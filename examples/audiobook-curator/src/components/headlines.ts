@@ -1,10 +1,16 @@
 import type { AudibleSearchReceipt } from '../audible.ts';
 import type { ConvertReceipt } from '../conversion.ts';
 import type { IntegrityAuditReceipt } from '../integrity-audit.ts';
-import type { InventoryReceipt, SelectionReceipt } from '../library.ts';
+import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from '../library.ts';
 
 export const inventoryHeadline = (receipt: InventoryReceipt): string =>
   `Inventoried ${receipt.summary.files} media files with ${receipt.summary.errors} retained errors.`;
+
+export const libraryAuditHeadline = (receipt: LibraryAuditReceipt): string =>
+  `Audited ${receipt.summary.files} library media files and found ${receipt.duplicateCandidates.length} duplicate candidate groups.`;
+
+export const libraryAuditCliHeadline = (receipt: LibraryAuditReceipt, sourceCount: number): string =>
+  `Audited ${String(receipt.summary.files)} files (${String(receipt.summary.bytes)} bytes) across ${String(sourceCount)} sources.`;
 
 export const selectionHeadline = (receipt: SelectionReceipt): string => {
   const reviewCount = receipt.selections.filter((selection) => selection.reviewRequired).length;

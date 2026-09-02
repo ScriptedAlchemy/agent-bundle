@@ -4,6 +4,7 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
 import { CuratorDocument } from '../components/curator-document.js';
+import { libraryAuditCliHeadline } from '../components/headlines.js';
 import { LibraryAnalysis } from '../components/library-analysis.js';
 import { DataList } from '../components/primitives.js';
 import type { LibraryAuditReceipt } from '../library.js';
@@ -45,7 +46,7 @@ export default async function LibraryAudit({ input, signal }: CliRouteProps<type
     summary.missingChapters + summary.missingTitle + summary.probeFailures;
   return (
     <CuratorDocument
-      headline={`Audited ${String(summary.files)} files (${String(summary.bytes)} bytes) across ${String(total)} sources.`}
+      headline={libraryAuditCliHeadline(receipt, total)}
       receipt={receipt}
     >
       <Agent.Markdown>## Library audit</Agent.Markdown>

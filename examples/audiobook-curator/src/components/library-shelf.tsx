@@ -63,8 +63,8 @@ export interface AuditShelfProps {
   readonly receipt: LibraryAuditReceipt;
 }
 
-export const AuditShelf = ({ receipt }: AuditShelfProps) => {
-  const summaryFields: Field[] = [
+export const AuditSummary = ({ receipt }: AuditShelfProps) => {
+  const fields: Field[] = [
     { label: 'Files', value: receipt.summary.files },
     { label: 'Total bytes', value: receipt.summary.bytes },
     { label: 'Missing album', value: receipt.summary.missingAlbum },
@@ -74,13 +74,23 @@ export const AuditShelf = ({ receipt }: AuditShelfProps) => {
     { label: 'Missing title', value: receipt.summary.missingTitle },
     { label: 'Probe failures', value: receipt.summary.probeFailures },
   ];
+  return <DataList fields={fields} />;
+};
+
+export const AuditFileCards = ({ receipt }: AuditShelfProps) => (
+  <>
+    {receipt.files.slice(0, maximumCards).map((file) => (
+      <FileCard {...fileCardModel(file)} key={file.path} />
+    ))}
+    <RemainingFiles count={receipt.files.length} />
+  </>
+);
+
+export const AuditShelf = ({ receipt }: AuditShelfProps) => {
   return (
     <>
-      <DataList fields={summaryFields} />
-      {receipt.files.slice(0, maximumCards).map((file) => (
-        <FileCard {...fileCardModel(file)} key={file.path} />
-      ))}
-      <RemainingFiles count={receipt.files.length} />
+      <AuditSummary receipt={receipt} />
+      <AuditFileCards receipt={receipt} />
       {receipt.duplicateCandidates.slice(0, 10).map((group) => (
         <CandidateGroupCallout
           files={group.files}
