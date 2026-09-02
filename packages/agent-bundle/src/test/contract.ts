@@ -35,11 +35,18 @@
  * from a clean installed layout. It carries static layout checks and the
  * source/artifact/installed/running version quadruple from `installed.ts`.
  *
- * No boundary here proves browser App HTML, state-lifetime catalog identity,
- * or runtime-instance identity beyond the live MCP initialize result (#269).
+ * Packed and installed-host runs with event runtimes sample the pinned status
+ * IPC before and throughout the sequential matrix events. They fail if the
+ * warm instance changes or degrades. Stateful lifecycle fixtures may also pin
+ * their mounted-state declaration against the compiler manifest catalog.
+ * Boundaries without an event runtime report identity as not-applicable.
  */
 import type { Client } from '@modelcontextprotocol/client';
 
+import {
+  requestEventRuntimeStatus,
+  type EventRuntimeStatusResult,
+} from '../events/ipc.ts';
 import { AgentTestError, captured } from './errors.ts';
 import {
   MCP_IN_MEMORY_PROOF_LEVEL,
@@ -89,6 +96,10 @@ export interface ContractLifecycleFixture {
       readonly expectedCode: string;
       readonly input: unknown;
       readonly revisionPath: readonly string[];
+    };
+    readonly catalog?: {
+      readonly id: string;
+      readonly lifetime: NonNullable<AgentBundleTestManifest['state']>['lifetime'];
     };
     readonly durability?: {
       readonly expectedStructuredContent: unknown;
@@ -164,11 +175,18 @@ export type ContractMatrixProvenance =
   | PackedMcpProvenance;
 
 export interface ContractMatrixReport {
+  readonly checks: Readonly<Record<string, ContractCheckOutcome>>;
   readonly provenance: ContractMatrixProvenance;
   readonly routes: Readonly<Record<string, ContractRouteReport>>;
 }
 
+export type ContractEventRuntimeAddress =
+  | { readonly endpoint: string; readonly endpointId?: never }
+  | { readonly endpoint?: never; readonly endpointId: string };
+
 export interface PackedContractMatrixOptions {
+  /** Read-only status address for the generated event runtime, when this artifact has one. */
+  readonly eventRuntime?: ContractEventRuntimeAddress;
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
@@ -199,6 +217,8 @@ export interface InstalledHostContractMatrixReport {
 
 interface MatrixBoundaryCapabilities {
   readonly canLoadRouteModules: boolean;
+  readonly eventRuntime?: ContractEventRuntimeAddress;
+  readonly eventRuntimeNotApplicableReason: string;
   readonly moduleSchemaNotApplicableReason: string;
   readonly proofLevel: AgentTestProofLevel;
   readonly registersAppResources: boolean;
@@ -214,6 +234,7 @@ const INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
 
 const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
   canLoadRouteModules: true,
+  eventRuntimeNotApplicableReason: 'the mcp-in-memory boundary has no generated event runtime.',
   moduleSchemaNotApplicableReason: '',
   proofLevel: MCP_IN_MEMORY_PROOF_LEVEL,
   registersAppResources: false,
@@ -222,10 +243,14 @@ const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
 
 const packedBoundaryFromSession = (
   session: PackedMcpSession,
+  eventRuntime: ContractEventRuntimeAddress | undefined,
   restart: (() => Promise<ContractMatrixRestartSession>) | undefined,
 ): MatrixBoundaryCapabilities =>
   Object.freeze({
     canLoadRouteModules: false,
+    ...(eventRuntime === undefined ? {} : { eventRuntime }),
+    eventRuntimeNotApplicableReason:
+      'this packed matrix run was not supplied the generated event runtime endpoint.',
     moduleSchemaNotApplicableReason: PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
     proofLevel: session.provenance.proofLevel,
     registersAppResources: true,
@@ -238,6 +263,11 @@ const installedHostBoundaryFromSession = (
 ): MatrixBoundaryCapabilities =>
   Object.freeze({
     canLoadRouteModules: false,
+    ...(session.eventRuntimeEndpoint === undefined
+      ? {}
+      : { eventRuntime: { endpoint: session.eventRuntimeEndpoint } }),
+    eventRuntimeNotApplicableReason:
+      'the installed-host session exposed no generated event runtime endpoint.',
     moduleSchemaNotApplicableReason: INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
     proofLevel: session.provenance.proofLevel,
     registersAppResources: true,
@@ -262,7 +292,9 @@ const CHECK_STATE_JOURNAL = 'state-journal';
 const CHECK_STATE_NOTICE = 'state-notice';
 const CHECK_STATE_IDEMPOTENCY = 'state-idempotency';
 const CHECK_STATE_BUDGET = 'state-budget';
+const CHECK_STATE_CATALOG = 'state-catalog';
 const CHECK_RESTART_DURABILITY = 'restart-durability';
+const CHECK_RUNTIME_INSTANCE_IDENTITY = 'runtime-instance-identity';
 
 interface MatrixFailure {
   readonly check: string;
@@ -362,6 +394,79 @@ const passed = (): ContractCheckOutcome => ({ status: 'passed' });
 const passedWithReason = (reason: string): ContractCheckOutcome => ({ reason, status: 'passed' });
 const failed = (reason: string): ContractCheckOutcome => ({ reason, status: 'failed' });
 const notApplicable = (reason: string): ContractCheckOutcome => ({ reason, status: 'not-applicable' });
+
+interface RuntimeIdentityTracker {
+  readonly observe: (label: string) => Promise<void>;
+  readonly outcome: () => ContractCheckOutcome;
+}
+
+const readRuntimeStatus = async (
+  address: ContractEventRuntimeAddress,
+): Promise<EventRuntimeStatusResult> => address.endpoint === undefined
+  ? requestEventRuntimeStatus({ endpointId: address.endpointId, timeoutMs: 1_000 })
+  : requestEventRuntimeStatus({ endpoint: address.endpoint, timeoutMs: 1_000 });
+
+const createRuntimeIdentityTracker = (
+  boundary: MatrixBoundaryCapabilities,
+  manifest: AgentBundleTestManifest,
+): RuntimeIdentityTracker => {
+  const hasEventRoutes = Object.values(manifest.routes)
+    .some((route) => route.kind === 'event-route');
+  if (!hasEventRoutes) {
+    const outcome = notApplicable(
+      'the compiled manifest declares no event routes, so this boundary has no event runtime.',
+    );
+    return Object.freeze({ observe: async () => undefined, outcome: () => outcome });
+  }
+  if (boundary.eventRuntime === undefined) {
+    const outcome = notApplicable(boundary.eventRuntimeNotApplicableReason);
+    return Object.freeze({ observe: async () => undefined, outcome: () => outcome });
+  }
+
+  const expectedArtifactEpoch = `${manifest.plugin.name}@${manifest.plugin.version}`;
+  let first: Extract<EventRuntimeStatusResult, { readonly status: 'available' }> | undefined;
+  let failure: string | undefined;
+  let observations = 0;
+  return Object.freeze({
+    observe: async (label: string): Promise<void> => {
+      if (failure !== undefined) return;
+      let status: EventRuntimeStatusResult;
+      try {
+        status = await readRuntimeStatus(boundary.eventRuntime!);
+      } catch (error) {
+        failure = `${label} status request failed: ${error instanceof Error ? error.message : captured(error)}`;
+        return;
+      }
+      observations += 1;
+      if (status.status !== 'available') {
+        failure = `${label} event runtime status was ${status.status}`;
+        return;
+      }
+      if (status.availability !== 'available') {
+        failure = `${label} event runtime availability was ${status.availability} for instance ${JSON.stringify(status.instanceId)}`;
+        return;
+      }
+      if (status.artifactEpoch !== expectedArtifactEpoch) {
+        failure = `${label} event runtime artifact epoch ${JSON.stringify(status.artifactEpoch)} did not match compiled epoch ${JSON.stringify(expectedArtifactEpoch)}`;
+        return;
+      }
+      if (first === undefined) {
+        first = status;
+        return;
+      }
+      if (status.instanceId !== first.instanceId) {
+        failure = `${label} event runtime instance changed from ${JSON.stringify(first.instanceId)} to ${JSON.stringify(status.instanceId)}`;
+      }
+    },
+    outcome: (): ContractCheckOutcome => {
+      if (failure !== undefined) return failed(failure);
+      if (first === undefined || observations < 2) {
+        return failed('event runtime identity was not observed before and after the matrix event sequence');
+      }
+      return passed();
+    },
+  });
+};
 
 const recordFailure = (
   failures: MatrixFailure[],
@@ -934,6 +1039,7 @@ const executeLifecycleTransitions = async (
   client: Client,
   descriptor: TestableRouteDescriptor,
   lifecycle: ContractLifecycleFixture,
+  runtimeIdentity: RuntimeIdentityTracker,
 ): Promise<LifecycleEvidence> => {
   let transitions: readonly ContractLifecycleTransition[];
   try {
@@ -991,6 +1097,7 @@ const executeLifecycleTransitions = async (
       );
       settled = true;
       byPhase.set(transition.phase, { liveProgress, result, transition });
+      await runtimeIdentity.observe(`${descriptor.id}/${transition.phase}`);
     }
   } finally {
     if (callerHandler === undefined) {
@@ -1102,6 +1209,27 @@ const checkLifecyclePath = (
     : failed(`${phase} structuredContent path ${path.join('.')} expected ${captured(expected)}; received ${captured(actual)}`);
 };
 
+const checkStateCatalog = (
+  manifest: AgentBundleTestManifest,
+  lifecycle: ContractLifecycleFixture,
+): ContractCheckOutcome => {
+  const expected = lifecycle.state?.catalog;
+  if (expected === undefined) {
+    return notApplicable('no lifecycle state catalog assertion declared.');
+  }
+  const actual = manifest.state;
+  if (actual === undefined) {
+    return failed(`lifecycle fixture declares state ${JSON.stringify(expected.id)}, but the compiled manifest declares no state`);
+  }
+  if (actual.id !== expected.id || actual.lifetime !== expected.lifetime) {
+    return failed(
+      `compiled state catalog was ${JSON.stringify(actual.id)} (${actual.lifetime}); `
+      + `the mounted-state lifecycle fixture declares ${JSON.stringify(expected.id)} (${expected.lifetime})`,
+    );
+  }
+  return passed();
+};
+
 const runStateIdempotency = async (
   client: Client,
   descriptor: TestableRouteDescriptor,
@@ -1162,10 +1290,12 @@ const matrixRouteDescriptors = (
 const finalizeContractMatrixReport = (
   failures: MatrixFailure[],
   boundary: MatrixBoundaryCapabilities,
+  checks: Readonly<Record<string, ContractCheckOutcome>>,
   provenance: ContractMatrixProvenance,
   routeReports: Record<string, ContractRouteReport>,
 ): ContractMatrixReport => {
   const report: ContractMatrixReport = Object.freeze({
+    checks: Object.freeze(checks),
     provenance,
     routes: Object.freeze(routeReports),
   });
@@ -1194,7 +1324,9 @@ const executeContractMatrix = async (options: {
 }): Promise<ContractMatrixReport> => {
   const { boundary, client, fixtures, manifest, provenance, serverName } = options;
   const failures: MatrixFailure[] = [];
+  const matrixChecks: Record<string, ContractCheckOutcome> = {};
   const routeReports: Record<string, ContractRouteReport> = {};
+  const runtimeIdentity = createRuntimeIdentityTracker(boundary, manifest);
   const moduleSchemaNotApplicable = (): ContractCheckOutcome =>
     notApplicable(boundary.moduleSchemaNotApplicableReason);
 
@@ -1217,6 +1349,7 @@ const executeContractMatrix = async (options: {
     }
   }
 
+  await runtimeIdentity.observe('before matrix events');
   const surface = await listLiveSurface(client);
   const invocationCache = new Map<string, ToolInvocationResult>();
   const durabilityChecks: Array<{
@@ -1232,6 +1365,7 @@ const executeContractMatrix = async (options: {
           [CHECK_SURFACE]: notApplicable('MCP Apps are not registered by the in-memory projection level.'),
         },
       };
+      await runtimeIdentity.observe(`after ${descriptor.id}`);
       continue;
     }
 
@@ -1256,6 +1390,7 @@ const executeContractMatrix = async (options: {
 
     if (fixture === undefined) {
       routeReports[descriptor.id] = { checks };
+      await runtimeIdentity.observe(`after ${descriptor.id}`);
       continue;
     }
 
@@ -1330,10 +1465,16 @@ const executeContractMatrix = async (options: {
         checks[CHECK_STATE_NOTICE] = notApplicable(reason);
         checks[CHECK_STATE_IDEMPOTENCY] = notApplicable(reason);
         checks[CHECK_STATE_BUDGET] = notApplicable(reason);
+        checks[CHECK_STATE_CATALOG] = notApplicable(reason);
         checks[CHECK_RESTART_DURABILITY] = notApplicable(reason);
       } else {
         const lifecycle = fixture.lifecycle;
-        const evidence = await executeLifecycleTransitions(client, descriptor, lifecycle);
+        const evidence = await executeLifecycleTransitions(
+          client,
+          descriptor,
+          lifecycle,
+          runtimeIdentity,
+        );
         checks[CHECK_LIFECYCLE_REPLAY] = outcomeFromCheck(
           failures,
           descriptor.id,
@@ -1400,6 +1541,12 @@ const executeContractMatrix = async (options: {
             ? notApplicable('no lifecycle budget assertion declared.')
             : await runStateBudget(client, descriptor, evidence, budget),
         );
+        checks[CHECK_STATE_CATALOG] = outcomeFromCheck(
+          failures,
+          descriptor.id,
+          CHECK_STATE_CATALOG,
+          checkStateCatalog(manifest, lifecycle),
+        );
         const durability = lifecycle.state?.durability;
         if (durability === undefined) {
           checks[CHECK_RESTART_DURABILITY] = notApplicable(
@@ -1423,11 +1570,20 @@ const executeContractMatrix = async (options: {
       checks[CHECK_STATE_NOTICE] = notApplicable('applies to tool routes only.');
       checks[CHECK_STATE_IDEMPOTENCY] = notApplicable('applies to tool routes only.');
       checks[CHECK_STATE_BUDGET] = notApplicable('applies to tool routes only.');
+      checks[CHECK_STATE_CATALOG] = notApplicable('applies to tool routes only.');
       checks[CHECK_RESTART_DURABILITY] = notApplicable('applies to tool routes only.');
     }
 
     routeReports[descriptor.id] = { checks };
+    await runtimeIdentity.observe(`after ${descriptor.id}`);
   }
+
+  matrixChecks[CHECK_RUNTIME_INSTANCE_IDENTITY] = outcomeFromCheck(
+    failures,
+    'boundary',
+    CHECK_RUNTIME_INSTANCE_IDENTITY,
+    runtimeIdentity.outcome(),
+  );
 
   if (durabilityChecks.length > 0) {
     if (boundary.restart === undefined) {
@@ -1470,7 +1626,13 @@ const executeContractMatrix = async (options: {
     }
   }
 
-  return finalizeContractMatrixReport(failures, boundary, provenance, routeReports);
+  return finalizeContractMatrixReport(
+    failures,
+    boundary,
+    matrixChecks,
+    provenance,
+    routeReports,
+  );
 };
 
 /**
@@ -1517,7 +1679,11 @@ export const runPackedContractMatrix = async (
 ): Promise<ContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   return executeContractMatrix({
-    boundary: packedBoundaryFromSession(options.session, options.restart),
+    boundary: packedBoundaryFromSession(
+      options.session,
+      options.eventRuntime,
+      options.restart,
+    ),
     client: options.session.client,
     fixtures: options.fixtures,
     manifest: options.manifest,

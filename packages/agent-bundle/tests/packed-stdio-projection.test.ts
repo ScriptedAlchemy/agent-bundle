@@ -95,6 +95,11 @@ it('serves compiled routes and durable state across packed process restarts', as
     expect(workerSource).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
     expect(workerSource).toMatch(/new URL\(["']\.\.["'], import\.meta\.url\)/u);
     const harnessManifest = await compileTestManifest({ root: project });
+    const artifactManifest = JSON.parse(
+      await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
+    ) as { readonly project: { readonly revision: string } };
+    const eventRuntimeEndpointId =
+      `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     const firstSession = await openPackedMcpServer({
@@ -198,6 +203,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         messages: [{ content: { text: 'Summarize chapter one', type: 'text' }, role: 'user' }],
       });
       const matrixReport = await runPackedContractMatrix({
+        eventRuntime: { endpointId: eventRuntimeEndpointId },
         fixtures: routeHarnessPackedContractFixtures(),
         manifest: harnessManifest,
         restart: async () => {
@@ -220,6 +226,12 @@ it('serves compiled routes and durable state across packed process restarts', as
       expect(matrixReport.routes['tool:harness/lifecycle']?.checks['restart-durability']).toEqual({
         status: 'passed',
       });
+      expect(matrixReport.checks['runtime-instance-identity']).toEqual({
+        status: 'passed',
+      });
+      expect(matrixReport.routes['tool:harness/lifecycle']?.checks['state-catalog']).toEqual({
+        status: 'passed',
+      });
       expect(matrixReport.routes['tool:harness/lifecycle']?.checks['lifecycle-serialized-round-trip']).toEqual({
         reason: expect.stringContaining('packed sessions cannot load project route modules'),
         status: 'not-applicable',
@@ -240,14 +252,11 @@ it('serves compiled routes and durable state across packed process restarts', as
         .resolves.toMatchObject({
           structuredContent: { entries: [{ note: 'packed durable proof' }], revision: 6 },
         });
-      const artifactManifest = JSON.parse(
-        await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
-      ) as { readonly project: { readonly revision: string } };
       let eventResponse: unknown;
       try {
         eventResponse = await requestEventRuntime({
           artifactEpoch: artifactManifest.project.revision,
-          endpointId: `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`,
+          endpointId: eventRuntimeEndpointId,
           event: 'tool/after',
           hostContractRevision: 'packed-proof',
           native: {
