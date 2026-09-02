@@ -3,7 +3,7 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleSelectionReceipt } from '../../../audible.js';
-import { CandidateRanking } from '../../../components/candidate-ranking.js';
+import { SelectionRanking } from '../../../components/candidate-ranking.js';
 import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
@@ -41,7 +41,7 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       headline={`Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`}
       receipt={receipt}
     >
-      <CandidateRanking receipt={receipt} />
+      <SelectionRanking receipt={receipt} />
       {shelf}
     </CuratorDocument>
   );

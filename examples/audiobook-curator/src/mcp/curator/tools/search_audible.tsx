@@ -2,8 +2,9 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleSearchReceipt } from '../../../audible.js';
-import { CandidateRanking } from '../../../components/candidate-ranking.js';
+import { SearchRanking } from '../../../components/candidate-ranking.js';
 import { CuratorDocument } from '../../../components/curator-document.js';
+import { audibleSearchHeadline } from '../../../components/headlines.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
@@ -19,10 +20,10 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
   const receipt = await operation.handler(input, { signal }) as AudibleSearchReceipt;
   return (
     <CuratorDocument
-      headline={`Ranked ${receipt.candidates.length} Audible candidates across reviewed regions; human selection is required.`}
+      headline={audibleSearchHeadline(receipt)}
       receipt={receipt}
     >
-      <CandidateRanking receipt={receipt} />
+      <SearchRanking receipt={receipt} />
     </CuratorDocument>
   );
 }

@@ -4,8 +4,8 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
-import { IntegrityReport } from '../../../components/integrity-report.js';
-import { MutationReceipt } from '../../../components/mutation-receipt.js';
+import { MetadataIntegrityReport } from '../../../components/integrity-report.js';
+import { MetadataMutation } from '../../../components/mutation-receipt.js';
 import type { MetadataReceipt } from '../../../media-mutation.js';
 import { defaultMediaMutationOperations, mediaMutationOperations } from '../../../operations/media-mutation.js';
 import { CurationShelfStateSchema } from '../../../state.js';
@@ -41,8 +41,8 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       );
   return (
     <CuratorDocument headline={headline} receipt={receipt}>
-      <MutationReceipt receipt={receipt} />
-      <IntegrityReport receipt={receipt} />
+      <MetadataMutation receipt={receipt} />
+      <MetadataIntegrityReport receipt={receipt} />
       {shelf}
     </CuratorDocument>
   );

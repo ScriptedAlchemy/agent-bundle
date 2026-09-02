@@ -37,7 +37,7 @@ export interface ChapterInput {
   readonly receipt?: string;
 }
 
-export interface MetadataReceipt {
+export type MetadataReceipt = {
   readonly apply: boolean;
   readonly artwork?: string;
   readonly artworkStreamsAfter?: number;
@@ -51,7 +51,7 @@ export interface MetadataReceipt {
   readonly chapterCountBefore: number;
   readonly file: string;
   readonly generatedAt: string;
-  readonly metadata: Readonly<Record<string, string | undefined>>;
+  readonly metadata: Readonly<Record<string, string>>;
   readonly mutation: boolean;
   readonly operation: 'apply-metadata';
   readonly product: string;
@@ -59,9 +59,9 @@ export interface MetadataReceipt {
   readonly status: 'applied-verified' | 'planned';
   readonly streamCountAfter?: number;
   readonly verifiedMetadataKeys?: readonly string[];
-}
+};
 
-export interface ChapterReceipt {
+export type ChapterReceipt = {
   readonly apply: boolean;
   readonly audioSha256After?: string;
   readonly audioSha256Before: string;
@@ -80,7 +80,7 @@ export interface ChapterReceipt {
   readonly sha256After?: string;
   readonly status: 'applied-verified' | 'planned';
   readonly verifiedBoundaries?: true;
-}
+};
 
 export interface MediaMutationDependencies extends LibraryDependencies {
   readonly ffmpeg?: string;

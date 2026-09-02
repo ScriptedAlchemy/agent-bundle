@@ -5,13 +5,23 @@ import type { IntegrityAuditReceipt } from '../integrity-audit.ts';
 import type { ChapterReceipt, MetadataReceipt } from '../media-mutation.ts';
 import { Callout, DataList, type Field } from './primitives.tsx';
 
-type IntegrityReceipt = ChapterReceipt | ConvertReceipt | IntegrityAuditReceipt | MetadataReceipt;
-
-export interface IntegrityReportProps {
-  readonly receipt: IntegrityReceipt;
+export interface IntegrityAuditReportProps {
+  readonly receipt: IntegrityAuditReceipt;
 }
 
-const auditReport = (receipt: IntegrityAuditReceipt) => {
+export interface MetadataIntegrityReportProps {
+  readonly receipt: MetadataReceipt;
+}
+
+export interface ChapterIntegrityReportProps {
+  readonly receipt: ChapterReceipt;
+}
+
+export interface ConversionIntegrityReportProps {
+  readonly receipt: ConvertReceipt;
+}
+
+export const IntegrityAuditReport = ({ receipt }: IntegrityAuditReportProps) => {
   const fields: Field[] = [
     { label: 'Audit status', value: receipt.status },
     { label: 'File', value: receipt.file },
@@ -38,7 +48,7 @@ const auditReport = (receipt: IntegrityAuditReceipt) => {
   );
 };
 
-const metadataReport = (receipt: MetadataReceipt) => (
+export const MetadataIntegrityReport = ({ receipt }: MetadataIntegrityReportProps) => (
   <>
     <DataList fields={[
       { label: 'Integrity status', value: receipt.status },
@@ -57,7 +67,7 @@ const metadataReport = (receipt: MetadataReceipt) => (
   </>
 );
 
-const chapterReport = (receipt: ChapterReceipt) => (
+export const ChapterIntegrityReport = ({ receipt }: ChapterIntegrityReportProps) => (
   <>
     <DataList fields={[
       { label: 'Integrity status', value: receipt.status },
@@ -75,7 +85,7 @@ const chapterReport = (receipt: ChapterReceipt) => (
   </>
 );
 
-const conversionReport = (receipt: ConvertReceipt) => (
+export const ConversionIntegrityReport = ({ receipt }: ConversionIntegrityReportProps) => (
   <>
     <DataList fields={[
       { label: 'Integrity status', value: receipt.status },
@@ -96,20 +106,3 @@ const conversionReport = (receipt: ConvertReceipt) => (
     </Callout>
   </>
 );
-
-export const IntegrityReport = ({ receipt }: IntegrityReportProps) => {
-  switch (receipt.operation) {
-    case 'audit':
-      return auditReport(receipt);
-    case 'apply-metadata':
-      return metadataReport(receipt);
-    case 'apply-chapters':
-      return chapterReport(receipt);
-    case 'convert':
-      return conversionReport(receipt);
-    default: {
-      const unhandled: never = receipt;
-      throw new Error(`Unhandled integrity report: ${JSON.stringify(unhandled)}`);
-    }
-  }
-};

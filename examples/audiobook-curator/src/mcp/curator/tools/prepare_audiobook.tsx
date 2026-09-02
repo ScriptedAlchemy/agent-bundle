@@ -2,7 +2,7 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import { CuratorDocument } from '../../../components/curator-document.js';
-import { MutationReceipt } from '../../../components/mutation-receipt.js';
+import { PrepareMutation } from '../../../components/mutation-receipt.js';
 import type { PrepareReceipt } from '../../../curator-core.js';
 import { defaultOutputOperations, outputOperations } from '../../../operations/output.js';
 
@@ -22,7 +22,7 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
     : `Planned audiobook output at ${receipt.output}; no media was changed.`;
   return (
     <CuratorDocument headline={headline} receipt={receipt}>
-      <MutationReceipt receipt={receipt} />
+      <PrepareMutation receipt={receipt} />
     </CuratorDocument>
   );
 }

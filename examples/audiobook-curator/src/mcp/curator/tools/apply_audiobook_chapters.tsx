@@ -2,11 +2,11 @@ import { agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { ChapterOutline } from '../../../components/chapter-outline.js';
+import { ChapterOutline, chaptersFromApplyReceipt } from '../../../components/chapter-outline.js';
 import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
-import { IntegrityReport } from '../../../components/integrity-report.js';
-import { MutationReceipt } from '../../../components/mutation-receipt.js';
+import { ChapterIntegrityReport } from '../../../components/integrity-report.js';
+import { ChapterMutation } from '../../../components/mutation-receipt.js';
 import type { ChapterReceipt } from '../../../media-mutation.js';
 import { defaultMediaMutationOperations, mediaMutationOperations } from '../../../operations/media-mutation.js';
 import { CurationShelfStateSchema } from '../../../state.js';
@@ -42,9 +42,9 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       );
   return (
     <CuratorDocument headline={headline} receipt={receipt}>
-      <MutationReceipt receipt={receipt} />
-      <ChapterOutline receipt={receipt} />
-      <IntegrityReport receipt={receipt} />
+      <ChapterMutation receipt={receipt} />
+      <ChapterOutline chapters={chaptersFromApplyReceipt(receipt)} />
+      <ChapterIntegrityReport receipt={receipt} />
       {shelf}
     </CuratorDocument>
   );

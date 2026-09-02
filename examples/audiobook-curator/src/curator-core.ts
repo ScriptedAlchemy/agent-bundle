@@ -23,26 +23,26 @@ export interface CuratorDependencies {
   readonly signal?: AbortSignal;
 }
 
-export interface AudioProbe {
+export type AudioProbe = {
   readonly channels?: number;
   readonly codec: string;
   readonly durationSeconds: number;
   readonly format: string;
   readonly sampleRate?: number;
   readonly tags: Readonly<Record<string, string>>;
-}
+};
 
-export interface InspectedAudioFile extends AudioProbe {
+export type InspectedAudioFile = AudioProbe & {
   readonly bytes: number;
   readonly path: string;
-}
+};
 
-export interface InspectionReceipt {
+export type InspectionReceipt = {
   readonly files: readonly InspectedAudioFile[];
   readonly operation: 'inspect';
   readonly root: string;
   readonly totalBytes: number;
-}
+};
 
 export interface PrepareInput {
   readonly apply?: boolean;
@@ -51,13 +51,13 @@ export interface PrepareInput {
   readonly source: string;
 }
 
-export interface PrepareReceipt {
+export type PrepareReceipt = {
   readonly applied: boolean;
   readonly operation: 'prepare';
   readonly output: string;
   readonly probe: AudioProbe;
   readonly source: string;
-}
+};
 
 const dependencies = (options: CuratorDependencies) => ({
   ffmpeg: options.ffmpeg ?? 'ffmpeg',

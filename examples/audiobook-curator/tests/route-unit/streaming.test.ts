@@ -44,6 +44,7 @@ it('streams library analysis after the audit shell while preserving the canonica
       && documentText(document).includes('"kind":"progress"'))).toBe(true);
     expectDocument(rendered)
       .toContainMarkdown('**Reclaimable bytes:** 4')
+      .toContainMarkdown(`- ${join(library, 'Shared title.flac')}\n- ${join(library, 'Shared title.mp3')}`)
       .toContainContext('Duplicate candidate group')
       .toHaveValue(rendered.result);
     expect(rendered.result).toEqual(rendered.document.value);

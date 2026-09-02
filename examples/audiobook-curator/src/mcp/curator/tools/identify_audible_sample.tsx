@@ -1,9 +1,9 @@
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CandidateRanking } from '../../../components/candidate-ranking.js';
+import { IdentifyRanking } from '../../../components/candidate-ranking.js';
 import { CuratorDocument } from '../../../components/curator-document.js';
-import { EvidenceTrail } from '../../../components/evidence-trail.js';
+import { IdentifyTrail } from '../../../components/evidence-trail.js';
 import type { AcousticIdentifyReceipt } from '../../../evidence.js';
 import { defaultEvidenceOperations, evidenceOperations } from '../../../operations/evidence.js';
 
@@ -23,8 +23,8 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
     : `No acoustic match after ${receipt.attempts.length} candidate attempts.`;
   return (
     <CuratorDocument headline={headline} receipt={receipt}>
-      <CandidateRanking receipt={receipt} />
-      <EvidenceTrail receipt={receipt} />
+      <IdentifyRanking receipt={receipt} />
+      <IdentifyTrail receipt={receipt} />
     </CuratorDocument>
   );
 }

@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
+import type { JsonObject } from '@agent-bundle/runtime';
+
 import {
   CuratorError,
   audibleHosts,
@@ -21,14 +23,14 @@ export interface CuratorHttpOptions {
 
 export type CuratorHttpClient = (url: string, options?: CuratorHttpOptions) => Promise<unknown>;
 
-export interface AudibleQuery {
+export type AudibleQuery = {
   readonly author?: string;
   readonly durationSeconds?: number;
   readonly narrator?: string;
   readonly title: string;
-}
+};
 
-export interface AudibleCandidateEvidence {
+export type AudibleCandidateEvidence = {
   readonly authorMatch: boolean;
   readonly durationDifferencePercent?: number;
   readonly language?: string;
@@ -38,12 +40,12 @@ export interface AudibleCandidateEvidence {
   readonly strictIdentityMatch: boolean;
   readonly titleMatch: boolean;
   readonly unabridged: boolean;
-}
+};
 
-export interface AudibleCandidate extends Record<string, unknown> {
+export type AudibleCandidate = JsonObject & {
   readonly evidence: AudibleCandidateEvidence;
   readonly region: AudibleRegion;
-}
+};
 
 export interface AudibleSearchInput extends AudibleQuery {
   readonly attempts?: number;
@@ -52,7 +54,7 @@ export interface AudibleSearchInput extends AudibleQuery {
   readonly report?: string;
 }
 
-export interface AudibleSearchReceipt {
+export type AudibleSearchReceipt = {
   readonly candidates: readonly AudibleCandidate[];
   readonly errors: readonly { readonly error: string; readonly region: AudibleRegion }[];
   readonly exitCode: 0 | 1;
@@ -62,9 +64,9 @@ export interface AudibleSearchReceipt {
   readonly operation: 'audible-search';
   readonly query: AudibleQuery;
   readonly reviewNote: string;
-}
+};
 
-export interface AudibleSelectionReceipt {
+export type AudibleSelectionReceipt = {
   readonly candidateNumber: number;
   readonly candidateReport?: string;
   readonly generatedAt: string;
@@ -73,7 +75,7 @@ export interface AudibleSelectionReceipt {
   readonly operation: 'audible-select';
   readonly reviewNote?: string;
   readonly selected: AudibleCandidate;
-}
+};
 
 export interface AudibleCacheInput {
   readonly asin: string;
@@ -83,7 +85,7 @@ export interface AudibleCacheInput {
   readonly region?: AudibleRegion;
 }
 
-export interface AudibleCacheReceipt {
+export type AudibleCacheReceipt = {
   readonly artwork?: string;
   readonly asin: string;
   readonly chapterError?: string;
@@ -99,15 +101,15 @@ export interface AudibleCacheReceipt {
     readonly chapters: string;
     readonly product: string;
   };
-}
+};
 
 export interface AudibleDependencies {
   readonly http?: CuratorHttpClient;
   readonly signal?: AbortSignal;
 }
 
-const objects = (value: unknown): Record<string, unknown>[] => Array.isArray(value)
-  ? value.filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object' && !Array.isArray(row))
+const objects = (value: unknown): JsonObject[] => Array.isArray(value)
+  ? value.filter((row): row is JsonObject => row !== null && typeof row === 'object' && !Array.isArray(row))
   : [];
 
 export const audibleCandidateEvidence = (

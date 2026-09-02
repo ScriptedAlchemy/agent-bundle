@@ -2,7 +2,8 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import { CuratorDocument } from '../../../components/curator-document.js';
-import { LibraryShelf } from '../../../components/library-shelf.js';
+import { selectionHeadline } from '../../../components/headlines.js';
+import { SelectionShelf } from '../../../components/library-shelf.js';
 import type { SelectionReceipt } from '../../../library.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
 
@@ -17,13 +18,12 @@ export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as SelectionReceipt;
-  const reviewCount = receipt.selections.filter((selection) => selection.reviewRequired).length;
   return (
     <CuratorDocument
-      headline={`Selected ${receipt.selections.length} source groups; ${reviewCount} require review.`}
+      headline={selectionHeadline(receipt)}
       receipt={receipt}
     >
-      <LibraryShelf receipt={receipt} />
+      <SelectionShelf receipt={receipt} />
     </CuratorDocument>
   );
 }

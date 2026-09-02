@@ -75,16 +75,16 @@ instead of maintaining separate MCP and CLI presenters:
 | Component | MCP composition | Rendered authored CLI composition |
 | --- | --- | --- |
 | `CuratorDocument` and its `CuratorReceipt` union | Wrap the structured receipt and headline for 15 receipt-bearing tools | Wrap `inventory`, `select`, `audible-search`, `convert`, `audit`, and `library-audit` |
-| `DataList`, `Field`, and `Callout` | Provide report primitives throughout the component library and directly in the catalog resource, curate prompt, cache route, and library audit | Provide the same primitives through the shared components and directly in `library-audit` |
-| `AudiobookCard` | Renders files in `audit_library` and under shelf and ranking views | Reached through `LibraryShelf` and `CandidateRanking` |
-| `LibraryShelf` | Composes `inventory_sources`, `inspect_sources`, and `select_sources` | Composes `inventory` and `select` |
-| `CandidateRanking` | Composes `search_audible`, `select_audible_edition`, and `identify_audible_sample` | Composes `audible-search` |
-| `EvidenceTrail` | Composes acoustic identification, acoustic verification, and Whisper verification | No authored rendered counterpart; those compatibility commands remain plain `.ts` routes |
-| `MutationReceipt` | Composes prepare, conversion, metadata, and chapter mutation tools | Composes `convert` |
-| `ChapterOutline` | Composes integrity audit, conversion, and chapter application tools | Composes `audit` and `convert` |
-| `IntegrityReport` | Composes integrity audit, conversion, metadata, and chapter application tools | Composes `audit` and `convert` |
+| `DataList`, `Field`, `Callout`, and `FileList` | Provide atomic report fields, prose callouts, and file-list blocks throughout the component library and directly in the catalog resource, curate prompt, cache route, and library audit | Provide the same primitives through the shared components and directly in `library-audit` |
+| `FileCard` and `EditionCard`, fed by `view-models` | Render file and edition models in `audit_library`, shelf, and ranking views | Reached through the receipt-specific shelves and ranking components |
+| `InspectionShelf`, `InventoryShelf`, `AuditShelf`, and `SelectionShelf` | Compose receipt-specific inspection, inventory, audit, and selection reports; the inspection, inventory, and selection shelves are used directly by their MCP routes | `InventoryShelf` and `SelectionShelf` compose `inventory` and `select` |
+| `SearchRanking`, `IdentifyRanking`, and `SelectionRanking` | Render the statically typed ranking for `search_audible`, `identify_audible_sample`, and `select_audible_edition` | `SearchRanking` composes `audible-search` |
+| `AcousticTrail`, `IdentifyTrail`, and `WhisperTrail` | Render the statically typed evidence for acoustic verification, acoustic identification, and Whisper verification | No authored rendered counterpart; those compatibility commands remain plain `.ts` routes |
+| `MetadataMutation`, `ChapterMutation`, `ConversionMutation`, and `PrepareMutation` | Render each statically typed metadata, chapter, conversion, or preparation mutation | `ConversionMutation` composes `convert` |
+| `ChapterOutline` with normalized `chapters` props | Composes integrity audit, conversion, and chapter application tools through receipt-specific mappers | Composes `audit` and `convert` |
+| `IntegrityAuditReport`, `MetadataIntegrityReport`, `ChapterIntegrityReport`, and `ConversionIntegrityReport` | Render each statically typed integrity report | `IntegrityAuditReport` and `ConversionIntegrityReport` compose `audit` and `convert` |
 | `CurationShelf` | Composes shelf review, Audible edition selection, and metadata/chapter application | Composes `shelf` |
-| `LibraryAnalysis` | Resolves the asynchronous duplicate and multipart analysis in `audit_library` | Resolves the same analysis in `library-audit` |
+| `LibraryAnalysis` and `CandidateGroupCallout` | Resolve asynchronous duplicate and multipart analysis in `audit_library` with shared atomic candidate prose and file lists | Resolve the same analysis and candidate-group presentation in `library-audit` |
 
 The catalog resource at `src/mcp/curator/resources/catalog.tsx` and the prompt at
 `src/mcp/curator/prompts/curate.tsx` are compositions too: both return their

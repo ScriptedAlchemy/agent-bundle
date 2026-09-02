@@ -3,8 +3,9 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 import type { AudibleSearchReceipt } from '../audible.js';
-import { CandidateRanking } from '../components/candidate-ranking.js';
+import { SearchRanking } from '../components/candidate-ranking.js';
 import { CuratorDocument } from '../components/curator-document.js';
+import { audibleSearchHeadline } from '../components/headlines.js';
 import { audibleOperations, audibleRegionList, defaultAudibleOperations } from '../operations/audible.js';
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
@@ -43,10 +44,10 @@ export default async function audibleSearch({ input, signal }: CliRouteProps<typ
   }, { signal }) as AudibleSearchReceipt;
   return (
     <CuratorDocument
-      headline={`Ranked ${receipt.candidates.length} Audible candidates across reviewed regions; human selection is required.`}
+      headline={audibleSearchHeadline(receipt)}
       receipt={receipt}
     >
-      <CandidateRanking receipt={receipt} />
+      <SearchRanking receipt={receipt} />
     </CuratorDocument>
   );
 }

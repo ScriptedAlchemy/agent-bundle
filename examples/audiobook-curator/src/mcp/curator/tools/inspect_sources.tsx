@@ -2,7 +2,7 @@ import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import { CuratorDocument } from '../../../components/curator-document.js';
-import { LibraryShelf } from '../../../components/library-shelf.js';
+import { InspectionShelf } from '../../../components/library-shelf.js';
 import type { InspectionReceipt } from '../../../curator-core.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
 
@@ -22,7 +22,7 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       headline={`Inspected ${receipt.files.length} audio files (${receipt.totalBytes} bytes).`}
       receipt={receipt}
     >
-      <LibraryShelf receipt={receipt} />
+      <InspectionShelf receipt={receipt} />
     </CuratorDocument>
   );
 }
