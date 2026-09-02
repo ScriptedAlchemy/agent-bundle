@@ -19,7 +19,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB4500` | Registered config extensions (strict finite JSON). |
 | `AB46xx` | Assets and the generated-runtime floor. |
 | `AB470x` | Package build `bin` configuration (`AB4706`: artifact output overlaps `dist`). |
-| `AB471x` | Package build `lib` configuration. |
+| `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`; see below). |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
@@ -29,6 +29,37 @@ gate a build, a validation, or a dev rebuild.
 | `AB7300`–`AB7315` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, and runtime endpoint health. |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
+
+## Declaration generation (`AB4716`)
+
+A `lib` entry with `dts` enabled compiles its source directory as its own
+TypeScript program. When that declaration emit fails, the bundler aborts with
+one prose line naming only its own environment, so the framework replays
+declaration emit over the same synthesized project (the consumer's own
+`typescript`, the same tsconfig, `--declaration --emitDeclarationOnly`) and
+reports **one `AB4716` error per recovered TypeScript diagnostic**, each
+carrying the file, the `(line,column)` position, the `TS` code, and the
+compiler's message, plus a `sourcePath`:
+
+```text
+[AB4716] Declaration generation for lib entry "index" failed:
+  src/operations/audible.ts(79,14): TS4023: Exported variable 'audibleOperations'
+  has or is using name 'CliCommandDefinition' from external module "…" but cannot be named.
+```
+
+When no diagnostic can be recovered — the project has no resolvable
+`typescript`, or the replay passes because the failure was elsewhere in
+declaration generation — the failure still reports as a single `AB4716`
+carrying the bundler's own message. Declaration failures never fall through
+to the `AB5000` catch-all, whose dev-lock meaning previously misdirected
+triage.
+
+The recovery hint names the trap these failures share: declaration-emit
+errors such as `TS4023` (an exported value whose inferred type names a type
+its module does not export) are invisible to `tsc --noEmit`, so a green
+`typecheck` script proves nothing about them. Reproduce them with
+`tsc --declaration --emitDeclarationOnly` over the lib entry source
+directory.
 
 ## Migration nudges (`AB4730`–`AB4735`)
 

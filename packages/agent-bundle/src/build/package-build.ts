@@ -3,7 +3,9 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
+import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside } from '../core/paths.ts';
+import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import { runtimeIgnoredRoot } from './entries.ts';
@@ -14,7 +16,8 @@ import {
   generatedExecutableEntrySource,
   generatedRenderedRouteWorkerSource,
 } from './entry-shell.ts';
-import { buildWithRslib, type RslibEntry } from './rslib.ts';
+import type { BundledOutputEvidence } from './provenance.ts';
+import { buildWithRslib, isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 
 /**
  * The framework-owned npm package build: `bin` entries become self-executing
@@ -186,6 +189,34 @@ export const planPackageEntries = async (
   return Object.freeze(entries);
 };
 
+/**
+ * Runs the synthesized package build, translating a declaration-generation
+ * abort into `AB4716` errors that name the underlying TypeScript diagnostics.
+ * The bundler reports declaration failures as one prose line, so the detail is
+ * recovered by replaying declaration emit over the same synthesized project
+ * the failed pass used — which is exactly the manual
+ * `tsc --declaration --emitDeclarationOnly` triage this removes.
+ */
+const buildPackageEntries = async (
+  options: Parameters<typeof buildWithRslib>[0],
+  declaration: { readonly entryName: string; readonly tsconfigPath: string } | undefined,
+): Promise<readonly BundledOutputEvidence[]> => {
+  try {
+    return await buildWithRslib(options);
+  } catch (error) {
+    if (declaration === undefined || !isDeclarationGenerationFailure(error)) throw error;
+    throw new DiagnosticError(declarationBuildDiagnostics({
+      entryName: declaration.entryName,
+      failure: error instanceof Error ? error.message : String(error),
+      projectRoot: options.cwd,
+      typeScriptDiagnostics: await replayDeclarationEmit({
+        projectRoot: options.cwd,
+        tsconfigPath: declaration.tsconfigPath,
+      }),
+    }));
+  }
+};
+
 /** Maps one emitted `.d.ts` back to the authored module it declares. */
 const declarationSource = (sourceDir: string, declarationPath: string): string | undefined => {
   const stem = declarationPath.slice(0, -'.d.ts'.length);
@@ -222,14 +253,16 @@ export const buildPackageOutputs = async (options: {
     const cliRuntimeShell = entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
       ? cliEntryRuntimePath()
       : undefined;
-    const evidence = await buildWithRslib({
+    const evidence = await buildPackageEntries({
       cwd: projectRoot,
       entries,
       ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
       logLevel: 'error',
       outputRoot: stageRoot,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
-    });
+    }, dtsTsconfig === undefined || packageBuild.lib === undefined
+      ? undefined
+      : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
     const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
     await Promise.all(entries
       .filter((entry) => entry.executable)
