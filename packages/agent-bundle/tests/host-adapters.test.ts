@@ -171,6 +171,22 @@ const withClaudeDependencies = (
   },
 });
 
+const withClaudeManifestMetadata = (
+  model: NormalizedPlugin,
+  manifestMetadata: Readonly<Record<string, unknown>>,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/manifest-metadata.config.ts' },
+      target: 'claude',
+      value: manifestMetadata,
+    },
+  },
+});
+
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -330,6 +346,110 @@ it('lowers Claude commands with documented kebab-case frontmatter and body-only 
 
   const commandFree = planEntries(plugin, 'claude');
   expect(commandFree.some((entry) => entry.relativePath.startsWith('commands/'))).toBe(false);
+});
+
+it('emits validated Claude manifest metadata fields with extension provenance', async () => {
+  const model = withClaudeManifestMetadata(plugin, {
+    defaultEnabled: false,
+    displayName: 'Review Tools',
+    metadata: {
+      catalog: 'security',
+      entitlement: { tier: 'team' },
+    },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({
+    kind: 'write',
+    sourceInputs: [
+      '/workspace/agent-bundle.config.ts',
+      '/workspace/skills/review/SKILL.md',
+      '/workspace/manifest-metadata.config.ts',
+    ],
+  });
+  if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
+  expect(JSON.parse(manifest.content)).toMatchObject({
+    defaultEnabled: false,
+    displayName: 'Review Tools',
+    metadata: {
+      catalog: 'security',
+      entitlement: { tier: 'team' },
+    },
+  });
+  await validateDocuments('claude', writeContents(model, 'claude'));
+});
+
+it.each([
+  {
+    code: 'claude.manifest.displayName.invalid',
+    declaration: { displayName: '   ' },
+    label: 'a whitespace-only displayName',
+  },
+  {
+    code: 'claude.manifest.metadata.invalid',
+    declaration: { metadata: null },
+    label: 'null metadata',
+  },
+  {
+    code: 'claude.manifest.metadata.invalid',
+    declaration: { metadata: [] },
+    label: 'array metadata',
+  },
+  {
+    code: 'claude.manifest.defaultEnabled.invalid',
+    declaration: { defaultEnabled: 'false' },
+    label: 'a non-boolean defaultEnabled',
+  },
+])('rejects $label without emitting Claude manifest metadata fields', ({ code, declaration }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeManifestMetadata(plugin, declaration));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+    target: 'claude',
+  }));
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Claude plugin manifest.');
+  const document = JSON.parse(manifest.content) as Record<string, unknown>;
+  expect(document).not.toHaveProperty('defaultEnabled');
+  expect(document).not.toHaveProperty('displayName');
+  expect(document).not.toHaveProperty('metadata');
+});
+
+it('pins the closed Claude manifest metadata schema while keeping metadata free-form', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude manifest metadata schema fixture.',
+    name: 'claude-metadata-fixture',
+    version: '1.0.0',
+  };
+
+  expect(validate({
+    ...manifest,
+    defaultEnabled: false,
+    displayName: 'Claude Metadata Fixture',
+    metadata: { catalog: 'security', nested: { rank: 1 }, tags: ['review'] },
+  }), JSON.stringify(validate.errors)).toBe(true);
+  for (const declaration of [
+    { displayName: '' },
+    { metadata: null },
+    { metadata: [] },
+    { defaultEnabled: 'false' },
+    { homepage: 'https://example.test' },
+    // Host-supported custom paths stay outside the generator-owned schema.
+    { commands: './custom/deploy.md' },
+  ]) {
+    expect(validate({ ...manifest, ...declaration })).toBe(false);
+  }
 });
 
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {

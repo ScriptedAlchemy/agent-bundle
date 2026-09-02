@@ -115,6 +115,7 @@
       "required": ["name"],
       "type": "object"
     },
+    "defaultEnabled": { "type": "boolean" },
     "description": { "minLength": 1, "type": "string" },
     "dependencies": {
       "items": {
@@ -126,6 +127,7 @@
       "minItems": 1,
       "type": "array"
     },
+    "displayName": { "minLength": 1, "type": "string" },
     "hooks": { "const": "./hooks/hooks.json", "type": "string" },
     "lspServers": {
       "anyOf": [
@@ -139,6 +141,7 @@
         }
       ]
     },
+    "metadata": { "type": "object" },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
     "userConfig": {
       "additionalProperties": { "$ref": "#/$defs/userConfigOption" },

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -79,6 +79,21 @@ const withClaudeDependencies = (dependencies: unknown): NormalizedPlugin => ({
       provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
       target: 'claude',
       value: { dependencies },
+    },
+  },
+});
+
+const withClaudeManifestMetadata = (
+  manifestMetadata: Readonly<Record<string, unknown>>,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target: 'claude',
+      value: manifestMetadata,
     },
   },
 });
@@ -267,6 +282,55 @@ nativeIt('accepts emitted Claude plugin dependencies under strict native validat
     ]));
     const validation = await runClaudeValidation(root, root);
 
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('accepts emitted Claude manifest metadata fields under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-manifest-metadata-'));
+
+  try {
+    await writeClaudeArtifact(root, withClaudeManifestMetadata({
+      defaultEnabled: false,
+      displayName: 'Review Tools',
+      metadata: { catalog: 'security', entitlement: { tier: 'team' } },
+    }));
+    const manifest = JSON.parse(
+      await readFile(join(root, '.claude-plugin', 'plugin.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(manifest).toMatchObject({
+      defaultEnabled: false,
+      displayName: 'Review Tools',
+      metadata: { catalog: 'security', entitlement: { tier: 'team' } },
+    });
+
+    const validation = await runClaudeValidation(root, root);
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('accepts a custom flat command path without a default commands directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-custom-command-path-'));
+
+  try {
+    const written = await writeClaudeArtifact(root, model);
+    expect(written.some((path) => path.startsWith('commands/'))).toBe(false);
+    await mkdir(join(root, 'custom'), { recursive: true });
+    await writeFile(
+      join(root, 'custom', 'deploy.md'),
+      '---\ndescription: Deploy the current project.\n---\nDeploy the current project.\n',
+    );
+    const manifestPath = join(root, '.claude-plugin', 'plugin.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(manifestPath, `${JSON.stringify({ ...manifest, commands: './custom/deploy.md' })}\n`);
+
+    const validation = await runClaudeValidation(root, root);
     expect(validation.code, validation.output).toBe(0);
     expect(validation.output).toContain('Validation passed');
   } finally {
