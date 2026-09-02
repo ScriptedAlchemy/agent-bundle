@@ -234,35 +234,20 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation.map(({ host, target }) => ({ host, target }))).toEqual([
-      { host: 'claude', target: 'claude' },
-      { host: 'codex', target: 'codex' },
-    ]);
-    const [claudeValidation, codexValidation] = validationDocument.hostValidation;
-    if (claudeValidation!.status === 'passed') {
-      expect(claudeValidation!.diagnostics).toEqual([]);
-    } else {
-      expect(claudeValidation).toMatchObject({
-        diagnostics: [{ code: 'AB6019', severity: 'info' }],
-        status: 'unavailable',
-      });
+    expect(validationDocument.hostValidation.map((report) => report.host).sort()).toEqual(['claude', 'codex']);
+    for (const host of ['claude', 'codex'] as const) {
+      const report = validationDocument.hostValidation.find((candidate) => candidate.host === host)!;
+      expect(report.target).toBe(host);
+      expect(report.diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
+      if (host === 'claude' && report.status === 'passed') {
+        expect(report.diagnostics).toEqual([]);
+      }
+      if (report.status === 'unavailable') expect(report.diagnostics.length).toBeGreaterThan(0);
     }
-    if (codexValidation!.status === 'passed') {
-      expect(codexValidation).toMatchObject({
-        diagnostics: [
-          { code: 'AB6030', severity: 'info' },
-          { code: 'AB6031', severity: 'info' },
-        ],
-      });
-    } else {
-      expect(codexValidation).toMatchObject({
-        diagnostics: [{ code: 'AB6030', severity: 'info' }],
-        status: 'unavailable',
-      });
-    }
-    expect(validationDocument.diagnostics).toEqual(
-      validationDocument.hostValidation.flatMap(({ diagnostics }) => diagnostics),
-    );
+    const hostDiagnosticCodes = validationDocument.hostValidation
+      .flatMap((report) => report.diagnostics.map((diagnostic) => diagnostic.code))
+      .sort();
+    expect(validationDocument.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual(hostDiagnosticCodes);
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [

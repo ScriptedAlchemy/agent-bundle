@@ -12,6 +12,7 @@ const operation = evidenceOperations(defaultEvidenceOperations).acousticIdentify
 export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.',
+  exitCode: 'result',
 };
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;

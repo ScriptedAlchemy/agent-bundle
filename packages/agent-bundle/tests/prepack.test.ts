@@ -40,6 +40,7 @@ beforeAll(async () => {
       'export default {',
       '  bin: false,',
       "  lib: './src/index.ts',",
+      "  output: { distPath: 'host-packs' },",
       "  plugin: { name: 'installer-fixture' },",
       "  targets: ['cursor'],",
       '};',
@@ -47,7 +48,7 @@ beforeAll(async () => {
     ].join('\n')),
     writeFile(join(projectRoot, 'src', 'index.ts'), 'export const value = 1;\n'),
   ]);
-  result = await prepack({ output: 'host-packs', root: projectRoot });
+  result = await prepack({ root: projectRoot });
   payloadPath = join(projectRoot, 'host-packs', 'cursor', 'INSTALL.md');
   payloadBytes = await readFile(payloadPath, 'utf8');
 });
@@ -109,6 +110,23 @@ it('reports missing allowlisted artifacts as AB7010', async () => {
     files: result.pack.files.filter((file) => file.path !== 'host-packs/cursor/INSTALL.md'),
   };
   expect(await diagnostics(pack)).toContainEqual(expect.objectContaining({ code: 'AB7010' }));
+});
+
+it('requires README.md even when the source file is absent', async () => {
+  const readme = join(projectRoot, 'README.md');
+  await rm(readme);
+  try {
+    const pack = {
+      ...result.pack,
+      files: result.pack.files.filter((file) => file.path !== 'README.md'),
+    };
+    expect(await diagnostics(pack)).toContainEqual(expect.objectContaining({
+      code: 'AB7010',
+      message: expect.stringContaining('"README.md"'),
+    }));
+  } finally {
+    await writeFile(readme, '# Installer fixture\n');
+  }
 });
 
 it('reports stale artifact hashes as AB7011', async () => {

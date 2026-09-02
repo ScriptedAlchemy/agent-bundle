@@ -11,6 +11,7 @@ const operation = evidenceOperations(defaultEvidenceOperations).acousticVerify;
 export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },
   description: 'Compare a bounded Audible sample with local audio through an optional Audiolocate Python capability.',
+  exitCode: 'result',
 };
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;

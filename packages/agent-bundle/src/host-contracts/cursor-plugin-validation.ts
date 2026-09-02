@@ -57,6 +57,12 @@ export interface ValidateCursorPluginOptions {
   readonly target: string;
 }
 
+export interface ValidateCursorPluginFilesOptions {
+  readonly containmentRoot?: string;
+  readonly pluginDirectory: string;
+  readonly target: string;
+}
+
 interface CursorProbe {
   readonly diagnostics: readonly Diagnostic[];
   readonly unavailable: boolean;
@@ -288,20 +294,26 @@ const displayPath = (root: string, path: string): string => relative(root, path)
 
 const symlinkDiagnostics = async (
   pluginDirectory: string,
+  containmentRoot: string,
   target: string,
 ): Promise<readonly Diagnostic[]> => {
   let rootRealPath: string;
   try {
-    rootRealPath = await realpath(pluginDirectory);
+    rootRealPath = await realpath(containmentRoot);
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return Object.freeze([]);
     return freezeDiagnostics([diagnostic(
       'AB6028',
-      'The Cursor bundle directory could not be resolved for symlink containment validation.',
+      containmentRoot === pluginDirectory
+        ? 'The Cursor bundle directory could not be resolved for symlink containment validation.'
+        : `Cursor local plugin root ${JSON.stringify(containmentRoot)} could not be resolved for symlink containment validation.`,
       'error',
       target,
     )]);
   }
+  const containmentLabel = containmentRoot === pluginDirectory
+    ? 'the Cursor bundle directory'
+    : `Cursor local plugin root ${JSON.stringify(containmentRoot)}`;
   const diagnostics: Diagnostic[] = [];
   const visit = async (directory: string): Promise<void> => {
     let entries;
@@ -325,7 +337,7 @@ const symlinkDiagnostics = async (
           if (!isInsideOrEqual(rootRealPath, targetPath)) {
             diagnostics.push(diagnostic(
               'AB6028',
-              `${displayPath(pluginDirectory, path)} is a symlink whose real target escapes the Cursor bundle directory.`,
+              `${displayPath(pluginDirectory, path)} is a symlink whose real target escapes ${containmentLabel}.`,
               'error',
               target,
             ));
@@ -333,7 +345,7 @@ const symlinkDiagnostics = async (
         } catch {
           diagnostics.push(diagnostic(
             'AB6028',
-            `${displayPath(pluginDirectory, path)} is a symlink whose real target cannot be resolved inside the Cursor bundle directory.`,
+            `${displayPath(pluginDirectory, path)} is a symlink whose real target cannot be resolved inside ${containmentLabel}.`,
             'error',
             target,
           ));
@@ -394,17 +406,47 @@ const tokenDiagnostics = (
   return freezeDiagnostics(diagnostics);
 };
 
+export const validateCursorPluginSymlinks = async (
+  options: ValidateCursorPluginFilesOptions,
+): Promise<readonly Diagnostic[]> => {
+  const pluginDirectory = resolve(options.pluginDirectory);
+  return symlinkDiagnostics(
+    pluginDirectory,
+    resolve(options.containmentRoot ?? pluginDirectory),
+    options.target,
+  );
+};
+
+export const validateCursorPluginFiles = async (
+  options: ValidateCursorPluginFilesOptions,
+): Promise<readonly Diagnostic[]> => {
+  const pluginDirectory = resolve(options.pluginDirectory);
+  const [localDocuments, precedence, symlinks] = await Promise.all([
+    readDocuments(pluginDirectory, options.target),
+    manifestPrecedenceDiagnostics(pluginDirectory, options.target),
+    validateCursorPluginSymlinks({
+      ...(options.containmentRoot === undefined ? {} : { containmentRoot: options.containmentRoot }),
+      pluginDirectory,
+      target: options.target,
+    }),
+  ]);
+  return freezeDiagnostics([
+    ...localDocuments.diagnostics,
+    ...precedence,
+    ...symlinks,
+    ...localDocuments.documents.flatMap((document) => tokenDiagnostics(document, options.target)),
+  ]);
+};
+
 export const validateCursorPlugin = async (
   options: ValidateCursorPluginOptions,
 ): Promise<CursorPluginValidationReport> => {
   const pluginDirectory = resolve(options.pluginDirectory);
   const executable = options.executable ?? 'cursor-agent';
   const run = options.run ?? runCursorCommand;
-  const [probe, localDocuments, precedence, symlinks] = await Promise.all([
+  const [probe, localDiagnostics] = await Promise.all([
     probeCursor(executable, dirname(pluginDirectory), run, options.target),
-    readDocuments(pluginDirectory, options.target),
-    manifestPrecedenceDiagnostics(pluginDirectory, options.target),
-    symlinkDiagnostics(pluginDirectory, options.target),
+    validateCursorPluginFiles({ pluginDirectory, target: options.target }),
   ]);
   const transparency = diagnostic(
     'AB6026',
@@ -415,10 +457,7 @@ export const validateCursorPlugin = async (
   const diagnostics = freezeDiagnostics([
     transparency,
     ...probe.diagnostics,
-    ...localDocuments.diagnostics,
-    ...precedence,
-    ...symlinks,
-    ...localDocuments.documents.flatMap((document) => tokenDiagnostics(document, options.target)),
+    ...localDiagnostics,
   ]);
   const failed = diagnostics.some((entry) => entry.severity === 'error');
   const warnings = diagnostics.some((entry) => entry.severity === 'warning');

@@ -124,6 +124,7 @@ export const planPackageEntries = async (
       const sourceInputs = Object.freeze([...new Set([
         bin.provenance.sourcePath,
         ...bin.generatedCli.routes.map((route) => route.source),
+        ...(model.providers ?? []).map((provider) => provider.source),
         ...(model.state === undefined ? [] : [model.state.source]),
       ])]);
       entries.push({
@@ -159,6 +160,7 @@ export const planPackageEntries = async (
           source: bin.source,
           sourceInputs,
           virtualSource: generatedRenderedRouteWorkerSource({
+            providers: model.providers ?? [],
             routes: renderedRoutes,
             ...(model.state === undefined ? {} : { state: model.state }),
           }),
@@ -189,9 +191,16 @@ export const planPackageEntries = async (
     options.artifactRoot !== undefined &&
     options.packageOutputRoot !== undefined
   ) {
-    const name = packageBuild.bins.some((bin) => bin.name === model.metadata.name)
-      ? `${model.metadata.name}-install`
-      : model.metadata.name;
+    const occupiedNames = new Set(packageBuild.bins.map((bin) => bin.name));
+    let name = model.metadata.name;
+    if (occupiedNames.has(name)) {
+      name = `${model.metadata.name}-install`;
+      let suffix = 2;
+      while (occupiedNames.has(name)) {
+        name = `${model.metadata.name}-install-${String(suffix)}`;
+        suffix += 1;
+      }
+    }
     const outputRelativePath = `bin/${name}.js`;
     const emittedBinDirectory = dirname(resolve(options.packageOutputRoot, outputRelativePath));
     const relativeArtifact = relative(emittedBinDirectory, options.artifactRoot).replaceAll('\\', '/');

@@ -313,7 +313,7 @@ export const compileMcpCliCommands = (
     return {
       aliases: [],
       ...(typeof description === 'string' ? { description } : {}),
-      exitCode: 'zero' as const,
+      exitCode: route.config['exitCode'] === 'result' ? 'result' as const : 'zero' as const,
       mcp: { confirm, server, tool },
       options: confirm ? [toolOption, confirmationOption] : [toolOption],
       path: [server, tool],

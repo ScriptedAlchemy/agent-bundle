@@ -374,7 +374,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
 
     await writeFile(join(project.root, 'agent-bundle.config.ts'), 'this source must not be loaded\n');
     const artifactValidation = await runCli(project.root, [
-      'validate', '--root', project.root, '--artifact', project.output, '--json',
+      'validate', '--root', project.root, '--artifact', project.output, '--no-host-validation', '--json',
     ]);
     expect(artifactValidation).toEqual({
       code: 0,
@@ -383,7 +383,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     });
 
     const humanValidation = await runCli(project.root, [
-      'validate', '--root', project.root, '--artifact', project.output,
+      'validate', '--root', project.root, '--artifact', project.output, '--no-host-validation',
     ]);
     expect(humanValidation).toEqual({ code: 0, stderr: '', stdout: 'Validation succeeded\n' });
   } finally {

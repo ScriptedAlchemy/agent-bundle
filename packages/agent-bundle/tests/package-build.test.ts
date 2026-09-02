@@ -254,6 +254,15 @@ describe('framework-owned package build', () => {
     await expect(build({ output: 'dist/artifact', packageOutputs: true, root })).rejects.toThrow(/overlaps the package build output/u);
   }, 120_000);
 
+  it('uses a non-overlapping artifact default when package outputs are requested', async () => {
+    const root = await fixtureRoot(conventionFixture());
+    await installTypescriptToolchain(root);
+    const result = await build({ packageOutputs: true, root });
+
+    expect(result.build.outputRoot).toBe(join(root, 'artifact'));
+    expect(result.packageBuild?.outputRoot).toBe(join(root, 'dist'));
+  }, 120_000);
+
   it('keeps programmatic artifact builds free of package outputs', async () => {
     const root = await fixtureRoot(conventionFixture());
     const result = await build({ output: 'artifact', root });

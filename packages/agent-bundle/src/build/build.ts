@@ -371,6 +371,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
             cwd: options.projectRoot,
             meta,
             outDir: target.root,
+            providers: options.model.providers ?? [],
             ...(options.model.state === undefined ? {} : { state: options.model.state }),
             ...tools,
           },

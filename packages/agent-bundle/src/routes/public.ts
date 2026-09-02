@@ -118,6 +118,8 @@ export interface ToolConfig {
   readonly _meta?: Readonly<Record<string, unknown>>;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
+  /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
+  readonly exitCode?: 'result';
   readonly title?: string;
 }
 

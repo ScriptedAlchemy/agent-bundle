@@ -182,6 +182,9 @@ export const packageBuildOutputDir = 'dist';
 /** The default artifact output directory of `agent-bundle build`, relative to the project root. */
 export const defaultArtifactDistPath = 'dist';
 
+/** The non-overlapping artifact default used when package outputs are built in the same operation. */
+export const defaultPackageArtifactDistPath = 'artifact';
+
 export type ArtifactDistPathIssue = 'path' | 'reserved' | 'shape';
 
 const reservedArtifactDistPathSegments = new Set([
@@ -211,16 +214,19 @@ export const artifactDistPathIssue = (value: unknown): ArtifactDistPathIssue | u
 };
 
 /** Returns the validated config path, falling back so downstream path resolution cannot throw on malformed input. */
-export const configuredArtifactDistPath = (config: AgentBundleConfig): string => {
+export const configuredArtifactDistPath = (
+  config: AgentBundleConfig,
+  fallback = defaultArtifactDistPath,
+): string => {
   try {
     const output = config.output as unknown;
-    if (!isArtifactOutputConfig(output)) return defaultArtifactDistPath;
+    if (!isArtifactOutputConfig(output)) return fallback;
     const distPath = output.distPath;
     return artifactDistPathIssue(distPath) === undefined
       ? distPath as string
-      : defaultArtifactDistPath;
+      : fallback;
   } catch {
-    return defaultArtifactDistPath;
+    return fallback;
   }
 };
 

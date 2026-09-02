@@ -24,8 +24,9 @@ node-consumable package build under `dist/` — the outputs `package.json`
 - When package outputs and at least one Claude, Codex, or Cursor host pack are
   built inside the project, the framework also emits one self-contained
   package-relative installer. It is `dist/bin/<plugin-name>.js` when that name
-  is free, otherwise `dist/bin/<plugin-name>-install.js`. Declare the matching
-  `package.json` `bin` value. Its grammar is
+  is free, otherwise `dist/bin/<plugin-name>-install.js`; if both are occupied,
+  a numeric suffix (`-install-2`, `-install-3`, …) guarantees a free name.
+  Declare the matching `package.json` `bin` value. Its grammar is
   `install <host> [--scope <scope>] [--json]`; help lists only built hosts.
   The baked URL resolves the shipped artifact directory from `import.meta.url`,
   never the caller's working directory, and delegates to the same
@@ -33,9 +34,11 @@ node-consumable package build under `dist/` — the outputs `package.json`
 - `agent-bundle prepack [--root <root>] [--output <artifact>] [--json]` runs
   the release build and `npm pack --dry-run --json --ignore-scripts`, then
   gates the exact package/artifact inventory, manifest hashes, package bin
-  targets, and release-version agreement. Use it as an npm `prepack` script;
-  `--ignore-scripts` prevents recursion and npm install never runs the host
-  installer.
+  targets, and release-version agreement. With no `--output`, prepack uses
+  configured `output.distPath` when present and otherwise writes artifacts to
+  `artifact/`, leaving the package build in `dist/`. Use it as an npm `prepack`
+  script; `--ignore-scripts` prevents recursion and npm install never runs the
+  host installer.
 - The package build runs for `agent-bundle build` (CLI, or
   `build({ packageOutputs: true })` through the API) and inside the
   `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”
@@ -78,7 +81,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
@@ -334,6 +337,11 @@ Every other tool is mutation-capable and fails closed unless `--yes` is
 present. Help and `agent-bundle inspect --routes` expose the source server,
 tool, and confirmation policy, and collisions with custom command paths,
 groups, or aliases fail with `AB4813`.
+
+A tool whose validated result carries an integer `exitCode` can declare
+`config.exitCode: 'result'`; projection preserves that policy so represented
+domain failures exit nonzero. Other projected tools retain the success-status
+policy and exit zero only for a successful rendered document.
 
 This is an in-house projection over the compiled route graph, per gate G7; it
 does not depend on MCPorter or introduce a second command model. MCPorter can

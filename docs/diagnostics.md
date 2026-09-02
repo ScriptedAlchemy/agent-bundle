@@ -28,7 +28,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7318` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, and durable-state inventory. |
+| `AB7300`–`AB7320` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, and static bytes-at-rest validation. |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8xxx` | Development server configuration. |
@@ -398,6 +398,17 @@ SQLite lock or shared-memory files.
 | --- | --- | --- |
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. Restart it after upgrading Agent Bundle. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. Inspect or restart the runtime, then rerun Doctor. |
+
+## Read-only Doctor static validation (`AB7319`–`AB7320`)
+
+Doctor reuses the pinned, process-free host document and loader validators.
+These checks read installed or supplied bundle bytes only; they never invoke a
+host CLI, repair a bundle, or perform a live protocol exchange.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract; the loader-recognized entry remains `installed`. | Reinstall an invalid Cursor plugin or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
 
 ## Development package build (`AB7103`)
 
