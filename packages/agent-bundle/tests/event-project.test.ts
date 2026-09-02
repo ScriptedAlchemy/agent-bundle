@@ -46,3 +46,38 @@ it('validates native event envelopes with the generated wrapper error contract',
   expect(() => validateNativeEventEnvelope([], options))
     .toThrow('Agent Bundle event route error: stdin JSON value must be an object');
 });
+
+it('validates Cursor workspaceOpen without inventing an agent session', () => {
+  const options = {
+    canonicalEvent: 'workspace/open' as const,
+    nativeEvent: 'workspaceOpen',
+    target: 'cursor',
+  };
+  const documented = {
+    cursor_version: '1.7.2',
+    hook_event_name: 'workspaceOpen',
+    user_email: null,
+    workspace_roots: ['/abs/path'],
+  };
+
+  expect(validateNativeEventEnvelope(documented, options)).toBe(documented);
+  for (const workspaceRoots of [undefined, [], [''], ['/abs/path', 7]]) {
+    expect(() => validateNativeEventEnvelope({
+      ...documented,
+      workspace_roots: workspaceRoots,
+    }, options)).toThrow(/native workspace_roots must be a nonempty array of nonempty strings/u);
+  }
+  expect(() => validateNativeEventEnvelope({ ...documented, cursor_version: '' }, options))
+    .toThrow(/native cursor_version must be a nonempty string/u);
+  expect(() => validateNativeEventEnvelope({ ...documented, user_email: 7 }, options))
+    .toThrow(/native user_email must be a string or null/u);
+
+  expect(() => validateNativeEventEnvelope({
+    ...documented,
+    hook_event_name: 'sessionStart',
+  }, {
+    canonicalEvent: 'session/start',
+    nativeEvent: 'sessionStart',
+    target: 'cursor',
+  })).toThrow(/native session_id or conversation_id must be a string/u);
+});

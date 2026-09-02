@@ -154,7 +154,14 @@ export const createNativeEventStarter = (
             stop_hook_active: false,
           });
     case 'workspace/open':
-      return deepFreeze(base);
+      return deepFreeze(target === 'cursor'
+        ? {
+            cursor_version: 'lifecycle-replay',
+            hook_event_name: nativeEvent,
+            user_email: null,
+            workspace_roots: ['/tmp'],
+          }
+        : base);
     default: {
       const exhaustive: never = canonicalEvent;
       return exhaustive;

@@ -1034,6 +1034,88 @@ it('runs the embedded Codex and Claude native codecs through their published wra
   }
 }, 15_000);
 
+it('runs the Cursor workspace/open lifecycle starter through a generated wrapper with empty stdout', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-workspace-open-'));
+  const sourceRoot = join(root, 'src', 'events', 'workspace');
+  const packageRoot = join(root, 'node_modules', 'agent-bundle');
+  const wrapper = join(root, 'event-route-workspace-open.mjs');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [{
+      event: 'workspaceOpen',
+      eventRoute: { event: 'workspace/open', fallback: 'none', runtime: 'standalone' },
+      id: 'hook:event-route:workspace-open',
+      name: 'event-route-workspace-open',
+      provenance: { kind: 'conventional', sourcePath: join(sourceRoot, 'open.mjs') },
+      source: join(sourceRoot, 'open.mjs'),
+      targets: ['cursor'],
+      tools: [],
+    }],
+    targets: [{
+      id: 'target:cursor',
+      name: 'cursor',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+    }],
+  };
+
+  try {
+    await Promise.all([
+      mkdir(sourceRoot, { recursive: true }),
+      mkdir(packageRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+        exports: {
+          './event-ipc': './event-ipc.mjs',
+          './event-project': './event-project.mjs',
+        },
+        type: 'module',
+      })),
+      writeFile(
+        join(packageRoot, 'event-ipc.mjs'),
+        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-ipc.js')).href)};\n`,
+      ),
+      writeFile(
+        join(packageRoot, 'event-project.mjs'),
+        `export * from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/dist/event-project.js')).href)};\n`,
+      ),
+      writeFile(join(sourceRoot, 'open.mjs'), [
+        `import { Agent } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/rsc-runtime/dist/index.js')).href)};`,
+        `import { createElement } from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'packages/agent-bundle/node_modules/react/index.js')).href)};`,
+        '',
+        'export default async function WorkspaceOpen() {',
+        '  return createElement(Agent.Result);',
+        '}',
+        '',
+      ].join('\n')),
+    ]);
+    const targetRegistry = createDefaultRegistry();
+    const plan = targetRegistry.get('cursor').plan(model);
+    const generated = plan.hookEntries?.find((entry) => entry.relativePath === 'hooks/event-route-workspace-open.mjs');
+    const starter = targetRegistry.hookContract('cursor')?.nativeEventStarter?.('workspace/open');
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(generated).toBeDefined();
+    await writeFile(wrapper, generated!.virtualSource);
+    expect(starter).toEqual({
+      cursor_version: 'lifecycle-replay',
+      hook_event_name: 'workspaceOpen',
+      user_email: null,
+      workspace_roots: ['/tmp'],
+    });
+    await expect(runNativeHook(wrapper, starter!)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: '',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
 it('round-trips Claude and Codex subagent fields through published wrappers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-subagent-hook-codecs-'));
   const sourceRoot = join(root, 'src', 'hooks');

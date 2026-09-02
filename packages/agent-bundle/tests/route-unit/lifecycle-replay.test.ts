@@ -122,3 +122,51 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
     });
   }
 });
+
+it('replays the Cursor workspaceOpen starter as an observation with no native response', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-lifecycle-replay-workspace-open-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({ name: 'workspace-open-fixture', type: 'module' })),
+    writeProjectFile(root, 'src/events/workspace/open.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function WorkspaceOpen() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+  const graph = await compileRouteGraph(root, { targets: ['cursor'] } as never);
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['cursor'] }),
+  });
+  const lifecycle = service.list().lifecycles.find((candidate) => candidate.routeId === 'event:workspace/open');
+  const target = lifecycle?.targets.find((candidate) => candidate.target === 'cursor');
+
+  expect(target?.fixture?.native).toEqual({
+    cursor_version: 'lifecycle-replay',
+    hook_event_name: 'workspaceOpen',
+    user_email: null,
+    workspace_roots: ['/tmp'],
+  });
+  const replay = await service.replay({
+    binding: {
+      manifestDigest: graph.digest,
+      routeId: 'event:workspace/open',
+      target: 'cursor',
+    },
+    native: target!.fixture!.native,
+    source: 'fixture',
+  });
+  expect('diagnostics' in replay).toBe(false);
+  expect(replay).toMatchObject({
+    canonical: {
+      event: 'workspace/open',
+      provenance: { host: 'cursor', nativeEvent: 'workspaceOpen' },
+    },
+    nativeInput: target?.fixture?.native,
+  });
+  expect((replay as LifecycleReplay).nativeResponse).toBeUndefined();
+});

@@ -797,7 +797,7 @@ it('discovers only the seven v1 event families and validates their component con
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
 
-it('fails unavailable event routes before packaging for every selected target', async () => {
+it('fails unavailable event routes before packaging while admitting supported targets', async () => {
   const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
   const configSource = [
     'export default {',
@@ -819,7 +819,7 @@ it('fails unavailable event routes before packaging for every selected target', 
     code: 'AB4824',
     target: 'claude',
   }));
-  expect(unrestricted.diagnostics).toContainEqual(expect.objectContaining({
+  expect(unrestricted.diagnostics).not.toContainEqual(expect.objectContaining({
     code: 'AB4824',
     target: 'cursor',
   }));
@@ -835,11 +835,8 @@ it('fails unavailable event routes before packaging for every selected target', 
   });
 
   const restricted = await inspect({ root: restrictedRoot });
-  expect(restricted.state).toBe('invalid');
-  expect(restricted.diagnostics).toContainEqual(expect.objectContaining({
-    code: 'AB4824',
-    target: 'cursor',
-  }));
+  expect(restricted.state).toBe('ready');
+  expect(restricted.diagnostics).toEqual([]);
 });
 
 it('rejects malformed event route targets with AB4825', async () => {

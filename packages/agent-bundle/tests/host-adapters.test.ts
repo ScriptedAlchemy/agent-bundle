@@ -610,6 +610,48 @@ it('diagnoses a plain Cursor workspaceOpen hook instead of lowering a session-sc
   expect(plan.entries.some((entry) => entry.relativePath === 'hooks/hooks.json')).toBe(false);
 });
 
+it('plans a Cursor workspace/open event route without enabling the plain hook vocabulary', () => {
+  const model: NormalizedPlugin = {
+    ...plugin,
+    hooks: [{
+      event: 'workspaceOpen',
+      eventRoute: { event: 'workspace/open', fallback: 'none', runtime: 'shared' },
+      id: 'hook:event-route:workspace-open',
+      name: 'event-route-workspace-open',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/workspace/open.tsx' },
+      source: '/workspace/src/events/workspace/open.tsx',
+      targets: ['cursor'],
+      tools: [],
+    }],
+    marketplace: undefined,
+    mcpServers: [],
+    skills: [],
+    targets: [{
+      id: 'target:cursor',
+      name: 'cursor',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    }],
+  };
+  const plan = createDefaultRegistry().get('cursor').plan(model);
+  const hooks = plan.entries.find((entry) => entry.relativePath === 'hooks/hooks.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(hooks?.kind).toBe('write');
+  expect(JSON.parse(hooks?.kind === 'write' ? hooks.content : '{}')).toEqual({
+    hooks: {
+      workspaceOpen: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-workspace-open.mjs"',
+      }],
+    },
+    version: 1,
+  });
+  expect(plan.hookEntries).toContainEqual(expect.objectContaining({
+    nativeEvent: 'workspaceOpen',
+    relativePath: 'hooks/event-route-workspace-open.mjs',
+    target: 'cursor',
+  }));
+});
+
 it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd, and the env anchor', () => {
   const compiled = {
     ...plugin,
