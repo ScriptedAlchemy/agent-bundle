@@ -2,6 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/plugin.schema.json",
   "$defs": {
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "marketplace": { "minLength": 1, "type": "string" },
+        "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+        "version": { "minLength": 1, "type": "string" }
+      },
+      "required": ["name"],
+      "type": "object"
+    },
     "lspServer": {
       "additionalProperties": false,
       "properties": {
@@ -106,6 +116,16 @@
       "type": "object"
     },
     "description": { "minLength": 1, "type": "string" },
+    "dependencies": {
+      "items": {
+        "oneOf": [
+          { "minLength": 1, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+          { "$ref": "#/$defs/dependency" }
+        ]
+      },
+      "minItems": 1,
+      "type": "array"
+    },
     "hooks": { "const": "./hooks/hooks.json", "type": "string" },
     "lspServers": {
       "anyOf": [

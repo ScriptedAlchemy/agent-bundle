@@ -254,6 +254,36 @@ it('attaches a specific recovery to every invalid inspection diagnostic', async 
   }
 });
 
+it('accepts the public claude.dependencies config surface and plans its manifest', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '  claude: {',
+      "    dependencies: ['audit-logger', { name: 'policy-kit', version: '^2.0', marketplace: 'acme-shared' }],",
+      '  },',
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ root });
+    const manifest = result.plans[0]?.entries.find((entry) =>
+      entry.relativePath === '.claude-plugin/plugin.json');
+
+    expect(result.diagnostics).toEqual([]);
+    expect(manifest?.kind).toBe('write');
+    if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
+    expect(JSON.parse(manifest.content).dependencies).toEqual([
+      'audit-logger',
+      { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
+    ]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
 it('reports one modern-MCP source diagnostic for a legacy SSE declaration', async () => {
   const root = await createProject();
   try {

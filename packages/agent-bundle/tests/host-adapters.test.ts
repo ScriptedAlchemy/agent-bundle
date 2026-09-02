@@ -7,6 +7,7 @@ import addFormats from 'ajv-formats';
 import { expect, it } from '@rstest/core';
 
 import { cursorMarketplaceValidator } from '../src/adapters/cursor.ts';
+import { isValidClaudeDependencyRange } from '../src/adapters/claude.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { build } from './support/build.ts';
@@ -149,6 +150,23 @@ const withClaudeSettings = (
       provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
       target: 'claude',
       value: { settings },
+    },
+  },
+});
+
+const withClaudeDependencies = (
+  model: NormalizedPlugin,
+  dependencies: unknown,
+  target = 'claude',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/dependencies.config.ts' },
+      target,
+      value: { dependencies },
     },
   },
 });
@@ -998,6 +1016,83 @@ it('emits no Claude settings document when the host config declares none', () =>
 
   expect(plan.entries.some((entry) => entry.relativePath === 'settings.json')).toBe(false);
 });
+
+it('emits Claude plugin dependencies in authored order with closed object keys and extension provenance', async () => {
+  const model = withClaudeDependencies(plugin, [
+    'audit-logger',
+    { version: '~2.1.0', name: 'secrets-vault' },
+    { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
+  ]);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const entry = plan.entries.find((candidate) => candidate.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(entry?.kind).toBe('write');
+  if (entry?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
+  expect(JSON.parse(entry.content).dependencies).toEqual([
+    'audit-logger',
+    { name: 'secrets-vault', version: '~2.1.0' },
+    { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
+  ]);
+  expect(entry.sourceInputs).toContain('/workspace/dependencies.config.ts');
+  await validateDocuments('claude', writeContents(model, 'claude'));
+});
+
+it.each([
+  { dependencies: [], code: 'claude.dependencies.declaration.invalid', label: 'an empty array' },
+  { dependencies: [7], code: 'claude.dependencies.entry.invalid', label: 'a non-string non-object entry' },
+  { dependencies: [''], code: 'claude.dependencies.entry.invalid', label: 'an empty string entry' },
+  { dependencies: [{}], code: 'claude.dependencies.name.required', label: 'an object without a name' },
+  { dependencies: [{ name: '', version: '^2.0' }], code: 'claude.dependencies.name.required', label: 'an empty object name' },
+  { dependencies: [{ name: 'audit-logger', source: './audit' }], code: 'claude.dependencies.field.unknown', label: 'an unknown object field' },
+  { dependencies: ['Audit Logger'], code: 'claude.dependencies.name.invalid', label: 'an implausible plugin name' },
+  { dependencies: ['audit-logger', { name: 'audit-logger' }], code: 'claude.dependencies.duplicate', label: 'a duplicate same-marketplace name' },
+  {
+    dependencies: [
+      { marketplace: 'acme-shared', name: 'audit-logger' },
+      { marketplace: 'acme-shared', name: 'audit-logger', version: '^2.0' },
+    ],
+    code: 'claude.dependencies.duplicate',
+    label: 'a duplicate cross-marketplace name',
+  },
+  { dependencies: ['review-tools'], code: 'claude.dependencies.self', label: 'a self dependency' },
+  { dependencies: [{ name: 'audit-logger', version: 'latest' }], code: 'claude.dependencies.version.invalid', label: 'an invalid version range' },
+  { dependencies: [{ marketplace: '', name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'an empty marketplace' },
+  { dependencies: [{ marketplace: 7, name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'a non-string marketplace' },
+])('rejects $label before emitting Claude dependencies', ({ dependencies, code }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeDependencies(plugin, dependencies));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+  }));
+  if (manifest?.kind === 'write') {
+    expect(JSON.parse(manifest.content)).not.toHaveProperty('dependencies');
+  }
+});
+
+it.each([
+  '~2.1.0',
+  '^2.0',
+  '>=1.4',
+  '=2.1.0',
+  '2.x',
+  '1.2.3 - 2.0.0',
+  '>=2.0 <3.0',
+  '^2.0.0-0',
+  '^1.0 || >=2.0 <3.0',
+])('accepts documented Claude dependency semver range %s', (range) => {
+  expect(isValidClaudeDependencyRange(range)).toBe(true);
+});
+
+it.each(['', 'latest', '^', 'not-a-range', '>=', '||', '<= >', '1.x.3', '^2.0.0-01'])(
+  'rejects malformed Claude dependency semver range %s',
+  (range) => {
+    expect(isValidClaudeDependencyRange(range)).toBe(false);
+  },
+);
 
 it.each([
   {

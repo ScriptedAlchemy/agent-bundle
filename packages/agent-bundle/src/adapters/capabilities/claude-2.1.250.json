@@ -55,6 +55,24 @@
       "organizationDistributionProhibited": true
     },
     "commands": true,
+    "dependencies": {
+      "autoInstall": true,
+      "autoInstallExceptions": ["command-source", "headersHelper"],
+      "crossMarketplaceAllowlist": "allowCrossMarketplaceDependenciesOn",
+      "entryForms": ["name", "object"],
+      "errorCodes": [
+        "dependency-unsatisfied",
+        "range-conflict",
+        "dependency-version-unsatisfied",
+        "no-matching-tag"
+      ],
+      "objectFields": ["marketplace", "name", "version"],
+      "prereleaseOptIn": true,
+      "prune": true,
+      "rangeIntersection": true,
+      "semverRanges": true,
+      "tagConvention": "{name}--v{version}"
+    },
     "devtools": {
       "details": true,
       "listJson": true,
@@ -149,7 +167,13 @@
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference rejects `${user_config.*}` in shell-form hook commands (use exec form with args or `CLAUDE_PLUGIN_OPTION_<KEY>`), monitor commands (read a config file), and MCP `headersHelper` (read a config file); before Claude Code v2.1.207 those fields performed substitution.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference stores non-sensitive options under `pluginConfigs[<plugin>].options` in user settings and sensitive options in macOS Keychain with credentials-file fallback, or `~/.claude/.credentials.json` without a supported keychain; Keychain storage is shared with OAuth tokens and has an approximately 2 KB total limit. pluginConfigs precedence is managed settings, then `--settings`, then user settings; project and local settings are ignored for pluginConfigs (but not enabledPlugins), while before v2.1.207 they were read.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents repeatable `claude plugin install --config key=value` for setting declared userConfig options.",
-      "2026-09-01: Claude Code 2.1.257 `claude plugin validate --strict` accepts an emitted plugin manifest declaring userConfig with a sensitive string option and a bounded number option."
+      "2026-09-01: Claude Code 2.1.257 `claude plugin validate --strict` accepts an emitted plugin manifest declaring userConfig with a sensitive string option and a bounded number option.",
+      "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents `.claude-plugin/plugin.json` dependencies as a union of bare plugin-name strings and closed objects with required `name` plus optional `version` and `marketplace`; omitted marketplace resolves in the declaring plugin's marketplace.",
+      "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents npm-style semver ranges, pre-release exclusion unless a range opts in, and git tag resolution through `{name}--v{version}`. Git sources fetch the highest satisfying tag; npm, archive, and command sources are load-checked only, command-source dependencies are never auto-installed, and a dependency's headersHelper is never run automatically.",
+      "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies requires cross-marketplace targets in `allowCrossMarketplaceDependenciesOn` on the root marketplace; only the root allowlist is consulted, trust does not chain, and users may manually install a blocked dependency first.",
+      "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents intersection of constraints from multiple dependents, constrained auto-update, transitive enable, disable refusal while depended upon, release of constraints after uninstall, and pruning only auto-installed orphan dependencies.",
+      "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies exposes dependency-unsatisfied, range-conflict, dependency-version-unsatisfied, and no-matching-tag in `claude plugin list --json` errors.",
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest declaring one bare dependency and one `{name, version}` dependency object and prints \"Validation passed\" (host-adapters.native.test.ts)."
     ]
   }
 }
