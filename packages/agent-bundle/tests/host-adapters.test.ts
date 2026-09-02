@@ -119,6 +119,23 @@ const withClaudeUserConfig = (
   },
 });
 
+const withClaudeChannels = (
+  model: NormalizedPlugin,
+  channels: unknown,
+  target = 'claude',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/channels.config.ts' },
+      target,
+      value: { channels },
+    },
+  },
+});
+
 const withClaudeBin = (
   model: NormalizedPlugin,
   files: NonNullable<NormalizedPlugin['hostBins']>[number]['files'],
@@ -863,6 +880,165 @@ it('pins the closed Claude userConfig manifest schema', async () => {
     { token: { ...option, type: 'secret' } },
   ]) {
     expect(validate({ ...manifest, userConfig })).toBe(false);
+  }
+});
+
+it('emits Claude channels bound to planned MCP servers with per-channel sensitive userConfig', () => {
+  const model = withClaudeChannels(plugin, [
+    {
+      server: 'stdio',
+      userConfig: {
+        bot_token: {
+          description: 'Telegram bot token.',
+          sensitive: true,
+          title: 'Bot token',
+          type: 'string',
+        },
+      },
+    },
+    { server: 'stdio' },
+    { server: 'http' },
+  ]);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({
+    kind: 'write',
+    sourceInputs: expect.arrayContaining(['/workspace/channels.config.ts']),
+  });
+  if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
+  expect(JSON.parse(manifest.content).channels).toEqual([
+    {
+      server: 'stdio',
+      userConfig: {
+        bot_token: {
+          description: 'Telegram bot token.',
+          sensitive: true,
+          title: 'Bot token',
+          type: 'string',
+        },
+      },
+    },
+    { server: 'stdio' },
+    { server: 'http' },
+  ]);
+});
+
+it.each([
+  { channels: [], code: 'claude.channels.declaration.invalid', label: 'an empty channels declaration' },
+  { channels: ['stdio'], code: 'claude.channels.entry.invalid', label: 'a non-object channel entry' },
+  { channels: [{ server: 'stdio', typo: true }], code: 'claude.channels.field.unknown', label: 'an unknown channel field' },
+  { channels: [{}], code: 'claude.channels.server.required', label: 'a missing channel server' },
+  { channels: [{ server: '' }], code: 'claude.channels.server.required', label: 'an empty channel server' },
+  { channels: [{ server: 'missing' }], code: 'claude.channels.server.unknown', label: 'a channel bound to an undeclared MCP server' },
+  { channels: [{ server: 'stdio', userConfig: {} }], code: 'claude.channels.userConfig.invalid', label: 'an empty per-channel userConfig' },
+  {
+    channels: [{
+      server: 'stdio',
+      userConfig: { 'bot-token': { description: 'Token.', title: 'Token', type: 'string' } },
+    }],
+    code: 'claude.channels.key.invalid',
+    label: 'an invalid per-channel option key',
+  },
+  {
+    channels: [{
+      server: 'stdio',
+      userConfig: {
+        BotToken: { description: 'First.', title: 'First', type: 'string' },
+        BOTTOKEN: { description: 'Second.', title: 'Second', type: 'string' },
+      },
+    }],
+    code: 'claude.channels.key.collision',
+    label: 'per-channel environment keys that collide after uppercasing',
+  },
+  {
+    channels: [{
+      server: 'stdio',
+      userConfig: { bot_token: { description: 'Token.', title: 'Token', type: 'secret' } },
+    }],
+    code: 'claude.userConfig.type.invalid',
+    label: 'an invalid per-channel option declaration',
+  },
+])('rejects $label without emitting channels', ({ channels, code }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeChannels(plugin, channels));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+  }));
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Claude plugin manifest.');
+  expect(JSON.parse(manifest.content)).not.toHaveProperty('channels');
+});
+
+it('rejects channels when no Claude MCP servers are planned', () => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeChannels({
+    ...plugin,
+    mcpServers: [],
+  }, [{ server: 'stdio' }]));
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'claude.channels.server.unknown',
+    message: expect.stringContaining('no plugin MCP servers'),
+  }));
+});
+
+it('rejects a channel when its MCP server prevents the MCP document from emitting', () => {
+  const invalidMcpModel = {
+    ...plugin,
+    mcpServers: plugin.mcpServers.map((server) =>
+      server.name === 'http' ? { ...server, url: 'not a URL' } : server),
+  } satisfies NormalizedPlugin;
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeChannels(
+    invalidMcpModel,
+    [{ server: 'http' }],
+  ));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.schema.mcp',
+    'claude.channels.server.unknown',
+  ]);
+  expect(plan.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Claude plugin manifest.');
+  expect(JSON.parse(manifest.content)).not.toHaveProperty('channels');
+});
+
+it('pins the closed Claude channels manifest schema', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude channels schema fixture.',
+    name: 'claude-channels-fixture',
+    version: '1.0.0',
+  };
+  const option = {
+    description: 'Telegram bot token.',
+    sensitive: true,
+    title: 'Bot token',
+    type: 'string',
+  };
+
+  expect(validate({
+    ...manifest,
+    channels: [{ server: 'telegram', userConfig: { bot_token: option } }],
+  })).toBe(true);
+  for (const channels of [
+    [],
+    [{}],
+    [{ server: '' }],
+    [{ server: 'telegram', unknown: true }],
+    [{ server: 'telegram', userConfig: {} }],
+    [{ server: 'telegram', userConfig: { 'bot-token': option } }],
+  ]) {
+    expect(validate({ ...manifest, channels })).toBe(false);
   }
 });
 

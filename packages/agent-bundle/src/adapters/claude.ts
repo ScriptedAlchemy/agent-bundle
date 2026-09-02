@@ -118,6 +118,12 @@ export interface ClaudeUserConfigOption {
   readonly type: ClaudeUserConfigOptionType;
 }
 
+/** One Claude Code message channel bound to an MCP server supplied by this plugin. */
+export interface ClaudeChannelConfig {
+  readonly server: string;
+  readonly userConfig?: Readonly<Record<string, ClaudeUserConfigOption>>;
+}
+
 /**
  * One Claude Code subagent status line: the command object documented for
  * `subagentStatusLine`, which renders a custom row body for each subagent in
@@ -184,6 +190,8 @@ export interface ClaudeDependencyConfig {
 export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Project-authored directory copied to the plugin-root `bin/` executable convention. */
   readonly bin?: string;
+  /** Message channels whose server names must resolve in this plugin's emitted `.mcp.json`. */
+  readonly channels?: readonly ClaudeChannelConfig[];
   /** Whether a newly installed plugin starts enabled when no stronger host state exists. */
   readonly defaultEnabled?: boolean;
   /**
@@ -253,7 +261,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.10.0',
+  adapterRevision: '1.11.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -985,6 +993,17 @@ const noManifestMetadataPlan: ClaudeManifestMetadataPlan = deepFreeze({
   sourceInputs: [],
 });
 
+interface ClaudeChannelsPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: readonly Record<string, unknown>[];
+  readonly sourceInputs: readonly string[];
+}
+
+const noChannelsPlan: ClaudeChannelsPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
 const manifestMetadataDiagnostic = (
   code: string,
   message: string,
@@ -1041,6 +1060,129 @@ const planClaudeManifestMetadata = (model: NormalizedPlugin): ClaudeManifestMeta
       ...(displayName === undefined ? {} : { displayName }),
       ...(metadataValue === undefined ? {} : { metadata: metadataValue }),
     }),
+    sourceInputs: inputs,
+  };
+};
+
+const channelFields: ReadonlySet<string> = new Set(['server', 'userConfig']);
+
+/**
+ * Lowers `claude.channels` into plugin manifest declarations after binding
+ * each channel to a server that survived this target's MCP planning. Duplicate
+ * declarations are retained in authored order because the host contract does
+ * not require one channel per server.
+ */
+export const planClaudeChannels = (
+  model: NormalizedPlugin,
+  pluginMcpServerNames: ReadonlySet<string>,
+): ClaudeChannelsPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noChannelsPlan;
+  const declared = extension.value['channels'];
+  if (declared === undefined) return noChannelsPlan;
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!Array.isArray(declared) || declared.length === 0) {
+    return {
+      diagnostics: [userConfigDiagnostic(
+        'claude.channels.declaration.invalid',
+        'Claude channels must be a nonempty array of channel declarations.',
+        'Declare at least one channel as { server, userConfig? }, then rebuild.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const document: Record<string, unknown>[] = [];
+  for (const [index, channel] of declared.entries()) {
+    if (!isPlainDataRecord(channel)) {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.channels.entry.invalid',
+        `Claude channel at index ${index} must be a channel declaration object.`,
+        `Replace channels[${index}] with an object containing server and optional userConfig, then rebuild.`,
+      ));
+      continue;
+    }
+    for (const field of Object.keys(channel).sort()) {
+      if (channelFields.has(field)) continue;
+      diagnostics.push(userConfigDiagnostic(
+        'claude.channels.field.unknown',
+        `Claude channel at index ${index} declares unknown field ${JSON.stringify(field)}.`,
+        `Remove channels[${index}].${field}; channel declarations support only server and userConfig.`,
+      ));
+    }
+
+    const server = channel['server'];
+    if (typeof server !== 'string' || server.length === 0) {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.channels.server.required',
+        `Claude channel at index ${index} requires a nonempty server name.`,
+        `Set channels[${index}].server to a key emitted in this plugin's .mcp.json, then rebuild.`,
+      ));
+    } else if (!pluginMcpServerNames.has(server)) {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.channels.server.unknown',
+        pluginMcpServerNames.size === 0
+          ? `Claude channel at index ${index} binds to ${JSON.stringify(server)}, but this target emits no plugin MCP servers.`
+          : `Claude channel at index ${index} binds to undeclared plugin MCP server ${JSON.stringify(server)}.`,
+        `Set channels[${index}].server to one of the plugin MCP servers selected for this target, then rebuild.`,
+      ));
+    }
+
+    const userConfig = channel['userConfig'];
+    let plannedUserConfig: Record<string, Record<string, unknown>> | undefined;
+    if (userConfig !== undefined) {
+      if (!isPlainDataRecord(userConfig) || Object.keys(userConfig).length === 0) {
+        diagnostics.push(userConfigDiagnostic(
+          'claude.channels.userConfig.invalid',
+          `Claude channel at index ${index} userConfig must be a nonempty plain record of option key to option declaration.`,
+          `Set channels[${index}].userConfig to a nonempty option map or remove it, then rebuild.`,
+        ));
+      } else {
+        plannedUserConfig = Object.create(null) as Record<string, Record<string, unknown>>;
+        const environmentOwners = new Map<string, string>();
+        for (const key of Object.keys(userConfig).sort()) {
+          if (!userConfigIdentifier.test(key)) {
+            diagnostics.push(userConfigDiagnostic(
+              'claude.channels.key.invalid',
+              `Claude channel at index ${index} userConfig option key "${key}" must match ^[A-Za-z_][A-Za-z0-9_]*$.`,
+              `Rename channels[${index}].userConfig option "${key}" to a valid identifier, then rebuild.`,
+            ));
+          }
+          const environmentKey = key.toUpperCase();
+          const owner = environmentOwners.get(environmentKey);
+          if (owner === undefined) {
+            environmentOwners.set(environmentKey, key);
+          } else {
+            diagnostics.push(userConfigDiagnostic(
+              'claude.channels.key.collision',
+              `Claude channel at index ${index} userConfig option keys "${owner}" and "${key}" both export as CLAUDE_PLUGIN_OPTION_${environmentKey}.`,
+              `Rename one channels[${index}].userConfig option so every key remains unique after uppercasing, then rebuild.`,
+            ));
+          }
+          const optionPlan = planClaudeUserConfigOption(key, userConfig[key]);
+          diagnostics.push(...optionPlan.diagnostics);
+          if (optionPlan.value !== undefined) plannedUserConfig[key] = optionPlan.value;
+        }
+      }
+    }
+
+    if (
+      typeof server === 'string' &&
+      server.length > 0 &&
+      pluginMcpServerNames.has(server) &&
+      (userConfig === undefined || plannedUserConfig !== undefined)
+    ) {
+      document.push({
+        server,
+        ...(plannedUserConfig === undefined ? {} : { userConfig: plannedUserConfig }),
+      });
+    }
+  }
+
+  return {
+    diagnostics,
+    ...(diagnostics.length === 0 ? { document: Object.freeze(document) } : {}),
     sourceInputs: inputs,
   };
 };
@@ -1299,6 +1441,8 @@ export const planClaudeArtifacts = (
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
+  const channels = planClaudeChannels(model, new Set(mcpValid ? Object.keys(servers) : []));
+  diagnostics.push(...channels.diagnostics);
   const lsp = planClaudeLsp(model);
   diagnostics.push(...lsp.diagnostics);
   const userConfig = planClaudeUserConfig(model);
@@ -1324,6 +1468,7 @@ export const planClaudeArtifacts = (
   const plugin = {
     author: { name: model.metadata.name },
     ...manifestMetadata.document,
+    ...(channels.document === undefined ? {} : { channels: channels.document }),
     ...(dependencies.document === undefined ? {} : { dependencies: dependencies.document }),
     description: model.metadata.description ?? model.metadata.name,
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
@@ -1365,6 +1510,7 @@ export const planClaudeArtifacts = (
 
   const basePlan = standardPluginArtifactPlan({
     additionalPluginSourceInputs: sourceInputs(
+      ...channels.sourceInputs,
       ...userConfig.sourceInputs,
       ...manifestMetadata.sourceInputs,
       ...dependencies.sourceInputs,
@@ -1418,6 +1564,12 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
         capabilityTable.plugin.bin.organizationDistributionProhibited,
       evidence,
       'The pinned Claude plugin contract does not document the plugin-root bin executable surface.',
+    ),
+    channels: capabilityStateFromSupport(
+      capabilityTable.plugin.channels.bindsToPluginMcpServer &&
+        capabilityTable.plugin.channels.perChannelUserConfig,
+      evidence,
+      'The pinned Claude plugin contract does not document message channel declarations.',
     ),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,

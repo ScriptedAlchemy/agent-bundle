@@ -348,6 +348,53 @@ it('emits Claude manifest metadata from the unified target only into the Claude 
     .toContain('/workspace/claude-metadata.config.ts');
 });
 
+it('emits Claude channels from the unified target only into the Claude manifest', () => {
+  const model = {
+    ...bundleModel,
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config' as const, sourcePath: '/workspace/channels.config.ts' },
+        target: 'claude',
+        value: {
+          channels: [{
+            server: 'status',
+            userConfig: {
+              webhook_secret: {
+                description: 'Webhook signing secret.',
+                sensitive: true,
+                title: 'Webhook secret',
+                type: 'string',
+              },
+            },
+          }],
+        },
+      },
+    },
+  } satisfies NormalizedPlugin;
+  const plan = planBundle(model);
+  const documents = writeContents(model);
+  const claudeManifest = JSON.parse(documents['.claude-plugin/plugin.json']!) as Record<string, unknown>;
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(claudeManifest.channels).toEqual([{
+    server: 'status',
+    userConfig: {
+      webhook_secret: {
+        description: 'Webhook signing secret.',
+        sensitive: true,
+        title: 'Webhook secret',
+        type: 'string',
+      },
+    },
+  }]);
+  expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('channels');
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('channels');
+  expect(plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json')?.sourceInputs)
+    .toContain('/workspace/channels.config.ts');
+});
+
 it('emits the Claude bin directory from the unified plugin target', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
