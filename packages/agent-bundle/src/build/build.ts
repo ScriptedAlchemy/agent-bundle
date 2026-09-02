@@ -194,7 +194,7 @@ const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[
       resolveArtifactDestination(target.root, entry.relativePath),
     ),
     ...target.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledHooks.map((entry) => entry.output),
+    ...target.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
     ...target.compiledMcpApps.map((entry) => entry.output),
     ...target.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
   ]);
@@ -235,11 +235,15 @@ const outputCandidatesFor = (options: {
     path: entry.workerOutput,
     sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
   }])]),
-  ...options.compiledHooks.map((entry) => ({
+  ...options.compiledHooks.flatMap((entry) => [{
     kind: 'bundle' as const,
     path: entry.output,
     sourceInputs: entry.sourceInputs,
-  })),
+  }, ...(entry.workerOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.workerOutput,
+    sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
+  }])]),
   ...options.compiledMcpApps.map((entry) => ({
     kind: 'bundle' as const,
     path: entry.output,
@@ -377,6 +381,9 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         cwd: options.projectRoot,
         meta,
         outDir: target.root,
+        plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
+        providers: options.model.providers ?? [],
+        ...(options.model.state === undefined ? {} : { state: options.model.state }),
         ...tools,
       })));
       compiledMcpEntries.push(...(await compileMcpEntries(options.model.mcpServers, {
@@ -462,6 +469,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
         ...entry,
         output: publishedOutput(entry),
+        ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
       compiledMcpApps: Object.freeze(compiledMcpApps.map((entry) => Object.freeze({
         ...entry,

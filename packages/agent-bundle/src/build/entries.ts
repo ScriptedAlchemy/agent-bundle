@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   eventArtifactEpochToken,
+  eventFlightArtifactEpochToken,
   eventIpcRuntimeSpecifier,
   eventProjectRuntimeSpecifier,
   type TargetHookEntry,
@@ -471,18 +472,32 @@ export const compileMcpEntries = async (
 export const planCompiledHooks = (
   entries: readonly TargetHookEntry[],
   options: { readonly outDir: string },
-): readonly CompiledHookEntry[] => deepFreeze(entries.map((entry) => ({
-  event: entry.event,
-  id: entry.hook.id,
-  ...(entry.indexed === false ? { indexed: false as const } : {}),
-  name: entry.hook.name,
-  output: resolveArtifactDestination(options.outDir, entry.relativePath),
-  outputKind: 'bundle',
-  source: entry.hook.source,
-  sourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
-  target: entry.target,
-  ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
-})));
+): readonly CompiledHookEntry[] => {
+  const workerOwner = entries.findIndex((entry) =>
+    entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone');
+  const workerSourceInputs = Object.freeze([...new Set(entries
+    .filter((entry) =>
+      entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    .flatMap((entry) => [entry.hook.provenance.sourcePath, entry.hook.source]))]);
+  return deepFreeze(entries.map((entry, index) => ({
+    event: entry.event,
+    id: entry.hook.id,
+    ...(entry.indexed === false ? { indexed: false as const } : {}),
+    name: entry.hook.name,
+    output: resolveArtifactDestination(options.outDir, entry.relativePath),
+    outputKind: 'bundle',
+    source: entry.hook.source,
+    sourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
+    target: entry.target,
+    ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+    ...(index === workerOwner
+      ? {
+        workerOutput: resolveArtifactDestination(resolve(options.outDir, 'hooks'), 'hooks-flight.mjs'),
+        workerSourceInputs,
+      }
+      : {}),
+  })));
+};
 
 export const compileHooks = async (
   entries: readonly TargetHookEntry[],
@@ -491,21 +506,58 @@ export const compileHooks = async (
     readonly cwd: string;
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
+    readonly plugin: { readonly name: string; readonly version: string };
+    readonly providers?: readonly CompiledProvider[];
+    readonly state?: NormalizedStateDefinition;
     readonly tools?: AgentBundleToolsConfig;
   },
 ): Promise<readonly CompiledHookEntry[]> => {
   const compiled = planCompiledHooks(entries, options);
   const routeEntries = entries.filter((entry) => entry.hook.eventRoute !== undefined);
+  const standaloneEventRoutes = [...new Map(routeEntries
+    .filter((entry) =>
+      entry.hook.eventRoute?.runtime === 'standalone' || entry.hook.eventRoute?.fallback === 'standalone')
+    .map((entry) => [entry.hook.id, entry.hook])).values()];
+  const workerArtifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const eventIpcRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('project');
+  const workerEntry = standaloneEventRoutes.length === 0
+    ? undefined
+    : {
+      name: 'hooks-flight',
+      outputRelativePath: 'hooks/hooks-flight.mjs',
+      reactServer: true as const,
+      rscManifest: true as const,
+      source: standaloneEventRoutes[0]!.source,
+      sourceInputs: Object.freeze([
+        ...new Set([
+          ...standaloneEventRoutes.flatMap((hook) => [hook.provenance.sourcePath, hook.source]),
+          ...(options.providers ?? []).map((provider) => provider.source),
+          ...(options.state === undefined ? [] : [options.state.provenance.sourcePath, options.state.source]),
+        ]),
+      ]),
+      virtualSource: generatedRouteFlightWorkerSource({
+        artifactEpoch: workerArtifactEpoch,
+        eventRoutes: standaloneEventRoutes,
+        providers: options.providers ?? [],
+        routes: [],
+        serverName: 'hooks',
+        ...(options.state === undefined ? {} : { state: options.state }),
+      }),
+    };
   const evidence = await buildWithRslib({
     cwd: options.cwd,
-    entries: compiled.map((entry, index) => ({
+    entries: [
+      ...compiled.map((entry, index) => ({
       // One hook can compile into several host wrappers (for example a shared
       // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
       // library id derives from the unique output path, not the hook name.
       name: entries[index]!.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entries[index]!.relativePath,
+      ...(entries[index]!.hook.eventRoute?.runtime === 'standalone'
+        || entries[index]!.hook.eventRoute?.fallback === 'standalone'
+        ? { rscManifest: true as const }
+        : {}),
       ...(entries[index]!.hook.eventRoute === undefined || eventIpcRuntime === undefined
         ? {}
         : {
@@ -516,8 +568,12 @@ export const compileHooks = async (
         }),
       source: entry.source,
       sourceInputs: entry.sourceInputs,
-      virtualSource: entries[index]!.virtualSource.replaceAll(eventArtifactEpochToken, options.artifactEpoch),
-    })),
+      virtualSource: entries[index]!.virtualSource
+        .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
+        .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
+      })),
+      ...(workerEntry === undefined ? [] : [workerEntry]),
+    ],
     ...(eventIpcRuntime === undefined
       ? {}
       : {
@@ -531,5 +587,8 @@ export const compileHooks = async (
   return Object.freeze(compiled.map((entry, index) => Object.freeze({
     ...entry,
     sourceInputs: evidenceByPath.get(entries[index]!.relativePath) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),
+    ...(entry.workerOutput === undefined ? {} : {
+      workerSourceInputs: evidenceByPath.get('hooks/hooks-flight.mjs') ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
+    }),
   })));
 };

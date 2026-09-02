@@ -116,10 +116,12 @@ const isIgnoredModule = (path: string, ignoredSourcePaths: readonly string[]): b
 // identified by moduleType and externals by their readable identifier prefix
 // (an external's moduleType is "javascript/dynamic", never "external").
 const isKnownNoAuthorSourceModule = (module: JsonRecord): boolean => {
+  const identifier = stringAt(module, 'identifier');
   const moduleType = stringAt(module, 'moduleType');
   const name = stringAt(module, 'name');
   return recordsAt(module.modules).length > 0 ||
     moduleType === 'runtime' ||
+    identifier?.endsWith('|sync') === true ||
     name?.startsWith('external ') === true;
 };
 

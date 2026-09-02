@@ -8,7 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
-import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
+import { eventRuntimeEndpoint, requestEventRuntime } from '../src/events/ipc.ts';
 
 const roots: string[] = [];
 
@@ -608,6 +608,157 @@ it('renders one tool/after event route through two native thin clients', { retry
   }
 });
 
+it('renders composite plugin events through each concrete host in one warm runtime', { retry: 2, timeout: 90_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-plugin-events-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        '@modelcontextprotocol/server': '2.0.0',
+        react: '19.2.8',
+        zod: '4.4.3',
+      },
+      name: 'generated-plugin-events-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'generated-plugin-events-fixture', version: '1.0.0' }, targets: ['plugin'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/runtime/tools/status.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Keep the shared event runtime warm.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
+      'export default async function Status() {',
+      "  return createElement(Agent.Result, { value: { ok: true } }, createElement(Agent.Text, null, 'ready'));",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['plugin'], tools: ['file.write'] };",
+      'export default async function AfterTool() {',
+      '  const context = await agent();',
+      '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
+      '  const host = context.host.state === "available" ? context.host.value.name : "unavailable";',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:tool/after:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/session/start.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['plugin'] };",
+      'export default async function SessionStart() {',
+      '  const context = await agent();',
+      '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
+      '  const host = context.host.state === "available" ? context.host.value.name : "unavailable";',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:session/start:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['plugin'] });
+  const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === 'plugin')!;
+  const sharedAfter = compiled.build.compiledHooks.find((entry) =>
+    entry.event === 'afterTool' && !entry.output.endsWith('.cursor.mjs'))!;
+  const cursorAfter = compiled.build.compiledHooks.find((entry) =>
+    entry.event === 'afterTool' && entry.output.endsWith('.cursor.mjs'))!;
+  const sharedSession = compiled.build.compiledHooks.find((entry) =>
+    entry.event === 'sessionStart' && !entry.output.endsWith('.cursor.mjs'))!;
+  const client = new Client({ name: 'generated-event-plugin', version: '0.0.0' });
+  const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
+  await client.connect(transport);
+  try {
+    const endpointId = `${compiled.build.manifest.project.revision}:plugin:${dirname(dirname(resolve(mcp.output)))}`;
+    await expect(requestEventRuntime({
+      artifactEpoch: compiled.build.manifest.project.revision,
+      endpointId,
+      event: 'tool/after',
+      hostContractRevision: 'test',
+      native: {},
+      signal: AbortSignal.timeout(10_000),
+      target: 'portable',
+      timeoutMs: 10_000,
+    })).rejects.toMatchObject({ code: 'runtime-failed' });
+
+    const claude = await runHook(sharedAfter.output, {
+      cwd: root,
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-claude',
+      tool_input: { file_path: 'demo.ts' },
+      tool_name: 'Write',
+      tool_response: { ok: true },
+      tool_use_id: 'tool-claude',
+      transcript_path: join(root, 'transcript.jsonl'),
+    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined });
+    const firstContext = (claude as { hookSpecificOutput: { additionalContext: string } })
+      .hookSpecificOutput.additionalContext;
+    const instanceId = firstContext.slice('claude:tool/after:1:'.length);
+    expect(instanceId).not.toBe('');
+    expect(claude).toEqual({
+      hookSpecificOutput: {
+        additionalContext: `claude:tool/after:1:${instanceId}`,
+        hookEventName: 'PostToolUse',
+      },
+    });
+
+    await expect(runHook(sharedAfter.output, {
+      cwd: root,
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-codex',
+      tool_input: { command: '*** Begin Patch\n*** End Patch' },
+      tool_name: 'apply_patch',
+      tool_response: { ok: true },
+      tool_use_id: 'tool-codex',
+      transcript_path: null,
+    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+      hookSpecificOutput: {
+        additionalContext: `codex:tool/after:2:${instanceId}`,
+        hookEventName: 'PostToolUse',
+      },
+    });
+
+    await expect(runHook(cursorAfter.output, {
+      conversation_id: 'conversation-cursor',
+      cwd: root,
+      hook_event_name: 'postToolUse',
+      session_id: 'session-cursor',
+      tool_input: { file_path: 'demo.ts' },
+      tool_name: 'Write',
+      tool_output: '{"ok":true}',
+      tool_use_id: 'tool-cursor',
+    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined })).resolves.toEqual({
+      additional_context: `cursor:tool/after:3:${instanceId}`,
+    });
+
+    await expect(runHook(sharedSession.output, {
+      cwd: root,
+      hook_event_name: 'SessionStart',
+      session_id: 'session-codex',
+      source: 'startup',
+      transcript_path: null,
+    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+      hookSpecificOutput: {
+        additionalContext: `codex:session/start:4:${instanceId}`,
+        hookEventName: 'SessionStart',
+      },
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 it('runs an explicitly standalone event route without a shared runtime', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-standalone-event-'));
   roots.push(root);
@@ -629,11 +780,13 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
-      "import { createElement } from 'react';",
+      "import { createElement, Suspense } from 'react';",
       "export const config = { runtime: 'standalone', targets: ['cursor'] };",
+      'const wait = () => new Promise((resolve) => setTimeout(resolve, 5));',
       'const Context = async ({ tool }) => createElement(Agent.Context, null, `standalone:${tool}`);',
       'export default async function AfterTool({ native }) {',
-      '  return createElement(Agent.Result, null, createElement(Context, { tool: native.tool_name }));',
+      '  await wait();',
+      "  return createElement(Agent.Result, null, createElement(Suspense, { fallback: createElement(Agent.Context, null, 'loading') }, createElement(Context, { tool: native.tool_name })));",
       '}',
       '',
     ].join('\n')),
@@ -644,7 +797,7 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
   expect(compiled.build.compiledMcpEntries).toHaveLength(0);
   const hook = compiled.build.compiledHooks.find((entry) => entry.event === 'afterTool');
   expect(hook).toBeDefined();
-  await expect(runHook(hook!.output, {
+  const response = await runHook(hook!.output, {
     conversation_id: 'conversation-1',
     cwd: root,
     hook_event_name: 'postToolUse',
@@ -653,7 +806,8 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     tool_name: 'Write',
     tool_output: '{"ok":true}',
     tool_use_id: 'tool-1',
-  })).resolves.toEqual({ additional_context: 'standalone:Write' });
+  });
+  expect(response).toEqual({ additional_context: 'standalone:Write' });
 });
 
 it('replays Claude and Codex subagent fixtures through standalone event-route wrappers', { timeout: 60_000 }, async () => {

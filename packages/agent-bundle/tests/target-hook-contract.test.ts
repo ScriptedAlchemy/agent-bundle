@@ -12,6 +12,7 @@ import {
   readTargetNativeHookCommands,
   type TargetHookContract,
 } from '../src/adapters/hook-contract.ts';
+import { pluginAdapter } from '../src/adapters/plugin.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
@@ -314,8 +315,40 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
     eventRoute: { event: 'tool/after', fallback: 'standalone', runtime: 'shared' },
   };
   const degradedSource = planHooks(planningModel([degraded]), 'synthetic', contract).hookEntries[0]!.virtualSource;
-  expect(degradedSource).toContain('import * as routeModule');
+  expect(degradedSource).toContain('new URL("./hooks-flight.mjs", import.meta.url)');
+  expect(degradedSource).toContain('createAgentRenderDispatcher');
+  expect(degradedSource).toContain('projectEventDocument');
   expect(degradedSource).toContain('error.code === "runtime-unavailable"');
+  expect(degradedSource).not.toContain('import * as routeModule');
+  expect(degradedSource).not.toContain('renderStandaloneEventRoute');
+});
+
+it('bakes the concrete Cursor target only into the plugin Cursor event wrapper', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('afterTool', []),
+    eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+    targets: ['plugin'],
+  };
+  const model: NormalizedPlugin = {
+    ...planningModel([hook]),
+    targets: [{
+      id: 'target:plugin',
+      name: 'plugin',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    }],
+  };
+  const plan = pluginAdapter.plan(model);
+  const hookEntries = plan.hookEntries ?? [];
+  const shared = hookEntries.find((entry) => !entry.relativePath.endsWith('.cursor.mjs'));
+  const cursor = hookEntries.find((entry) => entry.relativePath.endsWith('.cursor.mjs'));
+
+  expect(shared?.virtualSource).toContain('const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;');
+  expect(shared?.virtualSource).toContain('process.env.PLUGIN_ROOT === undefined ? "claude" : "codex"');
+  expect(shared?.virtualSource).toContain('requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs })');
+  expect(cursor?.virtualSource).toContain('const target = "cursor";');
+  expect(cursor?.virtualSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+  expect(cursor?.virtualSource).not.toContain('process.env.PLUGIN_ROOT');
+  expect(cursor?.virtualSource).toContain('requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs })');
 });
 
 it('continues planning valid hooks after a prior hook mapping error', () => {
