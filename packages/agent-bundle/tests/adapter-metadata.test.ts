@@ -51,7 +51,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.2.0',
+    adapterRevision: '1.3.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -212,6 +212,21 @@ it('records observed capability versions and rehashes schema snapshots against p
       expect(pluginSchema.properties.logo).toEqual({
         description: 'Path to a logo image (relative to the plugin root) or an absolute URL.',
         type: 'string',
+      });
+    }
+    if (target === 'portable') {
+      expect(capabilityTable.install).toMatchObject({
+        evidence: [
+          expect.stringContaining('Cursor loads Agent Plugins natively'),
+          expect.stringContaining('ChatGPT, Codex, Cursor, GitHub Copilot, Kiro, and VS Code'),
+          expect.stringContaining('Claude Code is not a native client'),
+        ],
+        state: 'unavailable',
+      });
+      expect(provenance.specRepository).toEqual({
+        commit: 'ff8ab5e392cc87bd88d87c060815a87490e51003',
+        committedAt: '2026-08-19T16:34:23Z',
+        url: 'https://github.com/agentplugins/agent-plugins-spec',
       });
     }
   }

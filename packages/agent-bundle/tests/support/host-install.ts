@@ -1,16 +1,19 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { parse as parseYaml } from 'yaml';
 
+import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
+import portablePluginSchema from '../../src/adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
   cursorHooksValidator,
   cursorMcpValidator,
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
+import { createAdapterValidator } from '../../src/adapters/types.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validateCodexOpenaiYaml } from '../../src/schemas/skill-hosts/contract.ts';
 import {
@@ -29,11 +32,23 @@ const fixturesRoot = join(packageRoot, 'tests', 'fixtures');
 const cli = join(packageRoot, 'dist', 'cli.js');
 const plugin = 'host-install-proof';
 const marketplace = 'host-install-proof-marketplace';
+const portablePlugin = 'host-install-portable-proof';
 const tokenPlugin = 'host-install-token-proof';
 const version = '1.0.0';
 const proofLevel = proofLevelLabel(HOST_INSTALL_PROOF_LEVEL);
+const portableProofLevel =
+  'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)';
 const cursorPluginRootVariable = '${CURSOR_PLUGIN_ROOT}';
+const portablePluginDataVariable = '${PLUGIN_DATA}';
+const portablePluginRootVariable = '${PLUGIN_ROOT}';
+const portableMcpSchemaIdentifier =
+  'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+const portablePluginSchemaIdentifier =
+  'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const skillSidecarPath = join('skills', 'probe', 'agents', 'openai.yaml');
+const portableSchemaValidator = createAdapterValidator();
+const portableMcpValidator = portableSchemaValidator.compile(portableMcpSchema);
+const portablePluginValidator = portableSchemaValidator.compile(portablePluginSchema);
 
 /** Opt-in for the one billable `claude -p` invocation the session proof makes. */
 export const CLAUDE_SESSION_OPT_IN = 'AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION';
@@ -92,6 +107,10 @@ export interface BuiltHostInstallFixture extends BuiltFixtureProject {
 export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
   readonly claudeBundle: string;
   readonly loweredSkillMarkdown: string;
+}
+
+export interface BuiltPortableHostInstallFixture extends BuiltFixtureProject {
+  readonly portableBundle: string;
 }
 
 export interface HostInstallCommand {
@@ -171,6 +190,33 @@ export interface CursorHostInstallReport {
   };
   readonly proofLevel: string;
   readonly skill: string;
+  readonly status: 'passed';
+}
+
+export interface PortableHostInstallReport {
+  readonly destination: string;
+  readonly documents: {
+    readonly mcp: 'schema-valid';
+    readonly plugin: 'schema-valid';
+  };
+  readonly hooks: 'not-emitted';
+  readonly host: 'cursor';
+  readonly install: {
+    readonly first: 'installed';
+    readonly second: 'already-installed';
+    readonly version: '1.0.0';
+  };
+  readonly pluginVariables: {
+    readonly allowedLocations: 'args/env values/cwd only';
+    readonly locations: readonly string[];
+    readonly reservedEnvKeys: 'absent';
+    readonly resolvedAtInstall: false;
+    readonly sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface';
+  };
+  readonly proofLevel: string;
+  readonly proofScope: 'installer+filesystem+pinned-schema conformance against an isolated Cursor home; IDE plugin-loader behavior not observed by this test';
+  readonly skill: string;
+  readonly specVersion: '1.0.0';
   readonly status: 'passed';
 }
 
@@ -418,6 +464,20 @@ export const buildHostInstallTokenFixture = async (options: {
     ...built,
     claudeBundle,
     loweredSkillMarkdown: await readFile(join(claudeBundle, 'skills', 'token-probe', 'SKILL.md'), 'utf8'),
+  });
+};
+
+export const buildPortableHostInstallFixture = async (options: {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+}): Promise<BuiltPortableHostInstallFixture> => {
+  const built = await buildFixtureProject({
+    bundleNames: ['portable'],
+    environment: options.environment,
+    fixture: 'host-install-portable',
+  });
+  return Object.freeze({
+    ...built,
+    portableBundle: join(built.artifactRoot, 'portable'),
   });
 };
 
@@ -731,6 +791,190 @@ export const runCursorHostInstallProof = async (
       }),
       proofLevel,
       skill: normalizedRelative(home, skillPath),
+      status: 'passed',
+    });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
+};
+
+export const runPortableHostInstallProof = async (
+  fixture: BuiltPortableHostInstallFixture,
+  options: HostInstallProofOptions,
+): Promise<PortableHostInstallReport> => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-portable-'));
+  try {
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const installer = join(fixture.portableBundle, 'install.mjs');
+    const install = async (state: 'Already installed' | 'Installed'): Promise<void> => {
+      const result = await run(process.execPath, [installer], {
+        cwd: fixture.portableBundle,
+        environment,
+      });
+      assertProof(
+        result.exitCode === 0,
+        `Portable emitted installer failed: ${commandDetail(result)}`,
+      );
+      assertProof(
+        result.stdout.trim().startsWith(`${state} ${portablePlugin}@${version} at `),
+        `Portable emitted installer did not report ${state.toLowerCase()}.`,
+      );
+    };
+
+    await install('Installed');
+    const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
+    const pluginDocument = await readJson(
+      join(destination, 'plugin.json'),
+      'Portable installed plugin manifest',
+    );
+    assertProof(
+      portablePluginValidator(pluginDocument),
+      `Portable plugin manifest failed its pinned schema: ${JSON.stringify(portablePluginValidator.errors)}`,
+    );
+    const mcpDocument = await readJson(
+      join(destination, 'mcp.json'),
+      'Portable installed MCP document',
+    );
+    assertProof(
+      portableMcpValidator(mcpDocument),
+      `Portable MCP document failed its pinned schema: ${JSON.stringify(portableMcpValidator.errors)}`,
+    );
+
+    const pluginManifest = record(pluginDocument);
+    const mcpManifest = record(mcpDocument);
+    assertProof(pluginManifest !== undefined, 'Portable plugin manifest was not a JSON object.');
+    assertProof(mcpManifest !== undefined, 'Portable MCP document was not a JSON object.');
+    assertProof(
+      pluginManifest.$schema === portablePluginSchemaIdentifier,
+      'Portable plugin manifest did not declare the canonical Agent Plugins 1.0.0 schema.',
+    );
+    assertProof(
+      mcpManifest.$schema === portableMcpSchemaIdentifier,
+      'Portable MCP document did not declare the canonical Agent Plugins 1.0.0 schema.',
+    );
+    const schemaVersion = (identifier: string): string | undefined =>
+      /^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\//u.exec(identifier)?.[1];
+    assertProof(
+      schemaVersion(pluginManifest.$schema) === schemaVersion(mcpManifest.$schema),
+      'Portable plugin and MCP documents declared different Agent Plugins versions.',
+    );
+    assertProof(
+      schemaVersion(pluginManifest.$schema) === version,
+      `Portable documents did not declare Agent Plugins ${version}.`,
+    );
+    assertProof(
+      pluginManifest.name === portablePlugin && pluginManifest.version === version,
+      'Portable plugin manifest did not carry the fixture identity.',
+    );
+
+    const mcpServers = record(mcpManifest.mcpServers);
+    assertProof(mcpServers !== undefined, 'Portable MCP document had no server map.');
+    for (const [serverName, serverValue] of Object.entries(mcpServers)) {
+      const server = record(serverValue);
+      assertProof(server !== undefined, `Portable MCP server ${serverName} was not an object.`);
+      if (server.type !== 'stdio') continue;
+      const serverEnvironment = record(server.env);
+      if (serverEnvironment === undefined) continue;
+      assertProof(
+        !Object.keys(serverEnvironment).some((key) => key === 'PLUGIN_ROOT' || key === 'PLUGIN_DATA'),
+        `Portable MCP server ${serverName} used an Agent Plugins reserved environment key.`,
+      );
+    }
+
+    const escapePointerSegment = (segment: string): string =>
+      segment.replaceAll('~', '~0').replaceAll('/', '~1');
+    const placeholderLocations: string[] = [];
+    const visit = (value: unknown, pointer: string, documentName: string): void => {
+      if (typeof value === 'string') {
+        if (
+          value.includes(portablePluginRootVariable)
+          || value.includes(portablePluginDataVariable)
+        ) {
+          assertProof(
+            /^\/mcpServers\/[^/]+\/(?:args\/\d+|cwd|env\/[^/]+)$/u.test(pointer),
+            `Portable placeholder occurred outside args, environment values, or cwd at ${documentName}#${pointer}.`,
+          );
+          placeholderLocations.push(`${documentName}#${pointer}`);
+        }
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((entry, index) => visit(entry, `${pointer}/${String(index)}`, documentName));
+        return;
+      }
+      const valueRecord = record(value);
+      if (valueRecord === undefined) return;
+      for (const [key, entry] of Object.entries(valueRecord)) {
+        visit(entry, `${pointer}/${escapePointerSegment(key)}`, documentName);
+      }
+    };
+    visit(pluginDocument, '', 'plugin.json');
+    visit(mcpDocument, '', 'mcp.json');
+    assertProof(
+      placeholderLocations.length > 0,
+      'Portable installed documents carried no Agent Plugins path placeholders.',
+    );
+
+    const skillsRoot = join(destination, 'skills');
+    const skillDirectories = (await readdir(skillsRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name));
+    assertProof(skillDirectories.length > 0, 'Portable install had no immediate Skill directories.');
+    const skillPaths: string[] = [];
+    for (const directory of skillDirectories) {
+      const skillPath = join(skillsRoot, directory.name, 'SKILL.md');
+      const metadata = await lstat(skillPath).catch(() =>
+        fail(`Portable Skill directory ${directory.name} had no SKILL.md.`));
+      assertProof(
+        metadata.isFile() && !metadata.isSymbolicLink(),
+        `Portable Skill directory ${directory.name} did not contain a regular SKILL.md.`,
+      );
+      skillPaths.push(normalizedRelative(home, skillPath));
+    }
+    assertProof(
+      skillPaths.length === 1,
+      'Portable proof fixture did not install exactly one discovered Skill.',
+    );
+
+    for (const hookPath of [join(destination, 'hooks'), join(destination, 'hooks.json')]) {
+      const hookMetadata = await lstat(hookPath).catch((error: unknown) => {
+        const code = record(error)?.code;
+        if (code === 'ENOENT') return undefined;
+        throw error;
+      });
+      assertProof(
+        hookMetadata === undefined,
+        'Portable artifact emitted a hooks surface that Agent Plugins 1.0.0 does not define.',
+      );
+    }
+
+    await install('Already installed');
+
+    return Object.freeze({
+      destination: normalizedRelative(home, destination),
+      documents: Object.freeze({
+        mcp: 'schema-valid',
+        plugin: 'schema-valid',
+      }),
+      hooks: 'not-emitted',
+      host: 'cursor',
+      install: Object.freeze({
+        first: 'installed',
+        second: 'already-installed',
+        version,
+      }),
+      pluginVariables: Object.freeze({
+        allowedLocations: 'args/env values/cwd only',
+        locations: Object.freeze(placeholderLocations),
+        reservedEnvKeys: 'absent',
+        resolvedAtInstall: false,
+        sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
+      }),
+      proofLevel: portableProofLevel,
+      proofScope: 'installer+filesystem+pinned-schema conformance against an isolated Cursor home; IDE plugin-loader behavior not observed by this test',
+      skill: skillPaths[0],
+      specVersion: version,
       status: 'passed',
     });
   } finally {
