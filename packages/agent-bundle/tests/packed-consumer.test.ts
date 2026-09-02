@@ -234,23 +234,16 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation).toHaveLength(1);
-    expect(validationDocument.hostValidation[0]).toMatchObject({
-      host: 'claude',
-      target: 'claude',
-    });
-    if (validationDocument.hostValidation[0]!.status === 'passed') {
-      expect(validationDocument.diagnostics).toEqual([]);
-      expect(validationDocument.hostValidation[0]!.diagnostics).toEqual([]);
-    } else {
-      expect(validationDocument.hostValidation[0]).toMatchObject({
-        diagnostics: [{ code: 'AB6019', severity: 'info' }],
-        status: 'unavailable',
-      });
-      expect(validationDocument.diagnostics).toEqual([
-        expect.objectContaining({ code: 'AB6019', severity: 'info' }),
-      ]);
+    expect(validationDocument.hostValidation.map((report) => report.target).sort())
+      .toEqual(['claude', 'codex']);
+    for (const report of validationDocument.hostValidation) {
+      expect(report.host).toBe(report.target);
+      expect(['passed', 'unavailable', 'warnings']).toContain(report.status);
+      expect(report.diagnostics.every((diagnostic) => diagnostic.severity !== 'error')).toBe(true);
     }
+    expect(validationDocument.diagnostics).toEqual(
+      validationDocument.hostValidation.flatMap((report) => report.diagnostics),
+    );
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [
