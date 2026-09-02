@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { basename, extname, posix, relative, resolve, sep } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { basename, dirname, extname, posix, relative, resolve, sep } from 'node:path';
 
 import { digest } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -38,6 +38,8 @@ import type {
   NormalizedCommand,
   NormalizedConfigExtension,
   NormalizedHook,
+  NormalizedHostBin,
+  NormalizedHostBinFile,
   NormalizedLibEntry,
   NormalizedMcpApp,
   NormalizedMcpServer,
@@ -296,6 +298,7 @@ export const normalizePackageBuild = (
 export const reservedPayloadDestinations = Object.freeze(new Set([
   'AGENTS.md',
   'assets',
+  'bin',
   'commands',
   'hooks',
   'mcp',
@@ -536,6 +539,76 @@ const normalizeNativeHooks = async (
     }
   }
   return nativeHooks;
+};
+
+const enumerateHostBinFiles = async (source: string): Promise<readonly NormalizedHostBinFile[]> => {
+  const files: NormalizedHostBinFile[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const metadata = await stat(path);
+      files.push({
+        bytes: metadata.size,
+        executable: (metadata.mode & 0o111) !== 0,
+        relativePath: relative(source, path).replaceAll('\\', '/'),
+        source: path,
+      });
+    }
+  };
+  await visit(source);
+  return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+};
+
+const normalizeHostBins = async (
+  loaded: LoadedConfig,
+  targetNames: readonly string[],
+  registry: NormalizationTargetRegistry,
+): Promise<readonly NormalizedHostBin[]> => {
+  const provenance: SourceProvenance = { kind: 'config', sourcePath: loaded.configPath };
+  const bins: NormalizedHostBin[] = [];
+  for (const binSource of registry.binSources?.(loaded.config, targetNames) ?? []) {
+    if ('issue' in binSource) {
+      bins.push({
+        files: [],
+        issue: `source-${binSource.issue}`,
+        provenance: { ...provenance },
+        source: loaded.configPath,
+        target: binSource.target,
+      });
+      continue;
+    }
+    const source = resolve(dirname(loaded.configPath), binSource.source);
+    if (!isInside(loaded.context.projectRoot, source)) {
+      bins.push({ files: [], issue: 'outside', provenance: { ...provenance }, source, target: binSource.target });
+      continue;
+    }
+    let metadata;
+    try {
+      metadata = await stat(source);
+    } catch {
+      bins.push({ files: [], issue: 'missing', provenance: { ...provenance }, source, target: binSource.target });
+      continue;
+    }
+    if (!metadata.isDirectory()) {
+      bins.push({ files: [], issue: 'not-directory', provenance: { ...provenance }, source, target: binSource.target });
+      continue;
+    }
+    const files = await enumerateHostBinFiles(source);
+    bins.push({
+      files,
+      ...(files.length === 0 ? { issue: 'empty' as const } : {}),
+      provenance: { ...provenance },
+      source,
+      target: binSource.target,
+    });
+  }
+  return bins;
 };
 
 const normalizeMcpServer = (
@@ -1038,6 +1111,7 @@ export const normalizeProject = async (
   // remains the host-facing declared version during the migration.
   const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
   const version = resolvePluginVersion(loaded.config.plugin.version, packageIdentity.packageVersion);
+  const hostBins = await normalizeHostBins(loaded, targetNames, registry);
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
@@ -1064,6 +1138,7 @@ export const normalizeProject = async (
     ...(commands.length === 0 ? {} : { commands }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
     extensions: normalizeExtensions(loaded, registry, configProvenance),
+    ...(hostBins.length === 0 ? {} : { hostBins }),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,

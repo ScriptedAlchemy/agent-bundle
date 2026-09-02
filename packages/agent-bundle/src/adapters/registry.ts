@@ -4,6 +4,7 @@ import { dataArrayValues } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
   NormalizationConfigExtension,
+  NormalizationHostBinSource,
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
@@ -31,6 +32,7 @@ import { deepFreeze } from '../core/freeze.ts';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 type NativeHookSource = NonNullable<TargetAdapter['nativeHookSource']>;
+type BinSource = NonNullable<TargetAdapter['binSource']>;
 
 const emptyArtifactValidation: TargetArtifactValidationContract = deepFreeze({
   documents: [],
@@ -194,6 +196,9 @@ const snapshotArtifactLayout = (
   const assets = layout.assets === undefined
     ? undefined
     : requireNonempty(layout.assets, 'artifact layout assets namespace');
+  const bin = layout.bin === undefined
+    ? undefined
+    : requireNonempty(layout.bin, 'artifact layout bin namespace');
   const skills = layout.skills === undefined
     ? undefined
     : requireNonempty(layout.skills, 'artifact layout skills namespace');
@@ -201,6 +206,9 @@ const snapshotArtifactLayout = (
 
   if (assets !== undefined && !isSafeArtifactDirectory(assets)) {
     throw new Error('Target adapter artifact layout assets namespace must be a safe single namespace.');
+  }
+  if (bin !== undefined && !isSafeArtifactDirectory(bin)) {
+    throw new Error('Target adapter artifact layout bin namespace must be a safe single namespace.');
   }
   if (skills !== undefined && !isSafeArtifactDirectory(skills)) {
     throw new Error('Target adapter artifact layout skills namespace must be a safe single namespace.');
@@ -216,6 +224,7 @@ const snapshotArtifactLayout = (
   }
   return Object.freeze({
     ...(assets === undefined ? {} : { assets }),
+    ...(bin === undefined ? {} : { bin }),
     ...(commands === undefined ? {} : { commands }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
@@ -311,6 +320,14 @@ const snapshotNativeHookSource = (adapter: TargetAdapter): NativeHookSource | un
   return source;
 };
 
+const snapshotBinSource = (adapter: TargetAdapter): BinSource | undefined => {
+  const source = adapter.binSource;
+  if (source !== undefined && typeof source !== 'function') {
+    throw new Error('Target adapter bin source must be a function.');
+  }
+  return source;
+};
+
 const snapshotHookContract = (adapter: TargetAdapter): TargetHookContract | undefined => {
   const hookContract = adapter.hookContract;
   if (capabilityIsSupported(adapter.capabilities.hooks) && hookContract === undefined) {
@@ -393,6 +410,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #artifactLayouts = new Map<string, TargetArtifactLayout>();
   readonly #artifactValidations = new Map<string, TargetArtifactValidationContract>();
+  readonly #binSources = new Map<string, BinSource>();
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
   readonly #hookContracts = new Map<string, TargetHookContract>();
@@ -411,6 +429,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     assertCapabilityContract(adapter);
     const metadata = snapshotMetadata(adapter.metadata);
     const artifactValidation = snapshotArtifactValidation(adapter, metadata);
+    const binSource = snapshotBinSource(adapter);
     const nativeHookSource = snapshotNativeHookSource(adapter);
     const hookContract = snapshotHookContract(adapter);
     const mcpRuntime = snapshotMcpRuntime(adapter);
@@ -420,6 +439,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     this.#artifactValidations.set(adapter.name, artifactValidation);
     this.#artifactLayouts.set(adapter.name, artifactLayout);
     this.#metadata.set(adapter.name, metadata);
+    if (binSource !== undefined) {
+      this.#binSources.set(adapter.name, binSource);
+    }
     if (extension !== undefined) {
       this.#extensions.set(extension.key, Object.freeze({
         key: extension.key,
@@ -495,6 +517,28 @@ export class TargetRegistry implements NormalizationTargetRegistry {
 
   configExtensions(): readonly NormalizationConfigExtension[] {
     return Object.freeze([...this.#extensions.values()]);
+  }
+
+  binSources(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostBinSource[] {
+    const sources: NormalizationHostBinSource[] = [];
+    for (const target of [...this.#binSources.keys()].sort((left, right) => left.localeCompare(right))) {
+      if (!targetNames.includes(target)) continue;
+      const adapter = this.#adapters.get(target)!;
+      try {
+        const source = this.#binSources.get(target)!.call(adapter, config);
+        if (typeof source === 'string' && source.trim().length > 0) {
+          sources.push(Object.freeze({ source, target }));
+        } else if (source !== undefined) {
+          sources.push(Object.freeze({ issue: 'invalid', target }));
+        }
+      } catch {
+        sources.push(Object.freeze({ issue: 'error', target }));
+      }
+    }
+    return Object.freeze(sources);
   }
 
   nativeHookSources(

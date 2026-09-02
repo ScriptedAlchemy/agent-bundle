@@ -1392,11 +1392,17 @@ const validatePayload = (
   const sources: { name: string; source: string }[] = [];
   for (const [name, declaration] of Object.entries(configured)) {
     if (!isSafePayloadName(name) || reservedPayloadDestinations.has(name)) {
-      diagnostics.push(sourceDiagnostic(
+      const diagnostic = sourceDiagnostic(
         'AB4741',
         `Payload destination ${JSON.stringify(name)} must be a safe directory name outside the compiler-owned artifact namespaces.`,
         loaded.configPath,
-      ));
+      );
+      diagnostics.push(name === 'bin'
+        ? {
+            ...diagnostic,
+            recovery: 'Rename the payload destination; use claude.bin to declare Claude Code plugin executables.',
+          }
+        : diagnostic);
     }
     const entry = payloadDeclarationEntry(declaration);
     if (entry === undefined) {
@@ -2119,6 +2125,12 @@ export const validateModel = (
       if (!payload.targets.includes(target.name)) continue;
       for (const file of payload.files) {
         recordOutput(posix.join(target.name, payload.name, file.relativePath), file.source, target.name);
+      }
+    }
+    for (const bin of model.hostBins ?? []) {
+      if (bin.target !== target.name) continue;
+      for (const file of bin.files) {
+        recordOutput(posix.join(target.name, 'bin', file.relativePath), file.source, target.name);
       }
     }
   }

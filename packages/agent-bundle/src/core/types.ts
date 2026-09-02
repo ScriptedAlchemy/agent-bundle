@@ -499,6 +499,26 @@ export interface NormalizedPayload {
   readonly targets: readonly string[];
 }
 
+/** One file enumerated from a host-native plugin executable directory. */
+export interface NormalizedHostBinFile {
+  readonly bytes: number;
+  readonly executable: boolean;
+  /** POSIX path relative to the declared host bin directory. */
+  readonly relativePath: string;
+  /** Absolute source file path. */
+  readonly source: string;
+}
+
+/** One adapter-declared host-native plugin executable directory. */
+export interface NormalizedHostBin {
+  readonly files: readonly NormalizedHostBinFile[];
+  readonly issue?: 'empty' | 'missing' | 'not-directory' | 'outside' | 'source-error' | 'source-invalid';
+  readonly provenance: SourceProvenance;
+  /** Absolute source directory path. */
+  readonly source: string;
+  readonly target: string;
+}
+
 export interface NormalizedNativeHook {
   readonly document?: unknown;
   readonly issue?: 'missing' | 'parse' | 'source-error' | 'source-invalid';
@@ -553,6 +573,8 @@ export interface NormalizedPlugin {
    */
   readonly commands?: readonly NormalizedCommand[];
   readonly extensions: Readonly<Record<string, NormalizedConfigExtension>>;
+  /** Adapter-declared host-native executable directories, enumerated during normalization. */
+  readonly hostBins?: readonly NormalizedHostBin[];
   readonly hooks: readonly NormalizedHook[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
@@ -610,7 +632,25 @@ export type NormalizationNativeHookSource =
   | NormalizationNativeHookDocument
   | NormalizationNativeHookSourceError;
 
+export interface NormalizationHostBinDocument {
+  readonly source: string;
+  readonly target: string;
+}
+
+export interface NormalizationHostBinSourceError {
+  readonly issue: 'error' | 'invalid';
+  readonly target: string;
+}
+
+export type NormalizationHostBinSource =
+  | NormalizationHostBinDocument
+  | NormalizationHostBinSourceError;
+
 export interface NormalizationTargetRegistry {
+  binSources?(
+    config: Readonly<AgentBundleConfig>,
+    targetNames: readonly string[],
+  ): readonly NormalizationHostBinSource[];
   capabilityState?(name: string, capability: string): CapabilityState | undefined;
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];

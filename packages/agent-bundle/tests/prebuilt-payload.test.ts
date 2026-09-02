@@ -193,6 +193,7 @@ it('reports the prebuilt payload source diagnostics', async () => {
     ].join('\n'),
     payload: [
       '  payload: {',
+      "    bin: './built/app',",
       "    'mcp-apps': './built/app',",
       "    absent: './built/never-built',",
       "    runtime: { source: './built/runtime', targets: ['claude'] },",
@@ -204,7 +205,9 @@ it('reports the prebuilt payload source diagnostics', async () => {
     const result = await validate({ root });
     const codes = result.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity] as const);
     // The reserved destination name.
-    expect(codes).toContainEqual(['AB4741', 'error']);
+    expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(2);
+    expect(result.diagnostics.find((diagnostic) =>
+      diagnostic.code === 'AB4741' && diagnostic.message.includes('"bin"'))?.recovery).toContain('claude.bin');
     // The not-yet-built payload directory warns instead of failing validation.
     expect(codes).toContainEqual(['AB4743', 'warning']);
     // A prebuilt entry outside every declared payload, and one whose payload

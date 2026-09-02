@@ -35,7 +35,7 @@ const createFifo = async (path: string): Promise<void> => new Promise((resolvePr
 
 interface ArtifactFixtureFile {
   readonly contents: string;
-  readonly kind: 'bundle' | 'copy' | 'generated';
+  readonly kind: 'bundle' | 'copy' | 'generated' | 'prebuilt';
   readonly mode?: number;
   readonly path: string;
 }
@@ -183,6 +183,7 @@ const customRegistry = (validate = validateCustomDocument): TargetRegistry => ne
   },
   artifactLayout: {
     assets: 'assets',
+    bin: 'bin',
     commands: { allowedSuffixes: ['.md'], directory: 'commands' },
     rules: { allowedSuffixes: ['.mdc'], directory: 'rules' },
     scripts: { allowedSuffixes: ['.json', '.mjs', '.sh'], directory: 'scripts' },
@@ -802,6 +803,21 @@ it('admits nested project assets in the target-owned recursive asset namespace',
 
   try {
     await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('admits executable commands and nested support files in a recursive bin namespace', async () => {
+  const files = [
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: '#!/usr/bin/env sh\n', kind: 'prebuilt' as const, mode: 0o751, path: 'custom/bin/review-tool' },
+    { contents: '{"enabled":true}\n', kind: 'prebuilt' as const, path: 'custom/bin/lib/config.json' },
+  ];
+  const root = await writeArtifact(files, true, [customManifestTarget]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

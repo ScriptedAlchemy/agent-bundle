@@ -54,6 +54,7 @@ import {
   validateModernMcpDocument,
   withPluginRootEnvAnchor,
   type TargetAdapter,
+  type TargetArtifactCopy,
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
@@ -94,6 +95,8 @@ export interface ClaudeLspServerConfig {
  * the portable LSP component kind stays deferred.
  */
 export interface ClaudeHostConfig extends AgentBundleHostConfig {
+  /** Project-authored directory copied to the plugin-root `bin/` executable convention. */
+  readonly bin?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
 }
 
@@ -146,7 +149,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.5.0',
+  adapterRevision: '1.6.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -435,6 +438,106 @@ export const planClaudeLsp = (model: NormalizedPlugin): ClaudeLspPlan => {
   return { diagnostics, ...(valid ? { document: servers } : {}), sourceInputs: inputs };
 };
 
+interface ClaudeBinPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly entries: readonly TargetArtifactCopy[];
+}
+
+const planClaudeBin = (model: NormalizedPlugin, targetName: string): ClaudeBinPlan => {
+  const diagnostics: Diagnostic[] = [];
+  const entries: TargetArtifactCopy[] = [];
+  for (const bin of model.hostBins ?? []) {
+    if (bin.target !== targetName) continue;
+    if (bin.issue !== undefined) {
+      switch (bin.issue) {
+        case 'missing':
+          diagnostics.push({
+            ...errorDiagnostic(
+              'claude.bin.directory.missing',
+              `Claude bin directory ${JSON.stringify(bin.source)} does not exist.`,
+            ),
+            recovery: 'Create the configured Claude bin directory and add at least one executable, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        case 'empty':
+          diagnostics.push({
+            ...errorDiagnostic(
+              'claude.bin.directory.empty',
+              `Claude bin directory ${JSON.stringify(bin.source)} contains no files.`,
+            ),
+            recovery: 'Add at least one file to the configured Claude bin directory, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        case 'not-directory':
+          diagnostics.push({
+            ...errorDiagnostic(
+              'claude.bin.directory.invalid',
+              `Claude bin source ${JSON.stringify(bin.source)} must name a directory.`,
+            ),
+            recovery: 'Set claude.bin to a nonempty directory path relative to the config file, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        case 'outside':
+          diagnostics.push({
+            ...errorDiagnostic(
+              'claude.bin.directory.outside',
+              `Claude bin directory ${JSON.stringify(bin.source)} must resolve inside the project root.`,
+            ),
+            recovery: 'Move the executable directory inside the project and update claude.bin, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        case 'source-error':
+          diagnostics.push({
+            ...errorDiagnostic('claude.bin.source.error', 'Claude bin source resolution failed.'),
+            recovery: 'Correct the claude.bin declaration so the adapter can read it, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        case 'source-invalid':
+          diagnostics.push({
+            ...errorDiagnostic('claude.bin.source.invalid', 'Claude bin must be a nonempty directory path.'),
+            recovery: 'Set claude.bin to a nonempty directory path relative to the config file, then rebuild.',
+            sourcePath: bin.provenance.sourcePath,
+          });
+          break;
+        default: {
+          const exhaustive: never = bin.issue;
+          return exhaustive;
+        }
+      }
+      continue;
+    }
+    const nonExecutable = bin.files.filter((file) =>
+      !file.executable && !file.relativePath.includes('/'));
+    if (nonExecutable.length > 0) {
+      diagnostics.push({
+        ...errorDiagnostic(
+          'claude.bin.executable.required',
+          `Claude bin top-level file${nonExecutable.length === 1 ? '' : 's'} ${nonExecutable
+            .map((file) => JSON.stringify(file.relativePath))
+            .join(', ')} must be executable.`,
+        ),
+        recovery: 'Run chmod +x on every top-level file in the configured Claude bin directory, then rebuild.',
+        sourcePath: bin.provenance.sourcePath,
+      });
+      continue;
+    }
+    entries.push(...bin.files.map((file): TargetArtifactCopy => ({
+      bytes: file.bytes,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: `bin/${file.relativePath}`,
+      source: file.source,
+      sourceInputs: sourceInputs(bin.provenance.sourcePath, file.source),
+    })));
+  }
+  return deepFreeze({ diagnostics, entries });
+};
+
 export interface ClaudeArtifactPlanOptions {
   /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
   readonly targetName?: string;
@@ -459,6 +562,8 @@ export const planClaudeArtifacts = (
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   const lsp = planClaudeLsp(model);
   diagnostics.push(...lsp.diagnostics);
+  const bin = planClaudeBin(model, targetName);
+  diagnostics.push(...bin.diagnostics);
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
@@ -520,6 +625,7 @@ export const planClaudeArtifacts = (
     ...basePlan,
     entries: sortedEntries([
       ...basePlan.entries,
+      ...bin.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
   }), model, targetName === 'plugin' ? 'plugin' : 'claude');
@@ -527,6 +633,7 @@ export const planClaudeArtifacts = (
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({
   ...standardArtifactLayout,
+  bin: 'bin',
   commands: Object.freeze({
     allowedSuffixes: Object.freeze(['.md']),
     directory: 'commands',
@@ -538,6 +645,15 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    bin: capabilityStateFromSupport(
+      capabilityTable.plugin.bin.directory === 'bin' &&
+        capabilityTable.plugin.bin.bashPath &&
+        capabilityTable.plugin.bin.bareCommands &&
+        capabilityTable.plugin.bin.enabledOnly &&
+        capabilityTable.plugin.bin.organizationDistributionProhibited,
+      evidence,
+      'The pinned Claude plugin contract does not document the plugin-root bin executable surface.',
+    ),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,
@@ -571,6 +687,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: claudeName,
+  binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   plan: planClaudeArtifacts,
 });

@@ -267,6 +267,10 @@ const modelPathReferences = (model: NormalizedPlugin): readonly string[] => [
   ...(model.providers ?? []).map((provider) => provider.source),
   ...(model.rules ?? []).flatMap((rule) => [rule.provenance.sourcePath, rule.source]),
   ...Object.values(model.extensions).map((extension) => extension.provenance.sourcePath),
+  ...(model.hostBins ?? []).flatMap((bin) => [
+    bin.provenance.sourcePath,
+    ...bin.files.map((file) => file.source),
+  ]),
   ...model.targets.map((target) => target.provenance.sourcePath),
   // A prebuilt hook's source is its payload file, which may not exist yet
   // (the payload comes from the consumer's own build step); its bytes join
@@ -373,6 +377,19 @@ export const canonicalizeNormalizedModel = (
         ...extension,
         provenance: canonicalProvenance(root, extension.provenance),
       }])),
+    ...(detached.hostBins === undefined
+      ? {}
+      : {
+        hostBins: detached.hostBins.map((bin) => ({
+          ...bin,
+          files: bin.files.map((file) => ({
+            ...file,
+            source: canonicalCompilerPath(root, file.source, 'Host bin file source path'),
+          })),
+          provenance: canonicalProvenance(root, bin.provenance),
+          source: canonicalCompilerPath(root, bin.source, 'Host bin source path'),
+        })),
+      }),
     hooks: detached.hooks.map((hook) => ({
       ...hook,
       provenance: canonicalProvenance(root, hook.provenance),

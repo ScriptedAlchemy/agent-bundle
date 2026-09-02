@@ -408,6 +408,7 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFre
  */
 export interface TargetArtifactLayout {
   readonly assets?: string;
+  readonly bin?: string;
   readonly commands?: TargetArtifactOutputLayout;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
@@ -499,6 +500,7 @@ export interface TargetAdapter {
   readonly metadata: TargetAdapterMetadata;
   readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
+  binSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   plan(model: NormalizedPlugin): TargetArtifactPlan;
 }
