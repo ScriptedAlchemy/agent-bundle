@@ -81,7 +81,7 @@ const spawnZombieOwner = async (): Promise<Readonly<{
   child: ChildProcess;
   owner: EndpointClaimOwner;
 }>> => {
-  const child = spawn('sh', ['-c', 'true & echo $!; exec sleep 300'], {
+  const child = spawn('sh', ['-c', 'p=$$; { while [ "$(cat /proc/$p/comm 2>/dev/null)" != "sleep" ]; do :; done; } & echo $!; exec sleep 300'], {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const pidLine = new Promise<string>((resolve, reject) => {
@@ -94,7 +94,7 @@ const spawnZombieOwner = async (): Promise<Readonly<{
     await killChild(child);
     throw new Error('Zombie child pid was not reported.');
   }
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     const processStat = await linuxProcessStat(zombiePid).catch(() => undefined);
     if (processStat?.state === 'Z') {
       return {
