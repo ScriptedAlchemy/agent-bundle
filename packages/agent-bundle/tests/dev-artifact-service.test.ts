@@ -296,7 +296,7 @@ it.each(['added', 'changed', 'removed'] as const)(
 
 it('rejects publication when an executable source loses its execute bit after compiling', async () => {
   const root = await createProject();
-  const executable = join(root, 'skills', 'review', 'SKILL.md');
+  const executable = join(root, 'src', 'skills', 'review', 'SKILL.md');
   const store = new EpochStore({ projectRoot: root });
   try {
     await chmod(executable, 0o755);
