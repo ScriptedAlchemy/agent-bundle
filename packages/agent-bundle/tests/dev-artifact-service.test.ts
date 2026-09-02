@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -293,6 +293,33 @@ it.each(['added', 'changed', 'removed'] as const)(
     }
   },
 );
+
+it('rejects publication when an executable source loses its execute bit after compiling', async () => {
+  const root = await createProject();
+  const executable = join(root, 'skills', 'review', 'SKILL.md');
+  const store = new EpochStore({ projectRoot: root });
+  try {
+    await chmod(executable, 0o755);
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      compile: async (options) => {
+        const built = await build(options);
+        await chmod(executable, 0o644);
+        return built;
+      },
+      createEpochId: () => 'epoch-executable-drift',
+      epochStore: store,
+    }).build(prepared);
+
+    expect(result).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'AB7101' })],
+      outcome: 'failed',
+    });
+    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('uses the prepared output exclusions when checking source changes after compilation', async () => {
   const root = await createProject();

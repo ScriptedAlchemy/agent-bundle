@@ -476,7 +476,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
     expect(Object.isFrozen(left.projectContext)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs[0])).toBe(true);
-    expect(Object.keys(left.projectContext?.sourceInputs[0] ?? {})).toEqual(['path', 'sha256']);
+    expect(Object.keys(left.projectContext?.sourceInputs[0] ?? {})).toEqual(['executable', 'path', 'sha256']);
     expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
     expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
 
@@ -930,25 +930,25 @@ it('changes a payload source revision when an executable bit is lost', async () 
   try {
     await mkdir(binRoot);
     await writeFile(executable, '#!/bin/sh\nprintf "reviewed\\n"\n');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  claude: { bin: './bin' },",
+      "  plugin: { name: 'executable-payload', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
     await chmod(executable, 0o755);
-    const initial = await snapshotProjectSource(
-      root,
-      join(root, 'agent-bundle.config.ts'),
-      [],
-      [binRoot],
-    );
+    const initial = await new ProjectService({ root }).prepare('inspect');
 
     await chmod(executable, 0o644);
-    const changed = await snapshotProjectSource(
-      root,
-      join(root, 'agent-bundle.config.ts'),
-      [],
-      [binRoot],
-    );
+    const changed = await new ProjectService({ root }).prepare('inspect');
 
-    expect(changed.inputs.find((input) => input.path === 'bin/review')?.sha256)
-      .toBe(initial.inputs.find((input) => input.path === 'bin/review')?.sha256);
-    expect(changed.revision).not.toBe(initial.revision);
+    expect(changed.projectContext?.sourceInputs.find((input) => input.path === 'bin/review')?.sha256)
+      .toBe(initial.projectContext?.sourceInputs.find((input) => input.path === 'bin/review')?.sha256);
+    expect(initial.projectContext?.revision).toBe(initial.source.revision);
+    expect(changed.projectContext?.revision).toBe(changed.source.revision);
+    expect(changed.source.revision).not.toBe(initial.source.revision);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

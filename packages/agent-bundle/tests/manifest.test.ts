@@ -15,7 +15,7 @@ const hash = (character: string): string => character.repeat(64);
 
 const sourceInputs = Object.freeze([
   Object.freeze({ path: 'agent-bundle.config.ts', sha256: hash('a') }),
-  Object.freeze({ path: 'skills/review/SKILL.md', sha256: hash('b') }),
+  Object.freeze({ executable: true, path: 'skills/review/SKILL.md', sha256: hash('b') }),
 ]);
 
 const validManifest = (): ArtifactManifest => ({
@@ -190,6 +190,7 @@ it('rejects malformed scalar fields, unsafe paths, and manifest self-listing', (
     [(manifest) => { manifest.files[1]!.mode = 0o1000; }, /mode/i],
     [(manifest) => { manifest.files[1]!.mode = -1; }, /mode/i],
     [(manifest) => { manifest.files[1]!.mode = 1.5; }, /mode/i],
+    [(manifest) => { manifest.project.sourceInputs[1]!.executable = 'yes' as unknown as boolean; }, /executable.*boolean/i],
     [(manifest) => { manifest.files[0]!.kind = 'other' as 'bundle'; }, /kind/i],
     [(manifest) => { manifest.validation.source.status = 'failed' as 'passed'; }, /status/i],
     [(manifest) => { manifest.files[0]!.path = ''; }, /path/i],

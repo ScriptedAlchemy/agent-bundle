@@ -11,6 +11,7 @@ import type { NormalizedPlugin, SourceProvenance } from './types.ts';
 
 /** One deterministic, byte-addressed authored input in a project identity. */
 export interface ProjectSourceInput {
+  readonly executable?: boolean;
   readonly path: string;
   readonly sha256: string;
 }
@@ -543,7 +544,11 @@ const canonicalSourceInputs = (
       throw new TypeError(`Project source input ${JSON.stringify(input.path)} must have a lowercase SHA-256 digest.`);
     }
     const path = resolvedProjectPath(root, input.path, 'Project source input path');
-    return { path, sha256: input.sha256 } satisfies ProjectSourceInput;
+    return {
+      ...(input.executable === undefined ? {} : { executable: input.executable }),
+      path,
+      sha256: input.sha256,
+    } satisfies ProjectSourceInput;
   });
   canonical.sort((left, right) => left.path.localeCompare(right.path));
   for (let index = 1; index < canonical.length; index += 1) {
