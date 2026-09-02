@@ -429,7 +429,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     // schema-collision guard when no hook lowers to Cursor.
     let cursorHooksDocument: Record<string, unknown> = emptyCursorHooksDocument;
     if (emitCursorHooks) {
-      const cursorHooks = planHooks(model, pluginName, cursorBundleHookContract);
+      const cursorHooks = planHooks(model, pluginName, cursorBundleHookContract, 'cursor');
       diagnostics.push(...cursorHooks.diagnostics);
       if (cursorHooks.document !== undefined) {
         const cursorHooksDocumentValid = cursorHooksValidator(cursorHooks.document);

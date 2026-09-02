@@ -417,6 +417,7 @@ export type GeneratedRouteExecutionHost = WarmFlightHost;
  * harness. An artifact with no event routes passes nothing.
  */
 export interface GeneratedEventRuntimeBinding {
+  readonly allowedTargets: readonly string[];
   readonly artifactEpoch: string;
   readonly createCanonicalEventProps: typeof createCanonicalEventProps;
   readonly createEventRuntimeServer: typeof createEventRuntimeServer;
@@ -468,11 +469,17 @@ const startEventRuntime = async (
   endpointId: events.endpointId,
   handle: async (request, signal) => {
     const event = canonicalEvent(request.event);
+    const target = events.allowedTargets.find((candidate) => candidate === request.target);
+    if (target === undefined) {
+      throw new TypeError(
+        `Event runtime target ${JSON.stringify(request.target)} is not allowed by this artifact (${events.allowedTargets.map((candidate) => JSON.stringify(candidate)).join(', ')}).`,
+      );
+    }
     const nativeEvent = nativeString(request.native, 'hook_event_name') ?? event;
     const props = events.createCanonicalEventProps(
       event,
       request.native,
-      events.target,
+      target,
       nativeEvent,
       request.hostContractRevision,
       signal,
@@ -481,7 +488,7 @@ const startEventRuntime = async (
       ?? nativeString(request.native, 'conversation_id');
     const workspaceRoot = nativeString(request.native, 'cwd');
     return runAgentRequest({
-      host: available({ name: events.target }, 'native'),
+      host: available({ name: target }, 'native'),
       invocation: {
         artifactEpoch: events.artifactEpoch,
         hostContractRevision: request.hostContractRevision,
@@ -505,7 +512,7 @@ const startEventRuntime = async (
         signal,
       }),
       event,
-      events.target,
+      target,
       nativeEvent,
     ));
   },

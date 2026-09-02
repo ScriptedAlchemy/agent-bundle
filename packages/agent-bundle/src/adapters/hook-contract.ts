@@ -403,10 +403,13 @@ export const eventFlightArtifactEpochToken = '__AGENT_BUNDLE_EVENT_FLIGHT_ARTIFA
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
+  concreteTarget?: string,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
-  const targetSource = entry.target === 'plugin'
+  const targetSource = concreteTarget !== undefined
+    ? [`const target = ${JSON.stringify(concreteTarget)};`]
+    : entry.target === 'plugin'
     ? [
         'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
         'const target = declaredHost === "claude" || declaredHost === "codex"',
@@ -799,6 +802,7 @@ export const planHooks = (
   model: NormalizedPlugin,
   target: string,
   contract: TargetHookContract,
+  concreteEventTarget?: string,
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
   const selected = model.hooks
@@ -867,7 +871,7 @@ export const planHooks = (
       ...wrapper,
       virtualSource: hook.eventRoute === undefined
         ? contract.wrapperSource(wrapper)
-        : eventRouteHookWrapperSource(wrapper, contract.hostContractRevision ?? target),
+        : eventRouteHookWrapperSource(wrapper, contract.hostContractRevision ?? target, concreteEventTarget),
     });
   }
 

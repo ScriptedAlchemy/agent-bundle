@@ -713,6 +713,10 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   assertRegistrableMcpRoutes(routes, options.state !== undefined);
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
+  const eventTarget = options.target ?? 'unknown';
+  const allowedEventTargets = eventTarget === 'plugin'
+    ? ['claude', 'codex', 'cursor']
+    : [eventTarget];
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
@@ -737,8 +741,10 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           // The endpoint identity is artifact-location dependent, so it stays
           // in the artifact rather than the shared runtime.
           `const EVENT_ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
-          `const EVENT_TARGET = ${JSON.stringify(options.target ?? 'unknown')};`,
+          `const EVENT_TARGET = ${JSON.stringify(eventTarget)};`,
+          `const EVENT_ALLOWED_TARGETS = Object.freeze(${JSON.stringify(allowedEventTargets)});`,
           'const events = Object.freeze({',
+          '  allowedTargets: EVENT_ALLOWED_TARGETS,',
           '  artifactEpoch: EVENT_ARTIFACT_EPOCH,',
           '  createCanonicalEventProps,',
           '  createEventRuntimeServer,',
