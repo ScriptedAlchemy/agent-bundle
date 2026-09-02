@@ -1,6 +1,7 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import { hasErrors, type Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { isValidPackageName } from '../core/project-context.ts';
 import {
   pathTokens,
   type AgentBundleConfig,
@@ -236,10 +237,61 @@ export interface ClaudeMarketplaceRelevanceConfig {
   readonly topic?: string;
 }
 
+export interface ClaudeMarketplaceGithubSource {
+  readonly source: 'github';
+  readonly repo: string;
+  readonly ref?: string;
+  readonly sha?: string;
+}
+
+export interface ClaudeMarketplaceGitUrlSource {
+  readonly source: 'url';
+  readonly url: string;
+  readonly ref?: string;
+  readonly sha?: string;
+}
+
+export interface ClaudeMarketplaceGitSubdirSource {
+  readonly source: 'git-subdir';
+  readonly url: string;
+  readonly path: string;
+  readonly ref?: string;
+  readonly sha?: string;
+}
+
+export interface ClaudeMarketplaceNpmSource {
+  readonly source: 'npm';
+  readonly package: string;
+  readonly version?: string;
+  readonly registry?: string;
+}
+
+export interface ClaudeMarketplaceArchiveSource {
+  readonly source: 'archive';
+  readonly url: string;
+  readonly sha256?: string;
+}
+
+export interface ClaudeMarketplaceCommandSource {
+  readonly source: 'command';
+  readonly command: string;
+  readonly timeout?: number;
+  readonly mode?: 'copy' | 'link';
+}
+
+export type ClaudeMarketplacePluginSource =
+  | string
+  | ClaudeMarketplaceGithubSource
+  | ClaudeMarketplaceGitUrlSource
+  | ClaudeMarketplaceGitSubdirSource
+  | ClaudeMarketplaceNpmSource
+  | ClaudeMarketplaceArchiveSource
+  | ClaudeMarketplaceCommandSource;
+
 /**
  * Authored fields that enrich the one generated marketplace plugin entry.
- * Plugin identity, component paths, and the relative `./` source remain
- * generator-owned; URL and command source variants are tracked separately.
+ * Plugin identity and component paths remain generator-owned. Source defaults
+ * to the generated relative `./` path and may identify a distributed copy.
  */
 export interface ClaudeMarketplacePluginConfig {
   readonly author?: ClaudeMarketplaceContactConfig & { readonly name: string };
@@ -247,9 +299,9 @@ export interface ClaudeMarketplacePluginConfig {
   readonly defaultEnabled?: boolean;
   readonly description?: string;
   readonly displayName?: string;
-  /** Archive-download headers; rejected until URL-capable sources are emitted. */
+  /** Archive-download headers; applicable only to an archive source. */
   readonly headers?: Readonly<Record<string, string>>;
-  /** Archive-download header command; rejected until URL-capable sources are emitted. */
+  /** Archive-download header command; requires an archive source and strict: false. */
   readonly headersHelper?: string;
   readonly homepage?: string;
   readonly keywords?: readonly string[];
@@ -257,6 +309,7 @@ export interface ClaudeMarketplacePluginConfig {
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly relevance?: ClaudeMarketplaceRelevanceConfig;
   readonly repository?: string;
+  readonly source?: ClaudeMarketplacePluginSource;
   readonly strict?: boolean;
   readonly tags?: readonly string[];
   readonly version?: string;
@@ -297,7 +350,7 @@ export interface ClaudeHostConfig extends AgentBundleHostConfig {
   /** Human-readable plugin name shown in Claude Code UI surfaces. */
   readonly displayName?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
-  /** Enriches the generated marketplace and its single relative-source plugin entry. */
+  /** Enriches the generated marketplace and its single plugin entry. */
   readonly marketplace?: ClaudeMarketplaceConfig;
   /** Free-form catalog or entitlement data that Claude Code preserves but does not interpret. */
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -369,7 +422,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.15.0',
+  adapterRevision: '1.16.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -764,6 +817,7 @@ const marketplacePluginFields: ReadonlySet<string> = new Set([
   'metadata',
   'relevance',
   'repository',
+  'source',
   'strict',
   'tags',
   'version',
@@ -774,6 +828,28 @@ const relevanceSignalFields: ReadonlySet<string> = new Set(['cli', 'cwd', 'files
 const manifestDependencySignalFields: ReadonlySet<string> = new Set(['file', 'pattern']);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const hostnamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
+const githubRepositoryPattern =
+  /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/u;
+const gitSshUrlPattern = /^git@[^:\s]+:[^\s]+$/u;
+const gitShaPattern = /^[0-9a-f]{40}$/iu;
+const archiveSha256Pattern = /^[0-9a-f]{64}$/iu;
+const npmSourceVersionPattern = new RegExp(`^(?:\\^|~)?${fullSemverVersion}$`, 'u');
+const printableCommandPattern = /^[\x20-\x7e]+$/u;
+const sourceFormFields = {
+  archive: new Set(['source', 'url', 'sha256']),
+  command: new Set(['source', 'command', 'timeout', 'mode']),
+  github: new Set(['source', 'repo', 'ref', 'sha']),
+  'git-subdir': new Set(['source', 'url', 'path', 'ref', 'sha']),
+  npm: new Set(['source', 'package', 'version', 'registry']),
+  url: new Set(['source', 'url', 'ref', 'sha']),
+} as const satisfies Readonly<Record<Exclude<ClaudeMarketplacePluginSource, string>['source'], ReadonlySet<string>>>;
+const blockedArchiveHosts: ReadonlySet<string> = new Set([
+  'instance-data.ec2.internal',
+  'metadata',
+  'metadata.azure.internal',
+  'metadata.google',
+  'metadata.google.internal',
+]);
 const reservedMarketplaceNames: ReadonlySet<string> = new Set([
   'agent-skills',
   'anthropic-agent-skills',
@@ -1007,8 +1083,337 @@ const planMarketplaceRelevance = (
   };
 };
 
+type ClaudeMarketplaceObjectSource = Exclude<ClaudeMarketplacePluginSource, string>;
+type ClaudeMarketplaceSourceForm = ClaudeMarketplaceObjectSource['source'];
+
+interface ClaudeMarketplaceSourcePlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly form?: 'relative' | ClaudeMarketplaceSourceForm;
+  readonly value?: ClaudeMarketplacePluginSource;
+}
+
+const isGitUrl = (value: string): boolean => {
+  if (gitSshUrlPattern.test(value)) return true;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isInternalSubdirectory = (value: string): boolean =>
+  isNonemptyString(value) &&
+  !value.startsWith('/') &&
+  !value.startsWith('\\') &&
+  !value.split(/[\\/]/u).some((segment) => segment === '.' || segment === '..');
+
+const isSafeArchiveUrl = (value: string): boolean => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '').replace(/\.$/u, '');
+  if (
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    blockedArchiveHosts.has(hostname)
+  ) {
+    return false;
+  }
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(hostname);
+  if (ipv4 !== null) {
+    const octets = ipv4.slice(1).map(Number);
+    if (
+      octets.some((octet) => octet > 255) ||
+      octets[0] === 0 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254)
+    ) {
+      return false;
+    }
+  }
+  return hostname !== '::' && hostname !== '::1' && !/^fe[89ab]:/iu.test(hostname);
+};
+
+const planMarketplacePluginSource = (
+  declared: unknown,
+  pluginRoot: string | undefined,
+): ClaudeMarketplaceSourcePlan => {
+  if (typeof declared === 'string') {
+    const internalRelative =
+      declared.startsWith('./') &&
+      !declared.split('/').includes('..');
+    const bareUnderPluginRoot =
+      pluginRoot !== undefined &&
+      declared !== '.' &&
+      declared !== '..' &&
+      /^[^/\\]+$/u.test(declared);
+    if (!internalRelative && !bareUnderPluginRoot) {
+      return {
+        diagnostics: [marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.relative.invalid',
+          'Claude marketplace relative plugin source must start with ./ and stay inside the marketplace, or be one bare name under metadata.pluginRoot.',
+          'Use an internal ./ path, or set metadata.pluginRoot and use one bare directory name, then rebuild.',
+        )],
+      };
+    }
+    return { diagnostics: [], form: 'relative', value: declared };
+  }
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.plugin.source.invalid',
+        'Claude marketplace plugin source must be a documented relative string or source object.',
+        'Set plugin.source to an internal relative path or a documented closed source object, then rebuild.',
+      )],
+    };
+  }
+  const source = declared['source'];
+  if (
+    typeof source !== 'string' ||
+    !Object.hasOwn(sourceFormFields, source)
+  ) {
+    return {
+      diagnostics: [marketplaceDiagnostic(
+        'claude.marketplace.plugin.source.form.invalid',
+        'Claude marketplace plugin source object requires source set to github, url, git-subdir, npm, archive, or command.',
+        'Choose one documented plugin source form and provide its required fields, then rebuild.',
+      )],
+    };
+  }
+  const form = source as ClaudeMarketplaceSourceForm;
+  const diagnostics: Diagnostic[] = [];
+  const allowedFields = sourceFormFields[form];
+  for (const field of Object.keys(declared).sort()) {
+    if (allowedFields.has(field)) continue;
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.source.field.unknown',
+      `Claude marketplace ${form} source declares unknown field ${JSON.stringify(field)}.`,
+      `Remove plugin.source.${field}; the ${form} source object is closed, then rebuild.`,
+    ));
+  }
+  const planGitPins = (value: Record<string, unknown>): void => {
+    const ref = declared['ref'];
+    if (ref !== undefined) {
+      if (!isNonemptyString(ref)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.ref.invalid',
+          `Claude marketplace ${form} source ref must be a nonempty branch or tag.`,
+          'Set plugin.source.ref to a nonempty branch or tag, or remove it, then rebuild.',
+        ));
+      } else {
+        value['ref'] = ref;
+      }
+    }
+    const sha = declared['sha'];
+    if (sha !== undefined) {
+      if (typeof sha !== 'string' || !gitShaPattern.test(sha)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.sha.invalid',
+          `Claude marketplace ${form} source sha must be a full 40-character hexadecimal commit.`,
+          'Set plugin.source.sha to the full 40-hex commit pin, or remove it, then rebuild.',
+        ));
+      } else {
+        value['sha'] = sha;
+      }
+    }
+  };
+
+  switch (form) {
+    case 'github': {
+      const value: Record<string, unknown> = { source: form };
+      const repo = declared['repo'];
+      if (typeof repo !== 'string' || !githubRepositoryPattern.test(repo)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.repo.invalid',
+          'Claude marketplace github source repo must use owner/repo format.',
+          'Set plugin.source.repo to the GitHub owner and repository as owner/repo, then rebuild.',
+        ));
+      } else {
+        value['repo'] = repo;
+      }
+      planGitPins(value);
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceGithubSource }
+        : { diagnostics };
+    }
+    case 'url': {
+      const value: Record<string, unknown> = { source: form };
+      const url = declared['url'];
+      if (typeof url !== 'string' || !isGitUrl(url)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.url.invalid',
+          'Claude marketplace url source requires an HTTPS or git@ repository URL.',
+          'Set plugin.source.url to the full HTTPS or git@ repository URL, then rebuild.',
+        ));
+      } else {
+        value['url'] = url;
+      }
+      planGitPins(value);
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceGitUrlSource }
+        : { diagnostics };
+    }
+    case 'git-subdir': {
+      const value: Record<string, unknown> = { source: form };
+      const url = declared['url'];
+      if (
+        typeof url !== 'string' ||
+        (!isGitUrl(url) && !githubRepositoryPattern.test(url))
+      ) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.url.invalid',
+          'Claude marketplace git-subdir source requires an HTTPS URL, git@ URL, or owner/repo shorthand.',
+          'Set plugin.source.url to a documented git repository location, then rebuild.',
+        ));
+      } else {
+        value['url'] = url;
+      }
+      const path = declared['path'];
+      if (typeof path !== 'string' || !isInternalSubdirectory(path)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.path.invalid',
+          'Claude marketplace git-subdir source path must be a nonempty internal repository subdirectory without . or .. segments.',
+          'Set plugin.source.path to the repository subdirectory containing the plugin, then rebuild.',
+        ));
+      } else {
+        value['path'] = path;
+      }
+      planGitPins(value);
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceGitSubdirSource }
+        : { diagnostics };
+    }
+    case 'npm': {
+      const value: Record<string, unknown> = { source: form };
+      const packageName = declared['package'];
+      if (
+        typeof packageName !== 'string' ||
+        packageName.includes('*') ||
+        !isValidPackageName(packageName)
+      ) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.package.invalid',
+          'Claude marketplace npm source package must be a valid lowercase npm package name.',
+          'Set plugin.source.package to a valid package name such as package-name or @scope/package-name, then rebuild.',
+        ));
+      } else {
+        value['package'] = packageName;
+      }
+      const version = declared['version'];
+      if (version !== undefined) {
+        if (typeof version !== 'string' || !npmSourceVersionPattern.test(version)) {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.plugin.source.version.invalid',
+            'Claude marketplace npm source version must be an exact semantic version or a ^ or ~ range.',
+            'Set plugin.source.version to a form such as 2.1.0, ^2.0.0, or ~1.5.0, then rebuild.',
+          ));
+        } else {
+          value['version'] = version;
+        }
+      }
+      const registry = declared['registry'];
+      if (registry !== undefined) {
+        if (typeof registry !== 'string' || !isHttpUrl(registry)) {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.plugin.source.registry.invalid',
+            'Claude marketplace npm source registry must be an absolute HTTP(S) URL.',
+            'Set plugin.source.registry to the custom npm registry URL, or remove it, then rebuild.',
+          ));
+        } else {
+          value['registry'] = registry;
+        }
+      }
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceNpmSource }
+        : { diagnostics };
+    }
+    case 'archive': {
+      const value: Record<string, unknown> = { source: form };
+      const url = declared['url'];
+      if (typeof url !== 'string' || !isSafeArchiveUrl(url)) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.url.invalid',
+          'Claude marketplace archive source requires an HTTPS URL that is not loopback, link-local, or a known cloud-metadata host.',
+          'Set plugin.source.url to a safe externally reachable HTTPS archive URL, then rebuild.',
+        ));
+      } else {
+        value['url'] = url;
+      }
+      const sha256 = declared['sha256'];
+      if (sha256 !== undefined) {
+        if (typeof sha256 !== 'string' || !archiveSha256Pattern.test(sha256)) {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.plugin.source.sha256.invalid',
+            'Claude marketplace archive source sha256 must contain exactly 64 hexadecimal characters.',
+            'Set plugin.source.sha256 to the archive SHA-256 integrity pin, or remove it, then rebuild.',
+          ));
+        } else {
+          value['sha256'] = sha256;
+        }
+      }
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceArchiveSource }
+        : { diagnostics };
+    }
+    case 'command': {
+      const value: Record<string, unknown> = { source: form };
+      const command = declared['command'];
+      if (
+        !isNonemptyString(command) ||
+        !printableCommandPattern.test(command) ||
+        command.length > 500 ||
+        command.includes('    ')
+      ) {
+        diagnostics.push(marketplaceDiagnostic(
+          'claude.marketplace.plugin.source.command.invalid',
+          'Claude marketplace command source command must be 1-500 printable ASCII characters with no run of four spaces.',
+          'Set plugin.source.command to a reviewable shell command that prints the absolute plugin directory, then rebuild.',
+        ));
+      } else {
+        value['command'] = command;
+      }
+      const timeout = declared['timeout'];
+      if (timeout !== undefined) {
+        if (!Number.isInteger(timeout) || typeof timeout !== 'number' || timeout <= 0 || timeout > 600) {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.plugin.source.timeout.invalid',
+            'Claude marketplace command source timeout must be a positive whole number no greater than 600 seconds.',
+            'Set plugin.source.timeout to a whole number from 1 through 600, or remove it, then rebuild.',
+          ));
+        } else {
+          value['timeout'] = timeout;
+        }
+      }
+      const mode = declared['mode'];
+      if (mode !== undefined) {
+        if (mode !== 'copy' && mode !== 'link') {
+          diagnostics.push(marketplaceDiagnostic(
+            'claude.marketplace.plugin.source.mode.invalid',
+            'Claude marketplace command source mode must be copy or link.',
+            'Set plugin.source.mode to copy or link, or remove it to use copy, then rebuild.',
+          ));
+        } else {
+          value['mode'] = mode;
+        }
+      }
+      return diagnostics.length === 0
+        ? { diagnostics, form, value: value as unknown as ClaudeMarketplaceCommandSource }
+        : { diagnostics };
+    }
+    default: {
+      const exhaustive: never = form;
+      return exhaustive;
+    }
+  }
+};
+
 const planMarketplacePlugin = (
   declared: unknown,
+  pluginRoot: string | undefined,
 ): { readonly diagnostics: readonly Diagnostic[]; readonly value?: Record<string, unknown> } => {
   const diagnostics: Diagnostic[] = [];
   if (!isPlainDataRecord(declared)) {
@@ -1093,16 +1498,57 @@ const planMarketplacePlugin = (
       value['metadata'] = metadataValue;
     }
   }
-  // Claude Code 2.1.257 warns that headers/headersHelper only apply to
-  // archive sources and --strict promotes that warning to failure, so the
-  // authored overlay rejects them until URL-capable sources are emitted.
-  for (const field of ['headers', 'headersHelper'] as const) {
-    if (declared[field] === undefined) continue;
+  const sourcePlan: ClaudeMarketplaceSourcePlan = declared['source'] === undefined
+    ? { diagnostics: [], form: 'relative' }
+    : planMarketplacePluginSource(declared['source'], pluginRoot);
+  diagnostics.push(...sourcePlan.diagnostics);
+  if (sourcePlan.value !== undefined) value['source'] = sourcePlan.value;
+  const headers = declared['headers'];
+  if (headers !== undefined && sourcePlan.form !== 'archive') {
     diagnostics.push(marketplaceDiagnostic(
-      `claude.marketplace.plugin.${field}.inapplicable`,
-      `Claude Code applies marketplace ${field} only to archive sources, and the generated plugin entry uses the relative './' source, so strict native validation rejects it.`,
-      `Remove plugin.${field} until Agent Bundle emits URL-capable marketplace sources, then rebuild.`,
+      'claude.marketplace.plugin.headers.inapplicable',
+      `Claude Code applies marketplace headers only to archive sources, not the ${sourcePlan.form ?? 'invalid'} source form.`,
+      'Remove plugin.headers or change plugin.source to an archive source, then rebuild.',
     ));
+  } else if (headers !== undefined) {
+    if (
+      !isPlainDataRecord(headers) ||
+      Object.keys(headers).length === 0 ||
+      !Object.entries(headers).every(([name, headerValue]) =>
+        isNonemptyString(name) && isNonemptyString(headerValue))
+    ) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.plugin.headers.invalid',
+        'Claude marketplace archive headers must be a nonempty record of nonempty string values.',
+        'Set plugin.headers to one or more nonempty HTTP header names and string values, then rebuild.',
+      ));
+    } else {
+      value['headers'] = headers;
+    }
+  }
+  const headersHelper = declared['headersHelper'];
+  if (headersHelper !== undefined && sourcePlan.form !== 'archive') {
+    diagnostics.push(marketplaceDiagnostic(
+      'claude.marketplace.plugin.headersHelper.inapplicable',
+      `Claude Code applies marketplace headersHelper only to archive sources, not the ${sourcePlan.form ?? 'invalid'} source form.`,
+      'Remove plugin.headersHelper or change plugin.source to an archive source, then rebuild.',
+    ));
+  } else if (headersHelper !== undefined) {
+    if (!isNonemptyString(headersHelper)) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.plugin.headersHelper.invalid',
+        'Claude marketplace archive headersHelper must be a nonempty command string.',
+        'Set plugin.headersHelper to the command that prints one JSON header object, then rebuild.',
+      ));
+    } else if (declared['strict'] !== false) {
+      diagnostics.push(marketplaceDiagnostic(
+        'claude.marketplace.plugin.headersHelper.strict',
+        'Claude Code requires a marketplace archive entry with headersHelper to set strict to false.',
+        'Set plugin.strict to false beside plugin.headersHelper, then rebuild.',
+      ));
+    } else {
+      value['headersHelper'] = headersHelper;
+    }
   }
   const author = declared['author'];
   if (author !== undefined) {
@@ -1294,7 +1740,12 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
   }
   const pluginOverlay = declared['plugin'];
   if (pluginOverlay !== undefined) {
-    const planned = planMarketplacePlugin(pluginOverlay);
+    const marketplaceMetadata = document['metadata'];
+    const pluginRoot = isPlainDataRecord(marketplaceMetadata) &&
+        typeof marketplaceMetadata['pluginRoot'] === 'string'
+      ? marketplaceMetadata['pluginRoot']
+      : undefined;
+    const planned = planMarketplacePlugin(pluginOverlay, pluginRoot);
     diagnostics.push(...planned.diagnostics);
     if (planned.value !== undefined) {
       document['plugins'] = [{ ...basePlugin, ...planned.value }];
@@ -2712,7 +3163,19 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
         capabilityTable.plugin.marketplaceManifest.entryMetadataFields.includes('strict') &&
         capabilityTable.plugin.marketplaceManifest.entryRelevanceSignals.includes('manifestDeps') &&
         capabilityTable.plugin.marketplaceManifest.generatedSourceForms.length === 1 &&
-        capabilityTable.plugin.marketplaceManifest.generatedSourceForms[0] === 'relative',
+        capabilityTable.plugin.marketplaceManifest.generatedSourceForms[0] === 'relative' &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('relative') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('github') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('url') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('git-subdir') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('npm') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('archive') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.authoredForms.includes('command') &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.archiveIntegrity === 'sha256-64-hex' &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.shaOverridesRef &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.versionGates.archive === '2.1.224' &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.versionGates.command === '2.1.229' &&
+        capabilityTable.plugin.marketplaceManifest.sourceMatrix.versionGates.pluginRootBareName === '2.1.239',
       evidence,
       'The pinned Claude plugin contract does not document the complete marketplace manifest surface.',
     ),

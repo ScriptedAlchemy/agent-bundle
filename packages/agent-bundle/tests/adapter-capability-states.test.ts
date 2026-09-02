@@ -369,6 +369,21 @@ it.each([
   expect(registry.supports('plugin', capability)).toBe(false);
 });
 
+it('pins the authored Claude marketplace source matrix and version gates', () => {
+  expect(claudeCapabilityTable.plugin.marketplaceManifest.sourceMatrix).toEqual({
+    archiveIntegrity: 'sha256-64-hex',
+    authoredForms: ['relative', 'github', 'url', 'git-subdir', 'npm', 'archive', 'command'],
+    generatedDefault: 'relative',
+    gitPinFields: ['ref', 'sha'],
+    shaOverridesRef: true,
+    versionGates: {
+      archive: '2.1.224',
+      command: '2.1.229',
+      pluginRootBareName: '2.1.239',
+    },
+  });
+});
+
 it.each([
   ['manifestMetadata', 'manifest metadata fields'],
   ['manifestPaths', 'custom manifest path rules'],
