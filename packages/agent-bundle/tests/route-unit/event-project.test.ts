@@ -1,4 +1,4 @@
-import { Agent } from '@agent-bundle/runtime';
+import { Agent, type JsonValue } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 import { createElement, Suspense } from 'react';
 
@@ -146,4 +146,51 @@ it('projects subagent-stop continuation only through supported host contracts', 
     .toThrow(/not supported by the Codex SubagentStop output schema/u);
   expect(() => projectEventDocument(feedback.document, 'agent/stop', 'plugin', 'SubagentStop'))
     .toThrow(/must resolve the invoking host/u);
+});
+
+it('projects workspace/open as a fire-and-forget observation only', async () => {
+  const props = createCanonicalEventProps(
+    'workspace/open',
+    {
+      cursor_version: '1.7.2',
+      hook_event_name: 'workspaceOpen',
+      user_email: null,
+      workspace_roots: ['/workspace'],
+    },
+    'cursor',
+    'workspaceOpen',
+    '2026-08-28',
+    new AbortController().signal,
+  );
+  const routeInput = {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:workspace/open',
+  } as const;
+  const observation = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, routeInput);
+  expect(projectEventDocument(observation.document, 'workspace/open', 'cursor', 'workspaceOpen')).toBeUndefined();
+
+  const rejectedValues: readonly JsonValue[] = [
+    { outcome: 'deny', reason: 'Do not open.' },
+    { updatedInput: { workspace_roots: ['/replacement'] } },
+  ];
+  for (const value of rejectedValues) {
+    const rejected = await renderRoute({
+      default: async () => createElement(Agent.Result, { value }),
+    }, routeInput);
+    expect(() => projectEventDocument(rejected.document, 'workspace/open', 'cursor', 'workspaceOpen'))
+      .toThrow(/workspace\/open is observation-only on every supported host/u);
+  }
+
+  const context = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      null,
+      createElement(Agent.Context, null, 'Inject this context.'),
+    ),
+  }, routeInput);
+  expect(() => projectEventDocument(context.document, 'workspace/open', 'cursor', 'workspaceOpen'))
+    .toThrow(/Cursor's workspaceOpen has no context\/output channel.*pluginPaths.*deliberately not modeled/u);
 });

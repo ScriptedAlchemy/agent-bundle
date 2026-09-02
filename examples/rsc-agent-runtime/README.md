@@ -235,11 +235,13 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `stop` | Supported | `Stop` | `Stop` |
 | `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
 | `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
-| `workspace/open` | Unavailable | Unavailable | Unavailable |
+| `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |
 
-Cursor's native `workspaceOpen` is sessionless: it fires without session or
-conversation fields and its response returns `pluginPaths`. The generated
-session-scoped wrapper and output vocabulary cannot express that envelope.
+Cursor's native `workspaceOpen` is sessionless and its optional `pluginPaths`
+return is deliberately not modeled. Event routes observe the documented
+workspace envelope and emit no native output; plain `hooks.events.workspaceOpen`
+handlers remain unavailable because their session-scoped vocabulary cannot
+express it.
 `agent/start` is context-injection-only on Claude Code and Codex and cannot
 block subagent creation. Their `agent/stop` routes can continue the subagent
 with the native `decision: "block"` plus `reason` contract. Codex

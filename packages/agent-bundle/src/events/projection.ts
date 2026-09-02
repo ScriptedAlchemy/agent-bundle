@@ -55,6 +55,24 @@ export const validateNativeEventEnvelope = (
     return nativeEventError(`native hook_event_name must equal ${nativeEvent}`);
   }
   if (target === 'cursor') {
+    if (canonicalEvent === 'workspace/open') {
+      if (
+        !Array.isArray(native.workspace_roots)
+        || native.workspace_roots.length === 0
+        || !native.workspace_roots.every((root) => typeof root === 'string' && root.trim() !== '')
+      ) {
+        return nativeEventError('native workspace_roots must be a nonempty array of nonempty strings');
+      }
+      requireNativeString(native, 'cursor_version');
+      if (
+        Object.hasOwn(native, 'user_email')
+        && native.user_email !== null
+        && typeof native.user_email !== 'string'
+      ) {
+        return nativeEventError('native user_email must be a string or null');
+      }
+      return native;
+    }
     if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {
       return nativeEventError('native session_id or conversation_id must be a string');
     }
@@ -277,6 +295,17 @@ export const projectEventDocument = (
             hookEventName: nativeEvent,
           },
         });
+  }
+  if (event === 'workspace/open') {
+    if (parsedValue?.outcome === 'deny' || parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('workspace/open is observation-only on every supported host and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError(
+        'Cursor\'s workspaceOpen has no context/output channel; the native pluginPaths return channel is deliberately not modeled.',
+      );
+    }
+    return undefined;
   }
   return undefined;
 };

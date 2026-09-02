@@ -419,8 +419,8 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     });
   }
   expect(registry.get('cursor').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('pluginPaths'),
-    state: 'unavailable',
+    evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+    state: 'supported',
   });
   for (const target of ['claude', 'codex'] as const) {
     for (const capability of allNativeHosts) {
@@ -441,7 +441,7 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     });
   }
   expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('pluginPaths'),
+    reason: expect.not.stringContaining('pluginPaths'),
     state: 'unavailable',
   });
   expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
