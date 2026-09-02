@@ -71,7 +71,7 @@ const writeBundle = async (
   return directory;
 };
 
-type GeneratedSchemaBehavior = 'drift' | 'match' | 'missing-verb' | 'output-limit' | 'timed-out';
+type GeneratedSchemaBehavior = 'app-server-only' | 'drift' | 'match' | 'missing-verb' | 'output-limit' | 'timed-out';
 
 const runWith = (
   behavior: GeneratedSchemaBehavior,
@@ -113,6 +113,11 @@ const runWith = (
       const outIndex = request.args.indexOf('--out');
       const outputDirectory = request.args[outIndex + 1];
       if (outputDirectory === undefined) throw new Error('schema output directory was not provided');
+      if (behavior === 'app-server-only') {
+        await writeFile(join(outputDirectory, 'codex_app_server_protocol.schemas.json'), '{}\n', 'utf8');
+        await writeFile(join(outputDirectory, 'codex_app_server_protocol.v2.schemas.json'), '{}\n', 'utf8');
+        return { exitCode: 0, signal: null, stderr: '', stdout: '' };
+      }
       const pinnedDirectory = new URL('../src/adapters/schemas/codex/generated/', import.meta.url);
       for (const name of generatedSchemaNames) {
         await copyFile(new URL(name, pinnedDirectory), join(outputDirectory, name));
@@ -249,6 +254,35 @@ it('warns when live generated schemas drift from the pinned revision', async () 
         }),
       ],
       status: 'warnings',
+      version: '0.147.0',
+    });
+  } finally {
+    await rm(pluginDirectory, { force: true, recursive: true });
+  }
+});
+
+it('reports app-server-only schema output as unassessable information even in strict mode', async () => {
+  const pluginDirectory = await writeBundle();
+  try {
+    const report = await validateCodexPlugin({
+      pluginDirectory,
+      run: runWith('app-server-only').run,
+      strict: true,
+      target: 'codex',
+    });
+
+    expect(report).toMatchObject({
+      diagnostics: [
+        expect.objectContaining({ code: 'AB6030', severity: 'info' }),
+        expect.objectContaining({
+          code: 'AB6031',
+          message: expect.stringContaining(
+            'live hook-schema drift is not assessable because the generator emits the app-server protocol surface',
+          ),
+          severity: 'info',
+        }),
+      ],
+      status: 'passed',
       version: '0.147.0',
     });
   } finally {

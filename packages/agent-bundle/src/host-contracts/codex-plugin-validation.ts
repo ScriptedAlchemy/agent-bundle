@@ -214,9 +214,20 @@ const compareGeneratedSchemas = async (
   if (missing.length === 0 && changed.length === 0) return Object.freeze([]);
 
   const liveFiles = await generatedJsonFiles(liveDirectory);
-  const appServerBundle = liveFiles.some((path) =>
-    path === 'codex_app_server_protocol.schemas.json' ||
-    path === 'codex_app_server_protocol.v2.schemas.json');
+  const appServerBundlesPresent = [
+    'codex_app_server_protocol.schemas.json',
+    'codex_app_server_protocol.v2.schemas.json',
+  ].every((path) => liveFiles.includes(path));
+  if (missing.length === generatedSchemaNames.length && appServerBundlesPresent) {
+    return freezeDiagnostics([diagnostic(
+      'AB6031',
+      `Codex ${liveVersion ?? 'unknown'} live hook-schema drift is not assessable because the generator emits ` +
+        `the app-server protocol surface, which is unpinned for plugin hook validation against Codex ${pinnedRevision}.`,
+      'info',
+      target,
+      'Retain validation against the vendored pinned hook schemas until Codex publishes a comparable live hook-schema surface.',
+    )]);
+  }
   const details = [
     ...(missing.length === 0 ? [] : [`missing ${missing.join(', ')}`]),
     ...(changed.length === 0 ? [] : [`changed ${changed.join(', ')}`]),
@@ -224,8 +235,7 @@ const compareGeneratedSchemas = async (
   return freezeDiagnostics([diagnostic(
     'AB6031',
     `The live Codex ${liveVersion ?? 'unknown'} schema set does not match pinned Codex ${pinnedRevision} ` +
-      `generated hook schemas (${details}); the command emitted ${liveFiles.length} JSON schema files` +
-      `${appServerBundle ? ' for the app-server protocol, which is unpinned for plugin hook validation' : ''}.`,
+      `generated hook schemas (${details}); the command emitted ${liveFiles.length} JSON schema files.`,
     strict ? 'error' : 'warning',
     target,
     'Review the live host schema source and update the pinned revision only from a published, attributable Codex contract.',
