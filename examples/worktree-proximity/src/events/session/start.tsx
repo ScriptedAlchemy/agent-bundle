@@ -33,7 +33,7 @@ export default async function SessionStart({
   }
 
   const actorId = `session:${sessionId}`;
-  await withTopology(currentWorktree, async (topology) => {
+  const topologyResult = await withTopology(async (topology) => {
     await topology.dispatch('actorObserved', {
       id: actorId,
       kind: 'root',
@@ -50,13 +50,17 @@ export default async function SessionStart({
       idempotencyKey: `${canonical.idempotencyKey}:worktree`,
     });
   });
-  const deliveries = await withNotices(
-    currentWorktree,
-    actorId,
-    'native',
-    async (notices) => notices.read(),
-  );
-  const contexts = deliveryContexts(deliveries);
+  if (topologyResult.state === 'unavailable') {
+    return (
+      <Agent.Result>
+        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      </Agent.Result>
+    );
+  }
+  const noticeResult = await withNotices(async (notices) => notices.read());
+  const contexts = noticeResult.state === 'available'
+    ? deliveryContexts(noticeResult.value)
+    : [noticeResult.reason];
   return (
     <Agent.Result>
       {contexts.map((context) => <Agent.Context key={context}>{context}</Agent.Context>)}

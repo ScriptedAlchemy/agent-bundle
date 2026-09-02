@@ -3,17 +3,12 @@ import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
 import { z } from 'zod';
 
-import { worktree } from '../../../api.js';
-import {
-  readNoticeLedger,
-  stateRootFor,
-  withTopology,
-} from '../../../coordination.js';
+import { withTopology } from '../../../coordination.js';
 import { ActorSchema } from '../../../state.js';
 
 export const config = {
   annotations: { readOnlyHint: true },
-  description: 'Show the durable worktree topology, active intents, refusals, and pending directed notices.',
+  description: 'Show the mounted durable worktree topology, active intents, and refusals.',
 } satisfies ToolConfig;
 
 export const inputSchema = z
@@ -26,11 +21,9 @@ export const resultSchema = z
   .object({
     activeActivities: z.number().int().nonnegative(),
     actors: z.array(ActorSchema),
-    pendingNotices: z.number().int().nonnegative(),
     reason: z.string().optional(),
     refusals: z.number().int().nonnegative(),
     state: z.enum(['available', 'unavailable']),
-    stateRoot: z.string().optional(),
   })
   .strict();
 
@@ -39,20 +32,18 @@ type StatusResult = z.output<typeof resultSchema>;
 export default async function Status({
   input,
 }: ToolRouteProps<typeof inputSchema>) {
-  const currentWorktree = await worktree();
+  const topologyResult = await withTopology(async (store) => (await store.read()).state);
   let result: StatusResult;
-  if (currentWorktree.state === 'unavailable') {
+  if (topologyResult.state === 'unavailable') {
     result = {
       activeActivities: 0,
       actors: [],
-      pendingNotices: 0,
-      reason: currentWorktree.reason,
+      reason: topologyResult.reason,
       refusals: 0,
       state: 'unavailable',
     };
   } else {
-    const topology = await withTopology(currentWorktree, async (store) => (await store.read()).state);
-    const notices = await readNoticeLedger(currentWorktree);
+    const topology = topologyResult.value;
     const actors = input.actorId === undefined
       ? topology.actors
       : topology.actors.filter((actor) => actor.id === input.actorId);
@@ -64,10 +55,8 @@ export default async function Status({
           && (activity.paths.length > 0 || activity.dependencies.length > 0),
       ).length,
       actors,
-      pendingNotices: notices.notices.filter((notice) => notice.state === 'pending').length,
       refusals: topology.refusals.length,
       state: 'available',
-      stateRoot: stateRootFor(currentWorktree),
     };
   }
 
@@ -77,7 +66,6 @@ export default async function Status({
         '',
         `- Actors: ${String(result.actors.length)}`,
         `- Active activities: ${String(result.activeActivities)}`,
-        `- Pending notices: ${String(result.pendingNotices)}`,
         `- Refused edges: ${String(result.refusals)}`,
       ].join('\n')
     : `# Worktree proximity status\n\nUnavailable: ${result.reason ?? 'unknown reason'}`;

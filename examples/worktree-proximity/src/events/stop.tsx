@@ -29,7 +29,7 @@ export default async function Stop({
     );
   }
   const nativeActorId = nativeString(native, 'agent_id');
-  const actor = await withTopology(currentWorktree, async (topology): Promise<ResolvedActor> => {
+  const topologyResult = await withTopology(async (topology): Promise<ResolvedActor> => {
     const resolved = nativeActorId === undefined
       ? (await actorForWorktree(topology, currentWorktree, canonical)).actor
       : { id: nativeActorId, source: 'native' as const };
@@ -41,15 +41,20 @@ export default async function Stop({
     });
     return resolved;
   });
-  const deliveries = await withNotices(
-    currentWorktree,
-    actor.id,
-    actor.source,
-    async (notices) => notices.read(),
-  );
+  if (topologyResult.state === 'unavailable') {
+    return (
+      <Agent.Result>
+        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      </Agent.Result>
+    );
+  }
+  const noticeResult = await withNotices(async (notices) => notices.read());
+  const contexts = noticeResult.state === 'available'
+    ? deliveryContexts(noticeResult.value)
+    : [noticeResult.reason];
   return (
     <Agent.Result>
-      {deliveryContexts(deliveries).map((context) =>
+      {contexts.map((context) =>
         <Agent.Context key={context}>{context}</Agent.Context>)}
     </Agent.Result>
   );

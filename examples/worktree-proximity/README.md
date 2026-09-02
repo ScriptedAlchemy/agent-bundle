@@ -39,25 +39,33 @@ The application has four planes:
 
 - **Providers** — `git-worktree` derives repository, branch, commit, common
   Git directory, and linked-worktree identity without throwing for expected
-  degradation. `agent-topology` exposes a read-only durable snapshot.
+  degradation. `agent-topology` reports that its snapshot is unavailable
+  before request mounting.
 - **Events** — canonical shared-runtime routes observe actors, bind worktrees,
   record or clear intent, detect conflicts, render current-actor context, and
   publish or admit notices.
 - **State and notices** — one workspace-durable topology definition and the
-  framework notice definition share a SQLite state root. Each request opens,
-  uses, and closes its stores; SQLite supplies cross-process durability and
-  idempotency without a daemon.
+  framework notice definition share the generated runtime's SQLite driver.
+  Routes use only the mounted `(await agent()).state` and
+  `(await agent()).notices` handles; SQLite supplies cross-process durability
+  and idempotency without a daemon.
 - **Domain** — `src/domain/proximity.ts` contains all collision decisions and
   performs no I/O.
 
-`WORKTREE_PROXIMITY_STATE_DIR` overrides storage for tests and explicit
-deployments. Otherwise state lives at
-`<git common dir>/agent-bundle-proximity/`, so linked worktrees share one
-durable topology and notice ledger.
+The generated runtime owns the durable root. It mounts SQLite at
+`$AGENT_BUNDLE_PLUGIN_ROOT/state`, with the generated artifact root as the
+fallback anchor, and mounts topology state and the notice ledger over that
+same driver. The application never opens a second store from Git identity
+data; `gitWorktree.commonDir` remains identity evidence only.
+
+The issue sketch places a snapshot at `providers.agentTopology.snapshot`, but
+providers execute before request state is mounted, so this provider reports
+an honest unavailable result and routes read snapshots from
+`(await agent()).state.read()` instead.
 
 `worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
 provider value. A `useWorktree()` React-hook variant is recorded unavailable:
-main exposes no client-hook contract for provider values.
+the framework exposes no client-hook contract for provider values.
 
 ## Actor identity and provenance
 
@@ -80,33 +88,31 @@ rendered as unavailable instead of being replaced with invented evidence.
 
 ## Framework primitive wiring
 
-The topology and notice operations are custom APIs composed from public
-framework primitives. Generated bundles do not yet mount `(await
-agent()).state` or `(await agent()).notices` (issue #233). The application
-probes those reserved request handles first and uses them when available,
-then falls back to opening the SQLite driver and notice ledger for the current
-request. This is application wiring, not a private framework import, and it
-can disappear naturally when #233 lands.
+Generated route workers mount the extracted `src/state.ts` definition and the
+notice ledger into every request scope. `withTopology` and `withNotices` are
+small capability adapters over those real handles. If a surface has no
+mounted handle, they return an unavailable result and the route renders that
+reason as `Agent.Context`; there is no fallback write path.
 
-The local notice authorizer admits this repository-scoped demonstration's
-actor-addressed publications and deliveries. Recipient matching uses only the
-actor axis, so it does not accidentally require a matching session or
-worktree axis.
+Notice admission runs once per event invocation in the render scope.
+Recipient matching uses the actor identity mounted in that request, and
+`(await agent()).notices.read()` exposes only deliveries attempted for that
+invocation. The coordinator status therefore reports topology facts only and
+does not claim a whole-ledger pending count.
 
 ## Evidence boundary
 
-The deterministic suite is artifact/contract integration evidence, NOT
-commercial-host dispatch proof. Route-unit tests render compiled route
-modules through the framework request and document contracts in-process. They
-do not prove that Claude, Codex, or another commercial host invokes a hook,
-preserves its envelope, or displays projected context in production.
-
-The later real-child-process journey suite is responsible for process-level
-restart and dispatch evidence. The version-1 state design is restart durable,
-but this slice makes no claim that the later journey suite has run.
+The route-unit suite is in-process real-renderer evidence: it compiles the
+manifest, mounts the real state and notice handles, renders the event routes,
+and exercises the documented journeys against one shared durable runtime
+owner. The multi-process artifact/contract suite is the next slice and has
+not run here. Neither level is proof that Claude, Codex, or another commercial
+host dispatches a hook, preserves its envelope, or displays projected context
+in production.
 
 ## External-driver boundary
 
-Version 1 connects NO external adapter and claims none. A real external
-adapter must pass the framework state-driver conformance suite before any
-“integrated” claim. SQLite is the only durable driver used by this example.
+Version 1 connects no external driver adapter and claims none. A future
+external adapter must pass the framework state-driver conformance suite
+before any “integrated” claim. The generated runtime's SQLite driver is the
+only durable driver used by this example.

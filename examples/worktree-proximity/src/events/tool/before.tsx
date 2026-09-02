@@ -1,4 +1,4 @@
-import { Agent } from '@agent-bundle/runtime';
+import { Agent, type JsonValue } from '@agent-bundle/runtime';
 import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
@@ -29,7 +29,7 @@ export default async function BeforeTool({
     );
   }
   const intent = extractIntent(native);
-  const resolution = await withTopology(currentWorktree, async (topology) => {
+  const topologyResult = await withTopology(async (topology) => {
     const { actor } = await actorForWorktree(topology, currentWorktree, canonical);
     const committed = await topology.dispatch('intentRecorded', {
       actorId: actor.id,
@@ -54,39 +54,45 @@ export default async function BeforeTool({
       }),
     };
   });
+  if (topologyResult.state === 'unavailable') {
+    return (
+      <Agent.Result value={{ outcome: 'continue', reason: topologyResult.reason }}>
+        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      </Agent.Result>
+    );
+  }
+  const resolution = topologyResult.value;
 
-  const deliveryAndPublication = await withNotices(
-    currentWorktree,
-    resolution.actor.id,
-    resolution.actor.source,
-    async (notices) => {
-      const deliveries = await notices.read();
-      for (const [index, conflict] of resolution.conflicts.entries()) {
-        await notices.publish({
-          content: {
-            root: {
-              kind: 'text',
-              text: conflict.summary,
-            },
-            status: 'success',
-            version: 1,
+  const noticeResult = await withNotices(async (notices) => {
+    const deliveries = await notices.read();
+    for (const [index, conflict] of resolution.conflicts.entries()) {
+      await notices.publish({
+        content: {
+          root: {
+            kind: 'text',
+            text: conflict.summary,
           },
-          dedupeKey: `proximity:${resolution.actor.id}:${conflict.actorId}:${conflict.summary}`,
-          priority: 'high',
-          recipient: {
-            actor: { id: conflict.actorId },
-          },
-        }, {
-          idempotencyKey: `${canonical.idempotencyKey}:notice:${String(index)}`,
-        });
-      }
-      return deliveryContexts(deliveries);
-    },
-  );
+          status: 'success',
+          version: 1,
+        },
+        dedupeKey: `proximity:${resolution.actor.id}:${conflict.actorId}:${conflict.summary}`,
+        priority: 'high',
+        recipient: {
+          actor: { id: conflict.actorId },
+        },
+      }, {
+        idempotencyKey: `${canonical.idempotencyKey}:notice:${String(index)}`,
+      });
+    }
+    return deliveryContexts(deliveries);
+  });
+  const deliveryAndPublication = noticeResult.state === 'available'
+    ? noticeResult.value
+    : [noticeResult.reason];
   const warnings = resolution.conflicts.map((conflict) =>
     `Proximity warning for ${resolution.actor.id}: ${conflict.summary}`);
   const reason = warnings.join(' ');
-  const value = reason === ''
+  const value: JsonValue = reason === ''
     ? { outcome: 'continue' as const }
     : { outcome: 'continue' as const, reason };
 

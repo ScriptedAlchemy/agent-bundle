@@ -22,7 +22,7 @@ export default async function AfterTool({
       </Agent.Result>
     );
   }
-  const actor = await withTopology(currentWorktree, async (topology) => {
+  const topologyResult = await withTopology(async (topology) => {
     const resolved = await actorForWorktree(topology, currentWorktree, canonical);
     await topology.dispatch('intentRecorded', {
       actorId: resolved.actor.id,
@@ -40,15 +40,20 @@ export default async function AfterTool({
     });
     return resolved.actor;
   });
-  const deliveries = await withNotices(
-    currentWorktree,
-    actor.id,
-    actor.source,
-    async (notices) => notices.read(),
-  );
+  if (topologyResult.state === 'unavailable') {
+    return (
+      <Agent.Result value={{ outcome: 'continue' }}>
+        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      </Agent.Result>
+    );
+  }
+  const noticeResult = await withNotices(async (notices) => notices.read());
+  const contexts = noticeResult.state === 'available'
+    ? deliveryContexts(noticeResult.value)
+    : [noticeResult.reason];
   return (
     <Agent.Result value={{ outcome: 'continue' }}>
-      {deliveryContexts(deliveries).map((context) =>
+      {contexts.map((context) =>
         <Agent.Context key={context}>{context}</Agent.Context>)}
     </Agent.Result>
   );

@@ -1,7 +1,6 @@
 import type {
   AgentDocumentNode,
   AgentNoticeDelivery,
-  ObservedSource,
 } from '@agent-bundle/runtime';
 
 import type { AvailableWorktree } from './api.js';
@@ -20,7 +19,7 @@ export interface ExtractedIntent {
 
 export interface ResolvedActor {
   readonly id: string;
-  readonly source: ObservedSource;
+  readonly source: 'derived' | 'native';
 }
 
 export const nativeString = (

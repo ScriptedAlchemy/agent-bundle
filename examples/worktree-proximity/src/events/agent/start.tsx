@@ -26,13 +26,11 @@ export default async function AgentStart({
 
   const agentId = nativeString(native, 'agent_id');
   const sessionId = nativeString(native, 'session_id');
-  const refusal = agentId === undefined
-    ? 'agent/start omitted native agent_id; refused to fabricate a topology edge'
-    : sessionId === undefined
-      ? 'agent/start omitted native session_id; refused to fabricate a topology edge'
-      : undefined;
-  if (refusal !== undefined) {
-    await withTopology(currentWorktree, async (topology) => {
+  if (agentId === undefined || sessionId === undefined) {
+    const refusal = agentId === undefined
+      ? 'agent/start omitted native agent_id; refused to fabricate a topology edge'
+      : 'agent/start omitted native session_id; refused to fabricate a topology edge';
+    const topologyResult = await withTopology(async (topology) => {
       await topology.dispatch('edgeRefused', {
         idempotencyKey: canonical.idempotencyKey,
         observedAt: canonical.observedAt,
@@ -42,22 +40,23 @@ export default async function AgentStart({
         idempotencyKey: `${canonical.idempotencyKey}:refusal`,
       });
     });
-    const deliveries = await withNotices(
-      currentWorktree,
-      undefined,
-      'derived',
-      async (notices) => notices.read(),
-    );
+    const noticeResult = await withNotices(async (notices) => notices.read());
+    const contexts = [
+      ...(topologyResult.state === 'unavailable' ? [topologyResult.reason] : []),
+      ...(noticeResult.state === 'available'
+        ? deliveryContexts(noticeResult.value)
+        : [noticeResult.reason]),
+    ];
     return (
       <Agent.Result>
         <Agent.Context>{`Parent identity unavailable; ${refusal}.`}</Agent.Context>
-        {deliveryContexts(deliveries).map((context) =>
+        {contexts.map((context) =>
           <Agent.Context key={context}>{context}</Agent.Context>)}
       </Agent.Result>
     );
   }
 
-  await withTopology(currentWorktree, async (topology) => {
+  const topologyResult = await withTopology(async (topology) => {
     await topology.dispatch('actorObserved', {
       id: agentId,
       kind: 'child',
@@ -78,15 +77,20 @@ export default async function AgentStart({
       idempotencyKey: `${canonical.idempotencyKey}:worktree`,
     });
   });
-  const deliveries = await withNotices(
-    currentWorktree,
-    agentId,
-    'native',
-    async (notices) => notices.read(),
-  );
+  if (topologyResult.state === 'unavailable') {
+    return (
+      <Agent.Result>
+        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      </Agent.Result>
+    );
+  }
+  const noticeResult = await withNotices(async (notices) => notices.read());
+  const contexts = noticeResult.state === 'available'
+    ? deliveryContexts(noticeResult.value)
+    : [noticeResult.reason];
   return (
     <Agent.Result>
-      {deliveryContexts(deliveries).map((context) =>
+      {contexts.map((context) =>
         <Agent.Context key={context}>{context}</Agent.Context>)}
     </Agent.Result>
   );

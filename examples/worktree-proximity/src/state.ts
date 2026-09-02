@@ -164,3 +164,9 @@ export const topologyStateDefinition = defineState({
   schema: TopologyStateSchema,
   version: 1,
 });
+
+export default defineState({
+  ...topologyStateDefinition,
+  id: 'worktree-proximity/topology',
+  lifetime: 'workspace-durable',
+});
