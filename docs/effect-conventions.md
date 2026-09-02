@@ -182,8 +182,8 @@ static assets.
 
 Exact-pin `effect` + `@effect/atom-react` (synchronized with the repo's effect
 pin, currently `4.0.0-rc.112`) are allowed there, but only in dedicated
-browser-state modules (`src/runtime/agent-document-atoms.ts` and
-`src/routes/route-editor-atoms.ts`).
+browser-state modules (`src/runtime/agent-document-atoms.ts`,
+`src/routes/route-editor-atoms.ts`, and `src/discovery/discovery-atoms.ts`).
 Atoms live in `effect/unstable/reactivity`; React bindings come from
 `@effect/atom-react`.
 

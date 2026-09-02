@@ -13,6 +13,10 @@ import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
+import {
+  HostDiscoveryService,
+  type HostDiscoveryServiceOptions,
+} from './playground/host-discovery-service.ts';
 import { LifecycleReplayService } from './playground/lifecycle-replay-service.ts';
 import {
   startForegroundServer,
@@ -113,6 +117,8 @@ interface DevServerForeground {
 
 interface DevServerTesting {
   readonly createSandboxProxy?: (options: CreateMcpAppSandboxProxyOptions) => Promise<McpAppSandboxProxy>;
+  /** Overrides only Doctor execution and time; prepared build identity always comes from this dev server. */
+  readonly hostDiscoveryOptions?: Pick<HostDiscoveryServiceOptions, 'doctor' | 'doctorOptions' | 'now'>;
   readonly openRuntimeClientSurface?: (
     endpoint: DevRuntimeClientSurfaceEndpoint,
     listener: Parameters<typeof RuntimeClientSurfaceProxy.open>[1],
@@ -685,6 +691,19 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
+  const hostDiscovery = new HostDiscoveryService({
+    ...options.testing?.hostDiscoveryOptions,
+    prepared: () => {
+      const prepared = latestValidPreparedProject;
+      if (prepared?.model === undefined) return undefined;
+      return Object.freeze({
+        bundleSource: join(root, 'dist'),
+        ...(prepared.source.revision === undefined
+          ? {}
+          : { manifestDigest: prepared.source.revision }),
+      });
+    },
+  });
   const lifecycleReplay = new LifecycleReplayService({
     logger: logs,
     prepared: () => {
@@ -770,6 +789,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     evalLifecycle: evals,
     eventHub,
     hookPlayground,
+    hostDiscovery,
     inspector,
     lifecycleReplay,
     logs,
