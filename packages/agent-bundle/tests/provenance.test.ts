@@ -275,6 +275,7 @@ it('permits classified no-source modules and rejects anonymous or unknown select
   expect(collect([
     { moduleType: 'runtime' },
     { moduleType: 'external', name: 'external "node:fs"' },
+    { identifier: '/work/project/node_modules/agent-bundle/dist|sync', moduleType: 'javascript/auto' },
     { modules: [{ nameForCondition: '/work/project/src/greeting.ts' }] },
   ])).toEqual([{
     path: 'portable/scripts/greeting.mjs',

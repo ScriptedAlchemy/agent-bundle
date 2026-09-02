@@ -629,11 +629,13 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
-      "import { createElement } from 'react';",
+      "import { createElement, Suspense } from 'react';",
       "export const config = { runtime: 'standalone', targets: ['cursor'] };",
+      'const wait = () => new Promise((resolve) => setTimeout(resolve, 5));',
       'const Context = async ({ tool }) => createElement(Agent.Context, null, `standalone:${tool}`);',
       'export default async function AfterTool({ native }) {',
-      '  return createElement(Agent.Result, null, createElement(Context, { tool: native.tool_name }));',
+      '  await wait();',
+      "  return createElement(Agent.Result, null, createElement(Suspense, { fallback: createElement(Agent.Context, null, 'loading') }, createElement(Context, { tool: native.tool_name })));",
       '}',
       '',
     ].join('\n')),
@@ -644,7 +646,7 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
   expect(compiled.build.compiledMcpEntries).toHaveLength(0);
   const hook = compiled.build.compiledHooks.find((entry) => entry.event === 'afterTool');
   expect(hook).toBeDefined();
-  await expect(runHook(hook!.output, {
+  const response = await runHook(hook!.output, {
     conversation_id: 'conversation-1',
     cwd: root,
     hook_event_name: 'postToolUse',
@@ -653,7 +655,8 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     tool_name: 'Write',
     tool_output: '{"ok":true}',
     tool_use_id: 'tool-1',
-  })).resolves.toEqual({ additional_context: 'standalone:Write' });
+  });
+  expect(response).toEqual({ additional_context: 'standalone:Write' });
 });
 
 it('replays Claude and Codex subagent fixtures through standalone event-route wrappers', { timeout: 60_000 }, async () => {
