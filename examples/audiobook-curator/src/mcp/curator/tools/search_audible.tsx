@@ -8,7 +8,7 @@ import { defaultAudibleOperations, audibleOperations } from '../../../operations
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
 
-export const config = {"annotations":{"openWorldHint":true,"readOnlyHint":false},"description":"Search Audible regions and return ranked identity evidence requiring human review."};
+export const config = {"annotations":{"openWorldHint":true,"readOnlyHint":false},"description":"Search Audible regions and return ranked identity evidence requiring human review.","exitCode":"result"};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

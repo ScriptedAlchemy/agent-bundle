@@ -9,7 +9,7 @@ import { defaultDiscoveryOperations, discoveryOperations } from '../../../operat
 
 const operation = discoveryOperations(defaultDiscoveryOperations).inventory;
 
-export const config = {"annotations":{"readOnlyHint":false},"description":"Inventory source audio with retained per-file probe evidence."};
+export const config = {"annotations":{"readOnlyHint":false},"description":"Inventory source audio with retained per-file probe evidence.","exitCode":"result"};
 export const inputSchema = z.object({
   source: z.string().min(1).max(4096).describe('Source audio path to inventory.'),
   report: z.string().min(1).max(4096).optional().describe('Optional report destination.'),
