@@ -95,6 +95,17 @@ describe('generated entry templates', () => {
     expect(generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' })).toContain('entry["default"]');
   });
 
+  it('defers installer filesystem URL conversion to the guarded runtime', () => {
+    const source = entryShellModule.generatedInstallBinEntrySource({
+      artifactRelativeUrl: '../../artifact/',
+      hosts: ['cursor'],
+      name: 'installer',
+    });
+
+    expect(source).toContain('artifactRoot: new URL("../../artifact/", import.meta.url)');
+    expect(source).not.toContain('fileURLToPath');
+  });
+
   it('routes a rejected progress report into the generated request failure path', async () => {
     const generated = generatedRenderedScriptEntrySource({
       name: 'report',
@@ -440,6 +451,41 @@ it('generates deterministic per-request provider execution in the shared Flight 
   expect(source).toContain('Context provider "');
   expect(source).toContain('provider.source');
   expect(source).toContain('providers: providerValues');
+});
+
+it('mounts deterministic per-request providers in rendered route workers', () => {
+  const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    providers: [
+      {
+        id: 'provider:zeta',
+        name: 'zeta',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/zeta.ts' },
+        source: '/project/src/providers/zeta.ts',
+      },
+      {
+        id: 'provider:alpha-value',
+        name: 'alpha-value',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/alpha-value.ts' },
+        source: '/project/src/providers/alpha-value.ts',
+      },
+    ],
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+  });
+
+  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
+    source.indexOf('/project/src/providers/zeta.ts'),
+  );
+  expect(source).toContain('await provider.module.default({ invocation: message.invocation, signal: controller.signal })');
+  expect(source).toContain('providers: providerValues');
+  expect(source).toContain('processLifetime');
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {

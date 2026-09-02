@@ -90,6 +90,7 @@ export {
   serializeArtifactManifest,
 } from './build/manifest.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
+import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
@@ -701,6 +702,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     : [resolveOutput(root, options.output)];
   const prepared = await new ProjectService({
     ...options,
+    ...(options.packageOutputs === true ? { artifactDistPathDefault: defaultPackageArtifactDistPath } : {}),
     ...(outputRoots === undefined ? {} : { outputRoots }),
     root,
   }).prepare('build');

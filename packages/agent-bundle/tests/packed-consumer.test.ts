@@ -234,23 +234,20 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation).toHaveLength(1);
-    expect(validationDocument.hostValidation[0]).toMatchObject({
-      host: 'claude',
-      target: 'claude',
-    });
-    if (validationDocument.hostValidation[0]!.status === 'passed') {
-      expect(validationDocument.diagnostics).toEqual([]);
-      expect(validationDocument.hostValidation[0]!.diagnostics).toEqual([]);
-    } else {
-      expect(validationDocument.hostValidation[0]).toMatchObject({
-        diagnostics: [{ code: 'AB6019', severity: 'info' }],
-        status: 'unavailable',
-      });
-      expect(validationDocument.diagnostics).toEqual([
-        expect.objectContaining({ code: 'AB6019', severity: 'info' }),
-      ]);
+    expect(validationDocument.hostValidation.map((report) => report.host).sort()).toEqual(['claude', 'codex']);
+    for (const host of ['claude', 'codex'] as const) {
+      const report = validationDocument.hostValidation.find((candidate) => candidate.host === host)!;
+      expect(report.target).toBe(host);
+      expect(report.diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
+      if (host === 'claude' && report.status === 'passed') {
+        expect(report.diagnostics).toEqual([]);
+      }
+      if (report.status === 'unavailable') expect(report.diagnostics.length).toBeGreaterThan(0);
     }
+    const hostDiagnosticCodes = validationDocument.hostValidation
+      .flatMap((report) => report.diagnostics.map((diagnostic) => diagnostic.code))
+      .sort();
+    expect(validationDocument.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual(hostDiagnosticCodes);
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [

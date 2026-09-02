@@ -160,6 +160,7 @@ export const compileEntries = async (
     readonly cwd: string;
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
+    readonly providers?: readonly CompiledProvider[];
     readonly state?: NormalizedStateDefinition;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -174,6 +175,10 @@ export const compileEntries = async (
     entries: await Promise.all(bundled.flatMap((entry) => {
       const { name, rendered, source, sourceInputs } = entry;
       if (rendered !== undefined) {
+        const workerSourceInputs = Object.freeze([...new Set([
+          ...sourceInputs,
+          ...(options.providers ?? []).map((provider) => provider.source),
+        ])]);
         // A rendered script route (#102 stage 3): the entry projects the
         // dispatcher's render-event stream onto the CLI output contract and
         // a sibling react-server worker executes the component.
@@ -198,8 +203,9 @@ export const compileEntries = async (
             reactServer: true as const,
             rscManifest: true as const,
             source,
-            sourceInputs,
+            sourceInputs: workerSourceInputs,
             virtualSource: generatedRenderedRouteWorkerSource({
+              ...(options.providers === undefined ? {} : { providers: options.providers }),
               routes: [{
                 config: emptyRouteConfig,
                 id: rendered.routeId,

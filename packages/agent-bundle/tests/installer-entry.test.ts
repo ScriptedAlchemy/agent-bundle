@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 const fixture = async (options: {
-  readonly bin?: false | string;
+  readonly bin?: false | readonly string[];
   readonly target: 'cursor' | 'plugin' | 'portable';
 }): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-installer-entry-'));
@@ -36,7 +36,7 @@ const fixture = async (options: {
         ? []
         : options.bin === false
           ? ['  bin: false,']
-          : [`  bin: { ${JSON.stringify(options.bin)}: './src/cli.ts' },`]),
+          : [`  bin: { ${options.bin.map((name) => `${JSON.stringify(name)}: './src/cli.ts'`).join(', ')} },`]),
       "  lib: './src/index.ts',",
       "  plugin: { name: 'installer-fixture' },",
       `  targets: [${JSON.stringify(options.target)}],`,
@@ -68,7 +68,7 @@ const run = async (
 };
 
 it('builds a package-relative installer with fallback naming and built-host argv validation', async () => {
-  const root = await fixture({ bin: 'installer-fixture', target: 'cursor' });
+  const root = await fixture({ bin: ['installer-fixture'], target: 'cursor' });
   const result = await build({
     output: 'nested/non-default-host-packs',
     packageOutputs: true,
@@ -114,6 +114,35 @@ it('builds a package-relative installer with fallback naming and built-host argv
     version: '1.2.3',
   });
   await expect(stat(join(home, '.cursor', 'plugins', 'local', 'installer-fixture'))).resolves.toBeDefined();
+}, 120_000);
+
+it('chooses an unused installer name when both primary candidates are bins', async () => {
+  const root = await fixture({
+    bin: ['installer-fixture', 'installer-fixture-install'],
+    target: 'cursor',
+  });
+  const result = await build({ output: 'host-packs', packageOutputs: true, root });
+
+  expect(result.packageBuild?.files.map((file) => file.path)).toEqual(expect.arrayContaining([
+    'bin/installer-fixture.js',
+    'bin/installer-fixture-install.js',
+    'bin/installer-fixture-install-2.js',
+  ]));
+  const help = await run(join(root, 'dist', 'bin', 'installer-fixture-install-2.js'), ['--help'], { cwd: tmpdir() });
+  expect(help).toMatchObject({ code: 0, stderr: '' });
+}, 120_000);
+
+it('handles installer help when the project path contains a percent sign', async () => {
+  const originalRoot = await fixture({ bin: ['installer-fixture'], target: 'cursor' });
+  const root = `${originalRoot}%build`;
+  await rename(originalRoot, root);
+  roots.splice(roots.indexOf(originalRoot), 1, root);
+
+  await build({ output: 'host-packs', packageOutputs: true, root });
+  const help = await run(join(root, 'dist', 'bin', 'installer-fixture-install.js'), ['--help'], { cwd: tmpdir() });
+
+  expect(help).toMatchObject({ code: 0, stderr: '' });
+  expect(help.stdout).toContain('install <host> [--scope <scope>] [--json]');
 }, 120_000);
 
 it('uses the plugin name when free and skips portable-only artifacts', async () => {
