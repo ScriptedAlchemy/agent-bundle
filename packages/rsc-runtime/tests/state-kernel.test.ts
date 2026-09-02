@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { agent, runAgentRequest } from '../src/index.js';
 import {
+  AGENT_STATE_DEFAULT_BUDGETS,
   AGENT_STATE_LIFETIMES,
   AgentStateError,
   agentStateLifetimeIsVolatile,
@@ -115,9 +116,70 @@ describe('defineState', () => {
   it('freezes the definition and its parsed initial state', () => {
     const definition = counterDefinition();
     expect(Object.isFrozen(definition)).toBe(true);
+    expect(Object.isFrozen(definition.budgets)).toBe(true);
     expect(Object.isFrozen(definition.initial)).toBe(true);
+    expect(definition.budgets).toEqual(AGENT_STATE_DEFAULT_BUDGETS);
     expect(definition.version).toBe(1);
     expect(definition.migrations).toEqual({});
+  });
+
+  it('validates, resolves, and freezes runtime budgets', () => {
+    const definition = defineState({
+      events: counterEvents,
+      id: 'state-kernel-test/budgets',
+      initial: { count: 0 },
+      lifetime: 'process',
+      budgets: { maxCommitMs: 25, maxEventBytes: 64 },
+      reduce: (state, event) => ({ count: state.count + event.payload.by }),
+      schema: z.object({ count: z.number().int() }).strict(),
+    });
+
+    expect(definition.budgets).toEqual({
+      ...AGENT_STATE_DEFAULT_BUDGETS,
+      maxCommitMs: 25,
+      maxEventBytes: 64,
+    });
+    expect(Object.isFrozen(definition.budgets)).toBe(true);
+
+    for (const [field, value] of [
+      ['maxEventBytes', 0],
+      ['maxStateBytes', -1],
+      ['maxRevisions', 1.5],
+      ['maxCommitMs', Number.POSITIVE_INFINITY],
+    ] as const) {
+      expect(() =>
+        defineState({
+          events: counterEvents,
+          id: 'state-kernel-test/invalid-budget',
+          initial: { count: 0 },
+          lifetime: 'process',
+          budgets: { [field]: value },
+          reduce: (state, event) => ({ count: state.count + event.payload.by }),
+          schema: z.object({ count: z.number().int() }).strict(),
+        }),
+      ).toThrow(expect.objectContaining({
+        code: 'invalid-definition',
+        message: expect.stringContaining(field),
+      }));
+    }
+  });
+
+  it('rejects an initial state over maxStateBytes without exposing its contents', () => {
+    const confidential = 'initial-state-secret';
+    expect(() =>
+      defineState({
+        events: { replaced: z.object({ value: z.string() }).strict() },
+        id: 'state-kernel-test/initial-budget',
+        initial: { value: confidential },
+        lifetime: 'process',
+        budgets: { maxStateBytes: 8 },
+        reduce: (_state, event) => ({ value: event.payload.value }),
+        schema: z.object({ value: z.string() }).strict(),
+      }),
+    ).toThrow(expect.objectContaining({
+      code: 'invalid-definition',
+      message: expect.not.stringContaining(confidential),
+    }));
   });
 
   it('schema issues in errors name paths and codes, never rejected values', () => {
@@ -204,6 +266,33 @@ describe('createMemoryStateDriver', () => {
       name: 'AgentStateError',
     });
     expect((await store.read()).revision).toBe(0);
+  });
+
+  it('fails a commit that exceeds maxCommitMs without changing the head', async () => {
+    let nowMs = 0;
+    const driver = createMemoryStateDriver({
+      now: () => {
+        const current = new Date(nowMs);
+        nowMs += 11;
+        return current;
+      },
+    });
+    const definition = defineState({
+      events: counterEvents,
+      id: 'state-kernel-test/commit-time-budget',
+      initial: { count: 0 },
+      lifetime: 'process',
+      budgets: { maxCommitMs: 10 },
+      reduce: (state, event) => ({ count: state.count + event.payload.by }),
+      schema: z.object({ count: z.number().int() }).strict(),
+    });
+    const store = await driver.open(definition);
+
+    await expect(
+      store.dispatch('incremented', { by: 1 }, { idempotencyKey: 'slow' }),
+    ).rejects.toMatchObject({ code: 'budget-exceeded', name: 'AgentStateError' });
+    await expect(store.read()).resolves.toEqual({ revision: 0, state: { count: 0 } });
+    await driver.close();
   });
 
   it('driver close closes every registered store', async () => {
@@ -341,6 +430,34 @@ describe('explicit migrations', () => {
     // Reopening at the same version does not migrate again.
     const again = await driver.open(v2());
     expect((await again.read()).revision).toBe(2);
+  });
+
+  it('exempts kernel migration commits from revision and time budgets', async () => {
+    let nowMs = 0;
+    const driver = createMemoryStateDriver({
+      now: () => {
+        const current = new Date(nowMs);
+        nowMs += 10_000;
+        return current;
+      },
+    });
+    const definitionV1 = defineState({
+      ...v1(),
+      budgets: { maxCommitMs: 20_000, maxRevisions: 1 },
+    });
+    const storeV1 = await driver.open(definitionV1);
+    await storeV1.dispatch('incremented', { by: 1 }, { idempotencyKey: 'i1' });
+    const definitionV2 = defineState({
+      ...v2(),
+      budgets: { maxCommitMs: 1, maxRevisions: 1 },
+    });
+
+    await expect(driver.open(definitionV2)).resolves.toBeDefined();
+    await expect(storeV1.read()).resolves.toEqual({
+      revision: 2,
+      state: { count: 1, unit: 'edits' },
+    });
+    await driver.close();
   });
 
   it('fails closed when a migration step throws or produces invalid state', async () => {

@@ -23,6 +23,8 @@ import type { AgentStateJournalRecord } from './journal.js';
 import {
   canonicalCommitInput,
   changeFromJournalRecord,
+  expectCommitWithinBudgets,
+  expectMigrationWithinStateBudget,
   migrationIdempotencyKey,
   parseEventPayload,
   reduceStateEvent,
@@ -31,6 +33,7 @@ import {
   runStateMigrations,
 } from './journal.js';
 import { stateEffect } from './effect.js';
+import { canonicalJson } from './json.js';
 import { createPendingOpenTracker } from './pending-opens.js';
 
 /**
@@ -156,6 +159,7 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
         | { readonly kind: 'reset'; readonly state: TState }
       ),
     expectedRevision: number | undefined,
+    startedAtMs: number,
   ): AgentStateCommitResult<TState> => {
     const committed = internals.keys.get(input.key);
     if (committed !== undefined) {
@@ -177,10 +181,19 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
       input.kind === 'event'
         ? reduceStateEvent(internals.definition, internals.head.state, input.name, input.payload)
         : input.state;
+    const stateText = canonicalJson(state);
+    const committedAt = now();
+    expectCommitWithinBudgets(internals.definition, {
+      headRevision: internals.head.revision,
+      kind: input.kind,
+      nowMs: committedAt.getTime(),
+      startedAtMs,
+      stateText,
+    });
     const journalRecord: AgentStateJournalRecord =
       input.kind === 'event'
         ? {
-            committedAt: now().toISOString(),
+            committedAt: committedAt.toISOString(),
             idempotencyKey: input.key,
             kind: 'event',
             name: input.name,
@@ -188,7 +201,7 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
             revision: internals.head.revision + 1,
           }
         : {
-            committedAt: now().toISOString(),
+            committedAt: committedAt.toISOString(),
             idempotencyKey: input.key,
             kind: 'reset',
             revision: internals.head.revision + 1,
@@ -237,6 +250,7 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
       return runStore(
         stateEffect(() => {
           expectOperable(internals.closed, internals.definition.id, options.signal);
+          const startedAtMs = now().getTime();
           const key = expectIdempotencyKey(options.idempotencyKey);
           expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
           // Payload validation only — the reducer runs inside `commit`, after
@@ -250,7 +264,11 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
             payload: parsed,
             revision: 0,
           });
-          return commit({ canonicalInput, key, kind: 'event', name, payload: parsed }, options.expectedRevision);
+          return commit(
+            { canonicalInput, key, kind: 'event', name, payload: parsed },
+            options.expectedRevision,
+            startedAtMs,
+          );
         }),
       );
     },
@@ -281,6 +299,7 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
       return runStore(
         stateEffect(() => {
           expectOperable(internals.closed, internals.definition.id, options.signal);
+          const startedAtMs = now().getTime();
           const key = expectIdempotencyKey(options.idempotencyKey);
           expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
           const state = resolveResetState(internals.definition, options.seed);
@@ -291,7 +310,11 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
             revision: 0,
             state,
           });
-          return commit({ canonicalInput, key, kind: 'reset', state }, options.expectedRevision);
+          return commit(
+            { canonicalInput, key, kind: 'reset', state },
+            options.expectedRevision,
+            startedAtMs,
+          );
         }),
       );
     },
@@ -311,6 +334,8 @@ const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
 ): void => {
   const fromVersion = internals.definition.version;
   const migrated = runStateMigrations(definition, fromVersion, internals.head.state);
+  const migratedStateText = canonicalJson(migrated);
+  expectMigrationWithinStateBudget(definition, migratedStateText);
   const record: AgentStateJournalRecord = {
     committedAt: now().toISOString(),
     idempotencyKey: migrationIdempotencyKey(definition.version),
@@ -403,6 +428,9 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
                   }
                   if (definition.version !== existing.internals.definition.version) {
                     migrateOpenStore(existing.internals, definition, now);
+                  } else {
+                    // Budgets are runtime policy, not persisted metadata.
+                    existing.internals.definition = definition;
                   }
                   return existing;
                 }

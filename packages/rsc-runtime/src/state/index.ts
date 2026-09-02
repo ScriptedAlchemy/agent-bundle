@@ -8,6 +8,7 @@
  * `node:sqlite`.
  */
 export {
+  AGENT_STATE_DEFAULT_BUDGETS,
   AGENT_STATE_LIFETIMES,
   AGENT_STATE_RESERVED_KEY_PREFIX,
   AgentStateError,
@@ -17,6 +18,8 @@ export {
   expectIdempotencyKey,
 } from './contract.js';
 export type {
+  AgentStateBudgets,
+  AgentStateBudgetsInput,
   AgentStateChange,
   AgentStateChangeBatch,
   AgentStateChangesOptions,
@@ -44,7 +47,9 @@ export {
   applyStateEvent,
   canonicalCommitInput,
   changeFromJournalRecord,
+  expectCommitWithinBudgets,
   expectConsistentJournal,
+  expectMigrationWithinStateBudget,
   migrationIdempotencyKey,
   parseEventPayload,
   reduceStateEvent,

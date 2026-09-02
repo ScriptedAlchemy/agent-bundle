@@ -45,8 +45,10 @@ import {
   changeFromJournalRecord,
   deepFreezeJson,
   describeSchemaIssues,
+  expectCommitWithinBudgets,
   expectConsistentJournal,
   expectIdempotencyKey,
+  expectMigrationWithinStateBudget,
   migrationIdempotencyKey,
   parseEventPayload,
   reduceStateEvent,
@@ -393,8 +395,12 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     return replayJournal(this.#definition, this.#journalRecords(db, revision), revision);
   }
 
-  #appendRecord(db: DatabaseSync, record: AgentStateJournalRecord, state: TState): AgentStateCommitResult<TState> {
-    const stateText = canonicalJson(state);
+  #appendRecord(
+    db: DatabaseSync,
+    record: AgentStateJournalRecord,
+    state: TState,
+    stateText: string,
+  ): AgentStateCommitResult<TState> {
     db
       .prepare(
         'INSERT INTO agent_state_journal (revision, kind, name, payload, state, result_state, to_version, idempotency_key, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -423,8 +429,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     options: AgentStateDispatchOptions | AgentStateResetOptions<TState>,
   ): Effect.Effect<AgentStateCommitResult<TState>, AgentStateError, SqliteConnection> {
     const definition = this.#definition;
-    const appendRecord = (db: DatabaseSync, record: AgentStateJournalRecord, state: TState) =>
-      this.#appendRecord(db, record, state);
+    const appendRecord = (db: DatabaseSync, record: AgentStateJournalRecord, state: TState, stateText: string) =>
+      this.#appendRecord(db, record, state, stateText);
     const committedByKey = (db: DatabaseSync, key: string) => this.#committedByKey(db, key);
     const committedState = (
       db: DatabaseSync,
@@ -439,34 +445,39 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     type PreparedCommit =
       | { readonly canonicalInput: string; readonly kind: 'event'; readonly name: string; readonly payload: unknown }
       | { readonly canonicalInput: string; readonly kind: 'reset'; readonly state: TState };
-    const validate = sqliteEffect(definition.id, 'validate commit', (): { key: string; prepared: PreparedCommit } => {
-      expectOperable(this.#closed, definition.id, options.signal);
-      expectRevisionShape(options.expectedRevision, `State '${definition.id}' expectedRevision`);
-      const key = expectIdempotencyKey(options.idempotencyKey);
-      if (input.kind === 'event') {
-        const payload = parseEventPayload(definition, input.name, input.rawPayload);
+    const validate = sqliteEffect(
+      definition.id,
+      'validate commit',
+      (): { key: string; prepared: PreparedCommit; startedAtMs: number } => {
+        expectOperable(this.#closed, definition.id, options.signal);
+        const startedAtMs = now().getTime();
+        expectRevisionShape(options.expectedRevision, `State '${definition.id}' expectedRevision`);
+        const key = expectIdempotencyKey(options.idempotencyKey);
+        if (input.kind === 'event') {
+          const payload = parseEventPayload(definition, input.name, input.rawPayload);
+          const canonicalInput = canonicalCommitInput({
+            committedAt: '',
+            idempotencyKey: key,
+            kind: 'event',
+            name: input.name,
+            payload,
+            revision: 0,
+          });
+          return { key, prepared: { canonicalInput, kind: 'event', name: input.name, payload }, startedAtMs };
+        }
+        const state = resolveResetState(definition, input.seed);
         const canonicalInput = canonicalCommitInput({
           committedAt: '',
           idempotencyKey: key,
-          kind: 'event',
-          name: input.name,
-          payload,
+          kind: 'reset',
           revision: 0,
+          state,
         });
-        return { key, prepared: { canonicalInput, kind: 'event', name: input.name, payload } };
-      }
-      const state = resolveResetState(definition, input.seed);
-      const canonicalInput = canonicalCommitInput({
-        committedAt: '',
-        idempotencyKey: key,
-        kind: 'reset',
-        revision: 0,
-        state,
-      });
-      return { key, prepared: { canonicalInput, kind: 'reset', state } };
-    });
+        return { key, prepared: { canonicalInput, kind: 'reset', state }, startedAtMs };
+      },
+    );
     return Effect.gen(function*() {
-      const { key, prepared } = yield* validate;
+      const { key, prepared, startedAtMs } = yield* validate;
       return yield* transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
         const committed = committedByKey(db, key);
         if (committed !== undefined) {
@@ -489,14 +500,22 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
             `State '${definition.id}' expected revision ${String(options.expectedRevision)} but the head is ${String(head.revision)}`,
           );
         }
-        const committedAt = now().toISOString();
         switch (prepared.kind) {
           case 'event': {
             const state = reduceStateEvent(definition, head.state, prepared.name, prepared.payload);
+            const stateText = canonicalJson(state);
+            const committedAt = now();
+            expectCommitWithinBudgets(definition, {
+              headRevision: head.revision,
+              kind: 'event',
+              nowMs: committedAt.getTime(),
+              startedAtMs,
+              stateText,
+            });
             return appendRecord(
               db,
               {
-                committedAt,
+                committedAt: committedAt.toISOString(),
                 idempotencyKey: key,
                 kind: 'event',
                 name: prepared.name,
@@ -504,14 +523,32 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
                 revision: head.revision + 1,
               },
               state,
+              stateText,
             );
           }
-          case 'reset':
+          case 'reset': {
+            const stateText = canonicalJson(prepared.state);
+            const committedAt = now();
+            expectCommitWithinBudgets(definition, {
+              headRevision: head.revision,
+              kind: 'reset',
+              nowMs: committedAt.getTime(),
+              startedAtMs,
+              stateText,
+            });
             return appendRecord(
               db,
-              { committedAt, idempotencyKey: key, kind: 'reset', revision: head.revision + 1, state: prepared.state },
+              {
+                committedAt: committedAt.toISOString(),
+                idempotencyKey: key,
+                kind: 'reset',
+                revision: head.revision + 1,
+                state: prepared.state,
+              },
               prepared.state,
+              stateText,
             );
+          }
           default: {
             const unreachable: never = prepared;
             throw new AgentStateError('invalid-input', `Unknown commit kind ${String(unreachable)}`);
@@ -696,6 +733,8 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         }
       }
       const migrated = runStateMigrations(definition, meta.schema_version, rawHead);
+      const migratedStateText = canonicalJson(migrated);
+      expectMigrationWithinStateBudget(definition, migratedStateText);
       // Journal records retain the original commit input for dedupe. Their
       // committed results migrate separately, matching the memory driver's
       // `{ record, state }` split. A legacy journal-head result can be
@@ -728,7 +767,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         state: migrated,
         toVersion: definition.version,
       };
-      this.#appendRecord(transactionDb, record, migrated);
+      this.#appendRecord(transactionDb, record, migrated, migratedStateText);
       transactionDb.prepare('UPDATE agent_state_meta SET schema_version = ? WHERE id = 1').run(definition.version);
     });
     return this.#runtime.run(
