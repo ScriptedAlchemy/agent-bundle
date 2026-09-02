@@ -1,3 +1,4 @@
+import { RegistryProvider } from '@effect/atom-react';
 import { type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
@@ -1445,4 +1446,4 @@ const Workbench = () => {
   return <main className="loading-state" aria-live="polite"><strong>Loading project state…</strong>{runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}</main>;
 };
 
-createRoot(document.getElementById('root')!).render(<Workbench />);
+createRoot(document.getElementById('root')!).render(<RegistryProvider><Workbench /></RegistryProvider>);

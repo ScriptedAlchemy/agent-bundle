@@ -65,6 +65,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/playground-real.e2e.test.ts',
   'packages/workbench/tests/rsbuild-closure.test.ts',
   'packages/workbench/tests/rsbuild-workbench.test.ts',
+  'packages/workbench/tests/runtime-document-atoms-disposal.test.ts',
   'packages/workbench/tests/runtime-inspector.test.ts',
   'packages/workbench/tests/runtime-consent-dialog.test.ts',
   'packages/workbench/tests/runtime-playground-capture-cleanup.test.ts',

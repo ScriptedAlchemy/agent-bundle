@@ -174,6 +174,37 @@ error channel, and crosses back to the public Promise API only through the
 runtime boundary. It adopts no unstable Effect modules and starts no fibers,
 timers, or workers between invocations.
 
+## Workbench browser state (#105 phase 1)
+
+The Workbench (`packages/workbench`) is an internal React client, never a
+published API surface; its dist ships inside the `agent-bundle` package as
+static assets.
+
+Exact-pin `effect` + `@effect/atom-react` (synchronized with the repo's effect
+pin, currently `4.0.0-rc.112`) are allowed there, but only in dedicated
+browser-state modules (the first is `src/runtime/agent-document-atoms.ts`).
+Atoms live in `effect/unstable/reactivity`; React bindings come from
+`@effect/atom-react`.
+
+- No `Atom` or `AsyncResult` types in DTOs, public exports, or examples —
+  atoms consume the strictly-decoded outputs of the existing zod clients and
+  never replace wire contracts.
+- One root `RegistryProvider` mounted in the app shell (`src/main.tsx`); the
+  module-level default registry is never used.
+- Components never call `Effect.run*` — the registry owns effect execution;
+  components interact through the `@effect/atom-react` hooks only (rslint
+  `effect-boundary/no-ad-hoc-run` already enforces the run ban).
+- Imperative clients (`ProjectClient`, `RuntimeClient`, `AgentDocumentClient`,
+  …) stay the lifecycle authorities; atoms are read-side caches over their
+  decoded outputs.
+- Known caveat: `4.0.0-rc.112` has a stream-backed derived-atom disposal bug
+  (fixed upstream post-rc.112, unpublished) — no stream-backed derived atoms
+  in the Workbench until a re-pin past the fix; the root `RegistryProvider`
+  (not the default registry) avoids the reported React case.
+- Every effect re-pin must bump `@effect/atom-react` to the same RC in the
+  same chore, re-run the Workbench disposal regression test, and re-measure
+  the Workbench production bundle (the rsbuild build emits the size table).
+
 ## Banned modules and APIs
 
 - `Effect.runPromise` / `runSync` / `runFork` / `runCallback` (and `*With` /
@@ -196,7 +227,7 @@ The #99 notice ledger also adopts none: it needs only stable `Effect` and
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
-| — | — | — |
+| `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
 
 ## Language service
 
@@ -224,7 +255,10 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 ## Re-pin chore
 
 1. Bump the exact `effect` version in `packages/rsc-runtime/package.json`.
-2. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git main --squash`.
-3. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
-4. Re-verify every unstable-module row and the language-service diagnostics.
-5. Re-run the hook cold-start check.
+2. Synchronize `@effect/atom-react` in `packages/workbench/package.json` to
+   the same RC; re-run the Workbench disposal regression test and production
+   bundle measurement (rsbuild size table).
+3. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git main --squash`.
+4. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
+5. Re-verify every unstable-module row and the language-service diagnostics.
+6. Re-run the hook cold-start check.

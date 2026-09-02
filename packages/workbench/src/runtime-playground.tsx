@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
   DevRuntimeInvocationRequest,
@@ -440,6 +440,10 @@ const resetSeedLabel = (request: DevRuntimeStateResetRequest): string =>
 
 export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlaygroundLiveMcpPageAdapter, registerAppPreviewLifecycle, renderAppPreview }: RuntimePlaygroundProps): React.ReactNode => {
   const [model, setModel] = useState(controller.model);
+  const loadDocumentEvents = useCallback(
+    (runId: string, signal?: AbortSignal) => controller.readRunDocument(runId, signal),
+    [controller],
+  );
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const invokingRef = useRef<HTMLButtonElement>(null);
@@ -655,7 +659,7 @@ export const RuntimePlayground = ({ controller, liveMcpPageAdapter = runtimePlay
           />
           {flightDownloadError === undefined ? undefined : <p className="runtime-request-error" role="alert">{flightDownloadError}</p>}
           <RuntimeInspector
-            loadDocumentEvents={(runId, signal) => controller.readRunDocument(runId, signal)}
+            loadDocumentEvents={loadDocumentEvents}
             onDownloadFlight={downloadFlight}
             onTabChange={(tab) => controller.dispatch({ tab, type: 'selection.tab' })}
             run={run}
