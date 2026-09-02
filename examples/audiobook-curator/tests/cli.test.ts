@@ -50,9 +50,10 @@ describe('audiobook-curator routed CLI', () => {
       'library-audit',
       'prepare',
       'select',
+      'shelf',
       'whisper-verify',
     ]);
-    expect(projectedCommands).toHaveLength(15);
+    expect(projectedCommands).toHaveLength(16);
     expect(projectedCommands.every((command) =>
       command.path[0] === 'curator' && command.rendered)).toBe(true);
 
