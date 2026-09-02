@@ -195,7 +195,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph, state, and provider conventions (`AB4800`–`AB4822`, `AB4940`–`AB4942`)
+## Route graph, state, and provider conventions (`AB4800`–`AB4825`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -321,6 +321,9 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4820` | error | A generated project selects `external` state lifetime; v1 generated mounting supports only `request`, `process`, and `workspace-durable` because external drivers require embedder wiring. |
 | `AB4821` | error | A project state definition uses the reserved notice-ledger id `@agent-bundle/runtime/agent-notice-ledger/v1`; generated runtimes own that id for the co-mounted notice store. |
 | `AB4822` | error | A `routes.mcpCommands.include` or `.exclude` pattern matches no eligible tool, or `include: []` explicitly selects none. Correct the pattern using an available `<server>:<tool>` identity listed by the diagnostic. |
+| `AB4823` | error | An event route declares an event outside the v1 event vocabulary. |
+| `AB4824` | error | An event route selects an unknown target or requires an event capability that the selected target does not support. |
+| `AB4825` | error | An event route's `config.targets` is not a nonempty array of nonempty target names. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

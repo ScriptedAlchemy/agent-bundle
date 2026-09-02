@@ -464,7 +464,7 @@ export const compileRouteGraph = async (
       !canonicalAgentEvents.includes(module.event!)
     ) {
       diagnostics.push(routeError(
-        'AB4813',
+        'AB4823',
         `Event route ${relativePath} declares ${JSON.stringify(module.event)}, which is outside the #97 v1 event vocabulary.`,
         `Use one of: ${canonicalAgentEvents.join(', ')}.`,
         source,
