@@ -8,10 +8,12 @@
   },
   "files": [
     "dist",
+    "artifact",
     "README.md"
   ],
   "bin": {
-    "my-agent-plugin": "./dist/bin/my-agent-plugin.js"
+    "my-agent-plugin": "./dist/bin/my-agent-plugin.js",
+    "my-agent-plugin-install": "./dist/bin/my-agent-plugin-install.js"
   },
   "exports": {
     ".": {
@@ -23,6 +25,7 @@
     "build": "agent-bundle build --json --output artifact",
     "check": "npm run validate && npm run build && npm run typecheck && npm run test",
     "dev": "agent-bundle dev",
+    "prepack": "agent-bundle prepack --json --output artifact",
     "test": "rstest tests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate --json"

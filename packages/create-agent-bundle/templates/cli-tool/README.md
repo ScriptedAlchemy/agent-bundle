@@ -16,7 +16,13 @@ npm run check      # validate + build + typecheck + test
 
 # after a build
 node dist/bin/my-agent-plugin.js World
+
+# after publishing/installing the package
+npx my-agent-plugin-install install cursor
 ```
+
+Installing the npm package does not mutate any host; run the generated
+`my-agent-plugin-install install <host>` command explicitly.
 
 ## Layout
 

@@ -1,12 +1,13 @@
 import { execFile as executeFile } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { afterAll, expect, it } from '@rstest/core';
 
-import { installedEnvironment, npmInstallArguments } from '../../agent-bundle/tests/support/shared-pack.ts';
+import { installedEnvironment, npmInstallArguments, packOutputFromJson } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { cleanupScaffoldFixture, expectCleanValidate, npmRun, scaffoldProject } from './support/scaffold-fixture.ts';
 
 const execFile = promisify(executeFile);
@@ -32,6 +33,7 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
 
   const checked = await npmRun(projectRoot, 'check');
   await expectCleanValidate(projectRoot);
+  await npmRun(projectRoot, 'prepack');
 
   // The template's own harness pools ran inside `check`, and they are asserted
   // positively — a silent `check` would also pass if the pools were dropped or
@@ -86,6 +88,7 @@ it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, 
   const checked = await npmRun(projectRoot, 'check');
   expect(checked).toContain('tests/cli.test.ts');
   await expectCleanValidate(projectRoot);
+  await npmRun(projectRoot, 'prepack');
 
   // The src/cli.ts convention produced the executable package bin.
   const bin = join(projectRoot, 'dist', 'bin', 'greeter.js');
@@ -105,4 +108,21 @@ it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, 
   await expect(execFile(process.execPath, [
     join(projectRoot, 'artifact', 'portable', 'scripts', 'greeter.mjs'), 'World',
   ], { cwd: projectRoot, env: installedEnvironment() })).resolves.toMatchObject({ stdout: 'Hello, World!\n' });
+
+  const packDestination = await mkdtemp(join(tmpdir(), 'create-agent-bundle-cli-pack-'));
+  try {
+    const { stdout } = await execFile('npm', [
+      'pack', '--json', '--ignore-scripts', '--pack-destination', packDestination,
+    ], { cwd: projectRoot, env: installedEnvironment() });
+    // packOutputFromJson handles both npm pack --json shapes (array and
+    // package-keyed object), unlike a bare array destructure.
+    const packedPaths = packOutputFromJson(stdout).files.map((file) => file.path);
+    expect(packedPaths).toContain('artifact/agent-bundle.manifest.json');
+    expect(packedPaths).toContain('artifact/portable/plugin.json');
+    expect(packedPaths).toContain('artifact/codex/.codex-plugin/plugin.json');
+    expect(packedPaths).toContain('artifact/claude/.claude-plugin/plugin.json');
+    expect(packedPaths).toContain('dist/bin/greeter-install.js');
+  } finally {
+    await rm(packDestination, { force: true, recursive: true });
+  }
 }, 600_000);

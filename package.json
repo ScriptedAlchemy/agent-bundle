@@ -40,7 +40,7 @@
     "test:host-install:session:claude": "pnpm build && AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION=1 pnpm test:host-install:session",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm build && changeset publish",
+    "release": "pnpm check:release && changeset publish",
     "preview:publish": "pkg-pr-new publish --previewVersion --peerDeps --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime' './packages/create-agent-bundle'",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
     "audit:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle && node scripts/audit-packed-release.mjs",

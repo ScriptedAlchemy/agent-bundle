@@ -7,10 +7,25 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "files": [
+    "dist",
+    "artifact",
+    "README.md"
+  ],
+  "bin": {
+    "my-agent-plugin": "./dist/bin/my-agent-plugin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/status.d.ts",
+      "import": "./dist/status.js"
+    }
+  },
   "scripts": {
     "build": "agent-bundle build --json --output artifact",
     "check": "npm run validate && npm run build && npm run typecheck && npm run test && npm run test:routes && npm run test:projection",
     "dev": "agent-bundle dev",
+    "prepack": "agent-bundle prepack --json --output artifact",
     "test": "rstest tests --exclude \"tests/{route-unit,projection}/**\"",
     "test:projection": "rstest --config rstest.projection.config.ts",
     "test:routes": "rstest --config rstest.route-unit.config.ts",
