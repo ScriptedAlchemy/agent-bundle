@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
@@ -17,12 +18,15 @@ import {
   type BuiltPortableHostInstallFixture,
 } from './support/host-install.ts';
 import { AgentTestError } from '../src/test/errors.ts';
+import { stableJson } from '../src/core/digest.ts';
 import {
   HOST_INSTALL_PROOF_LEVEL,
   proofLevelLabel,
 } from '../src/test/manifest.ts';
 
 const proofLabel = proofLevelLabel(HOST_INSTALL_PROOF_LEVEL);
+const simulatedProofLabel =
+  'simulated (adapter-simulated discovery and stdio spawn from an isolated installed root; NOT host-install evidence)';
 const claudeMissingEvidence = 'missing evidence: claude binary unavailable on PATH';
 const codexMissingEvidence = 'missing evidence: codex binary unavailable on PATH';
 const claudeAvailable = spawnSync('claude', ['--version'], {
@@ -39,11 +43,31 @@ const claudePluginIt = claudeAvailable ? it : it.skip;
 const codexPluginIt = codexAvailable ? it : it.skip;
 
 let fixture: BuiltHostInstallFixture | undefined;
+let mcpOnlyFixture: BuiltHostInstallFixture | undefined;
 let portableFixture: BuiltPortableHostInstallFixture | undefined;
 
 beforeAll(async () => {
-  [fixture, portableFixture] = await Promise.all([
+  [fixture, mcpOnlyFixture, portableFixture] = await Promise.all([
     buildHostInstallFixture({ environment: process.env }),
+    buildHostInstallFixture({
+      environment: process.env,
+      prepareProject: async (projectRoot) => {
+        await writeFile(join(projectRoot, 'agent-bundle.config.ts'), [
+          'export default {',
+          '  marketplace: true,',
+          '  mcp: { servers: { probe: {} } },',
+          '  plugin: {',
+          "    description: 'Proves an MCP-only installed host artifact.',",
+          "    name: 'host-install-mcp-only-proof',",
+          "    version: '1.0.0',",
+          '  },',
+          '  routes: { mcpCommands: true },',
+          "  targets: ['claude', 'codex', 'cursor'],",
+          '};',
+          '',
+        ].join('\n'));
+      },
+    }),
     buildPortableHostInstallFixture({ environment: process.env }),
   ]);
 }, 180_000);
@@ -51,6 +75,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all([
     fixture === undefined ? Promise.resolve() : disposeHostInstallFixture(fixture),
+    mcpOnlyFixture === undefined ? Promise.resolve() : disposeHostInstallFixture(mcpOnlyFixture),
     portableFixture === undefined ? Promise.resolve() : disposeHostInstallFixture(portableFixture),
   ]);
 });
@@ -65,6 +90,13 @@ const builtPortableFixture = (): BuiltPortableHostInstallFixture => {
     throw new Error(`[${proofLabel}] portable fixture build did not complete.`);
   }
   return portableFixture;
+};
+
+const builtMcpOnlyFixture = (): BuiltHostInstallFixture => {
+  if (mcpOnlyFixture === undefined) {
+    throw new Error(`[${simulatedProofLabel}] MCP-only fixture build did not complete.`);
+  }
+  return mcpOnlyFixture;
 };
 
 const expectHygienicReport = (report: unknown): void => {
@@ -95,7 +127,7 @@ it('stages a clean adapter-simulated host and runs the shared matrix from its in
     },
     host: 'claude',
     matrix: {
-      provenance: { host: 'claude', proofLevel: 'host-install' },
+      provenance: { host: 'claude', proofLevel: 'simulated' },
       routes: {
         'tool:probe/echo': {
           checks: {
@@ -125,7 +157,7 @@ it('stages a clean adapter-simulated host and runs the shared matrix from its in
       },
       manifestSchemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
     },
-    proofLevel: proofLabel,
+    proofLevel: simulatedProofLabel,
     sessionEvidence: 'adapter-simulated discovery and stdio spawn from an isolated installed root',
     status: 'passed',
     versions: {
@@ -141,7 +173,102 @@ it('stages a clean adapter-simulated host and runs the shared matrix from its in
   expectHygienicReport(report);
 }, 180_000);
 
-it('fails closed when an installed manifest drifts from source, artifact, and running process', async () => {
+it('does not execute a tampered installed MCP command after static integrity checks fail', async () => {
+  const markerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-tampered-command-'));
+  const marker = join(markerRoot, 'executed');
+  try {
+    const error = await runInstalledHostContractMatrixProof(builtFixture(), {
+      environment: process.env,
+      fixtures: {
+        'tool:probe/echo': { input: { message: 'installed host' }, resultCompat: 'additive' },
+      },
+      host: 'claude',
+      mode: 'adapter-simulator',
+      mutateInstalled: async (installedRoot) => {
+        const commandPath = join(markerRoot, 'tampered-command.sh');
+        await writeFile(commandPath, [
+          '#!/bin/sh',
+          `printf executed > ${JSON.stringify(marker)}`,
+          `exec ${JSON.stringify(process.execPath)} "$@"`,
+          '',
+        ].join('\n'), { mode: 0o755 });
+        const mcpPath = join(installedRoot, '.mcp.json');
+        const mcp = JSON.parse(await readFile(mcpPath, 'utf8')) as {
+          mcpServers: Record<string, Record<string, unknown>>;
+        };
+        await writeFile(mcpPath, `${JSON.stringify({
+          ...mcp,
+          mcpServers: {
+            ...mcp.mcpServers,
+            probe: { ...mcp.mcpServers.probe, command: commandPath },
+          },
+        })}\n`);
+      },
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).message).toContain('version-digests');
+    await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(markerRoot, { force: true, recursive: true });
+  }
+}, 180_000);
+
+it('accepts an installed artifact whose manifest declares no resource components', async () => {
+  const cloneParent = await mkdtemp(join(tmpdir(), 'agent-bundle-resource-free-'));
+  const cloneRoot = join(cloneParent, 'fixture');
+  try {
+    await cp(builtFixture().root, cloneRoot, { recursive: true });
+    const artifactRoot = join(cloneRoot, 'project', 'artifact');
+    const artifactManifestPath = join(artifactRoot, 'agent-bundle.manifest.json');
+    const artifactManifest = JSON.parse(await readFile(artifactManifestPath, 'utf8')) as {
+      readonly files: readonly { readonly path: string }[];
+    };
+    await writeFile(artifactManifestPath, `${stableJson({
+      ...artifactManifest,
+      files: artifactManifest.files.filter((file) =>
+        !/^[^/]+\/(?:assets|commands|skills)\//u.test(file.path)),
+    })}\n`);
+    const clonedFixture: BuiltHostInstallFixture = Object.freeze({
+      artifactRoot,
+      bundles: Object.freeze({
+        claude: join(artifactRoot, 'claude'),
+        codex: join(artifactRoot, 'codex'),
+        cursor: join(artifactRoot, 'cursor'),
+      }),
+      cli: builtFixture().cli,
+      root: cloneRoot,
+    });
+    const report = await runInstalledHostContractMatrixProof(clonedFixture, {
+      environment: process.env,
+      fixtures: {
+        'tool:probe/echo': { input: { message: 'resource-free installed host' }, resultCompat: 'additive' },
+      },
+      host: 'claude',
+      mode: 'adapter-simulator',
+    });
+
+    expect(report.checks.resources).toEqual({ status: 'passed' });
+  } finally {
+    await rm(cloneParent, { force: true, recursive: true });
+  }
+}, 180_000);
+
+it('accepts an installed MCP-only artifact with no declared hooks', async () => {
+  const report = await runInstalledHostContractMatrixProof(builtMcpOnlyFixture(), {
+    environment: process.env,
+    fixtures: {
+      'tool:probe/echo': { input: { message: 'MCP-only installed host' }, resultCompat: 'additive' },
+    },
+    host: 'claude',
+    mode: 'adapter-simulator',
+  });
+
+  expect(report.checks['hook-commands']).toEqual({ status: 'passed' });
+  expect(report.proofLevel).toBe(simulatedProofLabel);
+}, 180_000);
+
+it('fails closed when an installed manifest drifts from the built artifact', async () => {
   const error = await runInstalledHostContractMatrixProof(builtFixture(), {
     environment: process.env,
     fixtures: {
@@ -159,8 +286,7 @@ it('fails closed when an installed manifest drifts from source, artifact, and ru
   expect(error).toBeInstanceOf(AgentTestError);
   expect((error as AgentTestError).code).toBe('contract-violation');
   expect((error as AgentTestError).message).toContain('version-digests');
-  expect((error as AgentTestError).message).toContain('version-quadruple');
-  expect((error as AgentTestError).message).toContain(proofLabel);
+  expect((error as AgentTestError).message).toContain(simulatedProofLabel);
 }, 180_000);
 
 claudePluginIt(

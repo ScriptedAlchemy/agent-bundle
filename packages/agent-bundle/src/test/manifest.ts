@@ -36,6 +36,8 @@ import type {
  * - `browser-app` compiles MCP App HTML through the production Rsbuild
  *   profile and mounts it over the product bridge in a real browser page. It
  *   does not prove host embedding, a packed artifact, or Workbench behavior.
+ * - `simulated` stages an emitted bundle directly into an isolated host-shaped
+ *   root and spawns its MCP command. It does not prove a host-owned install.
  * - `host-install` installs a built bundle into an isolated real host home
  *   through the public install path and observes registration through the
  *   host's own CLI. It does not prove session behavior or packed provenance.
@@ -47,6 +49,7 @@ export type AgentTestProofLevel =
   | 'packed-stdio'
   | 'packed-deleted-source'
   | 'browser-app'
+  | 'simulated'
   | 'host-install';
 
 export const ROUTE_UNIT_PROOF_LEVEL = 'route-unit' as const;
@@ -55,6 +58,7 @@ export const CLI_DISPATCH_PROOF_LEVEL = 'cli-dispatch' as const;
 export const PACKED_STDIO_PROOF_LEVEL = 'packed-stdio' as const;
 export const PACKED_DELETED_SOURCE_PROOF_LEVEL = 'packed-deleted-source' as const;
 export const BROWSER_APP_PROOF_LEVEL = 'browser-app' as const;
+export const SIMULATED_PROOF_LEVEL = 'simulated' as const;
 export const HOST_INSTALL_PROOF_LEVEL = 'host-install' as const;
 
 /**
@@ -76,6 +80,8 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
       return 'packed-deleted-source (packed tarball installed into a clean consumer, artifact built, project source removed and verified absent, generated stdio entry spawned as a real process; self-contained-artifact evidence)';
     case 'browser-app':
       return 'browser-app (MCP App HTML compiled through the production Rsbuild profile, mounted in a real browser page over the product bridge; NOT host embedding, packed-artifact, or Workbench evidence)';
+    case 'simulated':
+      return 'simulated (adapter-simulated discovery and stdio spawn from an isolated installed root; NOT host-install evidence)';
     case 'host-install':
       return 'host-install (built bundle installed into an isolated real host home through the public install path, registration observed via the host\'s own CLI; NOT session-behavior or packed-artifact evidence)';
     default: {

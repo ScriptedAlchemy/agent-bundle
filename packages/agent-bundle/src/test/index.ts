@@ -14,6 +14,7 @@
  * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
+ * | `simulated` | `openInstalledHostMcpServer` without `sessionEvidence` | an emitted bundle staged directly into an isolated host-shaped root and spawned without a host-owned install |
  * | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the host's emitted format, and spawned from the installed layout |
  *
  * A pass at one level is never a receipt for another. The `deletedSource`
@@ -28,6 +29,7 @@ export {
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
   PACKED_STDIO_PROOF_LEVEL,
   ROUTE_UNIT_PROOF_LEVEL,
+  SIMULATED_PROOF_LEVEL,
   compileTestManifest,
   proofLevelLabel,
   testManifestFromRouteGraph,
