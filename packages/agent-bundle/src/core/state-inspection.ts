@@ -1,5 +1,3 @@
-import { AGENT_STATE_DEFAULT_BUDGETS } from '@agent-bundle/runtime/state';
-
 import { deepFreeze } from './freeze.ts';
 import type { NormalizedStateDefinition } from './types.ts';
 
@@ -11,6 +9,16 @@ export interface StateProjectionBudgets {
   readonly maxRevisions: number;
   readonly maxStateBytes: number;
 }
+
+// Keep static inspection independent of the optional runtime peer. The
+// cross-package inspection test compares these policy defaults with the
+// runtime export so the two package boundaries cannot drift silently.
+export const agentStateDefaultBudgets: StateProjectionBudgets = Object.freeze({
+  maxCommitMs: 5_000,
+  maxEventBytes: 262_144,
+  maxRevisions: 100_000,
+  maxStateBytes: 1_048_576,
+});
 
 export interface StateDefinitionProjection {
   readonly budgets:
@@ -60,7 +68,7 @@ export const stateDefinitionProjection = (
     ? Object.freeze({ source: 'dynamic' })
     : Object.freeze({
       resolved: Object.freeze({
-        ...AGENT_STATE_DEFAULT_BUDGETS,
+        ...agentStateDefaultBudgets,
         ...(definition.budgets?.declared ?? {}),
       }),
       source: definition.budgets === undefined ? 'defaults' : 'declared',
