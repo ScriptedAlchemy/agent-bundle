@@ -1812,10 +1812,21 @@ it('retains sandbox startup and foreground cleanup failures structurally', async
   }
 });
 
-it('passes --no-open and the requested port from the CLI to the public dev API', async () => {
+it('passes --no-open, the requested port, and repeatable dev host installs to the public dev API', async () => {
   const stdout: string[] = [];
   const received: unknown[] = [];
-  const exitCode = await runCli(['dev', '--root', '/project', '--no-open', '--port', '4100'], {
+  const exitCode = await runCli([
+    'dev',
+    '--root',
+    '/project',
+    '--no-open',
+    '--port',
+    '4100',
+    '--install-host',
+    'cursor',
+    '--install-host',
+    'claude',
+  ], {
     stdout: { write: (value) => stdout.push(value) },
   }, {
     startDevServer: async (options) => {
@@ -1830,7 +1841,12 @@ it('passes --no-open and the requested port from the CLI to the public dev API',
   });
 
   expect(exitCode).toBe(0);
-  expect(received).toEqual([expect.objectContaining({ open: false, port: 4100, root: '/project' })]);
+  expect(received).toEqual([expect.objectContaining({
+    installHosts: ['cursor', 'claude'],
+    open: false,
+    port: 4100,
+    root: '/project',
+  })]);
   expect(stdout.join('')).toBe('Development workbench at http://127.0.0.1:4100\n');
 });
 

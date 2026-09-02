@@ -272,11 +272,19 @@ export interface RuntimeEvent {
   readonly type: import('./runtime-provider.ts').DevRuntimeEventInput['type'];
 }
 
+export interface DevHostSyncEvent {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly epochId: string;
+  readonly host: 'claude' | 'codex' | 'cursor';
+  readonly state: 'failed' | 'succeeded';
+}
+
 export interface ProjectEventPayloadMap {
   readonly 'artifact.available': ActiveArtifactStatus;
   readonly 'artifact.status': ArtifactStatus;
   readonly 'build.failed': FailedBuildAttempt;
   readonly 'build.started': RunningBuildAttempt;
+  readonly 'dev.host.sync': DevHostSyncEvent;
   readonly invalidation: Invalidation;
   readonly 'runtime.event': RuntimeEvent;
   readonly 'source.changed': Invalidation;
@@ -284,7 +292,7 @@ export interface ProjectEventPayloadMap {
 }
 
 export type ProjectEventType = keyof ProjectEventPayloadMap;
-type EpochScopedProjectEventType = 'artifact.available';
+type EpochScopedProjectEventType = 'artifact.available' | 'dev.host.sync';
 
 type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
   ? Readonly<{

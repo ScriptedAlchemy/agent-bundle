@@ -146,7 +146,7 @@ artifact-bound MCP playground with the raw protocol trace, a hook playground tha
 wrapper, a durable ordered Playground trace with replay and export, and eval runs and comparisons.
 
 The same session is available programmatically through the public `startDevServer` export, which
-accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`) and resolves to a
+accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`, `installHosts`) and resolves to a
 `DevServerSession` exposing the loopback `url`, a `status()` snapshot, and `close()`:
 
 ```ts
@@ -156,6 +156,35 @@ const session = await startDevServer({ root: process.cwd(), port: 3100 });
 console.log(session.url);
 await session.close();
 ```
+
+Pass `--install-host <claude|codex|cursor>` more than once to install development variants into
+the selected hosts:
+
+```sh
+agent-bundle dev --install-host cursor --install-host claude
+```
+
+The first successful epoch uses the ordinary host installer. Claude and Codex therefore register
+the plugin normally and read its files from their host-owned
+`plugins/cache/<marketplace>/<plugin>/<version>` directory; Cursor reads
+`~/.cursor/plugins/local/<plugin>`. The installed root contains
+`.agent-bundle-dev.json` with schema version `1`, the project root, host, and installed epoch.
+Its MCP document always launches
+the framework CLI through the running dev server's Node executable as
+`agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host>`;
+rebuilds never replace that stable command with an epoch path, and host process `PATH` contents do
+not affect whether the project-local framework can be spawned.
+
+Each later `artifact.available` event copies the new target into an immutable installed generation.
+Top-level directories switch by atomic symlink (or Windows junction) rename and top-level files by
+atomic sibling-file rename, so a host sees an old or new complete entry and no synchronized
+directory disappears between generations. A failed publication rolls pointers back to the prior
+generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build emits no
+`artifact.available`, so the last-good install is unchanged. Re-sync writes the host cache directly
+and does not invoke the Claude or Codex CLI again.
+
+Stopping the dev server leaves the marked development install in place. Hooks and Skills remain on
+disk, while the stable proxy command fails closed until that project dev server is running again.
 
 `script.run` is a production-mounted, trusted-local Playground operation. It runs only the selected
 manifest-owned emitted script for the selected target, in a managed workspace, and preserves bounded
