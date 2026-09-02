@@ -206,6 +206,27 @@ Atoms live in `effect/unstable/reactivity`; React bindings come from
   same chore, re-run the Workbench disposal regression test, and re-measure
   the Workbench production bundle (the rsbuild build emits the size table).
 
+## Effect platform services (@effect/platform-node)
+
+Evaluated 2026-09-01 against `effect@4.0.0-rc.112` +
+`@effect/platform-node@4.0.0-rc.112`; **decision = not adopted** this RC
+cycle (missing `lstat`/`O_NOFOLLOW`/inode primitives for hardened fs
+protocols; `runMain` cannot express the 130/143 signal-distinct exit
+contract); revisit at GA.
+
+Effect platform services are optional inside Effect-native internals, not a
+blanket replacement for `node:fs` or `node:path`. Use them when portable
+ordinary I/O materially improves service substitution or scoped ownership, and
+provide only the narrow `NodeFileSystem`/`NodePath` layers at an existing
+Effect boundary. Keep raw Node APIs for compiler and generated-entry code,
+synchronous SQLite setup, `lstat`/`O_NOFOLLOW`, inode/link identity,
+directory-fsync and atomic-publication protocols, transferred resource
+ownership, or bespoke process exit contracts. Map `PlatformError` to the
+existing typed contract at one boundary. Use scoped temporary paths only in
+tests already Effect-native; do not convert Promise-contract tests solely for
+fixture cleanup. Treat `layerNoop` as a selective stub, not an in-memory
+filesystem.
+
 ## Banned modules and APIs
 
 - `Effect.runPromise` / `runSync` / `runFork` / `runCallback` (and `*With` /
@@ -224,11 +245,14 @@ binary stream, not Ndjson/SchemaBinary, and no other `effect/unstable/*`
 module fits the dispatcher rewrite. Stage 3 also adopts none: the dev seam
 needed only stable `Semaphore`, `Deferred`, `Scope`, and `Exit`.
 The #99 notice ledger also adopts none: it needs only stable `Effect` and
-`forEach` over the existing Promise-returning state authority.
+`forEach` over the existing Promise-returning state authority. Declined rows
+record evaluated-and-rejected surfaces; see [Effect platform
+services](#effect-platform-services-effectplatform-node).
 
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
+| `@effect/platform-node` (`NodeFileSystem` / `NodePath`) | **declined** (2026-09-01) | revisit at Effect GA; re-pin re-evaluates lstat/O_NOFOLLOW/inode primitives + `runMain` 130/143 exit contract |
 
 ## Language service
 
