@@ -315,7 +315,7 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
     eventRoute: { event: 'tool/after', fallback: 'standalone', runtime: 'shared' },
   };
   const degradedSource = planHooks(planningModel([degraded]), 'synthetic', contract).hookEntries[0]!.virtualSource;
-  expect(degradedSource).toContain('new URL("./hooks-flight.mjs", import.meta.url)');
+  expect(degradedSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
   expect(degradedSource).toContain('createAgentRenderDispatcher');
   expect(degradedSource).toContain('projectEventDocument');
   expect(degradedSource).toContain('error.code === "runtime-unavailable"');
