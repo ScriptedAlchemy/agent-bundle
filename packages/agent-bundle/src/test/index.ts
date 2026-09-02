@@ -160,3 +160,11 @@ export type {
   CodexPluginValidationStatus,
   ValidateCodexPluginOptions,
 } from '../host-contracts/codex-plugin-validation.ts';
+export { validateCursorPlugin } from '../host-contracts/cursor-plugin-validation.ts';
+export type {
+  CursorPluginCommandResult,
+  CursorPluginCommandRunner,
+  CursorPluginValidationReport,
+  CursorPluginValidationStatus,
+  ValidateCursorPluginOptions,
+} from '../host-contracts/cursor-plugin-validation.ts';

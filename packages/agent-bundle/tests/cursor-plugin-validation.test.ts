@@ -1,0 +1,345 @@
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { afterEach, expect, it } from '@rstest/core';
+
+import {
+  validateCursorPlugin,
+  type CursorPluginCommandRunner,
+} from '../src/host-contracts/cursor-plugin-validation.ts';
+
+const fixtureRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+});
+
+const createFixtureRoot = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-validation-'));
+  fixtureRoots.push(root);
+  return root;
+};
+
+const writeJson = async (root: string, path: string, value: unknown): Promise<void> => {
+  const file = join(root, path);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+};
+
+const createBundle = async (
+  documents: Readonly<Record<string, unknown>> = {
+    '.cursor-plugin/plugin.json': { name: 'fixture-plugin' },
+  },
+): Promise<string> => {
+  const root = await createFixtureRoot();
+  await Promise.all(Object.entries(documents).map(([path, value]) => writeJson(root, path, value)));
+  return root;
+};
+
+const versionRunner = (): { readonly calls: unknown[]; readonly run: CursorPluginCommandRunner } => {
+  const calls: unknown[] = [];
+  return {
+    calls,
+    run: async (request) => {
+      calls.push(request);
+      return {
+        exitCode: 0,
+        signal: null,
+        stderr: '',
+        stdout: '2026.08.31-4057e58\n',
+      };
+    },
+  };
+};
+
+it('records the Cursor version and always discloses local pinned-schema validation', async () => {
+  const pluginDirectory = await createBundle();
+  const fixture = versionRunner();
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: fixture.run,
+    target: 'cursor',
+  });
+
+  expect(fixture.calls).toEqual([
+    expect.objectContaining({
+      args: ['--version'],
+      executable: 'cursor-agent',
+    }),
+  ]);
+  expect(report).toEqual({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6026',
+      message: expect.stringContaining('070189284e702e8a4d2e3cc8913994b204c5337a'),
+      severity: 'info',
+      target: 'cursor',
+    })],
+    host: 'cursor',
+    status: 'passed',
+    target: 'cursor',
+    version: '2026.08.31-4057e58',
+  });
+  expect(Object.isFrozen(report)).toBe(true);
+  expect(Object.isFrozen(report.diagnostics)).toBe(true);
+});
+
+it('keeps local validation active when cursor-agent is absent', async () => {
+  const validPluginDirectory = await createBundle();
+  const invalidPluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': {
+      name: 'fixture-plugin',
+      unknownField: true,
+    },
+  });
+  const missing = Object.assign(new Error('spawn cursor-agent ENOENT'), { code: 'ENOENT' });
+
+  const unavailable = await validateCursorPlugin({
+    pluginDirectory: validPluginDirectory,
+    run: async () => { throw missing; },
+    target: 'cursor',
+  });
+  expect(unavailable).toMatchObject({
+    diagnostics: expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6026', severity: 'info' }),
+      expect.objectContaining({ code: 'AB6029', severity: 'info' }),
+    ]),
+    status: 'unavailable',
+  });
+
+  const failed = await validateCursorPlugin({
+    pluginDirectory: invalidPluginDirectory,
+    run: async () => { throw missing; },
+    target: 'cursor',
+  });
+  expect(failed.status).toBe('failed');
+  expect(failed.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'AB6026', severity: 'info' }),
+    expect.objectContaining({
+      code: 'AB6027',
+      message: expect.stringContaining('additional properties'),
+      severity: 'error',
+    }),
+    expect.objectContaining({
+      code: 'AB6029',
+      message: expect.stringContaining('not installed or is not on PATH'),
+      severity: 'info',
+    }),
+  ]));
+});
+
+it('accepts valid bytes for every vendored Cursor schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/marketplace.json': {
+      name: 'fixture-marketplace',
+      plugins: [{ name: 'fixture-plugin', source: './' }],
+    },
+    '.cursor-plugin/plugin.json': {
+      hooks: './hooks/hooks.json',
+      mcpServers: './mcp.json',
+      name: 'fixture-plugin',
+    },
+    'hooks/hooks.json': {
+      hooks: {
+        stop: [{ command: 'node ${CURSOR_PLUGIN_ROOT}/hooks/stop.mjs' }],
+      },
+      version: 1,
+    },
+    'mcp.json': {
+      mcpServers: {
+        fixture: {
+          args: ['${CURSOR_PLUGIN_ROOT}/mcp/server.mjs'],
+          command: 'node',
+          env: { PLUGIN_ROOT: '${CURSOR_PLUGIN_ROOT}' },
+        },
+      },
+    },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.status).toBe('passed');
+  expect(report.diagnostics).toEqual([
+    expect.objectContaining({ code: 'AB6026', severity: 'info' }),
+  ]);
+});
+
+it('rejects an unknown plugin manifest property under the strict pinned schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { name: 'fixture-plugin', surprise: true },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6027',
+        message: expect.stringContaining('.cursor-plugin/plugin.json'),
+      }),
+    ]),
+    status: 'failed',
+  });
+});
+
+it('rejects malformed MCP bytes under the pinned schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { mcpServers: './mcp.json', name: 'fixture-plugin' },
+    'mcp.json': { mcpServers: { fixture: { command: 'node', unknown: true } } },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6027',
+      message: expect.stringContaining('mcp.json'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
+it('rejects malformed hook bytes under the pinned schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: './hooks/hooks.json', name: 'fixture-plugin' },
+    'hooks/hooks.json': { hooks: { inventedEvent: [{ command: 'true' }] } },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6027',
+      message: expect.stringContaining('hooks/hooks.json'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
+it('rejects malformed marketplace bytes under the pinned schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/marketplace.json': {
+      name: 'fixture-marketplace',
+      plugins: [{ name: 'fixture-plugin', source: './', unknown: true }],
+    },
+    '.cursor-plugin/plugin.json': { name: 'fixture-plugin' },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6027',
+      message: expect.stringContaining('.cursor-plugin/marketplace.json'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
+it('requires the generated Cursor manifest while leaving optional documents optional', async () => {
+  const pluginDirectory = await createBundle({});
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report).toMatchObject({
+    diagnostics: expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6027',
+        message: expect.stringContaining('.cursor-plugin/plugin.json is required'),
+      }),
+    ]),
+    status: 'failed',
+  });
+});
+
+it('reports which fallback manifest the pinned loader precedence would select', async () => {
+  const pluginDirectory = await createBundle({
+    '.claude-plugin/plugin.json': { name: 'claude-fallback' },
+    'plugin.json': { name: 'portable-fallback' },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6028',
+      message: expect.stringContaining('.claude-plugin/plugin.json'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
+it('rejects symlinks whose real targets escape the bundle directory', async () => {
+  const pluginDirectory = await createBundle();
+  const outsideRoot = await createFixtureRoot();
+  const outsideFile = join(outsideRoot, 'outside.json');
+  await writeFile(outsideFile, '{"hooks":{}}\n');
+  await mkdir(join(pluginDirectory, 'hooks'), { recursive: true });
+  await symlink(outsideFile, join(pluginDirectory, 'hooks', 'hooks.json'));
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6028',
+      message: expect.stringContaining('escapes the Cursor bundle directory'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
+it('rejects CURSOR_PLUGIN_ROOT outside loader-substituted fields', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': {
+      description: 'Unsupported here: ${CURSOR_PLUGIN_ROOT}',
+      name: 'fixture-plugin',
+    },
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      code: 'AB6028',
+      message: expect.stringContaining('does not substitute CURSOR_PLUGIN_ROOT'),
+    }),
+  ]));
+  expect(report.status).toBe('failed');
+});
