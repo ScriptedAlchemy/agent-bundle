@@ -10,7 +10,10 @@ import { defaultOutputOperations, outputOperations } from '../../../operations/o
 
 const operation = outputOperations(defaultOutputOperations).convert;
 
-export const config = {"annotations":{"destructiveHint":true,"readOnlyHint":false},"description":"Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources."};
+export const config = {
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan or explicitly apply a verified FFmpeg or Audiobook Forge conversion while preserving sources.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

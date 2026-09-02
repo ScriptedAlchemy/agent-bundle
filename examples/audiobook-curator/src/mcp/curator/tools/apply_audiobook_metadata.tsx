@@ -12,7 +12,10 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = mediaMutationOperations(defaultMediaMutationOperations).applyMetadata;
 
-export const config = {"annotations":{"destructiveHint":true,"readOnlyHint":false},"description":"Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream."};
+export const config = {
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan or explicitly apply verified catalog metadata and artwork while preserving every audio stream.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

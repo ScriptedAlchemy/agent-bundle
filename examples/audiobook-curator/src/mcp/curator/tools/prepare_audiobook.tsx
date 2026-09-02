@@ -8,7 +8,10 @@ import { defaultOutputOperations, outputOperations } from '../../../operations/o
 
 const operation = outputOperations(defaultOutputOperations).prepare;
 
-export const config = {"annotations":{"destructiveHint":true,"readOnlyHint":false},"description":"Plan an M4B output, or apply the plan only when apply is explicitly true."};
+export const config = {
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan an M4B output, or apply the plan only when apply is explicitly true.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

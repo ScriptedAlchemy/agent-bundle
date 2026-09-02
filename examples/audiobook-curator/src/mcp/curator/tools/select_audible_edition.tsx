@@ -11,7 +11,10 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = audibleOperations(defaultAudibleOperations).audibleSelect;
 
-export const config = {"annotations":{"readOnlyHint":false},"description":"Record an explicit human-reviewed Audible edition choice from a candidate report."};
+export const config = {
+  annotations: { readOnlyHint: false },
+  description: 'Record an explicit human-reviewed Audible edition choice from a candidate report.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

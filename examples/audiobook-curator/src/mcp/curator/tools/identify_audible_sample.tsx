@@ -9,7 +9,10 @@ import { defaultEvidenceOperations, evidenceOperations } from '../../../operatio
 
 const operation = evidenceOperations(defaultEvidenceOperations).acousticIdentify;
 
-export const config = {"annotations":{"openWorldHint":true,"readOnlyHint":false},"description":"Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default."};
+export const config = {
+  annotations: { openWorldHint: true, readOnlyHint: false },
+  description: 'Try ranked Audible candidates, retaining skips/errors and stopping at the first acoustic match by default.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

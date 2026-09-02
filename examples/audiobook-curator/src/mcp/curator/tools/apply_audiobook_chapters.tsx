@@ -13,7 +13,10 @@ import { CurationShelfStateSchema } from '../../../state.js';
 
 const operation = mediaMutationOperations(defaultMediaMutationOperations).applyChapters;
 
-export const config = {"annotations":{"destructiveHint":true,"readOnlyHint":false},"description":"Plan or explicitly apply verified chapter rows while preserving all non-chapter media state."};
+export const config = {
+  annotations: { destructiveHint: true, readOnlyHint: false },
+  description: 'Plan or explicitly apply verified chapter rows while preserving all non-chapter media state.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

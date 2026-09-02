@@ -8,7 +8,10 @@ import { defaultDiscoveryOperations, discoveryOperations } from '../../../operat
 
 const operation = discoveryOperations(defaultDiscoveryOperations).select;
 
-export const config = {"annotations":{"readOnlyHint":false},"description":"Select strongest source encodings while retaining alternates and duration review evidence."};
+export const config = {
+  annotations: { readOnlyHint: false },
+  description: 'Select strongest source encodings while retaining alternates and duration review evidence.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

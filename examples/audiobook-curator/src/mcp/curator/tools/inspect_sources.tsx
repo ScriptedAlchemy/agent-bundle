@@ -8,7 +8,10 @@ import { defaultDiscoveryOperations, discoveryOperations } from '../../../operat
 
 const operation = discoveryOperations(defaultDiscoveryOperations).inspect;
 
-export const config = {"annotations":{"readOnlyHint":true},"description":"Inspect a bounded directory tree and report supported audiobook media without changing it."};
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Inspect a bounded directory tree and report supported audiobook media without changing it.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 
