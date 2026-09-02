@@ -44,10 +44,18 @@ export interface DiscoveredPayload {
 
 export interface DiscoveredProject {
   assets?: DiscoveredAsset[];
-  /** Conventional flat `commands/*.md` documents; absent when none are discovered. */
+  /** Conventional flat `src/commands/*.md` documents; absent when none are discovered. */
   commands?: readonly CommandDocument[];
+  /**
+   * Documents using removed top-level conventions. Validation reports AB4736
+   * for every unclaimed document; absent when none are discovered.
+   */
+  legacyConventionalDocuments?: readonly {
+    readonly kind: 'skill' | 'command' | 'rule';
+    readonly source: string;
+  }[];
   payloads?: DiscoveredPayload[];
-  /** Conventional flat `rules/*.mdc` documents; absent when none are discovered. */
+  /** Conventional flat `src/rules/*.mdc` documents; absent when none are discovered. */
   rules?: readonly RuleDocument[];
   /**
    * The compiled conventional route graph (#93). Present only when route
@@ -56,7 +64,7 @@ export interface DiscoveredProject {
    */
   routeGraph?: CompiledRouteGraph;
   /**
-   * Conventional `skills/<name>/SKILL.md` documents that explicit `skills`
+   * Conventional `src/skills/<name>/SKILL.md` documents that explicit `skills`
    * configuration leaves uncovered — the confusable shadowed state surfaced
    * by the AB4734 migration nudge. Absent when config is silent (the
    * convention itself applies) or when every conventional skill is covered.
@@ -245,7 +253,7 @@ export const discoverProject = async (
   const projectRoot = resolve(root);
   const rules = await readProjectIgnoreRules(projectRoot);
   const configuredSkills = config.skills;
-  const conventionalSources = (await fastGlob('skills/*/SKILL.{md,ts,tsx}', {
+  const conventionalSources = (await fastGlob('src/skills/*/SKILL.{md,ts,tsx}', {
     absolute: true,
     cwd: projectRoot,
     dot: true,
@@ -272,9 +280,42 @@ export const discoverProject = async (
   }
   const shadowedConventionalSkills = [...shadowedByDir.values()];
 
+  const legacySkillSources = (await fastGlob('skills/*/SKILL.{md,ts,tsx}', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  }))
+    .filter((source) =>
+      !isProjectPathIgnored(rules, projectRoot, source) &&
+      !coveredDirs.has(dirname(source))
+    );
+  const legacyCommandSources = (await fastGlob('commands/*.md', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  })).filter((source) => !isProjectPathIgnored(rules, projectRoot, source));
+  const legacyRuleSources = (await fastGlob('rules/*.mdc', {
+    absolute: true,
+    cwd: projectRoot,
+    dot: true,
+    followSymbolicLinks: false,
+    onlyFiles: true,
+  })).filter((source) => !isProjectPathIgnored(rules, projectRoot, source));
+  const legacyConventionalDocuments = [
+    ...legacySkillSources.map((source) => ({ kind: 'skill' as const, source })),
+    ...legacyCommandSources.map((source) => ({ kind: 'command' as const, source })),
+    ...legacyRuleSources.map((source) => ({ kind: 'rule' as const, source })),
+  ].sort((left, right) =>
+    left.source.localeCompare(right.source) || left.kind.localeCompare(right.kind)
+  );
+
   const payloads = await discoverPayloads(projectRoot, config.payload);
   const routeGraph = await compileRouteGraph(projectRoot, config, rules);
-  const commandSources = (await fastGlob('commands/*.md', {
+  const commandSources = (await fastGlob('src/commands/*.md', {
     absolute: true,
     cwd: projectRoot,
     dot: true,
@@ -284,7 +325,7 @@ export const discoverProject = async (
     .filter((source) => !isProjectPathIgnored(rules, projectRoot, source))
     .sort((left, right) => left.localeCompare(right));
   const discoveredCommands = await Promise.all(commandSources.map((source) => parseCommand(source)));
-  const ruleSources = (await fastGlob('rules/*.mdc', {
+  const ruleSources = (await fastGlob('src/rules/*.mdc', {
     absolute: true,
     cwd: projectRoot,
     dot: true,
@@ -298,6 +339,7 @@ export const discoverProject = async (
   return {
     assets: await discoverAssets(projectRoot, config.assets, rules),
     ...(discoveredCommands.length === 0 ? {} : { commands: discoveredCommands }),
+    ...(legacyConventionalDocuments.length === 0 ? {} : { legacyConventionalDocuments }),
     ...(payloads.length === 0 ? {} : { payloads }),
     ...(routeGraph === undefined || isEmptyRouteGraph(routeGraph) ? {} : { routeGraph }),
     ...(discoveredRules.length === 0 ? {} : { rules: discoveredRules }),

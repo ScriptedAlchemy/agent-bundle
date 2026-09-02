@@ -34,7 +34,7 @@ it('rejects a Windows path on a different drive', () => {
 
 const createProject = async (skillMarkdown: string): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-service-'));
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   await Promise.all([
     writeFile(
       join(root, 'agent-bundle.config.ts'),
@@ -46,7 +46,7 @@ const createProject = async (skillMarkdown: string): Promise<string> => {
         '',
       ].join('\n'),
     ),
-    writeFile(join(root, 'skills', 'review', 'SKILL.md'), skillMarkdown),
+    writeFile(join(root, 'src', 'skills', 'review', 'SKILL.md'), skillMarkdown),
   ]);
   return root;
 };
@@ -69,10 +69,10 @@ const createRuntimeProject = async (options: Readonly<{
     '{ _meta: ' + (options.appMeta ?? "{ ui: { preferred: 'compact' }, labels: ['one', 'two'] }") +
     ", entry: './src/app.ts', resourceUri: 'ui://timeline/v1/dashboard', targets: ['portable'], template: './src/shell.html' }"
   );
-  await mkdir(join(root, 'skills', 'review'), { recursive: true });
+  await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
   await mkdir(join(root, 'src', 'dev'), { recursive: true });
   await Promise.all([
-    writeFile(join(root, 'skills', 'review', 'SKILL.md'), [
+    writeFile(join(root, 'src', 'skills', 'review', 'SKILL.md'), [
       '---',
       'name: review',
       'description: Reviews changes',
@@ -351,7 +351,7 @@ it('sanitizes top-level MCP App metadata accessors before source validation with
 it('does not let supplemental metadata sanitization suppress unrelated source diagnostics', async () => {
   const project = await createRuntimeProject({ appMeta: '{ count: Number.NaN }' });
   try {
-    await writeFile(join(project.root, 'skills', 'review', 'SKILL.md'), '# Missing frontmatter\n');
+    await writeFile(join(project.root, 'src', 'skills', 'review', 'SKILL.md'), '# Missing frontmatter\n');
     const prepared = await new ProjectService({ includeDevRuntime: true, mode: 'development', root: project.root }).prepare('build');
 
     expect(prepared.source).toMatchObject({
@@ -373,7 +373,7 @@ it('stops the shared project pipeline on source errors with a frozen structured 
     expect(prepared.source.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB3001',
-        sourcePath: join(root, 'skills', 'review', 'SKILL.md'),
+        sourcePath: join(root, 'src', 'skills', 'review', 'SKILL.md'),
       }),
     ]));
     expect(prepared.model).toBeUndefined();
@@ -425,7 +425,7 @@ it('retains the resolved configuration path in the prepared project', async () =
     );
     expect(prepared.projectContext?.sourceInputs).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'agent-bundle.config.ts' }),
-      expect.objectContaining({ path: 'skills/review/SKILL.md' }),
+      expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
     ]));
     expect(Object.isFrozen(prepared.projectContext?.sourceInputs)).toBe(true);
   } finally {
@@ -470,7 +470,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
     expect(left.projectContext?.sourceInputs.map((input) => input.path)).toEqual([
       'a-first.txt',
       'agent-bundle.config.ts',
-      'skills/review/SKILL.md',
+      'src/skills/review/SKILL.md',
       'z-last.txt',
     ]);
     expect(Object.isFrozen(left.projectContext)).toBe(true);
@@ -847,18 +847,18 @@ it('derives source revisions from authored bytes, including resources and invali
   const invalidRoot = await createProject('# First invalid skill\n');
   try {
     await Promise.all([
-      writeFile(join(root, 'skills', 'review', 'guide.txt'), 'one'),
-      writeFile(join(equivalentRoot, 'skills', 'review', 'guide.txt'), 'one'),
+      writeFile(join(root, 'src', 'skills', 'review', 'guide.txt'), 'one'),
+      writeFile(join(equivalentRoot, 'src', 'skills', 'review', 'guide.txt'), 'one'),
     ]);
     const initial = await new ProjectService({ root }).prepare('build');
     const equivalentInitial = await new ProjectService({ root: equivalentRoot }).prepare('build');
-    await writeFile(join(root, 'skills', 'review', 'guide.txt'), 'two');
+    await writeFile(join(root, 'src', 'skills', 'review', 'guide.txt'), 'two');
     const resourceChanged = await new ProjectService({ root }).prepare('build');
-    await writeFile(join(equivalentRoot, 'skills', 'review', 'guide.txt'), 'two');
+    await writeFile(join(equivalentRoot, 'src', 'skills', 'review', 'guide.txt'), 'two');
     const equivalentChanged = await new ProjectService({ root: equivalentRoot }).prepare('build');
 
     const invalidInitial = await new ProjectService({ root: invalidRoot }).prepare('build');
-    await writeFile(join(invalidRoot, 'skills', 'review', 'SKILL.md'), '# Second invalid skill\n');
+    await writeFile(join(invalidRoot, 'src', 'skills', 'review', 'SKILL.md'), '# Second invalid skill\n');
     const invalidChanged = await new ProjectService({ root: invalidRoot }).prepare('build');
 
     expect(initial.source.revision).toBe(equivalentInitial.source.revision);
@@ -888,7 +888,7 @@ it('invalidates cached source hashes after a same-size rewrite with a restored m
     '[Guide](guide.txt)',
     '',
   ].join('\n'));
-  const guide = join(root, 'skills', 'review', 'guide.txt');
+  const guide = join(root, 'src', 'skills', 'review', 'guide.txt');
 
   try {
     await writeFile(guide, 'one');

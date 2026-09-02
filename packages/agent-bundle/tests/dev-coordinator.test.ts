@@ -28,7 +28,7 @@ const createProject = async (): Promise<string> => (await createProjectFixture({
     '',
   ].join('\n'),
   files: {
-    'skills/review/SKILL.md': [
+    'src/skills/review/SKILL.md': [
       '---',
       'name: review',
       'description: Reviews changes',

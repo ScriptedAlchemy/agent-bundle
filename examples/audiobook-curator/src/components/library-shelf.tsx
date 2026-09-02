@@ -3,22 +3,26 @@ import React from 'react';
 
 import type { InspectionReceipt } from '../curator-core.ts';
 import type { InventoryReceipt, LibraryAuditReceipt, SelectionReceipt } from '../library.ts';
-import { AudiobookCard } from './audiobook-card.tsx';
-import { Callout, DataList, type Field } from './primitives.tsx';
+import { FileCard } from './audiobook-card.tsx';
+import { CandidateGroupCallout } from './candidate-group-callout.tsx';
+import { Callout, DataList, FileList, type Field } from './primitives.tsx';
+import { fileCardModel } from './view-models.ts';
 
-type ShelfReceipt = InspectionReceipt | InventoryReceipt | LibraryAuditReceipt | SelectionReceipt;
-
-export interface LibraryShelfProps {
-  readonly receipt: ShelfReceipt;
+export interface InspectionShelfProps {
+  readonly receipt: InspectionReceipt;
 }
 
 const maximumCards = 20;
 
-const remaining = (count: number): React.ReactNode => count > maximumCards
+interface RemainingFilesProps {
+  readonly count: number;
+}
+
+const RemainingFiles = ({ count }: RemainingFilesProps) => count > maximumCards
   ? <Agent.Markdown>{`_+${String(count - maximumCards)} more files retained in the structured receipt._`}</Agent.Markdown>
   : null;
 
-const inspectionShelf = (receipt: InspectionReceipt) => (
+export const InspectionShelf = ({ receipt }: InspectionShelfProps) => (
   <>
     <DataList fields={[
       { label: 'Files', value: receipt.files.length },
@@ -26,13 +30,17 @@ const inspectionShelf = (receipt: InspectionReceipt) => (
       { label: 'Root', value: receipt.root },
     ]} />
     {receipt.files.slice(0, maximumCards).map((file) => (
-      <AudiobookCard file={file} key={file.path} kind="file" />
+      <FileCard {...fileCardModel(file)} key={file.path} />
     ))}
-    {remaining(receipt.files.length)}
+    <RemainingFiles count={receipt.files.length} />
   </>
 );
 
-const inventoryShelf = (receipt: InventoryReceipt) => (
+export interface InventoryShelfProps {
+  readonly receipt: InventoryReceipt;
+}
+
+export const InventoryShelf = ({ receipt }: InventoryShelfProps) => (
   <>
     <DataList fields={[
       { label: 'Files', value: receipt.summary.files },
@@ -42,16 +50,20 @@ const inventoryShelf = (receipt: InventoryReceipt) => (
       { label: 'Source', value: receipt.source },
     ]} />
     {receipt.files.slice(0, maximumCards).map((file) => (
-      <AudiobookCard file={file} key={file.path} kind="file" />
+      <FileCard {...fileCardModel(file)} key={file.path} />
     ))}
-    {remaining(receipt.files.length)}
-    {receipt.errors.length > 0
-      ? <Callout tone="error">{receipt.errors.map((row) => `${row.path}: ${row.error}`).join('; ')}</Callout>
-      : null}
+    <RemainingFiles count={receipt.files.length} />
+    {receipt.errors.map((row, index) => (
+      <Callout key={`${row.path}:${String(index)}`} tone="error">{`${row.path}: ${row.error}`}</Callout>
+    ))}
   </>
 );
 
-const auditShelf = (receipt: LibraryAuditReceipt) => {
+export interface AuditShelfProps {
+  readonly receipt: LibraryAuditReceipt;
+}
+
+export const AuditShelf = ({ receipt }: AuditShelfProps) => {
   const summaryFields: Field[] = [
     { label: 'Files', value: receipt.summary.files },
     { label: 'Total bytes', value: receipt.summary.bytes },
@@ -66,18 +78,26 @@ const auditShelf = (receipt: LibraryAuditReceipt) => {
     <>
       <DataList fields={summaryFields} />
       {receipt.files.slice(0, maximumCards).map((file) => (
-        <AudiobookCard file={file} key={file.path} kind="file" />
+        <FileCard {...fileCardModel(file)} key={file.path} />
       ))}
-      {remaining(receipt.files.length)}
+      <RemainingFiles count={receipt.files.length} />
       {receipt.duplicateCandidates.slice(0, 10).map((group) => (
-        <Callout key={group.identityKey} tone="review">
-          {`Duplicate candidate group ${group.identityKey}: ${group.files.join(', ')}. ${receipt.reviewNote}`}
-        </Callout>
+        <CandidateGroupCallout
+          files={group.files}
+          identityKey={group.identityKey}
+          key={group.identityKey}
+          kind="duplicate"
+          reviewNote={receipt.reviewNote}
+        />
       ))}
       {receipt.multipartCandidates.slice(0, 10).map((group) => (
-        <Callout key={`${group.directory}/${group.identityKey}`} tone="review">
-          {`Multipart candidate group ${group.identityKey}: ${group.files.map((file) => `part ${String(file.part)} ${file.path}`).join(', ')}. ${receipt.reviewNote}`}
-        </Callout>
+        <CandidateGroupCallout
+          files={group.files.map((file) => `part ${String(file.part)} ${file.path}`)}
+          identityKey={group.identityKey}
+          key={`${group.directory}/${group.identityKey}`}
+          kind="multipart"
+          reviewNote={receipt.reviewNote}
+        />
       ))}
       {receipt.duplicateCandidates.length === 0 && receipt.multipartCandidates.length === 0
         ? <Callout tone="review">{receipt.reviewNote}</Callout>
@@ -86,7 +106,11 @@ const auditShelf = (receipt: LibraryAuditReceipt) => {
   );
 };
 
-const selectionShelf = (receipt: SelectionReceipt) => (
+export interface SelectionShelfProps {
+  readonly receipt: SelectionReceipt;
+}
+
+export const SelectionShelf = ({ receipt }: SelectionShelfProps) => (
   <>
     <DataList fields={[
       { label: 'Source groups', value: receipt.selections.length },
@@ -96,14 +120,17 @@ const selectionShelf = (receipt: SelectionReceipt) => (
     {receipt.selections.slice(0, maximumCards).map((selection) => (
       <React.Fragment key={selection.identityKey}>
         <Agent.Markdown>{`## Source group: ${selection.identityKey}`}</Agent.Markdown>
-        <AudiobookCard file={selection.selected} kind="file" />
-        <Agent.Markdown>
-          {[
-            `Selected because: ${selection.reason}.`,
-            `Alternates: ${selection.alternates.length === 0 ? 'none' : selection.alternates.map((file) => file.path).join(', ')}`,
-            `Duration spread: ${String(selection.durationSpreadSeconds)} seconds.`,
-          ].join('\n\n')}
-        </Agent.Markdown>
+        <FileCard {...fileCardModel(selection.selected)} />
+        <Agent.Markdown>{`Selected because: ${selection.reason}.`}</Agent.Markdown>
+        {selection.alternates.length === 0
+          ? <Agent.Markdown>Alternates: none.</Agent.Markdown>
+          : (
+            <>
+              <Agent.Markdown>Alternates:</Agent.Markdown>
+              <FileList files={selection.alternates.map((file) => file.path)} />
+            </>
+          )}
+        <Agent.Markdown>{`Duration spread: ${String(selection.durationSpreadSeconds)} seconds.`}</Agent.Markdown>
         {selection.reviewRequired
           ? <Callout tone="review">{selection.reviewReason ?? 'The source group requires human review.'}</Callout>
           : null}
@@ -114,20 +141,3 @@ const selectionShelf = (receipt: SelectionReceipt) => (
       : null}
   </>
 );
-
-export const LibraryShelf = ({ receipt }: LibraryShelfProps) => {
-  switch (receipt.operation) {
-    case 'inspect':
-      return inspectionShelf(receipt);
-    case 'inventory':
-      return inventoryShelf(receipt);
-    case 'library-audit':
-      return auditShelf(receipt);
-    case 'quality-selection':
-      return selectionShelf(receipt);
-    default: {
-      const unhandled: never = receipt;
-      throw new Error(`Unhandled shelf receipt: ${JSON.stringify(unhandled)}`);
-    }
-  }
-};

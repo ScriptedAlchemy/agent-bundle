@@ -52,6 +52,13 @@ const fullReport = {
     directory: '/tmp/agent-bundle',
     findings: [{
       path: '/tmp/agent-bundle/live.sock',
+      runtime: {
+        artifactEpoch: 'epoch-a',
+        availability: 'available' as const,
+        instanceId: 'runtime-a',
+        pid: 1234,
+        status: 'available' as const,
+      },
       state: 'live' as const,
     }, {
       path: '/tmp/agent-bundle/stale.lock',
@@ -155,6 +162,13 @@ it('rejects unknown keys at every discovery response boundary', async () => {
     { ...fullReport, endpoints: { ...fullReport.endpoints, summary: { ...fullReport.endpoints.summary, extra: true } } },
     { ...fullReport, endpoints: { ...fullReport.endpoints, diagnostics: [{ ...fullReport.endpoints.diagnostics[0]!, extra: true }] } },
     { ...fullReport, endpoints: { ...fullReport.endpoints, findings: [{ ...firstEndpointFinding, extra: true }] } },
+    {
+      ...fullReport,
+      endpoints: {
+        ...fullReport.endpoints,
+        findings: [{ ...firstEndpointFinding, runtime: { ...firstEndpointFinding.runtime!, extra: true } }],
+      },
+    },
     { ...fullReport, hosts: [{ ...firstHost, extra: true }] },
     { ...fullReport, hosts: [{ ...firstHost, probe: { ...firstHost.probe, extra: true } }] },
     { ...fullReport, hosts: [{ ...firstHost, inventory: { ...firstHost.inventory, extra: true } }] },

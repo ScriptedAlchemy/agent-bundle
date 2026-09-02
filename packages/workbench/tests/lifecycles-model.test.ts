@@ -73,11 +73,16 @@ const replay: LifecycleReplay = {
   nativeInput: { hook_event_name: 'PostToolUse' },
   projectionDiagnostic: { code: 'projection.partial', message: 'Optional host field was omitted.' },
   requestContext: {
-    hostContractRevision: 'claude-hooks@1',
-    invocationKind: 'event',
-    nativeEvent: 'PostToolUse',
-    routeId: 'event:tool/after',
-    target: 'claude',
+    actor: { reason: 'not-provided', state: 'unavailable' },
+    host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+    invocation: {
+      hostContractRevision: 'claude-hooks@1',
+      kind: 'event',
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
+    session: { source: 'receipt', state: 'available', value: { sessionId: 'session-1' } },
+    workspace: { source: 'receipt', state: 'available', value: { root: '/workspace' } },
   },
   source: 'fixture',
 };
@@ -132,10 +137,13 @@ it('derives one correlated replay view with identity, context, and diagnostics',
   ]);
   expect(view.requestRows).toEqual([
     { label: 'Invocation kind', value: 'event' },
-    { label: 'Route ID', value: 'event:tool/after' },
-    { label: 'Target', value: 'claude' },
-    { label: 'Native event', value: 'PostToolUse' },
+    { label: 'Operation ID', value: 'event:tool/after' },
+    { label: 'Surface', value: 'tool/after' },
     { label: 'Host contract revision', value: 'claude-hooks@1' },
+    { label: 'Host', value: 'claude · receipt' },
+    { label: 'Session', value: 'session-1 · receipt' },
+    { label: 'Actor', value: 'Unavailable · not-provided' },
+    { label: 'Workspace', value: '/workspace · receipt' },
   ]);
   expect(view.resultDiagnostics).toEqual([
     { code: 'projection.partial', message: 'Optional host field was omitted.', source: 'projection' },

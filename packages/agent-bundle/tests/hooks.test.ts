@@ -1,4 +1,4 @@
-import { cp, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -13,7 +13,8 @@ import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
-import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
+import { compileHooks } from '../src/build/entries.ts';
+import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
@@ -1035,9 +1036,13 @@ it('runs the embedded Codex and Claude native codecs through their published wra
 }, 15_000);
 
 it('runs the Cursor workspace/open lifecycle starter through a generated wrapper with empty stdout', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-workspace-open-'));
+  const buildRoot = join(process.cwd(), 'examples', 'audiobook-curator');
+  const fixtureParent = join(buildRoot, 'node_modules', '.cache');
+  await mkdir(fixtureParent, { recursive: true });
+  const root = await mkdtemp(join(fixtureParent, 'agent-bundle-cursor-workspace-open-'));
   const sourceRoot = join(root, 'src', 'events', 'workspace');
-  const outputRoot = join(root, 'artifact');
+  const outputRoot = join(root, 'dist', 'cursor');
+  const wrapper = join(outputRoot, 'hooks', 'event-route-workspace-open.mjs');
   const base = hookModel(root);
   const model: NormalizedPlugin = {
     ...base,
@@ -1046,8 +1051,8 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
       eventRoute: { event: 'workspace/open', fallback: 'none', runtime: 'standalone' },
       id: 'hook:event-route:workspace-open',
       name: 'event-route-workspace-open',
-      provenance: { kind: 'conventional', sourcePath: join(sourceRoot, 'open.tsx') },
-      source: join(sourceRoot, 'open.tsx'),
+      provenance: { kind: 'conventional', sourcePath: join(sourceRoot, 'open.mjs') },
+      source: join(sourceRoot, 'open.mjs'),
       targets: ['cursor'],
       tools: [],
     }],
@@ -1060,26 +1065,15 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
   try {
     await mkdir(sourceRoot, { recursive: true });
-    await Promise.all([
-      symlink(join(process.cwd(), 'packages', 'agent-bundle', 'node_modules'), join(root, 'node_modules'), 'dir'),
-      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
-      writeFile(join(root, 'package.json'), JSON.stringify({
-        dependencies: {
-          '@agent-bundle/runtime': 'workspace:*',
-          react: '19.2.8',
-        },
-        type: 'module',
-      })),
-      writeFile(join(sourceRoot, 'open.tsx'), [
-        "import { Agent } from '@agent-bundle/runtime';",
-        "import { createElement } from 'react';",
-        '',
-        'export default async function WorkspaceOpen() {',
-        '  return createElement(Agent.Result);',
-        '}',
-        '',
-      ].join('\n')),
-    ]);
+    await writeFile(join(sourceRoot, 'open.mjs'), [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      '',
+      'export default async function WorkspaceOpen() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n'));
     const targetRegistry = createDefaultRegistry();
     const plan = targetRegistry.get('cursor').plan(model);
     const generated = plan.hookEntries?.find((entry) => entry.relativePath === 'hooks/event-route-workspace-open.mjs');
@@ -1087,8 +1081,13 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
     expect(plan.diagnostics).toEqual([]);
     expect(generated).toBeDefined();
-    await build({ model, outputRoot, projectRoot: root, registry: targetRegistry });
-    const wrapper = join(outputRoot, 'cursor', generated!.relativePath);
+    await compileHooks(plan.hookEntries ?? [], {
+      artifactEpoch: 'cursor-workspace-open-test',
+      cwd: buildRoot,
+      meta: projectMeta(model.metadata),
+      outDir: outputRoot,
+      plugin: { name: model.metadata.name, version: model.metadata.version },
+    });
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',

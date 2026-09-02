@@ -60,7 +60,7 @@ const sourceDiagnostic = (
 });
 
 /**
- * Informational migration nudges (AB473x): they surface pre-convention
+ * Informational migration nudges (AB4730-AB4735): they surface pre-convention
  * patterns the entry conventions now replace, and they must never gate a
  * build — migrations stay optional, so the severity is always `info`.
  */
@@ -1607,7 +1607,7 @@ const validatePrebuiltReference = (
 
 /**
  * AB4734: explicit `skills` configuration leaves a conventional
- * `skills/<name>/SKILL.md` document uncovered, so the convention is silently
+ * `src/skills/<name>/SKILL.md` document uncovered, so the convention is silently
  * shadowed — the skills-directory analogue of AB4731/AB4732/AB4733.
  */
 const skillConventionShadowNudges = (
@@ -1617,8 +1617,24 @@ const skillConventionShadowNudges = (
   'AB4734',
   `${relativePosix(loaded.context.projectRoot, source)} is present but explicit skills configuration does not cover it; the conventional skill is shadowed.`,
   source,
-  'Optional: remove the explicit skills configuration to adopt the skills/<name>/SKILL.md convention, add the directory to skills, or remove it to silence this nudge.',
+  'Optional: remove the explicit skills configuration to adopt the src/skills/<name>/SKILL.md convention, add the directory to skills, or remove it to silence this nudge.',
 ));
+
+const legacyConventionalDocumentErrors = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+): Diagnostic[] => (discovered.legacyConventionalDocuments ?? []).map(({ kind, source }) => {
+  const relativePath = relativePosix(loaded.context.projectRoot, source);
+  const destination = `src/${relativePath}`;
+  return sourceDiagnostic(
+    'AB4736',
+    `${relativePath} uses the removed top-level ${kind} convention and is no longer discovered.`,
+    source,
+    kind === 'skill'
+      ? `Move the document to ${destination}, or cover its directory with explicit skills configuration.`
+      : `Move the document to ${destination}.`,
+  );
+});
 
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
@@ -1905,6 +1921,7 @@ export const validateSource = (
   }
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
+  diagnostics.push(...legacyConventionalDocumentErrors(loaded, discovered));
   // Route overrides are validated during discovery; source validation must
   // still observe the config getter so hostile accessors fail closed as AB7001.
   void loaded.config['routes'];

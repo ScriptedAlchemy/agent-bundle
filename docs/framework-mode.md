@@ -2,10 +2,12 @@
 
 Agent Bundle has one newcomer model:
 
-1. **Files under conventional `src/` roots are the app.** For MCP, put one
+1. **Authored source lives under `src/`.** For MCP, put one
    module at `src/mcp/<server>/{tools,resources,prompts}/<name>.tsx`; its path
-   is its identity. `skills/<name>/SKILL.md`, `src/scripts/<name>.ts`,
-   `src/cli.ts`, and `src/index.ts` keep their existing conventions.
+   is its identity. Skills, commands, rules, scripts, routes, and state use
+   their conventional `src/` roots, including `src/skills/<name>/SKILL.md`,
+   `src/commands/*.md`, and `src/rules/*.mdc`. Top-level `assets/` holds
+   static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
    targets, and policy that no route file can own.
 3. **JSX = rendering.** An executable route is one async default Server
@@ -105,8 +107,10 @@ such paths as JavaScript, CSS, and SVG subdirectories.
 are also deliberately deferred: host packs have a framework-owned
 `<target>/skills|mcp|scripts|assets/...` layout content-addressed by the
 artifact manifest. Unlike machine-local Rsbuild config, the hashed, portable
-release-identity config rejects absolute paths; use the per-invocation CLI
-flag when an absolute path is required.
+release-identity config rejects absolute paths. The per-invocation CLI
+`--output` flag can override the configured relative artifact root, but it is
+subject to the same project-root containment check; absolute and external
+output roots are unsupported.
 
 ## Distribution
 

@@ -242,14 +242,17 @@ present and match the current v4 docs: their signatures operate over
 family. Revisit at Effect GA or the first time a wire contract genuinely
 diverges between its encoded and decoded sides.
 
-The projections currently have nothing to bridge. Every wire contract in
-`packages/agent-bundle/src/contracts/*` is JSON-plain: timestamps are strings,
-there are no `Date`, `bigint`, `Map`, `Set`, or transformations, and the
-encoded and type sides are structurally identical. `toType` / `toEncoded`
-would therefore be near-identity. The real dual maintenance — contract types
-plus separately hand-written Workbench decoders — is a single-source-of-truth
-problem that the pinned zod can already solve with `z.infer`; it does not
-require a second schema runtime.
+The projections currently have nothing to bridge on the audited JSON DTO
+routes: timestamps are strings, there are no `Date`, `bigint`, `Map`, `Set`,
+or transformations, and the encoded and type sides are structurally
+identical. That claim does not cover every export under `contracts/*`.
+`McpSessionTraceEntry.occurredAt` preserves a numeric Unix timestamp, and
+`DevRuntimeAsset.body` carries a `Uint8Array` through `contracts/runtime.ts`;
+neither is one of the audited JSON DTO routes. `toType` / `toEncoded` would
+therefore be near-identity at the audited seams. The real dual maintenance —
+contract types plus separately hand-written Workbench decoders — is a
+single-source-of-truth problem that the pinned zod can already solve with
+`z.infer`; it does not require a second schema runtime.
 
 Strictness is also call-site-fragile. Effect Schema rejects unknown keys only
 through the per-decode `onExcessProperty: "error"` parse option, whose default

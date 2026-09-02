@@ -59,16 +59,16 @@ const bundleModel = Object.freeze({
     Object.freeze({
       body: '# Review\n',
       description: 'Review code and explain findings.',
-      dir: '/workspace/skills/review',
+      dir: '/workspace/src/skills/review',
       frontmatter: Object.freeze({ description: 'Review code and explain findings.', name: 'review' }),
       id: 'skill:review',
       name: 'review',
-      provenance: Object.freeze({ kind: 'conventional' as const, sourcePath: '/workspace/skills/review/SKILL.md' }),
+      provenance: Object.freeze({ kind: 'conventional' as const, sourcePath: '/workspace/src/skills/review/SKILL.md' }),
       resources: Object.freeze([
-        Object.freeze({ bytes: 9, relativePath: 'SKILL.md', source: '/workspace/skills/review/SKILL.md' }),
-        Object.freeze({ bytes: 8, relativePath: 'references/guide.md', source: '/workspace/skills/review/references/guide.md' }),
+        Object.freeze({ bytes: 9, relativePath: 'SKILL.md', source: '/workspace/src/skills/review/SKILL.md' }),
+        Object.freeze({ bytes: 8, relativePath: 'references/guide.md', source: '/workspace/src/skills/review/references/guide.md' }),
       ]),
-      source: '/workspace/skills/review/SKILL.md',
+      source: '/workspace/src/skills/review/SKILL.md',
       targets: Object.freeze(['plugin']),
     }),
   ]),
@@ -668,8 +668,8 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
       id: 'rule:focused',
       markdown,
       name: 'focused',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/focused.mdc' },
-      source: '/workspace/rules/focused.mdc',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/rules/focused.mdc' },
+      source: '/workspace/src/rules/focused.mdc',
       targets: ['plugin'],
     }],
   };
@@ -705,8 +705,8 @@ it('emits Claude-format commands without pointing Cursor at the shared directory
       id: 'command:review',
       markdown: '---\ndescription: Review changes\nargumentHint: "[path]"\n---\nReview the staged diff.\n',
       name: 'review',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
-      source: '/workspace/commands/review.md',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/review.md' },
+      source: '/workspace/src/commands/review.md',
       targets: ['plugin'],
     }],
   };
@@ -764,7 +764,7 @@ it('reports a bundle-target conflict instead of silently overwriting an entry', 
 it('builds the unified bundle root on disk with a compiled universal hook wrapper', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-plugin-bundle-'));
   const outputRoot = join(root, 'dist');
-  const skillRoot = join(root, 'skills', 'review');
+  const skillRoot = join(root, 'src', 'skills', 'review');
   const skillMarkdown = '---\nname: review\ndescription: Review code and explain findings.\n---\n\n# Review\n';
   await mkdir(join(skillRoot, 'references'), { recursive: true });
   await Promise.all([

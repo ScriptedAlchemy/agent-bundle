@@ -85,8 +85,54 @@ it('debounces only relevant source paths into one ordered invalidation and close
   expect(invalidations).toHaveLength(1);
 });
 
-// Flaky under full-pool load (chokidar create-event coalescing, #122); retry while the root cause stays open.
-it('waits for the real watcher root before reporting create, change, and delete source inputs', { retry: 2 }, async () => {
+it('drops delayed source events until the path signature changes', async () => {
+  const fake = new FakeWatcher();
+  const invalidations: Invalidation[] = [];
+  const source = '/project/src/input.ts';
+  let signature: string | undefined = 'revision-1';
+  const watcher = new ProjectWatcher({
+    createWatcher: () => fake,
+    debounceMs: 60_000,
+    onInvalidation: async (invalidation) => {
+      invalidations.push(invalidation);
+    },
+    readPathSignature: async () => signature,
+    root: '/project',
+  });
+
+  fake.emit('add', source);
+  await watcher.flush();
+  fake.emit('change', source);
+  await watcher.flush();
+
+  expect(invalidations).toHaveLength(1);
+
+  signature = 'revision-2';
+  fake.emit('change', source);
+  await watcher.flush();
+
+  expect(invalidations).toEqual([
+    expect.objectContaining({ paths: ['src/input.ts'] }),
+    expect.objectContaining({ paths: ['src/input.ts'] }),
+  ]);
+
+  signature = undefined;
+  fake.emit('unlink', source);
+  await watcher.flush();
+  fake.emit('unlink', source);
+  await watcher.flush();
+
+  expect(invalidations).toHaveLength(3);
+
+  signature = 'revision-1';
+  fake.emit('add', source);
+  await watcher.flush();
+
+  expect(invalidations).toHaveLength(4);
+  await watcher.close();
+});
+
+it('waits for the real watcher root before reporting create, change, and delete source inputs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-real-watcher-'));
   await mkdir(join(root, 'src'), { recursive: true });
   await writeFile(join(root, 'src', 'existing.ts'), 'export const value = 1;\n');
@@ -125,8 +171,15 @@ it('waits for the real watcher root before reporting create, change, and delete 
       mkdir(join(root, 'node_modules', 'dependency'), { recursive: true }).then(async () =>
         writeFile(join(root, 'node_modules', 'dependency', 'index.js'), 'ignored\n')),
     ]);
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 100));
-    expect(received).toHaveLength(3);
+    const sentinel = nextInvalidation((listener) => { listen = listener; });
+    await writeFile(join(root, 'src', 'sentinel.ts'), 'export const sentinel = true;\n');
+    expect((await sentinel).paths).toContain('src/sentinel.ts');
+
+    const reportedPaths = received.flatMap((invalidation) => invalidation.paths);
+    expect(reportedPaths).not.toContain('.agent-bundle/output/generated.ts');
+    expect(reportedPaths).not.toContain('.git/HEAD');
+    expect(reportedPaths).not.toContain('node_modules/dependency/index.js');
+    expect(received).toHaveLength(4);
   } finally {
     await watcher.close();
     await rm(root, { force: true, recursive: true });

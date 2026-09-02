@@ -113,7 +113,7 @@ const treeDigest = async (
 
 const createProject = async (): Promise<TestProject> => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle build with spaces '));
-  const skillRoot = join(root, 'skills', 'review');
+  const skillRoot = join(root, 'src', 'skills', 'review');
   const skillScriptsRoot = join(skillRoot, 'scripts');
   const scriptPath = join(skillScriptsRoot, 'greeting script.ts');
   const localModulePath = join(skillScriptsRoot, 'local greeting module.ts');
@@ -234,26 +234,26 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
     {
       body: '# Review\n\nSee [guide](references/guide.md).\n',
       description: 'Review changes',
-      dir: join(project.root, 'skills', 'review'),
+      dir: join(project.root, 'src', 'skills', 'review'),
       frontmatter: { description: 'Review changes', name: 'review' },
       id: 'skill:review',
       name: 'review',
-      provenance: { kind: 'conventional', sourcePath: join(project.root, 'skills', 'review', 'SKILL.md') },
+      provenance: { kind: 'conventional', sourcePath: join(project.root, 'src', 'skills', 'review', 'SKILL.md') },
       resources: [
         {
           bytes: Buffer.byteLength(skillFixture.markdown),
           relativePath: 'SKILL.md',
-          source: join(project.root, 'skills', 'review', 'SKILL.md'),
+          source: join(project.root, 'src', 'skills', 'review', 'SKILL.md'),
         },
         {
           bytes: 4,
           relativePath: 'assets/icon.bin',
-          source: join(project.root, 'skills', 'review', 'assets', 'icon.bin'),
+          source: join(project.root, 'src', 'skills', 'review', 'assets', 'icon.bin'),
         },
         {
           bytes: 8,
           relativePath: 'references/guide.md',
-          source: join(project.root, 'skills', 'review', 'references', 'guide.md'),
+          source: join(project.root, 'src', 'skills', 'review', 'references', 'guide.md'),
         },
         {
           bytes: Buffer.byteLength(skillFixture.source),
@@ -276,7 +276,7 @@ const modelFor = (project: TestProject): NormalizedPlugin => ({
           source: project.pythonScriptPath,
         },
       ],
-      source: join(project.root, 'skills', 'review', 'SKILL.md'),
+      source: join(project.root, 'src', 'skills', 'review', 'SKILL.md'),
       targets: ['portable'],
     },
   ],
@@ -354,7 +354,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
         configPath: 'agent-bundle.config.ts',
         sourceInputs: expect.arrayContaining([
           expect.objectContaining({ path: 'agent-bundle.config.ts' }),
-          expect.objectContaining({ path: 'skills/review/SKILL.md' }),
+          expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
         ]),
       },
       runtime: { node: '22.12.0' },
@@ -412,8 +412,8 @@ it('low-level build writes and returns the exact canonical manifest for a config
         path: resource.path,
         sha256: sha256Hex(contents),
         sourceInputs: expect.arrayContaining([
-          resource.path.replace('portable/', ''),
-          'skills/review/SKILL.md',
+          resource.path.replace('portable/', 'src/'),
+          'src/skills/review/SKILL.md',
         ]),
       }));
     }
@@ -512,16 +512,16 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
       kind: 'bundle',
       path: 'portable/scripts/greeting.mjs',
       sourceInputs: [
-        'skills/review/scripts/greeting script.ts',
-        'skills/review/scripts/local greeting module.ts',
+        'src/skills/review/scripts/greeting script.ts',
+        'src/skills/review/scripts/local greeting module.ts',
       ],
     });
     expect(provenance).toContainEqual({
       kind: 'copy',
       path: 'portable/skills/review/scripts/review helper.sh',
       sourceInputs: [
-        'skills/review/scripts/review helper.sh',
-        'skills/review/SKILL.md',
+        'src/skills/review/scripts/review helper.sh',
+        'src/skills/review/SKILL.md',
       ],
     });
     expect(provenance).toContainEqual({
@@ -974,8 +974,8 @@ it('rejects a script name that exits its target scripts directory', async () => 
 
 it('rejects canonical aliases and adapter/root-script collisions before emission', async () => {
   const project = await createProject();
-  const uppercaseScript = join(project.root, 'skills', 'review', 'scripts', 'upper.SH');
-  const lowercaseScript = join(project.root, 'skills', 'review', 'scripts', 'upper.sh');
+  const uppercaseScript = join(project.root, 'src', 'skills', 'review', 'scripts', 'upper.SH');
+  const lowercaseScript = join(project.root, 'src', 'skills', 'review', 'scripts', 'upper.sh');
   const aliasesAdapter: TargetAdapter = {
     capabilities: {},
     metadata: testAdapterMetadata,

@@ -5,6 +5,7 @@ import { expect, it } from '@rstest/core';
 import { compileRouteGraph, emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { routeManifestFor, type RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import { RouteManifestRoutes, type RouteManifestRouteService } from '../src/dev/routes/route-manifest-routes.ts';
+import type { NormalizedStateDefinition } from '../src/core/types.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import {
   authorize,
@@ -15,6 +16,17 @@ import {
 } from './support/route-harness.ts';
 
 const revision = 'r'.repeat(64);
+
+const stateDefinition = (
+  budgets?: NormalizedStateDefinition['budgets'],
+  lifetime: NormalizedStateDefinition['lifetime'] = 'workspace-durable',
+): NormalizedStateDefinition => ({
+  ...(budgets === undefined ? {} : { budgets }),
+  id: 'fixture/catalog-state',
+  lifetime,
+  provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+  source: '/project/src/state.ts',
+});
 
 class RecordingService implements RouteManifestRouteService {
   readonly calls: string[] = [];
@@ -53,6 +65,44 @@ it('serves the compiled manifest without recompiling the graph', async () => {
       },
     });
     expect(service.calls).toEqual(['manifest']);
+  } finally {
+    await started.close();
+  }
+});
+
+it('serves the normalized state catalog on the manifest wire', async () => {
+  const service = new RecordingService();
+  service.value = routeManifestFor(
+    emptyCompiledRouteGraph,
+    revision,
+    stateDefinition({ declared: { maxStateBytes: 2_048 } }),
+  );
+  const started = await startRoutes(service);
+
+  try {
+    const read = await fetch(`${started.url}/api/routes/manifest`, { headers: headers() });
+    expect(read.status).toBe(200);
+    await expect(read.json()).resolves.toMatchObject({
+      manifest: {
+        state: {
+          budgets: {
+            resolved: {
+              maxCommitMs: 5_000,
+              maxEventBytes: 262_144,
+              maxRevisions: 100_000,
+              maxStateBytes: 2_048,
+            },
+            source: 'declared',
+          },
+          driver: 'sqlite',
+          durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
+          id: 'fixture/catalog-state',
+          lifetime: 'workspace-durable',
+          notices: [expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1')],
+          source: 'src/state.ts',
+        },
+      },
+    });
   } finally {
     await started.close();
   }
@@ -177,6 +227,55 @@ it('projects a compiled graph into the browser manifest with project-relative so
     routeId: 'tool:harness/echo',
   }));
   expect(Object.isFrozen(manifest)).toBe(true);
+});
+
+it('projects declared, default, and dynamic state budgets without fabricating absent state', () => {
+  const declared = routeManifestFor(
+    emptyCompiledRouteGraph,
+    revision,
+    stateDefinition({ declared: { maxCommitMs: 25 } }, 'process'),
+  );
+  expect(declared.state).toMatchObject({
+    budgets: {
+      resolved: {
+        maxCommitMs: 25,
+        maxEventBytes: 262_144,
+        maxRevisions: 100_000,
+        maxStateBytes: 1_048_576,
+      },
+      source: 'declared',
+    },
+    driver: 'memory',
+    id: 'fixture/catalog-state',
+    lifetime: 'process',
+    source: 'src/state.ts',
+  });
+  expect(declared.state).not.toHaveProperty('durableLocation');
+
+  const defaults = routeManifestFor(
+    emptyCompiledRouteGraph,
+    revision,
+    stateDefinition(undefined, 'request'),
+  );
+  expect(defaults.state?.budgets).toEqual({
+    resolved: {
+      maxCommitMs: 5_000,
+      maxEventBytes: 262_144,
+      maxRevisions: 100_000,
+      maxStateBytes: 1_048_576,
+    },
+    source: 'defaults',
+  });
+
+  const dynamic = routeManifestFor(
+    emptyCompiledRouteGraph,
+    revision,
+    stateDefinition('dynamic'),
+  );
+  expect(dynamic.state?.budgets).toEqual({ source: 'dynamic' });
+
+  const absent = routeManifestFor(emptyCompiledRouteGraph, revision);
+  expect(absent).not.toHaveProperty('state');
 });
 
 it('passes the bounded input schema through as the optional manifest wire field', () => {

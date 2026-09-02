@@ -19,6 +19,10 @@ export interface AgentBundlePluginConfig {
    * project's `package.json` (issue #94 stage 3): package.json is
    * authoritative for release identity, and a declared value that disagrees
    * with it reports the AB4008 warning.
+   *
+   * @deprecated Declare the release version only in `package.json`. This
+   * compatibility field will be removed through the normal breaking-change
+   * policy.
    */
   version?: string;
   [key: string]: unknown;
@@ -120,8 +124,8 @@ export interface AgentBundleOutputConfig {
   /**
    * The artifact output directory of `agent-bundle build`, relative to the
    * project root. Defaults to `dist`. The per-invocation CLI `--output` flag
-   * still wins, and remains the only way to target an absolute path outside
-   * the project.
+   * still wins, but remains subject to the same project-root containment
+   * check; absolute and external output paths are unsupported.
    */
   distPath?: string;
 }
@@ -583,7 +587,7 @@ export interface NormalizedPlugin {
    */
   readonly assets?: readonly NormalizedAsset[];
   /**
-   * Conventional `commands/*.md` documents. Present only when commands are
+   * Conventional `src/commands/*.md` documents. Present only when commands are
    * discovered; optional so hand-constructed models predating commands remain valid.
    */
   readonly commands?: readonly NormalizedCommand[];
@@ -620,7 +624,7 @@ export interface NormalizedPlugin {
   /** Conventional context providers executed for every generated render request. */
   readonly providers?: readonly CompiledProvider[];
   /**
-   * Conventional `rules/*.mdc` documents. Present only when rules are
+   * Conventional `src/rules/*.mdc` documents. Present only when rules are
    * discovered; optional so hand-constructed models predating rules remain valid.
    */
   readonly rules?: readonly NormalizedRule[];

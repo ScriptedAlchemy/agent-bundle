@@ -8,7 +8,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { MarkdownRenderError, renderElementToMarkdown } from './render-markdown.ts';
 
 /**
- * The rendered-skill convention: `skills/<name>/SKILL.tsx` (or `.ts`)
+ * The rendered-skill convention: `src/skills/<name>/SKILL.tsx` (or `.ts`)
  * default-exports a component and exports a `frontmatter` record; the build
  * compiles the rendered tree to the `SKILL.md` document every host consumes.
  * A hand-authored `SKILL.md` in the same directory always wins (config beats

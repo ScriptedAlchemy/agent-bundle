@@ -125,7 +125,7 @@ const writeMcpPlaygroundProject = async (root: string): Promise<void> => {
       "  mcp: { servers: { fixture: { entry: './src/server.ts', env: { NO_COLOR: '1', SECRET_TOKEN: 'fixture-secret' } } } },",
       "  portable: { fixtureMarker: 'artifact-extension-initial' },",
       "  plugin: { name: 'workbench-mcp-fixture', version: '1.0.0' },",
-      "  skills: ['skills/review'],",
+      "  skills: ['src/skills/review'],",
       "  targets: ['portable'],",
       '});',
       '',
@@ -185,9 +185,7 @@ e2e('redirects a direct Runtime deep link only after capability discovery report
   }
 });
 
-// Flaky under hosted-runner load (watch delivery can split one edit into an
-// extra reload generation, #200); retry while the root cause stays open.
-e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { retry: 2, timeout: 120_000 }, async ({ page }) => {
+e2e('offers the host-owned MCP playground handoff only after a selected Runtime App succeeds', { timeout: 120_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   let clientPage: Page | undefined;
   let clientSurface: Awaited<ReturnType<typeof fixture.openRuntimeClientSurface>> | undefined;
@@ -314,12 +312,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     }, fixture.url);
     const initialProjectSource = await readProjectSource();
     // Source status carries the package identity derived from package.json (#94).
-    expect(initialProjectSource).toMatchObject({
-      diagnostics: [],
-      packageName: '@agent-bundle/rsc-agent-runtime-demo',
-      revision: sourceRevision,
-      state: 'ready',
-    });
+    expect(initialProjectSource).toEqual({ diagnostics: [], packageName: '@agent-bundle/rsc-agent-runtime-demo', packageVersion: '1.0.0', revision: sourceRevision, state: 'ready' });
     const expectRuntimeProfileInspection = async (preview: Locator, expectedSourceRevision: string): Promise<void> => {
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('Portable MCP Apps');
       await expect(preview.getByLabel('Simulated MCP App profile')).toContainText('agent-bundle:mcp-apps:2026-01-26');
@@ -410,16 +403,15 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     expect(runtimeAppRequests.filter((request) => request === 'POST /api/runtime/apps')).toHaveLength(1);
     expect(runtimeAppRequests.filter((request) => request.startsWith('DELETE /api/runtime/apps/'))).toHaveLength(0);
     expect(runtimeAppResponses).toHaveLength(1);
-    // Frame delivery is asynchronous relative to the assertions above: the
-    // two replaced watched sources compile as one coalesced or two split App
-    // generations (multi-compiler watch delivery skews under load), so a
-    // second legitimate reload frame may surface after this point. Consume
-    // the owned channel monotonically over generation ordinals (issue #111)
-    // instead of pinning an exact frame snapshot: the accepted connection
-    // replays generation 0, a frame may repeat the current generation, an
-    // advance is exactly one, and nothing past the edit budget may ever
-    // arrive - a config reconcile that reloads the retained App still fails
-    // here once the edits' generations are spent.
+    // Each atomic replacement changes the emitted App asset set and spends
+    // one generation. Split watch completions with identical emitted bytes
+    // are content-deduped before this channel, so load cannot spend another.
+    // Consume the owned channel monotonically over generation ordinals
+    // (issue #111) instead of pinning an exact frame snapshot: the accepted
+    // connection replays generation 0, a frame may repeat the current
+    // generation, an advance is exactly one, and nothing past the edit
+    // budget may ever arrive - a config reconcile that reloads the retained
+    // App still fails here once the edits' generations are spent.
     const ownedReloadGenerationBudget = 2;
     const expectMonotonicOwnedReloadFrames = (): void => {
       const generations = ownedReloadFrames();
@@ -1510,7 +1502,7 @@ e2e('lists an immutable build Skill tree even after the current source Skill is 
   const project = await createProjectFixture();
   const { server } = await startFrozenEpochServer(project.root);
   try {
-    const renamed = join(project.root, 'skills', 'revised');
+    const renamed = join(project.root, 'src', 'skills', 'revised');
     await rename(project.skillDir, renamed);
     await writeFile(join(renamed, 'SKILL.md'), project.skillMarkdown.replace('name: review', 'name: revised'));
 

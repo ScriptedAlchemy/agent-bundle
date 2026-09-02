@@ -19,6 +19,16 @@
 .route-group-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
 .route-group-heading h2 { font-size: 17px; margin: 0; }
 .route-group-heading p { color: #596372; font-size: 13px; margin: 0; text-transform: lowercase; }
+.route-state-facts, .route-state-budgets { display: grid; gap: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 14px 0 0; }
+.route-state-facts div, .route-state-budgets div { border-right: 1px solid #e1e5eb; min-width: 0; padding: 8px 14px 8px 0; }
+.route-state-facts div:last-child, .route-state-budgets div:last-child { border-right: 0; }
+.route-state-facts dt, .route-state-budgets dt { color: #596372; font-size: 11px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.route-state-facts dd, .route-state-budgets dd { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin: 5px 0 0; overflow-wrap: anywhere; }
+.route-state-detail { margin-top: 16px; }
+.route-state-detail h3 { color: #35445a; font-size: 12px; margin: 0; text-transform: uppercase; }
+.route-state-detail p, .route-state-notice { color: #596372; font-size: 12px; line-height: 1.5; margin: 7px 0 0; }
+.route-state-source { font-weight: 700; text-transform: capitalize; }
+.route-state-notice { border-left: 2px solid #ccd4df; padding-left: 10px; }
 .route-server-summary { color: #596372; font-size: 13px; margin: 10px 0 0; max-width: 760px; }
 .route-table { border-collapse: collapse; margin-top: 14px; table-layout: fixed; width: 100%; }
 .route-table th, .route-table td { border-bottom: 1px solid #e4e8ef; padding: 11px 12px 11px 0; text-align: left; vertical-align: top; }

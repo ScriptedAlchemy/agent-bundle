@@ -8,7 +8,10 @@ import { defaultAudibleOperations, audibleOperations } from '../../../operations
 
 const operation = audibleOperations(defaultAudibleOperations).audibleCache;
 
-export const config = {"annotations":{"openWorldHint":true,"readOnlyHint":false},"description":"Cache a reviewed Audible edition and retained source evidence."};
+export const config = {
+  annotations: { openWorldHint: true, readOnlyHint: false },
+  description: 'Cache a reviewed Audible edition and retained source evidence.',
+};
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;
 

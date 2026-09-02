@@ -13,7 +13,7 @@ export interface IntegrityAuditInput {
   readonly receipt?: string;
 }
 
-export interface IntegrityAuditReceipt {
+export type IntegrityAuditReceipt = {
   readonly audioSha256: string;
   readonly bytes: number;
   readonly chapterIssues: readonly string[];
@@ -32,7 +32,7 @@ export interface IntegrityAuditReceipt {
     readonly status: 'not-requested' | 'review-required' | 'verified';
   }>;
   readonly status: 'review-required' | 'verified';
-}
+};
 
 export interface IntegrityAuditDependencies extends LibraryDependencies {
   readonly ffmpeg?: string;

@@ -2,6 +2,8 @@ import { lstat, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import type { JsonObject, JsonValue } from '@agent-bundle/runtime';
+
 import {
   defaultCuratorHttpClient,
   requestWithAttempts,
@@ -22,7 +24,7 @@ export type AcousticMatcher = (
   source: string,
   sample: string,
   options: AcousticMatchOptions,
-) => Promise<Readonly<Record<string, unknown>>>;
+) => Promise<JsonObject>;
 
 export interface AcousticVerifyInput {
   readonly audiolocatePython?: string;
@@ -36,23 +38,23 @@ export interface AcousticVerifyInput {
   readonly verbose?: boolean;
 }
 
-export interface AcousticReceipt {
+export type AcousticReceipt = {
   readonly asin: string;
-  readonly audible: Readonly<Record<string, unknown>>;
+  readonly audible: JsonObject;
   readonly exitCode: 0 | 2;
   readonly file: string;
-  readonly fingerprint: Readonly<Record<string, unknown>>;
+  readonly fingerprint: JsonObject;
   readonly generatedAt: string;
   readonly mutation: false;
   readonly operation: 'audiolocate';
   readonly region: AudibleRegion;
   readonly verifiedRecording: boolean;
-}
+};
 
 export interface AcousticIdentifyInput {
   readonly all?: boolean;
   readonly attempts?: number;
-  readonly candidates: readonly Readonly<Record<string, unknown>>[];
+  readonly candidates: readonly JsonObject[];
   readonly candidatesReport: string;
   readonly chunkSeconds?: number;
   readonly file: string;
@@ -61,20 +63,31 @@ export interface AcousticIdentifyInput {
   readonly verbose?: boolean;
 }
 
-export interface AcousticIdentifyReceipt {
-  readonly attempts: readonly Readonly<Record<string, unknown>>[];
+export type AcousticIdentifyReceipt = {
+  readonly attempts: readonly JsonObject[];
   readonly candidatesReport: string;
   readonly exitCode: 0 | 2;
   readonly file: string;
   readonly generatedAt: string;
-  readonly identified?: Readonly<{ readonly asin: string; readonly region: string; readonly title?: unknown }>;
+  readonly identified?: Readonly<{ readonly asin: string; readonly region: string; readonly title?: JsonValue }>;
   readonly mutation: false;
   readonly operation: 'acoustic-identify';
   readonly reviewNote: string;
   readonly stopOnMatch: boolean;
   readonly top: number;
   readonly verifiedRecording: boolean;
-}
+};
+
+type AcousticIdentifyAttempt = {
+  readonly asin?: string;
+  readonly fingerprint?: JsonObject;
+  readonly reason?: string;
+  readonly region: AudibleRegion;
+  readonly sampleUrl?: JsonValue;
+  readonly score?: JsonValue;
+  readonly status: 'error' | 'matched' | 'no-match' | 'skipped';
+  readonly title?: JsonValue;
+};
 
 export interface WhisperInput {
   readonly author?: string;
@@ -90,15 +103,15 @@ export interface WhisperInput {
   readonly windowSeconds?: number;
 }
 
-export interface WhisperWindow {
+export type WhisperWindow = {
   readonly index: number;
   readonly sampleSeconds: number;
   readonly startSeconds: number;
   readonly text: string;
   readonly usable: boolean;
-}
+};
 
-export interface WhisperReceipt {
+export type WhisperReceipt = {
   readonly exitCode: 0 | 2;
   readonly expectedAuthor?: string;
   readonly expectedTitle?: string;
@@ -113,7 +126,7 @@ export interface WhisperReceipt {
   readonly status: 'insufficient-spoken-windows' | 'transcript-ready';
   readonly usableWindows: number;
   readonly windows: readonly WhisperWindow[];
-}
+};
 
 export interface EvidenceDependencies extends LibraryDependencies {
   readonly audiolocatePython?: string;
@@ -135,7 +148,9 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
     const result = await process(python, ['-c', script, source, sample, String(options.chunkSeconds), options.verbose ? '1' : '0'], { signal: options.signal });
     const line = result.stdout.split(/\r?\n/u).findLast((candidate) => candidate.startsWith(resultMarker));
     if (line === undefined) throw new CuratorError('Audiolocate emitted no structured result.');
-    return Object.freeze(asRecord(JSON.parse(line.slice(resultMarker.length))));
+    const parsed = JSON.parse(line.slice(resultMarker.length)) as JsonObject;
+    asRecord(parsed);
+    return Object.freeze(parsed);
   } catch (error) {
     throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${error instanceof Error ? error.message : ''}`.trim());
   }
@@ -149,7 +164,7 @@ const productUrl = (region: AudibleRegion, asin: string): string => {
 const sampleMatch = async (
   input: AcousticVerifyInput,
   dependencies: EvidenceDependencies,
-): Promise<{ audible: Readonly<Record<string, unknown>>; fingerprint: Readonly<Record<string, unknown>> }> => {
+): Promise<{ audible: JsonObject; fingerprint: JsonObject }> => {
   const region = input.region ?? 'us';
   const attempts = Math.max(1, Math.min(input.attempts ?? 4, 10));
   const http = dependencies.http ?? defaultCuratorHttpClient;
@@ -179,7 +194,7 @@ const sampleMatch = async (
       signal: dependencies.signal,
       verbose: input.verbose === true,
     });
-    return { audible: Object.freeze(audible), fingerprint };
+    return { audible: Object.freeze(audible) as JsonObject, fingerprint };
   } finally { await rm(work, { force: true, recursive: true }); }
 };
 
@@ -229,12 +244,17 @@ export const identifyAudibleSample = async (
   });
   const top = Math.max(1, Math.min(input.top ?? 3, 10));
   const selected = input.all === true ? unique : unique.slice(0, top);
-  const attempts: Record<string, unknown>[] = [];
-  let identified: { asin: string; region: string; title?: unknown } | undefined;
+  const attempts: AcousticIdentifyAttempt[] = [];
+  let identified: { asin: string; region: string; title?: JsonValue } | undefined;
   for (const candidate of selected) {
     const asin = String(candidate.asin ?? '');
     const region = String(candidate.region ?? 'us') as AudibleRegion;
-    const base = { asin: asin || undefined, region, score: asRecord(candidate.evidence).score, title: candidate.title };
+    const base = {
+      asin: asin || undefined,
+      region,
+      score: asRecord(candidate.evidence).score as JsonValue | undefined,
+      title: candidate.title,
+    };
     if (asin === '') {
       attempts.push({ ...base, reason: 'candidate has no ASIN', status: 'skipped' });
       continue;

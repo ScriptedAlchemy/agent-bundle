@@ -71,7 +71,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
       'fixture reference\n',
     );
     await expect(readFile(join(output, 'portable', 'skills', 'review', 'assets', 'binary.bin'))).resolves.toEqual(
-      await readFile(join(root, 'skills', 'review', 'assets', 'binary.bin')),
+      await readFile(join(root, 'src', 'skills', 'review', 'assets', 'binary.bin')),
     );
 
     const [portableMcp, codexMcp, claudeMcp, codexHooks, claudeHooks, codexMarketplace, claudeMarketplace] =
@@ -202,7 +202,7 @@ it('builds the checked-in portable skills-only fixture', async () => {
       'portable guide\n',
     );
     await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'assets', 'binary.bin'))).resolves.toEqual(
-      await readFile(join(root, 'skills', 'portable-skill', 'assets', 'binary.bin')),
+      await readFile(join(root, 'src', 'skills', 'portable-skill', 'assets', 'binary.bin')),
     );
   } finally {
     await rm(parent, { force: true, recursive: true });

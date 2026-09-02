@@ -32,7 +32,7 @@ const epoch = {
 const sourceChanged: ProjectEventInput = {
   payload: {
     occurredAt: '2026-08-14T12:00:00.000Z',
-    paths: ['skills/review/SKILL.md'],
+    paths: ['src/skills/review/SKILL.md'],
     reason: 'source-change',
   },
   type: 'source.changed',
@@ -171,7 +171,7 @@ it('rejects non-JSON event payloads before allocating a sequence ID', () => {
 
 it('rejects numeric own array keys outside the array length without consuming a sequence', () => {
   const hub = new ProjectEventHub();
-  const paths = ['skills/review/SKILL.md'];
+  const paths = ['src/skills/review/SKILL.md'];
   Object.defineProperty(paths, '4294967295', {
     enumerable: true,
     value: 'not-an-array-index',

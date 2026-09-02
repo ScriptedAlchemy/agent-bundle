@@ -17,6 +17,6 @@ export default {
   routes: {
     mcpCommands: true,
   },
-  skills: ['skills/probe'],
+  skills: ['src/skills/probe'],
   targets: ['claude', 'codex', 'cursor'],
 };

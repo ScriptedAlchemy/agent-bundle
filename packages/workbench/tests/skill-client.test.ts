@@ -17,7 +17,7 @@ const sourceDocument = Object.freeze({
     message: 'A Skill warning.',
     recovery: 'Fix the Skill.',
     severity: 'warning' as const,
-    sourcePath: 'skills/review/SKILL.md',
+    sourcePath: 'src/skills/review/SKILL.md',
     target: 'portable',
   })]),
   frontmatter: Object.freeze({

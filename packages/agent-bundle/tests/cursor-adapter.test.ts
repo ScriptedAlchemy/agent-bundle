@@ -52,16 +52,16 @@ const plugin = (): NormalizedPlugin => ({
     {
       body: '# Review\n',
       description: 'Review code and explain findings.',
-      dir: '/workspace/skills/review',
+      dir: '/workspace/src/skills/review',
       frontmatter: { description: 'Review code and explain findings.', name: 'review' },
       id: 'skill:review',
       name: 'review',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/skills/review/SKILL.md' },
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/skills/review/SKILL.md' },
       resources: [
-        { bytes: 9, relativePath: 'SKILL.md', source: '/workspace/skills/review/SKILL.md' },
-        { bytes: 8, relativePath: 'references/guide.md', source: '/workspace/skills/review/references/guide.md' },
+        { bytes: 9, relativePath: 'SKILL.md', source: '/workspace/src/skills/review/SKILL.md' },
+        { bytes: 8, relativePath: 'references/guide.md', source: '/workspace/src/skills/review/references/guide.md' },
       ],
-      source: '/workspace/skills/review/SKILL.md',
+      source: '/workspace/src/skills/review/SKILL.md',
       targets: ['cursor'],
     },
   ],
@@ -255,8 +255,8 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
       id: 'rule:typescript',
       markdown,
       name: 'typescript',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/typescript.mdc' },
-      source: '/workspace/rules/typescript.mdc',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/rules/typescript.mdc' },
+      source: '/workspace/src/rules/typescript.mdc',
       targets: ['cursor'],
     }, {
       body: 'Keep changes focused.',
@@ -265,8 +265,8 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
       id: 'rule:focused',
       markdown: '---\ndescription: Focus changes\nalwaysApply: true\ntargets:\n  - cursor\n---\nKeep changes focused.',
       name: 'focused',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/rules/focused.mdc' },
-      source: '/workspace/rules/focused.mdc',
+      provenance: { kind: 'conventional', sourcePath: '/workspace/src/rules/focused.mdc' },
+      source: '/workspace/src/rules/focused.mdc',
       targets: ['cursor'],
     }],
   };
@@ -283,7 +283,7 @@ it('emits selected rules byte-faithfully and omits the entire surface when rule-
     rules: './rules/',
   });
   expect(plan.entries.find((entry) => entry.relativePath === 'rules/typescript.mdc')?.sourceInputs).toEqual([
-    '/workspace/rules/typescript.mdc',
+    '/workspace/src/rules/typescript.mdc',
   ]);
 
   const ruleFree = cursorAdapter.plan(model);
@@ -302,8 +302,8 @@ it('emits Cursor command bodies, strips authored frontmatter, and omits the comm
         id: 'command:review',
         markdown: '---\r\ndescription: Review changes\r\nargumentHint: "[path]"\r\ntargets:\r\n  - cursor\r\n---\r\nReview the staged diff.\r\n',
         name: 'review',
-        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/review.md' },
-        source: '/workspace/commands/review.md',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/review.md' },
+        source: '/workspace/src/commands/review.md',
         targets: ['cursor'],
       },
       {
@@ -312,8 +312,8 @@ it('emits Cursor command bodies, strips authored frontmatter, and omits the comm
         id: 'command:explain',
         markdown: '# Explain\n\nExplain this code.',
         name: 'explain',
-        provenance: { kind: 'conventional', sourcePath: '/workspace/commands/explain.md' },
-        source: '/workspace/commands/explain.md',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/explain.md' },
+        source: '/workspace/src/commands/explain.md',
         targets: ['cursor'],
       },
     ],

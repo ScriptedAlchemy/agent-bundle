@@ -17,7 +17,7 @@ npm run test:projection  # in-memory MCP projection pool
 npx agent-bundle mcp list --server status --target portable --artifact artifact
 
 # after publishing/removing "private" and installing the package
-npx my-agent-plugin install cursor
+npx my-agent-plugin install claude
 ```
 
 Installing the npm package does not mutate any host; run the generated

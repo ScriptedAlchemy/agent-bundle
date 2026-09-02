@@ -986,11 +986,11 @@ it('bootstraps a same-session token before posting an explicit rebuild through t
     },
   });
 
-  await expect(client.rebuild(['skills/review/SKILL.md'])).resolves.toMatchObject({ artifact: { state: 'stale' } });
+  await expect(client.rebuild(['src/skills/review/SKILL.md'])).resolves.toMatchObject({ artifact: { state: 'stale' } });
 
   expect(requests).toHaveLength(2);
   expect(requests[0]?.input).toBe('/api/project/session');
-  expect(requests[1]).toMatchObject({ body: '{"paths":["skills/review/SKILL.md"]}', input: '/api/project/rebuild' });
+  expect(requests[1]).toMatchObject({ body: '{"paths":["src/skills/review/SKILL.md"]}', input: '/api/project/rebuild' });
   expect(new Headers(requests[1]?.headers).get('x-agent-bundle-session')).toBe('token-1');
 });
 

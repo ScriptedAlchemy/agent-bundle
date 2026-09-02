@@ -49,7 +49,7 @@ describe('scaffold', () => {
         'README.md',
         'agent-bundle.config.ts',
         'package.json',
-        'skills/getting-started/SKILL.md',
+        'src/skills/getting-started/SKILL.md',
         'tests/skill.test.ts',
         'tsconfig.json',
       ]);
@@ -133,6 +133,31 @@ describe('scaffold', () => {
       expect(mcpManifest.scripts.prepack).toBe('agent-bundle prepack --json --output artifact');
       await expect(readFile(join(mcpServer.root, 'agent-bundle.config.ts'), 'utf8'))
         .resolves.toContain("lib: './src/status.ts'");
+    } finally {
+      await Promise.all([
+        rm(cliTool.root, { force: true, recursive: true }),
+        rm(mcpServer.root, { force: true, recursive: true }),
+      ]);
+    }
+  });
+
+  it('drops generated installer bins when no installable host target is selected', async () => {
+    const [cliTool, mcpServer] = await Promise.all([
+      scaffoldTemplate('cli-tool', { pluginName: 'greeter', targets: ['portable'] }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['portable'] }),
+    ]);
+    try {
+      const cliManifest = JSON.parse(await readFile(join(cliTool.root, 'package.json'), 'utf8')) as {
+        readonly bin?: Record<string, string>;
+      };
+      expect(cliManifest.bin).toEqual({
+        greeter: './dist/bin/greeter.js',
+      });
+
+      const mcpManifest = JSON.parse(await readFile(join(mcpServer.root, 'package.json'), 'utf8')) as {
+        readonly bin?: Record<string, string>;
+      };
+      expect(mcpManifest.bin).toBeUndefined();
     } finally {
       await Promise.all([
         rm(cliTool.root, { force: true, recursive: true }),

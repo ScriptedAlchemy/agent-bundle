@@ -6,6 +6,18 @@ import { AGENT_STATE_DEFAULT_BUDGETS } from '@agent-bundle/runtime/state';
 import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
+import { agentStateDefaultBudgets } from '../src/core/state-inspection.ts';
+
+it('keeps static inspection defaults aligned with the runtime package', () => {
+  expect(agentStateDefaultBudgets).toEqual({
+    maxCommitMs: 5_000,
+    maxEventBytes: 262_144,
+    maxRevisions: 100_000,
+    maxStateBytes: 1_048_576,
+  });
+  expect(agentStateDefaultBudgets).toEqual(AGENT_STATE_DEFAULT_BUDGETS);
+  expect(Object.isFrozen(agentStateDefaultBudgets)).toBe(true);
+});
 
 const createProject = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-inspect-state-'));
@@ -58,7 +70,12 @@ it('inspects volatile and workspace-durable state without inventing runtime path
       selected: {
         state: {
           budgets: {
-            resolved: AGENT_STATE_DEFAULT_BUDGETS,
+            resolved: {
+              maxCommitMs: 5_000,
+              maxEventBytes: 262_144,
+              maxRevisions: 100_000,
+              maxStateBytes: 1_048_576,
+            },
             source: 'defaults',
           },
           declared: true,

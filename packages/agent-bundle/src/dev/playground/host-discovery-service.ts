@@ -86,6 +86,7 @@ const findingFields = (value: DoctorFinding): DiscoveryFinding => Object.freeze(
   ...(value.manifest === undefined ? {} : { manifest: value.manifest }),
   ...(value.name === undefined ? {} : { name: value.name }),
   ...(value.path === undefined ? {} : { path: value.path }),
+  ...(value.runtime === undefined ? {} : { runtime: value.runtime }),
   state: value.state,
   ...(value.version === undefined ? {} : { version: value.version }),
 });

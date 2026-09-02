@@ -106,9 +106,13 @@ it('renders a lifecycle replay through a real default-pool dev server', { timeou
         },
       },
       requestContext: {
-        invocationKind: 'event',
-        routeId: 'event:tool/after',
-        target: 'claude',
+        actor: { reason: 'not-provided', state: 'unavailable' },
+        host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+        invocation: {
+          kind: 'event',
+          operationId: 'event:tool/after',
+          surface: 'tool/after',
+        },
       },
       source: 'fixture',
     });

@@ -1,4 +1,4 @@
-import { Agent, type JsonValue } from '@agent-bundle/runtime';
+import { Agent } from '@agent-bundle/runtime';
 import React, { type ReactNode } from 'react';
 
 import type { AudibleCacheReceipt, AudibleSearchReceipt, AudibleSelectionReceipt } from '../audible.ts';
@@ -33,7 +33,7 @@ export interface CuratorDocumentProps {
 }
 
 export const CuratorDocument = ({ children, headline, receipt }: CuratorDocumentProps) => (
-  <Agent.Result value={receipt as unknown as JsonValue}>
+  <Agent.Result value={receipt}>
     <Agent.Text>{headline}</Agent.Text>
     {children}
   </Agent.Result>

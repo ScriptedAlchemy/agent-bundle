@@ -169,8 +169,8 @@ describe('skill token registry', () => {
 
 describe('canonical Skill IR', () => {
   it('keeps a portable SKILL.md byte-stable when no extension or placeholder requires target output', async () => {
-    const root = await projectRoot({ 'skills/review/SKILL.md': portableMarkdown });
-    const document = await parseSkill(join(root, 'skills', 'review'), root);
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': portableMarkdown });
+    const document = await parseSkill(join(root, 'src', 'skills', 'review'), root);
     const ir = parseSkillIr(document);
     expect(ir.diagnostics).toEqual([]);
     expect(ir.passThrough).toBe(true);
@@ -207,8 +207,8 @@ describe('canonical Skill IR', () => {
       'Review the change.',
       '',
     ].join('\n');
-    const root = await projectRoot({ 'skills/review/SKILL.md': markdown });
-    const document = await parseSkill(join(root, 'skills', 'review'), root);
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': markdown });
+    const document = await parseSkill(join(root, 'src', 'skills', 'review'), root);
     const ir = parseSkillIr(document);
     expect(ir.passThrough).toBe(false);
     expect(ir.extensions.claude).toEqual(expect.objectContaining({ context: 'fork', model: 'sonnet' }));
@@ -253,8 +253,8 @@ describe('canonical Skill IR', () => {
       `Review ${skillTokenSpellings.arguments} in ${skillTokenSpellings.projectRoot}.`,
       '',
     ].join('\n');
-    const root = await projectRoot({ 'skills/review/SKILL.md': markdown });
-    const ir = parseSkillIr(await parseSkill(join(root, 'skills', 'review'), root));
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': markdown });
+    const ir = parseSkillIr(await parseSkill(join(root, 'src', 'skills', 'review'), root));
     expect(ir.passThrough).toBe(false);
     expect(ir.placeholders.map((placeholder) => placeholder.token)).toEqual(['arguments', 'projectRoot']);
 
@@ -284,8 +284,8 @@ describe('canonical Skill IR', () => {
       '# Review',
       '',
     ].join('\n');
-    const root = await projectRoot({ 'skills/review/SKILL.md': markdown });
-    const ir = parseSkillIr(await parseSkill(join(root, 'skills', 'review'), root));
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': markdown });
+    const ir = parseSkillIr(await parseSkill(join(root, 'src', 'skills', 'review'), root));
     expect(ir.diagnostics).toEqual([expect.objectContaining({
       code: 'AB3006',
       message: expect.stringContaining('invented-host-field'),
@@ -324,8 +324,8 @@ describe('canonical Skill IR', () => {
       '# Review',
       '',
     ].join('\n');
-    const root = await projectRoot({ 'skills/review/SKILL.md': markdown });
-    const ir = parseSkillIr(await parseSkill(join(root, 'skills', 'review'), root));
+    const root = await projectRoot({ 'src/skills/review/SKILL.md': markdown });
+    const ir = parseSkillIr(await parseSkill(join(root, 'src', 'skills', 'review'), root));
 
     expect(ir.diagnostics).toEqual([
       'targets.claude.display_nmae',
@@ -351,7 +351,7 @@ describe('canonical Skill IR', () => {
 
   it('surfaces the shared-vs-per-host skills tree as an inspect-visible evidence decision', async () => {
     const root = await projectRoot({
-      'skills/review/SKILL.md': [
+      'src/skills/review/SKILL.md': [
         '---',
         'name: review',
         'description: Review a change.',
@@ -362,7 +362,7 @@ describe('canonical Skill IR', () => {
         '',
       ].join('\n'),
     });
-    const ir = parseSkillIr(await parseSkill(join(root, 'skills', 'review'), root));
+    const ir = parseSkillIr(await parseSkill(join(root, 'src', 'skills', 'review'), root));
     const inspection = inspectSkillProjection(ir, ['claude', 'codex', 'cursor']);
     expect(inspection.authoredMarkdown).toContain('model: sonnet');
     expect(inspection.skillTreeLayout.decision).toBe('per-host-required');
@@ -393,7 +393,7 @@ describe('static lowering through the rendered-skill path', () => {
 
   it('compiles SKILL.tsx at build time and projects per-host Markdown without a Flight client', async () => {
     const root = await projectRoot({
-      'skills/review/SKILL.ts': [
+      'src/skills/review/SKILL.ts': [
         `const argumentsToken = ${JSON.stringify(skillTokenSpellings.arguments)};`,
         `const projectRootToken = ${JSON.stringify(skillTokenSpellings.projectRoot)};`,
         "export const frontmatter = { description: 'Review a change and report actionable findings.', name: 'review' };",
@@ -408,7 +408,7 @@ describe('static lowering through the rendered-skill path', () => {
         '',
       ].join('\n'),
     });
-    const document = await parseSkill(join(root, 'skills', 'review'), root);
+    const document = await parseSkill(join(root, 'src', 'skills', 'review'), root);
     expect(document.diagnostics).toEqual([]);
     expect(document.rendered).toBe(true);
     const ir = parseSkillIr(document);
@@ -422,7 +422,7 @@ describe('static lowering through the rendered-skill path', () => {
   it('lets the artifact planner own destinations and keeps portable skills as copy pass-through', async () => {
     const root = await projectRoot({
       'agent-bundle.config.ts': '',
-      'skills/review/SKILL.md': portableMarkdown,
+      'src/skills/review/SKILL.md': portableMarkdown,
     });
     const loaded = loadedProject(pluginConfig(['claude', 'codex', 'cursor']), root);
     const discovered = await discoverProject(root, loaded.config);

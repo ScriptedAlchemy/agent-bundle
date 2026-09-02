@@ -108,6 +108,8 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each source write.
 e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { retry: 2, timeout: 120_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('skills-starter');
@@ -177,6 +179,8 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each source write.
 e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('hooks-and-scripts');
@@ -368,6 +372,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
     // Every capability here is configured rather than routed: the compiled
     // catalog reports an empty graph while all nine pages stay navigable.
+    await expect(page.getByText('This project declares no state module.', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('This project declares no conventional route modules.', { exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.route-table')).toHaveCount(0);
     for (const preserved of ['Overview', 'Skills', 'Hooks', 'MCP playground', 'Artifacts', 'Playground', 'Logs', 'Evals', 'Comparisons']) {
@@ -570,6 +575,8 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   }
 });
 
+// #122's delayed duplicate event is signature-gated; this retry still covers the first
+// Chokidar event racing the immediate manual rebuild after each staged source replacement.
 e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
@@ -587,6 +594,12 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Routes', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
+    const state = page.getByRole('region', { name: 'State' });
+    await expect(state).toContainText('audiobook-curator/shelf', { timeout: browserTimeout });
+    await expect(state).toContainText('workspace-durable', { timeout: browserTimeout });
+    await expect(state).toContainText('sqlite', { timeout: browserTimeout });
+    await expect(state).toContainText('src/state.ts', { timeout: browserTimeout });
+    await expect(state.locator('button, input, select, textarea')).toHaveCount(0);
 
     // One generated server owns every MCP kind the curator declares, so each
     // kind must appear as its own server-scoped group rather than a flat list.

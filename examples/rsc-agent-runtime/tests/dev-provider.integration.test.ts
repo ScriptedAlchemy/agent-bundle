@@ -277,7 +277,7 @@ test('requires the App environment through the public Rsbuild compiler hook', as
   expect(() => afterCreate?.({ environments: { app: {} } })).not.toThrow();
 });
 
-test('emits one owned App reload for each later successful changed App compilation', async () => {
+test('emits one owned App reload for changed output and none for an unchanged-output recompile', async () => {
   const reloads: number[] = [];
   const config = createRscRuntimeRsbuildConfig({
     compilerRoot: join(tmpdir(), 'rsc-provider-app-reload'),
@@ -302,14 +302,31 @@ test('emits one owned App reload for each later successful changed App compilati
     onCloseDevServer: (callback: unknown) => { closeDevServer = callback as () => unknown; },
   });
 
-  const firstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: true, stats: { hasErrors: () => false, hash: 'app-change-a' } });
-  const duplicateFirstAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
-  const appBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
-  const appAUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-a' } });
-  const repeatedAppBUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'app-change-b' } });
+  const appUpdate = (statsHash: string, outputContent: string, isFirstCompile = false) => Object.freeze({
+    environment: Object.freeze({ name: 'app' }),
+    isFirstCompile,
+    stats: Object.freeze({
+      compilation: Object.freeze({
+        getAssets: () => Object.freeze([
+          Object.freeze({
+            name: 'edit-timeline-v1.html',
+            source: Object.freeze({ buffer: () => Buffer.from(outputContent) }),
+          }),
+        ]),
+      }),
+      hasErrors: () => false,
+      hash: statsHash,
+    }),
+  });
+  const firstAppUpdate = appUpdate('app-change-a', 'app-output-a', true);
+  const duplicateFirstAppUpdate = appUpdate('split-app-change-a', 'app-output-a');
+  const appBUpdate = appUpdate('app-change-b', 'app-output-b');
+  const duplicateAppBUpdate = appUpdate('split-app-change-b', 'app-output-b');
+  const appAUpdate = appUpdate('returned-app-change-a', 'app-output-a');
+  const repeatedAppBUpdate = appUpdate('returned-app-change-b', 'app-output-b');
   const failedAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => true } });
+  const unidentifiableAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: 'unreadable-output' } });
   const hashlessAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false } });
-  const emptyHashAppUpdate = Object.freeze({ environment: { name: 'app' }, isFirstCompile: false, stats: { hasErrors: () => false, hash: '' } });
   const nonAppUpdate = Object.freeze({ environment: { name: 'widget' }, isFirstCompile: false, stats: { hasErrors: () => false } });
 
   afterCompiler?.({ environments: { app: {}, widget: {} } });
@@ -324,17 +341,17 @@ test('emits one owned App reload for each later successful changed App compilati
 
   afterEnvironmentCompile?.(appBUpdate);
   expect(reloads).toEqual([1]);
+  afterEnvironmentCompile?.(duplicateAppBUpdate);
+  expect(reloads).toEqual([1]);
   afterEnvironmentCompile?.(appAUpdate);
   expect(reloads).toEqual([1, 2]);
   afterEnvironmentCompile?.(repeatedAppBUpdate);
   expect(reloads).toEqual([1, 2, 3]);
-  // A hashless success is unidentifiable, not unchanged: it still reloads
-  // (at-least-once; consumers dedupe by generation ordinal), but it must not
-  // dedupe by stats object identity or clobber the retained hash - the
-  // unchanged hashed completion after it stays deduped instead of minting a
-  // spurious frame (issue #111 secondary defect).
+  // An unreadable asset set is unidentifiable even when stats has a hash. It
+  // reloads at least once without clobbering the retained output identity, so
+  // the later readable completion remains deduped.
+  afterEnvironmentCompile?.(unidentifiableAppUpdate);
   afterEnvironmentCompile?.(hashlessAppUpdate);
-  afterEnvironmentCompile?.(emptyHashAppUpdate);
   expect(reloads).toEqual([1, 2, 3, 4, 5]);
   afterEnvironmentCompile?.(repeatedAppBUpdate);
   expect(reloads).toEqual([1, 2, 3, 4, 5]);

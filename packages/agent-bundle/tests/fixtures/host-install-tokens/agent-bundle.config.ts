@@ -7,6 +7,6 @@ export default {
     name: 'host-install-token-proof',
     version: '1.0.0',
   },
-  skills: ['skills/token-probe'],
+  skills: ['src/skills/token-probe'],
   targets: ['claude'],
 };

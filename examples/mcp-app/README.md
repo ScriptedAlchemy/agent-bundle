@@ -13,7 +13,7 @@ and Claude artifacts; the App resource remains portable.
 
 ## What is authored
 
-- `skills/service-readiness` documents the evidence, checks, and report needed
+- `src/skills/service-readiness` documents the evidence, checks, and report needed
   for a service-readiness decision.
 - `src/hooks/session-start.ts` adds the readiness workflow to compatible host
   sessions, while `check-service-fixture` validates the checked-in compiler

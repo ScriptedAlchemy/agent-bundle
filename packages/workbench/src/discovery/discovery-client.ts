@@ -13,6 +13,7 @@ import type {
   DiscoveryInventoryStatus,
   DiscoveryProbe,
   DiscoveryProbeStatus,
+  DiscoveryRuntimeStatus,
   HostDiscoveryReport,
 } from '../../../agent-bundle/src/contracts/discovery.ts';
 import type {
@@ -43,6 +44,7 @@ export type {
   DiscoveryInventoryStatus,
   DiscoveryProbe,
   DiscoveryProbeStatus,
+  DiscoveryRuntimeStatus,
   HostDiscoveryReport,
   McpProbeFailure,
   McpProbeFailureKind,
@@ -118,12 +120,26 @@ const findingStateSchema = z.enum([
   'unknown',
   'unregistered',
 ]);
+const runtimeStatusSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    artifactEpoch: textSchema,
+    availability: z.enum(['available', 'runtime-restarted', 'runtime-unavailable']),
+    instanceId: textSchema,
+    pid: z.number().int().positive(),
+    startedAt: textSchema.optional(),
+    status: z.literal('available'),
+  }),
+  z.strictObject({
+    status: z.enum(['failed', 'unavailable', 'unsupported']),
+  }),
+]);
 const findingShape = {
   durableState: durableStateSchema.optional(),
   entry: textSchema.optional(),
   manifest: textSchema.optional(),
   name: textSchema.optional(),
   path: textSchema.optional(),
+  runtime: runtimeStatusSchema.optional(),
   state: findingStateSchema,
   version: textSchema.optional(),
 } as const;

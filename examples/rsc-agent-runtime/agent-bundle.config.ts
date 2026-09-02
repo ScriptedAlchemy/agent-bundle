@@ -1,5 +1,7 @@
 import { defineConfig } from 'agent-bundle/config';
 
+import { projectName } from './src/project-identity.js';
+
 // The RSC runtime and App payloads are compiled by this example's own
 // multi-environment Rsbuild build (see rsbuild.config.ts); agent-bundle
 // packages those prebuilt trees verbatim and generates the host manifests,
@@ -38,8 +40,7 @@ export default defineConfig({
   portable: {},
   plugin: {
     description: 'React Server Components agent runtime demonstration.',
-    name: 'rsc-agent-runtime-demo',
-    version: '1.0.0',
+    name: projectName,
   },
   targets: ['portable', 'claude', 'codex'],
 });
