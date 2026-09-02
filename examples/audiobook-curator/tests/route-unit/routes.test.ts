@@ -25,11 +25,11 @@ it('renders the curation prompt route into a final Agent Document', async () => 
 
   expectDocument(rendered)
     .toHaveStatus('success')
-    .toContainText('Evidence-first curation prompt ready.')
+    .toContainText('Curation review prepared.')
     .toHaveValue({
       messages: [{
         content: {
-          text: 'Inspect /library, retain evidence, and require review before mutation.',
+          text: 'Inspect /library through discover, identify, curate, and verify. Retain evidence and require review before any mutation.',
           type: 'text',
         },
         role: 'user',
