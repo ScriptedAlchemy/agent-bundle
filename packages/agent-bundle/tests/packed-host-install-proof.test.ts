@@ -1,0 +1,264 @@
+import { execFile as executeFile, spawnSync } from 'node:child_process';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { afterAll, beforeAll, expect, it } from '@rstest/core';
+
+import {
+  buildHostInstallFixture,
+  disposeHostInstallFixture,
+  runClaudeHostInstallProof,
+  runCodexHostInstallProof,
+  runCursorHostInstallProof,
+  type BuiltHostInstallFixture,
+  type HostInstallCommand,
+} from './support/host-install.ts';
+import {
+  installedEnvironment,
+  npmInstallArguments,
+  packOutputFromJson,
+} from './support/shared-pack.ts';
+import {
+  HOST_INSTALL_PROOF_LEVEL,
+  proofLevelLabel,
+} from '../src/test/manifest.ts';
+
+const execFile = promisify(executeFile);
+const proofLabel = proofLevelLabel(HOST_INSTALL_PROOF_LEVEL);
+const packageName = 'host-install-proof-fixture';
+const pluginName = 'host-install-proof';
+const claudeMissingEvidence = 'missing evidence: claude binary unavailable on PATH';
+const codexMissingEvidence = 'missing evidence: codex binary unavailable on PATH';
+const claudeAvailable = spawnSync('claude', ['--version'], {
+  stdio: 'ignore',
+  timeout: 5_000,
+  windowsHide: true,
+}).status === 0;
+const codexAvailable = spawnSync('codex', ['--version'], {
+  stdio: 'ignore',
+  timeout: 5_000,
+  windowsHide: true,
+}).status === 0;
+const claudePluginIt = claudeAvailable ? it : it.skip;
+const codexPluginIt = codexAvailable ? it : it.skip;
+
+let cleanupRoot: string | undefined;
+let sourceFixture: BuiltHostInstallFixture | undefined;
+let packedFixture: BuiltHostInstallFixture | undefined;
+let packedInstallCommand: HostInstallCommand | undefined;
+let fixturePackageVersion: string | undefined;
+
+beforeAll(async () => {
+  cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-host-install-'));
+  sourceFixture = await buildHostInstallFixture({
+    buildCommand: 'prepack',
+    environment: process.env,
+    prepareProject: async (projectRoot) => {
+      const packagePath = join(projectRoot, 'package.json');
+      const packageDocument = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>;
+      if (typeof packageDocument.version !== 'string') {
+        throw new TypeError(`[${proofLabel}] host-install fixture package has no string version.`);
+      }
+      fixturePackageVersion = packageDocument.version;
+      delete packageDocument.private;
+      packageDocument.bin = { [pluginName]: `./dist/bin/${pluginName}.js` };
+      packageDocument.files = ['artifact', 'dist'];
+      await Promise.all([
+        writeFile(packagePath, `${JSON.stringify(packageDocument, null, 2)}\n`),
+        writeFile(join(projectRoot, 'src', 'index.ts'), 'export const fixture = true;\n'),
+      ]);
+      const configPath = join(projectRoot, 'agent-bundle.config.ts');
+      const config = await readFile(configPath, 'utf8');
+      await writeFile(configPath, config.replace(
+        'export default {\n',
+        "export default {\n  bin: false,\n  lib: { dts: false, entry: './src/index.ts' },\n",
+      ));
+    },
+  });
+
+  const projectRoot = dirname(sourceFixture.artifactRoot);
+  const tarballs = join(cleanupRoot, 'tarballs');
+  const consumer = join(cleanupRoot, 'consumer');
+  await Promise.all([mkdir(tarballs), mkdir(consumer)]);
+  expect(await readdir(consumer), proofLabel).toEqual([]);
+
+  const packed = await execFile(
+    'npm',
+    ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs],
+    { cwd: projectRoot, env: installedEnvironment() },
+  );
+  const packOutput = packOutputFromJson(packed.stdout);
+  const tarball = join(tarballs, packOutput.filename);
+  await execFile('npm', ['install', ...npmInstallArguments, tarball], {
+    cwd: consumer,
+    env: installedEnvironment(),
+  });
+
+  const installedPackageRoot = join(consumer, 'node_modules', packageName);
+  const installedArtifactRoot = join(installedPackageRoot, 'artifact');
+  const installedBin = join(consumer, 'node_modules', '.bin', pluginName);
+  await Promise.all([
+    access(installedBin),
+    access(join(installedArtifactRoot, 'claude')),
+    access(join(installedArtifactRoot, 'codex')),
+    access(join(installedArtifactRoot, 'cursor')),
+  ]);
+
+  await rm(projectRoot, { force: true, recursive: true });
+  await expect(stat(projectRoot), proofLabel).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(join(projectRoot, 'dist', 'bin', `${pluginName}.js`)), proofLabel)
+    .rejects.toMatchObject({ code: 'ENOENT' });
+
+  packedFixture = Object.freeze({
+    artifactRoot: installedArtifactRoot,
+    bundles: Object.freeze({
+      claude: join(installedArtifactRoot, 'claude'),
+      codex: join(installedArtifactRoot, 'codex'),
+      cursor: join(installedArtifactRoot, 'cursor'),
+    }),
+    cli: sourceFixture.cli,
+    root: cleanupRoot,
+  });
+  packedInstallCommand = Object.freeze({ cwd: consumer, executable: installedBin });
+}, 300_000);
+
+afterAll(async () => {
+  await Promise.all([
+    cleanupRoot === undefined ? Promise.resolve() : rm(cleanupRoot, { force: true, recursive: true }),
+    sourceFixture === undefined ? Promise.resolve() : disposeHostInstallFixture(sourceFixture),
+  ]);
+});
+
+const builtFixture = (): BuiltHostInstallFixture => {
+  if (packedFixture === undefined) throw new Error(`[${proofLabel}] packed fixture setup did not complete.`);
+  return packedFixture;
+};
+
+const installCommand = (): HostInstallCommand => {
+  if (packedInstallCommand === undefined) throw new Error(`[${proofLabel}] packed installer setup did not complete.`);
+  return packedInstallCommand;
+};
+
+const expectHygienicReport = (report: unknown): void => {
+  expect(JSON.stringify(report), proofLabel).not.toMatch(
+    /(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN|authorization|credential|password|secret|sk-[A-Za-z0-9_-]{16,}|\/home\/|\/Users\/|\/tmp\/|stdout|stderr)/iu,
+  );
+};
+
+claudePluginIt(
+  claudeAvailable
+    ? 'installs the packed tarball through Claude and observes the host-owned component inventory'
+    : `installs the packed tarball through Claude and observes the host-owned component inventory [${claudeMissingEvidence}]`,
+  async () => {
+    const report = await runClaudeHostInstallProof(builtFixture(), {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+
+    expect(report, proofLabel).toEqual({
+      host: 'claude',
+      install: { state: 'installed', version: '1.0.0' },
+      inventory: { hooks: 1, mcpServers: 1, skills: 1 },
+      proofLevel: proofLabel,
+      registration: {
+        enabled: true,
+        id: 'host-install-proof@host-install-proof-marketplace',
+        installPath: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0',
+        mcpServers: ['probe'],
+        scope: 'user',
+        version: '1.0.0',
+      },
+      skill: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0/skills/probe/SKILL.md',
+      status: 'passed',
+    });
+    expect(report.registration.version, proofLabel).toBe(fixturePackageVersion);
+    expectHygienicReport(report);
+  },
+  180_000,
+);
+
+codexPluginIt(
+  codexAvailable
+    ? 'installs the packed tarball through Codex and observes enabled registration'
+    : `installs the packed tarball through Codex and observes enabled registration [${codexMissingEvidence}]`,
+  async () => {
+    const report = await runCodexHostInstallProof(builtFixture(), {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+
+    expect(report, proofLabel).toEqual({
+      host: 'codex',
+      install: { state: 'installed', version: '1.0.0' },
+      manifest: {
+        interfaceCapabilities: ['hooks', 'mcp', 'skills'],
+        interfaceFields: [
+          'capabilities',
+          'category',
+          'defaultPrompt',
+          'developerName',
+          'displayName',
+          'longDescription',
+          'shortDescription',
+        ],
+        path: '.codex-plugin/plugin.json',
+      },
+      proofLevel: proofLabel,
+      registration: {
+        cachePath: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0',
+        state: 'installed, enabled',
+        version: '1.0.0',
+      },
+      skill: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0/skills/probe/SKILL.md',
+      skillSidecar: {
+        matchesBuiltArtifact: true,
+        path: 'skills/probe/agents/openai.yaml',
+        schema: 'schema-valid',
+        sections: ['dependencies', 'interface', 'policy'],
+      },
+      status: 'passed',
+    });
+    expect(report.registration.version, proofLabel).toBe(fixturePackageVersion);
+    expectHygienicReport(report);
+  },
+  180_000,
+);
+
+it('installs the packed tarball into an isolated Cursor home, validates schemas, and is idempotent', async () => {
+  const report = await runCursorHostInstallProof(builtFixture(), {
+    environment: process.env,
+    installCommand: installCommand(),
+  });
+
+  expect(report, proofLabel).toEqual({
+    destination: '.cursor/plugins/local/host-install-proof',
+    documents: {
+      hooks: 'schema-valid',
+      mcp: 'schema-valid',
+      plugin: 'schema-valid',
+    },
+    host: 'cursor',
+    install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    logo: {
+      path: './assets/docs/media/logo.svg',
+      resolvesInsideDeployTree: true,
+    },
+    pluginRootVariable: {
+      locations: [
+        'hooks/hooks.json#/hooks/sessionStart/0/command',
+        'mcp.json#/mcpServers/probe/args/0',
+        'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
+      ],
+      resolvedAtInstall: false,
+      sessionEvidence: 'unavailable: Cursor exposes no non-interactive plugin-loading session surface',
+      spelling: '${CURSOR_PLUGIN_ROOT}',
+    },
+    proofLevel: proofLabel,
+    skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
+    status: 'passed',
+  });
+  expect(report.install.version, proofLabel).toBe(fixturePackageVersion);
+  expectHygienicReport(report);
+}, 180_000);

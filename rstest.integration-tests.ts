@@ -110,6 +110,7 @@ export const nightlyEvidenceTestFiles: readonly string[] = [
 export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
   'packages/agent-bundle/tests/packed-consumer.test.ts',
+  'packages/agent-bundle/tests/packed-host-install-proof.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
