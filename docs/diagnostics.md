@@ -120,7 +120,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph and state convention (`AB4800`–`AB4820`)
+## Route graph, state, and provider conventions (`AB4800`–`AB4820`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -233,6 +233,9 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4818` | error | `src/state.ts` is present but does not default-export one direct `defineState({ ... })` call, or `state` config is not the supported `false` opt-out. |
 | `AB4819` | error | The state definition's `id` or `lifetime` is missing, non-literal, empty, duplicated, or outside the state lifetime vocabulary. |
 | `AB4820` | error | A generated project selects `external` state lifetime; v1 generated mounting supports only `request`, `process`, and `workspace-durable` because external drivers require embedder wiring. |
+| `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
+| `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
+| `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |
 
 ## Development package build (`AB7103`)
 

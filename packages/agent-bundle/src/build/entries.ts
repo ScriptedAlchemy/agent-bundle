@@ -36,7 +36,7 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
 } from './entry-shell.ts';
-import { emptyRouteConfig } from '../routes/types.ts';
+import { emptyRouteConfig, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
@@ -309,6 +309,7 @@ export const compileMcpEntries = async (
     readonly eventHooks: readonly NormalizedHook[];
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
+    readonly providers?: readonly CompiledProvider[];
     readonly state?: NormalizedStateDefinition;
     readonly target: string;
     readonly tools?: AgentBundleToolsConfig;
@@ -357,6 +358,7 @@ export const compileMcpEntries = async (
       : generatedRouteFlightWorkerSource({
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
         eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        providers: options.providers ?? [],
         routes: server.generatedRoutes,
         serverName: server.name,
         ...(options.state === undefined ? {} : { state: options.state }),

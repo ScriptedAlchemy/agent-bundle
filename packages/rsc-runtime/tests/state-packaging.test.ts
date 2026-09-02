@@ -19,6 +19,11 @@ const distFile = async (...segments: string[]): Promise<string> =>
   readFile(join(packageRoot, 'dist', ...segments), 'utf8');
 
 describe.sequential('state kernel packaging boundaries', () => {
+  it('publishes the provider invocation type from the root declaration entry', async () => {
+    const declaration = await distFile('index.d.ts');
+    expect(declaration).toContain('AgentRenderInvocation');
+  });
+
   it('keeps every kernel and storage identifier out of the root and plugin entries', async () => {
     const kernel = [
       'node:sqlite',

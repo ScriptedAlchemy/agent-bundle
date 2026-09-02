@@ -22,7 +22,7 @@ const unwrappedExpression = (expression: ts.Expression): ts.Expression => {
 };
 
 const diagnostic = (
-  code: 'AB4810' | 'AB4811',
+  code: 'AB4810' | 'AB4811' | 'AB4940',
   message: string,
   sourcePath: string,
   recovery: string,
@@ -32,6 +32,8 @@ const diagnostic = (
 export interface RouteModuleExports {
   /** True when the default export is an async function or arrow function. */
   readonly asyncDefault: boolean;
+  /** True when the default export is a function or arrow function. */
+  readonly defaultFunction: boolean;
   readonly named: ReadonlySet<string>;
   /** True when the module exports `execute` or `render` (the retired split contract). */
   readonly splitExport: boolean;
@@ -43,23 +45,39 @@ export const scanRouteModuleExports = (
   relativePath: string,
 ): RouteModuleExports => {
   const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const asyncFunctionBindings = new Set<string>();
+  const functionBindings = new Set<string>();
   const named = new Set<string>();
   let asyncDefault = false;
+  let defaultFunction = false;
+  let defaultIdentifier: string | undefined;
   let splitExport = false;
 
   for (const statement of sourceFile.statements) {
-    if (ts.isVariableStatement(statement) && exported(statement)) {
+    if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (!ts.isIdentifier(declaration.name)) continue;
-        named.add(declaration.name.text);
-        if (declaration.name.text === 'execute' || declaration.name.text === 'render') splitExport = true;
+        const initializer = declaration.initializer === undefined ? undefined : unwrappedExpression(declaration.initializer);
+        if (initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+          functionBindings.add(declaration.name.text);
+          if (asynchronous(initializer)) asyncFunctionBindings.add(declaration.name.text);
+        }
+        if (exported(statement)) {
+          named.add(declaration.name.text);
+          if (declaration.name.text === 'execute' || declaration.name.text === 'render') splitExport = true;
+        }
       }
       continue;
     }
-    if (ts.isFunctionDeclaration(statement) && exported(statement)) {
-      if (modifier(statement, ts.SyntaxKind.DefaultKeyword)) {
+    if (ts.isFunctionDeclaration(statement)) {
+      if (statement.name !== undefined) {
+        functionBindings.add(statement.name.text);
+        if (asynchronous(statement)) asyncFunctionBindings.add(statement.name.text);
+      }
+      if (exported(statement) && modifier(statement, ts.SyntaxKind.DefaultKeyword)) {
+        defaultFunction = true;
         asyncDefault = asynchronous(statement);
-      } else if (statement.name !== undefined) {
+      } else if (exported(statement) && statement.name !== undefined) {
         named.add(statement.name.text);
         if (statement.name.text === 'execute' || statement.name.text === 'render') splitExport = true;
       }
@@ -67,19 +85,30 @@ export const scanRouteModuleExports = (
     }
     if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
       const expression = unwrappedExpression(statement.expression);
-      asyncDefault = (ts.isArrowFunction(expression) || ts.isFunctionExpression(expression)) && asynchronous(expression);
+      defaultFunction = ts.isArrowFunction(expression) || ts.isFunctionExpression(expression);
+      asyncDefault = defaultFunction && asynchronous(expression);
+      if (ts.isIdentifier(expression)) defaultIdentifier = expression.text;
       continue;
     }
     if (ts.isExportDeclaration(statement) && statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
       for (const element of statement.exportClause.elements) {
         const name = element.name.text;
+        if (name === 'default' && statement.moduleSpecifier === undefined) {
+          defaultIdentifier = element.propertyName?.text ?? name;
+          continue;
+        }
         named.add(name);
         if (name === 'execute' || name === 'render') splitExport = true;
       }
     }
   }
 
-  return Object.freeze({ asyncDefault, named, splitExport });
+  if (defaultIdentifier !== undefined) {
+    defaultFunction = functionBindings.has(defaultIdentifier);
+    asyncDefault = asyncFunctionBindings.has(defaultIdentifier);
+  }
+
+  return Object.freeze({ asyncDefault, defaultFunction, named, splitExport });
 };
 
 /** Validates G8's one executable MCP route contract without evaluating the module. */
@@ -139,4 +168,20 @@ export const validateEventRouteModuleContract = (
     ));
   }
   return Object.freeze(diagnostics);
+};
+
+/** Validates one context provider's default factory export without evaluating the module. */
+export const validateProviderModuleContract = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+): readonly Diagnostic[] => {
+  const { defaultFunction } = scanRouteModuleExports(moduleText, relativePath);
+  if (defaultFunction) return Object.freeze([]);
+  return Object.freeze([diagnostic(
+    'AB4940',
+    `Provider module ${relativePath} does not satisfy the public provider contract: default export is not a function.`,
+    sourcePath,
+    'Default-export a provider factory receiving { invocation, signal }.',
+  )]);
 };

@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
-import type { CompiledAgentRoute, CompiledCliCommand } from '../routes/types.ts';
+import { providerKeyFromName } from '../routes/providers.ts';
+import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
 
 /**
  * Generated-entry templates: the framework-provided entry files consumers
@@ -453,6 +454,7 @@ export interface GeneratedRouteMcpEntryOptions {
 export interface GeneratedRouteFlightWorkerOptions {
   readonly artifactEpoch: string;
   readonly eventRoutes?: readonly NormalizedHook[];
+  readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
   readonly state?: NormalizedStateDefinition;
@@ -488,10 +490,25 @@ const eventRouteRecords = (
 ): readonly string[] => routes.map((route, index) =>
   `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
+const orderedProviders = (providers: readonly CompiledProvider[]): readonly CompiledProvider[] =>
+  [...providers].sort((left, right) => {
+    const byKey = providerKeyFromName(left.name).localeCompare(providerKeyFromName(right.name));
+    return byKey === 0 ? left.source.localeCompare(right.source) : byKey;
+  });
+
+const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
+  providers.map((provider, index) =>
+    `import * as provider${String(index)} from ${JSON.stringify(provider.source)};`);
+
+const providerRecords = (providers: readonly CompiledProvider[]): readonly string[] =>
+  providers.map((provider, index) =>
+    `  Object.freeze({ key: ${JSON.stringify(providerKeyFromName(provider.name))}, module: provider${String(index)}, source: ${JSON.stringify(provider.provenance.relativePath)} }),`);
+
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
   const routes = executableMcpRoutes(options.routes);
   const eventRoutes = options.eventRoutes ?? [];
+  const providers = orderedProviders(options.providers ?? []);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
@@ -500,6 +517,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...generatedStateImports(options.state, 'artifact'),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
+    ...providerImports(providers),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
@@ -508,6 +526,13 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...generatedStateOwner(options.state, 'artifact'),
+    ...(providers.length === 0
+      ? []
+      : [
+        'const providers = Object.freeze([',
+        ...providerRecords(providers),
+        ']);',
+      ]),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
     ...eventRouteRecords(eventRoutes, routes.length),
@@ -529,13 +554,30 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...(options.state === undefined
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
+    ...(providers.length === 0
+      ? []
+      : [
+        '    const providerValues = { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } };',
+        '    for (const provider of providers) {',
+        '      if (typeof provider.module.default !== \'function\') {',
+        '        throw new TypeError(`Context provider "${provider.key}" (${provider.source}) must default-export a factory.`);',
+        '      }',
+        '      try {',
+        '        providerValues[provider.key] = await provider.module.default({ invocation: message.invocation, signal: controller.signal });',
+        '      } catch (error) {',
+        '        throw new Error(`Context provider "${provider.key}" (${provider.source}) failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });',
+        '      }',
+        '    }',
+      ]),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
     '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
-    '      providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
+    ...(providers.length === 0
+      ? ['      providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },']
+      : ['      providers: providerValues,']),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),

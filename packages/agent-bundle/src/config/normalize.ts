@@ -1010,6 +1010,7 @@ export const normalizeProject = async (
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const commands = normalizeCommands(discovered, targetNames);
+  const providers = discovered.routeGraph?.providers ?? [];
   const rules = normalizeRules(discovered, targetNames);
   const state: NormalizedStateDefinition | undefined = discovered.state?.definition === undefined
     ? undefined
@@ -1044,6 +1045,7 @@ export const normalizeProject = async (
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
     ...(payloads.length === 0 ? {} : { payloads }),
+    ...(providers.length === 0 ? {} : { providers }),
     ...(rules.length === 0 ? {} : { rules }),
     runtime: normalizeRuntime(loaded),
     scripts,

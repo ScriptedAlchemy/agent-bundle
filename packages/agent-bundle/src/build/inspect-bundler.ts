@@ -222,6 +222,7 @@ const mcpEntryEntries = async (
           sourceInputs: [],
           virtualSource: generatedRouteFlightWorkerSource({
             artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
+            providers: model.providers ?? [],
             routes: generatedRoutes,
             serverName,
             ...(model.state === undefined ? {} : { state: model.state }),

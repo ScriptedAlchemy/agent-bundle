@@ -24,6 +24,8 @@ export type {
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentProviderContext,
+  AgentProviderFactory,
   AppRouteConfig,
   CanonicalAgentEvent,
   PromptConfig,
