@@ -9,6 +9,7 @@ export interface ProximityIntent {
 export interface ProximityConflict {
   readonly actorId: string;
   readonly summary: string;
+  readonly worktreeRoot: string;
 }
 
 const normalizeSegments = (value: string): string => {
@@ -69,6 +70,7 @@ export const findProximity = (
         actorId: actor.id,
         summary:
           `Worktrees ${currentWorktree} and ${actor.worktreeRoot} both intend to change path ${sharedPath}.`,
+        worktreeRoot: actor.worktreeRoot,
       });
     }
 
@@ -80,6 +82,7 @@ export const findProximity = (
         actorId: actor.id,
         summary:
           `Worktrees ${currentWorktree} and ${actor.worktreeRoot} both depend on ${sharedDependency}.`,
+        worktreeRoot: actor.worktreeRoot,
       });
     }
   }

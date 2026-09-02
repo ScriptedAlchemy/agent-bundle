@@ -81,7 +81,7 @@ const renderEventInput = async (
         providers: { gitWorktree: provider(worktreeRoot) },
         session: available({ sessionId: 'root-session' }, 'native'),
         state: bindings.state,
-        workspace: available({ root: '/repo' }, 'native'),
+        workspace: available({ root: worktreeRoot }, 'native'),
       },
       input,
     });
@@ -224,7 +224,7 @@ describe('worktree proximity journeys', () => {
       const snapshot = await bindings.noticeLedger.read();
       expect(snapshot.notices).toEqual([
         expect.objectContaining({
-          recipient: { actor: { id: 'agent-a' } },
+          recipient: { workspace: { root: worktrees.a } },
           state: 'pending',
         }),
       ]);
@@ -370,6 +370,7 @@ describe('worktree proximity journeys', () => {
         expect.objectContaining({ id: 'agent-b', worktreeRoot: worktrees.b }),
       ]),
       refusals: 0,
+      revision: expect.any(Number),
     });
   });
 

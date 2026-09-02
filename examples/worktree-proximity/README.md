@@ -95,20 +95,31 @@ mounted handle, they return an unavailable result and the route renders that
 reason as `Agent.Context`; there is no fallback write path.
 
 Notice admission runs once per event invocation in the render scope.
-Recipient matching uses the actor identity mounted in that request, and
-`(await agent()).notices.read()` exposes only deliveries attempted for that
-invocation. The coordinator status therefore reports topology facts only and
-does not claim a whole-ledger pending count.
+Generated event principals in v1 mount host, session, and workspace identity,
+but not actor identity. Proximity notices therefore target the recipient
+worktree through `recipient.workspace.root`, while their content and dedupe
+keys continue to name the target actor. Actor-directed delivery remains future
+work tied to actor-principal mounting in the #99/#233 lineage.
+`(await agent()).notices.read()` exposes only deliveries attempted for the
+current invocation. The coordinator status therefore reports topology facts
+only and does not claim a whole-ledger pending count.
 
 ## Evidence boundary
 
 The route-unit suite is in-process real-renderer evidence: it compiles the
 manifest, mounts the real state and notice handles, renders the event routes,
 and exercises the documented journeys against one shared durable runtime
-owner. The multi-process artifact/contract suite is the next slice and has
-not run here. Neither level is proof that Claude, Codex, or another commercial
-host dispatches a hook, preserves its envelope, or displays projected context
-in production.
+owner. The root integration-pool suite
+`packages/agent-bundle/tests/worktree-proximity-journeys.test.ts` builds the
+real artifact, invokes generated hooks as separate processes against linked
+Git worktrees, and proves warning, workspace-directed delivery, replay
+idempotency, and exact-revision restart durability through the generated MCP
+server. Journey 8 has two honesty layers: the generated wrapper fails closed
+on an identity-less `SubagentStart` for host contracts that require
+`agent_id`, while the route-unit suite proves the route records a refusal for
+host contracts that genuinely omit it. Neither level proves that Claude,
+Codex, or another commercial host dispatches a hook, preserves its envelope,
+or displays projected context in production.
 
 ## External-driver boundary
 
