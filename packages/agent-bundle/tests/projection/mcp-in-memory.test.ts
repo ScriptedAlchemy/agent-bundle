@@ -30,7 +30,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'echo', 'journal', 'publish-notice', 'unavailable']);
+    expect(surface.tools).toEqual(['catalog', 'echo', 'journal', 'publish-notice', 'strict-report', 'ticket', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -42,7 +42,10 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/echo',
         'tool:harness/journal',
         'tool:harness/publish-notice',
+        'tool:harness/strict-report',
+        'tool:harness/ticket',
         'tool:harness/unavailable',
+        'tool:harness/wait',
       ],
       serverName: 'harness',
     });

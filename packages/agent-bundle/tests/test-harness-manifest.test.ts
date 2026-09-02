@@ -74,7 +74,10 @@ describe('the compiled test manifest', () => {
       'tool:harness/echo',
       'tool:harness/journal',
       'tool:harness/publish-notice',
+      'tool:harness/strict-report',
+      'tool:harness/ticket',
       'tool:harness/unavailable',
+      'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
