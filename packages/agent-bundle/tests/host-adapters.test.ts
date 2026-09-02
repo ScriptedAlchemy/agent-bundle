@@ -241,6 +241,22 @@ const withClaudeManifestMetadata = (
   },
 });
 
+const withClaudeMarketplace = (
+  model: NormalizedPlugin,
+  marketplace: unknown,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/marketplace.config.ts' },
+      target: 'claude',
+      value: { marketplace },
+    },
+  },
+});
+
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -503,6 +519,226 @@ it('pins the closed Claude manifest metadata schema while keeping metadata free-
     { commands: './custom/deploy.md' },
   ]) {
     expect(validate({ ...manifest, ...declaration })).toBe(false);
+  }
+});
+
+it('enriches the generated Claude marketplace with the complete authored catalog overlay', async () => {
+  const model = withClaudeMarketplace(plugin, {
+    $schema: 'https://example.test/claude-marketplace.schema.json',
+    allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+    description: 'Acme review plugins.',
+    metadata: {
+      description: 'Legacy catalog description.',
+      pluginRoot: './plugins',
+      version: 'catalog-v2',
+    },
+    name: 'acme-review-tools',
+    owner: {
+      email: 'plugins@example.test',
+      name: 'Acme Developer Experience',
+      url: 'https://example.test/developer-experience',
+    },
+    plugin: {
+      author: {
+        email: 'review-tools@example.test',
+        name: 'Review Tools Team',
+        url: 'https://example.test/review-tools',
+      },
+      category: 'Developer Tools',
+      defaultEnabled: false,
+      description: 'Acme-specific code review automation.',
+      displayName: 'Acme Review Tools',
+      homepage: 'https://example.test/review-tools',
+      keywords: ['review', 'security'],
+      license: 'MIT',
+      metadata: { catalogId: 'review-tools', tier: 'team' },
+      relevance: {
+        signals: {
+          cli: ['git'],
+          cwd: ['packages/review'],
+          filesRead: ['**/*.ts'],
+          hosts: ['api.example.test'],
+          manifestDeps: [{
+            file: '[/\\\\]package\\.json$',
+            pattern: '"agent-bundle"\\s*:',
+          }],
+        },
+        topic: 'Code review',
+      },
+      repository: 'https://github.com/acme/review-tools',
+      strict: false,
+      tags: ['code-quality'],
+      version: 'catalog-v2',
+    },
+    renames: {
+      'legacy-review-tools': 'review-tools',
+      'removed-review-tools': null,
+    },
+    version: '2',
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const marketplace = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/marketplace.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(marketplace).toMatchObject({
+    kind: 'write',
+    sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/marketplace.config.ts'],
+  });
+  if (marketplace?.kind !== 'write') throw new Error('Expected an emitted Claude marketplace manifest.');
+  expect(JSON.parse(marketplace.content)).toEqual({
+    $schema: 'https://example.test/claude-marketplace.schema.json',
+    allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+    description: 'Acme review plugins.',
+    metadata: {
+      description: 'Legacy catalog description.',
+      pluginRoot: './plugins',
+      version: 'catalog-v2',
+    },
+    name: 'acme-review-tools',
+    owner: {
+      email: 'plugins@example.test',
+      name: 'Acme Developer Experience',
+      url: 'https://example.test/developer-experience',
+    },
+    plugins: [{
+      author: {
+        email: 'review-tools@example.test',
+        name: 'Review Tools Team',
+        url: 'https://example.test/review-tools',
+      },
+      category: 'Developer Tools',
+      defaultEnabled: false,
+      description: 'Acme-specific code review automation.',
+      displayName: 'Acme Review Tools',
+      homepage: 'https://example.test/review-tools',
+      keywords: ['review', 'security'],
+      license: 'MIT',
+      metadata: { catalogId: 'review-tools', tier: 'team' },
+      name: 'review-tools',
+      relevance: {
+        signals: {
+          cli: ['git'],
+          cwd: ['packages/review'],
+          filesRead: ['**/*.ts'],
+          hosts: ['api.example.test'],
+          manifestDeps: [{
+            file: '[/\\\\]package\\.json$',
+            pattern: '"agent-bundle"\\s*:',
+          }],
+        },
+        topic: 'Code review',
+      },
+      repository: 'https://github.com/acme/review-tools',
+      source: './',
+      strict: false,
+      tags: ['code-quality'],
+      version: 'catalog-v2',
+    }],
+    renames: {
+      'legacy-review-tools': 'review-tools',
+      'removed-review-tools': null,
+    },
+    version: '2',
+  });
+  await validateDocuments('claude', writeContents(model, 'claude'));
+});
+
+it.each([
+  {
+    code: 'claude.marketplace.declaration.invalid',
+    marketplace: [],
+  },
+  {
+    code: 'claude.marketplace.field.unknown',
+    marketplace: { unknown: true },
+  },
+  {
+    code: 'claude.marketplace.name.invalid',
+    marketplace: { name: 'Not Valid' },
+  },
+  {
+    code: 'claude.marketplace.name.reserved',
+    marketplace: { name: 'claude-plugins-official' },
+  },
+  {
+    code: 'claude.marketplace.owner.invalid',
+    marketplace: { owner: [] },
+  },
+  {
+    code: 'claude.marketplace.owner.email.invalid',
+    marketplace: { owner: { email: 'not-an-email' } },
+  },
+  {
+    code: 'claude.marketplace.allowCrossMarketplaceDependenciesOn.invalid',
+    marketplace: { allowCrossMarketplaceDependenciesOn: [] },
+  },
+  {
+    code: 'claude.marketplace.renames.invalid',
+    marketplace: { renames: { 'Legacy Plugin': 'review-tools' } },
+  },
+  {
+    code: 'claude.marketplace.plugin.field.unknown',
+    marketplace: { plugin: { source: { source: 'github', repo: 'acme/review-tools' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.headers.inapplicable',
+    marketplace: { plugin: { headers: { Authorization: 'Bearer catalog-token' } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.headersHelper.inapplicable',
+    marketplace: { plugin: { headersHelper: './scripts/headers.sh', strict: false } },
+  },
+  {
+    code: 'claude.marketplace.plugin.relevance.invalid',
+    marketplace: { plugin: { relevance: { signals: {} } } },
+  },
+  {
+    code: 'claude.marketplace.plugin.relevance.hosts.invalid',
+    marketplace: { plugin: { relevance: { signals: { hosts: ['https://api.example.test/path'] } } } },
+  },
+])('rejects malformed authored Claude marketplace input with $code', ({ code, marketplace }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeMarketplace(plugin, marketplace));
+  const document = writeContents(withClaudeMarketplace(plugin, marketplace), 'claude');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.stringMatching(/then rebuild\.$/u),
+    severity: 'error',
+    target: 'claude',
+  }));
+  expect(document['.claude-plugin/marketplace.json']).toBeUndefined();
+});
+
+it('pins the full closed Claude marketplace schema while retaining relative sources', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/marketplace.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    name: 'review-tools-marketplace',
+    owner: { email: 'plugins@example.test', name: 'Review Tools', url: 'https://example.test' },
+    plugins: [{
+      headersHelper: './scripts/headers.sh',
+      name: 'review-tools',
+      relevance: { signals: { hosts: ['api.example.test'] }, topic: 'Review' },
+      source: './',
+      strict: false,
+    }],
+  };
+
+  expect(validate(manifest), JSON.stringify(validate.errors)).toBe(true);
+  for (const invalid of [
+    { ...manifest, unknown: true },
+    { ...manifest, owner: { ...manifest.owner, unknown: true } },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], unknown: true }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: 'review-tools' }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: './../outside' }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], relevance: { signals: { unknown: ['value'] } } }] },
+  ]) {
+    expect(validate(invalid)).toBe(false);
   }
 });
 

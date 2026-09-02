@@ -108,6 +108,19 @@ const withClaudeDependencies = (dependencies: unknown): NormalizedPlugin => ({
   },
 });
 
+const withClaudeMarketplace = (marketplace: unknown): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      target: 'claude',
+      value: { marketplace },
+    },
+  },
+});
+
 const withClaudeManifestMetadata = (
   manifestMetadata: Readonly<Record<string, unknown>>,
 ): NormalizedPlugin => ({
@@ -268,6 +281,98 @@ nativeIt('accepts the emitted Claude marketplace under strict native validation'
     await writeClaudeArtifact(root, model);
     const validation = await runClaudeValidation(root, join(root, '.claude-plugin', 'marketplace.json'));
     expect(validation.code, validation.output).toBe(0);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('accepts the enriched Claude marketplace under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-enriched-'));
+
+  try {
+    await writeClaudeArtifact(root, withClaudeMarketplace({
+      allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+      metadata: { pluginRoot: './plugins' },
+      owner: {
+        email: 'plugins@example.test',
+        url: 'https://example.test/plugins',
+      },
+      plugin: {
+        author: {
+          email: 'review-tools@example.test',
+          name: 'Review Tools Team',
+          url: 'https://example.test/review-tools',
+        },
+        category: 'Developer Tools',
+        defaultEnabled: false,
+        displayName: 'Review Tools',
+        metadata: { catalogId: 'review-tools' },
+        relevance: {
+          signals: {
+            cli: ['git'],
+            hosts: ['api.example.test'],
+          },
+          topic: 'Code review',
+        },
+        strict: true,
+        tags: ['review'],
+      },
+      renames: { 'legacy-review-tools': 'review-tools' },
+      version: '2',
+    }));
+    const validation = await runClaudeValidation(
+      root,
+      join(root, '.claude-plugin', 'marketplace.json'),
+    );
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records whether strict native validation enforces marketplace allowlist entry names', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-allowlist-invalid-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    const marketplacePath = join(root, '.claude-plugin', 'marketplace.json');
+    const marketplace = JSON.parse(await readFile(marketplacePath, 'utf8')) as Record<string, unknown>;
+    marketplace['allowCrossMarketplaceDependenciesOn'] = [''];
+    await writeFile(marketplacePath, `${JSON.stringify(marketplace)}\n`);
+    const validation = await runClaudeValidation(root, marketplacePath);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('allowCrossMarketplaceDependenciesOn');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict native validation rejects archive authentication on a relative source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-marketplace-relative-auth-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    const marketplacePath = join(root, '.claude-plugin', 'marketplace.json');
+    const marketplace = JSON.parse(await readFile(marketplacePath, 'utf8')) as {
+      plugins: Record<string, unknown>[];
+    };
+    marketplace.plugins[0]!['headers'] = { Authorization: 'Bearer test-token' };
+    marketplace.plugins[0]!['headersHelper'] = 'printf \'{}\'';
+    marketplace.plugins[0]!['strict'] = false;
+    await writeFile(marketplacePath, `${JSON.stringify(marketplace)}\n`);
+    const validation = await runClaudeValidation(root, marketplacePath);
+
+    // The fields are documented only for archive downloads. The host reports
+    // their inapplicability as a warning, and --strict promotes that warning
+    // to failure; URL-capable sources remain a separate follow-up.
+    expect(validation.code).not.toBe(0);
+    expect(validation.output).toContain('headersHelper');
+    expect(validation.output).toContain('only apply to "archive" sources');
+    expect(validation.output).toContain('--strict treats warnings as errors');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

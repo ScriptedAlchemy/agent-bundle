@@ -1886,6 +1886,70 @@ it('validates Claude plugin artifacts carrying the pinned userConfig contract', 
   }
 });
 
+it('validates an enriched Claude marketplace against the full closed pinned contract', async () => {
+  const registry = createDefaultRegistry();
+  const target = targetFromRegistry(registry, 'claude');
+  const marketplacePath = 'claude/.claude-plugin/marketplace.json';
+  const pluginPath = 'claude/.claude-plugin/plugin.json';
+  const plugin = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude marketplace artifact fixture.',
+    name: 'claude-marketplace-artifact',
+    version: '1.0.0',
+  };
+  const marketplace = {
+    allowCrossMarketplaceDependenciesOn: ['acme-shared'],
+    name: 'claude-marketplace-artifacts',
+    owner: {
+      email: 'plugins@example.test',
+      name: 'Agent Bundle',
+      url: 'https://example.test/plugins',
+    },
+    plugins: [{
+      metadata: { catalogId: 'claude-marketplace-artifact' },
+      name: 'claude-marketplace-artifact',
+      relevance: { signals: { hosts: ['api.example.test'] } },
+      source: './',
+      strict: true,
+    }],
+    renames: { 'legacy-marketplace-artifact': 'claude-marketplace-artifact' },
+  };
+  const validFiles = [
+    { contents: '# Install claude-marketplace-artifact\n', kind: 'generated' as const, path: 'claude/INSTALL.md' },
+    { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: marketplacePath },
+    { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: pluginPath },
+  ];
+  const root = await writeArtifact(validFiles, true, [target]);
+
+  try {
+    expect(await validateArtifact({ artifactRoot: root, registry })).toEqual([]);
+
+    const invalidFiles = [
+      validFiles[0]!,
+      {
+        contents: `${JSON.stringify({
+          ...marketplace,
+          plugins: [{ ...marketplace.plugins[0], source: { repo: 'acme/plugin', source: 'github' } }],
+        })}\n`,
+        kind: 'generated' as const,
+        path: marketplacePath,
+      },
+      validFiles[2]!,
+    ];
+    await writeFile(join(root, marketplacePath), invalidFiles[1]!.contents);
+    await writeFile(
+      join(root, 'agent-bundle.manifest.json'),
+      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
+    );
+
+    expect(await validateArtifact({ artifactRoot: root, registry })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6012', generatedPath: marketplacePath, target: 'claude' }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('validates a canonically rehashed Codex marketplace at its emitted path', async () => {
   const registry = createDefaultRegistry();
   const target = targetFromRegistry(registry, 'codex');

@@ -187,6 +187,8 @@ export interface StandardPluginArtifactsInput {
   readonly isSelected: (targets: readonly string[]) => boolean;
   readonly marketplace?: Record<string, unknown>;
   readonly marketplaceRelativePath: string;
+  /** Additional authored inputs that select fields in the marketplace document. */
+  readonly marketplaceSourceInputs?: readonly string[];
   readonly marketplaceValid: boolean;
   readonly mcp?: Record<string, unknown>;
   /** Artifact-relative path for the MCP document; defaults to the plugin-root `.mcp.json` convention. */
@@ -283,7 +285,11 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       content: `${stableJson(marketplace)}\n`,
       kind: 'write',
       relativePath: marketplaceRelativePath,
-      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath, ...targetSourceInputs),
+      sourceInputs: sourceInputs(
+        model.metadata.provenance.sourcePath,
+        ...targetSourceInputs,
+        ...(input.marketplaceSourceInputs ?? []),
+      ),
     });
   }
   for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
