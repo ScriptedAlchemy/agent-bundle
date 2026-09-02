@@ -68,16 +68,45 @@ const createBundle = async (
   await writeFile(join(bundle, 'payload.txt'), 'payload\n');
   if (host === 'claude') {
     await Promise.all([
-      writeJson(join(bundle, '.claude-plugin/plugin.json'), { name: 'doctor-fixture', version }),
+      writeJson(join(bundle, '.claude-plugin/plugin.json'), {
+        author: { name: 'Doctor Fixture' },
+        description: 'Doctor fixture plugin.',
+        name: 'doctor-fixture',
+        version,
+      }),
       writeJson(join(bundle, '.claude-plugin/marketplace.json'), {
         name: 'doctor-fixture-marketplace',
+        owner: { name: 'Doctor Fixture' },
+        plugins: [{ name: 'doctor-fixture', source: './' }],
       }),
     ]);
   } else if (host === 'codex') {
     await Promise.all([
-      writeJson(join(bundle, '.codex-plugin/plugin.json'), { name: 'doctor-fixture', version }),
+      writeJson(join(bundle, '.codex-plugin/plugin.json'), {
+        author: { name: 'Doctor Fixture' },
+        description: 'Doctor fixture plugin.',
+        interface: {
+          capabilities: ['skills'],
+          category: 'Productivity',
+          defaultPrompt: ['Use the doctor fixture.'],
+          developerName: 'Doctor Fixture',
+          displayName: 'Doctor Fixture',
+          longDescription: 'Doctor fixture plugin.',
+          shortDescription: 'Doctor fixture plugin.',
+        },
+        name: 'doctor-fixture',
+        skills: './skills/',
+        version,
+      }),
       writeJson(join(bundle, '.agents/plugins/marketplace.json'), {
+        interface: { displayName: 'Doctor Fixture' },
         name: 'doctor-fixture-marketplace',
+        plugins: [{
+          category: 'Productivity',
+          name: 'doctor-fixture',
+          policy: { authentication: 'ON_INSTALL', installation: 'AVAILABLE' },
+          source: { path: './', source: 'local' },
+        }],
       }),
     ]);
   } else {
@@ -85,6 +114,8 @@ const createBundle = async (
   }
   return bundle;
 };
+
+const staticDiagnosticCodes = new Set(['AB7319', 'AB7320']);
 
 const hostReport = (report: DoctorReport, host: DoctorHost) => {
   const found = report.hosts.find((entry) => entry.host === host);
@@ -197,6 +228,16 @@ it('inventories all pinned Cursor manifest candidates in loader order', async ()
       ],
       status: 'known',
     });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7320')).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('.claude-plugin/plugin.json'),
+        severity: 'info',
+      }),
+      expect.objectContaining({
+        message: expect.stringContaining('plugin.json'),
+        severity: 'info',
+      }),
+    ]);
   } finally {
     await fixture.cleanup();
   }
@@ -206,7 +247,10 @@ it('accepts a versionless Cursor inventory manifest as installed', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
   try {
-    await writeJson(join(installRoot, 'versionless', 'plugin.json'), { name: 'versionless' });
+    await writeJson(
+      join(installRoot, 'versionless', '.cursor-plugin/plugin.json'),
+      { name: 'versionless' },
+    );
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       home: fixture.home,
@@ -216,7 +260,7 @@ it('accepts a versionless Cursor inventory manifest as installed', async () => {
       (entry) => entry.entry === 'versionless',
     );
     expect(finding).toMatchObject({
-      manifest: 'plugin.json',
+      manifest: '.cursor-plugin/plugin.json',
       name: 'versionless',
       state: 'installed',
     });
@@ -234,7 +278,10 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
   const store = 'project-tasks-0123456789abcdef.sqlite';
   try {
     await Promise.all([
-      writeJson(join(pluginRoot, 'plugin.json'), { name: 'stateful', version: '1.0.0' }),
+      writeJson(
+        join(pluginRoot, '.cursor-plugin/plugin.json'),
+        { name: 'stateful', version: '1.0.0' },
+      ),
       mkdir(stateRoot, { recursive: true }),
     ]);
     await Promise.all([
@@ -316,7 +363,10 @@ it('warns when an installed bundle state directory cannot be read', async () => 
   const fixture = await temporaryDoctor();
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'blocked-state');
   try {
-    await writeJson(join(pluginRoot, 'plugin.json'), { name: 'blocked-state', version: '1.0.0' });
+    await writeJson(
+      join(pluginRoot, '.cursor-plugin/plugin.json'),
+      { name: 'blocked-state', version: '1.0.0' },
+    );
     await writeFile(join(pluginRoot, 'state'), 'not a directory');
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
@@ -382,6 +432,259 @@ it('reports corrupt, symlinked, and interrupted Cursor inventory entries', async
       expect.objectContaining({ code: 'AB7304', severity: 'error' }),
       expect.objectContaining({ code: 'AB7305', severity: 'warning' }),
     ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('accepts valid installed and --from Cursor bytes without static findings', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    await mkdir(dirname(destination), { recursive: true });
+    await cp(bundle, destination, { recursive: true });
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ entry: 'doctor-fixture', state: 'installed' }),
+    ]);
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('installed');
+    expect(report.diagnostics.filter((entry) => staticDiagnosticCodes.has(entry.code))).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('marks an installed Cursor plugin corrupt when pinned-schema validation fails', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'schema-invalid');
+  try {
+    await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), {
+      name: 'schema-invalid',
+      surprise: true,
+    });
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ entry: 'schema-invalid', state: 'corrupt' }),
+    ]);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7320',
+        message: expect.stringContaining('AB6027'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('marks an installed Cursor plugin corrupt when a symlink escapes the local plugin root', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'escaping-link');
+  const outside = join(fixture.root, 'outside.txt');
+  try {
+    await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'escaping-link' });
+    await writeFile(outside, 'outside\n');
+    await symlink(outside, join(pluginRoot, 'outside-link'));
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ entry: 'escaping-link', state: 'corrupt' }),
+    ]);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7320',
+        message: expect.stringContaining('AB6028'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('allows an installed Cursor plugin symlink to another entry inside the local plugin root', async () => {
+  const fixture = await temporaryDoctor();
+  const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
+  const pluginRoot = join(installRoot, 'linked-inside');
+  const siblingRoot = join(installRoot, 'shared-target');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, 'plugin.json'), { name: 'linked-inside' }),
+      writeJson(join(siblingRoot, '.cursor-plugin/plugin.json'), { name: 'shared-target' }),
+    ]);
+    await writeFile(join(siblingRoot, 'shared.txt'), 'shared\n');
+    await symlink(join(siblingRoot, 'shared.txt'), join(pluginRoot, 'shared-link'));
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ entry: 'linked-inside', state: 'installed' }),
+      expect.objectContaining({ entry: 'shared-target', state: 'installed' }),
+    ]);
+    expect(report.diagnostics.filter((entry) =>
+      entry.code === 'AB7320' && entry.severity === 'error')).toEqual([]);
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7320',
+        message: expect.stringContaining('plugin.json'),
+        severity: 'info',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports invalid --from Cursor bytes and keeps deterministic validator order', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await writeJson(join(bundle, '.cursor-plugin/plugin.json'), {
+      description: '${CURSOR_PLUGIN_ROOT} is invalid here',
+      name: 'doctor-fixture',
+      surprise: true,
+      version: '1.2.3',
+    });
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const findings = report.diagnostics.filter((entry) => entry.code === 'AB7319');
+
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('corrupt');
+    expect(findings.map((entry) => entry.message)).toEqual([
+      expect.stringContaining('AB6027'),
+      expect.stringContaining('AB6028'),
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('validates --from Codex bytes without running the live schema generator', async () => {
+  const fixture = await temporaryDoctor();
+  const calls: unknown[] = [];
+  try {
+    const bundle = await createBundle(fixture.root, 'codex');
+    await writeJson(join(bundle, '.codex-plugin/plugin.json'), {
+      name: 'Invalid Codex Name',
+      version: '1.2.3',
+    });
+
+    const report = await runDoctor({
+      commandRunner: async (request) => {
+        calls.push(request);
+        return commandResult({ stdout: 'codex 0.147.0\n' });
+      },
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['codex'],
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ args: ['--version'], executable: 'codex' }),
+    ]);
+    expect(hostReport(report, 'codex').bundle?.state).toBe('corrupt');
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7319',
+        message: expect.stringContaining('AB6032'),
+        severity: 'error',
+        target: 'codex',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('validates --from Claude documents from pinned bytes without a new CLI proof', async () => {
+  const fixture = await temporaryDoctor();
+  const calls: unknown[] = [];
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    await writeJson(join(bundle, '.claude-plugin/plugin.json'), {
+      name: 'doctor-fixture',
+      version: '1.2.3',
+    });
+
+    const report = await runDoctor({
+      commandRunner: async (request) => {
+        calls.push(request);
+        return request.args[0] === '--version'
+          ? commandResult({ stdout: 'claude 2.1.250\n' })
+          : commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+      },
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ args: ['--version'], executable: 'claude' }),
+      expect.objectContaining({
+        args: ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
+        executable: 'claude',
+      }),
+    ]);
+    expect(hostReport(report, 'claude').bundle?.state).toBe('corrupt');
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7319',
+        message: expect.stringContaining('.claude-plugin/plugin.json'),
+        severity: 'error',
+        target: 'claude',
+      }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('skips static validation when Cursor home and --from are absent', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(hostReport(report, 'cursor').probe.status).toBe('unavailable');
+    expect(hostReport(report, 'cursor').inventory.status).toBe('skipped');
+    expect(hostReport(report, 'cursor').bundle).toBeUndefined();
+    expect(report.diagnostics.filter((entry) => staticDiagnosticCodes.has(entry.code))).toEqual([]);
   } finally {
     await fixture.cleanup();
   }

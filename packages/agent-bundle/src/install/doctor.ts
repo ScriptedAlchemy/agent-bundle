@@ -9,6 +9,12 @@ import {
   type DiagnosticSeverity,
 } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
+import { validateClaudePluginFiles } from '../host-contracts/claude-plugin-validation.ts';
+import { validateCodexPluginFiles } from '../host-contracts/codex-plugin-validation.ts';
+import {
+  validateCursorPluginFiles,
+  validateCursorPluginSymlinks,
+} from '../host-contracts/cursor-plugin-validation.ts';
 import type {
   BoundedChildProcessRequest,
   BoundedChildProcessResult,
@@ -230,6 +236,47 @@ const readString = (
     throw new Error(`${kind} must declare a nonempty ${key}.`);
   }
   return value;
+};
+
+interface DoctorStaticValidationIssue {
+  readonly code: string;
+  readonly message: string;
+  readonly severity: DiagnosticSeverity;
+}
+
+type DoctorStaticDiagnosticCode = 'AB7319' | 'AB7320';
+
+const staticValidationDiagnostics = (
+  code: DoctorStaticDiagnosticCode,
+  host: DoctorHost,
+  root: string,
+  issues: readonly DoctorStaticValidationIssue[],
+): readonly Diagnostic[] => freezeDiagnostics(issues.map((issue) => diagnostic(
+  code,
+  `Static validation of ${host} bytes at ${JSON.stringify(root)} reported ${issue.code}: ${issue.message}`,
+  code === 'AB7319'
+    ? `Rebuild the ${host} bundle from valid source bytes, then rerun Doctor.`
+    : 'Reinstall the Cursor plugin from a freshly validated bundle, then rerun Doctor.',
+  issue.severity,
+  host,
+)));
+
+const validateBundleFiles = async (
+  root: string,
+  host: DoctorHost,
+): Promise<readonly DoctorStaticValidationIssue[]> => {
+  switch (host) {
+    case 'claude':
+      return validateClaudePluginFiles({ pluginDirectory: root, target: host });
+    case 'codex':
+      return validateCodexPluginFiles({ pluginDirectory: root, target: host });
+    case 'cursor':
+      return validateCursorPluginFiles({ pluginDirectory: root, target: host });
+    default: {
+      const exhaustive: never = host;
+      throw new TypeError(`Unknown Doctor host ${String(exhaustive)}.`);
+    }
+  }
 };
 
 export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
@@ -586,6 +633,35 @@ const cursorInventory = async (
       ));
       continue;
     }
+    const staticIssues = manifest.manifest === cursorManifestCandidates[0]
+      ? await validateCursorPluginFiles({
+        containmentRoot: installRoot,
+        pluginDirectory: path,
+        target: 'cursor',
+      })
+      : await validateCursorPluginSymlinks({
+        containmentRoot: installRoot,
+        pluginDirectory: path,
+        target: 'cursor',
+      });
+    const staticDiagnostics = staticValidationDiagnostics(
+      'AB7320',
+      'cursor',
+      path,
+      staticIssues,
+    );
+    if (manifest.manifest !== cursorManifestCandidates[0]) {
+      diagnostics.push(diagnostic(
+        'AB7320',
+        `Cursor plugin entry ${JSON.stringify(path)} uses loader manifest flavor ` +
+          `${JSON.stringify(manifest.manifest)}; no Cursor-side pinned static document contract exists for that flavor.`,
+        'Use that manifest flavor\'s ecosystem validator when static document proof is required; ' +
+          'Doctor still checked Cursor local-root symlink containment.',
+        'info',
+        'cursor',
+      ));
+    }
+    diagnostics.push(...staticDiagnostics);
     const durableState = await inspectDurableState(path, 'cursor');
     if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
     findings.push({
@@ -594,7 +670,7 @@ const cursorInventory = async (
       manifest: manifest.manifest,
       name: manifest.name,
       path,
-      state: 'installed',
+      state: staticDiagnostics.some((entry) => entry.severity === 'error') ? 'corrupt' : 'installed',
       ...(manifest.version === undefined ? {} : { version: manifest.version }),
     });
   }
@@ -1122,11 +1198,18 @@ const doctorHost = async (
   if (options.from !== undefined) {
     try {
       const identity = await readIdentity(options.from, host);
+      const staticDiagnostics = staticValidationDiagnostics(
+        'AB7319',
+        host,
+        identity.bundleRoot,
+        await validateBundleFiles(identity.bundleRoot, host),
+      );
       const checked = host === 'cursor'
         ? await cursorBundle(identity, home)
         : host === 'claude'
           ? await claudeBundle(identity, probed.probe, run)
           : codexBundle(identity);
+      diagnostics.push(...staticDiagnostics);
       diagnostics.push(...checked.diagnostics);
       if (checked.finding === undefined) {
         throw new TypeError(`The ${host} bundle check returned no finding.`);
@@ -1135,6 +1218,9 @@ const doctorHost = async (
       if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
       bundle = Object.freeze({
         ...checked.finding,
+        ...(staticDiagnostics.some((entry) => entry.severity === 'error')
+          ? { state: 'corrupt' as const }
+          : {}),
         ...(durableState === undefined ? {} : { durableState }),
       });
     } catch (error) {

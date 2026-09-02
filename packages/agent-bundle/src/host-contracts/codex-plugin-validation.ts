@@ -63,6 +63,11 @@ export interface ValidateCodexPluginOptions {
   readonly target: string;
 }
 
+export interface ValidateCodexPluginFilesOptions {
+  readonly pluginDirectory: string;
+  readonly target: string;
+}
+
 interface PinnedDocumentContract {
   readonly path: string;
   readonly required: boolean;
@@ -181,6 +186,11 @@ const validatePinnedDocuments = async (
   }
   return freezeDiagnostics(diagnostics);
 };
+
+export const validateCodexPluginFiles = async (
+  options: ValidateCodexPluginFilesOptions,
+): Promise<readonly Diagnostic[]> =>
+  validatePinnedDocuments(resolve(options.pluginDirectory), options.target);
 
 const generatedJsonFiles = async (directory: string): Promise<readonly string[]> =>
   Object.freeze((await readdir(directory, { recursive: true }))
@@ -388,7 +398,7 @@ export const validateCodexPlugin = async (
       options.target,
       'Use the vendored pinned schema diagnostics until Codex publishes a plugin validation developer tool.',
     ),
-    ...await validatePinnedDocuments(pluginDirectory, options.target),
+    ...await validateCodexPluginFiles({ pluginDirectory, target: options.target }),
     ...await schemaGenerationDiagnostics({
       cwd,
       executable,
