@@ -139,6 +139,15 @@ export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot =
 };
 
 /**
+ * The version a project carries while it has no release identity at all:
+ * neither an authored `plugin.version` nor a valid `package.json` version.
+ * It is a development-only value — `agent-bundle build` refuses to package
+ * a project resting on it (AB4013), so it can never reach a release
+ * artifact.
+ */
+export const developmentFallbackVersion = '0.0.0-dev';
+
+/**
  * The human display label for the release-version axis. Without a package
  * version there is no release identity, so the label is a clearly marked
  * development fallback over the source revision — never a semantic version.
@@ -147,7 +156,7 @@ export const projectVersionLabel = (
   context: Pick<ProjectContext, 'packageVersion' | 'revision'>,
 ): string =>
   context.packageVersion ??
-  `0.0.0-dev.${context.revision.slice(0, 12)} (development fallback — no package.json version)`;
+  `${developmentFallbackVersion}.${context.revision.slice(0, 12)} (development fallback — no package.json version)`;
 
 export interface CreateProjectContextOptions {
   readonly configPath: string;

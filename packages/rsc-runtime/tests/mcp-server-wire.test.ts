@@ -60,9 +60,39 @@ const removeOperation = defineOperation({
   resultSchema: z.object({ removed: z.boolean() }).strict(),
 });
 
+const contextOperation = defineOperation({
+  execute: async (_input, context) => {
+    if (context.request === undefined) throw new Error('request context was not installed');
+    return {
+      actor: context.request.actor,
+      host: context.request.host,
+      session: context.request.session,
+      workspace: context.request.workspace,
+    };
+  },
+  id: 'context',
+  inputSchema: z.object({
+    host: z.string().optional(),
+    session: z.string().optional(),
+  }).strict(),
+  mcp: {
+    description: 'Observe request context.',
+    name: 'context',
+    readOnly: true,
+    server: 'demo',
+  },
+  render: (result) => createElement(Mcp.Result, { structuredContent: result }),
+  resultSchema: z.object({
+    actor: z.unknown(),
+    host: z.unknown(),
+    session: z.unknown(),
+    workspace: z.unknown(),
+  }).strict(),
+});
+
 const application = defineRscApplication({
   name: 'wire-demo',
-  operations: [searchOperation, removeOperation],
+  operations: [searchOperation, removeOperation, contextOperation],
   version: '1.0.0',
 });
 
@@ -87,6 +117,7 @@ const connectClient = async (): Promise<{
 }> => {
   const server = createRscMcpServer(application, 'demo');
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  serverTransport.sessionId = 'wire-session';
   const wireResults = new Map<number | string, Record<string, unknown>>();
   const originalSend = serverTransport.send.bind(serverTransport);
   serverTransport.send = async (message, options) => {
@@ -106,7 +137,7 @@ const connectClient = async (): Promise<{
 const wireToolListing = async (): Promise<Map<string, WireTool>> => {
   const { client, wireResults } = await connectClient();
   const parsed = await client.listTools();
-  expect(parsed.tools).toHaveLength(2);
+  expect(parsed.tools).toHaveLength(3);
   const listing = [...wireResults.values()].find((result) => Array.isArray(result.tools));
   const tools = (listing?.tools ?? []) as readonly WireTool[];
   return new Map(tools.map((tool) => [tool.name, tool]));
@@ -157,5 +188,30 @@ describe('createRscMcpServer wire listing', () => {
     const wireCall = [...wireResults.values()].find((result) => result.structuredContent !== undefined);
     expect(wireCall?.structuredContent).toEqual({ count: 3 });
     expect(Object.hasOwn(wireCall?.structuredContent as object, 'note')).toBe(false);
+  });
+
+  it('exposes native client and session identity without accepting lookalikes from tool input', async () => {
+    const { client } = await connectClient();
+    const result = await client.callTool({
+      arguments: { host: 'spoofed-host', session: 'spoofed-session' },
+      name: 'context',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      actor: { reason: 'not-provided', state: 'unavailable' },
+      host: { source: 'native', state: 'available', value: { name: 'wire-listing-test' } },
+      session: {
+        source: 'native',
+        state: 'available',
+        value: { sessionId: 'wire-session' },
+      },
+      workspace: { reason: 'not-provided', state: 'unavailable' },
+    });
+    expect(result.structuredContent).not.toEqual(expect.objectContaining({
+      host: expect.objectContaining({ value: { name: 'spoofed-host' } }),
+    }));
+    expect(result.structuredContent).not.toEqual(expect.objectContaining({
+      session: expect.objectContaining({ value: { sessionId: 'spoofed-session' } }),
+    }));
   });
 });

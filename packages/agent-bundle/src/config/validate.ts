@@ -6,6 +6,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
+  developmentFallbackVersion,
   snapshotPackageIdentity,
   type PackageIdentityIssueKind,
 } from '../core/project-context.ts';
@@ -1595,6 +1596,13 @@ export interface ValidateSourceOptions {
    * false to skip the walk.
    */
   readonly payloadFreshness?: boolean;
+  /**
+   * Judge the project as a release build (`agent-bundle build`) rather than
+   * development preparation. Development flows keep the labeled version
+   * fallback; a release refuses to package a project that has no release
+   * identity at all (AB4013).
+   */
+  readonly release?: boolean;
 }
 
 /**
@@ -1621,7 +1629,7 @@ const packageIdentityIssueCode = (kind: PackageIdentityIssueKind): string => {
   }
 };
 
-const validatePackageIdentity = (loaded: LoadedConfig): Diagnostic[] => {
+const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const identity = snapshotPackageIdentity(loaded.context.projectRoot);
   const packageJsonPath = join(loaded.context.projectRoot, 'package.json');
@@ -1650,6 +1658,20 @@ const validatePackageIdentity = (loaded: LoadedConfig): Diagnostic[] => {
       loaded.configPath,
       'Align plugin.version with the package.json version, or update package.json.',
     ));
+  }
+  const declared = typeof pluginVersion === 'string' && pluginVersion.trim().length > 0;
+  if (release && !declared && identity.packageVersion === undefined) {
+    // A development-only fallback may exist, but it can never produce a
+    // release artifact (issue #94): with no authored plugin.version and no
+    // valid package.json version, this project has no release identity to
+    // stamp into manifests, host projections, or compiled surfaces.
+    diagnostics.push({
+      code: 'AB4013',
+      message: 'This project has no release version: plugin.version is omitted and package.json declares no valid semantic version, so the build would package the development fallback.',
+      recovery: `Add a valid semantic "version" to package.json, or declare plugin.version in the config. Development commands keep the labeled ${developmentFallbackVersion} fallback.`,
+      severity: 'error',
+      sourcePath: packageJsonPath,
+    });
   }
   return diagnostics;
 };
@@ -1754,11 +1776,14 @@ export const validateSource = (
       sourceDiagnostic('AB4000', 'Plugin metadata must define a nonempty name.', loaded.configPath),
     );
   }
-  if (typeof pluginVersion !== 'string' || pluginVersion.trim().length === 0) {
+  // `plugin.version` is optional since #94 stage 3: omitting it derives the
+  // version from package.json. Declaring it as anything but a nonempty
+  // string is still a mistake with no defensible reading.
+  if (pluginVersion !== undefined && (typeof pluginVersion !== 'string' || pluginVersion.trim().length === 0)) {
     diagnostics.push(
       sourceDiagnostic(
         'AB4001',
-        'Plugin metadata must define a nonempty version.',
+        'Plugin metadata version must be a nonempty string when it is declared; omit it to derive the version from package.json.',
         loaded.configPath,
       ),
     );
@@ -1790,7 +1815,7 @@ export const validateSource = (
 
   const payloads = declaredPayloads(loaded, registry);
   diagnostics.push(...validateAssets(loaded));
-  diagnostics.push(...validatePackageIdentity(loaded));
+  diagnostics.push(...validatePackageIdentity(loaded, options?.release === true));
   diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));

@@ -14,7 +14,13 @@ export interface AgentBundlePluginConfig {
   /** Project-relative path to a logo image copied into host artifacts that support it. */
   logo?: string;
   name: string;
-  version: string;
+  /**
+   * The host-facing declared version. Omit it to derive the version from the
+   * project's `package.json` (issue #94 stage 3): package.json is
+   * authoritative for release identity, and a declared value that disagrees
+   * with it reports the AB4008 warning.
+   */
+  version?: string;
   [key: string]: unknown;
 }
 

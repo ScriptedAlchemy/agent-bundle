@@ -131,6 +131,54 @@ unavailable-shaped value instead of throwing. `processLifetime` is reserved
 for the framework-owned process identity and hit counter, so provider filenames
 must not derive that key.
 
+### Handler request context
+
+Conventional route components receive only their surface props, such as
+`{ input, signal }`. They read transport-owned request context with
+`await agent()` from `@agent-bundle/runtime`. The handle exposes the
+invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
+Each identity axis is `Observed`: transports publish an `available` value and
+source when they know it, or `unavailable` with a typed reason when they do
+not. Generated event scopes currently mount no actor principal, so event
+routes observe actor as unavailable rather than receiving a fabricated value.
+
+Handlers authored with `defineOperation` receive the same handle as optional
+`context.request` in the second `execute` argument:
+
+```ts
+const status = defineOperation({
+  // ...
+  execute: async (input, context) => {
+    const request = context.request;
+    // request is the identical handle returned by await agent() in this invocation.
+    return inspect(input, request);
+  },
+});
+```
+
+The runtime supplies `context.request` inside `runAgentRequest`; direct
+operation calls outside a request scope leave it absent. Transport context is
+separate from validated business input, so fields named `host`, `session`, or
+similar inside `input` cannot override request identity.
+
+Route-unit tests inject identity through the harness context seam:
+
+```ts
+import { available } from '@agent-bundle/runtime';
+import { renderRoute } from 'agent-bundle/test';
+
+await renderRoute('tool:curator/status', {
+  context: {
+    host: available({ name: 'test-host' }, 'native'),
+    session: available({ sessionId: 'test-session' }, 'native'),
+  },
+  input: { subject: 'library' },
+});
+```
+
+The same seam accepts `actor`, `workspace`, and `capabilities`; tests can use
+`unavailable(...)` to pin a transport's honest absence semantics.
+
 ### Migration nudges
 
 Source validation reports **informational** nudges (never errors — migrations
@@ -307,6 +355,35 @@ Export detection is a static scan of the entry source (comment-, string-, and
 template-safe). The generated shells re-verify the export shape at runtime
 with a clear error.
 
+## `agent-bundle/meta` — build-time release identity
+
+Plugin code reads its own identity from the framework instead of maintaining
+a hand-written `src/lib/version.ts`:
+
+```ts
+import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
+```
+
+`version` is the resolved plugin version: the authored `plugin.version` when
+declared, otherwise the `package.json` version. `name` is the host-native
+plugin slug — never the npm package name. `packageName` and `packageVersion`
+are the validated npm axes, `undefined` for an unpackaged development
+project. Every value is exactly what artifact manifests, `inspect`, and dev
+status report for the same build.
+
+The compiler replaces the specifier in **every** compiled surface: artifact
+scripts, the routed CLI, MCP entries, hook wrappers, and the package build
+(all through Rslib), plus browser MCP App view bundles (through Rsbuild). The
+module is a reserved specifier, so the `tools` hatch cannot externalize it,
+and no emitted bundle can still carry an unresolved import of it.
+
+Types ship with the package export, so no generated declaration file is
+involved. Outside Agent Bundle compilation the published module throws rather
+than reporting a fabricated identity — a plugin slug exists only in the
+config, and a runtime guess at it would silently disagree with the artifact.
+A release build refuses a project with no release version at all (`AB4013`),
+so a compiled artifact never carries the development fallback.
+
 ## Prebuilt payloads — package what you compiled yourself
 
 Some projects legitimately own their compilation — a coordinated
@@ -398,8 +475,8 @@ A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
 overriding the contract. Reserved module specifiers are protected the same
 way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
-registry specifier (such as `agent-bundle/mcp-apps`) fails the build with a
-hard diagnostic — at config inspection for statically visible `externals`,
+module specifier (`agent-bundle/meta`, or a registry specifier such as
+`agent-bundle/mcp-apps`) fails the build with a hard diagnostic — at config inspection for statically visible `externals`,
 and through a post-build scan of the emitted bundle for function-form
 `externals` — because generated executables must stay self-contained. The
 hatch customizes *how code compiles*, never *what the artifact promises*.

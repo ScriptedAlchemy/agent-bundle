@@ -270,8 +270,8 @@ it('derives the Audiobook Curator release identity from package.json as the one 
   const inspection = await inspect({ root });
   expect(inspection.state).toBe('ready');
   if (inspection.state !== 'ready') throw new Error('unreachable');
-  // package.json declares 1.0.0 once; both derived axes and the config's
-  // still-required plugin.version agree, so no AB4008 mismatch surfaces.
+  // package.json declares 1.0.0 once and the config declares no
+  // plugin.version, so the model version is inferred and cannot mismatch.
   expect(inspection.projectContext.packageName).toBe('@agent-bundle-example/audiobook-curator');
   expect(inspection.projectContext.packageVersion).toBe('1.0.0');
   expect(inspection.model.metadata).toMatchObject({

@@ -4,6 +4,7 @@ import type { RenderedRouteProvenance } from './types.ts';
 export type AgentTestErrorCode =
   | 'assertion-failed'
   | 'command-not-found'
+  | 'contract-violation'
   | 'deleted-source-unverified'
   | 'invalid-input'
   | 'invalid-route-module'

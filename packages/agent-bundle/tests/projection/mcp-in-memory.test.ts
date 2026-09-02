@@ -30,7 +30,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'echo', 'journal', 'mutation-probe', 'publish-notice', 'unavailable']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'journal', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -39,11 +39,15 @@ describe('the in-memory MCP projection level', () => {
         'prompt:harness/summarize',
         'resource:harness/notes',
         'tool:harness/catalog',
+        'tool:harness/context',
         'tool:harness/echo',
         'tool:harness/journal',
         'tool:harness/mutation-probe',
         'tool:harness/publish-notice',
+        'tool:harness/strict-report',
+        'tool:harness/ticket',
         'tool:harness/unavailable',
+        'tool:harness/wait',
       ],
       serverName: 'harness',
     });
@@ -66,6 +70,17 @@ describe('the in-memory MCP projection level', () => {
       workspace: '/tmp/harness-library',
     });
     expect(invocation.provenance.proofLevel).toBe('mcp-in-memory');
+  });
+
+  it('reports the identity axes the in-memory projection actually installs', async () => {
+    const invocation = await invokeMcpTool('context');
+
+    expect(invocation.structuredContent).toEqual({
+      actor: { reason: 'not-provided', state: 'unavailable' },
+      host: { reason: 'not-provided', state: 'unavailable' },
+      session: { reason: 'not-provided', state: 'unavailable' },
+      workspace: { reason: 'not-provided', state: 'unavailable' },
+    });
   });
 
   it('carries a represented error to the protocol as isError rather than a transport failure', async () => {

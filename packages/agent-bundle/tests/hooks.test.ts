@@ -13,13 +13,32 @@ import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
+import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
 import { buildWithRslib } from '../src/build/rslib.ts';
+import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
+
+const probeMeta: AgentBundleMeta = Object.freeze({
+  name: 'hook-probe',
+  packageName: 'hook-probe',
+  packageVersion: '1.0.0',
+  version: '1.0.0',
+});
+
+/**
+ * Every generated executable resolves the framework identity module, so a
+ * stubbed Rslib resolution has to carry what a real one would: the
+ * virtual-module plugin instance and the exact-match alias.
+ */
+const resolvedVirtualModules = (outputRoot: string) => ({
+  plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+  resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(outputRoot) } },
+});
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -155,6 +174,7 @@ it('does not share a persistent Rslib cache between generated executables', asyn
           output: { asyncChunks: false, path: outputRoot },
           performance: { buildCache: false },
           target: 'node',
+          ...resolvedVirtualModules(outputRoot),
         }],
         environmentConfigs: { 'agent-bundle-cache-probe': { output: { cleanDistPath: false } } },
       },
@@ -172,6 +192,7 @@ it('does not share a persistent Rslib cache between generated executables', asyn
         source: '/tmp/hook.ts',
         sourceInputs: ['/tmp/hook.ts'],
       }],
+      meta: probeMeta,
       outputRoot,
     }, {
       createRslib: async (options) => {
@@ -220,8 +241,8 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
           entry: { 'close-probe': [virtualEntryPath] },
           name: 'agent-bundle-close-probe',
           output: { asyncChunks: false, path: outputRoot },
-          plugins: [new rspack.experiments.VirtualModulesPlugin({})],
           target: 'node',
+          ...resolvedVirtualModules(outputRoot),
         }],
         environmentConfigs: { 'agent-bundle-close-probe': { output: { cleanDistPath: false } } },
       },
@@ -240,6 +261,7 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
         sourceInputs: ['/tmp/hook.ts'],
         virtualSource: 'export default undefined;',
       }],
+      meta: probeMeta,
       outputRoot,
     }, {
       createRslib: async (options) => {
@@ -310,6 +332,7 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
       sourceInputs: ['/tmp/hook.ts'],
       virtualSource: 'export default undefined;',
     }],
+    meta: probeMeta,
     outputRoot,
   }, { createRslib: async () => rslibFor(bundlerConfig) as never });
 
@@ -322,8 +345,14 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
     // without the generated wrapper.
     await expect(buildLostProbe({
       entry: { 'lost-probe': ['/tmp/hook.ts'] },
-      plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+      ...resolvedVirtualModules(outputRoot),
     })).rejects.toThrow(/without its generated wrapper entry/u);
+    // A resolved config that lost the framework identity alias would resolve
+    // agent-bundle/meta to the published throwing stub instead.
+    await expect(buildLostProbe({
+      entry: { 'lost-probe': [virtualEntryPath] },
+      plugins: [new rspack.experiments.VirtualModulesPlugin({})],
+    })).rejects.toThrow(/without its reserved module aliases/u);
   } finally {
     await rm(outputRoot, { force: true, recursive: true });
   }
@@ -347,6 +376,7 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
           name: 'agent-bundle-residual-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
+          ...resolvedVirtualModules(outputRoot),
         }],
         environmentConfigs: { 'agent-bundle-residual-probe': { output: { cleanDistPath: false } } },
       },
@@ -367,6 +397,7 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
         source: '/tmp/hook.ts',
         sourceInputs: ['/tmp/hook.ts'],
       }],
+      meta: probeMeta,
       outputRoot,
     }, { createRslib: async () => rslib as never })).rejects.toThrow(/not self-contained/u);
   } finally {
@@ -385,6 +416,7 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
           name: 'agent-bundle-close-error-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
+          ...resolvedVirtualModules(outputRoot),
         }],
         environmentConfigs: { 'agent-bundle-close-error-probe': { output: { cleanDistPath: false } } },
       },
@@ -400,6 +432,7 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
         source: '/tmp/hook.ts',
         sourceInputs: ['/tmp/hook.ts'],
       }],
+      meta: probeMeta,
       outputRoot,
     }, { createRslib: async () => rslib as never })).rejects.toThrow(/stats/i);
 

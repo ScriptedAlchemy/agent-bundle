@@ -35,23 +35,29 @@ export const createRscMcpServer = (
       description: mcp.description,
       inputSchema: operation.inputSchema,
       ...(mcp.title === undefined ? {} : { title: mcp.title }),
-    }, async (input, context) => runAgentRequest({
-      ...(context.http?.authInfo?.clientId === undefined
-        ? {}
-        : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
-      invocation: {
-        kind: 'tool',
-        operationId: operation.id,
-        surface: mcp.name,
-      },
-      ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
-        ? { session: available({ sessionId: context.sessionId }, 'native') }
-        : {}),
-      signal: context.mcpReq.signal,
-    }, async () => {
-      const result = await operation.execute(input, { signal: context.mcpReq.signal });
-      return lowerMcpResult(operation.render(result));
-    }));
+    }, async (input, context) => {
+      const clientName = server.server.getClientVersion()?.name;
+      return runAgentRequest({
+        ...(context.http?.authInfo?.clientId === undefined
+          ? {}
+          : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
+        ...(typeof clientName === 'string' && clientName.trim() !== ''
+          ? { host: available({ name: clientName }, 'native') }
+          : {}),
+        invocation: {
+          kind: 'tool',
+          operationId: operation.id,
+          surface: mcp.name,
+        },
+        ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
+          ? { session: available({ sessionId: context.sessionId }, 'native') }
+          : {}),
+        signal: context.mcpReq.signal,
+      }, async () => {
+        const result = await operation.execute(input, { signal: context.mcpReq.signal });
+        return lowerMcpResult(operation.render(result));
+      });
+    });
   }
   return server;
 };

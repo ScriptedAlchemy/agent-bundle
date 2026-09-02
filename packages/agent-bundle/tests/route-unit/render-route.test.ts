@@ -7,6 +7,7 @@ import { renderRoute } from '../../src/test/render.ts';
 import { testManifest } from '../../src/test/registry.ts';
 
 const workspace = { source: 'native', state: 'available', value: { root: '/tmp/harness-library' } } as never;
+const notProvided = { reason: 'not-provided', state: 'unavailable' };
 
 /** The harness error one render rejected with; a resolved render is itself a failure. */
 const rejection = async (render: Promise<unknown>): Promise<AgentTestError> => {
@@ -63,6 +64,48 @@ describe('renderRoute through the real renderer', () => {
     expect(rendered.invocation).toEqual({
       kind: 'tool',
       props: { input: { message: 'hello' }, operationId: 'tool:harness/echo' },
+    });
+  });
+
+  it('reports typed unavailable identity axes when the harness receives no context injection', async () => {
+    const rendered = await renderRoute('tool:harness/context');
+
+    expect(rendered.result).toEqual({
+      actor: notProvided,
+      host: notProvided,
+      session: notProvided,
+      workspace: notProvided,
+    });
+  });
+
+  it('preserves injected identity values and their observation sources', async () => {
+    const rendered = await renderRoute('tool:harness/context', {
+      context: {
+        actor: { source: 'receipt', state: 'available', value: { id: 'actor-route-unit' } },
+        host: { source: 'native', state: 'available', value: { name: 'route-unit-host' } },
+        session: { source: 'native', state: 'available', value: { sessionId: 'route-unit-session' } },
+        workspace: { source: 'derived', state: 'available', value: { root: '/tmp/route-unit' } },
+      },
+    });
+
+    expect(rendered.result).toEqual({
+      actor: { source: 'receipt', state: 'available', value: { id: 'actor-route-unit' } },
+      host: { source: 'native', state: 'available', value: { name: 'route-unit-host' } },
+      session: { source: 'native', state: 'available', value: { sessionId: 'route-unit-session' } },
+      workspace: { source: 'derived', state: 'available', value: { root: '/tmp/route-unit' } },
+    });
+  });
+
+  it('does not treat lookalike business input as request identity', async () => {
+    const rendered = await renderRoute('tool:harness/context', {
+      input: { host: 'spoofed-host', session: 'spoofed-session' },
+    });
+
+    expect(rendered.result).toEqual({
+      actor: notProvided,
+      host: notProvided,
+      session: notProvided,
+      workspace: notProvided,
     });
   });
 
@@ -214,7 +257,7 @@ describe('renderRoute through the real renderer', () => {
     expectDocument(rendered)
       .toHaveStatus('success')
       .toContainMarkdown('Observed tool/after from claude.')
-      .toHaveValue(undefined);
+      .toHaveValue({ actor: notProvided });
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {

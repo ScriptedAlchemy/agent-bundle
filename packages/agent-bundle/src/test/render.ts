@@ -41,7 +41,13 @@ import type {
   TestableRouteDescriptor,
 } from './types.ts';
 
-/** Request-scoped overrides for one rendered route, over the runtime's own request contract. */
+/**
+ * Request-scoped overrides for one rendered route, over the runtime's own
+ * request contract. `host`, `session`, `actor`, `workspace`, and
+ * `capabilities` are the identity-injection seam for context-dependent route
+ * tests; construct observed values with `available` or `unavailable` from
+ * `@agent-bundle/runtime`.
+ */
 export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'signal'> & {
   readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
   readonly progress?: AgentProgressReporter;

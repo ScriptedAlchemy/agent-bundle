@@ -71,11 +71,15 @@ describe('the compiled test manifest', () => {
       'prompt:harness/summarize',
       'resource:harness/notes',
       'tool:harness/catalog',
+      'tool:harness/context',
       'tool:harness/echo',
       'tool:harness/journal',
       'tool:harness/mutation-probe',
       'tool:harness/publish-notice',
+      'tool:harness/strict-report',
+      'tool:harness/ticket',
       'tool:harness/unavailable',
+      'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
@@ -277,6 +281,7 @@ describe('the generated route registry', () => {
     const loaders = /loaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
 
     expect(loaders).toContain('"event:tool/after": () => import(');
+    expect(loaders).toContain('"tool:harness/context": () => import(');
     expect(loaders).toContain('"tool:harness/echo": () => import(');
     expect(loaders).toContain('"tool:harness/journal": () => import(');
     expect(loaders).toContain('"tool:harness/mutation-probe": () => import(');

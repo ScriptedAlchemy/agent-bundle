@@ -350,6 +350,11 @@ const currentLease = (): Lease => {
   return lease;
 };
 
+export const currentAgentRequest = (): AgentRequestContext | undefined => {
+  const lease = getStore().storage.getStore();
+  return lease === undefined || lease.closed ? undefined : lease.handle;
+};
+
 export const agent = async (): Promise<AgentRequestContext> => {
   const lease = currentLease();
   open(lease);

@@ -102,6 +102,10 @@ export interface TestableRouteDescriptor {
 /** The project identity a generated MCP server advertises on the wire. */
 export interface TestManifestPluginIdentity {
   readonly name: string;
+  /** The validated npm package name, absent for unpackaged development projects. */
+  readonly packageName?: string;
+  /** The validated semantic release version, absent for unpackaged development projects. */
+  readonly packageVersion?: string;
   readonly version: string;
 }
 
@@ -301,7 +305,14 @@ export const compileTestManifest = async (
     graph: prepared.routeGraph ?? emptyCompiledRouteGraph,
     ...(prepared.model === undefined
       ? {}
-      : { plugin: { name: prepared.model.metadata.name, version: prepared.model.metadata.version } }),
+      : {
+        plugin: {
+          name: prepared.model.metadata.name,
+          ...(prepared.model.metadata.packageName === undefined ? {} : { packageName: prepared.model.metadata.packageName }),
+          ...(prepared.model.metadata.packageVersion === undefined ? {} : { packageVersion: prepared.model.metadata.packageVersion }),
+          version: prepared.model.metadata.version,
+        },
+      }),
     projectRoot: prepared.root,
     ...(prepared.model?.state === undefined ? {} : { state: prepared.model.state }),
     targets: prepared.model?.targets.map((target) => target.name) ?? [],
