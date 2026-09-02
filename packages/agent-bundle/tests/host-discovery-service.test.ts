@@ -27,7 +27,17 @@ const doctorReport = Object.freeze({
     diagnostics: Object.freeze([]),
     directory: '/tmp/agent-bundle-test',
     findings: Object.freeze([
-      Object.freeze({ path: '/tmp/agent-bundle-test/event-live.sock', state: 'live' as const }),
+      Object.freeze({
+        path: '/tmp/agent-bundle-test/event-live.sock',
+        runtime: Object.freeze({
+          artifactEpoch: 'epoch-a',
+          availability: 'available' as const,
+          instanceId: 'runtime-a',
+          pid: 1234,
+          status: 'available' as const,
+        }),
+        state: 'live' as const,
+      }),
     ]),
     status: 'healthy' as const,
     summary: Object.freeze({ live: 1, staleLocks: 0, staleSockets: 0 }),

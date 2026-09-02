@@ -72,9 +72,11 @@ describe('createWarmFlightHost', () => {
       host: { execute: async () => emptyFlight() },
     });
 
+    expect(host.availability()).toBe('available');
     await host.execute(dispatch());
     host.markUnavailable('runtime-restarted');
 
+    expect(host.availability()).toBe('runtime-restarted');
     await expect(host.execute(dispatch())).rejects.toBeInstanceOf(AgentRuntimeError);
     await expect(host.execute(dispatch())).rejects.toMatchObject({ code: 'runtime-restarted' });
   });
@@ -86,6 +88,7 @@ describe('createWarmFlightHost', () => {
     });
     host.markUnavailable('runtime-unavailable');
 
+    expect(host.availability()).toBe('runtime-unavailable');
     await expect(host.execute(dispatch())).rejects.toBeInstanceOf(AgentRuntimeError);
     await expect(host.execute(dispatch())).rejects.toMatchObject({ code: 'runtime-unavailable' });
   });

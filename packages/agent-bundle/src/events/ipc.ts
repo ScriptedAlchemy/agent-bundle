@@ -41,6 +41,20 @@ const eventRequestSchema = z.object({
   target: z.string().min(1),
 }).strict();
 
+const eventStatusRequestSchema = z.object({
+  kind: z.literal('status'),
+  protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
+}).strict();
+
+const runtimeAvailabilitySchema = z.enum(['available', 'runtime-restarted', 'runtime-unavailable']);
+const eventRuntimeStatusPayloadSchema = z.object({
+  artifactEpoch: z.string().min(1),
+  availability: runtimeAvailabilitySchema,
+  instanceId: z.string().min(1),
+  pid: z.number().int().positive(),
+  startedAt: z.string().min(1).optional(),
+}).strict();
+
 const eventResponseSchema = z.discriminatedUnion('status', [
   z.object({
     artifactEpoch: z.string().min(1),
@@ -57,6 +71,22 @@ const eventResponseSchema = z.discriminatedUnion('status', [
   }).strict(),
 ]);
 
+const eventStatusResponseSchema = z.discriminatedUnion('status', [
+  z.object({
+    kind: z.literal('status'),
+    protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
+    runtime: eventRuntimeStatusPayloadSchema,
+    status: z.literal('ok'),
+  }).strict(),
+  z.object({
+    artifactEpoch: z.string().min(1),
+    code: z.literal('invalid-message'),
+    message: z.string(),
+    protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
+    status: z.literal('error'),
+  }).strict(),
+]);
+
 export interface EventRuntimeRequest {
   readonly artifactEpoch: string;
   readonly event: string;
@@ -65,10 +95,20 @@ export interface EventRuntimeRequest {
   readonly target: string;
 }
 
+export type EventRuntimeAvailability = z.infer<typeof runtimeAvailabilitySchema>;
+export interface EventRuntimeStatus {
+  readonly artifactEpoch: string;
+  readonly availability: EventRuntimeAvailability;
+  readonly instanceId: string;
+  readonly pid: number;
+  readonly startedAt?: string;
+}
+
 export interface CreateEventRuntimeServerOptions {
   readonly artifactEpoch: string;
   readonly endpointId: string;
   readonly handle: (request: EventRuntimeRequest, signal: AbortSignal) => Promise<unknown>;
+  readonly status?: () => EventRuntimeStatus;
 }
 
 export interface EventRuntimeServer {
@@ -81,6 +121,17 @@ export interface RequestEventRuntimeOptions extends EventRuntimeRequest {
   readonly signal: AbortSignal;
   readonly timeoutMs: number;
 }
+
+export type RequestEventRuntimeStatusOptions = Readonly<{
+  readonly timeoutMs: number;
+}> & (
+  | Readonly<{ readonly endpoint: string; readonly endpointId?: never }>
+  | Readonly<{ readonly endpoint?: never; readonly endpointId: string }>
+);
+
+export type EventRuntimeStatusResult =
+  | Readonly<EventRuntimeStatus & { readonly status: 'available' }>
+  | Readonly<{ readonly status: 'unavailable' | 'unsupported' }>;
 
 export const eventRuntimeEndpoint = (endpointId: string): string => {
   const hash = createHash('sha256').update(endpointId, 'utf8').digest('hex').slice(0, 32);
@@ -167,6 +218,26 @@ const handleConnection = Effect.fnUntraced(function*(
       message: 'Event runtime request is invalid.',
       protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
       status: 'error',
+    });
+    return;
+  }
+  const statusRequest = eventStatusRequestSchema.safeParse(raw.value);
+  if (statusRequest.success) {
+    if (options.status === undefined) {
+      writeResponse(socket, {
+        artifactEpoch: options.artifactEpoch,
+        code: 'invalid-message',
+        message: 'Event runtime request does not match the wire schema.',
+        protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
+        status: 'error',
+      });
+      return;
+    }
+    writeResponse(socket, {
+      kind: 'status',
+      protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
+      runtime: options.status(),
+      status: 'ok',
     });
     return;
   }
@@ -798,3 +869,42 @@ const requestProgram = (
 export const requestEventRuntime = async (
   options: RequestEventRuntimeOptions,
 ): Promise<unknown> => runPromise(requestProgram(options), { signal: options.signal });
+
+const statusProgram = (
+  options: RequestEventRuntimeStatusOptions,
+): Effect.Effect<EventRuntimeStatusResult, EventRuntimeTransportError> => Effect.acquireUseRelease(
+  connect(options.endpoint ?? eventRuntimeEndpoint(options.endpointId)),
+  (socket) => Effect.gen(function*() {
+    socket.write(`${JSON.stringify({
+      kind: 'status',
+      protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
+    })}\n`);
+    const raw = yield* readOneMessage(socket);
+    const response = eventStatusResponseSchema.safeParse(raw);
+    if (!response.success) {
+      return yield* Effect.fail(transportError(
+        'invalid-message',
+        'Event runtime status response does not match the wire schema.',
+      ));
+    }
+    if (response.data.status === 'error') return Object.freeze({ status: 'unsupported' as const });
+    return Object.freeze({
+      ...response.data.runtime,
+      status: 'available' as const,
+    });
+  }),
+  (socket) => Effect.sync(() => socket.destroy()),
+).pipe(
+  Effect.raceFirst(
+    Effect.sleep(Duration.millis(options.timeoutMs)).pipe(
+      Effect.andThen(Effect.fail(transportError('runtime-timeout', 'Event runtime status exceeded its deadline.'))),
+    ),
+  ),
+  Effect.catch((error) => error.code === 'runtime-unavailable'
+    ? Effect.succeed(Object.freeze({ status: 'unavailable' as const }))
+    : Effect.fail(error)),
+);
+
+export const requestEventRuntimeStatus = async (
+  options: RequestEventRuntimeStatusOptions,
+): Promise<EventRuntimeStatusResult> => runPromise(statusProgram(options));

@@ -14,6 +14,7 @@ import type {
   BoundedChildProcessResult,
 } from '../host-contracts/process.ts';
 import { runBoundedChildProcess } from '../host-contracts/process.ts';
+import { requestEventRuntimeStatus } from '../events/ipc.ts';
 import { treeHash, type InstallHost } from './install.ts';
 
 export type DoctorHost = InstallHost;
@@ -62,9 +63,21 @@ export interface DoctorFinding {
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
+  readonly runtime?: DoctorRuntimeStatus;
   readonly state: DoctorFindingState;
   readonly version?: string;
 }
+
+export type DoctorRuntimeStatus =
+  | Readonly<{
+    readonly artifactEpoch: string;
+    readonly availability: 'available' | 'runtime-restarted' | 'runtime-unavailable';
+    readonly instanceId: string;
+    readonly pid: number;
+    readonly startedAt?: string;
+    readonly status: 'available';
+  }>
+  | Readonly<{ readonly status: 'failed' | 'unavailable' | 'unsupported' }>;
 
 export interface DoctorDurableStateStore {
   /** Main database plus any present `-wal` and `-shm` sidecars. */
@@ -972,7 +985,36 @@ const scanEndpoints = async (
       if (state === 'missing') continue;
       if (state === 'live') {
         live += 1;
-        findings.push({ path, state: 'live' });
+        let runtime: DoctorRuntimeStatus;
+        try {
+          const probed = await requestEventRuntimeStatus({ endpoint: path, timeoutMs: 1_000 });
+          runtime = probed;
+          if (probed.status === 'unsupported') {
+            diagnostics.push(diagnostic(
+              'AB7317',
+              `Runtime socket ${JSON.stringify(path)} predates read-only runtime identity introspection.`,
+              'Restart the runtime after upgrading Agent Bundle to expose its process-lifetime identity.',
+              'info',
+            ));
+          } else if (probed.status === 'unavailable') {
+            diagnostics.push(diagnostic(
+              'AB7318',
+              `Runtime socket ${JSON.stringify(path)} became unavailable during its status probe.`,
+              'Restart the runtime or inspect the socket, then rerun Doctor.',
+              'error',
+            ));
+          }
+        } catch (error) {
+          runtime = Object.freeze({ status: 'failed' });
+          diagnostics.push(diagnostic(
+            'AB7318',
+            `Runtime socket ${JSON.stringify(path)} status probe failed: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+            'Inspect the runtime protocol and socket responsiveness, then rerun Doctor.',
+            'error',
+          ));
+        }
+        findings.push({ path, runtime, state: 'live' });
         continue;
       }
       staleSockets += 1;

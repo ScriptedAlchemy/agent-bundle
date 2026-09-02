@@ -14,6 +14,7 @@ import {
   eventRuntimeEndpoint,
   EventRuntimeTransportError,
   requestEventRuntime,
+  requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
 
 interface EndpointClaimOwner {
@@ -160,6 +161,64 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
     echoed: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
     event: 'tool/after',
   });
+}));
+
+it.live('reports read-only runtime identity without an artifact epoch gate', () => Effect.gen(function*() {
+  const endpointId = `event-ipc-status-${crypto.randomUUID()}`;
+  const server = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-server',
+      endpointId,
+      handle: async () => undefined,
+      status: () => ({
+        artifactEpoch: 'epoch-server',
+        availability: 'available',
+        instanceId: 'runtime-1',
+        pid: 1234,
+      }),
+    })),
+    (runtime) => Effect.promise(() => runtime.close()),
+  );
+
+  const byId = yield* Effect.promise(() => requestEventRuntimeStatus({
+    endpointId,
+    timeoutMs: 1_000,
+  }));
+  const byPath = yield* Effect.promise(() => requestEventRuntimeStatus({
+    endpoint: server.endpoint,
+    timeoutMs: 1_000,
+  }));
+  expect(byId).toEqual({
+    artifactEpoch: 'epoch-server',
+    availability: 'available',
+    instanceId: 'runtime-1',
+    pid: 1234,
+    status: 'available',
+  });
+  expect(byPath).toEqual(byId);
+}));
+
+it.live('reports unsupported and unavailable status endpoints distinctly', () => Effect.gen(function*() {
+  const endpointId = `event-ipc-status-unsupported-${crypto.randomUUID()}`;
+  yield* Effect.scoped(Effect.gen(function*() {
+    yield* Effect.acquireRelease(
+      Effect.promise(() => createEventRuntimeServer({
+        artifactEpoch: 'epoch-1',
+        endpointId,
+        handle: async () => undefined,
+      })),
+      (runtime) => Effect.promise(() => runtime.close()),
+    );
+    expect(yield* Effect.promise(() => requestEventRuntimeStatus({
+      endpointId,
+      timeoutMs: 1_000,
+    }))).toEqual({ status: 'unsupported' });
+  }));
+
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({
+    endpointId: `event-ipc-status-missing-${crypto.randomUUID()}`,
+    timeoutMs: 100,
+  }))).toEqual({ status: 'unavailable' });
 }));
 
 it.live('rejects a second live server without disturbing the endpoint owner', () => Effect.gen(function*() {
