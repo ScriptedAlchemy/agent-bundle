@@ -131,15 +131,26 @@ it('imports the externalized config entry from a packed npm consumer', async () 
       'void [claudeHook, codexHook, portableConfig];',
       '',
     ].join('\n'));
-    await expect(execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
-      '--module', 'nodenext',
-      '--moduleResolution', 'nodenext',
-      '--noEmit',
-      '--strict',
-      '--target', 'es2022',
-      '--types', 'node',
-      'config.mts',
-    ], { cwd: consumerRoot, env: isolatedCommandEnvironment() })).resolves.toMatchObject({ stderr: '', stdout: '' });
+    try {
+      const typecheck = await execFile(join(workspaceRoot, 'node_modules', '.bin', 'tsc'), [
+        '--module', 'nodenext',
+        '--moduleResolution', 'nodenext',
+        '--noEmit',
+        '--strict',
+        '--target', 'es2022',
+        '--types', 'node',
+        'config.mts',
+      ], { cwd: consumerRoot, env: isolatedCommandEnvironment() });
+      expect(typecheck).toMatchObject({ stderr: '', stdout: '' });
+    } catch (error) {
+      const stdout = error !== null && typeof error === 'object' && 'stdout' in error
+        ? String(error.stdout)
+        : '';
+      const stderr = error !== null && typeof error === 'object' && 'stderr' in error
+        ? String(error.stderr)
+        : '';
+      throw new Error(`Packed config typecheck failed.\nstdout:\n${stdout}\nstderr:\n${stderr}`, { cause: error });
+    }
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
