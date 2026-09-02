@@ -17,6 +17,7 @@ export type {
   RouteManifestRoute,
   RouteManifestServer,
   RouteManifestServerMode,
+  RouteManifestState,
 } from '../dev/routes/route-manifest.ts';
 export type {
   RouteInputArrayItemSchema,
