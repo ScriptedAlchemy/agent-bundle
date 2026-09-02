@@ -25,7 +25,21 @@ describe('the CLI dispatch level', () => {
     expect(cliJson(run)).toEqual({ format: 'json', shelf: 'fiction', titles: ['Piranesi', 'Solaris'] });
     expect(run.value).toEqual({ format: 'json', shelf: 'fiction', titles: ['Piranesi', 'Solaris'] });
     expect(run.provenance).toMatchObject({
-      commands: ['db migrate', 'inventory', 'report'],
+      commands: [
+        'db migrate',
+        'harness catalog',
+        'harness context',
+        'harness echo',
+        'harness journal',
+        'harness mutation-probe',
+        'harness publish-notice',
+        'harness strict-report',
+        'harness ticket',
+        'harness unavailable',
+        'harness wait',
+        'inventory',
+        'report',
+      ],
       proofLevel: 'cli-dispatch',
     });
   });

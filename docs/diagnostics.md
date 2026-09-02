@@ -184,7 +184,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
-## Route graph, state, and provider conventions (`AB4800`–`AB4821`, `AB4940`–`AB4942`)
+## Route graph, state, and provider conventions (`AB4800`–`AB4822`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -253,6 +253,17 @@ success (or the validated result's integer `exitCode` under
 input-validation failure, 130/143 after SIGINT/SIGTERM. `--help`, `--json`,
 `--ndjson`, and `--version` are owned by the generated shell.
 
+The power-tier `routes.mcpCommands` option projects tools from generated MCP
+servers into that same command graph. Each tool becomes
+`<server> <tool>` with one optional `--input '<JSON object>'` argument;
+mutation-capable tools also require the enforced `--yes` flag. Missing or
+malformed `annotations.readOnlyHint` is mutation-capable by default. Include
+and exclude patterns use only literal text plus `*`; every declared pattern
+must match at least one eligible `<server>:<tool>` identity so misspellings
+fail during compilation. Projected commands invoke the same tool render and
+request-context contracts as the generated MCP server, and their `mcp`
+metadata records server, tool, and confirmation provenance in `inspect`.
+
 The argv projection of `inputSchema` is extracted statically — the module is
 parsed, never executed — from a bounded zod grammar: the top level is
 `z.object({ ... })` or `z.strictObject({ ... })` (optionally `.strict()`);
@@ -298,6 +309,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4819` | error | The state definition's `id` or `lifetime` is missing, non-literal, empty, duplicated, or outside the state lifetime vocabulary. |
 | `AB4820` | error | A generated project selects `external` state lifetime; v1 generated mounting supports only `request`, `process`, and `workspace-durable` because external drivers require embedder wiring. |
 | `AB4821` | error | A project state definition uses the reserved notice-ledger id `@agent-bundle/runtime/agent-notice-ledger/v1`; generated runtimes own that id for the co-mounted notice store. |
+| `AB4822` | error | A `routes.mcpCommands.include` or `.exclude` pattern matches no eligible tool, or `include: []` explicitly selects none. Correct the pattern using an available `<server>:<tool>` identity listed by the diagnostic. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

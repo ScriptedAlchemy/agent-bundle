@@ -4,7 +4,13 @@ import { extractCliArgv } from './cli-argv.ts';
 import { scanRouteModuleExports } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledCliOption } from './types.ts';
+import { isRecord } from '../core/strict-json.ts';
+import type {
+  CompiledAgentRoute,
+  CompiledCliCommand,
+  CompiledCliOption,
+  CompiledServerSurface,
+} from './types.ts';
 
 /**
  * The #102 command-graph compiler: projects the generated-mode `src/cli/**`
@@ -36,6 +42,25 @@ const collisionError = (message: string, sourcePath: string): Diagnostic => ({
   recovery: 'Keep exactly one command per name at each nesting level, then inspect again.',
   severity: 'error',
   sourcePath,
+});
+
+const mcpCollisionError = (
+  identity: string,
+  message: string,
+  sourcePath: string,
+): Diagnostic => ({
+  code: 'AB4813',
+  message: `Projected MCP tool ${JSON.stringify(identity)} ${message}`,
+  recovery: `Exclude ${JSON.stringify(identity)} with routes.mcpCommands.exclude, or rename the colliding custom CLI route or alias.`,
+  severity: 'error',
+  sourcePath,
+});
+
+const mcpSelectionError = (message: string): Diagnostic => ({
+  code: 'AB4822',
+  message,
+  recovery: 'Correct the routes.mcpCommands include/exclude patterns using one of the listed generated tool identities, then inspect again.',
+  severity: 'error',
 });
 
 const contractError = (message: string, sourcePath: string): Diagnostic => ({
@@ -183,6 +208,126 @@ export interface CompiledCliCommandSurface {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+export interface McpCommandSelection {
+  readonly exclude?: readonly string[];
+  readonly include?: readonly string[];
+}
+
+export interface CompiledMcpCliCommandSurface extends CompiledCliCommandSurface {
+  readonly routes: readonly CompiledAgentRoute[];
+}
+
+interface EligibleMcpTool {
+  readonly identity: string;
+  readonly route: CompiledAgentRoute;
+  readonly server: string;
+  readonly tool: string;
+}
+
+const patternExpression = (pattern: string): RegExp => new RegExp(
+  `^${pattern.split('*').map((literal) =>
+    literal.replace(/[\\^$.*+?()[\]{}|]/gu, '\\$&')).join('.*')}$`,
+  'u',
+);
+
+const toolOption: CompiledCliOption = Object.freeze({
+  description: 'Tool input as one JSON object.',
+  key: 'input',
+  kind: 'string',
+  option: 'input',
+  repeated: false,
+  required: false,
+});
+
+const confirmationOption: CompiledCliOption = Object.freeze({
+  description: 'Confirm running this mutation-capable MCP tool.',
+  key: 'yes',
+  kind: 'boolean',
+  option: 'yes',
+  repeated: false,
+  required: false,
+});
+
+/**
+ * Projects selected tools from generated MCP servers into rendered CLI
+ * commands. This in-house projection intentionally uses the compiled route
+ * graph directly (G7); MCPorter remains an independent live-server client.
+ */
+export const compileMcpCliCommands = (
+  servers: readonly CompiledServerSurface[],
+  selection: McpCommandSelection,
+): CompiledMcpCliCommandSurface => {
+  const eligible: EligibleMcpTool[] = servers
+    .filter((server) => server.mode === 'generated')
+    .flatMap((server) => server.routes
+      .filter((route) => route.kind === 'tool')
+      .map((route) => {
+        const tool = route.id.slice(route.id.lastIndexOf('/') + 1);
+        return { identity: `${server.name}:${tool}`, route, server: server.name, tool };
+      }))
+    .sort((left, right) => left.identity.localeCompare(right.identity));
+  const available = eligible.length === 0
+    ? 'No generated MCP tools are available.'
+    : `Available generated MCP tools: ${eligible.map((tool) => tool.identity).join(', ')}.`;
+  const diagnostics: Diagnostic[] = [];
+  let selected: EligibleMcpTool[];
+
+  if (selection.include === undefined) {
+    selected = [...eligible];
+  } else if (selection.include.length === 0) {
+    diagnostics.push(mcpSelectionError(
+      `routes.mcpCommands.include is empty and therefore selects no tools. ${available}`,
+    ));
+    selected = [];
+  } else {
+    const included = new Set<string>();
+    for (const pattern of selection.include) {
+      const expression = patternExpression(pattern);
+      const matches = eligible.filter((tool) => expression.test(tool.identity));
+      if (matches.length === 0) {
+        diagnostics.push(mcpSelectionError(
+          `routes.mcpCommands.include pattern ${JSON.stringify(pattern)} matches no eligible tool. ${available}`,
+        ));
+      }
+      for (const match of matches) included.add(match.identity);
+    }
+    selected = eligible.filter((tool) => included.has(tool.identity));
+  }
+
+  for (const pattern of selection.exclude ?? []) {
+    const expression = patternExpression(pattern);
+    const matches = eligible.filter((tool) => expression.test(tool.identity));
+    if (matches.length === 0) {
+      diagnostics.push(mcpSelectionError(
+        `routes.mcpCommands.exclude pattern ${JSON.stringify(pattern)} matches no eligible tool. ${available}`,
+      ));
+    }
+    const excluded = new Set(matches.map((tool) => tool.identity));
+    selected = selected.filter((tool) => !excluded.has(tool.identity));
+  }
+
+  const commands = selected.map(({ route, server, tool }) => {
+    const annotations = route.config['annotations'];
+    const confirm = !(isRecord(annotations) && annotations.readOnlyHint === true);
+    const description = route.config['description'];
+    return {
+      aliases: [],
+      ...(typeof description === 'string' ? { description } : {}),
+      exitCode: 'zero' as const,
+      mcp: { confirm, server, tool },
+      options: confirm ? [toolOption, confirmationOption] : [toolOption],
+      path: [server, tool],
+      rendered: true,
+      routeId: route.id,
+    };
+  });
+  return deepFreeze({
+    commands,
+    diagnostics,
+    routes: selected.map((tool) => tool.route),
+  });
+};
+
 /**
  * Compiles the generated-mode CLI route surface into the collision-checked
  * command graph. `readModuleText` supplies each plain route's source text
@@ -192,9 +337,10 @@ export interface CompiledCliCommandSurface {
 export const compileCliCommands = async (
   routes: readonly CompiledAgentRoute[],
   readModuleText: (route: CompiledAgentRoute) => Promise<string | undefined>,
+  projected: CompiledMcpCliCommandSurface = { commands: [], diagnostics: [], routes: [] },
 ): Promise<CompiledCliCommandSurface> => {
-  const diagnostics: Diagnostic[] = [];
-  const commands: CompiledCliCommand[] = [];
+  const diagnostics: Diagnostic[] = [...projected.diagnostics];
+  const commands: CompiledCliCommand[] = [...projected.commands];
 
   for (const route of [...routes].sort((left, right) => left.id.localeCompare(right.id))) {
     const relativePath = route.provenance.relativePath;
@@ -243,53 +389,119 @@ export const compileCliCommands = async (
     });
   }
 
-  // Collision checks run over every discovered route's claimed path, so a
-  // sibling that compiled no command still collides deterministically.
-  const claimedPaths = new Map<string, string>();
-  for (const route of routes) {
-    claimedPaths.set(cliCommandPath(route).join('/'), route.provenance.relativePath);
+  interface PathClaim {
+    readonly mcp?: NonNullable<CompiledCliCommand['mcp']>;
+    readonly path: readonly string[];
+    readonly relativePath: string;
+    readonly source: string;
   }
-  const groupPaths = new Map<string, string>();
-  for (const route of routes) {
-    const path = cliCommandPath(route);
-    for (let depth = 1; depth < path.length; depth += 1) {
-      const prefix = path.slice(0, depth).join('/');
-      if (!groupPaths.has(prefix)) groupPaths.set(prefix, route.provenance.relativePath);
+  // Collision checks run over every discovered custom route's claimed path,
+  // even when it compiled no command, plus every selected MCP projection.
+  const claims: PathClaim[] = [
+    ...routes.map((route) => ({
+      path: cliCommandPath(route),
+      relativePath: route.provenance.relativePath,
+      source: route.source,
+    })),
+    ...projected.commands.map((command) => {
+      const route = projected.routes.find((candidate) => candidate.id === command.routeId)!;
+      return {
+        mcp: command.mcp!,
+        path: command.path,
+        relativePath: route.provenance.relativePath,
+        source: route.source,
+      };
+    }),
+  ];
+  const mcpIdentity = (claim: PathClaim): string | undefined =>
+    claim.mcp === undefined ? undefined : `${claim.mcp.server}:${claim.mcp.tool}`;
+  const claimedPaths = new Map<string, PathClaim>();
+  for (const claim of claims) {
+    const path = claim.path.join('/');
+    const existing = claimedPaths.get(path);
+    if (existing === undefined) {
+      claimedPaths.set(path, claim);
+      continue;
     }
-  }
-  const sourceByPath = new Map(routes.map((route) => [cliCommandPath(route).join('/'), route.source]));
-  for (const [path, relativePath] of claimedPaths) {
-    const groupClaim = groupPaths.get(path);
-    if (groupClaim !== undefined) {
-      diagnostics.push(collisionError(
-        `CLI command ${JSON.stringify(path.replaceAll('/', ' '))} is both the command module ${relativePath} and a command group (${groupClaim} nests below it); the compiler never chooses silently.`,
-        sourceByPath.get(path)!,
+    const mcp = claim.mcp === undefined ? existing : claim;
+    const identity = mcpIdentity(mcp);
+    diagnostics.push(identity === undefined
+      ? collisionError(
+        `CLI command ${JSON.stringify(path.replaceAll('/', ' '))} is claimed by both ${existing.relativePath} and ${claim.relativePath}; the compiler never chooses silently.`,
+        claim.source,
+      )
+      : mcpCollisionError(
+        identity,
+        `claims the same command path as ${claim.mcp === undefined ? claim.relativePath : existing.relativePath}.`,
+        claim.mcp === undefined ? claim.source : existing.source,
       ));
+  }
+  const groupPaths = new Map<string, PathClaim>();
+  for (const claim of claims) {
+    for (let depth = 1; depth < claim.path.length; depth += 1) {
+      const prefix = claim.path.slice(0, depth).join('/');
+      if (!groupPaths.has(prefix)) groupPaths.set(prefix, claim);
     }
+  }
+  for (const [path, claim] of claimedPaths) {
+    const groupClaim = groupPaths.get(path);
+    if (groupClaim === undefined) continue;
+    const mcp = claim.mcp === undefined ? groupClaim : claim;
+    const identity = mcpIdentity(mcp);
+    diagnostics.push(identity === undefined
+      ? collisionError(
+        `CLI command ${JSON.stringify(path.replaceAll('/', ' '))} is both the command module ${claim.relativePath} and a command group (${groupClaim.relativePath} nests below it); the compiler never chooses silently.`,
+        claim.source,
+      )
+      : mcpCollisionError(
+        identity,
+        `collides with the custom command ${claim.mcp === undefined ? claim.relativePath : groupClaim.relativePath} at its server command group.`,
+        claim.mcp === undefined ? claim.source : groupClaim.source,
+      ));
   }
 
   // Alias collisions resolve per nesting level: an alias must not equal a
   // sibling command name, a sibling group name, or another sibling alias.
-  const levelNames = new Map<string, Map<string, string>>();
-  const claimLevelName = (parent: string, name: string, claim: string): string | undefined => {
-    const names = levelNames.get(parent) ?? new Map<string, string>();
+  interface LevelClaim {
+    readonly description: string;
+    readonly pathClaim: PathClaim;
+  }
+  const levelNames = new Map<string, Map<string, LevelClaim>>();
+  const claimLevelName = (parent: string, name: string, claim: LevelClaim): LevelClaim | undefined => {
+    const names = levelNames.get(parent) ?? new Map<string, LevelClaim>();
     levelNames.set(parent, names);
     const existing = names.get(name);
     if (existing !== undefined) return existing;
     names.set(name, claim);
     return undefined;
   };
-  for (const [path, relativePath] of claimedPaths) {
+  for (const [path, claim] of claimedPaths) {
     const segments = path.split('/');
-    claimLevelName(segments.slice(0, -1).join('/'), segments[segments.length - 1]!, `the command ${relativePath}`);
+    claimLevelName(segments.slice(0, -1).join('/'), segments[segments.length - 1]!, {
+      description: claim.mcp === undefined
+        ? `the command ${claim.relativePath}`
+        : `projected MCP tool ${JSON.stringify(mcpIdentity(claim))}`,
+      pathClaim: claim,
+    });
   }
-  for (const [path, relativePath] of groupPaths) {
+  for (const [path, claim] of groupPaths) {
     const segments = path.split('/');
-    claimLevelName(segments.slice(0, -1).join('/'), segments[segments.length - 1]!, `the ${relativePath} command group`);
+    claimLevelName(segments.slice(0, -1).join('/'), segments[segments.length - 1]!, {
+      description: claim.mcp === undefined
+        ? `the ${claim.relativePath} command group`
+        : `the ${JSON.stringify(mcpIdentity(claim))} MCP server command group`,
+      pathClaim: claim,
+    });
   }
   for (const command of commands) {
     const parent = command.path.slice(0, -1).join('/');
-    const route = routes.find((candidate) => candidate.id === command.routeId)!;
+    const route = [...routes, ...projected.routes].find((candidate) => candidate.id === command.routeId)!;
+    const commandClaim: PathClaim = {
+      ...(command.mcp === undefined ? {} : { mcp: command.mcp }),
+      path: command.path,
+      relativePath: route.provenance.relativePath,
+      source: route.source,
+    };
     for (const alias of new Set(command.aliases)) {
       if (!safeIdentitySegment.test(alias)) {
         diagnostics.push(collisionError(
@@ -298,12 +510,23 @@ export const compileCliCommands = async (
         ));
         continue;
       }
-      const existing = claimLevelName(parent, alias, `the ${route.provenance.relativePath} alias`);
+      const existing = claimLevelName(parent, alias, {
+        description: `the ${route.provenance.relativePath} alias`,
+        pathClaim: commandClaim,
+      });
       if (existing !== undefined) {
-        diagnostics.push(collisionError(
-          `CLI alias ${JSON.stringify(alias)} on ${route.provenance.relativePath} collides with ${existing} at the same nesting level.`,
-          route.source,
-        ));
+        const mcp = commandClaim.mcp === undefined ? existing.pathClaim : commandClaim;
+        const identity = mcpIdentity(mcp);
+        diagnostics.push(identity === undefined
+          ? collisionError(
+            `CLI alias ${JSON.stringify(alias)} on ${route.provenance.relativePath} collides with ${existing.description} at the same nesting level.`,
+            route.source,
+          )
+          : mcpCollisionError(
+            identity,
+            `collides with the custom alias ${JSON.stringify(alias)} on ${commandClaim.mcp === undefined ? route.provenance.relativePath : existing.pathClaim.relativePath}.`,
+            commandClaim.mcp === undefined ? route.source : existing.pathClaim.source,
+          ));
       }
     }
     const duplicateAlias = command.aliases.find((alias, index) => command.aliases.indexOf(alias) !== index);

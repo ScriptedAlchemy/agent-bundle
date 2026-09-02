@@ -7,5 +7,8 @@ export default {
     name: 'route-harness',
     version: '1.0.0',
   },
+  routes: {
+    mcpCommands: true,
+  },
   targets: ['claude'],
 };

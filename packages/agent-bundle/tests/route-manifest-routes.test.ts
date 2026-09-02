@@ -157,7 +157,10 @@ it('preserves a request diagnostic raised by the manifest service', async () => 
 });
 
 it('projects a compiled graph into the browser manifest with project-relative sources', async () => {
-  const graph = await compileRouteGraph(resolve(import.meta.dirname, '../fixtures/route-harness'), { targets: ['claude'] } as never);
+  const graph = await compileRouteGraph(resolve(import.meta.dirname, '../fixtures/route-harness'), {
+    routes: { mcpCommands: { include: ['harness:echo'] } },
+    targets: ['claude'],
+  } as never);
   const manifest = routeManifestFor(graph, revision);
 
   expect(manifest.digest).toBe(graph.digest);
@@ -169,6 +172,10 @@ it('projects a compiled graph into the browser manifest with project-relative so
     expect(route.source.startsWith('/')).toBe(false);
     expect(route.provenance).toEqual({ kind: 'conventional' });
   }
+  expect(manifest.cli?.commands).toContainEqual(expect.objectContaining({
+    mcp: { confirm: false, server: 'harness', tool: 'echo' },
+    routeId: 'tool:harness/echo',
+  }));
   expect(Object.isFrozen(manifest)).toBe(true);
 });
 

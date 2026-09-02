@@ -125,6 +125,27 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });
 
+it('preserves projected MCP provenance and confirmation policy', async () => {
+  const projected = {
+    ...manifest.cli.commands[0],
+    mcp: { confirm: true, server: 'library', tool: 'apply' },
+    path: ['library', 'apply'],
+    routeId: 'tool:library/apply',
+  };
+  const decoded = await clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: { ...manifest.cli, commands: [projected] },
+    },
+  })).manifest();
+
+  expect(decoded.cli?.commands?.[0]?.mcp).toEqual({
+    confirm: true,
+    server: 'library',
+    tool: 'apply',
+  });
+});
+
 it('freezes the decoded manifest so no page can mutate compiled route facts', async () => {
   const decoded = await clientFor(() => response({ manifest })).manifest();
 

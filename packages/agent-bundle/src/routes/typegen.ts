@@ -6,11 +6,14 @@ import type { CompiledAgentRoute, CompiledRouteGraph } from './types.ts';
 
 export const routeTypesRelativePath = '.agent-bundle/routes.d.ts';
 
-const executableRoutes = (graph: CompiledRouteGraph): readonly CompiledAgentRoute[] => Object.freeze([
-  ...graph.servers.flatMap((server) => server.routes.filter((route) => route.kind !== 'app')),
-  ...(graph.cli?.routes ?? []),
-  ...graph.events,
-].sort((left, right) => left.id.localeCompare(right.id)));
+const executableRoutes = (graph: CompiledRouteGraph): readonly CompiledAgentRoute[] => Object.freeze(
+  [...new Map([
+    ...graph.servers.flatMap((server) => server.routes.filter((route) => route.kind !== 'app')),
+    ...(graph.cli?.routes ?? []),
+    ...graph.events,
+  ].map((route) => [route.id, route])).values()]
+    .sort((left, right) => left.id.localeCompare(right.id)),
+);
 
 const declarationImport = (route: CompiledAgentRoute, index: number): string => {
   const relativePath = route.provenance.relativePath;

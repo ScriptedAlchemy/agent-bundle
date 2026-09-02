@@ -201,6 +201,10 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
   const lines: string[] = [commandUsage(name, command)];
   if (command.description !== undefined) lines.push('', command.description);
   if (command.aliases.length > 0) lines.push('', `Aliases: ${command.aliases.join(', ')}`);
+  if (command.mcp !== undefined) {
+    lines.push('', `MCP tool: ${command.mcp.server}:${command.mcp.tool}`);
+    if (command.mcp.confirm) lines.push('Mutation-capable; requires --yes.');
+  }
   const positionals = sortedPositionals(command);
   if (positionals.length > 0) {
     lines.push('', 'Arguments:', helpColumns(positionals.map((option) => [
@@ -403,6 +407,31 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
   }
   if (json && ndjson) throw new CliUsageError('Use either --json or --ndjson, not both.');
   return { input: Object.fromEntries(values), json, ndjson };
+};
+
+const parseMcpCommandInput = (
+  command: CompiledCliCommand,
+  parsed: ParsedArgv,
+): ParsedArgv => {
+  if (command.mcp === undefined) return parsed;
+  const raw = parsed.input['input'];
+  let input: unknown = {};
+  if (raw !== undefined) {
+    try {
+      input = JSON.parse(raw as string) as unknown;
+    } catch {
+      throw new CliUsageError('--input must be one valid JSON object.');
+    }
+  }
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new CliUsageError('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
+  }
+  if (command.mcp.confirm && parsed.input['yes'] !== true) {
+    throw new CliUsageError(
+      `MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`,
+    );
+  }
+  return { ...parsed, input: input as Readonly<Record<string, unknown>> };
 };
 
 const resultExitCode = (policy: 'result' | 'zero', result: unknown): number => {
@@ -612,7 +641,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       writeOut(commandHelp(options.name, command));
       return 0;
     }
-    const parsed = parseCommandArgv(command, rest);
+    const parsed = parseMcpCommandInput(command, parseCommandArgv(command, rest));
     signal.throwIfAborted();
     if (command.rendered) {
       if (options.render === undefined) {

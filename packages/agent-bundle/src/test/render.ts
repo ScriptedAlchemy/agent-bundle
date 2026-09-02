@@ -628,10 +628,15 @@ export const prepareCliRenderHost = async (
         throw new CliInputError(error instanceof Error ? error.message : String(error));
       }
       const commandName = command.path.join(' ');
-      const invocation = {
-        kind: 'cli' as const,
-        props: { args: execution.args, command: commandName },
-      };
+      const invocation: AgentRenderInvocation = command.mcp === undefined
+        ? {
+            kind: 'cli',
+            props: { args: execution.args, command: commandName },
+          }
+        : {
+            kind: 'tool',
+            props: { input: parsed as never, operationId: command.routeId },
+          };
       const collected: AgentProgressUpdate[] = [];
       const dispatcher = createFlightDispatcher({
         collected,
@@ -652,12 +657,20 @@ export const prepareCliRenderHost = async (
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
-            invocation: {
-              kind: 'cli',
-              operationId: command.routeId,
-              surface: commandName,
-              ...context.invocation,
-            },
+            invocation: command.mcp === undefined
+              ? {
+                  kind: 'cli',
+                  operationId: command.routeId,
+                  surface: commandName,
+                  ...context.invocation,
+                }
+              : {
+                  artifactEpoch: `${options.manifest.plugin.name}@${options.manifest.plugin.version}`,
+                  kind: 'tool',
+                  operationId: command.routeId,
+                  surface: command.mcp.tool,
+                  ...context.invocation,
+                },
             signal: request.signal,
           };
         },

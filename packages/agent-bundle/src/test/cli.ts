@@ -7,11 +7,15 @@
  * help, output-mode selection, and exit-code mapping are the product's. Plain
  * commands run through an in-process `execute` bridge; rendered commands run
  * through an in-process render session that shares the route-unit harness's
- * dispatcher and Flight renderer.
+ * dispatcher and Flight renderer. Projected MCP commands use that local
+ * renderer with the same tool invocation and request-context shapes as the
+ * generated MCP server; no MCP transport or wire client is involved.
  *
  * It does **not** spawn the generated binary: no shebang, no executable bit,
  * worker thread, process framing, or chunk-by-chunk Flight streaming timing.
- * The packed CLI route suite owns that evidence.
+ * It also does not negotiate MCP progress or task support over a wire. The
+ * packed CLI route suite owns executable evidence; MCP transport suites own
+ * wire behavior.
  */
 import type * as AgentRuntime from '@agent-bundle/runtime';
 

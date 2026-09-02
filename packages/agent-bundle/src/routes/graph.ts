@@ -5,7 +5,11 @@ import { extname, relative, resolve } from 'node:path';
 import fastGlob from 'fast-glob';
 
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
-import { compileCliCommands } from './cli-commands.ts';
+import {
+  compileCliCommands,
+  compileMcpCliCommands,
+  type McpCommandSelection,
+} from './cli-commands.ts';
 import { extractRouteConfig } from './config-extract.ts';
 import {
   validateEventRouteModuleContract,
@@ -244,6 +248,7 @@ const configClaimedSources = (
 
 interface RouteModeOverrides {
   readonly cli?: 'generated' | 'conventional';
+  readonly mcpCommands?: McpCommandSelection;
   readonly servers: ReadonlyMap<string, CompiledServerMode>;
 }
 
@@ -256,10 +261,11 @@ const parseRouteModeOverrides = (
   config: Readonly<AgentBundleConfig>,
   diagnostics: Diagnostic[],
 ): RouteModeOverrides => {
-  const overrideRecovery = 'Set routes.servers.<id> to generated, custom, command, or remote, and routes.cli to generated or conventional.';
+  const overrideRecovery = 'Set routes.servers.<id> to generated, custom, command, or remote; routes.cli to generated or conventional; and routes.mcpCommands to true or an object with string-array include/exclude fields.';
   const declared = configValue(config, 'routes');
   const servers = new Map<string, CompiledServerMode>();
   let cli: 'generated' | 'conventional' | undefined;
+  let mcpCommands: McpCommandSelection | undefined;
   if (declared === undefined) return { servers };
   if (!isRecord(declared)) {
     diagnostics.push(routeError('AB4804', 'Routes overrides must be an object.', overrideRecovery));
@@ -295,7 +301,40 @@ const parseRouteModeOverrides = (
       ));
     }
   }
-  return { ...(cli === undefined ? {} : { cli }), servers };
+  const declaredMcpCommands = declared.mcpCommands;
+  if (declaredMcpCommands === true) {
+    // G7 replaced the issue's MCPorter-branded sketch with this in-house
+    // projection over the compiled route graph.
+    mcpCommands = {};
+  } else if (declaredMcpCommands !== undefined) {
+    const keys = isRecord(declaredMcpCommands) ? Object.keys(declaredMcpCommands) : [];
+    const include = isRecord(declaredMcpCommands) ? declaredMcpCommands.include : undefined;
+    const exclude = isRecord(declaredMcpCommands) ? declaredMcpCommands.exclude : undefined;
+    const validList = (value: unknown): value is readonly string[] =>
+      Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string');
+    if (
+      !isRecord(declaredMcpCommands)
+      || keys.some((key) => key !== 'include' && key !== 'exclude')
+      || (include !== undefined && !validList(include))
+      || (exclude !== undefined && !validList(exclude))
+    ) {
+      diagnostics.push(routeError(
+        'AB4804',
+        'Routes MCP command projection must be true or an object containing only string-array include/exclude fields.',
+        overrideRecovery,
+      ));
+    } else {
+      mcpCommands = {
+        ...(exclude === undefined ? {} : { exclude }),
+        ...(include === undefined ? {} : { include }),
+      };
+    }
+  }
+  return {
+    ...(cli === undefined ? {} : { cli }),
+    ...(mcpCommands === undefined ? {} : { mcpCommands }),
+    servers,
+  };
 };
 
 /** The declared config entry for one MCP server, tolerant of malformed config shapes. */
@@ -599,8 +638,11 @@ export const compileRouteGraph = async (
     });
   }
 
+  const projected = overrides.mcpCommands === undefined
+    ? undefined
+    : compileMcpCliCommands(servers, overrides.mcpCommands);
   let cli: CompiledCliSurface | undefined;
-  if (cliRoutes.length > 0) {
+  if (cliRoutes.length > 0 || projected !== undefined) {
     const conventionalCli = conventionalEntryAt(projectRoot, 'src', 'cli');
     let mode: CompiledCliMode;
     if (overrides.cli !== undefined) {
@@ -609,9 +651,14 @@ export const compileRouteGraph = async (
       mode = 'generated';
     } else {
       mode = 'conflict';
+      const generatedClaim = cliRoutes.length === 0
+        ? 'the routes.mcpCommands projection'
+        : projected === undefined
+          ? 'src/cli/ command route modules'
+          : 'src/cli/ command route modules plus the routes.mcpCommands projection';
       diagnostics.push(routeError(
         'AB4801',
-        'The conventional src/cli entry module and src/cli/ command route modules both exist; the compiler never chooses silently.',
+        `The conventional src/cli entry module and ${generatedClaim} both exist; the compiler never chooses silently.`,
         'Set routes.cli to generated to compile the command routes, or to conventional to keep the src/cli entry.',
         conventionalCli,
       ));
@@ -624,16 +671,38 @@ export const compileRouteGraph = async (
           // Racing deletion is handled by the next source snapshot.
           return undefined;
         }
-      });
+      }, projected);
       diagnostics.push(...compiled.diagnostics);
-      cli = { commands: compiled.commands, mode, routes: cliRoutes };
+      cli = {
+        commands: compiled.commands,
+        mode,
+        routes: [...cliRoutes, ...(projected?.routes ?? [])]
+          .sort((left, right) => left.id.localeCompare(right.id)),
+      };
     } else {
+      diagnostics.push(...(projected?.diagnostics ?? []));
+      if (mode === 'conventional' && projected !== undefined) {
+        diagnostics.push(routeError(
+          'AB4804',
+          'routes.mcpCommands requires a generated CLI surface, but routes.cli is conventional.',
+          'Set routes.cli to generated, or remove routes.mcpCommands to keep the conventional src/cli entry.',
+          conventionalCli,
+        ));
+      }
       cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
     }
   }
 
   const identity = {
-    ...(cli === undefined ? {} : { cli: { mode: cli.mode, routes: cli.routes.map(routeIdentity) } }),
+    ...(cli === undefined
+      ? {}
+      : {
+          cli: {
+            ...(cli.commands === undefined ? {} : { commands: cli.commands }),
+            mode: cli.mode,
+            routes: cli.routes.map(routeIdentity),
+          },
+        }),
     events: events.map(routeIdentity),
     providers: providers.map((provider) => ({ id: provider.id, relativePath: provider.provenance.relativePath })),
     scripts: scripts.map(routeIdentity),

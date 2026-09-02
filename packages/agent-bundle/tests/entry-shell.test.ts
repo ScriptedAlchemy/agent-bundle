@@ -366,6 +366,43 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   })).toBe(source);
 });
 
+it('generates projected MCP commands with the same tool invocation and request contract as the MCP server', () => {
+  const route = {
+    config: { annotations: { readOnlyHint: true } },
+    id: 'tool:curator/read_item',
+    kind: 'tool' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/tools/read_item.tsx' },
+    serverId: 'mcp:curator',
+    source: '/project/src/mcp/curator/tools/read_item.tsx',
+  };
+  const source = entryShellModule.generatedCliBinEntrySource({
+    commands: [{
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: false, server: 'curator', tool: 'read_item' },
+      options: [{
+        description: 'Tool input as one JSON object.',
+        key: 'input',
+        kind: 'string',
+        option: 'input',
+        repeated: false,
+        required: false,
+      }],
+      path: ['curator', 'read_item'],
+      rendered: true,
+      routeId: route.id,
+    }],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    workerFile: 'route-fixture-flight.mjs',
+  });
+
+  expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/read_item.tsx"');
+  expect(source).toContain("invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } }");
+  expect(source).toContain('request: { artifactEpoch: "route-fixture@1.2.3", kind: \'tool\', operationId: command.routeId, surface: command.mcp.tool }');
+  expect(source).toContain('props: { input: parsed }');
+});
+
 it('generates deterministic per-request provider execution in the shared Flight worker', () => {
   const source = entryShellModule.generatedRouteFlightWorkerSource({
     artifactEpoch: 'route-fixture@1.2.3',
