@@ -44,13 +44,18 @@ describe('audiobook curator filesystem application', () => {
     expect(graph.servers[0]!.routes.filter((route) => route.kind === 'prompt').map((route) => route.id)).toEqual(['prompt:curator/curate']);
   });
 
-  it('derives the complete routed CLI from src/cli/ route modules and no cli config', async () => {
+  it('derives the complete routed CLI and projected MCP toolset', async () => {
     const graph = await compileRouteGraph(root, config);
     expect(graph.cli).toMatchObject({ mode: 'generated' });
-    expect(graph.cli!.commands).toHaveLength(15);
-    // Exactly one command renders through the dispatcher; the other
-    // fourteen keep the plain one-JSON-line contract byte for byte.
-    expect(graph.cli!.commands!.filter((command) => command.rendered).map((command) => command.path.join(' ')))
+    expect(graph.cli!.commands).toHaveLength(30);
+    const customCommands = graph.cli!.commands!.filter((command) => command.mcp === undefined);
+    const projectedCommands = graph.cli!.commands!.filter((command) => command.mcp !== undefined);
+    expect(customCommands).toHaveLength(15);
+    expect(projectedCommands.map((command) => command.path.join(' '))).toEqual(
+      toolNames.map((tool) => `curator ${tool}`),
+    );
+    expect(customCommands.filter((command) => command.rendered).map((command) => command.path.join(' ')))
       .toEqual(['library-audit']);
+    expect(projectedCommands.every((command) => command.rendered)).toBe(true);
   });
 });
