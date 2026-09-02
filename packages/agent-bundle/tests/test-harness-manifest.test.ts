@@ -189,11 +189,15 @@ describe('the compiled test manifest', () => {
     });
     expect(manifest.cliCommands.filter((command) => command.mcp !== undefined)).toEqual([
       projected('catalog', 'Streams the harness catalog behind one Suspense boundary.', true),
+      projected('context', 'Returns the request identity axes observed by this route.', true),
       projected('echo', 'Echoes one message back with the observed workspace root.', false),
       projected('journal', 'Records and reads durable route-harness journal entries.', true),
       projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
+      projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
+      projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
       projected('unavailable', undefined, true),
+      projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true),
     ]);
   });
 
