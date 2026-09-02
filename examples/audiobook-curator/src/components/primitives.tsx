@@ -16,6 +16,14 @@ export const DataList = ({ fields }: DataListProps) => (
   </Agent.Markdown>
 );
 
+export interface FileListProps {
+  readonly files: readonly string[];
+}
+
+export const FileList = ({ files }: FileListProps) => (
+  <Agent.Markdown>{files.map((file) => `- ${file}`).join('\n')}</Agent.Markdown>
+);
+
 export interface CalloutProps {
   readonly children: string;
   readonly tone: 'error' | 'review' | 'warning';

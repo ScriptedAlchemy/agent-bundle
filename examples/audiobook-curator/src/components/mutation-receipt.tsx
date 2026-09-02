@@ -5,13 +5,23 @@ import type { PrepareReceipt } from '../curator-core.ts';
 import type { ChapterReceipt, MetadataReceipt } from '../media-mutation.ts';
 import { Callout, DataList } from './primitives.tsx';
 
-type PlanFirstReceipt = ChapterReceipt | ConvertReceipt | MetadataReceipt | PrepareReceipt;
-
-export interface MutationReceiptProps {
-  readonly receipt: PlanFirstReceipt;
+export interface MetadataMutationProps {
+  readonly receipt: MetadataReceipt;
 }
 
-const metadataMutation = (receipt: MetadataReceipt) => (
+export interface ChapterMutationProps {
+  readonly receipt: ChapterReceipt;
+}
+
+export interface ConversionMutationProps {
+  readonly receipt: ConvertReceipt;
+}
+
+export interface PrepareMutationProps {
+  readonly receipt: PrepareReceipt;
+}
+
+export const MetadataMutation = ({ receipt }: MetadataMutationProps) => (
   <>
     <DataList fields={[
       { label: 'Status', value: receipt.status },
@@ -28,7 +38,7 @@ const metadataMutation = (receipt: MetadataReceipt) => (
   </>
 );
 
-const chapterMutation = (receipt: ChapterReceipt) => (
+export const ChapterMutation = ({ receipt }: ChapterMutationProps) => (
   <>
     <DataList fields={[
       { label: 'Status', value: receipt.status },
@@ -45,7 +55,7 @@ const chapterMutation = (receipt: ChapterReceipt) => (
   </>
 );
 
-const conversionMutation = (receipt: ConvertReceipt) => (
+export const ConversionMutation = ({ receipt }: ConversionMutationProps) => (
   <>
     <DataList fields={[
       { label: 'Status', value: receipt.status },
@@ -64,7 +74,7 @@ const conversionMutation = (receipt: ConvertReceipt) => (
   </>
 );
 
-const prepareMutation = (receipt: PrepareReceipt) => (
+export const PrepareMutation = ({ receipt }: PrepareMutationProps) => (
   <>
     <DataList fields={[
       { label: 'Status', value: receipt.applied ? 'applied' : 'planned' },
@@ -81,20 +91,3 @@ const prepareMutation = (receipt: PrepareReceipt) => (
     </Callout>
   </>
 );
-
-export const MutationReceipt = ({ receipt }: MutationReceiptProps) => {
-  switch (receipt.operation) {
-    case 'apply-metadata':
-      return metadataMutation(receipt);
-    case 'apply-chapters':
-      return chapterMutation(receipt);
-    case 'convert':
-      return conversionMutation(receipt);
-    case 'prepare':
-      return prepareMutation(receipt);
-    default: {
-      const unhandled: never = receipt;
-      throw new Error(`Unhandled mutation receipt: ${JSON.stringify(unhandled)}`);
-    }
-  }
-};
