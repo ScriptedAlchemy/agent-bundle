@@ -1,11 +1,18 @@
+import { execFile as executeFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import { capabilityIsSupported } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import {
+  packInventoryDiagnostics,
+  packOutputFromJson,
+  type PackOutput,
+} from './build/pack-inventory.ts';
 import type { CapabilityState } from './core/capabilities.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
@@ -333,6 +340,11 @@ export interface BuildProjectResult {
   readonly model: NormalizedPlugin;
   readonly packageBuild?: PackageBuildResult;
   readonly projectContext: ProjectContext;
+}
+
+export interface PrepackResult {
+  readonly build: BuildProjectResult;
+  readonly pack: PackOutput;
 }
 
 export interface ArtifactOperationOptions extends ProjectOptions {
@@ -728,6 +740,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   let packageBuild: PackageBuildResult | undefined;
   if (packageOutputRoot !== undefined) {
     packageBuild = await buildPackageOutputs({
+      ...(isInsideOrEqual(prepared.root, output) ? { artifactRoot: output } : {}),
       model,
       projectRoot: prepared.root,
       ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
@@ -741,6 +754,33 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     ...(packageBuild === undefined ? {} : { packageBuild }),
     projectContext,
   });
+};
+
+const execFile = promisify(executeFile);
+
+export const prepack = async (options: BuildOptions): Promise<PrepackResult> => {
+  const result = await build({ ...options, packageOutputs: true });
+  if (result.packageBuild === undefined) {
+    throw new DiagnosticError([{
+      code: 'AB7010',
+      message: 'Prepack requires at least one framework-owned package output.',
+      recovery: 'Declare a package bin or lib entry before running agent-bundle prepack.',
+      severity: 'error',
+    }]);
+  }
+  const { stdout } = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+    cwd: resolve(options.root),
+  });
+  const pack = packOutputFromJson(stdout);
+  const diagnostics = await packInventoryDiagnostics({
+    artifactRoot: result.build.outputRoot,
+    model: result.model,
+    packageBuild: result.packageBuild,
+    packOutput: pack,
+    projectRoot: options.root,
+  });
+  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
+  return deepFreeze({ build: result, pack });
 };
 
 /** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */

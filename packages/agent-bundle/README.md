@@ -67,6 +67,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | Command | Purpose |
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
+| `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
 | `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
@@ -127,6 +128,15 @@ node ./install.mjs
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. A source-free artifact root is accepted
 by `--from` when it contains the selected host target directory.
+
+When package outputs ship one of those host packs, the build also emits a
+package-relative installer bin. It uses the plugin name when no configured bin
+claims it and `<plugin-name>-install` otherwise. Map that name to the generated
+`dist/bin/*.js` file in `package.json`; consumers run
+`<bin> install <host> [--scope <scope>] [--json]`. The executable locates the
+artifact directory beside the installed package, so it works from
+`node_modules` regardless of the current directory. No npm lifecycle performs
+an installation.
 
 ## Developer workbench
 

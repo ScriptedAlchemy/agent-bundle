@@ -21,6 +21,21 @@ node-consumable package build under `dist/` — the outputs `package.json`
 | `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
 | `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` + `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
 
+- When package outputs and at least one Claude, Codex, or Cursor host pack are
+  built inside the project, the framework also emits one self-contained
+  package-relative installer. It is `dist/bin/<plugin-name>.js` when that name
+  is free, otherwise `dist/bin/<plugin-name>-install.js`. Declare the matching
+  `package.json` `bin` value. Its grammar is
+  `install <host> [--scope <scope>] [--json]`; help lists only built hosts.
+  The baked URL resolves the shipped artifact directory from `import.meta.url`,
+  never the caller's working directory, and delegates to the same
+  `installBundle` implementation as `agent-bundle install`.
+- `agent-bundle prepack [--root <root>] [--output <artifact>] [--json]` runs
+  the release build and `npm pack --dry-run --json --ignore-scripts`, then
+  gates the exact package/artifact inventory, manifest hashes, package bin
+  targets, and release-version agreement. Use it as an npm `prepack` script;
+  `--ignore-scripts` prevents recursion and npm install never runs the host
+  installer.
 - The package build runs for `agent-bundle build` (CLI, or
   `build({ packageOutputs: true })` through the API) and inside the
   `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”
