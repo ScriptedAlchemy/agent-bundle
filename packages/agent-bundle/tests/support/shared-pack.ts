@@ -23,7 +23,7 @@ export interface SharedPack {
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
 
-const packOutputFromJson = (stdout: string): SharedPackOutput => {
+export const packOutputFromJson = (stdout: string): SharedPackOutput => {
   const parsed: unknown = JSON.parse(stdout);
   const entries = Array.isArray(parsed)
     ? parsed
