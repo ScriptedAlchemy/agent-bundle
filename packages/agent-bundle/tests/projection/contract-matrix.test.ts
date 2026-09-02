@@ -264,6 +264,54 @@ describe('the generated-plugin contract matrix', () => {
     }
   }, 30_000);
 
+  it('does not require identity from a generated server that does not own the event runtime', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-contract-non-owner-'));
+    const compiledManifest = await compileTestManifest({ root: fixtureRoot });
+    const manifest = Object.freeze({
+      ...compiledManifest,
+      apps: Object.freeze({}),
+      eventRuntimeServerId: 'mcp:not-harness',
+      routes: Object.freeze(Object.fromEntries(
+        Object.entries(compiledManifest.routes).filter(([, route]) => route.kind !== 'app'),
+      )),
+    });
+    const session = await openInMemoryMcpServer({
+      manifest,
+      state: {
+        definition: stateDefinition,
+        driver: createSqliteStateDriver({ root }),
+      },
+    });
+    const packedSession: PackedMcpSession = Object.freeze({
+      client: session.client,
+      close: session.close,
+      provenance: Object.freeze({
+        entry: 'in-memory non-owning-server regression fixture',
+        pid: undefined,
+        proofLevel: 'packed-stdio' as const,
+      }),
+      stderr: () => '',
+      [Symbol.asyncDispose]: session[Symbol.asyncDispose],
+    });
+    try {
+      const report = await runPackedContractMatrix({
+        eventRuntime: { endpoint: join(root, 'must-not-be-read.sock') },
+        fixtures: routeHarnessContractFixtures(),
+        manifest,
+        server: 'harness',
+        session: packedSession,
+      });
+
+      expect(report.checks['runtime-instance-identity']).toEqual({
+        reason: 'compiled server "mcp:harness" does not own the event runtime; owner is "mcp:not-harness".',
+        status: 'not-applicable',
+      });
+    } finally {
+      await session.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 30_000);
+
   it('reads one warm runtime identity across installed-host matrix events', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-bundle-installed-identity-'));
     const runtime = await createEventRuntimeServer({

@@ -409,12 +409,27 @@ const readRuntimeStatus = async (
 const createRuntimeIdentityTracker = (
   boundary: MatrixBoundaryCapabilities,
   manifest: AgentBundleTestManifest,
+  serverName: string,
 ): RuntimeIdentityTracker => {
   const hasEventRoutes = Object.values(manifest.routes)
     .some((route) => route.kind === 'event-route');
   if (!hasEventRoutes) {
     const outcome = notApplicable(
       'the compiled manifest declares no event routes, so this boundary has no event runtime.',
+    );
+    return Object.freeze({ observe: async () => undefined, outcome: () => outcome });
+  }
+  const serverId = `mcp:${serverName}`;
+  if (manifest.eventRuntimeServerId === undefined) {
+    const outcome = notApplicable(
+      'the compiled manifest declares event routes, but no generated MCP server owns their event runtime.',
+    );
+    return Object.freeze({ observe: async () => undefined, outcome: () => outcome });
+  }
+  if (manifest.eventRuntimeServerId !== serverId) {
+    const outcome = notApplicable(
+      `compiled server ${JSON.stringify(serverId)} does not own the event runtime; `
+      + `owner is ${JSON.stringify(manifest.eventRuntimeServerId)}.`,
     );
     return Object.freeze({ observe: async () => undefined, outcome: () => outcome });
   }
@@ -1326,7 +1341,7 @@ const executeContractMatrix = async (options: {
   const failures: MatrixFailure[] = [];
   const matrixChecks: Record<string, ContractCheckOutcome> = {};
   const routeReports: Record<string, ContractRouteReport> = {};
-  const runtimeIdentity = createRuntimeIdentityTracker(boundary, manifest);
+  const runtimeIdentity = createRuntimeIdentityTracker(boundary, manifest, serverName);
   const moduleSchemaNotApplicable = (): ContractCheckOutcome =>
     notApplicable(boundary.moduleSchemaNotApplicableReason);
 
