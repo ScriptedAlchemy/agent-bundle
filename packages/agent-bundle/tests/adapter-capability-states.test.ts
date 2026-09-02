@@ -109,6 +109,27 @@ it('reports Claude LSP support and honest unavailable composite coverage', () =>
   expect(registry.supports('plugin', 'lsp')).toBe(false);
 });
 
+it('reports Claude bin support without inventing coverage on other native hosts', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.bin).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities.bin).toMatchObject({
+    reason: expect.stringContaining('Claude-only bin'),
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.bin).toBeUndefined();
+  }
+  expect(registry.supports('claude', 'bin')).toBe(true);
+  expect(registry.supports('plugin', 'bin')).toBe(false);
+});
+
 it('intersects supported composite capabilities and merges both evidence records', () => {
   const intersection = intersectCapabilityStates(
     supportedCapability(evidence('claude')),

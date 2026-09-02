@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.6.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -149,6 +149,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.5.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -262,17 +263,20 @@ it('returns frozen, detached metadata snapshots while retaining the original ada
   expect(() => (snapshot.schemas[0] as { name: string }).name = 'changed').toThrow();
 });
 
-it('snapshots canonical immutable artifact output suffixes and rejects malformed layouts', () => {
+it('snapshots canonical immutable artifact output suffixes and recursive namespaces and rejects malformed layouts', () => {
   const allowedSuffixes = ['.mjs', '.sh'];
   const registered = adapter('custom');
   const registry = new TargetRegistry().register({
     ...registered,
-    artifactLayout: { scripts: { allowedSuffixes, directory: 'scripts' } },
+    artifactLayout: { bin: 'bin', scripts: { allowedSuffixes, directory: 'scripts' } },
   });
   const layout = registry.artifactLayout('custom');
 
   allowedSuffixes.push('.py');
-  expect(layout).toEqual({ scripts: { allowedSuffixes: ['.mjs', '.sh'], directory: 'scripts' } });
+  expect(layout).toEqual({
+    bin: 'bin',
+    scripts: { allowedSuffixes: ['.mjs', '.sh'], directory: 'scripts' },
+  });
   expect(Object.isFrozen(layout)).toBe(true);
   expect(Object.isFrozen(layout.scripts)).toBe(true);
   expect(Object.isFrozen(layout.scripts?.allowedSuffixes)).toBe(true);

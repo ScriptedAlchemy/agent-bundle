@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { configuredPayloadRoots, discoverProject } from '../config/discover.ts';
@@ -278,7 +278,7 @@ export const snapshotProjectSource = async (
   root: string,
   configPath: string,
   outputRoots: readonly string[] = [],
-  payloadRoots: readonly string[] = [],
+  additionalSourceRoots: readonly string[] = [],
 ): Promise<ProjectSourceSnapshot> => {
   const requestedRoot = resolve(root);
   const resolvedRoot = await realpath(requestedRoot);
@@ -287,13 +287,13 @@ export const snapshotProjectSource = async (
   relativeSourcePath(requestedRoot, requestedConfigPath);
   const resolvedConfigPath = await realpath(requestedConfigPath);
   relativeSourcePath(resolvedRoot, resolvedConfigPath);
-  // Declared prebuilt payload files join the identity even though payload
-  // directories are ignored for source discovery: the artifact packages
+  // Declared prebuilt payload and host-bin files join the identity even when
+  // their directories are ignored for source discovery: the artifact packages
   // their exact bytes, so the project revision must change with them.
   const sources = new Set<string>([
     resolvedConfigPath,
     ...(await sourcePaths(resolvedRoot, resolvedOutputRoots)),
-    ...(await payloadSourcePaths(resolvedRoot, payloadRoots)),
+    ...(await payloadSourcePaths(resolvedRoot, additionalSourceRoots)),
   ]);
   const inputs = Object.freeze((await Promise.all([...sources].map((source) => sourceInput(resolvedRoot, source))))
     .sort((left, right) => left.path.localeCompare(right.path)));
@@ -738,10 +738,15 @@ export class ProjectService {
       return failedPreparation('AB7000', 'Unable to load project source.', configPath, 'project.invalid-source', snapshot);
     }
 
-    const payloadRoots = configuredPayloadRoots(root, loaded.config);
+    const targetNames = loaded.context.selectedTargets.length > 0
+      ? loaded.context.selectedTargets
+      : (loaded.config.targets ?? registry.defaultTargetNames());
+    const hostBinRoots = (registry.binSources?.(loaded.config, targetNames) ?? [])
+      .flatMap((source) => 'source' in source ? [resolve(dirname(loaded.configPath), source.source)] : []);
+    const additionalSourceRoots = [...configuredPayloadRoots(root, loaded.config), ...hostBinRoots];
     let snapshot: ProjectSourceSnapshot;
     try {
-      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
+      snapshot = await snapshotProjectSource(root, loaded.configPath, outputRoots, additionalSourceRoots);
     } catch {
       return failedPreparation('AB7003', 'Unable to snapshot project source.', loaded.configPath, 'project.invalid-source');
     }
@@ -791,7 +796,7 @@ export class ProjectService {
       );
     }
     const snapshotSource = (): Promise<ProjectSourceSnapshot> =>
-      snapshotProjectSource(root, loaded.configPath, outputRoots, payloadRoots);
+      snapshotProjectSource(root, loaded.configPath, outputRoots, additionalSourceRoots);
     if (hasErrors(sourceDiagnostics)) {
       const source = sourceStatus(sourceDiagnostics, snapshot.revision, root);
       log(this.#options.logger, 'project.invalid-source', { diagnostics: sourceDiagnostics.length, root });

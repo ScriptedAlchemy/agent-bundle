@@ -1,4 +1,7 @@
 import { expect, it } from '@rstest/core';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import * as normalizeModule from '../src/config/normalize.ts';
 import {
@@ -202,6 +205,91 @@ it('normalizes the typed Claude LSP source surface through the strict JSON exten
   });
   expect(Object.isFrozen(extension)).toBe(true);
   expect(Object.isFrozen(extension?.value)).toBe(true);
+});
+
+it('enumerates claude.bin relative to the config file into immutable executable metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-bin-normalize-'));
+  const configDir = join(root, 'configs');
+  const binRoot = join(root, 'tools');
+  const executable = join(binRoot, 'review-tool');
+  const support = join(binRoot, 'lib', 'config.json');
+  const executableContents = '#!/usr/bin/env sh\nprintf "reviewed\\n"\n';
+  const supportContents = '{"enabled":true}\n';
+  await mkdir(join(binRoot, 'lib'), { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await Promise.all([
+    writeFile(executable, executableContents),
+    writeFile(support, supportContents),
+  ]);
+  await chmod(executable, 0o751);
+  const loaded: LoadedConfig = {
+    ...loadedProject({
+      claude: { bin: '../tools' },
+      plugin: { name: 'claude-bin-fixture', version: '1.0.0' },
+      targets: ['claude'],
+    }, { root }),
+    configPath: join(configDir, 'agent-bundle.config.ts'),
+  };
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, createDefaultRegistry());
+
+    expect(model.hostBins).toEqual([{
+      files: [
+        {
+          bytes: Buffer.byteLength(supportContents),
+          executable: false,
+          relativePath: 'lib/config.json',
+          source: support,
+        },
+        {
+          bytes: Buffer.byteLength(executableContents),
+          executable: true,
+          relativePath: 'review-tool',
+          source: executable,
+        },
+      ],
+      provenance: { kind: 'config', sourcePath: loaded.configPath },
+      source: binRoot,
+      target: 'claude',
+    }]);
+    expect(Object.isFrozen(model.hostBins)).toBe(true);
+    expect(Object.isFrozen(model.hostBins?.[0])).toBe(true);
+    expect(Object.isFrozen(model.hostBins?.[0]?.files)).toBe(true);
+    expect(Object.isFrozen(model.hostBins?.[0]?.files[0])).toBe(true);
+
+    const pluginModel = await normalizeProject({
+      ...loaded,
+      config: { ...loaded.config, targets: ['plugin'] },
+    }, { skills: [] }, createDefaultRegistry());
+    expect(pluginModel.hostBins?.[0]?.target).toBe('plugin');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it.each([
+  { code: 'claude.bin.directory.missing', create: false, issue: 'missing' as const },
+  { code: 'claude.bin.directory.empty', create: true, issue: 'empty' as const },
+])('normalizes and diagnoses a claude.bin directory that is $issue', async ({ code, create, issue }) => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-bin-diagnostic-'));
+  const binRoot = join(root, 'tools');
+  if (create) await mkdir(binRoot, { recursive: true });
+  const loaded = loadedProject({
+    claude: { bin: './tools' },
+    plugin: { name: 'claude-bin-diagnostic', version: '1.0.0' },
+    targets: ['claude'],
+  }, { root });
+
+  try {
+    const model = await normalizeProject(loaded, { skills: [] }, createDefaultRegistry());
+    const plan = createDefaultRegistry().get('claude').plan(model);
+
+    expect(model.hostBins?.[0]).toMatchObject({ files: [], issue, source: binRoot, target: 'claude' });
+    expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 it('rejects non-JSON values in registered config extensions before normalization', async () => {

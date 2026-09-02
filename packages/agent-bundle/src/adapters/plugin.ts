@@ -1,7 +1,7 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
-import type { NormalizedHook, NormalizedPlugin } from '../core/types.ts';
+import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../core/types.ts';
 import {
   allMcpPathTokenFields,
   createMcpPathTokenResolver,
@@ -183,7 +183,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.4.0',
+  adapterRevision: '1.5.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -212,6 +212,7 @@ const mcpRuntime = createTargetMcpRuntime({
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({
   assets: standardArtifactLayout.assets,
+  bin: 'bin',
   commands: Object.freeze({ allowedSuffixes: Object.freeze(['.md']), directory: 'commands' }),
   hookWrappers: standardArtifactLayout.hookWrappers,
   mcpApps: standardArtifactLayout.mcpApps,
@@ -225,6 +226,8 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginName, 'Agent plugin bundle');
 
 interface AgentsDocumentOptions {
+  /** True when the Claude half emitted plugin-root executables. */
+  readonly bin: boolean;
   /** True when the Claude half emitted conventional command prompts. */
   readonly commands: boolean;
   /** True when the Claude half of this bundle emitted `.lsp.json`. */
@@ -265,6 +268,11 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
     ...(options.commands
       ? [
           '- `commands/` — Claude Code command prompts; Codex has no commands surface; the Cursor manifest deliberately does not point at Claude-format command files.',
+        ]
+      : []),
+    ...(options.bin
+      ? [
+          '- `bin/` — Claude Code executables added to the Bash tool PATH while the plugin is enabled; Codex and Cursor have no declared bin surface.',
         ]
       : []),
     ...(options.rules
@@ -478,6 +486,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   entries.push(...ruleWriteEntries(model, isSelected));
   entries.push({
     content: agentsDocument(model, {
+      bin: entries.some((entry) => entry.relativePath.startsWith('bin/')),
       commands: selectedCommands.length > 0,
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
       rules: selectedRules.length > 0,
@@ -546,6 +555,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...compositeEventCapabilities,
+    bin: unavailableCapability(
+      'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',
+    ),
     commands: intersectCapabilityStates(
       intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
       cursorAdapter.capabilities.commands!,
@@ -586,5 +598,6 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: pluginName,
+  binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
   plan,
 });

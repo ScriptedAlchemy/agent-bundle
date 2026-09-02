@@ -268,6 +268,35 @@ it('emits Claude-only LSP configuration at the shared composite root', () => {
   expect(documents['AGENTS.md']).toContain('claude --debug');
 });
 
+it('emits the Claude bin directory from the unified plugin target', () => {
+  const model: NormalizedPlugin = {
+    ...bundleModel,
+    hostBins: [{
+      files: [{
+        bytes: 37,
+        executable: true,
+        relativePath: 'review-tool',
+        source: '/workspace/tools/review-tool',
+      }],
+      provenance: { kind: 'config', sourcePath: configPath },
+      source: '/workspace/tools',
+      target: 'plugin',
+    }],
+  };
+  const plan = planBundle(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.filter((entry) => entry.relativePath.startsWith('bin/'))).toEqual([{
+    bytes: 37,
+    kind: 'copy',
+    prebuilt: true,
+    relativePath: 'bin/review-tool',
+    source: '/workspace/tools/review-tool',
+    sourceInputs: [configPath, '/workspace/tools/review-tool'],
+  }]);
+  expect(writeContents(model)['AGENTS.md']).toContain('`bin/`');
+});
+
 it('emits each shared surface exactly once with no duplicate artifact paths', () => {
   const plan = planBundle(bundleModel);
   const paths = plan.entries.map((entry) => entry.relativePath);

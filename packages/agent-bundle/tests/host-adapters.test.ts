@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { cursorMarketplaceValidator } from '../src/adapters/cursor.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { emitPlanEntries } from '../src/build/emit.ts';
 import { build } from './support/build.ts';
 import { pathTokens, pluginRootEnvAnchor, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -98,6 +99,25 @@ const withClaudeLsp = (
       value: { lspServers },
     },
   },
+});
+
+const withClaudeBin = (
+  model: NormalizedPlugin,
+  files: NonNullable<NormalizedPlugin['hostBins']>[number]['files'],
+  options: {
+    readonly issue?: NonNullable<NormalizedPlugin['hostBins']>[number]['issue'];
+    readonly source?: string;
+    readonly target?: string;
+  } = {},
+): NormalizedPlugin => ({
+  ...model,
+  hostBins: [{
+    files,
+    ...(options.issue === undefined ? {} : { issue: options.issue }),
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    source: options.source ?? '/workspace/tools',
+    target: options.target ?? 'claude',
+  }],
 });
 
 const validateDocuments = async (
@@ -482,6 +502,112 @@ it('emits Claude LSP configuration and expands only the four documented token fi
     },
   });
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+});
+
+it('plans Claude bin files as byte-faithful prebuilt copies with complete provenance', () => {
+  const model = withClaudeBin(plugin, [
+    {
+      bytes: 37,
+      executable: true,
+      relativePath: 'review-tool',
+      source: '/workspace/tools/review-tool',
+    },
+    {
+      bytes: 12,
+      executable: false,
+      relativePath: 'lib/config.json',
+      source: '/workspace/tools/lib/config.json',
+    },
+  ]);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.entries.filter((entry) => entry.relativePath.startsWith('bin/'))).toEqual([
+    {
+      bytes: 12,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'bin/lib/config.json',
+      source: '/workspace/tools/lib/config.json',
+      sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/tools/lib/config.json'],
+    },
+    {
+      bytes: 37,
+      kind: 'copy',
+      prebuilt: true,
+      relativePath: 'bin/review-tool',
+      source: '/workspace/tools/review-tool',
+      sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/tools/review-tool'],
+    },
+  ]);
+});
+
+it.each([
+  {
+    code: 'claude.bin.directory.missing',
+    issue: 'missing' as const,
+    recovery: 'Create the configured Claude bin directory and add at least one executable, then rebuild.',
+  },
+  {
+    code: 'claude.bin.directory.empty',
+    issue: 'empty' as const,
+    recovery: 'Add at least one file to the configured Claude bin directory, then rebuild.',
+  },
+])('diagnoses a Claude bin directory that is $issue without emitting it', ({ code, issue, recovery }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeBin(plugin, [], { issue }));
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({ code, recovery, severity: 'error' }));
+  expect(plan.entries.some((entry) => entry.relativePath.startsWith('bin/'))).toBe(false);
+});
+
+it('requires every top-level Claude bin file to be executable while allowing nested support files', () => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeBin(plugin, [
+    {
+      bytes: 12,
+      executable: false,
+      relativePath: 'review-tool',
+      source: '/workspace/tools/review-tool',
+    },
+    {
+      bytes: 12,
+      executable: false,
+      relativePath: 'lib/config.json',
+      source: '/workspace/tools/lib/config.json',
+    },
+  ]));
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'claude.bin.executable.required',
+    recovery: 'Run chmod +x on every top-level file in the configured Claude bin directory, then rebuild.',
+    severity: 'error',
+  }));
+  expect(plan.entries.some((entry) => entry.relativePath.startsWith('bin/'))).toBe(false);
+});
+
+it('preserves the executable mode when emitting a Claude bin copy entry', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-bin-'));
+  const source = join(root, 'authored', 'review-tool');
+  const output = join(root, 'output');
+  await mkdir(join(root, 'authored'), { recursive: true });
+  await writeFile(source, '#!/usr/bin/env sh\nprintf "reviewed\\n"\n');
+  await chmod(source, 0o751);
+
+  try {
+    const plan = createDefaultRegistry().get('claude').plan(withClaudeBin(plugin, [{
+      bytes: (await stat(source)).size,
+      executable: true,
+      relativePath: 'review-tool',
+      source,
+    }], { source: join(root, 'authored') }));
+    await emitPlanEntries({
+      entries: plan.entries.filter((entry) => entry.relativePath.startsWith('bin/')),
+      root: output,
+    });
+
+    expect((await stat(join(output, 'bin', 'review-tool'))).mode & 0o777).toBe(0o751);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 it('pins all documented Claude plugin-manifest LSP declaration forms', async () => {
