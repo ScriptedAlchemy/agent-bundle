@@ -10,7 +10,14 @@ import { join, resolve } from 'node:path';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
+import type { AgentBundleMeta } from '../meta.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
+import {
+  generatedMetaModulePath,
+  generatedMetaModuleSource,
+  generatedModulesDirname,
+  metaModuleSpecifier,
+} from './meta.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -51,16 +58,6 @@ type RslibToolsRspack = NonNullable<NonNullable<LibConfig['tools']>['rspack']>;
 interface RslibDependencies {
   readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
 }
-
-/**
- * The reserved namespace (under each build's output root) whose paths
- * identify generated module sources — wrapper entries and registry modules.
- * Nothing ever writes these paths: they are guaranteed-nonexistent module
- * ids served from memory by {@link virtualModulesPluginConstructor}, chosen
- * to be deterministic for `inspect --bundler` and collision-safe across
- * entries. The namespace stays excluded from authored-source provenance.
- */
-const generatedModulesDirname = '.agent-bundle-virtual';
 
 /**
  * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
@@ -127,11 +124,21 @@ const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] =
 const virtualRegistryModules = (
   outputRoot: string,
   entry: RslibEntry,
-): readonly { readonly name: string; readonly path: string; readonly source: string }[] =>
-  (entry.virtualModules ?? []).map((module, index) => ({
+  meta: AgentBundleMeta,
+): readonly { readonly name: string; readonly path: string; readonly source: string }[] => [
+  // The framework identity constant (issue #237) reaches every compiled
+  // surface, so it is composed here rather than declared per entry: one
+  // build stamps one identity, and every entry shares one generated module.
+  {
+    name: metaModuleSpecifier,
+    path: generatedMetaModulePath(outputRoot),
+    source: generatedMetaModuleSource(meta),
+  },
+  ...(entry.virtualModules ?? []).map((module, index) => ({
     ...module,
     path: join(outputRoot, generatedModulesDirname, `${entry.name}-${index}.mjs`),
-  }));
+  })),
+];
 
 /**
  * The module specifiers one entry's emitted bundle must inline: the runtime
@@ -142,6 +149,7 @@ const virtualRegistryModules = (
  */
 const reservedSpecifiers = (entry: RslibEntry): readonly string[] => Object.freeze([...new Set([
   mcpEntryRuntimeSpecifier,
+  metaModuleSpecifier,
   ...Object.keys(entry.aliases ?? {}),
   ...(entry.virtualModules ?? []).map((module) => module.name),
 ])]);
@@ -337,6 +345,7 @@ const assertExecutableConfig = (
     readonly environmentConfigs: Readonly<Record<string, unknown>>;
   },
   outputRoot: string,
+  meta: AgentBundleMeta,
 ): void => {
   if (
     inspection.bundlerConfigs.length !== entries.length ||
@@ -371,12 +380,10 @@ const assertExecutableConfig = (
     // The generated environment must retain the virtual-module source: a
     // resolved config without the plugin instance would resolve the
     // guaranteed-nonexistent generated paths against the real filesystem.
-    const registryModules = virtualRegistryModules(outputRoot, entry);
-    if (entry.virtualSource !== undefined || registryModules.length > 0) {
-      const constructor = virtualModulesPluginConstructor();
-      if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
-        throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
-      }
+    const registryModules = virtualRegistryModules(outputRoot, entry, meta);
+    const constructor = virtualModulesPluginConstructor();
+    if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
+      throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
     }
     if (entry.virtualSource !== undefined
       && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(outputRoot, entry))) {
@@ -418,6 +425,8 @@ const assertExecutableConfig = (
 export const composeEntryLibConfig = (
   entry: RslibEntry,
   options: {
+    /** The project identity served to plugin source as `agent-bundle/meta`. */
+    readonly meta: AgentBundleMeta;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
@@ -426,7 +435,7 @@ export const composeEntryLibConfig = (
 ): LibConfig => {
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
-  const virtualModules = virtualRegistryModules(options.outputRoot, entry);
+  const virtualModules = virtualRegistryModules(options.outputRoot, entry, options.meta);
   // Every generated module this entry serves virtually during its build:
   // the wrapper entry (when present) plus the registry modules.
   const generatedModules = [
@@ -586,6 +595,8 @@ export const buildWithRslib = async (options: {
   readonly ignoredSourcePaths?: readonly string[];
   /** 'error' lets declaration-generation failures reach the consumer's terminal. */
   readonly logLevel?: 'error' | 'silent';
+  /** The project identity served to plugin source as `agent-bundle/meta`. */
+  readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;
@@ -601,6 +612,7 @@ export const buildWithRslib = async (options: {
     config: {
       logLevel: options.logLevel ?? 'silent',
       lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+        meta: options.meta,
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
         ...(options.tools === undefined ? {} : { tools: options.tools }),
@@ -609,7 +621,7 @@ export const buildWithRslib = async (options: {
   });
 
   const inspection = await rslib.inspectConfig();
-  assertExecutableConfig(options.entries, inspection.origin, options.outputRoot);
+  assertExecutableConfig(options.entries, inspection.origin, options.outputRoot, options.meta);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {

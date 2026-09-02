@@ -9,6 +9,7 @@ import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
 import { buildWithRslib, type RslibEntry } from '../src/build/rslib.ts';
+import type { AgentBundleMeta } from '../src/meta.ts';
 import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
@@ -17,6 +18,13 @@ import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
+
+const testMeta: AgentBundleMeta = Object.freeze({
+  name: 'reserved-probe-plugin',
+  packageName: 'reserved-probe-package',
+  packageVersion: '2.3.4',
+  version: '2.3.4',
+});
 
 interface TestProject {
   readonly assetPath: string;
@@ -1127,6 +1135,7 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     const evidence = await buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       // A hatch external naming a non-reserved module is legal: the
       // invariant rejects reserved specifiers, not the externals mechanism.
@@ -1164,6 +1173,7 @@ it('keeps sibling staged outputs alive under a tools hatch that asks to clean th
     await buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       tools: { rsbuild: { output: { cleanDistPath: true } } },
     });
@@ -1186,6 +1196,7 @@ it('overrides a tools hatch that strips plugins and repoints the entry away from
     await buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       tools: {
         rspack: (config) => {
@@ -1208,6 +1219,7 @@ it('rejects a tools hatch that externalizes a reserved specifier statically', as
     await expect(buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       tools: { rspack: { externals: { 'agent-bundle/mcp-entry': 'module agent-bundle/mcp-entry' } } },
     })).rejects.toThrow(/must not externalize the reserved specifier "agent-bundle\/mcp-entry"/u);
@@ -1222,6 +1234,7 @@ it('rejects a tools hatch that externalizes a reserved specifier through functio
     await expect(buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       tools: {
         // Function externals cannot be inspected statically; the build-time
@@ -1253,6 +1266,7 @@ it('rejects a tools hatch alias that shadows a reserved specifier', async () => 
     await expect(buildWithRslib({
       cwd: root,
       entries: [entry],
+      meta: testMeta,
       outputRoot: join(root, 'dist'),
       // A plain (non-$) consumer alias for a reserved specifier would win
       // over the framework's exact-match alias by insertion order.

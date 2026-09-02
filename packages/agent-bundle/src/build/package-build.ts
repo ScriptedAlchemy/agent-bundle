@@ -16,6 +16,7 @@ import {
   generatedExecutableEntrySource,
   generatedRenderedRouteWorkerSource,
 } from './entry-shell.ts';
+import { projectMeta } from './meta.ts';
 import type { BundledOutputEvidence } from './provenance.ts';
 import { buildWithRslib, isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 
@@ -258,6 +259,7 @@ export const buildPackageOutputs = async (options: {
       entries,
       ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
       logLevel: 'error',
+      meta: projectMeta(options.model.metadata),
       outputRoot: stageRoot,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     }, dtsTsconfig === undefined || packageBuild.lib === undefined

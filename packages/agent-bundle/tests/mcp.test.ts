@@ -802,6 +802,85 @@ it('builds one deterministic self-contained MCP App view and injects it through 
   }
 }, 30_000);
 
+it('injects one release identity into both the Node bundle and the browser MCP App bundle', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-meta-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'views'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    // package.json is the only version source: the config declares no
+    // plugin.version, so every compiled surface must agree on 4.5.6.
+    await writeFile(
+      join(root, 'package.json'),
+      `${JSON.stringify({ name: '@scope/meta-fixture', version: '4.5.6' })}\n`,
+    );
+    await symlink(workbenchNodeModules, join(root, 'node_modules'), 'dir');
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import meta from 'agent-bundle/meta';",
+      "import { name, packageName, version } from 'agent-bundle/meta';",
+      'export const serverIdentity = [name, version, packageName, meta.packageVersion];',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import { createElement } from 'react';",
+      "import { createRoot } from 'react-dom/client';",
+      "import { name, packageVersion, version } from 'agent-bundle/meta';",
+      "createRoot(document.querySelector('#view')!).render(",
+      "  createElement('span', undefined, `${name} ${version} ${packageVersion}`),",
+      ');',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n');
+
+    const loaded = loadedProject(root, {
+      mcp: {
+        servers: {
+          fixture: {
+            apps: {
+              dashboard: {
+                entry: './views/dashboard.ts',
+                resourceUri: 'ui://agent-bundle/dashboard.html',
+                template: './views/shell.html',
+              },
+            },
+            entry: './src/server.ts',
+          },
+        },
+      },
+      plugin: { name: 'meta-fixture' },
+      targets: ['portable'],
+    });
+    const releaseDiagnostics = validateSource(loaded, { skills: [] }, registry, { release: true });
+    expect(releaseDiagnostics.filter((diagnostic) => diagnostic.severity !== 'info')).toEqual([]);
+
+    const model = await normalizeProject(loaded, { skills: [] }, registry);
+    expect(model.metadata).toMatchObject({
+      name: 'meta-fixture',
+      packageName: '@scope/meta-fixture',
+      packageVersion: '4.5.6',
+      version: '4.5.6',
+    });
+
+    const outputRoot = join(root, 'dist');
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
+    for (const injected of ['meta-fixture', '4.5.6', '@scope/meta-fixture']) {
+      expect(serverBundle).toContain(injected);
+    }
+    expect(serverBundle).not.toContain('agent-bundle/meta');
+
+    const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    for (const injected of ['meta-fixture', '4.5.6']) {
+      expect(html).toContain(injected);
+    }
+    expect(html).not.toContain('agent-bundle/meta');
+    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('compiles one shared MCP App once and serves it from every identically declaring server', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-shared-'));
   try {
@@ -948,6 +1027,35 @@ it('rejects the built MCP Apps entrypoint with the intended error, not a TDZ Ref
   expect(stderr).toContain(
     'agent-bundle/mcp-apps is available only while Agent Bundle compiles a local MCP server.',
   );
+  expect(stderr).not.toContain('ReferenceError');
+});
+
+it('rejects the built identity module with the intended error, not a TDZ ReferenceError', async () => {
+  // `agent-bundle/meta` carries the same dist contract as `agent-bundle/mcp-apps`:
+  // a compiled surface resolves it to the generated identity, and anything
+  // else must say so rather than report a fabricated identity.
+  await expect(import('../src/meta.ts')).rejects.toThrow(
+    'agent-bundle/meta is available only inside a surface Agent Bundle compiles',
+  );
+
+  const distEntry = join(agentBundlePackageRoot, 'dist', 'meta.js');
+  const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    const child = spawn(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      `await import(${JSON.stringify(pathToFileURL(distEntry).href)});`,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let output = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      output += chunk;
+    });
+    child.on('close', (exitCode) => {
+      resolve({ code: exitCode, stderr: output });
+    });
+  });
+  expect(code).toBe(1);
+  expect(stderr).toContain('agent-bundle/meta is available only inside a surface Agent Bundle compiles');
   expect(stderr).not.toContain('ReferenceError');
 });
 

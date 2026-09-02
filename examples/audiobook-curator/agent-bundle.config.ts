@@ -9,13 +9,9 @@ export default defineConfig({
     // package name (`@agent-bundle-example/audiobook-curator`); scoped npm
     // names never become slugs.
     name: 'audiobook-curator',
-    // Release identity is derived from package.json: `packageName` and
-    // `packageVersion` flow into the project context, artifact manifests,
-    // inspect output, and dev status. This declared version must match the
-    // package.json version — a mismatch reports the AB4008 warning. The
-    // package.json version is the single version source; this field only
-    // restates it until plugin.version becomes optional (issue #94 stage 3).
-    version: '1.0.0',
+    // No `version` field: package.json is the single version source. It flows
+    // into the project context, artifact manifests, inspect output, dev
+    // status, and the `agent-bundle/meta` constant this plugin imports.
   },
   runtime: { node: '22.19.0' },
   // No `scripts` or `bin` fields needed: the routed `src/cli/` commands

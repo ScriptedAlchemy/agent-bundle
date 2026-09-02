@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import apps from 'agent-bundle/mcp-apps';
+import { name, version } from 'agent-bundle/meta';
 import { z } from 'zod';
 
 import { healthyCompilerStatus } from '../compiler-status-contract.ts';
@@ -21,7 +22,9 @@ const serviceCatalog = Object.freeze({
 });
 
 export const createStatusServer = (): McpServer => {
-  const server = new McpServer({ name: 'mcp-app-example', version: '1.0.0' });
+  // The compiler stamps this project's identity into `agent-bundle/meta`, so
+  // the wire identity cannot drift from the config or package.json.
+  const server = new McpServer({ name, version });
 
   server.registerResource(app.name, app.resourceUri, {
     _meta: { ui: { resourceUri: app.resourceUri } },

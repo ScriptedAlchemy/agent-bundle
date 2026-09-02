@@ -61,6 +61,10 @@
       "types": "./dist/mcp-apps.d.ts",
       "import": "./dist/mcp-apps.js"
     },
+    "./meta": {
+      "types": "./dist/meta.d.ts",
+      "import": "./dist/meta.js"
+    },
     "./mcp-entry": {
       "types": "./dist/mcp-entry.d.ts",
       "import": "./dist/mcp-entry.js"
