@@ -95,7 +95,19 @@
       "supportedKeys": ["agent", "subagentStatusLine"],
       "unknownKeysIgnored": true
     },
-    "skills": true
+    "skills": true,
+    "userConfig": {
+      "envVarPrefix": "CLAUDE_PLUGIN_OPTION_",
+      "installConfigFlag": true,
+      "optionalFields": ["default", "max", "min", "multiple", "required", "sensitive"],
+      "projectSettingsIgnored": true,
+      "requiredFields": ["type", "title", "description"],
+      "sensitiveStorage": true,
+      "settingsSources": ["managed", "--settings", "user"],
+      "shellSubstitutionRejected": ["hookShellCommands", "monitorCommands", "mcpHeadersHelper"],
+      "substitutionToken": "${user_config.KEY}",
+      "types": ["boolean", "directory", "file", "number", "string"]
+    }
   },
   "tokens": {
     "pluginData": "${CLAUDE_PLUGIN_DATA}",
@@ -131,7 +143,13 @@
       "2026-09-01: \"Setting `agent` activates one of the plugin's custom agents as the main thread, applying its system prompt, tool restrictions, and model\"; the documented example value \"security-reviewer\" names an agent in the plugin's agents/ directory. The plugin agents/ component remains deferred by the #100 stage-2 G5 gate recorded in merged PR #220, so this compiler emits no agents/ tree: a declared `agent` resolves only when the author ships that agent by other means, such as the prebuilt payload surface, and the compiler emits the claude.settings.agent.deferred warning to keep the dangling-reference risk visible instead of implying an agents component exists.",
       "2026-09-01: https://code.claude.com/docs/en/statusline documents subagentStatusLine as a command object - {\"type\": \"command\", \"command\": \"~/.claude/subagent-statusline.sh\"} - whose command \"renders a custom row body for each subagent shown in the agent panel below the prompt\", and records the plugin policy: \"Plugins can ship a default `subagentStatusLine` in their `settings.json`, but unlike hooks, plugin values don't run under `allowManagedHooksOnly` even when the plugin is force-enabled in managed settings `enabledPlugins`.\" The pinned schema admits only the two fields the subagentStatusLine examples show; statusLine's optional `padding` is documented for the user status line alone and is deliberately not admitted.",
       "2026-09-01: The plugins-reference placeholder table (\"Which fields substitute them inline depends on the plugin component\") enumerates Skill and agent content, hook and monitor commands, MCP stdio and remote fields, and LSP servers - settings.json appears nowhere - so an Agent Bundle path token in a settings value is rejected (claude.settings.token.unsupported) rather than emitted as a placeholder Claude Code never resolves.",
-      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted claude artifact whose plugin root carries settings.json with both supported keys, for both the marketplace-manifest and plugin-manifest validation modes, printing only the validated manifest path and \"Validation passed\". The same command also passes for a deliberately malformed settings.json (empty `agent`, a user-scope `statusLine` key, a stray `padding`) and never names the file, so the host validator does not inspect plugin settings.json at all: the compiler's claude.settings.* diagnostics are the only guard an author gets before the plugin is enabled (host-adapters.native.test.ts)."
+      "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted claude artifact whose plugin root carries settings.json with both supported keys, for both the marketplace-manifest and plugin-manifest validation modes, printing only the validated manifest path and \"Validation passed\". The same command also passes for a deliberately malformed settings.json (empty `agent`, a user-scope `statusLine` key, a stray `padding`) and never names the file, so the host validator does not inspect plugin settings.json at all: the compiler's claude.settings.* diagnostics are the only guard an author gets before the plugin is enabled (host-adapters.native.test.ts).",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents manifest userConfig as a nonempty option map whose keys are valid identifiers; each option requires type (string, number, boolean, directory, or file), title, and description, and may declare sensitive, required, default, multiple for string arrays, and min/max for numbers.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents `${user_config.KEY}` substitution in MCP and LSP server configs and hook commands, plus non-sensitive substitution in skill and agent content; every option is exported to hook processes as `CLAUDE_PLUGIN_OPTION_<KEY>` with the key uppercased.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference rejects `${user_config.*}` in shell-form hook commands (use exec form with args or `CLAUDE_PLUGIN_OPTION_<KEY>`), monitor commands (read a config file), and MCP `headersHelper` (read a config file); before Claude Code v2.1.207 those fields performed substitution.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference stores non-sensitive options under `pluginConfigs[<plugin>].options` in user settings and sensitive options in macOS Keychain with credentials-file fallback, or `~/.claude/.credentials.json` without a supported keychain; Keychain storage is shared with OAuth tokens and has an approximately 2 KB total limit. pluginConfigs precedence is managed settings, then `--settings`, then user settings; project and local settings are ignored for pluginConfigs (but not enabledPlugins), while before v2.1.207 they were read.",
+      "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents repeatable `claude plugin install --config key=value` for setting declared userConfig options.",
+      "2026-09-01: Claude Code 2.1.257 `claude plugin validate --strict` accepts an emitted plugin manifest declaring userConfig with a sensitive string option and a bounded number option."
     ]
   }
 }

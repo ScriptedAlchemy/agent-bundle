@@ -154,6 +154,27 @@ it('reports Claude plugin settings support and honest unavailable composite cove
   expect(registry.supports('plugin', 'settings')).toBe(false);
 });
 
+it('reports Claude userConfig support and honest unavailable composite coverage', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('claude').capabilities.userConfig).toMatchObject({
+    evidence: {
+      observedVersion: '2.1.250',
+      target: 'claude',
+    },
+    state: 'supported',
+  });
+  expect(registry.get('plugin').capabilities.userConfig).toMatchObject({
+    reason: expect.stringContaining('Claude-only userConfig'),
+    state: 'unavailable',
+  });
+  for (const target of ['codex', 'cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.userConfig).toBeUndefined();
+  }
+  expect(registry.supports('claude', 'userConfig')).toBe(true);
+  expect(registry.supports('plugin', 'userConfig')).toBe(false);
+});
+
 it('intersects supported composite capabilities and merges both evidence records', () => {
   const intersection = intersectCapabilityStates(
     supportedCapability(evidence('claude')),

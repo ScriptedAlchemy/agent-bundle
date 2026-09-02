@@ -101,6 +101,23 @@ const withClaudeLsp = (
   },
 });
 
+const withClaudeUserConfig = (
+  model: NormalizedPlugin,
+  userConfig: unknown,
+  target = 'claude',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    claude: {
+      id: 'extension:claude',
+      key: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/claude.config.ts' },
+      target,
+      value: { userConfig },
+    },
+  },
+});
+
 const withClaudeBin = (
   model: NormalizedPlugin,
   files: NonNullable<NormalizedPlugin['hostBins']>[number]['files'],
@@ -518,6 +535,197 @@ it('emits Claude LSP configuration and expands only the four documented token fi
     },
   });
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+});
+
+it('emits sorted, allowlisted Claude userConfig declarations with config provenance', () => {
+  const model = withClaudeUserConfig(plugin, {
+    z_count: {
+      default: 3,
+      description: 'Maximum findings.',
+      max: 10,
+      min: 1,
+      required: true,
+      title: 'Finding limit',
+      type: 'number',
+    },
+    api_token: {
+      description: 'API authentication token.',
+      sensitive: true,
+      title: 'API token',
+      type: 'string',
+    },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({
+    kind: 'write',
+    sourceInputs: ['/workspace/agent-bundle.config.ts', '/workspace/skills/review/SKILL.md', '/workspace/claude.config.ts'],
+  });
+  if (manifest?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
+  expect(JSON.parse(manifest.content).userConfig).toEqual({
+    api_token: {
+      description: 'API authentication token.',
+      sensitive: true,
+      title: 'API token',
+      type: 'string',
+    },
+    z_count: {
+      default: 3,
+      description: 'Maximum findings.',
+      max: 10,
+      min: 1,
+      required: true,
+      title: 'Finding limit',
+      type: 'number',
+    },
+  });
+  expect(manifest.content.indexOf('"api_token"')).toBeLessThan(manifest.content.indexOf('"z_count"'));
+});
+
+it.each([
+  {
+    code: 'claude.userConfig.declaration.invalid',
+    label: 'an empty declaration',
+    userConfig: {},
+  },
+  {
+    code: 'claude.userConfig.option.invalid',
+    label: 'a non-object option',
+    userConfig: { token: 'string' },
+  },
+  {
+    code: 'claude.userConfig.key.invalid',
+    label: 'an invalid identifier',
+    userConfig: { 'api-token': { description: 'Token.', title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.key.collision',
+    label: 'environment-variable keys that collide after uppercasing',
+    userConfig: {
+      ApiKey: { description: 'First.', title: 'First', type: 'string' },
+      APIKEY: { description: 'Second.', title: 'Second', type: 'string' },
+    },
+  },
+  {
+    code: 'claude.userConfig.field.unknown',
+    label: 'an unknown option field',
+    userConfig: { token: { description: 'Token.', title: 'Token', type: 'string', typo: true } },
+  },
+  {
+    code: 'claude.userConfig.type.invalid',
+    label: 'an unsupported type',
+    userConfig: { token: { description: 'Token.', title: 'Token', type: 'secret' } },
+  },
+  {
+    code: 'claude.userConfig.title.required',
+    label: 'an empty title',
+    userConfig: { token: { description: 'Token.', title: '', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.description.required',
+    label: 'a missing description',
+    userConfig: { token: { title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.sensitive.invalid',
+    label: 'a non-boolean sensitive flag',
+    userConfig: { token: { description: 'Token.', sensitive: 'yes', title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.required.invalid',
+    label: 'a non-boolean required flag',
+    userConfig: { token: { description: 'Token.', required: 1, title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.multiple.invalid',
+    label: 'multiple on a non-string option',
+    userConfig: { count: { description: 'Count.', multiple: true, title: 'Count', type: 'number' } },
+  },
+  {
+    code: 'claude.userConfig.multiple.invalid',
+    label: 'a non-boolean multiple flag',
+    userConfig: { token: { description: 'Token.', multiple: 'yes', title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.min.invalid',
+    label: 'min on a non-number option',
+    userConfig: { token: { description: 'Token.', min: 1, title: 'Token', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.max.invalid',
+    label: 'a non-number max bound',
+    userConfig: { count: { description: 'Count.', max: 'ten', title: 'Count', type: 'number' } },
+  },
+  {
+    code: 'claude.userConfig.bounds.invalid',
+    label: 'inverted numeric bounds',
+    userConfig: { count: { description: 'Count.', max: 1, min: 2, title: 'Count', type: 'number' } },
+  },
+  {
+    code: 'claude.userConfig.default.invalid',
+    label: 'a string-array default without multiple',
+    userConfig: { tags: { default: ['one'], description: 'Tags.', title: 'Tags', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.default.invalid',
+    label: 'a scalar string default with multiple',
+    userConfig: { tags: { default: 'one', description: 'Tags.', multiple: true, title: 'Tags', type: 'string' } },
+  },
+  {
+    code: 'claude.userConfig.default.invalid',
+    label: 'a numeric default outside bounds',
+    userConfig: { count: { default: 11, description: 'Count.', max: 10, title: 'Count', type: 'number' } },
+  },
+  {
+    code: 'claude.userConfig.default.invalid',
+    label: 'a mismatched file default',
+    userConfig: { file: { default: false, description: 'File.', title: 'File', type: 'file' } },
+  },
+  {
+    code: 'claude.userConfig.sensitive.default',
+    label: 'a sensitive option with a manifest default',
+    userConfig: { token: { default: 'secret', description: 'Token.', sensitive: true, title: 'Token', type: 'string' } },
+  },
+])('rejects $label without emitting userConfig', ({ code, userConfig }) => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeUserConfig(plugin, userConfig));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+  }));
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Claude plugin manifest.');
+  expect(JSON.parse(manifest.content)).not.toHaveProperty('userConfig');
+});
+
+it('pins the closed Claude userConfig manifest schema', async () => {
+  const schema = (await import('../src/adapters/schemas/claude/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Agent Bundle' },
+    description: 'Claude userConfig schema fixture.',
+    name: 'claude-user-config-fixture',
+    version: '1.0.0',
+  };
+  const option = { description: 'API token.', title: 'API token', type: 'string' };
+
+  expect(validate({ ...manifest, userConfig: { api_token: option } })).toBe(true);
+  for (const userConfig of [
+    {},
+    { 'api-token': option },
+    { token: { ...option, unknown: true } },
+    { token: { description: 'Missing title.', type: 'string' } },
+    { token: { ...option, type: 'secret' } },
+  ]) {
+    expect(validate({ ...manifest, userConfig })).toBe(false);
+  }
 });
 
 it('plans Claude bin files as byte-faithful prebuilt copies with complete provenance', () => {

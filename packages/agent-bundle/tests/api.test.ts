@@ -165,6 +165,45 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
   }
 });
 
+it('accepts claude.userConfig through the public inspection and build APIs', async () => {
+  const root = await createProject();
+  const artifact = join(root, 'artifact');
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'user-config-api', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '  claude: {',
+      '    userConfig: {',
+      "      api_token: { type: 'string', title: 'API token', description: 'Authentication token.', sensitive: true },",
+      '    },',
+      '  },',
+      '};',
+      '',
+    ].join('\n'));
+
+    const inspection = await readyInspection({ root });
+    expect(inspection.model.extensions.claude?.value).toMatchObject({
+      userConfig: {
+        api_token: {
+          description: 'Authentication token.',
+          sensitive: true,
+          title: 'API token',
+          type: 'string',
+        },
+      },
+    });
+
+    await build({ output: artifact, root });
+    const manifest = JSON.parse(
+      await readFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(manifest).toHaveProperty('userConfig.api_token.sensitive', true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
 it('returns a frozen invalid inspection for opaque source failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-api-invalid-inspection-'));
   try {

@@ -178,3 +178,68 @@ nativeIt('accepts an emitted Claude plugin with bin under strict native validati
     await rm(root, { force: true, recursive: true });
   }
 });
+
+nativeIt('accepts emitted Claude userConfig under strict native validation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-user-config-'));
+  const outputRoot = join(root, 'plugin');
+  const model: NormalizedPlugin = {
+    extensions: {
+      claude: {
+        id: 'extension:claude',
+        key: 'claude',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        target: 'claude',
+        value: {
+          userConfig: {
+            api_token: {
+              description: 'API authentication token.',
+              sensitive: true,
+              title: 'API token',
+              type: 'string',
+            },
+            retries: {
+              default: 3,
+              description: 'Maximum retry count.',
+              max: 5,
+              min: 0,
+              title: 'Retries',
+              type: 'number',
+            },
+          },
+        },
+      },
+    },
+    hooks: [],
+    marketplace: true,
+    mcpServers: [],
+    metadata: {
+      description: 'Validate Claude user configuration.',
+      id: 'plugin:user-config-proof',
+      name: 'user-config-proof',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+      version: '1.0.0',
+    },
+    runtime: { node: '22.12.0' },
+    scripts: [],
+    skills: [],
+    targets: [{
+      id: 'target:claude',
+      name: 'claude',
+      provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    }],
+  };
+
+  try {
+    const plan = claudeAdapter.plan(model);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: outputRoot });
+    const result = await runClaudeValidation(
+      outputRoot,
+      join(outputRoot, '.claude-plugin', 'marketplace.json'),
+    );
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('Validation passed');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

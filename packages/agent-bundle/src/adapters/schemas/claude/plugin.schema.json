@@ -26,6 +26,75 @@
       },
       "required": ["command", "extensionToLanguage"],
       "type": "object"
+    },
+    "userConfigOption": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "string" } }, "required": ["type"] },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "default": { "items": { "type": "string" }, "type": "array" },
+                  "multiple": { "const": true }
+                },
+                "required": ["multiple"]
+              },
+              {
+                "properties": {
+                  "default": { "type": "string" },
+                  "multiple": { "const": false }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "number" } }, "required": ["type"] },
+          "then": { "properties": { "default": { "type": "number" } } },
+          "else": { "not": { "anyOf": [{ "required": ["min"] }, { "required": ["max"] }] } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "boolean" } }, "required": ["type"] },
+          "then": { "properties": { "default": { "type": "boolean" } } }
+        },
+        {
+          "if": {
+            "properties": { "type": { "enum": ["directory", "file"] } },
+            "required": ["type"]
+          },
+          "then": { "properties": { "default": { "type": "string" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "string" } }, "required": ["type"] },
+          "else": { "not": { "required": ["multiple"] } }
+        },
+        {
+          "if": { "properties": { "sensitive": { "const": true } }, "required": ["sensitive"] },
+          "then": { "not": { "required": ["default"] } }
+        }
+      ],
+      "properties": {
+        "default": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "number" },
+            { "type": "string" },
+            { "items": { "type": "string" }, "type": "array" }
+          ]
+        },
+        "description": { "minLength": 1, "type": "string" },
+        "max": { "type": "number" },
+        "min": { "type": "number" },
+        "multiple": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "title": { "minLength": 1, "type": "string" },
+        "type": { "enum": ["boolean", "directory", "file", "number", "string"] }
+      },
+      "required": ["type", "title", "description"],
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -51,6 +120,12 @@
       ]
     },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
+    "userConfig": {
+      "additionalProperties": { "$ref": "#/$defs/userConfigOption" },
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "type": "object"
+    },
     "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
   },
   "required": ["name", "version", "description", "author"],

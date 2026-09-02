@@ -91,6 +91,33 @@ export interface ClaudeLspServerConfig {
   readonly workspaceFolder?: string;
 }
 
+export type ClaudeUserConfigOptionType = 'boolean' | 'directory' | 'file' | 'number' | 'string';
+
+/**
+ * One enable-time option declared in a Claude Code plugin manifest.
+ *
+ * Sensitive values are masked and stored in secure storage rather than
+ * settings.json. On macOS that means Keychain with credentials-file fallback;
+ * the Keychain is shared with OAuth tokens and has an approximately 2 KB total
+ * budget, so sensitive values must stay small.
+ *
+ * Do not place `${user_config.*}` in shell-form hook commands, monitor
+ * commands, or MCP `headersHelper`: Claude Code rejects those shell execution
+ * fields. Use exec-form hook args, `CLAUDE_PLUGIN_OPTION_<KEY>`, or a config
+ * file as appropriate.
+ */
+export interface ClaudeUserConfigOption {
+  readonly default?: string | number | boolean | readonly string[];
+  readonly description: string;
+  readonly max?: number;
+  readonly min?: number;
+  readonly multiple?: boolean;
+  readonly required?: boolean;
+  readonly sensitive?: boolean;
+  readonly title: string;
+  readonly type: ClaudeUserConfigOptionType;
+}
+
 /**
  * One Claude Code subagent status line: the command object documented for
  * `subagentStatusLine`, which renders a custom row body for each subagent in
@@ -140,6 +167,8 @@ export interface ClaudeHostConfig extends AgentBundleHostConfig {
   readonly bin?: string;
   readonly lspServers?: Readonly<Record<string, ClaudeLspServerConfig>>;
   readonly settings?: ClaudeSettingsConfig;
+  /** Enable-time options copied into `.claude-plugin/plugin.json`. */
+  readonly userConfig?: Readonly<Record<string, ClaudeUserConfigOption>>;
 }
 
 export interface ClaudeConfigExtension {
@@ -193,7 +222,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.7.0',
+  adapterRevision: '1.8.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -351,6 +380,9 @@ const lspServerFields: ReadonlySet<string> = new Set([
 const isDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  isDataRecord(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
+
 const expandLspToken = (value: unknown): unknown =>
   typeof value === 'string' ? expandClaudeToken(value) : value;
 
@@ -482,6 +514,236 @@ export const planClaudeLsp = (model: NormalizedPlugin): ClaudeLspPlan => {
   const valid = validateLsp(servers);
   diagnostics.push(...schemaDiagnostics('lsp', valid, validateLsp.errors));
   return { diagnostics, ...(valid ? { document: servers } : {}), sourceInputs: inputs };
+};
+
+const userConfigOptionFields: readonly (keyof ClaudeUserConfigOption)[] = Object.freeze([
+  'default',
+  'description',
+  'max',
+  'min',
+  'multiple',
+  'required',
+  'sensitive',
+  'title',
+  'type',
+]);
+const userConfigOptionFieldSet: ReadonlySet<string> = new Set(userConfigOptionFields);
+const userConfigOptionTypes: ReadonlySet<string> = new Set([
+  'boolean',
+  'directory',
+  'file',
+  'number',
+  'string',
+]);
+const userConfigIdentifier = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+const isUserConfigOptionType = (value: unknown): value is ClaudeUserConfigOptionType =>
+  typeof value === 'string' && userConfigOptionTypes.has(value);
+
+const userConfigDiagnostic = (code: string, message: string, recovery: string): Diagnostic => ({
+  ...errorDiagnostic(code, message),
+  recovery,
+});
+
+interface ClaudeUserConfigOptionPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly value?: Record<string, unknown>;
+}
+
+/**
+ * Validates and allowlist-copies one option independently so the same closed
+ * declaration contract can be reused by a later channels.userConfig slice.
+ */
+const planClaudeUserConfigOption = (key: string, declared: unknown): ClaudeUserConfigOptionPlan => {
+  const diagnostics: Diagnostic[] = [];
+  if (!isPlainDataRecord(declared)) {
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.option.invalid',
+      `Claude userConfig option "${key}" must be an option declaration object.`,
+      `Replace userConfig.${key} with an object containing type, title, and description, then rebuild.`,
+    ));
+    return { diagnostics };
+  }
+
+  for (const field of Object.keys(declared).sort()) {
+    if (userConfigOptionFieldSet.has(field)) continue;
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.field.unknown',
+      `Claude userConfig option "${key}" declares unknown field "${field}".`,
+      `Remove userConfig.${key}.${field} or replace it with a documented option field, then rebuild.`,
+    ));
+  }
+
+  const type = declared['type'];
+  if (!isUserConfigOptionType(type)) {
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.type.invalid',
+      `Claude userConfig option "${key}" requires type "string", "number", "boolean", "directory", or "file".`,
+      `Set userConfig.${key}.type to one of the five documented option types, then rebuild.`,
+    ));
+  }
+  for (const field of ['title', 'description'] as const) {
+    if (typeof declared[field] === 'string' && declared[field].length > 0) continue;
+    diagnostics.push(userConfigDiagnostic(
+      `claude.userConfig.${field}.required`,
+      `Claude userConfig option "${key}" requires a nonempty ${field}.`,
+      `Set userConfig.${key}.${field} to the text Claude Code should show in its configuration dialog, then rebuild.`,
+    ));
+  }
+  for (const field of ['sensitive', 'required'] as const) {
+    if (declared[field] === undefined || typeof declared[field] === 'boolean') continue;
+    diagnostics.push(userConfigDiagnostic(
+      `claude.userConfig.${field}.invalid`,
+      `Claude userConfig option "${key}" field "${field}" must be a boolean when provided.`,
+      `Set userConfig.${key}.${field} to true or false, or remove it, then rebuild.`,
+    ));
+  }
+
+  const multiple = declared['multiple'];
+  if (
+    multiple !== undefined &&
+    (typeof multiple !== 'boolean' || (isUserConfigOptionType(type) && type !== 'string'))
+  ) {
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.multiple.invalid',
+      `Claude userConfig option "${key}" may declare boolean field "multiple" only for type "string".`,
+      `Remove userConfig.${key}.multiple or change the option type to "string", then rebuild.`,
+    ));
+  }
+
+  const bounds: Partial<Record<'min' | 'max', number>> = {};
+  for (const field of ['min', 'max'] as const) {
+    const bound = declared[field];
+    if (bound === undefined) continue;
+    if (typeof bound !== 'number' || !Number.isFinite(bound) || (isUserConfigOptionType(type) && type !== 'number')) {
+      diagnostics.push(userConfigDiagnostic(
+        `claude.userConfig.${field}.invalid`,
+        `Claude userConfig option "${key}" may declare finite numeric field "${field}" only for type "number".`,
+        `Remove userConfig.${key}.${field} or use it with a number option and a finite numeric value, then rebuild.`,
+      ));
+      continue;
+    }
+    bounds[field] = bound;
+  }
+  if (bounds.min !== undefined && bounds.max !== undefined && bounds.min > bounds.max) {
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.bounds.invalid',
+      `Claude userConfig option "${key}" has min ${String(bounds.min)} greater than max ${String(bounds.max)}.`,
+      `Set userConfig.${key}.min less than or equal to userConfig.${key}.max, then rebuild.`,
+    ));
+  }
+
+  const defaultValue = declared['default'];
+  if (defaultValue !== undefined && isUserConfigOptionType(type)) {
+    let validDefault: boolean;
+    switch (type) {
+      case 'string':
+        validDefault = multiple === true
+          ? Array.isArray(defaultValue) && defaultValue.every((entry) => typeof entry === 'string')
+          : typeof defaultValue === 'string';
+        break;
+      case 'number':
+        validDefault =
+          typeof defaultValue === 'number' &&
+          Number.isFinite(defaultValue) &&
+          (bounds.min === undefined || defaultValue >= bounds.min) &&
+          (bounds.max === undefined || defaultValue <= bounds.max);
+        break;
+      case 'boolean':
+        validDefault = typeof defaultValue === 'boolean';
+        break;
+      case 'directory':
+      case 'file':
+        validDefault = typeof defaultValue === 'string';
+        break;
+      default: {
+        const exhaustive: never = type;
+        return exhaustive;
+      }
+    }
+    if (!validDefault) {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.userConfig.default.invalid',
+        `Claude userConfig option "${key}" has a default that does not match its type, multiple mode, or numeric bounds.`,
+        `Set userConfig.${key}.default to a valid ${type} value for this declaration, or remove it, then rebuild.`,
+      ));
+    }
+  }
+  if (declared['sensitive'] === true && defaultValue !== undefined) {
+    diagnostics.push(userConfigDiagnostic(
+      'claude.userConfig.sensitive.default',
+      `Claude userConfig option "${key}" cannot combine sensitive: true with a manifest default because that would ship a secure-storage value in the plugin manifest.`,
+      `Remove userConfig.${key}.default and let Claude Code prompt for the sensitive value, then rebuild.`,
+    ));
+  }
+
+  if (diagnostics.length > 0) return { diagnostics };
+  const value: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const field of userConfigOptionFields) {
+    if (declared[field] !== undefined) value[field] = declared[field];
+  }
+  return { diagnostics, value };
+};
+
+interface ClaudeUserConfigPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, Record<string, unknown>>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noUserConfigPlan: ClaudeUserConfigPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+const planClaudeUserConfig = (model: NormalizedPlugin): ClaudeUserConfigPlan => {
+  const extension = model.extensions[claudeName];
+  if (extension === undefined || !isDataRecord(extension.value)) return noUserConfigPlan;
+  const declared = extension.value['userConfig'];
+  if (declared === undefined) return noUserConfigPlan;
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isPlainDataRecord(declared) || Object.keys(declared).length === 0) {
+    return {
+      diagnostics: [userConfigDiagnostic(
+        'claude.userConfig.declaration.invalid',
+        'Claude userConfig must be a nonempty plain record of option key to option declaration.',
+        'Set claude.userConfig to a nonempty object whose values declare type, title, and description, then rebuild.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const options: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  const environmentOwners = new Map<string, string>();
+  for (const key of Object.keys(declared).sort()) {
+    if (!userConfigIdentifier.test(key)) {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.userConfig.key.invalid',
+        `Claude userConfig option key "${key}" must match ^[A-Za-z_][A-Za-z0-9_]*$.`,
+        `Rename userConfig option "${key}" to a valid identifier containing only letters, digits, and underscores and not starting with a digit, then rebuild.`,
+      ));
+    }
+    const environmentKey = key.toUpperCase();
+    const owner = environmentOwners.get(environmentKey);
+    if (owner === undefined) {
+      environmentOwners.set(environmentKey, key);
+    } else {
+      diagnostics.push(userConfigDiagnostic(
+        'claude.userConfig.key.collision',
+        `Claude userConfig option keys "${owner}" and "${key}" both export as CLAUDE_PLUGIN_OPTION_${environmentKey}.`,
+        `Rename one option so every key remains unique after uppercasing, then rebuild.`,
+      ));
+    }
+    const optionPlan = planClaudeUserConfigOption(key, declared[key]);
+    diagnostics.push(...optionPlan.diagnostics);
+    if (optionPlan.value !== undefined) options[key] = optionPlan.value;
+  }
+  return {
+    diagnostics,
+    ...(diagnostics.length === 0 ? { document: options } : {}),
+    sourceInputs: inputs,
+  };
 };
 
 interface ClaudeBinPlan {
@@ -740,6 +1002,8 @@ export const planClaudeArtifacts = (
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   const lsp = planClaudeLsp(model);
   diagnostics.push(...lsp.diagnostics);
+  const userConfig = planClaudeUserConfig(model);
+  diagnostics.push(...userConfig.diagnostics);
   const bin = planClaudeBin(model, targetName);
   diagnostics.push(...bin.diagnostics);
   const settings = planClaudeSettings(model);
@@ -759,6 +1023,7 @@ export const planClaudeArtifacts = (
     description: model.metadata.description ?? model.metadata.name,
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
+    ...(userConfig.document === undefined ? {} : { userConfig: userConfig.document }),
     version: model.metadata.version,
   };
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
@@ -794,6 +1059,7 @@ export const planClaudeArtifacts = (
   }
 
   const basePlan = standardPluginArtifactPlan({
+    additionalPluginSourceInputs: userConfig.sourceInputs,
     diagnostics,
     ...(hostDocuments.length === 0 ? {} : { hostDocuments }),
     hookDocument,
@@ -877,6 +1143,13 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       capabilityTable.plugin.skills,
       evidence,
       'The pinned Claude plugin contract does not support skills.',
+    ),
+    userConfig: capabilityStateFromSupport(
+      capabilityTable.plugin.userConfig.sensitiveStorage &&
+        capabilityTable.plugin.userConfig.projectSettingsIgnored &&
+        capabilityTable.plugin.userConfig.installConfigFlag,
+      evidence,
+      'The pinned Claude plugin contract does not document enable-time userConfig options.',
     ),
   }),
   configExtension: Object.freeze({ key: claudeName }),
