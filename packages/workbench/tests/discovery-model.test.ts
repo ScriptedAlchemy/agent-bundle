@@ -5,6 +5,8 @@ import {
   findingPresentationFor,
   inventoryPresentationFor,
   isStaleReport,
+  mcpProbePresentationFor,
+  mcpProbeViewFor,
   probePresentationFor,
 } from '../src/discovery/discovery-model.ts';
 
@@ -49,4 +51,49 @@ it('maps risky and healthy finding states to honest tones', () => {
   expect(findingPresentationFor('drifted').tone).toBe('warning');
   expect(findingPresentationFor('failed').tone).toBe('error');
   expect(findingPresentationFor('installed').tone).toBe('neutral');
+});
+
+it('presents successful and down MCP probe statuses honestly', () => {
+  expect(mcpProbePresentationFor('ok')).toEqual({
+    label: 'Connected',
+    tone: 'positive',
+  });
+  expect(mcpProbePresentationFor('unreachable')).toEqual({
+    label: 'Unreachable',
+    tone: 'neutral',
+  });
+  expect(mcpProbePresentationFor('timed-out')).toEqual({
+    label: 'Timed out',
+    tone: 'neutral',
+  });
+});
+
+it('derives a frozen MCP probe view with capability names', () => {
+  const report = {
+    durationMs: 42,
+    generatedAt: '2026-09-01T12:01:00.000Z',
+    host: 'claude' as const,
+    launch: {
+      args: ['dist/timeline.js'],
+      command: 'node',
+      env: {},
+      kind: 'stdio' as const,
+    },
+    serverName: 'timeline',
+    snapshot: {
+      capabilities: { prompts: false, tools: true },
+      protocolVersion: '2025-06-18',
+      serverInfo: { name: 'timeline-server', version: '1.0.0' },
+      tools: [],
+      toolsTruncated: false,
+    },
+    status: 'ok' as const,
+  };
+
+  const view = mcpProbeViewFor(report);
+
+  expect(view.presentation).toEqual({ label: 'Connected', tone: 'positive' });
+  expect(view.capabilityNames).toEqual(['prompts', 'tools']);
+  expect(Object.isFrozen(view)).toBe(true);
+  expect(Object.isFrozen(view.capabilityNames)).toBe(true);
 });

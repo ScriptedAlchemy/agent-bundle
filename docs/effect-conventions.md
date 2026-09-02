@@ -186,7 +186,8 @@ Exact-pin `effect` + `@effect/atom-react` (synchronized with the repo's effect
 pin, currently `4.0.0-rc.112`) are allowed there, but only in dedicated
 browser-state modules (`src/runtime/agent-document-atoms.ts`,
 `src/routes/route-editor-atoms.ts`, and `src/discovery/discovery-atoms.ts`).
-Atoms live in `effect/unstable/reactivity`; React bindings come from
+The discovery module owns report loading plus ephemeral live-probe consent
+and result state. Atoms live in `effect/unstable/reactivity`; React bindings come from
 `@effect/atom-react`.
 
 - No `Atom` or `AsyncResult` types in DTOs, public exports, or examples —

@@ -7,6 +7,8 @@ import {
 import type { ForegroundRequestAuthority } from '../src/mcp/mcp-route-client.ts';
 
 interface RecordedRequest {
+  readonly body?: BodyInit | null;
+  readonly contentType?: string;
   readonly method: string;
   readonly signal?: AbortSignal;
   readonly url: string;
@@ -77,6 +79,10 @@ const fullReport = {
       bundleRoot: '/home/user/.codex/plugins/agent-bundle',
       durableState,
       marketplace: 'local',
+      mcpServers: [{
+        name: 'timeline',
+        transport: 'stdio' as const,
+      }],
       name: 'agent-bundle',
       state: 'drifted' as const,
       version: '1.2.2',
@@ -107,6 +113,10 @@ const authority = (
 ): ForegroundRequestAuthority => ({
   protectedRequest: async (path, init = {}) => {
     calls.push({
+      ...(init.body === null || init.body === undefined ? {} : { body: init.body }),
+      ...(new Headers(init.headers).get('content-type') === null
+        ? {}
+        : { contentType: new Headers(init.headers).get('content-type')! }),
       method: init.method ?? 'GET',
       ...(init.signal === null || init.signal === undefined ? {} : { signal: init.signal }),
       url: String(path),
@@ -127,6 +137,11 @@ it('decodes and deeply freezes a full discovery report through the foreground au
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.hosts)).toBe(true);
   expect(Object.isFrozen(result.hosts[1]!.bundle!.durableState!.findings)).toBe(true);
+  expect(result.hosts[1]!.bundle!.mcpServers).toEqual([{
+    name: 'timeline',
+    transport: 'stdio',
+  }]);
+  expect(result.hosts[0]!.bundle?.mcpServers).toBeUndefined();
 });
 
 it('rejects unknown keys at every discovery response boundary', async () => {
@@ -144,6 +159,16 @@ it('rejects unknown keys at every discovery response boundary', async () => {
     { ...fullReport, hosts: [{ ...firstHost, probe: { ...firstHost.probe, extra: true } }] },
     { ...fullReport, hosts: [{ ...firstHost, inventory: { ...firstHost.inventory, extra: true } }] },
     { ...fullReport, hosts: [{ ...firstHost, bundle: { ...firstHost.bundle!, extra: true } }] },
+    {
+      ...fullReport,
+      hosts: [{
+        ...firstHost,
+        bundle: {
+          ...firstHost.bundle!,
+          mcpServers: [{ name: 'timeline', transport: 'stdio', extra: true }],
+        },
+      }],
+    },
     {
       ...fullReport,
       hosts: [{
@@ -198,6 +223,16 @@ it('rejects every out-of-range discovery enum value', async () => {
         ...firstHost,
         bundle: {
           ...firstHost.bundle!,
+          mcpServers: [{ name: 'timeline', transport: 'websocket' }],
+        },
+      }],
+    },
+    {
+      ...fullReport,
+      hosts: [{
+        ...firstHost,
+        bundle: {
+          ...firstHost.bundle!,
           durableState: { ...durableState, status: 'failed' },
         },
       }],
@@ -235,5 +270,139 @@ it('surfaces a server diagnostic from a non-success response', async () => {
     code: 'discovery.probe.denied',
     message: 'Host discovery is unavailable in this session.',
     status: 403,
+  });
+});
+
+const okProbeReport = {
+  durationMs: 42,
+  generatedAt: '2026-09-01T12:01:00.000Z',
+  host: 'claude' as const,
+  launch: {
+    args: ['dist/timeline.js'],
+    command: 'node',
+    cwd: '/workspace/dist',
+    env: { NODE_ENV: 'production' },
+    kind: 'stdio' as const,
+  },
+  serverName: 'timeline',
+  snapshot: {
+    capabilities: { tools: true },
+    instructions: 'Read-only timeline inspection.',
+    protocolVersion: '2025-06-18',
+    serverInfo: {
+      name: 'timeline-server',
+      title: 'Timeline',
+      version: '1.0.0',
+    },
+    tools: [{
+      description: 'Lists timeline entries.',
+      name: 'timeline_list',
+      title: 'List timeline',
+    }],
+    toolsTruncated: false,
+  },
+  status: 'ok' as const,
+};
+
+const unreachableProbeReport = {
+  durationMs: 7,
+  failure: {
+    detail: 'The redacted server command exited before initialize completed.',
+    kind: 'connect' as const,
+  },
+  generatedAt: '2026-09-01T12:02:00.000Z',
+  host: 'claude' as const,
+  launch: {
+    args: ['-e', 'process.exit(0)'],
+    command: 'node',
+    env: {},
+    kind: 'stdio' as const,
+  },
+  serverName: 'probe-down',
+  status: 'unreachable' as const,
+};
+
+it('posts a probe request and deeply freezes a successful report', async () => {
+  const calls: RecordedRequest[] = [];
+  const signal = new AbortController().signal;
+  const client = new DiscoveryClient({
+    foreground: authority(calls, () => jsonResponse(okProbeReport)),
+  });
+
+  const result = await client.probe({ host: 'claude', serverName: 'timeline' }, signal);
+
+  expect(result).toEqual(okProbeReport);
+  expect(calls).toEqual([{
+    body: JSON.stringify({ host: 'claude', serverName: 'timeline' }),
+    contentType: 'application/json',
+    method: 'POST',
+    signal,
+    url: '/api/discovery/probes',
+  }]);
+  expect(Object.isFrozen(result)).toBe(true);
+  expect(Object.isFrozen(result.snapshot?.tools)).toBe(true);
+  expect(Object.isFrozen(result.launch)).toBe(true);
+});
+
+it('decodes an honest unreachable probe report', async () => {
+  const client = new DiscoveryClient({
+    foreground: authority([], () => jsonResponse(unreachableProbeReport)),
+  });
+
+  await expect(client.probe({ host: 'claude', serverName: 'probe-down' }))
+    .resolves.toEqual(unreachableProbeReport);
+});
+
+it('rejects probe invariant violations and unknown keys with AB8235', async () => {
+  const { snapshot: _snapshot, ...okWithoutSnapshot } = okProbeReport;
+  const { failure: _failure, ...unreachableWithoutFailure } = unreachableProbeReport;
+  const malformed = [
+    okWithoutSnapshot,
+    unreachableWithoutFailure,
+    { ...okProbeReport, failure: unreachableProbeReport.failure },
+    { ...unreachableProbeReport, snapshot: okProbeReport.snapshot },
+    { ...okProbeReport, extra: true },
+  ];
+
+  for (const body of malformed) {
+    const client = new DiscoveryClient({
+      foreground: authority([], () => jsonResponse(body)),
+    });
+    await expect(client.probe({ host: 'claude', serverName: 'timeline' })).rejects.toMatchObject({
+      code: 'AB8235',
+      message: 'MCP probe route returned an invalid response.',
+    });
+  }
+});
+
+it('surfaces a server diagnostic from a failed probe request', async () => {
+  const client = new DiscoveryClient({
+    foreground: authority([], () => jsonResponse({
+      diagnostic: {
+        code: 'AB8221',
+        message: 'MCP server timeline was not found for claude.',
+      },
+    }, 404)),
+  });
+
+  const failure = await client.probe({ host: 'claude', serverName: 'timeline' })
+    .catch((reason: unknown) => reason);
+  expect(failure).toBeInstanceOf(DiscoveryClientError);
+  expect(failure).toMatchObject({
+    code: 'AB8221',
+    message: 'MCP server timeline was not found for claude.',
+    status: 404,
+  });
+});
+
+it('uses AB8235 with status for a malformed probe failure body', async () => {
+  const client = new DiscoveryClient({
+    foreground: authority([], () => jsonResponse({ error: 'unavailable' }, 503)),
+  });
+
+  await expect(client.probe({ host: 'claude', serverName: 'timeline' })).rejects.toMatchObject({
+    code: 'AB8235',
+    message: 'MCP probe request failed with HTTP 503.',
+    status: 503,
   });
 });
