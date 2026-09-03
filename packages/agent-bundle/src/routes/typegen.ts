@@ -40,10 +40,8 @@ const providerMember = (provider: CompiledProvider, index: number): string =>
 
 /**
  * The provider half of the generated declarations: `AgentBundleProviders`
- * maps each camel-cased key to its factory's awaited return type, and the
- * `@agent-bundle/runtime` augmentation makes `(await agent()).providers.<key>`
- * observe that type. Omitted for provider-free graphs so the augmentation
- * never references a module the project has no reason to depend on.
+ * maps each camel-cased key to its factory's awaited return type. Omitted for
+ * provider-free graphs.
  */
 const providerDeclarations = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.length === 0
@@ -58,10 +56,40 @@ const providerDeclarations = (providers: readonly CompiledProvider[]): readonly 
       'export type ProviderKey = keyof AgentBundleProviders;',
       'export type ProviderValue<Key extends ProviderKey> = AgentBundleProviders[Key];',
       '',
+    ];
+
+/**
+ * The single `@agent-bundle/runtime` augmentation. Its `Register.routes`
+ * member registers the thin `{ input, result }` contract map (TanStack
+ * Router's `Register` pattern), so `agent-bundle/test`'s `renderRoute` narrows
+ * its route-id parameter, `input`, and `result` from the project's own route
+ * modules; its `AgentProviderValues` members make
+ * `(await agent()).providers.<key>` observe each factory's resolved type.
+ * Omitted for graphs with neither, so the augmentation never references a
+ * module the project has no reason to depend on.
+ */
+const runtimeAugmentation = (
+  routes: readonly CompiledAgentRoute[],
+  providers: readonly CompiledProvider[],
+): readonly string[] =>
+  routes.length === 0 && providers.length === 0
+    ? []
+    : [
       "declare module '@agent-bundle/runtime' {",
-      '  interface AgentProviderValues {',
-      ...providers.map(providerMember).map((line) => `  ${line}`),
-      '  }',
+      ...(routes.length === 0
+        ? []
+        : [
+          '  interface Register {',
+          '    readonly routes: AgentBundleRouteContracts;',
+          '  }',
+        ]),
+      ...(providers.length === 0
+        ? []
+        : [
+          '  interface AgentProviderValues {',
+          ...providers.map(providerMember).map((line) => `  ${line}`),
+          '  }',
+        ]),
       '}',
       '',
     ];
@@ -105,8 +133,13 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     'export type RouteId = keyof AgentBundleRoutes;',
     'export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;',
     'export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;',
+    '/** The registered contract map: one `{ input, result }` per route id, for `@agent-bundle/runtime`\'s `Register`. */',
+    'export type AgentBundleRouteContracts = {',
+    '  readonly [Id in RouteId]: Readonly<{ input: RouteInput<Id>; result: RouteResult<Id> }>;',
+    '};',
     '',
     ...providerDeclarations(providers),
+    ...runtimeAugmentation(routes, providers),
   ].join('\n');
 };
 

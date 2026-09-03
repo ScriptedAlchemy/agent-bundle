@@ -49,6 +49,25 @@ export const summarizes = async (): Promise<void> => {
 上报器）、渲染 `limits` 以及一个 `signal`。它返回文档、路由上报的请求作用域进度、解析出的 provenance，
 以及由路由自己的 `resultSchema` 解析后的取值。无论调用方是否提供自己的上报器，进度都会被记录。
 
+### 带类型的 route id、输入与结果
+
+编译器生成的 `.agent-bundle/routes.d.ts` 会把项目的路由契约注册到 `@agent-bundle/runtime` 的
+`Register` 接口上——与它已经声明 provider 键的方式相同。一旦该文件成为项目 TypeScript 程序的一部分
+（把 `".agent-bundle/routes.d.ts"` 加入 `tsconfig.json` 的 `include`），用字符串字面量写出的
+`renderRoute` 调用就会针对编译后的 route id 做检查——编辑器会补全它们，写错时会被拒绝并列出已注册的
+备选项——而 `input` 与 `result` 来自该路由自己的 `inputSchema` 与 `resultSchema`：
+
+```ts
+const { result } = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+const chapters: number | undefined = result?.chapters; // 无需强制类型转换
+```
+
+这一切都不是必需的。目标若类型为 `string` 而非字面量，仍然合法，可用于动态查找；直接导入模块作为目标
+不受影响；而没有把生成文件纳入程序的项目——或尚未运行过一次构建或 `agent-bundle dev` 的项目——看到的
+仍是先前的类型：任意字符串 id、`unknown` 输入、`unknown` 结果。`@agent-bundle/runtime` 的
+`RegisteredRouteId`、`RegisteredRouteInput` 与 `RegisteredRouteResult` 直接命名这一注册表面，便于
+你自己封装。
+
 `testManifest()` 暴露编译后的路由清单，因此一个测试套件可以在进程内遍历每个路由，而不必为每个路由付出
 一次构建的代价。任何失败——未知路由、被拒绝的路由种类、被拒的输入、渲染错误——都会指明 route id、target
 种类与模块 provenance。

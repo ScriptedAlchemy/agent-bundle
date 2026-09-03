@@ -56,6 +56,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/prepack.test.ts',
   'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
+  'packages/agent-bundle/tests/route-register-typegen.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
   'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',

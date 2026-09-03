@@ -182,6 +182,44 @@ export interface AgentProviderValues {
   readonly processLifetime?: AgentProcessLifetime;
 }
 
+/**
+ * The project-registration seam, after TanStack Router's `Register`. It is
+ * empty here; the compiler's generated `.agent-bundle/routes.d.ts` augments it
+ * with `routes: AgentBundleRouteContracts` — a thin `{ input, result }` map
+ * keyed by route id, inferred from each route module's own schema exports —
+ * in the same `declare module '@agent-bundle/runtime'` block that declares
+ * provider keys on {@link AgentProviderValues}. Route-aware types such as
+ * {@link RegisteredRouteId} read through it and degrade to their unregistered
+ * shape (`string`, `unknown`) when the file is absent or excluded from the
+ * program, so nothing here is required for a project to type-check.
+ */
+// rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
+export interface Register {}
+
+/** One registered route's contract: the parsed input the route receives and the result it renders. */
+export interface RegisteredRouteContract {
+  readonly input: unknown;
+  readonly result: unknown;
+}
+
+/** Every registered route contract keyed by route id; `unknown` until a project registers. */
+export type RegisteredRoutes = Register extends { readonly routes: infer Routes extends Record<string, RegisteredRouteContract> }
+  ? Routes
+  : unknown;
+
+/** The registered route ids, or `string` when no project has registered. */
+export type RegisteredRouteId = unknown extends RegisteredRoutes ? string : keyof RegisteredRoutes & string;
+
+/** The registered input type for one route id; `unknown` for an unregistered id. */
+export type RegisteredRouteInput<Id extends string> = Id extends keyof RegisteredRoutes
+  ? RegisteredRoutes[Id] extends RegisteredRouteContract ? RegisteredRoutes[Id]['input'] : unknown
+  : unknown;
+
+/** The registered result type for one route id; `unknown` for an unregistered id. */
+export type RegisteredRouteResult<Id extends string> = Id extends keyof RegisteredRoutes
+  ? RegisteredRoutes[Id] extends RegisteredRouteContract ? RegisteredRoutes[Id]['result'] : unknown
+  : unknown;
+
 export interface AgentInvocation {
   readonly artifactEpoch?: string;
   readonly hostContractRevision?: string;

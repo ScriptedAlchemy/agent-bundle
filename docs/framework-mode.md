@@ -164,6 +164,20 @@ else supplies providers) requires `providers` outright: a handler typed against
 [harness section](../packages/agent-bundle/README.md#testing-routes) for the
 module-evaluation caveat that applies to provider-level state.
 
+The same file registers the route contracts themselves. One generated
+`AgentBundleRouteContracts` — `{ input, result }` per route id, inferred from
+each module's own `inputSchema`/`resultSchema` (or, for an event route, its
+component) — is registered on `@agent-bundle/runtime`'s `Register` interface in
+that one `declare module` block, so no per-route declaration file is emitted.
+`renderRoute('tool:library/summarize', { input })` then checks its id against
+the compiled ids, types `input` from the route's input schema, and types
+`result` from its result schema; `RegisteredRouteId`, `RegisteredRouteInput`,
+and `RegisteredRouteResult` name that surface for a wrapper of your own. The
+seam is inert without the file: an id typed `string` stays legal for dynamic
+lookups, a directly imported module target is unaffected, and a project that
+excludes the generated declarations (or has not built yet) sees the
+unregistered types — any string, `unknown` input, `unknown` result.
+
 ### What reaches the MCP wire
 
 The final Agent Document of a tool route lowers to one `CallToolResult`:

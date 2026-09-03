@@ -71,6 +71,9 @@ export type {
   RenderRouteTarget,
   RenderedRoute,
   RenderedRouteEvents,
+  RouteTargetInput,
+  RouteTargetConstraint,
+  RouteTargetResult,
 } from './render.ts';
 export { expectDocument } from './matchers.ts';
 export type {

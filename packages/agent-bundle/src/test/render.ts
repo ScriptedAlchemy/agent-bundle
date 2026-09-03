@@ -17,6 +17,9 @@ import type {
   AgentRenderInvocation,
   AgentRenderLimits,
   AgentRequestInit,
+  RegisteredRouteId,
+  RegisteredRouteInput,
+  RegisteredRouteResult,
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
@@ -76,11 +79,39 @@ export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress
  */
 export type RenderRouteContextInit = { readonly context?: RenderRouteContext };
 
-export interface RenderRouteOptionsBase {
+/** What `renderRoute` accepts: a route module rendered directly, or a route id. */
+export type RenderRouteTarget = AgentRouteModule | string;
+
+/**
+ * The constraint one target must satisfy. Once the generated
+ * `.agent-bundle/routes.d.ts` registers the project's routes on
+ * `@agent-bundle/runtime`'s `Register`, a string literal must be one of the
+ * registered ids (the editor completes them and a typo is rejected naming the
+ * alternatives), while a value typed `string` stays legal for dynamic lookups
+ * and a module target is unaffected. Without a registration `RegisteredRouteId`
+ * is `string`, so every string is legal, exactly as before.
+ *
+ * `renderRoute` infers `Target` from a literal while checking it against this
+ * constraint through TanStack Router's `ConstrainLiteral` shape,
+ * `(Target & Constraint) | Constraint`, spelled inline in each signature so the
+ * rejection message lists the registered ids rather than an alias name.
+ */
+export type RouteTargetConstraint<Target> = Target extends AgentRouteModule
+  ? AgentRouteModule
+  : string extends Target ? string : RegisteredRouteId;
+
+
+/** The registered input type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
+export type RouteTargetInput<Target> = Target extends RegisteredRouteId ? RegisteredRouteInput<Target> : unknown;
+
+/** The registered result type of a route target; `unknown` for a module target, a dynamic string, or an unregistered project. */
+export type RouteTargetResult<Target> = Target extends RegisteredRouteId ? RegisteredRouteResult<Target> : unknown;
+
+export interface RenderRouteOptionsBase<Target = RenderRouteTarget> {
   /** CLI route arguments; `cli` routes only. */
   readonly args?: readonly string[];
-  /** The route's input: tool input, event payload, or script input. */
-  readonly input?: unknown;
+  /** The route's input: tool input, event payload, or script input — typed from the route's own schema once the id is registered. */
+  readonly input?: RouteTargetInput<Target>;
   /** Overrides the route kind when a module is rendered directly; ignored for manifest routes. */
   readonly kind?: RenderableRouteKind;
   readonly limits?: Partial<AgentRenderLimits>;
@@ -91,7 +122,7 @@ export interface RenderRouteOptionsBase {
   readonly signal?: AbortSignal;
 }
 
-export type RenderRouteOptions = RenderRouteOptionsBase & RenderRouteContextInit;
+export type RenderRouteOptions<Target = RenderRouteTarget> = RenderRouteOptionsBase<Target> & RenderRouteContextInit;
 
 /**
  * The trailing options parameter of every harness entry point. It is always
@@ -100,18 +131,16 @@ export type RenderRouteOptions = RenderRouteOptionsBase & RenderRouteContextInit
  */
 export type HarnessOptionsArguments<Options> = readonly [options?: Options];
 
-export interface RenderedRoute {
+export interface RenderedRoute<Target = RenderRouteTarget> {
   /** The final Agent Document the real renderer produced. */
   readonly document: AgentDocument;
   readonly invocation: AgentRenderInvocation;
-  /** The document value parsed by the route's own `resultSchema`; absent when the module exports none. */
-  readonly result?: unknown;
+  /** The document value parsed by the route's own `resultSchema`, typed from that schema once the id is registered; absent when the module exports none. */
+  readonly result?: RouteTargetResult<Target>;
   /** Request-scoped progress the route reported. These are not render events; the final-only dispatcher emits no event stream. */
   readonly progress: readonly AgentProgressUpdate[];
   readonly provenance: RenderedRouteProvenance;
 }
-
-export type RenderRouteTarget = AgentRouteModule | string;
 
 interface Renderer {
   readonly available: typeof AgentRuntime.available;
@@ -1128,10 +1157,10 @@ const renderFailure = (
  * This is the route-unit proof level: no transport is opened, no browser
  * surface is compiled, and no host artifact is built.
  */
-export const renderRoute = async (
-  target: RenderRouteTarget,
-  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions>
-): Promise<RenderedRoute> => {
+export const renderRoute = async <Target extends RenderRouteTarget>(
+  target: (Target & RouteTargetConstraint<Target>) | RouteTargetConstraint<Target>,
+  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions<Target>>
+): Promise<RenderedRoute<Target>> => {
   const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   try {
     const document = await dispatcher.dispatch({ invocation, signal });
@@ -1142,7 +1171,8 @@ export const renderRoute = async (
       provenance: resolved.provenance,
       ...(resolved.module.resultSchema === undefined
         ? {}
-        : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) }),
+        // The value was parsed by the same `resultSchema` the registration types it from.
+        : { result: parsedResult(resolved.module.resultSchema, document, resolved.provenance) as RouteTargetResult<Target> }),
     });
   } catch (error) {
     throw renderFailure(error, invocation, resolved.provenance);
@@ -1151,7 +1181,7 @@ export const renderRoute = async (
   }
 };
 
-export interface RenderedRouteEvents extends RenderedRoute {
+export interface RenderedRouteEvents<Target = RenderRouteTarget> extends RenderedRoute<Target> {
   /** Every render event the runtime emitted, in the order it emitted them. */
   readonly events: readonly AgentRenderEvent[];
 }
@@ -1163,10 +1193,10 @@ export interface RenderedRouteEvents extends RenderedRoute {
  * {@link renderRoute}: this drains the dispatcher's public event stream
  * rather than its final-only entry point.
  */
-export const renderRouteEvents = async (
-  target: RenderRouteTarget,
-  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions>
-): Promise<RenderedRouteEvents> => {
+export const renderRouteEvents = async <Target extends RenderRouteTarget>(
+  target: (Target & RouteTargetConstraint<Target>) | RouteTargetConstraint<Target>,
+  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions<Target>>
+): Promise<RenderedRouteEvents<Target>> => {
   const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   const events: AgentRenderEvent[] = [];
   const reader = dispatcher.stream({ invocation, signal }).getReader();
@@ -1199,6 +1229,6 @@ export const renderRouteEvents = async (
     provenance: resolved.provenance,
     ...(resolved.module.resultSchema === undefined
       ? {}
-      : { result: parsedResult(resolved.module.resultSchema, complete.document, resolved.provenance) }),
+      : { result: parsedResult(resolved.module.resultSchema, complete.document, resolved.provenance) as RouteTargetResult<Target> }),
   });
 };

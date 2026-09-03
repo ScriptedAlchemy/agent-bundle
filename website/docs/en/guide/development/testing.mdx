@@ -56,6 +56,28 @@ request-scoped progress the route reported, the resolved provenance, and the rou
 `resultSchema`-parsed value. Progress is recorded whether or not the caller supplies a reporter
 of its own.
 
+### Typed route ids, inputs, and results
+
+The compiler's generated `.agent-bundle/routes.d.ts` registers the project's route contracts on
+`@agent-bundle/runtime`'s `Register` interface, the way it already declares provider keys. Once
+that file is part of the project's TypeScript program (add `".agent-bundle/routes.d.ts"` to
+`tsconfig.json` `include`), a `renderRoute` call written with a string literal is checked against
+the compiled route ids — the editor completes them, and a typo is rejected naming the registered
+alternatives — while `input` and `result` come from that route's own `inputSchema` and
+`resultSchema`:
+
+```ts
+const { result } = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+const chapters: number | undefined = result?.chapters; // no cast
+```
+
+Nothing about it is required. A target typed `string` rather than a literal stays legal for
+dynamic lookups, a directly imported module target is unaffected, and a project that does not
+include the generated file — or has not run a build or `agent-bundle dev` yet — sees the previous
+types: any string id, `unknown` input, `unknown` result. `RegisteredRouteId`,
+`RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime` name the
+registered surface directly, for a wrapper of your own.
+
 `testManifest()` exposes the compiled route inventory, so a suite can iterate every route in
 process rather than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target kind, and the
