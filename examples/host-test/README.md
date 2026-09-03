@@ -36,6 +36,9 @@ Two MCP servers ship in the plugin:
 - `host-test` (generated routes, `src/mcp/host-test/tools/`): `dump` (filter by
   any conversation/session/subagent id, `full` for raw lines) and `reset`. Each
   `dump` call records the request context the generated server mounted for it.
+  A bare `dump` returns the newest 50 matching records — a whole log of a few
+  hundred records overflows the tool-result document — so pass `limit` (up to
+  5000) for more; `matched` and `total` always count the whole log.
 - `host-test-raw` (hand-rolled stdio factory, `src/mcp/host-test-raw.ts`):
   `probe` records the raw SDK request context — session id, JSON-RPC id,
   `_meta`, lifted envelope, negotiated client info — so hook↔MCP correlation is
@@ -82,9 +85,15 @@ pnpm --filter @agent-bundle-example/host-test probe:uninstall claude
   `{ "prompt": "..." }`). For Claude every turn after the first runs
   `claude -p --resume <session_id>` against the session the first turn's
   `system/init` envelope reported, so one capture holds a multi-turn session
-  with `SessionStart source: resume`, a fresh `prompt_id` per turn, and one
-  `Stop`/`SessionEnd` per turn. Codex and Cursor drivers take the first turn
-  only and refuse longer scenarios. `scenarios/claude-orchestration.json` is
+  with `SessionStart source: resume` and one `SessionEnd` per invocation.
+  `Stop` follows the prompt path rather than the invocation: a turn whose
+  background subagents finish re-prompts itself with a `<task-notification>`
+  and stops twice, while a `/compact` turn submits no prompt and never stops
+  (`fixtures/host-lineage/claude-2.1.259-orchestration.ndjson`). If the first
+  turn reports no `session_id`, the capture fails instead of running the
+  remaining turns as fresh sessions; `--scripted-model` plays a fixed
+  transcript and refuses `--scenario`/`--prompt`. Codex and Cursor drivers take
+  the first turn only and refuse longer scenarios. `scenarios/claude-orchestration.json` is
   the checked-in orchestration scenario (two parallel `Agent` spawns, one
   sequential spawn that nests another, the `host-test:host-test` skill, a
   plugin-command probe, a manual `/compact`, a final stop).

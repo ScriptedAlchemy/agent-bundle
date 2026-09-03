@@ -4,7 +4,7 @@
 // uninstall. Nothing here touches the real ~/.claude, ~/.codex, or ~/.cursor.
 //
 //   node scripts/probe.mjs install   <claude|codex|cursor> [--no-auth] [--root <dir>]
-//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text> | --scenario <file.json>] [--model <m>] [--timeout <ms>] [--scripted-model]
+//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text> | --scenario <file.json> | --scripted-model] [--model <m>] [--timeout <ms>]
 //   node scripts/probe.mjs uninstall <claude|codex|cursor> [--keep-home]
 //   node scripts/probe.mjs status    <claude|codex|cursor>
 import { spawn, spawnSync } from 'node:child_process';
@@ -296,6 +296,12 @@ const describeStream = (envelopes) => {
  */
 const captureClaude = () => {
   const scripted = flags.scriptedModel === true;
+  // The scripted model answers one canned transcript; it cannot follow a
+  // scenario, so refuse the combination instead of silently running the
+  // canned turn under the scenario's name.
+  if (scripted && (flags.scenario !== undefined || flags.prompt !== undefined)) {
+    throw new Error('--scripted-model plays a fixed transcript and ignores prompts: drop --scenario/--prompt, or run the scenario against the real model');
+  }
   const turns = scripted ? ['You are exercising the host-test probe plugin. Do the scripted steps.'] : scenarioTurns();
   const baseArgs = [
     '--output-format', 'stream-json',

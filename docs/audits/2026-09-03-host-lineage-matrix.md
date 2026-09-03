@@ -151,8 +151,10 @@ Findings specific to this run:
 - **Turn boundaries.** Four `UserPromptSubmit` payloads (rows 2, 58, 105,
   137), four distinct `prompt_id`s; the sequential and nested spawns ran under
   the `<task-notification>` prompt (row 58), and the registry's `generation`
-  on their lineage is that `prompt_id`. Each `-p` process produced its own
-  `Stop` + `SessionEnd` (rows 34/102–103, 129–130, 135, 140–141); resuming
+  on their lineage is that `prompt_id`. Each `-p` process produced exactly one
+  `SessionEnd` (rows 103, 130, 135, 141), while `Stop` follows the prompt
+  path: twice in turn 1 (row 34 before the re-prompt, row 102 after), once in
+  turns 2 and 4 (rows 129, 140), never in the `/compact` turn; resuming
   re-registers nothing new — the root node stays the same and every resumed
   root-side hook still resolves `depth 0, resolution: native`.
 - **MCP correlation held at every depth.** The five `probe` calls (rows 29,
@@ -382,7 +384,7 @@ header table. What changed and what did not:
 | `PostToolUseFailure` "not observed" | Emitted by 2.1.259 for a failed MCP tool call, at the root and inside subagents, with the same `session_id`/`agent_id` carrier as `PostToolUse` (orchestration rows 77, 94, 116) | Corrected: observed; the registry already closed windows on `tool/failure` |
 | `PreCompact`/`PostCompact` "not observed" | Fired by a manual `/compact` sent as a resumed `-p` prompt, bracketing a `SessionStart source: compact`; root-only, no `agent_id`, own `prompt_id` (orchestration rows 132–134) | Corrected: inducible on demand |
 | Two spawns in one message would leave the registry's `toolCallId` uncertain (`siblingsUncertain`) | The host serialised them: `SubagentStart` for the first fired before the second `Agent` `PreToolUse` opened, so both claims were certain and agree with `tool_response.agentId` and the stream's `task_started` | Held stronger than assumed |
-| Single-turn `-p` sessions only | Four `-p` turns resumed into one `session_id`; `SessionStart source: resume`, one `Stop`/`SessionEnd` per turn, root-side lineage unchanged across turns | New coverage; no framework impact |
+| Single-turn `-p` sessions only | Four `-p` turns resumed into one `session_id`; `SessionStart source: resume`, one `SessionEnd` per invocation while `Stop` follows the prompt path (two in turn 1 around the `<task-notification>` re-prompt, none in the `/compact` turn), root-side lineage unchanged across turns | New coverage; no framework impact |
 
 No lineage or projection code change was needed: the registry replay test
 (`packages/rsc-runtime/tests/lineage-registry.test.ts`) now runs against all
