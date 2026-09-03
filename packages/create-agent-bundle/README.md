@@ -65,3 +65,9 @@ same `-preview-<sha>` suffix, so the scaffolder and the framework it pins
 always come from the same commit. A non-preview build of the scaffolder has
 no derivable default (the `agent-bundle` name on npm currently belongs to an
 unrelated project) and requires `--framework-version` explicitly.
+
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE).

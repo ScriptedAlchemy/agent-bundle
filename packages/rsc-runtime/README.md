@@ -258,3 +258,9 @@ content, and the `available`/`read` taxonomy rows from #99 map onto the
 availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
 cross-request routes from a per-host advertisement and returns a typed
 unavailable outcome when none is supported; it never fabricates a channel.
+
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE).

@@ -678,6 +678,13 @@ harness.
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in
 the published package.
 
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE); third-party material keeps
+its own notices under `dist/workbench/`.
+
 ## Contributor delivery and release gates
 
 The public examples live at [`../../examples`](../../examples). They are private
@@ -689,6 +696,7 @@ Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed:release`, and it does not replace
 `pnpm check`. `pnpm release` runs that release gate before `changeset publish`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
-npm publishing is deferred until the release owner picks the final package name/scope and
-license; pkg.pr.new previews are the interim channel, and the first npm release will use npm
-package provenance (`publishConfig.provenance` is already set).
+npm publishing is deferred until the release owner picks the final package name/scope;
+pkg.pr.new previews are the interim channel, and the first npm release will use npm
+package provenance (`publishConfig.provenance` is already set). `pnpm audit:release` fails if any
+publishable tarball lacks `LICENSE`, `NOTICE`, or the `"license": "Apache-2.0"` manifest field.

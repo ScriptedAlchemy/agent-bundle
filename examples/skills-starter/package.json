@@ -1,6 +1,7 @@
 {
   "name": "@agent-bundle-example/skills-starter",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "build": "agent-bundle build",

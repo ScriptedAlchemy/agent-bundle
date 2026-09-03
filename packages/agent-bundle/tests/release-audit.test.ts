@@ -119,6 +119,32 @@ it('packs generated Workbench legal companion files', async () => {
   expect(productManifest).not.toContain('workspace:');
 }, 120_000);
 
+it('packs the root LICENSE and NOTICE into every publishable tarball', async () => {
+  const [license, notice] = await Promise.all([
+    readFile(join(workspaceRoot, 'LICENSE'), 'utf8'),
+    readFile(join(workspaceRoot, 'NOTICE'), 'utf8'),
+  ]);
+
+  for (const packageName of ['agent-bundle', 'runtime', 'create-agent-bundle'] as const) {
+    const tarballRoot = await mkdtemp(join(tmpdir(), `agent-bundle-license-${packageName}-`));
+    try {
+      const { packOutput, tarball } = await sharedPackedTarball(packageName);
+      const paths = packOutput.files.map((file) => file.path);
+      expect(paths, `${packageName} tarball listing`).toEqual(expect.arrayContaining(['LICENSE', 'NOTICE']));
+
+      await execFile('tar', ['--extract', '--file', tarball, '--directory', tarballRoot]);
+      const manifest = JSON.parse(await readFile(join(tarballRoot, 'package', 'package.json'), 'utf8')) as {
+        readonly license?: string;
+      };
+      expect(manifest.license, `${packageName} license field`).toBe('Apache-2.0');
+      await expect(readFile(join(tarballRoot, 'package', 'LICENSE'), 'utf8')).resolves.toBe(license);
+      await expect(readFile(join(tarballRoot, 'package', 'NOTICE'), 'utf8')).resolves.toBe(notice);
+    } finally {
+      await rm(tarballRoot, { force: true, recursive: true });
+    }
+  }
+}, 120_000);
+
 it('installs public entrypoints and an externally resolved CLI for production consumers', async () => {
   const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-consumer-'));
 

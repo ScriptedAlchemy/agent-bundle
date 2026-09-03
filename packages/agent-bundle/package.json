@@ -2,6 +2,7 @@
   "name": "agent-bundle",
   "version": "0.1.0",
   "description": "Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts.",
+  "license": "Apache-2.0",
   "keywords": [
     "agent",
     "claude-code",
@@ -24,13 +25,15 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "pnpm build:workbench && rslib build",
+    "build": "node ../../scripts/sync-license-files.mjs && pnpm build:workbench && rslib build",
     "build:workbench": "pnpm --filter agent-bundle-workbench build"
   },
   "files": [
     "bin",
     "dist",
     "!dist/workbench/**/*.map",
+    "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "bin": {
