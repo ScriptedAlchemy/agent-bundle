@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { capabilityIsSupported } from './adapters/capability-state.ts';
+import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
@@ -263,10 +263,33 @@ export interface ValidateResult {
 
 export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capability';
 
-/** One component the plan silently omits for this target, with the intersection-rule cause. */
-export interface InspectionSkippedComponent {
+export type InspectionComponentKind = 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+
+/**
+ * The target's own four-state judgment of the capability a component needs,
+ * named so a reader can find the pinned row. Scripts need no host capability
+ * and carry none.
+ */
+export type InspectionComponentCapability = CapabilityState & { readonly name: string };
+
+/** One component the plan emits for this target. */
+export interface InspectionSelectedComponent {
+  readonly capability?: InspectionComponentCapability;
   readonly id: string;
-  readonly kind: 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+  readonly kind: InspectionComponentKind;
+  readonly name: string;
+}
+
+/**
+ * One component the plan omits for this target, with the intersection-rule
+ * cause. `unsupported-capability` carries the host's `degraded`,
+ * `unavailable`, or `prohibited` judgment and reason; `excluded-by-targets`
+ * carries the judgment the host would have applied had the author selected it.
+ */
+export interface InspectionSkippedComponent {
+  readonly capability?: InspectionComponentCapability;
+  readonly id: string;
+  readonly kind: InspectionComponentKind;
   readonly name: string;
   readonly reason: InspectionSkipReason;
 }
@@ -275,6 +298,8 @@ export interface InspectionPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
+  /** Components this target emits, in the same deterministic order as `skipped`. */
+  readonly selected: readonly InspectionSelectedComponent[];
   readonly skipped: readonly InspectionSkippedComponent[];
   readonly target: string;
 }
@@ -534,7 +559,7 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
 interface InspectableComponent {
   readonly capability?: string;
   readonly id: string;
-  readonly kind: InspectionSkippedComponent['kind'];
+  readonly kind: InspectionComponentKind;
   readonly name: string;
   readonly targets: readonly string[];
 }
@@ -549,22 +574,63 @@ const inspectableComponents = (model: NormalizedPlugin): readonly InspectableCom
   ...model.skills.map((skill) => ({ capability: 'skills', id: skill.id, kind: 'skill' as const, name: skill.name, targets: skill.targets })),
 ];
 
-const skippedComponentsFor = (
+/**
+ * The target's judgment for one component capability. An adapter that
+ * publishes no row for a capability it is asked about has not evidenced it, so
+ * the absence reads as an honest `unavailable` rather than a crash or a silent
+ * pass.
+ */
+const componentCapabilityFor = (
+  component: InspectableComponent,
+  target: string,
+  capabilities: Readonly<Record<string, CapabilityState>>,
+): InspectionComponentCapability | undefined => {
+  if (component.capability === undefined) return undefined;
+  const state = capabilities[component.capability];
+  return Object.freeze({
+    name: component.capability,
+    ...(state ?? unavailableCapability(
+      `The ${target} adapter publishes no ${component.capability} capability row.`,
+    )),
+  });
+};
+
+interface AccountedComponents {
+  readonly selected: readonly InspectionSelectedComponent[];
+  readonly skipped: readonly InspectionSkippedComponent[];
+}
+
+/**
+ * Splits the project's components into the ones this target emits and the
+ * ones it omits. Author exclusion (`targets`) is reported before the host's
+ * capability judgment, and every component that needs a capability carries the
+ * target's four-state judgment so `inspect` explains, not just counts.
+ */
+const accountComponentsFor = (
   components: readonly InspectableComponent[],
   target: string,
   capabilities: Readonly<Record<string, CapabilityState>>,
-): readonly InspectionSkippedComponent[] => Object.freeze(components
-  .filter((component) =>
-    !component.targets.includes(target) ||
-    (component.capability !== undefined && !capabilityIsSupported(capabilities[component.capability])))
-  .map((component) => Object.freeze({
-    id: component.id,
-    kind: component.kind,
-    name: component.name,
-    reason: (!component.targets.includes(target)
-      ? 'excluded-by-targets'
-      : 'unsupported-capability') satisfies InspectionSkipReason,
-  })));
+): AccountedComponents => {
+  const selected: InspectionSelectedComponent[] = [];
+  const skipped: InspectionSkippedComponent[] = [];
+  for (const component of components) {
+    const capability = componentCapabilityFor(component, target, capabilities);
+    const identity = {
+      ...(capability === undefined ? {} : { capability }),
+      id: component.id,
+      kind: component.kind,
+      name: component.name,
+    };
+    if (!component.targets.includes(target)) {
+      skipped.push(Object.freeze({ ...identity, reason: 'excluded-by-targets' satisfies InspectionSkipReason }));
+    } else if (capability !== undefined && !capabilityIsSupported(capability)) {
+      skipped.push(Object.freeze({ ...identity, reason: 'unsupported-capability' satisfies InspectionSkipReason }));
+    } else {
+      selected.push(Object.freeze(identity));
+    }
+  }
+  return { selected: Object.freeze(selected), skipped: Object.freeze(skipped) };
+};
 
 const inspectState = (model: NormalizedPlugin): StateInspection => {
   const definition = model.state;
@@ -605,15 +671,17 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
       .map((target) => {
         const adapter = prepared.registry.get(target.name);
         const plan = adapter.plan(model);
+        const accounted = accountComponentsFor(
+          components,
+          target.name,
+          adapter.componentCapabilities ?? adapter.capabilities,
+        );
         return Object.freeze({
           diagnostics: freezeDiagnostics(plan.diagnostics),
           entries: Object.freeze([...plan.entries]),
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
-          skipped: skippedComponentsFor(
-            components,
-            target.name,
-            adapter.componentCapabilities ?? adapter.capabilities,
-          ),
+          selected: accounted.selected,
+          skipped: accounted.skipped,
           target: target.name,
         });
       }));
