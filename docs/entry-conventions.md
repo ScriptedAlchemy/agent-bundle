@@ -172,19 +172,21 @@ expected degradation should return an honest unavailable-shaped value instead
 of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `script`), so a provider can branch on the entry surface deliberately.
 `processLifetime` is reserved for the framework-owned process identity and hit
-counter, so provider filenames must not derive that key. The `agent-bundle/test`
-harness mounts the same providers, in the same order and with the same
-fail-closed semantics, for every manifest-backed helper; a test passes
-`context.providers` to substitute an explicit map instead.
+counter, so provider filenames must not derive that key.
 
-Route-unit and CLI-dispatch tests inject provider values through the same
-`context` seam as identity axes (`renderRoute(id, { context: { providers:
-{ library: fixture } } })`); the harness never executes conventional provider
-modules, so a test chooses exactly the values a component observes. Once the
-generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, the
-harness `options` and its `context.providers` become required (as does
-`providers` on a direct `runAgentRequest`), so omitting a fixture the route's
-types promise is a compile error rather than a runtime `undefined`.
+The `agent-bundle/test` harness mounts the same providers, in the same order
+and with the same fail-closed semantics, for every manifest-backed helper
+(`renderRoute`, `renderRouteEvents`, `invokeCli`, and the in-memory MCP
+helpers), so a route test observes what the artifact would mount. A test that
+wants to choose the values instead injects them through the same `context`
+seam as identity axes (`renderRoute(id, { context: { providers: { library:
+fixture } } })`): an explicit map is mounted verbatim and no conventional
+provider module executes. A module rendered directly (no compiled manifest)
+has no project to discover, so it observes only `processLifetime`. Once the
+generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, an
+explicit `context.providers` map must carry every declared key (as must
+`providers` on a direct `runAgentRequest`), so a fixture that omits a value the
+route's types promise is a compile error rather than a runtime `undefined`.
 
 ### Handler request context
 

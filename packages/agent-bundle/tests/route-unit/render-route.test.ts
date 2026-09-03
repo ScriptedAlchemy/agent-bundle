@@ -263,7 +263,7 @@ describe('renderRoute through the real renderer', () => {
       .toHaveValue(undefined);
   });
 
-  it('mounts provider fixture values through the context seam instead of executing provider modules', async () => {
+  it('mounts explicit provider fixture values through the context seam instead of discovering providers', async () => {
     const library = { stages: ['discover', 'curate'], tooling: { ffmpeg: { available: false } } };
     const Providers = async (): Promise<unknown> => {
       const { providers } = await agent();
@@ -287,12 +287,14 @@ describe('renderRoute through the real renderer', () => {
       library,
     });
 
-    // A render without fixtures observes an empty, frozen provider map — the
-    // harness never runs conventional src/providers modules on the test's behalf.
+    // A module rendered directly has no compiled manifest, so there is nothing
+    // to discover: it observes only the framework-owned process identity, the
+    // same map a generated scope without providers mounts. Manifest routes
+    // execute the project's conventional providers (projection/providers.test.ts).
     const unfixtured = await renderRoute({ default: Providers as never }, {
       routeId: 'tool:harness/providers (module)',
     });
-    expectDocument(unfixtured).toHaveValue({ frozen: true, keys: [], library: undefined });
+    expectDocument(unfixtured).toHaveValue({ frozen: true, keys: ['processLifetime'], library: undefined });
   });
 
   it('serves useAgent() synchronously inside a rendered Server Component', async () => {
