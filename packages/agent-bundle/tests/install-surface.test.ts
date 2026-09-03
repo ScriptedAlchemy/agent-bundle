@@ -142,6 +142,8 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(installer).toContain('Refusing foreign install');
   expect(installer).toContain('Refusing content collision');
   expect(installer).toContain('Refusing version collision');
+  expect(installer).toContain('Refusing to overwrite unowned files');
+  expect(installer).toContain("!value.includes('\\\\')");
 });
 
 const run = async (
@@ -230,6 +232,33 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     ]);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+
+    // An incoming file that would land on an existing unowned file aborts before any change.
+    await writeFile(join(destination, 'notes.md'), 'operator\n');
+    await writeFile(join(bundle, 'notes.md'), 'artifact\n');
+    const collision = await run(installer, [], home);
+    expect(collision.code).toBe(1);
+    expect(collision.stderr).toContain('Refusing to overwrite unowned files');
+    expect(collision.stderr).toContain('notes.md');
+    expect(await readFile(join(destination, 'notes.md'), 'utf8')).toBe('operator\n');
+    await rm(join(bundle, 'notes.md'));
+    await rm(join(destination, 'notes.md'));
+
+    // Byte-identical legacy copy (receipt-less copies hash as a full tree, so runtime state is cleared
+    // first): plain rerun is a no-op, --replace adopts it by writing the receipt.
+    await rm(join(destination, installReceiptFile));
+    await rm(join(destination, 'state'), { force: true, recursive: true });
+    const identicalLegacy = await run(installer, [], home);
+    expect(identicalLegacy).toMatchObject({ code: 0, stderr: '' });
+    expect(identicalLegacy.stdout).toContain('Already installed install-fixture@1.2.3');
+    expect(await readInstallReceipt(destination)).toBeUndefined();
+    const adoptedIdentical = await run(installer, ['--replace'], home);
+    expect(adoptedIdentical).toMatchObject({ code: 0, stderr: '' });
+    expect(adoptedIdentical.stdout).toContain('Adopted install-fixture@1.2.3');
+    expect(await readInstallReceipt(destination)).toMatchObject({
+      contentHash: (await treeInventory(bundle)).hash,
+      plugin: 'install-fixture',
+    });
 
     // Legacy pre-receipt copy with drift: refused with a hash comparison until --replace adopts it.
     await rm(join(destination, installReceiptFile));

@@ -227,18 +227,24 @@ it('honours --replace for Codex through remove + add and fails closed without a 
       'plugin add install-fixture@install-fixture-marketplace',
     ]);
 
-    const unusable = recordingRunner(() => 'not json');
-    const error = await installBundle({
-      commandRunner: unusable.runner,
-      from: fixture.from,
-      host: 'codex',
-      replace: true,
-      scope: 'user',
-    }).catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(DiagnosticError);
-    expect((error as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'codex' });
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
-    expect(unusable.calls).toHaveLength(1);
+    // Unparsable output, and a matching row that cannot be read, both fail --replace closed.
+    const malformedRow = JSON.stringify({
+      installed: [{ installed: true, pluginId: 'install-fixture@install-fixture-marketplace' }],
+    });
+    for (const stdout of ['not json', malformedRow]) {
+      const unusable = recordingRunner(() => stdout);
+      const error = await installBundle({
+        commandRunner: unusable.runner,
+        from: fixture.from,
+        host: 'codex',
+        replace: true,
+        scope: 'user',
+      }).catch((failure: unknown) => failure);
+      expect(error, stdout).toBeInstanceOf(DiagnosticError);
+      expect((error as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'codex' });
+      expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
+      expect(unusable.calls).toHaveLength(1);
+    }
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -383,6 +389,18 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     const again = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(again).toMatchObject({ contentHash: artifact.hash, state: 'already-installed' });
     expect(again.previousContentHash).toBeUndefined();
+
+    // An incoming file that would land on an existing unowned file aborts before any change.
+    await writeFile(join(fixture.bundleRoot, 'operator-note.txt'), 'from the artifact\n');
+    const collision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(collision).toBeInstanceOf(DiagnosticError);
+    expect((collision as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'cursor' });
+    expect((collision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
+    expect((collision as DiagnosticError).diagnostics[0]?.message).toContain('operator-note.txt');
+    expect(await readFile(join(destination, 'operator-note.txt'), 'utf8')).toBe('keep me\n');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+    expect(await readInstallReceipt(destination)).toMatchObject({ contentHash: artifact.hash });
   } finally {
     await Promise.all([
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
@@ -400,6 +418,16 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     await writeFile(join(fixture.bundleRoot, 'INSTALL.md'), '# install\n');
     await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
     await cp(fixture.bundleRoot, destination, { recursive: true });
+
+    // Byte-identical legacy copy: a plain rerun is a no-op; --replace adopts it by writing the receipt.
+    const identical = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(identical).toMatchObject({ state: 'already-installed' });
+    expect(await readInstallReceipt(destination)).toBeUndefined();
+    const adopted = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
+    expect(adopted).toMatchObject({ contentHash: (await treeInventory(fixture.bundleRoot)).hash, state: 'adopted' });
+    expect(await readInstallReceipt(destination)).toMatchObject({ plugin: 'install-fixture', version: '1.2.3' });
+    await rm(join(destination, installReceiptFile));
+
     await writeFile(join(destination, 'payload.txt'), 'stale\n');
     const legacyHash = (await treeInventory(destination)).hash;
     const artifact = await treeInventory(fixture.bundleRoot);
@@ -415,8 +443,8 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     expect(message).toContain('same version, different content');
     expect(message).toContain('--replace');
 
-    const adopted = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
-    expect(adopted).toMatchObject({ contentHash: artifact.hash, previousContentHash: legacyHash, state: 'replaced' });
+    const replaced = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
+    expect(replaced).toMatchObject({ contentHash: artifact.hash, previousContentHash: legacyHash, state: 'replaced' });
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
     expect(await readInstallReceipt(destination)).toMatchObject({ contentHash: artifact.hash, plugin: 'install-fixture' });
   } finally {
@@ -448,6 +476,36 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
       rm(home, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('ignores receipts whose file list could escape the plugin root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-receipt-'));
+  try {
+    for (const files of [['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile]]) {
+      await writeJson(join(root, installReceiptFile), {
+        contentHash: 'abc',
+        files,
+        format: 'agent-bundle-install-receipt/1',
+        host: 'cursor',
+        installedAt: '2026-09-03T00:00:00.000Z',
+        plugin: 'install-fixture',
+        version: '1.2.3',
+      });
+      expect(await readInstallReceipt(root), JSON.stringify(files)).toBeUndefined();
+    }
+    await writeJson(join(root, installReceiptFile), {
+      contentHash: 'abc',
+      files: ['skills/probe/SKILL.md', 'plugin.json'],
+      format: 'agent-bundle-install-receipt/1',
+      host: 'cursor',
+      installedAt: '2026-09-03T00:00:00.000Z',
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    });
+    expect(await readInstallReceipt(root)).toMatchObject({ files: ['skills/probe/SKILL.md', 'plugin.json'] });
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

@@ -15,7 +15,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, safeArtifactPath } from '../core/paths.ts';
+import { exists } from '../core/paths.ts';
 
 /**
  * Host-agnostic install ownership core shared by `agent-bundle install`,
@@ -144,12 +144,22 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
   return hash.digest('hex');
 };
 
+/**
+ * Receipt paths drive deletions, so they must be exactly what `treeInventory`
+ * emits: POSIX-relative, no backslashes (a Windows `..\outside` must not slip
+ * past POSIX normalization), no empty, `.`, or `..` segments, no drive letter.
+ */
+export const isReceiptPath = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value !== installReceiptFile &&
+  !value.includes('\\') &&
+  !value.startsWith('/') &&
+  !/^[a-z]:/iu.test(value) &&
+  value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
-  Array.isArray(value) &&
-  value.every((entry) =>
-    typeof entry === 'string' &&
-    safeArtifactPath(entry) &&
-    entry !== installReceiptFile);
+  Array.isArray(value) && value.every(isReceiptPath);
 
 /** Reads the receipt at a plugin root; malformed or unsafe receipts read as absent. */
 export const readInstallReceipt = async (destination: string): Promise<InstallReceipt | undefined> => {
@@ -201,6 +211,17 @@ export const createInstallReceipt = (options: {
 });
 
 const receiptDocument = (receipt: InstallReceipt): string => `${stableJson(receipt)}\n`;
+
+/** Lands a receipt at a plugin root atomically (sibling temp file + rename). */
+export const writeInstallReceipt = async (destination: string, receipt: InstallReceipt): Promise<void> => {
+  const temporary = join(destination, `${installReceiptFile}.${process.pid}.tmp`);
+  await writeFile(temporary, receiptDocument(receipt), 'utf8');
+  try {
+    await rename(temporary, join(destination, installReceiptFile));
+  } finally {
+    await rm(temporary, { force: true });
+  }
+};
 
 const hasInstallSurfaceMarkers = async (destination: string): Promise<boolean> => {
   for (const marker of installSurfaceMarkerFiles) {
@@ -353,7 +374,8 @@ const previouslyOwnedFiles = async (
  * Replaces an agent-bundle-owned install in place: stale owned files leave
  * first (their now-empty directories are pruned), every staged file then
  * moves over its predecessor with an atomic rename, and the receipt lands
- * last as the commit marker. Unowned entries are never touched.
+ * last as the commit marker. Unowned entries are never touched; an incoming
+ * file that would land on an existing unowned entry aborts before any change.
  */
 export const replaceInstalledTree = async (options: {
   readonly comparison: InstalledTreeComparison;
@@ -364,8 +386,19 @@ export const replaceInstalledTree = async (options: {
     throw new Error(`Refusing to replace foreign install at ${options.destination}.`);
   }
   const incoming = new Set(options.staged.inventory.files);
-  const stale = (await previouslyOwnedFiles(options.destination, options.comparison))
-    .filter((file) => !incoming.has(file));
+  const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison);
+  const owned = new Set(previouslyOwned);
+  const collisions: string[] = [];
+  for (const file of options.staged.inventory.files) {
+    if (!owned.has(file) && await exists(join(options.destination, file))) collisions.push(file);
+  }
+  if (collisions.length > 0) {
+    throw new Error(
+      `Refusing to overwrite unowned files at ${options.destination}: ${collisions.join(', ')}. ` +
+        'Move them aside manually before replacing.',
+    );
+  }
+  const stale = previouslyOwned.filter((file) => !incoming.has(file));
   for (const file of stale) {
     await rm(join(options.destination, file), { force: true });
   }

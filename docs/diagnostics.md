@@ -702,7 +702,8 @@ this plugin's name — a copy installed before receipts existed), or **foreign**
 
 | Installed copy | `install` | `install --replace` (alias `--force`) | Doctor |
 | --- | --- | --- | --- |
-| Identical content | `already-installed` no-op | `already-installed` no-op | `current` |
+| Identical content (receipt / host-managed) | `already-installed` no-op | `already-installed` no-op | `current` |
+| Identical content (legacy) | `already-installed` no-op | `adopted` — receipt written, no plugin file changes | `current` |
 | Receipt / host-managed, same version, different content | replaced automatically (`replaced`) | replaced | `stale` — `AB7308` warning |
 | Receipt / host-managed, different version | `AB7005` version collision | replaced | `version-mismatch` — `AB7309` warning |
 | Legacy, different content | `AB7005` content collision | replaced and adopted (receipt written) | `stale` — `AB7308` warning, recovery names `--replace` |
@@ -716,7 +717,12 @@ Cursor replacement is in place and touches owned files only: stale owned files
 are removed and their empty directories pruned, staged files are renamed over
 their predecessors, and the receipt lands last. Entries the installer does not
 own — notably workspace-durable `state/` stores — are never removed or
-rewritten.
+rewritten; when a rebuilt artifact introduces a path that an existing unowned
+entry already occupies, replacement aborts before any change (`AB7004`,
+"Refusing to overwrite unowned files") and names the colliding paths. Receipt
+file lists are validated as strict POSIX-relative paths (no backslashes, no
+`..`/`.`/empty segments, no drive letters) before they can drive a deletion; a
+receipt that fails validation reads as absent.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

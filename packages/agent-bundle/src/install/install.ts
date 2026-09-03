@@ -12,10 +12,12 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import {
   compareInstalledTree,
+  createInstallReceipt,
   describeContentComparison,
   replaceInstalledTree,
   stageArtifact,
   treeInventory,
+  writeInstallReceipt,
   type InstalledManifestIdentity,
   type InstalledTreeComparison,
   type TreeInventory,
@@ -23,7 +25,11 @@ import {
 
 export type InstallHost = 'claude' | 'codex' | 'cursor';
 export type InstallScope = 'local' | 'project' | 'user';
-export type InstallResultState = 'already-installed' | 'installed' | 'replaced';
+/**
+ * `adopted`: a byte-identical pre-receipt Cursor copy gained its receipt under
+ * `--replace`; no plugin file changed.
+ */
+export type InstallResultState = 'adopted' | 'already-installed' | 'installed' | 'replaced';
 
 export interface InstallCommandResult {
   readonly code: number;
@@ -278,8 +284,10 @@ export const parsePublicHostInventory = (
       isRecord(candidate) &&
       candidate['id'] === id &&
       (options.scope === undefined || candidate['scope'] === options.scope));
-    if (row === undefined || !isRecord(row) || typeof row['installPath'] !== 'string') {
-      return { status: 'available' };
+    if (row === undefined) return { status: 'available' };
+    // A matching row we cannot read is not "not installed": replacing on it would skip the uninstall.
+    if (!isRecord(row) || typeof row['installPath'] !== 'string') {
+      return { detail: `claude plugin list --json row for ${id} carries no installPath`, status: 'unavailable' };
     }
     return {
       entry: {
@@ -294,8 +302,9 @@ export const parsePublicHostInventory = (
   }
   const row = document['installed'].find((candidate) =>
     isRecord(candidate) && candidate['pluginId'] === id && candidate['installed'] !== false);
-  if (row === undefined || !isRecord(row) || typeof row['version'] !== 'string') {
-    return { status: 'available' };
+  if (row === undefined) return { status: 'available' };
+  if (!isRecord(row) || typeof row['version'] !== 'string') {
+    return { detail: `codex plugin list --json row for ${id} carries no version`, status: 'unavailable' };
   }
   return {
     entry: {
@@ -513,6 +522,15 @@ const installCursor = async (
       version: identity.version,
     });
     if (comparison.status === 'current') {
+      if (comparison.ownership === 'legacy' && options.replace === true) {
+        await writeInstallReceipt(destination, createInstallReceipt({
+          host: 'cursor',
+          inventory: artifact,
+          plugin: identity.plugin,
+          version: identity.version,
+        }));
+        return { ...base, contentHash: artifact.hash, state: 'adopted' };
+      }
       return { ...base, contentHash: artifact.hash, state: 'already-installed' };
     }
     const replaceable = comparison.status === 'stale' && comparison.ownership === 'receipt'

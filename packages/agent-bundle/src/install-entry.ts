@@ -38,6 +38,8 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] =>
 
 const stateLabel = (state: InstallResult['state']): string => {
   switch (state) {
+    case 'adopted':
+      return 'Adopted';
     case 'already-installed':
       return 'Already installed';
     case 'installed':

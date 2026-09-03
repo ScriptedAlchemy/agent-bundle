@@ -279,6 +279,8 @@ const writeHumanPrepack = (output: Output, result: Awaited<ReturnType<typeof pre
 
 const installStateLabel = (state: InstallResult['state']): string => {
   switch (state) {
+    case 'adopted':
+      return 'Adopted';
     case 'already-installed':
       return 'Already installed';
     case 'installed':
