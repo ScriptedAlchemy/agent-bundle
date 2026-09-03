@@ -1,5 +1,4 @@
-import { lstat, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import type { JsonObject, JsonValue } from '@agent-bundle/runtime';
@@ -156,6 +155,19 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
   }
 };
 
+// Evidence staging holds decoded audio, and os.tmpdir() is commonly a
+// RAM-backed tmpfs on Linux; media work must stay on regular disk. Stage
+// beside the requested receipt when one exists, otherwise beside the source
+// media, mirroring the sibling modules' same-directory staging convention.
+const evidenceWorkDir = async (
+  input: Readonly<{ file: string; receipt?: string }>,
+  prefix: string,
+): Promise<string> => {
+  const root = dirname(resolve(input.receipt ?? input.file));
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
+};
+
 const productUrl = (region: AudibleRegion, asin: string): string => {
   const groups = new URLSearchParams({ response_groups: 'contributors,media,product_desc,product_extended_attrs,sample' });
   return `https://${audibleHosts[region]}/1.0/catalog/products/${encodeURIComponent(asin)}?${groups.toString()}`;
@@ -184,7 +196,7 @@ const sampleMatch = async (
   if (sampleUrl === undefined || sampleUrl === '') throw new CuratorError('Audible candidate has no sample URL');
   const bytes = await requestWithAttempts(http, sampleUrl, attempts, { binary: true, signal: dependencies.signal });
   if (!Buffer.isBuffer(bytes)) throw new CuratorError('Audible sample response is not binary.');
-  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-acoustic-'));
+  const work = await evidenceWorkDir(input, '.audiobook-curator-acoustic-');
   const sample = join(work, 'sample.mp3');
   try {
     await writeFile(sample, bytes, { mode: 0o600 });
@@ -327,7 +339,7 @@ export const verifyWithWhisper = async (
   const windowSeconds = Math.max(1, input.windowSeconds ?? 35);
   const minimumChars = Math.max(1, input.minimumChars ?? 80);
   const process = dependencies.process ?? runMediaProcess;
-  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-whisper-'));
+  const work = await evidenceWorkDir(input, '.audiobook-curator-whisper-');
   const windows: WhisperWindow[] = [];
   try {
     for (const [offset, fraction] of whisperSamplingFractions(maximumWindows).entries()) {
