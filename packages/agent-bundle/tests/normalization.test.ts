@@ -178,6 +178,36 @@ it('normalizes registered extensions and validates registered script and hook ta
   expect(Object.isFrozen(extensions.example?.value.nested)).toBe(true);
 });
 
+it('enumerates lsp components with unambiguous ids for any server name (#100)', async () => {
+  const model = await normalizeProject(loadedProject({
+    claude: {
+      lspServers: {
+        'a:b': { command: 'first-ls', extensionToLanguage: { '.a': 'a' } },
+        'pct%': { command: 'second-ls', extensionToLanguage: { '.b': 'b' } },
+        typescript: { command: 'typescript-language-server', extensionToLanguage: { '.ts': 'typescript' } },
+        '\uD800': { command: 'third-ls', extensionToLanguage: { '.c': 'c' } },
+      },
+    },
+    plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
+    targets: ['claude', 'cursor', 'plugin'],
+  }), { skills: [] }, createDefaultRegistry());
+
+  // Separator and escape characters are escaped so the (key, name) tuple is
+  // recoverable; a lone surrogate is accepted rather than aborting normalization.
+  expect(new Set(model.lspServers?.map((server) => server.id))).toEqual(new Set([
+    'lsp:claude:\uD800',
+    'lsp:claude:a%3Ab',
+    'lsp:claude:pct%25',
+    'lsp:claude:typescript',
+  ]));
+  expect(model.lspServers).toHaveLength(4);
+  // Only adapters that lower the `claude` extension are targeted.
+  for (const server of model.lspServers ?? []) {
+    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude', 'plugin'] });
+  }
+  expect(Object.isFrozen(model.lspServers)).toBe(true);
+});
+
 it('normalizes the typed Claude LSP source surface through the strict JSON extension seam', async () => {
   const model = await normalizeProject(loadedProject({
     claude: {

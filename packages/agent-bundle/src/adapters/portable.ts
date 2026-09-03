@@ -16,6 +16,7 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
   cliBinCapability,
   eventRouteCapabilitiesFrom,
@@ -91,7 +92,7 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.6.0',
+  adapterRevision: '1.7.0',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -630,6 +631,8 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     extensionDirectories: unavailableCapability(capabilityTable.plugin.extensionDirectories.reason),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
     install: unavailableCapability(capabilityTable.install.reason),
+    // Canonical component kinds outside the Agent Plugins 1.0.0 component set (#100).
+    lsp: capabilityFromTableRow(capabilityTable.plugin.lsp, evidence),
     manifestExtensions: capabilityStateFromSupport(
       capabilityTable.plugin.extensions.state === 'supported',
       evidence,
@@ -647,6 +650,8 @@ export const portableAdapter: TargetAdapter = Object.freeze({
       'Agent Plugins 1.0.0 does not support both required modern MCP transports.',
     ),
     mcpLegacySse: unavailableCapability(capabilityTable.mcp.legacySse.reason),
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     rules: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
     ),

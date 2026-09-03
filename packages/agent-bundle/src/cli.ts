@@ -372,6 +372,14 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     for (const component of plan.skipped) {
       output.write(`  omitted ${component.kind} ${component.name}: ${formatInspectionOmission(component)}\n`);
     }
+    // The kind matrix names every canonical kind this host cannot emit, with
+    // the host's own state, even when the project declares none of them.
+    const unsupportedKinds = plan.kinds
+      .filter((report) => report.capability !== undefined && report.capability.state !== 'supported')
+      .map((report) => `${report.kind} (${report.capability!.state})`);
+    if (unsupportedKinds.length > 0) {
+      output.write(`  kinds this host cannot emit: ${unsupportedKinds.join(', ')}\n`);
+    }
   }
 };
 

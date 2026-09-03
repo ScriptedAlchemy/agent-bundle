@@ -781,9 +781,14 @@ agent-bundle inspect [--target <t>] [--json]
 ```
 
 Every inspection plan accounts for each host component the project declares
-— skills, commands, rules, hooks, MCP servers, MCP Apps, and scripts — as
-either `selected` (emitted for that target) or `skipped` (omitted), in one
-deterministic order. A skipped component names its cause: `excluded-by-targets`
+— skills, commands, rules, config-declared hooks, filesystem event routes,
+LSP servers, MCP servers, MCP Apps, and scripts — as either `selected`
+(emitted for that target) or `skipped` (omitted), in one deterministic order.
+Each component carries its canonical `kind` (`AgentComponentKind`); event
+routes report as `event-route`, judged by the host's row for their canonical
+event (`event:session/start`, …), separately from `hook`, and Claude-declared
+`claude.lspServers` entries report as `lsp` against every target's `lsp` row.
+A skipped component names its cause: `excluded-by-targets`
 when the author's `targets` left the host out, or `unsupported-capability` when
 the host's pinned capability table does not support the surface. Components
 that need a host capability carry that target's own four-state judgment as
@@ -792,9 +797,17 @@ or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
 the JSON explains why a Cursor rule is absent from a Claude bundle in the
 host's words rather than the compiler's. An adapter that publishes no row for
 a needed capability reads as an honest `unavailable`, never a silent pass.
-Scripts need no host capability and carry none. The human output prints one
-line per target (`<target>: N component(s) selected, M omitted`) followed by
-each omission and its reason.
+Scripts need no host capability and carry none. Every plan also carries
+`kinds`: one entry per canonical kind, in kind order, with the target's own
+row for that kind (`capability`) and the counts of selected and skipped
+components of it — so a host with no `lsp`, `native-diagnostics`,
+`native-extension`, or `agent` surface says so in its own words even when the
+project declares none of them (`script` and `event-route` carry no kind-level
+row; event routes are judged per component). The human output prints one line
+per target (`<target>: N component(s) selected, M omitted`) followed by each
+omission and its reason, then `kinds this host cannot emit:` listing every
+kind whose row is not `supported`. The full matrix is in
+[Host components](framework-mode.md#host-components).
 
 ### `agent-bundle inspect --bundler`
 
