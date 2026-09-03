@@ -1172,6 +1172,78 @@ it('rejects a route that advertises an App the server does not build for every t
   expect(configAppErrors[0]!.message).toContain('config App "panel"');
 });
 
+it('rejects two App routes of one server that declare the same resourceUri with AB4829, but not the same URI across servers', async () => {
+  const app = (resourceUri: string): string => `export const config = { resourceUri: '${resourceUri}' };\n${moduleSource}`;
+
+  // Same server, two distinct route modules, one URI: the compiler names both
+  // files and the server instead of registering whichever route came first.
+  const sameServer = await createRoot();
+  await writeTree(sameServer, {
+    'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const sameServerGraph = await compileRouteGraph(sameServer, fixtureConfig());
+  expect(codesOf(sameServerGraph.diagnostics)).toEqual(['AB4829']);
+  expect(sameServerGraph.diagnostics[0]).toMatchObject({
+    severity: 'error',
+    sourcePath: join(sameServer, 'src/mcp/curator/apps/panel.tsx'),
+  });
+  expect(sameServerGraph.diagnostics[0]!.message).toContain('src/mcp/curator/apps/dashboard.tsx');
+  expect(sameServerGraph.diagnostics[0]!.message).toContain('src/mcp/curator/apps/panel.tsx');
+  expect(sameServerGraph.diagnostics[0]!.message).toContain('"curator"');
+  expect(sameServerGraph.diagnostics[0]!.message).toContain('"ui://curator/dashboard.html"');
+  expect(sameServerGraph.diagnostics[0]!.recovery).toContain('distinct config.resourceUri');
+  // Both routes stay visible in the IR beside the error; only the build is refused.
+  expect(sameServerGraph.servers[0]!.routes.filter((route) => route.kind === 'app').map((route) => route.id))
+    .toEqual(['app:curator/dashboard', 'app:curator/panel']);
+
+  // A third claimant is reported against the first, once per extra route.
+  const threeWay = await createRoot();
+  await writeTree(threeWay, {
+    'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/apps/sidebar.tsx': app('ui://curator/dashboard.html'),
+  });
+  const threeWayGraph = await compileRouteGraph(threeWay, fixtureConfig());
+  expect(codesOf(threeWayGraph.diagnostics)).toEqual(['AB4829', 'AB4829']);
+  expect(threeWayGraph.diagnostics.map((diagnostic) => diagnostic.sourcePath)).toEqual([
+    join(threeWay, 'src/mcp/curator/apps/panel.tsx'),
+    join(threeWay, 'src/mcp/curator/apps/sidebar.tsx'),
+  ]);
+
+  // Two servers may legitimately serve the same App under one URI: each
+  // generated server registers only its own Apps, so nothing collides.
+  const acrossServers = await createRoot();
+  await writeTree(acrossServers, {
+    'src/mcp/archive/apps/dashboard.tsx': app('ui://shared/dashboard.html'),
+    'src/mcp/archive/tools/list.ts': moduleSource,
+    'src/mcp/curator/apps/dashboard.tsx': app('ui://shared/dashboard.html'),
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const acrossServersGraph = await compileRouteGraph(acrossServers, fixtureConfig());
+  expect(acrossServersGraph.diagnostics).toEqual([]);
+  expect(acrossServersGraph.servers.map((server) => server.name)).toEqual(['archive', 'curator']);
+
+  // A server kept custom ships no Apps, so its duplicates are not reported either.
+  const custom = await createRoot();
+  await writeTree(custom, {
+    'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
+  });
+  expect((await compileRouteGraph(custom, fixtureConfig({ routes: { servers: { curator: 'custom' } } }))).diagnostics).toEqual([]);
+
+  // The collision fails validate/inspect like AB4812 does.
+  const project = await createInspectProject({
+    'src/mcp/curator/apps/dashboard.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/apps/panel.tsx': app('ui://curator/dashboard.html'),
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+  const validation = await validate({ root: project });
+  expect(codesOf(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error'))).toEqual(['AB4829']);
+  expect((await inspect({ root: project })).state).toBe('invalid');
+});
+
 it('normalizes the App route template to its resolved path for the build', async () => {
   const html = '<!doctype html><html><body></body></html>\n';
   const routeRelative = await createInspectProject({
