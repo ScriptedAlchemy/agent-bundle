@@ -133,7 +133,7 @@
         {
           "oneOf": [
             {
-              "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./",
+              "pattern": "^\\./(?!(?:.*[\\\\/])?\\.\\.?(?:[\\\\/]|$))",
               "type": "string"
             },
             {
@@ -302,7 +302,7 @@
       "properties": {
         "description": { "minLength": 1, "type": "string" },
         "pluginRoot": {
-          "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./.+",
+          "pattern": "^\\./(?!(?:.*[\\\\/])?\\.\\.?(?:[\\\\/]|$)).+",
           "type": "string"
         },
         "version": { "minLength": 1, "type": "string" }

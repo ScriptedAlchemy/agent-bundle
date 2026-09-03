@@ -726,6 +726,29 @@ it.each([
   });
 });
 
+it.each([
+  {
+    code: 'claude.marketplace.plugin.source.relative.invalid',
+    marketplace: { plugin: { source: './plugin\\..\\outside' } },
+  },
+  {
+    code: 'claude.marketplace.metadata.pluginRoot.invalid',
+    marketplace: {
+      metadata: { pluginRoot: './plugins\\..\\outside' },
+      plugin: { source: 'review-tools' },
+    },
+  },
+])('rejects backslash traversal in Claude marketplace relative paths %#', ({ code, marketplace }) => {
+  const model = withClaudeMarketplace(plugin, marketplace);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    message: expect.stringMatching(/stays? inside the marketplace/u),
+  }));
+  expect(writeContents(model, 'claude')['.claude-plugin/marketplace.json']).toBeUndefined();
+});
+
 it('accepts archive entry authentication only for an archive source', () => {
   const source = {
     source: 'archive',
@@ -961,6 +984,8 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { ...manifest, plugins: [{ ...manifest.plugins[0], unknown: true }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: 'review-tools' }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: './../outside' }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: './plugin\\..\\outside' }] },
+    { ...manifest, metadata: { pluginRoot: './plugins\\..\\outside' } },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools', extra: true } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://example.test/plugin.zip', sha256: 'bad' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'command', command: 'plugin-path', mode: 'move' } }] },

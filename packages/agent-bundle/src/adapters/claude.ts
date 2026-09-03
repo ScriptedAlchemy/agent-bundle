@@ -1230,6 +1230,10 @@ const isInternalSubdirectory = (value: string): boolean =>
   !value.startsWith('\\') &&
   !value.split(/[\\/]/u).some((segment) => segment === '.' || segment === '..');
 
+const isInternalRelativePath = (value: string): boolean =>
+  value === './' ||
+  (value.startsWith('./') && isInternalSubdirectory(value.slice(2)));
+
 const isSafeArchiveUrl = (value: string): boolean => {
   let parsed: URL;
   try {
@@ -1266,9 +1270,7 @@ const planMarketplacePluginSource = (
   pluginRoot: string | undefined,
 ): ClaudeMarketplaceSourcePlan => {
   if (typeof declared === 'string') {
-    const internalRelative =
-      declared.startsWith('./') &&
-      !declared.split('/').includes('..');
+    const internalRelative = isInternalRelativePath(declared);
     const bareUnderPluginRoot =
       pluginRoot !== undefined &&
       declared !== '.' &&
@@ -1809,9 +1811,7 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
         }
         const value = metadataValue[field];
         const pathValid = field !== 'pluginRoot' ||
-          (isNonemptyString(value) &&
-            value.startsWith('./') &&
-            !value.split('/').includes('..'));
+          (isNonemptyString(value) && isInternalRelativePath(value));
         if (!isNonemptyString(value) || !pathValid) {
           diagnostics.push(marketplaceDiagnostic(
             `claude.marketplace.metadata.${field}.invalid`,
