@@ -148,6 +148,13 @@ export const createAgentLineageRegistry = (
   let state: LineageState = initialLineageState;
   let hydration: Promise<void> | undefined;
   const applied = new Set<string>();
+  /**
+   * Once a durable commit fails for any reason other than a redelivery, the
+   * journal head no longer describes what this registry knows; it stays in
+   * memory from then on so a later re-read cannot erase local mutations.
+   */
+  let degraded = false;
+  const journal = (): AgentStateStore<LineageState, LineageEvents> | undefined => (degraded ? undefined : store);
 
   /** One shared initial read: concurrent observations all wait for it, none mutates the empty state first. */
   const hydrate = (): Promise<void> => {
@@ -156,7 +163,8 @@ export const createAgentLineageRegistry = (
       try {
         state = (await store.read()).state;
       } catch {
-        // A cold or unreadable journal degrades to in-memory tracking; resolution stays honest through `inferred`.
+        // An unreadable journal degrades to in-memory tracking for good.
+        degraded = true;
       }
     })();
     return hydration;
@@ -176,7 +184,8 @@ export const createAgentLineageRegistry = (
     keys: JournalKeys,
   ): Promise<void> => {
     const idempotencyKey = keys.next(name, payload);
-    if (store === undefined) {
+    const target = journal();
+    if (target === undefined) {
       // No journal: an in-memory ledger of applied keys suppresses redeliveries.
       if (applied.has(idempotencyKey)) return;
       applied.add(idempotencyKey);
@@ -185,19 +194,21 @@ export const createAgentLineageRegistry = (
       return;
     }
     try {
-      const committed = await store.dispatch(name, payload as never, { idempotencyKey });
-      state = committed.replayed ? (await store.read()).state : committed.state;
+      const committed = await target.dispatch(name, payload as never, { idempotencyKey });
+      state = committed.replayed ? (await target.read()).state : committed.state;
     } catch (error) {
       // The same key with a payload that differs only in what the digest
       // ignores (a receipt timestamp) is a redelivery, not a new fact.
       if (error instanceof AgentStateError && error.code === 'idempotency-conflict') {
         try {
-          state = (await store.read()).state;
+          state = (await target.read()).state;
         } catch {
           // Keep the head we already hold.
         }
         return;
       }
+      degraded = true;
+      applied.add(idempotencyKey);
       state = reduceLineage(state, { name, payload });
     }
   };
@@ -418,6 +429,11 @@ export const createAgentLineageRegistry = (
         }, keys);
       } else if (event === 'tool/after' || event === 'tool/failure') {
         await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
+        // A spawn that failed produced no child; Codex closes a successful
+        // spawn before SubagentStart, so only failure discards the claim.
+        if (event === 'tool/failure' && SPAWN_TOOLS[host](toolName)) {
+          await dispatch('spawnFailed', { toolCallId }, keys);
+        }
       }
     }
     return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
@@ -433,11 +449,12 @@ export const createAgentLineageRegistry = (
       // after its pre-tool hook sees that hook's window.
       await queue;
       await hydrate();
-      if (store !== undefined) {
+      const target = journal();
+      if (target !== undefined) {
         // Another generated server of the same install may hold the event
         // routes; its journal is the shared truth.
         try {
-          state = (await store.read()).state;
+          state = (await target.read()).state;
         } catch {
           // Keep the head already held.
         }
@@ -459,7 +476,10 @@ export const createAgentLineageRegistry = (
             // known for a registered node, zero for a root, one for a direct
             // child of the root, and otherwise only through a registered parent.
             const parentDepth = parent === undefined ? undefined : parent === root ? 0 : nodeFor(parent)?.depth;
-            const depth = known?.depth ?? (parent === undefined ? 0 : parentDepth === undefined ? undefined : parentDepth + 1);
+            const depth = known?.depth
+              ?? (parent === undefined
+                ? (conversation === root ? 0 : undefined)
+                : parentDepth === undefined ? undefined : parentDepth + 1);
             if (depth === undefined) return unavailable('id-not-resolvable');
             const value: AgentLineage = {
               conversation,

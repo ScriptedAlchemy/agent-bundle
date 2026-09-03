@@ -64,6 +64,8 @@ export const lineageEventSchemas = {
   sessionRetired: z.object({ root: id }).strict(),
   /** A subagent start consumed the spawn call that produced it; `siblingsUncertain` marks the cohort it was picked from. */
   spawnClaimed: z.object({ siblingsUncertain: z.boolean().optional(), toolCallId: id }).strict(),
+  /** A spawn call failed before any child started, so no later start may claim it. */
+  spawnFailed: z.object({ toolCallId: id }).strict(),
   toolCallClosed: z.object({ conversation: id, toolCallId: id }).strict(),
   toolCallOpened: OpenToolCallSchema.extend({ spawn: z.boolean().optional() }).strict(),
 } as const;
@@ -164,6 +166,10 @@ export const reduceLineage = (
             : open),
       };
     }
+    case 'spawnFailed': {
+      const { toolCallId } = event.payload as { toolCallId: string };
+      return { ...state, pendingSpawns: state.pendingSpawns.filter((open) => open.toolCallId !== toolCallId) };
+    }
     case 'sessionRetired': {
       const { root } = event.payload as { root: string };
       const retired = new Set(
@@ -190,7 +196,10 @@ export const reduceLineage = (
  * the MCP process mid-session does not forget which subagents are alive.
  */
 export const agentLineageStateDefinition = (lifetime: AgentStateLifetime = 'workspace-durable') => defineState({
-  budgets: { maxStateBytes: 4 * 1_048_576 },
+  // The journal is append-only for the life of an install; the revision cap is
+  // raised well past the kernel default and the registry degrades to memory
+  // (never to a stale head) once any durable commit fails.
+  budgets: { maxRevisions: 5_000_000, maxStateBytes: 4 * 1_048_576 },
   events: lineageEventSchemas,
   id: AGENT_LINEAGE_STATE_ID,
   initial: initialLineageState,

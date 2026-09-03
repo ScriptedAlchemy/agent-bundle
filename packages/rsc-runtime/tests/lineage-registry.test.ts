@@ -570,3 +570,46 @@ describe('lineage registry serialization (review round 7)', () => {
     expect(registry.snapshot().openCalls).toMatchObject([{ conversation: 'root', root: 'root', toolCallId: 'k' }]);
   });
 });
+
+describe('lineage registry failure handling (review round 8)', () => {
+  it('discards a spawn whose call failed so a later start is not attributed to it', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'f', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'failed' });
+    await observe('tool/failure', 'ff', { error: 'boom', hook_event_name: 'PostToolUseFailure', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'failed' });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+    await observe('agent/start', 'p', { agent_id: 'parent-agent', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    await observe('tool/before', 'ok', { agent_id: 'parent-agent', hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'ok' });
+    const child = await observe('agent/start', 'c', { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    expect(value(child)).toMatchObject({ depth: 2, parent: 'parent-agent', subagent: { toolCallId: 'ok' } });
+  });
+
+  it('keeps a parentless non-root Codex thread unresolved', async () => {
+    const registry = createAgentLineageRegistry();
+    expect(await registry.resolveToolCall({
+      host: 'codex',
+      meta: { 'x-codex-turn-metadata': { session_id: 'root', thread_id: 'orphan-thread', turn_id: 't' } },
+      toolName: 'dump',
+    })).toEqual(unavailable('id-not-resolvable'));
+  });
+
+  it('stays in memory after a durable commit fails instead of re-reading a head that lacks the mutation', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const failing = {
+      ...store,
+      dispatch: async (name: string, payload: unknown, options: { idempotencyKey: string }) => {
+        if (name === 'toolCallOpened') throw new Error('journal full');
+        return store.dispatch(name as never, payload as never, options);
+      },
+    } as typeof store;
+    const registry = createAgentLineageRegistry({ store: failing });
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    await registry.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'm', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_p_s__dump', tool_use_id: 'm1' } });
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'm1' }, toolName: 'dump' })).toMatchObject({ value: { conversation: 'root' } });
+    await store.close();
+    await driver.close();
+  });
+});

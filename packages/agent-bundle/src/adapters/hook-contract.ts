@@ -605,9 +605,14 @@ const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
   concreteTarget?: string,
+  durableLineage = false,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
+  // A standalone `session/end` (the warm runtime has usually already exited by
+  // then) retires the durable lineage journal itself, so roots never outlive
+  // their session; only projects whose state is workspace-durable have one.
+  const retiresLineage = standalone && durableLineage && route.event === 'session/end';
   const targetSource = concreteTarget !== undefined
     ? [`const target = ${JSON.stringify(concreteTarget)};`]
     : entry.target === 'plugin'
@@ -623,6 +628,14 @@ const eventRouteHookWrapperSource = (
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
       ? ["import { agent, available, createAgentRenderDispatcher, resolveNativeLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      : []),
+    ...(retiresLineage
+      ? [
+          "import { join } from 'node:path';",
+          "import { fileURLToPath } from 'node:url';",
+          "import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';",
+          "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
+        ]
       : []),
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
     `import { ${standalone ? 'createCanonicalEventProps, projectEventDocument, ' : ''}validateNativeEventEnvelope } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
@@ -691,8 +704,30 @@ const eventRouteHookWrapperSource = (
           '    await worker.terminate();',
           '  }',
           '};',
+          ...(retiresLineage
+            ? [
+                'const retireLineage = async (native, idempotencyKey, observedAt) => {',
+                "  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') return;",
+                "  const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
+                "  const driver = createSqliteStateDriver({ root: join(anchor, 'state') });",
+                '  try {',
+                '    const store = await driver.open(agentLineageStateDefinition());',
+                '    try {',
+                '      await createAgentLineageRegistry({ store }).observe({ event: canonicalEvent, host: target, idempotencyKey, native, observedAt });',
+                '    } finally {',
+                '      await store.close();',
+                '    }',
+                '  } catch (error) {',
+                '    process.stderr.write(`agent-bundle lineage retirement skipped: ${error instanceof Error ? error.message : String(error)}\\n`);',
+                '  } finally {',
+                '    await driver.close().catch(() => undefined);',
+                '  }',
+                '};',
+              ]
+            : []),
           'const runStandalone = async (native, signal) => {',
           '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          ...(retiresLineage ? ['  await retireLineage(native, props.canonical.idempotencyKey, props.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
           // Standalone hooks hold no registry, so lineage is only what the payload proves (docs/audits/2026-09-03-host-lineage-matrix.md).
@@ -1105,7 +1140,12 @@ export const planHooks = (
       ...wrapper,
       virtualSource: hook.eventRoute === undefined
         ? contract.wrapperSource(wrapper)
-        : eventRouteHookWrapperSource(wrapper, contract.hostContractRevision ?? target, concreteEventTarget),
+        : eventRouteHookWrapperSource(
+            wrapper,
+            contract.hostContractRevision ?? target,
+            concreteEventTarget,
+            model.state?.lifetime === 'workspace-durable',
+          ),
     });
   }
 
