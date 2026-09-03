@@ -367,7 +367,7 @@ describe('the in-memory MCP projection level', () => {
           {
             disclosure: { redacted: true, route: 'mcp-inbox' },
             sensitivity: 'internal',
-            text: 'Rotate token=[REDACTED] at https://[REDACTED]@vault.example.test/x (internal)',
+            text: 'Rotate [REDACTED] at [REDACTED]vault.example.test/x (internal)',
           },
           {
             disclosure: { redacted: false, route: 'mcp-inbox' },

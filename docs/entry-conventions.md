@@ -195,8 +195,11 @@ notice whose author-declared `sensitivity` exceeds the ceiling of the route
 about to carry it — the inbox omits it, event admission neither authorizes nor
 attempts it, the signaller never announces it — recording the refusal on the
 notice (`withheld[route]`) instead of moving its state. `internal` content
-(the default) is passed through the runtime's secret-pattern redaction on
-every route before it leaves the store; `public` travels as authored;
+(the default) is passed through the runtime's secret pass on every route
+before it leaves the store — `flare-redact`, an exact-pinned dependency of
+`@agent-bundle/runtime`, with its default detectors and every finding replaced
+whole by `[REDACTED]`; the runtime README's notices section lists the coverage
+and the libraries evaluated — `public` travels as authored;
 `secret` travels as authored only where the row admits it. The built-in hosts
 admit `secret` on `current-response` and `next-event` and `internal` on
 `mcp-inbox` and `mcp-resource-updated`; the pinned tables carry the dated

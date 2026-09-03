@@ -334,7 +334,8 @@ defaulted.
 Redaction is not configured here: it follows the notice's author-declared
 `sensitivity` (`public | internal | secret`, default `internal`, passed to
 `notices.publish()`) and each host's dated per-route ceiling in its pinned
-`noticeDelivery` table. `internal` content is secret-pattern redacted on every
+`noticeDelivery` table. `internal` content is passed through the runtime's
+secret pass (`flare-redact`, pinned exact; see the runtime README) on every
 route, `public` travels as authored, and `secret` travels only over a route
 whose ceiling admits it — otherwise it stays in the store and the route
 records the refusal on the notice.

@@ -193,7 +193,7 @@ const messages = {
     unavailableChannels: 'Why a channel is unavailable',
     sensitivityCeilings: 'Sensitivity ceilings',
     sensitivityIntro:
-      'Every notice carries an author-declared `sensitivity` — `public`, `internal` (the default), or `secret`. A supported channel names the most sensitive class it carries in full, with the dated evidence for that ceiling; a channel without a named ceiling admits `internal`. A notice above a channel\'s ceiling is withheld from that channel and the refusal is recorded on the notice; `internal` content is passed through the secret-pattern redaction before it leaves the store, `public` content travels as authored, and `secret` content travels as authored only where a channel admits it.',
+      'Every notice carries an author-declared `sensitivity` — `public`, `internal` (the default), or `secret`. A supported channel names the most sensitive class it carries in full, with the dated evidence for that ceiling; a channel without a named ceiling admits `internal`. A notice above a channel\'s ceiling is withheld from that channel and the refusal is recorded on the notice; `internal` content is passed through the runtime\'s secret pass (`flare-redact`, an exact-pinned dependency of `@agent-bundle/runtime`; every finding is replaced whole by `[REDACTED]`) before it leaves the store, `public` content travels as authored, and `secret` content travels as authored only where a channel admits it.',
     sensitivityEvidence: 'Ceiling evidence',
     diagnosticsTitle: 'Diagnostics reference',
     diagnosticsDescription:
@@ -270,7 +270,7 @@ const messages = {
     unavailableChannels: '通道不可用的原因',
     sensitivityCeilings: '敏感度上限',
     sensitivityIntro:
-      '每条通知都带有作者声明的 `sensitivity`——`public`、`internal`（默认）或 `secret`。受支持的通道会声明它能完整承载的最高敏感类别，并附上该上限的带日期证据；未声明上限的通道接受 `internal`。高于通道上限的通知会被该通道拒绝，且拒绝会记录在通知上；`internal` 内容在离开存储前会经过密钥模式脱敏，`public` 内容按作者原文传递，`secret` 内容仅在通道允许时按原文传递。',
+      '每条通知都带有作者声明的 `sensitivity`——`public`、`internal`（默认）或 `secret`。受支持的通道会声明它能完整承载的最高敏感类别，并附上该上限的带日期证据；未声明上限的通道接受 `internal`。高于通道上限的通知会被该通道拒绝，且拒绝会记录在通知上；`internal` 内容在离开存储前会经过运行时的密钥脱敏（`flare-redact`，`@agent-bundle/runtime` 精确锁定版本的依赖；每处命中整体替换为 `[REDACTED]`），`public` 内容按作者原文传递，`secret` 内容仅在通道允许时按原文传递。',
     sensitivityEvidence: '上限证据',
     diagnosticsTitle: '诊断参考',
     diagnosticsDescription:

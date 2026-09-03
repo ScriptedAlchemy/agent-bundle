@@ -246,7 +246,7 @@ export type AgentNoticeAuthorizer = (
 
 /** What the `next-event` route disclosed of a delivered notice. */
 export interface AgentNoticeDisclosureReceipt {
-  /** True when the secret-pattern pass ran over `notice.content` (every `internal` notice). */
+  /** True when the secret pass ran over `notice.content` (every `internal` notice). */
   readonly redacted: boolean;
   readonly route: AgentNoticeDeliveryRoute;
 }

@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it } from '@rstest/core';
 
 import {
@@ -75,7 +77,7 @@ const run = async <T>(
   workspace,
 }, operation);
 
-const SECRET_TEXT = 'Rotate token=abc123def456 before https://ops:hunter2@vault.example.test/x and sk-ant-0123456789abcdef0123';
+const SECRET_TEXT = 'Rotate token=abc123def456 before https://ops:hunter2@vault.example.test/x and sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyz0123';
 
 const publish = (
   ledger: Awaited<ReturnType<typeof openLedger>>['ledger'],
@@ -93,28 +95,56 @@ const publish = (
   ...(input.sensitivity === undefined ? {} : { sensitivity: input.sensitivity }),
 }, { idempotencyKey: `publish:${input.id}` }));
 
-describe('secret-pattern redaction', () => {
-  it('masks credential assignments, provider tokens, and URL userinfo while keeping structure', () => {
+describe('secret pass (flare-redact)', () => {
+  it('pins the redaction library to an exact version as a runtime dependency', async () => {
+    const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+    };
+    // Detector coverage is behavior a consumer relies on; a range would let a
+    // publish change what `internal` notices disclose without a changeset.
+    expect(manifest.dependencies?.['flare-redact']).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(manifest.peerDependencies?.['flare-redact']).toBeUndefined();
+  });
+
+  it('masks credential assignments, provider tokens, and URL credentials whole while keeping the rest', () => {
     const redacted = redactSecretText(SECRET_TEXT);
+    // Every finding is replaced by the mark alone: the library's own masks keep
+    // a hint (`sk-ant-***`, `:***@`) that a cross-actor notice must not.
     expect(redacted).toBe(
-      `Rotate token=${NOTICE_REDACTION_MARK} before https://${NOTICE_REDACTION_MARK}@vault.example.test/x and ${NOTICE_REDACTION_MARK}`,
+      `Rotate ${NOTICE_REDACTION_MARK} before ${NOTICE_REDACTION_MARK}vault.example.test/x and ${NOTICE_REDACTION_MARK}`,
     );
     expect(containsSecretText(SECRET_TEXT)).toBe(true);
     expect(containsSecretText('Another worktree is editing /repo/src/secrets.ts')).toBe(false);
     // Idempotent: a redacted text is a fixed point.
     expect(redactSecretText(redacted)).toBe(redacted);
-    // Quotes are preserved around the mask so JSON-shaped text stays parseable.
-    expect(redactSecretText('{"api_key": "xyz", "note": "keep"}')).toBe(`{"api_key": "${NOTICE_REDACTION_MARK}", "note": "keep"}`);
-    // JSON member names are prose too: a token used as a key is masked, and a
-    // credential-shaped key masks its whole subtree, names included.
-    expect(redactNoticeDocument({
-      root: { kind: 'json', value: { 'sk-proj-abcdefghijklmnopqrstuvwxyz': true, ok: 1, secret: { inner: 'v', 'sk-proj-abcdefghijklmnopqrstuvwxyz': 'w' } } },
-      status: 'success',
-      version: 1,
-    }).root).toEqual({
-      kind: 'json',
-      value: { [NOTICE_REDACTION_MARK]: true, ok: 1, secret: { [NOTICE_REDACTION_MARK]: NOTICE_REDACTION_MARK } },
-    });
+    expect(containsSecretText(redacted)).toBe(false);
+  });
+
+  it('covers the credential forms a coordination notice is likely to carry', () => {
+    const forms = {
+      anthropic: `sk-ant-api03-${'abcdefghij0123456789'.repeat(4)}AA`,
+      aws: 'AKIAIOSFODNN7EXAMPLE',
+      basic: 'Basic dXNlcjpwYXNzd29yZA==',
+      bearer: 'Bearer abcdefghijklmnopqrstuvwxyz',
+      // The recipient's identity is never surfaced through another actor's notice.
+      email: 'alice@example.com',
+      github: `ghp_${'a'.repeat(36)}`,
+      jwt: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+      openai: 'sk-proj-abcdefghijklmnopqrstuvwxyz',
+      password: 'password: hunter2',
+      pem: '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----',
+      url: 'postgres://user:pass@db.internal:5432/app',
+    };
+    for (const [name, sample] of Object.entries(forms)) {
+      expect(containsSecretText(sample), name).toBe(true);
+      expect(redactSecretText(`see ${sample} now`), name).toContain(NOTICE_REDACTION_MARK);
+      expect(redactSecretText(`see ${sample} now`), name).not.toContain(name === 'url' ? 'pass@' : sample.slice(-6));
+    }
+    // Paths, identifiers, and short values are not credentials.
+    for (const clean of ['/repo/src/secrets.ts', 'request-id: build-123', 'status=ok', 'commit 9fceb02d0ae598e95dc970b74767f19372d61af8']) {
+      expect(containsSecretText(clean), clean).toBe(false);
+    }
   });
 
   it('redacts every prose field of a document and nothing else', () => {
@@ -123,10 +153,10 @@ describe('secret-pattern redaction', () => {
         children: [
           { kind: 'markdown', text: 'password: p4ss' },
           { kind: 'context', text: 'clean' },
-          { kind: 'json', value: { auth: { password: 'hunter2', user: 'ops' }, nested: ['token: t0k3n', 1, true, null], plain: 'ok', authorization: ['a', 'b'] } },
-          { completed: 1, kind: 'progress', message: 'secret=abc', total: 2 },
+          { kind: 'json', value: { auth: { password: 'hunter2', user: 'ops' }, nested: ['token: t0k3n', 1, true, null], plain: 'ok', 'sk-proj-abcdefghijklmnopqrstuvwxyz': 'w' } },
+          { completed: 1, kind: 'progress', message: 'secret=abc123', total: 2 },
           { data: 'QUJD', kind: 'image', mimeType: 'image/png' },
-          { kind: 'resource', mimeType: 'text/plain', name: 'token: n', uri: 'https://u:p@h.example.test/r' },
+          { kind: 'resource', mimeType: 'text/plain', name: 'token: n0tes', uri: 'https://u:p@h.example.test/r' },
           { code: 'E_SECRET', kind: 'error', message: 'authorization: Bearer abcdefghijklmnopqrstuvwxyz' },
         ],
         kind: 'result',
@@ -140,22 +170,26 @@ describe('secret-pattern redaction', () => {
     expect(redacted).toEqual({
       root: {
         children: [
-          { kind: 'markdown', text: `password: ${NOTICE_REDACTION_MARK}` },
+          { kind: 'markdown', text: NOTICE_REDACTION_MARK },
           { kind: 'context', text: 'clean' },
-          // A value under a credential-shaped key is a credential by position:
-          // masked whole, recursively, whatever its text looks like.
+          // A string directly under a credential-shaped member name is a
+          // credential by position and masked whole, however short; every
+          // other string is scanned; member names are prose too, so a token
+          // used as a key is masked like any other string.
           {
             kind: 'json',
             value: {
               auth: { password: NOTICE_REDACTION_MARK, user: 'ops' },
-              nested: [`token: ${NOTICE_REDACTION_MARK}`, 1, true, null],
+              nested: [NOTICE_REDACTION_MARK, 1, true, null],
               plain: 'ok',
-              authorization: [NOTICE_REDACTION_MARK, NOTICE_REDACTION_MARK],
+              [NOTICE_REDACTION_MARK]: 'w',
             },
           },
-          { completed: 1, kind: 'progress', message: `secret=${NOTICE_REDACTION_MARK}`, total: 2 },
+          { completed: 1, kind: 'progress', message: NOTICE_REDACTION_MARK, total: 2 },
+          // Binary payloads carry no prose; base64 is never mistaken for a token.
           { data: 'QUJD', kind: 'image', mimeType: 'image/png' },
-          { kind: 'resource', mimeType: 'text/plain', name: `token: ${NOTICE_REDACTION_MARK}`, uri: `https://${NOTICE_REDACTION_MARK}@h.example.test/r` },
+          { kind: 'resource', mimeType: 'text/plain', name: NOTICE_REDACTION_MARK, uri: `${NOTICE_REDACTION_MARK}h.example.test/r` },
+          // Codes are vocabulary; the message is prose.
           { code: 'E_SECRET', kind: 'error', message: `authorization: ${NOTICE_REDACTION_MARK}` },
         ],
         kind: 'result',
@@ -166,6 +200,8 @@ describe('secret-pattern redaction', () => {
       version: 1,
     });
     expect(Object.isFrozen(redacted.root)).toBe(true);
+    expect(Object.isFrozen((redacted.root as { children: readonly unknown[] }).children[2])).toBe(true);
+    expect(Object.isFrozen(((redacted.root as { children: readonly { value?: unknown }[] }).children[2]!.value as { auth: unknown }).auth)).toBe(true);
     // The original is untouched: redaction is applied on egress, never in place.
     expect((snapshot.root as { children: readonly { text?: string }[] }).children[0]!.text).toBe('password: p4ss');
   });

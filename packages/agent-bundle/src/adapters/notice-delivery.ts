@@ -21,7 +21,7 @@ export type NoticeDeliveryRoute = (typeof NOTICE_DELIVERY_ROUTES)[number];
 /**
  * Author-declared disclosure classes of a notice, mirroring the runtime's
  * `AgentNoticeSensitivity`: `public` is delivered as authored, `internal`
- * (the default) after the secret-pattern pass, `secret` only over a route
+ * (the default) after the runtime's secret pass, `secret` only over a route
  * whose row admits it.
  */
 export const NOTICE_SENSITIVITIES = Object.freeze(['public', 'internal', 'secret'] as const);

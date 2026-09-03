@@ -378,13 +378,55 @@ the recipient's own host process) and `internal` on `mcp-inbox` and
 `mcp-resource-updated` (transport-derived identity the host does not
 authenticate to the plugin); `portable` has only the MCP routes.
 
-The secret pass (`redactSecretText()`, `redactNoticeDocument()`) masks
-credential assignments (`token: …`, `password=…`), recognizable provider
-tokens, and URL userinfo with `[REDACTED]`, the same patterns the compiler's
-credential and probe redaction use; `NOTICE_SECRET_PATTERN_SOURCES` is pinned
-byte-identical to the compiler copy by test because the runtime is an optional
-peer and cannot share the module. Paths are not redacted: coordination
-notices legitimately name files.
+The secret pass (`redactSecretText()`, `redactNoticeDocument()`,
+`containsSecretText()`) is not written here. Which fields are prose, which
+class each route may carry, and what a refusal records are this package's
+policy; recognizing a credential is delegated to
+[`flare-redact`](https://www.npmjs.com/package/flare-redact), a runtime
+dependency pinned to an exact version (a range would let a publish change
+what `internal` notices disclose without a changeset; a test keeps the pin
+exact). The ledger runs it with its default detectors and default
+credential-shaped member names, every finding replaced whole by `[REDACTED]`
+(the library's own masks keep a hint such as `AKIA***`; a notice crossing into
+another actor's context keeps nothing). Coverage: provider tokens (OpenAI,
+Anthropic, AWS, GitHub, GitLab, Slack, Stripe, Google, npm, and the other
+default detectors), JWTs, PEM private keys, `Bearer` / `Basic` headers,
+`user:password@` URL credentials, `key=value` / `key: value` credential
+assignments in any language (the whole assignment is masked, key included),
+e-mail addresses (a recipient's identity is never surfaced through another
+actor's notice), card numbers, and IBANs; a string held directly under a
+credential-shaped member name (`password`, `token`, `apiKey`,
+`authorization`, …) is masked whole regardless of content, and member names
+themselves are scanned like any other string. Not redacted: paths (coordination
+notices legitimately name files), numbers, base64 image and audio payloads,
+and vocabulary fields (`kind`, `status`, `code`, `mimeType`). Known gap at the
+pinned version: the OpenAI detector caps at 64 key characters, so a
+project-scoped `sk-proj-…` key of production length (~160) is not recognized;
+authors pasting one should publish as `secret`, and the detector is a
+reportable upstream fix, not something to patch here. The compiler keeps its
+own, older credential pass for probe and log text
+(`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
+parity, and no vendored-code notice is involved — `flare-redact` is an
+ordinary npm dependency under its own MIT license.
+
+Libraries evaluated for the pass (September 2026), against: MIT/Apache
+license, pure JS with no native dependencies and no Node-only globals (the
+Workbench renders notice content in a browser bundle), a stable API with
+recent releases, structured-field redaction, and a pattern pass for common
+credentials:
+
+| Package | License | Unpacked size | Last release | Module / runtime | Coverage | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `flare-redact` 1.6.1 | MIT | 949 kB (root entry a fraction; zero dependencies) | 2026-08 | ESM, Node ≥ 20, browser and edge safe | Deep object walk with sensitive-member-name masking plus 51 default text detectors (provider tokens, JWT, PEM, Bearer/Basic, URL credentials, generic assignments with a multilingual key vocabulary, e-mail, cards, IBAN); opt-in PII and high-entropy detectors left off | **Chosen**: the only candidate covering both halves in one dependency without Node-only code; young (first release 2026-07), hence the exact pin |
+| `fast-redact` 3.5.0 | MIT | 93 kB | 2024-03 | CJS, zero dependencies; compiles redactors with `Function()`, so it needs `unsafe-eval` under a browser CSP | Field-path redaction of known keys only, no pattern detection, no arbitrary-depth wildcards | Not chosen: covers structured fields but has no credential pass, and notice free text needs one |
+| `@sanity-labs/secret-scan` 1.1.0 | MIT | 1.1 MB | 2026-09 | ESM + CJS, zero dependencies, browser safe | 1,100+ TruffleHog-derived provider-token rules, JWT, connection strings; no generic `password=` assignments, no key-name masking, no e-mail | Not chosen: strong provider coverage but no structured-field or assignment redaction |
+| `redact-pii` 3.4.0 | MIT | 462 kB | 2022-07 | CJS; depends on `lodash` and `@google-cloud/dlp` (gRPC, Node only) | PII (names, addresses, cards, phones, e-mail) with optional Google DLP | Not chosen: Node-only heavy dependency, no releases since 2022, PII rather than credentials |
+| `@redact-pii/core`, `secret-scan`, `gitleaks-regexes` | — | — | — | — | — | Do not exist on npm |
+| `detect-secrets` 1.0.6 | Apache-2.0 | 37 kB | 2025-10 | CJS, CLI oriented (`which`, `debug`) | Yelp-style detectors for CI and pre-commit scanning, reports rather than redacts | Not chosen: a scanner for files, not a redaction primitive |
+| `secretlint` / `@secretlint/secretlint-rule-preset-recommend` 13.0.5 | MIT | 56 kB + 633 kB | 2026-08 | ESM, Node ≥ 22 | gitleaks-class rule presets through an async linting engine | Not chosen: async file-linting API and a large dependency graph for a synchronous egress pass |
+| `@zapier/secret-scrubber` 1.1.6 | ISC | 22 kB | 2026-07 | CJS; uses `node:url`, `Buffer`, `process.env`, `create-hash` | Scrubs values you already know are secret from objects | Not chosen: value-driven (needs the secrets up front), Node-only, ISC |
+| `is-secret` 1.2.1 | MIT | 4 kB | 2022-06 | CJS | Nine key-name regexes and one card-number regex | Not chosen: a key classifier, not a redactor |
+| `scrubtext` 0.1.1 | MIT | 90 kB | 2026-06 | ESM + CJS, zero dependencies | Text-only secrets and PII, no assignment or key-name pass | Not chosen: pre-1.0, two releases, no structured input |
 
 ### Retention (#99 acceptance item 7)
 

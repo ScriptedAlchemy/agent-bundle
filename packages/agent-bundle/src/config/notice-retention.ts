@@ -15,7 +15,7 @@ import type {
  */
 
 // Kept independent of the optional runtime peer, like the state budgets in
-// `core/state-inspection.ts`; `notice-retention-parity.test.ts` compares these
+// `core/state-inspection.ts`; `notice-retention-config.test.ts` compares these
 // with `AGENT_NOTICE_DEFAULT_RETENTION` so the two boundaries cannot drift.
 export const noticeRetentionDefaults: NormalizedNoticeRetentionPolicy = Object.freeze({
   maxJournalBytes: 16 * 1024 * 1024,

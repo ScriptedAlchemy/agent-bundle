@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@rstest/core';
 
+import { AGENT_NOTICE_DEFAULT_RETENTION } from '@agent-bundle/runtime/notices';
+
 import {
   normalizeNoticeRetention,
   noticeRetentionDefaults,
@@ -13,6 +15,13 @@ const config = (notices: unknown): AgentBundleConfig => ({
 } as AgentBundleConfig);
 
 describe('notices.retention config (AB4833)', () => {
+  it('keeps the static defaults equal to the runtime defaults', () => {
+    // `@agent-bundle/runtime` is an optional peer, so the compiler carries its
+    // own copy of the defaults; this pin fails the build the moment it drifts
+    // (the same discipline `inspect-state.test.ts` applies to the state budgets).
+    expect(noticeRetentionDefaults).toEqual(AGENT_NOTICE_DEFAULT_RETENTION);
+  });
+
   it('parses durations as positive integers of milliseconds or unit literals', () => {
     expect(parseNoticeRetentionDuration(1)).toBe(1);
     expect(parseNoticeRetentionDuration(86_400_000)).toBe(86_400_000);

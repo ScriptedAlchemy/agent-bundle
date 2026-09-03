@@ -1,3 +1,5 @@
+import { compilePolicy } from 'flare-redact';
+
 import type { AgentDocumentNode, AgentDocumentSnapshot } from '../agent-document.js';
 import type { JsonValue } from '../lower-mcp.js';
 
@@ -15,17 +17,28 @@ import type { JsonValue } from '../lower-mcp.js';
  *
  * - `public`: safe for any surface; delivered as authored.
  * - `internal` (default): for the recipient's own context; delivered after
- *   the secret-pattern pass below, so a credential pasted into a coordination
+ *   the secret pass below, so a credential pasted into a coordination
  *   message never crosses into another actor's context.
  * - `secret`: delivered as authored, but only over a route whose host
  *   capability row admits `secret`; otherwise it never leaves the durable
  *   store (see `resolveNoticeDisclosure` in `router.ts`).
  *
- * The secret patterns mirror the compiler's credential redaction
- * (`packages/agent-bundle/src/core/credentials.ts`, reused by the Workbench
- * probe redaction). The two packages cannot share a module — the runtime is an
- * optional peer of the compiler — so `notice-redaction-parity.test.ts` pins
- * the pattern sources equal on both sides.
+ * The secret pass is not ours. Which fields are prose, which class each route
+ * may carry, and what a refusal records are this module's policy; recognizing
+ * a credential is `flare-redact`'s job (pinned exact in `package.json`, a
+ * runtime dependency of this package, zero dependencies of its own, plain
+ * regular expressions with no Node-only globals). Its default detector set
+ * covers provider tokens (OpenAI, Anthropic, AWS, GitHub, GitLab, Slack,
+ * Stripe, Google, npm, …), JWTs, PEM private keys, `Bearer` / `Basic`
+ * headers, `user:password@` URL credentials, `key=value` / `key: value`
+ * credential assignments in any language, e-mail addresses (a recipient's
+ * identity is never surfaced through another actor's notice), card numbers,
+ * and IBANs; a structured value stored directly under a credential-shaped
+ * member name (`password`, `token`, `apiKey`, `authorization`, …) is masked
+ * whole regardless of content. Paths are not redacted: coordination notices
+ * legitimately name files. The compiler keeps its own, older credential pass
+ * for probe and log text (`packages/agent-bundle/src/core/credentials.ts`);
+ * the two are not held in parity.
  */
 export const AGENT_NOTICE_SENSITIVITIES = Object.freeze(['public', 'internal', 'secret'] as const);
 
@@ -49,96 +62,39 @@ export const isNoticeSensitivity = (value: unknown): value is AgentNoticeSensiti
 export const NOTICE_REDACTION_MARK = '[REDACTED]';
 
 /**
- * Pattern sources of the secret pass, exported so the compiler-side copy can
- * be pinned identical by test. `assignment` masks `key: value` / `key=value`
- * credential assignments; `provider` masks recognizable provider tokens;
- * `urlUserinfo` masks `scheme://user:secret@host` credentials.
+ * The one redaction policy of the notice ledger: `flare-redact`'s default
+ * detectors and default credential-shaped member names, every finding
+ * replaced whole by {@link NOTICE_REDACTION_MARK}. The library's own masks
+ * keep a recognizable prefix (`AKIA***`, `b***@***`) as a debugging hint; a
+ * notice crossing into another actor's context keeps nothing.
  */
-export const NOTICE_SECRET_PATTERN_SOURCES = Object.freeze({
-  assignment: String.raw`((?:["']?)(?:api[-_ ]?key|api[-_ ]?token|access[-_ ]?token|authorization|credential|password|secret|token)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)`,
-  provider: Object.freeze([
-    String.raw`\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b`,
-    String.raw`\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b`,
-    String.raw`\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b`,
-  ]),
-  urlUserinfo: String.raw`(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@`,
-});
+const secretPass = compilePolicy({ mask: NOTICE_REDACTION_MARK });
 
-// `String.prototype.replace` resets `lastIndex` on global regexes, so sharing these is safe.
-const assignmentPattern = new RegExp(NOTICE_SECRET_PATTERN_SOURCES.assignment, 'giu');
-const providerPatterns = NOTICE_SECRET_PATTERN_SOURCES.provider.map((source) => new RegExp(source, 'giu'));
-const urlUserinfoPattern = new RegExp(NOTICE_SECRET_PATTERN_SOURCES.urlUserinfo, 'giu');
-
-/**
- * Irreversibly removes recognizable credential material from free text.
- * Provider forms go first: an unquoted `authorization: Bearer <token>` would
- * otherwise lose only the word `Bearer` to the assignment pass and keep the
- * token.
- */
-export const redactSecretText = (value: string): string => {
-  let redacted = value;
-  for (const pattern of providerPatterns) {
-    redacted = redacted.replace(pattern, NOTICE_REDACTION_MARK);
-  }
-  redacted = redacted.replace(assignmentPattern, (_match, prefix: string, assigned: string) => {
-    const quote = assigned[0] === '"' || assigned[0] === "'" ? assigned[0] : '';
-    return `${prefix}${quote}${NOTICE_REDACTION_MARK}${quote}`;
-  });
-  return redacted.replace(urlUserinfoPattern, `$1${NOTICE_REDACTION_MARK}@`);
-};
+/** Irreversibly removes recognizable credential material from free text. */
+export const redactSecretText = (value: string): string => secretPass.redact(value);
 
 /** True when the secret pass would change `value`. */
-export const containsSecretText = (value: string): boolean => redactSecretText(value) !== value;
+export const containsSecretText = (value: string): boolean => !secretPass.isClean(value);
 
-/**
- * Key-name classifier for structured content, mirroring the compiler's
- * `isCredentialKey` (`packages/agent-bundle/src/core/credentials.ts`, pinned
- * equal by `notice-redaction-parity.test.ts`): keyword segments, compact
- * apikey/apitoken/authtoken/accesstoken suffixes, and provider
- * environment-variable names. A JSON value under such a key is a credential
- * by position — `{ password: "hunter2" }` never shows the assignment pass a
- * `password:` prefix — so every string beneath it is masked whole.
- */
-export const NOTICE_SECRET_KEY_SOURCES = Object.freeze({
-  compactSuffix: String.raw`(?:apikey|apitoken|authtoken|accesstoken)$`,
-  keywords: Object.freeze(['authorization', 'credential', 'credentials', 'password', 'secret', 'token']),
-  provider: Object.freeze([
-    String.raw`(?:^|_)(?:API_KEY|API_TOKEN|ACCESS_TOKEN)$`,
-    String.raw`^(?:ANTHROPIC|AZURE_OPENAI|CODEX|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE|GROQ|HUGGINGFACE|MISTRAL|OPENAI|PERPLEXITY|TOGETHER|XAI)_(?:API_KEY|TOKEN)$`,
-  ]),
-});
-
-const compactSuffixPattern = new RegExp(NOTICE_SECRET_KEY_SOURCES.compactSuffix, 'u');
-const providerKeyPatterns = NOTICE_SECRET_KEY_SOURCES.provider.map((source) => new RegExp(source, 'iu'));
-
-/** True when a record key or environment-variable name is credential-shaped. */
-export const isSecretKey = (key: string): boolean => {
-  const segments = key
-    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
-    .toLocaleLowerCase('en-US')
-    .split(/[^a-z0-9]+/u)
-    .filter((segment) => segment.length > 0);
-  const compact = segments.join('');
-  return segments.some((segment) => NOTICE_SECRET_KEY_SOURCES.keywords.includes(segment))
-    || compactSuffixPattern.test(compact)
-    || providerKeyPatterns.some((pattern) => pattern.test(key));
-};
-
-const redactJson = (value: JsonValue, underSecretKey = false): JsonValue => {
-  if (typeof value === 'string') return underSecretKey ? NOTICE_REDACTION_MARK : redactSecretText(value);
+const freezeRedactedJson = (value: JsonValue): JsonValue => {
   if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map((entry) => redactJson(entry as JsonValue, underSecretKey)));
+  if (Array.isArray(value)) return Object.freeze(value.map((entry) => freezeRedactedJson(entry as JsonValue)));
   // Member names are prose too: a token used as a key (`{ "sk-…": true }`)
   // is masked like any other string. Two names that mask to the same text
   // collapse onto one member; the mark carries no information to lose.
   return Object.freeze(Object.fromEntries(
     Object.entries(value as Readonly<Record<string, JsonValue>>)
-      .map(([key, entry]) => [
-        underSecretKey ? NOTICE_REDACTION_MARK : redactSecretText(key),
-        redactJson(entry, underSecretKey || isSecretKey(key)),
-      ]),
+      .map(([key, entry]) => [redactSecretText(key), freezeRedactedJson(entry)]),
   ));
 };
+
+/**
+ * Structured content: the library walks the value, masking a string held
+ * directly under a credential-shaped member name whole and scanning every
+ * other string; the result is then deep-frozen with its member names passed
+ * through the same scan.
+ */
+const redactJson = (value: JsonValue): JsonValue => freezeRedactedJson(secretPass.redact(value));
 
 const redactNode = (node: AgentDocumentNode): AgentDocumentNode => {
   switch (node.kind) {
