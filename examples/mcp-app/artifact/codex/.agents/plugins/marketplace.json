@@ -1,1 +1,0 @@
-{"interface":{"displayName":"mcp-app-example"},"name":"mcp-app-example-marketplace","plugins":[{"category":"Productivity","name":"mcp-app-example","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}

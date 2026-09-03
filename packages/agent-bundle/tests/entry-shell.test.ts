@@ -235,9 +235,12 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   // The lineage registry journals through the sqlite kernel beside project
   // state and degrades to memory when the store cannot open (#host-lineage).
   expect(source).toContain("from '@agent-bundle/runtime/lineage'");
-  expect(source).toContain('createSqliteStateDriver({ root: join(resolve(lineageAnchor), \'state\') })');
   expect(source).toContain('lineage: lineage.registry,');
   expect(source).toContain('disposeLineage: lineage.dispose,');
+  // A project without workspace-durable state keeps a process-lifetime
+  // registry: no sqlite import, no `state/` directory inside the artifact.
+  expect(source).not.toContain('node:sqlite');
+  expect(source).not.toContain('createSqliteStateDriver');
   // The event runtime's modules are aliased into the artifact, so the entry
   // imports them and hands them to the shared runtime; the wiring itself is
   // not re-templated here.
@@ -331,6 +334,33 @@ it('fails the build on an MCP route the generated server cannot register', () =>
   })).toThrow('reserved URI');
 });
 
+
+it('journals the lineage registry through sqlite only for workspace-durable projects', () => {
+  const source = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+    state: {
+      id: 'project/tasks',
+      lifetime: 'workspace-durable',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+      source: '/project/src/state.ts',
+    },
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(source).toContain("import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage'");
+  expect(source).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite'");
+  expect(source).toContain("const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
+  expect(source).toContain("createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') })");
+  expect(source).toContain('agent-bundle lineage registry is in-memory only');
+  expect(source).toContain('disposeLineage: lineage.dispose,');
+});
 
 it('generates the warm react-server Flight worker separately from the MCP dispatcher', () => {
   const generate = (entryShellModule as unknown as {

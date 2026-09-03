@@ -952,9 +952,17 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     : [eventTarget];
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
+  // The lineage registry journals durably only where the project already
+  // accepted the sqlite kernel and its durable anchor (a workspace-durable
+  // `src/state.ts`); stateless and volatile projects keep a process-lifetime
+  // registry so `node:sqlite` never loads for them and no `state/` directory
+  // appears inside an artifact that declared none.
+  const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
-    `import { ${hasEvents ? 'dirname, ' : ''}join, resolve } from 'node:path';`,
-    "import { fileURLToPath } from 'node:url';",
+    ...(hasEvents || durableLineage
+      ? [`import { ${[...(hasEvents ? ['dirname'] : []), ...(durableLineage ? ['join'] : []), 'resolve'].join(', ')} } from 'node:path';`]
+      : []),
+    ...(durableLineage ? ["import { fileURLToPath } from 'node:url';"] : []),
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
     ...(hasEvents
       ? [
@@ -962,30 +970,36 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           `import { createCanonicalEventProps, projectEventDocument } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
         ]
       : []),
-    "import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';",
-    "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
+    `import { ${durableLineage ? 'agentLineageStateDefinition, ' : ''}createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';`,
+    ...(durableLineage ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"] : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
     ...noticeDeliveryImports(wiresResourceUpdated),
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
-    // The lineage registry journals beside the project's own durable state so
-    // a restarted MCP process still knows which subagents are alive. A store
-    // that cannot open degrades to an in-memory registry rather than failing
-    // the server: lineage is an observed axis, never a precondition.
-    "const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
-    'const openLineage = async () => {',
-    "  const driver = createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') });",
-    '  try {',
-    '    const store = await driver.open(agentLineageStateDefinition());',
-    '    return { dispose: async () => { await store.close(); await driver.close(); }, registry: createAgentLineageRegistry({ store }) };',
-    '  } catch (error) {',
-    "    process.stderr.write(`agent-bundle lineage registry is in-memory only: ${error instanceof Error ? error.message : String(error)}\\n`);",
-    '    await driver.close().catch(() => undefined);',
-    '    return { dispose: async () => undefined, registry: createAgentLineageRegistry() };',
-    '  }',
-    '};',
+    ...(durableLineage
+      ? [
+          // Beside the project's own durable state, so a restarted MCP process
+          // still knows which subagents are alive. A store that cannot open
+          // degrades to memory rather than failing the server: lineage is an
+          // observed axis, never a precondition.
+          "const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
+          'const openLineage = async () => {',
+          "  const driver = createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') });",
+          '  try {',
+          '    const store = await driver.open(agentLineageStateDefinition());',
+          '    return { dispose: async () => { await store.close(); await driver.close(); }, registry: createAgentLineageRegistry({ store }) };',
+          '  } catch (error) {',
+          "    process.stderr.write(`agent-bundle lineage registry is in-memory only: ${error instanceof Error ? error.message : String(error)}\\n`);",
+          '    await driver.close().catch(() => undefined);',
+          '    return { dispose: async () => undefined, registry: createAgentLineageRegistry() };',
+          '  }',
+          '};',
+        ]
+      : [
+          'const openLineage = async () => ({ dispose: async () => undefined, registry: createAgentLineageRegistry() });',
+        ]),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
     ...noticeInboxRecord(wiresInbox),

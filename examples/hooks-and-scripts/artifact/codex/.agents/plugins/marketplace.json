@@ -1,1 +1,0 @@
-{"interface":{"displayName":"hooks-and-scripts"},"name":"hooks-and-scripts-marketplace","plugins":[{"category":"Productivity","name":"hooks-and-scripts","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}
