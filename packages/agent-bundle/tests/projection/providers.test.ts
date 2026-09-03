@@ -136,6 +136,22 @@ describe('conventional providers through the harness', () => {
     expect(convenience.instanceId).not.toBe(first.instanceId);
   });
 
+  it('hands concurrent requests on one server distinct hit counts, snapshotted before provider loading', async () => {
+    type Lifetime = { processLifetime: { hits: number; instanceId: string } };
+    await using session = await openInMemoryMcpServer();
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => session.client.callTool({ arguments: {}, name: 'tooling' })),
+    );
+    const lifetimes = results.map((result) => (result as { structuredContent: Lifetime }).structuredContent.processLifetime);
+
+    // Like the generated worker, each request captures its own hit right after
+    // the increment; awaiting provider loaders must not let a concurrent
+    // request move it.
+    expect(lifetimes.map((lifetime) => lifetime.hits).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
+    expect(new Set(lifetimes.map((lifetime) => lifetime.instanceId)).size).toBe(1);
+  });
+
   it('gives every route-unit render a fresh process identity', async () => {
     type Result = { processLifetime: { hits: number; instanceId: string } };
     const first = (await renderRoute('tool:harness/tooling')).result as Result;

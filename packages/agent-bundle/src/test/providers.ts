@@ -72,8 +72,12 @@ export const mountProviders = async (options: MountProvidersOptions): Promise<Ag
   if (options.explicit !== undefined) return options.explicit;
   const { processLifetime } = options;
   processLifetime.hits += 1;
+  // Snapshot before the first await, as the generated worker does right after
+  // its increment: a concurrent request on the same lifetime must not move
+  // this request's hit count while its provider modules load.
+  const snapshot = providerProcessLifetimeValue(processLifetime);
   if (options.manifest === undefined) {
-    return { processLifetime: providerProcessLifetimeValue(processLifetime) };
+    return { processLifetime: snapshot };
   }
   const providers: ExecutableProvider[] = [];
   for (const descriptor of options.manifest.providers ?? []) {
@@ -81,7 +85,7 @@ export const mountProviders = async (options: MountProvidersOptions): Promise<Ag
   }
   return executeProviders({
     invocation: options.invocation,
-    processLifetime,
+    processLifetime: { ...snapshot },
     providers,
     signal: options.signal,
   });
