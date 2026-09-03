@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -9,6 +9,7 @@ import {
   hostCliPinFromProvenance,
   hostCliProvenancePaths,
   installArguments,
+  installProbeEnvironment,
   parseCliVersion,
   pinsCacheKey,
   readHostCliPins,
@@ -147,6 +148,27 @@ it('installs exact pinned packages globally into the requested prefix', () => {
     '@openai/codex@0.147.0',
   ]);
   expect(installArguments(pins)).not.toContain('--prefix');
+});
+
+it('rejects --prefix without a directory operand instead of installing machine-wide', async () => {
+  await expect(runHostCliPins({ argv: ['install', '--prefix'], env: {} })).rejects.toThrow(
+    /--prefix requires a directory operand/u,
+  );
+  await expect(runHostCliPins({ argv: ['install', '--prefix', ''], env: {} })).rejects.toThrow(
+    /--prefix requires a directory operand/u,
+  );
+  await expect(runHostCliPins({ argv: ['install', '--prefix', '--verbose'], env: {} })).rejects.toThrow(
+    /--prefix requires a directory operand/u,
+  );
+});
+
+it('probes freshly installed CLIs from the prefix bin directory only, never the inherited PATH', () => {
+  const inherited = { HOME: '/home/ci', PATH: ['/usr/local/bin', '/usr/bin', '/opt/other-claude/bin'].join(delimiter) };
+  const probe = installProbeEnvironment('/tmp/host-cli/bin', inherited, '/opt/node/bin/node');
+  expect(probe.PATH).toBe(['/tmp/host-cli/bin', '/opt/node/bin'].join(delimiter));
+  expect(probe.PATH).not.toContain('/opt/other-claude/bin');
+  expect(probe.HOME).toBe('/home/ci');
+  expect(inherited.PATH).toContain('/opt/other-claude/bin');
 });
 
 it('keys the CLI cache on package names as well as versions', () => {

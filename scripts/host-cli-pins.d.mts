@@ -57,4 +57,10 @@ export declare const globalBinDirectory: (globalPrefix: string, platform?: NodeJ
 
 export declare const installArguments: (pins: HostCliPins, prefix?: string) => readonly string[];
 
+export declare const installProbeEnvironment: (
+  binDirectory: string,
+  environment: NodeJS.ProcessEnv,
+  execPath?: string,
+) => NodeJS.ProcessEnv;
+
 export declare const runHostCliPins: (options?: RunHostCliPinsOptions) => Promise<HostCliPins>;

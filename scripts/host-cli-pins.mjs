@@ -15,7 +15,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFile, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -165,6 +165,17 @@ export const installArguments = (pins, prefix) => Object.freeze([
   ...hostCliHosts.map((host) => `${pins[host].package}@${pins[host].version}`),
 ]);
 
+/**
+ * Environment for probing the CLIs *just installed* into `binDirectory`: PATH
+ * holds only that directory plus the running Node (the shims' `#!/usr/bin/env
+ * node`), never the inherited PATH, so a pre-existing `claude`/`codex`
+ * elsewhere cannot mask an incomplete prefix.
+ */
+export const installProbeEnvironment = (binDirectory, environment, execPath = process.execPath) => ({
+  ...environment,
+  PATH: [binDirectory, dirname(execPath)].join(delimiter),
+});
+
 const probeOnPath = async (host, environment) => {
   try {
     const result = await execFile(host, ['--version'], { encoding: 'utf8', env: environment, timeout: 30_000 });
@@ -183,7 +194,11 @@ const parseArgs = (argv) => {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === '--prefix') {
-      options.prefix = rest[index + 1];
+      const value = rest[index + 1];
+      if (value === undefined || value.length === 0 || value.startsWith('-')) {
+        throw new Error('--prefix requires a directory operand (refusing to fall back to the default global npm prefix)');
+      }
+      options.prefix = value;
       index += 1;
       continue;
     }
@@ -217,8 +232,7 @@ const installPins = async (pins, prefix, environment) => {
   const globalPrefix = (await runNpm(['prefix', '-g', ...prefixArguments], environment)).trim();
   const globalRoot = (await runNpm(['root', '-g', ...prefixArguments], environment)).trim();
   const binDirectory = globalBinDirectory(globalPrefix);
-  const pathWithPrefix = `${binDirectory}${process.platform === 'win32' ? ';' : ':'}${environment.PATH ?? ''}`;
-  const probeEnvironment = { ...environment, PATH: pathWithPrefix };
+  const probeEnvironment = installProbeEnvironment(binDirectory, environment);
   const claude = await probeOnPath('claude', probeEnvironment);
   if (claude.exitCode !== 0) {
     const postinstall = join(globalRoot, pins.claude.package, 'install.cjs');
