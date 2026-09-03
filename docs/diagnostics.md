@@ -706,7 +706,7 @@ this plugin's name — a copy installed before receipts existed), or **foreign**
 | Identical content (legacy) | `already-installed` no-op | `adopted` — receipt written, no plugin file changes | `current` |
 | Receipt / host-managed, same version, different content | replaced automatically (`replaced`) | replaced | `stale` — `AB7308` warning |
 | Receipt / host-managed, different version | `AB7005` version collision | replaced | `version-mismatch` — `AB7309` warning |
-| Legacy, different content | `AB7005` content collision | replaced and adopted (receipt written) | `stale` — `AB7308` warning, recovery names `--replace` |
+| Legacy, different content | `AB7005` content collision | adopted: the artifact's files are rewritten, every other file is left in place and stays unowned, receipt written (`replaced`) | `stale` — `AB7308` warning, recovery names `--replace` |
 | Foreign directory | `AB7005` foreign install | `AB7005` foreign install | `foreign` — `AB7321` warning |
 | Nothing installed | installed | installed | `not-installed` — `AB7307` info |
 

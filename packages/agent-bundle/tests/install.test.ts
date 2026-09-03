@@ -444,6 +444,9 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     await rm(join(destination, installReceiptFile));
 
     await writeFile(join(destination, 'payload.txt'), 'stale\n');
+    // Operator content and a file the rebuild dropped: a legacy copy has no inventory, so both stay.
+    await writeFile(join(destination, 'operator-note.txt'), 'keep me\n');
+    await writeFile(join(destination, 'dropped-by-rebuild.txt'), 'old artifact file\n');
     const legacyHash = (await treeInventory(destination)).hash;
     const artifact = await treeInventory(fixture.bundleRoot);
 
@@ -461,7 +464,15 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     const replaced = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
     expect(replaced).toMatchObject({ contentHash: artifact.hash, previousContentHash: legacyHash, state: 'replaced' });
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
-    expect(await readInstallReceipt(destination)).toMatchObject({ contentHash: artifact.hash, plugin: 'install-fixture' });
+    expect(await readFile(join(destination, 'operator-note.txt'), 'utf8')).toBe('keep me\n');
+    expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
+    const receipt = await readInstallReceipt(destination);
+    expect(receipt).toMatchObject({ contentHash: artifact.hash, plugin: 'install-fixture' });
+    expect(receipt?.files).toEqual(artifact.files);
+    // From now on the leftovers are unowned: a later same-version replace leaves them alone.
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
   } finally {
     await Promise.all([
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
@@ -542,6 +553,21 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('empty-dir');
     await rm(join(fixture.bundleRoot, 'empty-dir'));
     await rm(join(destination, 'empty-dir'), { recursive: true });
+
+    // An owned directory that also holds an unowned empty subdirectory is a collision, not a restructure.
+    await rm(join(fixture.bundleRoot, 'payload.txt'));
+    await mkdir(join(fixture.bundleRoot, 'payload.txt'));
+    await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    await mkdir(join(destination, 'payload.txt', 'scratch'));
+    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
+    const emptyNested = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((emptyNested as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
+    expect(await readFile(join(destination, 'payload.txt', 'nested.md'), 'utf8')).toBe('# nested\n');
+    await rm(join(destination, 'payload.txt', 'scratch'), { recursive: true });
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
 
     // A directory that also holds an unowned file is a collision, not a restructure.
     await rm(join(fixture.bundleRoot, 'payload.txt'));

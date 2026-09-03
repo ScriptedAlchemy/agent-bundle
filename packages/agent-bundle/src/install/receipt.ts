@@ -404,13 +404,51 @@ const pruneEmptyDirectories = async (destination: string, removedFiles: readonly
   }
 };
 
+/**
+ * What the previous installer owned. A receipt says so exactly. A legacy copy
+ * has no inventory, so only the files the new artifact also ships count as
+ * owned: they are rewritten, everything else (operator files, stale artifact
+ * files, `state/`) is left in place and stays unowned under the new receipt.
+ */
 const previouslyOwnedFiles = async (
   destination: string,
   comparison: InstalledTreeComparison,
+  incoming: ReadonlySet<string>,
 ): Promise<readonly string[]> => {
   if (comparison.ownership === 'receipt' && comparison.receipt !== undefined) return comparison.receipt.files;
   const inventory = await treeInventory(destination);
-  return inventory.files.filter((file) => !preservedRuntimeEntries.includes(file.split('/')[0] ?? ''));
+  return inventory.files.filter((file) =>
+    incoming.has(file) && !preservedRuntimeEntries.includes(file.split('/')[0] ?? ''));
+};
+
+/**
+ * True when a directory is entirely previous-installer territory: at least
+ * one file, every file owned, and no empty directories anywhere beneath (an
+ * empty directory is no evidence of ownership and would survive pruning).
+ */
+const isWhollyOwnedDirectory = async (
+  destination: string,
+  relativePath: string,
+  owned: ReadonlySet<string>,
+): Promise<boolean> => {
+  let files = 0;
+  const visit = async (directory: string): Promise<boolean> => {
+    const entries = sortNames(await readdir(join(destination, directory)));
+    if (entries.length === 0) return false;
+    for (const name of entries) {
+      const relative = `${directory}/${name}`;
+      const metadata = await lstat(join(destination, relative));
+      if (metadata.isSymbolicLink()) throw unsupportedEntry(relative);
+      if (metadata.isDirectory()) {
+        if (!await visit(relative)) return false;
+        continue;
+      }
+      if (!metadata.isFile() || !owned.has(relative)) return false;
+      files += 1;
+    }
+    return true;
+  };
+  return await visit(relativePath) && files > 0;
 };
 
 /**
@@ -429,7 +467,7 @@ export const replaceInstalledTree = async (options: {
     throw new Error(`Refusing to replace foreign install at ${options.destination}.`);
   }
   const incoming = new Set(options.staged.inventory.files);
-  const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison);
+  const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison, incoming);
   const owned = new Set(previouslyOwned);
   await assertRealAncestors(options.destination, previouslyOwned);
   await assertRealAncestors(options.destination, options.staged.inventory.files, owned);
@@ -451,13 +489,8 @@ export const replaceInstalledTree = async (options: {
     }
     return ownedIdentities.some((metadata) => sameFile(metadata, candidate));
   };
-  // An existing directory at an incoming file path is fine only when it holds owned files and
-  // nothing else: those files leave as stale and the emptied directory is pruned before the
-  // rename. An empty directory (or one holding only empty directories) is no evidence of ownership.
-  const isWhollyOwnedDirectory = async (file: string): Promise<boolean> => {
-    const nested = await treeInventory(join(options.destination, file));
-    return nested.files.length > 0 && nested.files.every((entry) => owned.has(`${file}/${entry}`));
-  };
+  // An existing directory at an incoming file path is fine only when it is wholly owned: its
+  // files leave as stale and the emptied directories are pruned before the rename.
   const collisions: string[] = [];
   for (const file of options.staged.inventory.files) {
     if (owned.has(file)) continue;
@@ -471,7 +504,7 @@ export const replaceInstalledTree = async (options: {
       throw error;
     }
     const tolerated = metadata.isDirectory() && !metadata.isSymbolicLink()
-      ? await isWhollyOwnedDirectory(file)
+      ? await isWhollyOwnedDirectory(options.destination, file, owned)
       : await isOwnedIdentity(target);
     if (!tolerated) collisions.push(file);
   }

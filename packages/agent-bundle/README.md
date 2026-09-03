@@ -204,9 +204,12 @@ every host treats it differently. `agent-bundle install` and the emitted
 - **`--replace` (alias `--force`).** Also replaces an agent-bundle install of
   the same plugin at a *different* version, and adopts a Cursor copy that was
   installed before receipts existed (recognised by its emitted `INSTALL.md` +
-  `install.mjs` and matching manifest name). Adoption writes the receipt, so
-  later same-version rebuilds replace automatically; a byte-identical legacy
-  copy under `--replace` reports `adopted` and changes no plugin file.
+  `install.mjs` and matching manifest name). A legacy copy has no owned-file
+  inventory, so adoption rewrites the files the new artifact ships and leaves
+  every other file in place (operator files, files an earlier rebuild dropped,
+  `state/`); those leftovers stay unowned under the new receipt, and later
+  same-version rebuilds replace automatically. A byte-identical legacy copy
+  under `--replace` reports `adopted` and changes no plugin file.
 - **Foreign installs are always refused.** A directory under the plugin name
   that is not an agent-bundle install of this plugin fails with `AB7005` and a
   content-hash comparison (`installed <name>@<version> content <hash> vs
