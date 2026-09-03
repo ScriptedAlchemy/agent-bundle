@@ -1,0 +1,9 @@
+{
+  "compact_summary": "Summary of the compacted conversation.",
+  "cwd": "/workspace",
+  "hook_event_name": "PostCompact",
+  "prompt_id": "prompt-claude-1",
+  "session_id": "session-claude-1",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl",
+  "trigger": "manual"
+}
