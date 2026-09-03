@@ -69,6 +69,45 @@ results and never renders JSX. Routed `src/cli/**` commands and
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
 
+## Skills: convention, override, and rendered documents
+
+`src/skills/<name>/SKILL.md` ships with no declaration. Config wins,
+conventions fill: declaring `skills:` replaces the directory convention
+entirely, and validation reports `AB4734` for any conventional skill directory
+the explicit list leaves uncovered. Skills at the removed top-level
+`skills/<name>/` location are an `AB4736` error unless explicit `skills`
+config claims them.
+
+A skill whose document is generated (power tier, never required) puts
+`SKILL.tsx` (or `SKILL.ts`) in the skill directory instead of `SKILL.md`. The
+module default-exports a component (sync or async) and exports a `frontmatter`
+record; the build renders the tree to Markdown and emits the same
+`skills/<name>/SKILL.md` artifact every host consumes.
+
+```tsx
+// src/skills/deploy-checklist/SKILL.tsx
+export const frontmatter = {
+  description: 'Deployment checklist.',
+  name: 'deploy-checklist',
+};
+
+export default () => (
+  <>
+    <h1>Deploy checklist</h1>
+    <p>Verify each step <strong>in order</strong>.</p>
+  </>
+);
+```
+
+The renderer supports a documented element subset (`h1`–`h6`, `p`,
+`ul`/`ol`/`li`, `strong`/`b`, `em`/`i`, `code`, `pre`, `blockquote`, `a`,
+`hr`, `br`, fragments, strings and numbers) and rejects anything outside it by
+name (`AB3005`), never a silent approximation; a module that fails to load or
+lacks the two exports reports `AB3003`/`AB3004`. Components may import
+project code, so the document can be computed from the same sources the
+plugin ships. A hand-authored `SKILL.md` in the same directory always wins
+(`AB4735`).
+
 ## Config reference
 
 ### `output`

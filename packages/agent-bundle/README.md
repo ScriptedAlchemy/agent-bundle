@@ -32,9 +32,11 @@ against the entry's plugin-root `cwd`. Codex has no path-token interpolation, so
 server without a plugin-root working directory omits the anchor; source-built (`entry:`) servers
 always have one on every target. Server runtime code should resolve persistent state and bundled
 assets against this anchor rather than the process working directory: Claude Code currently
-launches stdio servers from the host's own working directory and ignores the emitted `cwd` field
-(the Claude adapter still emits `cwd: "${CLAUDE_PLUGIN_ROOT}"` as documented, schema-valid
-future-proofing). A server's own `env` entries win over the injected value, so declaring
+launches stdio servers from the host's own working directory and ignores stdio `cwd` at runtime,
+and its placeholder-substitution table excludes `cwd`, so the Claude adapter emits no `cwd` for a
+plugin-root working directory (the absolute `${CLAUDE_PLUGIN_ROOT}/mcp/...` entry path plus this
+env anchor carry the guarantee) and rejects token-bearing `cwd` values outright. A server's own
+`env` entries win over the injected value, so declaring
 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The `pluginRootEnvAnchor` export
 names the variable for consumer code.
 

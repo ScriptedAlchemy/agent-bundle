@@ -49,14 +49,18 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685
 pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
 
 Previews carry the version string `0.0.0-preview-<sha>`, and the publish
-rewrites the `agent-bundle` peer range inside the `@agent-bundle/runtime`
-preview tarball to that exact preview version (`--peerDeps`). Installing both
+(`--peerDeps`) rewrites every peer range that points at a sibling workspace
+package to that exact preview version inside the preview tarballs. Today that
+is the optional `@agent-bundle/runtime` peer declared by `agent-bundle`
+(`@agent-bundle/runtime` itself no longer declares an `agent-bundle` peer;
+its peers are `react`, `react-dom`, and `@rspack/core`). Installing both
 packages from the same sha therefore works with stock npm — no
 `--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
 by design; use one sha (or one PR number) for both URLs. Previews published
-before the peer rewrite landed (PR #46) still carry the original
-`agent-bundle@^0.1.0` range, so pair-installing those older shas with npm
-still requires `--legacy-peer-deps`.
+before the peer rewrite landed (PR #46, fixing #45) still carry the original
+`agent-bundle@^0.1.0` range on the then-named `@agent-bundle/rsc-runtime`
+package, so pair-installing those older shas with npm still requires
+`--legacy-peer-deps`.
 
 ## Where previews come from
 
