@@ -145,7 +145,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.9.0',
+    adapterRevision: '1.8.0',
     observedVersion: '2026-08-28',
     schemas: [
       {
