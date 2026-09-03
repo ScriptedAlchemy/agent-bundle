@@ -1111,6 +1111,9 @@ export class NativePlaygroundService {
       if (Date.now() < deadline) continue;
       if (!staging.every((entry) => stagingPublisherExited(entry))) throw invalid();
       for (const entry of staging) await this.#catalogStorage.remove(join(dirname(path), entry), { force: true });
+      // The exited publisher may never have fsynced the directory after link():
+      // flush it here so a crash cannot keep the orphan and lose the sidecar.
+      await this.#syncCatalogDirectory(dirname(path));
       if ((await file.stat()).nlink === 1) return settledOrWithdrawn();
       throw invalid();
     }

@@ -1685,9 +1685,31 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
   const catalogDirectory = join(root, 'catalog');
   const reference = epoch('epoch-abandoned-staging', join(root, 'artifact'));
   const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directorySyncs: string[] = [];
+  const storage: NativePlaygroundCatalogStorage = {
+    link,
+    mkdir,
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => {
+              directorySyncs.push(String(path));
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: rm,
+  } as NativePlaygroundCatalogStorage;
   const serviceFor = (discover: () => Promise<readonly DiscoveredEvalSuite[]>): NativePlaygroundService => new NativePlaygroundService({
     catalogDirectory,
     catalogStagingSettleDeadlineMs: 50,
+    catalogStorage: storage,
     discover,
     inspectArtifact: async (candidate) => Object.freeze({
       binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
@@ -1713,11 +1735,14 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     // A publisher that exited after link() but before cleanup left a complete,
     // fsynced sidecar behind: the reader withdraws the orphan and adopts it.
     await link(sidecar, join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`));
+    directorySyncs.length = 0;
     const reader = serviceFor(async () => { throw new Error('A recovered catalog must not fall back to discovery.'); });
     expect(await reader.catalog(reference)).toEqual(published);
     await reader.close();
     expect((await stat(sidecar)).nlink).toBe(1);
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    // The exited publisher may never have flushed the directory after link(); recovery does.
+    expect(directorySyncs).toEqual([catalogDirectory]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
