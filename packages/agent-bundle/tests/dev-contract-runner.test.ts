@@ -118,6 +118,24 @@ it('exposes live progress notifications through the session trace for lifecycle 
   expect(seen).toEqual(['token-1']);
 });
 
+it('invokes a custom observeProgress method with the client as its receiver', () => {
+  class InstanceClient {
+    readonly listeners = new Set<(notification: { readonly params?: { readonly progressToken?: string | number } }) => void>();
+    observeProgress(listener: (notification: { readonly params?: { readonly progressToken?: string | number } }) => void): () => void {
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
+    }
+  }
+  const client = new InstanceClient();
+  const seen: unknown[] = [];
+  const stop = contractProgressObserver(client as unknown as ContractMatrixClient)((notification) =>
+    seen.push(notification.params?.progressToken));
+  for (const listener of client.listeners) listener({ params: { progressToken: 'bound' } });
+  stop();
+  expect(seen).toEqual(['bound']);
+  expect(client.listeners.size).toBe(0);
+});
+
 it('names the missing notification path for a client that is neither an SDK Client nor exposes observeProgress', () => {
   const bare = {} as ContractMatrixClient;
   expect(() => contractProgressObserver(bare))

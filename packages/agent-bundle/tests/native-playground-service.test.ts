@@ -1599,6 +1599,76 @@ it('never adopts a staged sidecar that its publisher rolls back, and republishes
   }
 });
 
+it('withdraws a sidecar whose directory fsync fails before releasing its staging link, so a waiting reader never adopts it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-fsync-withdrawn-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-fsync-withdrawn', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directoryFailure = new Error('directory sync failed');
+  let signalLinked!: () => void;
+  const linked = new Promise<void>((resolvePromise) => { signalLinked = resolvePromise; });
+  let releaseDirectorySync!: () => void;
+  const directorySync = new Promise<void>((resolvePromise) => { releaseDirectorySync = resolvePromise; });
+  const winnerStorage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      signalLinked();
+    },
+    mkdir,
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => {
+              // The publisher stalls on its directory fsync after the link, then fails it.
+              await directorySync;
+              throw directoryFailure;
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: rm,
+  } as NativePlaygroundCatalogStorage;
+  const serviceFor = (storage?: NativePlaygroundCatalogStorage): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    ...(storage === undefined ? {} : { catalogStorage: storage }),
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const winner = serviceFor(winnerStorage);
+  const loser = serviceFor();
+  try {
+    const winning = winner.catalog(reference);
+    await linked;
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
+    releaseDirectorySync();
+    // The rollback's own directory fsync fails the same way, so both are retained.
+    await expect(winning).rejects.toMatchObject({ errors: [directoryFailure, directoryFailure] });
+    const adopted = await losing;
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    expect(await loser.catalog(reference)).toEqual(adopted);
+    await Promise.all([winner.close(), loser.close()]);
+  } finally {
+    releaseDirectorySync();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('still rejects a persisted catalog aliased by a hard link that is not an epoch staging file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-aliased-catalog-'));
   const catalogDirectory = join(root, 'catalog');

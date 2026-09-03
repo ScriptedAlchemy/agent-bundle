@@ -1149,10 +1149,19 @@ export class NativePlaygroundService {
         try { await handle.close(); }
         catch (error) { cleanupFailures.push(error); }
       }
+      // A failed publication withdraws its sidecar while the staging link still
+      // exists: concurrent readers keep seeing an in-progress (doubly linked)
+      // publication until the path is gone, never a settled singly linked file
+      // that is about to be rolled back.
+      if (primary !== undefined && created && publicationIdentity !== undefined) {
+        try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }
+        catch (error) { cleanupFailures.push(error); }
+        created = false;
+      }
       try { await this.#catalogStorage.remove(temporary, { force: true }); }
       catch (error) { cleanupFailures.push(error); }
     }
-    if ((primary !== undefined || cleanupFailures.length > 0) && created && publicationIdentity !== undefined) {
+    if (primary === undefined && cleanupFailures.length > 0 && created && publicationIdentity !== undefined) {
       try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }
       catch (error) { cleanupFailures.push(error); }
     }

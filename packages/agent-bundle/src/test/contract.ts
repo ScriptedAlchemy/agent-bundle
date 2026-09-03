@@ -1225,7 +1225,8 @@ const sdkProgressObserver = (
 export const contractProgressObserver = (
   client: ContractMatrixClient,
 ): ContractMatrixProgressSource['observeProgress'] => {
-  if (typeof client.observeProgress === 'function') return client.observeProgress;
+  const { observeProgress } = client;
+  if (typeof observeProgress === 'function') return (listener) => observeProgress.call(client, listener);
   const handlers = (client as { readonly _notificationHandlers?: unknown })._notificationHandlers;
   if (handlers instanceof Map) return sdkProgressObserver(handlers as Map<string, ClientNotificationHandler>);
   throw new Error(
