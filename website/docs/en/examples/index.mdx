@@ -27,8 +27,9 @@ pnpm install
 pnpm example:skills
 ```
 
-For the noninteractive path, `pnpm examples:check` validates and builds every example package in
-the workspace — no dev server, no browser:
+For the noninteractive path, `pnpm examples:check` runs every example package's own `check`
+script — validate and build, plus typecheck and tests where the example has them — with no dev
+server and no browser:
 
 ```sh
 pnpm examples:check
@@ -55,7 +56,8 @@ most of the structure.
 Two habits make the Workbench trustworthy while you explore:
 
 - **Wait for a completed state.** A rebuild is finished when it reports Idle or Failed. A
-  Building state is still in progress, and judging it is how a healthy project looks broken.
+  Building state is still in progress, and judging one is how a healthy project comes to look
+  broken.
 - **Treat a failed rebuild as last-good behavior.** A failed build publishes no epoch, so the
   Workbench keeps serving the previously published artifact alongside the new diagnostic. Restore
   the checked-in source and rebuild; the new active epoch is the repair evidence.

@@ -25,8 +25,8 @@ pnpm install
 pnpm example:skills
 ```
 
-若需要非交互路径，`pnpm examples:check` 会校验并构建工作区中的每个示例包——不启动 dev 服务器，
-也不打开浏览器：
+若需要非交互路径，`pnpm examples:check` 会运行每个示例包自己的 `check` 脚本——校验与构建，以及示例自带
+的类型检查与测试——既不启动 dev 服务器，也不打开浏览器：
 
 ```sh
 pnpm examples:check
@@ -50,7 +50,7 @@ pnpm dev        # agent-bundle dev
 在探索时，有两个习惯能让 Workbench 的结论值得信任：
 
 - **等待一个已完成的状态。** 重建报告 Idle 或 Failed 时才算结束。Building 仍在进行中，据此下判断
-  正是健康项目看起来像坏了的原因。
+  正是健康项目看起来像坏了的原因所在。
 - **把失败的重建理解为“上一个可用产物”的行为。** 失败的构建不会发布 epoch，因此 Workbench 会在报告
   新诊断的同时继续提供之前发布的产物。恢复签入的源码并重建；新的活跃 epoch 才是修复证据。
 
