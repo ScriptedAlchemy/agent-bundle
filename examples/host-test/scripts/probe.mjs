@@ -310,6 +310,12 @@ const capture = () => {
   } else {
     log(`no capture log was written at ${logFile}: the host dispatched no hook and no MCP call reached the probe`);
   }
+  // The artifacts above are kept for inspection, but a failed host session is
+  // not evidence: automation must see the failure.
+  if (result.status !== 0) {
+    log(`host session failed with exit ${String(result.status)}; captures above are partial evidence at best`);
+    process.exitCode = result.status ?? 1;
+  }
 };
 
 const uninstall = () => {

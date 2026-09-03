@@ -59,12 +59,23 @@ const ENV_NAME_PREFIXES = Object.freeze([
 
 // `progressToken` is MCP plumbing, not a credential.
 const SECRET_KEY = /(?:(?<!progress)(?<!progress_)token|secret|password|passwd|api[_-]?key|authorization|credential|cookie|private[_-]?key)/iu;
-const SECRET_VALUE = /^(?:Bearer\s+\S+|(?:sk|ghp|gho|ghu|xox[abp]|AKIA)[-_A-Za-z0-9]{12,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,})/u;
+/**
+ * Credential shapes wherever they appear inside a string — free-form fields
+ * such as `tool_response`, shell output, or a prompt can quote them after any
+ * prefix (`Authorization: Bearer …`, `KEY=sk-…`), so matching is not anchored.
+ */
+const EMBEDDED_SECRET = new RegExp([
+  String.raw`\bBearer\s+[A-Za-z0-9._~+/=-]{16,}`,
+  String.raw`\b(?:sk|ghp|gho|ghu|ghs|xox[abposr]|glpat|npm_|AKIA)[-_A-Za-z0-9]{12,}`,
+  String.raw`\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
+  String.raw`(?<=\b[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL)[A-Za-z0-9_]*\s*[=:]\s*["']?)[^\s"']{6,}`,
+  String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`,
+].join('|'), 'giu');
 
 export const redactSecrets = (value: JsonValue, key = ''): JsonValue => {
   if (typeof value === 'string') {
-    if (SECRET_KEY.test(key) || SECRET_VALUE.test(value)) return '[redacted]';
-    return value;
+    if (SECRET_KEY.test(key)) return '[redacted]';
+    return value.replace(EMBEDDED_SECRET, '[redacted]');
   }
   if (Array.isArray(value)) return value.map((item) => redactSecrets(item, key));
   if (value !== null && typeof value === 'object') {

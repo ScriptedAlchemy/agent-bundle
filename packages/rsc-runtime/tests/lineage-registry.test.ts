@@ -260,3 +260,49 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     expect(resolveNativeLineage('cursor', { conversation_id: 'c' })).toEqual(unavailable('no-shared-runtime'));
   });
 });
+
+describe('lineage registry edge cases raised in review', () => {
+  it('ignores a replayed SubagentStart instead of claiming a second spawn or rewriting the node', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native });
+    await observe('session/start', 'start', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'spawn-1', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'spawn-1' });
+    await observe('tool/before', 'spawn-2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'spawn-2' });
+    const start = { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' };
+    const first = await observe('agent/start', 'child-start', start);
+    expect(value(first).subagent?.toolCallId).toBe('spawn-2');
+    const replayed = await observe('agent/start', 'child-start', start);
+    expect(value(replayed).subagent?.toolCallId).toBe('spawn-2');
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-1']);
+  });
+
+  it('leaves a Cursor child unresolved while two subagent starts are pending, then binds once one has stopped', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt' });
+    const start = (id: string) => ({
+      conversation_id: 'root', hook_event_name: 'subagentStart', is_parallel_worker: true, parent_conversation_id: 'root',
+      subagent_id: id, subagent_type: 'general-purpose', tool_call_id: id,
+    });
+    await observe('agent/start', 'a', start('call-a'));
+    await observe('agent/start', 'b', start('call-b'));
+    const ambiguous = await observe('tool/before', 'x', { conversation_id: 'child-x', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'Shell', tool_use_id: 'x' });
+    expect(ambiguous).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().nodes['child-x']).toBeUndefined();
+    await observe('agent/stop', 'a-stop', { ...start('call-a'), hook_event_name: 'subagentStop', status: 'completed' });
+    const bound = await observe('tool/before', 'y', { conversation_id: 'child-y', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'Shell', tool_use_id: 'y' });
+    expect(value(bound)).toMatchObject({ conversation: 'child-y', depth: 1, parent: 'root', subagent: { id: 'call-b' } });
+  });
+
+  it('does not fabricate a Codex depth when neither the thread nor its parent is registered', () => {
+    const registry = createAgentLineageRegistry();
+    const meta = (thread: string, parent: string | undefined) => ({
+      'x-codex-turn-metadata': { session_id: 'root', thread_id: thread, turn_id: 't', ...(parent === undefined ? {} : { parent_thread_id: parent }) },
+    });
+    expect(registry.resolveToolCall({ host: 'codex', meta: meta('root', undefined), toolName: 'dump' })).toMatchObject({ value: { depth: 0 } });
+    expect(registry.resolveToolCall({ host: 'codex', meta: meta('child', 'root'), toolName: 'dump' })).toMatchObject({ value: { depth: 1, parent: 'root' } });
+    expect(registry.resolveToolCall({ host: 'codex', meta: meta('grandchild', 'child'), toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+  });
+});

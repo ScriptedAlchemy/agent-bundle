@@ -179,22 +179,27 @@ export const createAgentLineageRegistry = (
     return undefined;
   };
 
+  /**
+   * The node for a conversation that speaks for itself, creating it when it is
+   * new. A never-seen Cursor conversation while exactly one `subagentStart` is
+   * pending is that child speaking for the first time; with several pending
+   * children the child payload carries nothing to tell them apart, so the
+   * conversation stays unresolved rather than being bound arbitrarily.
+   */
   const ensureRoot = async (
     host: LineageHost,
     conversation: string,
     generation: string | undefined,
     observedAt: string,
     keys: JournalKeys,
-  ): Promise<LineageNode> => {
+  ): Promise<LineageNode | undefined> => {
     const existing = state.nodes[conversation];
     if (existing !== undefined) return existing;
     if (host === 'cursor' && state.pendingChildren.length > 0) {
-      // A never-seen Cursor conversation while a subagentStart is pending is
-      // that child speaking for the first time.
+      if (state.pendingChildren.length > 1) return undefined;
       const subagentId = state.pendingChildren[0]!;
       await dispatch('childBound', { conversation, subagentId }, keys);
-      const bound = state.nodes[conversation];
-      if (bound !== undefined) return bound;
+      return state.nodes[conversation];
     }
     const node = rootNode(conversation, generation, observedAt);
     await dispatch('nodeStarted', node, keys);
@@ -223,7 +228,10 @@ export const createAgentLineageRegistry = (
       const subagentId = nativeString(native, 'subagent_id') ?? nativeString(native, 'tool_call_id');
       const parentId = nativeString(native, 'parent_conversation_id') ?? carrier.conversation;
       if (subagentId === undefined || parentId === undefined) return;
+      // A replayed start already registered (or bound) this child.
+      if (state.nodes[subagentId] !== undefined || Object.values(state.nodes).some((node) => node.subagentId === subagentId)) return;
       const parent = await ensureRoot(host, parentId, undefined, observedAt, keys);
+      if (parent === undefined) return;
       await dispatch('nodeStarted', {
         depth: parent.depth + 1,
         id: subagentId,
@@ -240,7 +248,10 @@ export const createAgentLineageRegistry = (
     const agentId = nativeString(native, 'agent_id');
     const root = carrier.root;
     if (agentId === undefined || root === undefined) return;
+    // A replayed start must not claim a second spawn or rewrite the node.
+    if (state.nodes[agentId] !== undefined) return;
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys);
+    if (rootNodeValue === undefined) return;
     const spawn = await claimSpawn(host, rootNodeValue.root, keys);
     const parent = (spawn === undefined ? undefined : nodeFor(spawn.conversation)) ?? rootNodeValue;
     await dispatch('nodeStarted', {
@@ -323,9 +334,15 @@ export const createAgentLineageRegistry = (
             const known = nodeFor(conversation);
             const turnId = nativeString(record, 'turn_id');
             const subagentKind = nativeString(record, 'subagent_kind');
+            // Codex names conversation, parent, and root but no depth: it is
+            // known for a registered node, zero for a root, one for a direct
+            // child of the root, and otherwise only through a registered parent.
+            const parentDepth = parent === undefined ? undefined : parent === root ? 0 : nodeFor(parent)?.depth;
+            const depth = known?.depth ?? (parent === undefined ? 0 : parentDepth === undefined ? undefined : parentDepth + 1);
+            if (depth === undefined) return unavailable('id-not-resolvable');
             const value: AgentLineage = {
               conversation,
-              depth: known?.depth ?? (parent === undefined ? 0 : (nodeFor(parent)?.depth ?? 0) + 1),
+              depth,
               ...(turnId === undefined ? {} : { generation: turnId }),
               ...(parent === undefined ? {} : { parent }),
               resolution: 'native',
