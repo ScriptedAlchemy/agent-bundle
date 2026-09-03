@@ -281,7 +281,9 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
 export const isReceiptPath = (value: unknown): value is string =>
   typeof value === 'string' &&
   value.length > 0 &&
-  value !== installReceiptFile &&
+  // The receipt's own name is reserved in every spelling: on a case-insensitive filesystem an
+  // alias resolves to the receipt itself, so it can neither be owned content nor be installed.
+  value.toLowerCase() !== installReceiptFile.toLowerCase() &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
   // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.

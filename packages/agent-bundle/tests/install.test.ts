@@ -750,6 +750,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   try {
     for (const files of [
       ['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile],
+      [installReceiptFile.toUpperCase()], ['.Agent-Bundle-Install.json'],
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
       ['state/plugin.sqlite'], ['state'], ['State/plugin.sqlite'], ['STATE'],
     ]) {
@@ -801,7 +802,8 @@ it('refuses artifact paths that could not round-trip through a receipt', async (
   await mkdir(join(home, '.cursor'));
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
-    for (const name of ['back\\slash.txt', 'notes.md:stream', 'trailing.', 'trailing ', 'bad<name']) {
+    // Includes a case alias of the receipt filename: on a case-insensitive filesystem it is the receipt.
+    for (const name of ['back\\slash.txt', 'notes.md:stream', 'trailing.', 'trailing ', 'bad<name', '.Agent-Bundle-Install.json']) {
       await writeFile(join(fixture.bundleRoot, name), 'odd\n');
       await expect(treeInventory(fixture.bundleRoot), name).rejects.toThrow(
         `Refusing unsupported filesystem entry ${JSON.stringify(name)}`,

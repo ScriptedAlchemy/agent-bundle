@@ -204,6 +204,12 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
       expect(odd.stderr).toContain('Refusing unsupported filesystem entry "back\\\\slash.txt"');
       await expect(readdir(destination)).rejects.toMatchObject({ code: 'ENOENT' });
       await rm(join(bundle, 'back\\slash.txt'));
+      // A case alias of the receipt filename is the receipt on a case-insensitive filesystem: refused.
+      await writeFile(join(bundle, '.Agent-Bundle-Install.json'), '{}\n');
+      const alias = await run(installer, [], home);
+      expect(alias.code).toBe(1);
+      expect(alias.stderr).toContain('Refusing unsupported filesystem entry ".Agent-Bundle-Install.json"');
+      await rm(join(bundle, '.Agent-Bundle-Install.json'));
     }
 
     // Empty directories are not plugin content: never hashed, installed, or owned.
