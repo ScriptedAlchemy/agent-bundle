@@ -1932,17 +1932,23 @@ const validateConventionalScripts = (
         // The rendered-script default export is a Server Component the
         // renderer drives. The bin envelope prefers a named `main` export and
         // only falls back to the default export, so the two surfaces can share
-        // one module exactly when it exports `main`; the detection is the
+        // one module exactly when it exports both; the detection is the
         // build's own export scan, so the gate and the envelope always agree.
-        if (binNames !== undefined && scriptEntryExports(route.source)?.hasMainExport !== true) {
-          diagnostics.push({
-            code: 'AB4737',
-            message: `Rendered script ${relativePath} is also the entry of bin ${binList} but exports no main; the bin envelope would call its default Server Component as main(argv).`,
-            recovery: 'Export a named main(argv) from the module for the bin surface, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
-            severity: 'error',
-            sourcePath: route.source,
-          });
-        }
+        if (binNames === undefined) break;
+        const exports = scriptEntryExports(route.source);
+        const hasMain = exports?.hasMainExport === true;
+        const hasDefault = exports?.hasDefaultExport === true;
+        if (hasMain && hasDefault) break;
+        const missing = !hasMain && !hasDefault
+          ? 'neither a default Server Component nor a named main'
+          : hasMain ? 'no default Server Component' : 'no named main';
+        diagnostics.push({
+          code: 'AB4737',
+          message: `Rendered script ${relativePath} is also the entry of bin ${binList} but exports ${missing}; the artifact script renders the default component and the bin envelope calls main(argv).`,
+          recovery: 'Export both a default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+          severity: 'error',
+          sourcePath: route.source,
+        });
         break;
       }
       case 'nested':

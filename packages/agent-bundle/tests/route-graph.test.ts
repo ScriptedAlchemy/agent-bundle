@@ -296,36 +296,48 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
   const project = await createInspectProject({
     'agent-bundle.config.ts': [
       'export default {',
-      "  bin: { notes: './src/scripts/render-notes.tsx', poster: './src/scripts/render-poster.tsx' },",
+      '  bin: {',
+      "    notes: './src/scripts/render-notes.tsx',",
+      "    poster: './src/scripts/render-poster.tsx',",
+      "    tool: './src/scripts/render-tool.tsx',",
+      '  },',
       "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
       '};',
       '',
     ].join('\n'),
-    // Exports the named main the bin envelope selects first, so the module
-    // serves both surfaces: main(argv) for the bin, the component for the script.
+    // Exports both: main(argv) for the bin envelope, the component for the
+    // rendered script, so the module serves both surfaces.
     'src/scripts/render-notes.tsx': [
       'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
       'export default async () => undefined;',
       '',
     ].join('\n'),
+    // Component only: the bin envelope would call it as main(argv).
     'src/scripts/render-poster.tsx': 'export default async () => undefined;\n',
+    // main only: the bin works, but the rendered script has no component to render.
+    'src/scripts/render-tool.tsx': 'export const main = async (argv: readonly string[]): Promise<number> => argv.length;\n',
   });
 
   const result = await validate({ root: project });
   const gate = result.diagnostics.filter(({ code }) => code === 'AB4737');
-  expect(gate).toHaveLength(1);
-  expect(gate[0]).toMatchObject({
-    message: expect.stringContaining('render-poster.tsx is also the entry of bin "poster" but exports no main'),
-    severity: 'error',
-    sourcePath: join(project, 'src/scripts/render-poster.tsx'),
-  });
-  // Both rendered scripts stay discovered beside their bins: the gate names
+  expect(gate.map((diagnostic) => diagnostic.sourcePath)).toEqual([
+    join(project, 'src/scripts/render-poster.tsx'),
+    join(project, 'src/scripts/render-tool.tsx'),
+  ]);
+  expect(gate[0]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
+  expect(gate[1]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no default Server Component');
+  expect(gate.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+  // Every rendered script stays discovered beside its bin: the gate names
   // the conflict instead of dropping a route.
   const graph = await compileRouteGraph(project, fixtureConfig({
-    bin: { notes: './src/scripts/render-notes.tsx', poster: './src/scripts/render-poster.tsx' },
+    bin: {
+      notes: './src/scripts/render-notes.tsx',
+      poster: './src/scripts/render-poster.tsx',
+      tool: './src/scripts/render-tool.tsx',
+    },
   }));
-  expect(graph.scripts.map((route) => route.id)).toEqual(['script:render-notes', 'script:render-poster']);
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:render-notes', 'script:render-poster', 'script:render-tool']);
 });
 
 it('gates a bin-claimed plain script with AB4738 only when its bin would run a default export the script ignores (#389)', async () => {

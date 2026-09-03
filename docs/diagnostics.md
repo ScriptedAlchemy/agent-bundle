@@ -286,27 +286,30 @@ Recover: move the document under `src/skills/`, `src/commands/`, or
 `src/rules/`. Explicit `skills` paths remain valid anywhere. Published
 artifact paths remain `skills/`, `commands/`, and `rules/`.
 
-### `AB4737` — rendered script claimed as a package bin entry without `main`
+### `AB4737` — rendered script claimed as a package bin entry lacks `main` or the component
 
 An explicit `bin` entry references a conventional rendered script
-(`src/scripts/<name>.tsx` or `.jsx`) that exports no named `main`. A plain
-`src/scripts/<name>.ts` module ships happily on both surfaces — the npm bin
-envelope calls its `main(argv)` and the artifact script is the same bundle —
-but a rendered script's default export is an async Server Component the
-Agent renderer drives with `{ argv, signal }` props. The bin envelope prefers
-a named `main` export and only falls back to the default export, so without
-`main` it would call that component as `main(argv)` and produce a bin that
-renders nothing; the compiler refuses the pair instead of emitting a broken
-executable beside a working script. A rendered script that also exports
-`main` serves both surfaces and is not gated. The detection is the same
-static export scan the package build uses, so the gate and the envelope
-always agree. The message names every `bin` entry referencing the module.
+(`src/scripts/<name>.tsx` or `.jsx`) that does not export **both** a default
+Server Component and a named `main`. A plain `src/scripts/<name>.ts` module
+ships happily on both surfaces — the npm bin envelope calls its `main(argv)`
+and the artifact script is the same bundle — but a rendered script's default
+export is an async Server Component the Agent renderer drives with
+`{ argv, signal }` props. The bin envelope prefers a named `main` export and
+only falls back to the default export, so without `main` it would call that
+component as `main(argv)` and produce a bin that renders nothing; without the
+default component, the bin works but `scripts/<name>.mjs` fails at run time
+with no component to render. The compiler refuses either shape instead of
+emitting a broken surface beside a working one. A rendered script that
+exports both serves both surfaces and is not gated. The detection is the
+same static export scan the package build uses, so the gate and the envelope
+always agree. The message names every `bin` entry referencing the module and
+which export is missing.
 
-Recover: export a named `main(argv)` from the module for the bin surface;
-point the `bin` entry at a plain module that exports `main`; rename the
-script to `.ts` so one plain module ships as both the bin and the artifact
-script; or prefix a path segment with `_` (`src/scripts/_name.tsx`) to keep
-the module out of script discovery and bin-only.
+Recover: export both a default Server Component and a named `main(argv)`
+from the module; point the `bin` entry at a plain module that exports `main`;
+rename the script to `.ts` so one plain module ships as both the bin and the
+artifact script; or prefix a path segment with `_` (`src/scripts/_name.tsx`)
+to keep the module out of script discovery and bin-only.
 
 ### `AB4738` — plain script claimed as a package bin entry runs only as the bin
 
