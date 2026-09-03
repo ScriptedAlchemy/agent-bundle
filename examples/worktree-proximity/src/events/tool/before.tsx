@@ -30,7 +30,7 @@ export default async function BeforeTool({
   }
   const intent = extractIntent(native);
   const topologyResult = await withTopology(async (topology) => {
-    const { actor } = await actorForWorktree(topology, currentWorktree, canonical);
+    const { actor } = await actorForWorktree(topology, currentWorktree, canonical, native);
     const committed = await topology.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],

@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withNotices, withTopology } from '../../coordination.js';
-import { deliveryContexts, nativeString } from '../../event-support.js';
+import { deliveryContexts, nativeString, requestLineage } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -23,8 +23,16 @@ export default async function SessionStart({
       </Agent.Result>
     );
   }
-  const sessionId = nativeString(native, 'session_id');
-  if (sessionId === undefined) {
+  // The runtime's lineage names the root conversation on every host; the
+  // native `session_id` is the fallback when no lineage was resolved.
+  const lineage = await requestLineage();
+  const root = lineage.state === 'available'
+    ? { id: lineage.value.root, source: lineage.value.resolution }
+    : (() => {
+        const sessionId = nativeString(native, 'session_id');
+        return sessionId === undefined ? undefined : { id: sessionId, source: 'native' as const };
+      })();
+  if (root === undefined) {
     return (
       <Agent.Result>
         <Agent.Context>Root actor unavailable: session/start omitted native session_id.</Agent.Context>
@@ -32,12 +40,12 @@ export default async function SessionStart({
     );
   }
 
-  const actorId = `session:${sessionId}`;
+  const actorId = `session:${root.id}`;
   const topologyResult = await withTopology(async (topology) => {
     await topology.dispatch('actorObserved', {
       id: actorId,
       kind: 'root',
-      provenance: { id: 'native' },
+      provenance: { id: root.source },
       status: 'active',
     }, {
       idempotencyKey: `${canonical.idempotencyKey}:actor`,

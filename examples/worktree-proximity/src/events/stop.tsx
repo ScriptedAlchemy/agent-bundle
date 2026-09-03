@@ -6,8 +6,8 @@ import { worktree } from '../api.js';
 import { withNotices, withTopology } from '../coordination.js';
 import {
   actorForWorktree,
+  carriedChild,
   deliveryContexts,
-  nativeString,
   type ResolvedActor,
 } from '../event-support.js';
 
@@ -28,11 +28,13 @@ export default async function Stop({
       </Agent.Result>
     );
   }
-  const nativeActorId = nativeString(native, 'agent_id');
+  // A stop names its own actor through the runtime lineage or the native
+  // `agent_id`; only an anonymous stop falls back to the worktree binding.
+  const carried = await carriedChild(native);
   const topologyResult = await withTopology(async (topology): Promise<ResolvedActor> => {
-    const resolved = nativeActorId === undefined
+    const resolved: ResolvedActor = carried === undefined
       ? (await actorForWorktree(topology, currentWorktree, canonical)).actor
-      : { id: nativeActorId, source: 'native' as const };
+      : { id: carried.id, source: carried.source };
     await topology.dispatch('actorStopped', {
       actorId: resolved.id,
       observedAt: canonical.observedAt,

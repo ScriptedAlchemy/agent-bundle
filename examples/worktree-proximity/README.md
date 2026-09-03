@@ -40,7 +40,7 @@ The application has four planes:
 - **Providers** — `git-worktree` derives repository, branch, commit, common
   Git directory, and linked-worktree identity without throwing for expected
   degradation. `agent-topology` reports that its snapshot is unavailable
-  before request mounting.
+  because providers receive no request identity or state handle.
 - **Events** — canonical shared-runtime routes observe actors, bind worktrees,
   record or clear intent, detect conflicts, render current-actor context, and
   publish or admit notices.
@@ -59,29 +59,53 @@ same driver. The application never opens a second store from Git identity
 data; `gitWorktree.commonDir` remains identity evidence only.
 
 The issue sketch places a snapshot at `providers.agentTopology.snapshot`, but
-providers execute before request state is mounted, so this provider reports
-an honest unavailable result and routes read snapshots from
-`(await agent()).state.read()` instead.
+a provider factory receives only `{ invocation, signal }` — no request
+identity, no `lineage`, and no mounted `state` handle
+([agent-bundle#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)) —
+so this provider reports an honest unavailable result and routes read
+snapshots from `(await agent()).state.read()` instead.
 
 `worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
-provider value. A `useWorktree()` React-hook variant is recorded unavailable:
-the framework exposes no client-hook contract for provider values.
+provider value. `useWorktree()` is the hook-shaped variant for Server
+Components and synchronous helpers: it reads the same request handle through
+the runtime's `useAgent()`, so it follows the identical lease rules and throws
+the runtime's `outside-invocation` error outside a request.
 
 ## Actor identity and provenance
 
-Every identity claim records whether it came from a native envelope or was
-derived:
+Every identity claim records where it came from. `native` is read from the
+host envelope (or a `request.lineage` the runtime resolved natively),
+`registry` and `inferred` are the runtime lineage registry's own resolutions,
+and `derived` is this application's fallback:
 
-- `session/start` observes `session:<session_id>` as the root actor.
-- `agent/start` requires native `agent_id` and `session_id`, records the child,
-  and records its parent session provenance as native.
-- Tool envelopes contain no `agent_id`. A tool event first resolves an active
-  actor already bound to the event worktree. Without an earlier binding it
-  uses the explicit derived identity `worktree:<root>` and records that
-  provenance; it never upgrades the derived identity to native.
-- `agent/start` without native identity records an `edgeRefused` event and
-  renders that parent identity is unavailable. It refuses to fabricate a
-  topology edge.
+- `session/start` observes `session:<root>` as the root actor, where the root
+  is `(await agent()).lineage.root` when the runtime resolved a lineage and the
+  native `session_id` otherwise.
+- `agent/start` records the child and its parent from `request.lineage`
+  (`subagent.id`, `parent`, `resolution`) when the runtime placed the start
+  below the root — which needs the spawning `Agent`/`Task` `tool/before` to
+  have passed through the same shared runtime — and from the native `agent_id`
+  + `session_id` pair otherwise.
+- Claude and Codex put the subagent's `agent_id` on every one of its hook
+  payloads; Cursor gives the child a fresh `conversation_id` that only the
+  runtime registry can bind to its `subagentStart`. A tool or stop event
+  therefore resolves its actor in order of evidence: the child named by
+  `request.lineage` (depth above zero), then the native `agent_id`, then the
+  active actor already bound to the event worktree, and finally the explicit
+  derived identity `worktree:<root>`. A carried child the topology has not
+  seen is observed and bound with the provenance the evidence carried; a
+  derived identity is never upgraded. A root-level tool envelope (lineage
+  depth zero) resolves through the worktree binding, so intent stays
+  attributed per worktree.
+- `agent/start` without either lineage or native identity records an
+  `edgeRefused` event and renders that parent identity is unavailable. It
+  refuses to fabricate a topology edge.
+
+`request.lineage` covers the request's own parent, root, depth, and subagent
+record. Siblings, children, and other roots are not exposed
+([#457](https://github.com/scriptedalchemy/agent-bundle/issues/457)), so this
+application keeps its own topology state for the whole-tree view the
+coordinator status reports.
 
 Unsupported worktree, actor, parent, state, and delivery conditions are
 rendered as unavailable instead of being replaced with invented evidence.
@@ -98,11 +122,15 @@ Notice admission runs once per event invocation in the render scope.
 Generated event principals in v1 mount host, session, and workspace identity,
 but not actor identity. Proximity notices therefore target the recipient
 worktree through `recipient.workspace.root`, while their content and dedupe
-keys continue to name the target actor. Actor-directed delivery remains future
-work tied to actor-principal mounting in the #99/#233 lineage.
+keys continue to name the target actor. Lineage-addressed delivery
+(`recipient.conversation` / `recipient.root` matched against
+`request.lineage`) is tracked in
+[agent-bundle#458](https://github.com/scriptedalchemy/agent-bundle/issues/458).
 `(await agent()).notices.read()` exposes only deliveries attempted for the
-current invocation. The coordinator status therefore reports topology facts
-only and does not claim a whole-ledger pending count.
+current invocation; publisher-scoped visibility is
+[#460](https://github.com/scriptedalchemy/agent-bundle/issues/460). The
+coordinator status therefore reports topology facts only and does not claim a
+whole-ledger pending count.
 
 ## Evidence boundary
 

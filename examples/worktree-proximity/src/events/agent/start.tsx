@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withNotices, withTopology } from '../../coordination.js';
-import { deliveryContexts, nativeString } from '../../event-support.js';
+import { carriedChild, deliveryContexts, nativeString } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -24,10 +24,13 @@ export default async function AgentStart({
     );
   }
 
-  const agentId = nativeString(native, 'agent_id');
-  const sessionId = nativeString(native, 'session_id');
-  if (agentId === undefined || sessionId === undefined) {
-    const refusal = agentId === undefined
+  // The runtime's `request.lineage` names the child and its parent when the
+  // registry resolved this start; the native `agent_id` + root `session_id`
+  // pair is the fallback. Neither present is a refusal, never a guess.
+  const child = await carriedChild(native);
+  if (child === undefined) {
+    const sessionId = nativeString(native, 'session_id');
+    const refusal = nativeString(native, 'agent_id') === undefined
       ? 'agent/start omitted native agent_id; refused to fabricate a topology edge'
       : 'agent/start omitted native session_id; refused to fabricate a topology edge';
     const topologyResult = await withTopology(async (topology) => {
@@ -58,19 +61,19 @@ export default async function AgentStart({
 
   const topologyResult = await withTopology(async (topology) => {
     await topology.dispatch('actorObserved', {
-      id: agentId,
+      id: child.id,
       kind: 'child',
-      parentSessionId: sessionId,
+      parentSessionId: child.parentSessionId,
       provenance: {
-        id: 'native',
-        parentSessionId: 'native',
+        id: child.source,
+        parentSessionId: child.source,
       },
       status: 'active',
     }, {
       idempotencyKey: `${canonical.idempotencyKey}:actor`,
     });
     await topology.dispatch('actorBound', {
-      actorId: agentId,
+      actorId: child.id,
       provenance: 'native',
       worktreeRoot: currentWorktree.root,
     }, {

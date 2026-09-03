@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
-import { available } from '@agent-bundle/runtime';
+import { available, type AgentLineage, type Observed } from '@agent-bundle/runtime';
 import {
   createGeneratedRuntimeState,
   type GeneratedRuntimeState,
@@ -66,6 +66,7 @@ const renderEventInput = async (
   id: string,
   worktreeRoot: string,
   actorId?: string,
+  lineage?: Observed<AgentLineage>,
 ) => {
   const bindings = await runtimeState.requestBindings();
   try {
@@ -77,6 +78,7 @@ const renderEventInput = async (
           id: `invocation:${id}`,
           startedAt: `2026-09-01T20:01:${String(sequence).padStart(2, '0')}.000Z`,
         },
+        ...(lineage === undefined ? {} : { lineage }),
         noticeLedger: bindings.noticeLedger,
         providers: { gitWorktree: provider(worktreeRoot) },
         session: available({ sessionId: 'root-session' }, 'native'),
@@ -97,13 +99,25 @@ const renderEvent = (
   id: string,
   worktreeRoot: string,
   actorId?: string,
+  lineage?: Observed<AgentLineage>,
 ) => renderEventInput(
   route,
   eventInput(event, native, id),
   id,
   worktreeRoot,
   actorId,
+  lineage,
 );
+
+/** A runtime-registry lineage placing `id` one level below `root-session`. */
+const childLineage = (id: string): Observed<AgentLineage> => available({
+  conversation: id,
+  depth: 1,
+  parent: 'root-session',
+  resolution: 'registry',
+  root: 'root-session',
+  subagent: { id },
+}, 'derived');
 
 const bindActors = async (): Promise<void> => {
   await renderEvent(
@@ -335,6 +349,80 @@ describe('worktree proximity journeys', () => {
           reason: 'agent/start omitted native agent_id; refused to fabricate a topology edge',
         }),
       ]);
+    } finally {
+      await bindings.close();
+    }
+  });
+
+  it('records the child and its parent from request.lineage when the envelope carries no agent_id', async () => {
+    await bindActors();
+    const rendered = await renderEvent(
+      'event:agent/start',
+      'agent/start',
+      {
+        agent_type: 'implementation',
+        cwd: worktrees.b,
+        hook_event_name: 'SubagentStart',
+        session_id: 'root-session',
+      },
+      'agent-c:start',
+      worktrees.b,
+      undefined,
+      childLineage('agent-c'),
+    );
+
+    expectDocument(rendered).toHaveStatus('success').toHaveNodeKinds(['result']);
+
+    const bindings = await runtimeState.requestBindings();
+    try {
+      const snapshot = await bindings.state.read();
+      expect(snapshot.state.refusals).toEqual([]);
+      expect(snapshot.state.actors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'agent-c',
+          kind: 'child',
+          parentSessionId: 'root-session',
+          provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
+          worktreeRoot: worktrees.b,
+        }),
+      ]));
+    } finally {
+      await bindings.close();
+    }
+  });
+
+  it('attributes a tool envelope to the lineage child ahead of the worktree binding', async () => {
+    await bindActors();
+    const rendered = await renderEvent(
+      'event:tool/before',
+      'tool/before',
+      {
+        cwd: worktrees.a,
+        hook_event_name: 'PreToolUse',
+        session_id: 'root-session',
+        tool_input: { file_path: 'src/shared.ts' },
+        tool_name: 'Edit',
+      },
+      'intent:c',
+      worktrees.a,
+      undefined,
+      childLineage('agent-c'),
+    );
+
+    expectDocument(rendered).toHaveStatus('success');
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
+
+    const bindings = await runtimeState.requestBindings();
+    try {
+      const snapshot = await bindings.state.read();
+      expect(snapshot.state.actors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'agent-c',
+          provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
+          worktreeRoot: worktrees.a,
+        }),
+      ]));
+      expect(snapshot.state.activities.map((activity) => activity.actorId)).toEqual(['agent-c']);
     } finally {
       await bindings.close();
     }
