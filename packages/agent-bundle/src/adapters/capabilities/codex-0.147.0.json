@@ -420,6 +420,34 @@
       "state": "supported"
     }
   },
+  "lineage": {
+    "subagent-events": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03 live capture (docs/audits/2026-09-03-host-lineage-matrix.md): SubagentStart/SubagentStop carry agent_id (= thread id), agent_type, turn_id; hooks inside a subagent carry its agent_id and the root session_id."
+      ]
+    },
+    "root": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: session_id is the root thread on every hook payload and in tools/call _meta.x-codex-turn-metadata.session_id."
+      ]
+    },
+    "parent": {
+      "state": "degraded",
+      "reason": "2026-09-03: SubagentStart names no parent; SubagentStop carries the parent rollout in transcript_path and tools/call _meta carries parent_thread_id, so hooks resolve the parent through the registry (spawn_agent claim) while MCP calls resolve it natively."
+    },
+    "depth": {
+      "state": "degraded",
+      "reason": "2026-09-03: no depth counter is delivered; the registry derives it from the parent chain."
+    },
+    "mcp-correlation": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: tools/call _meta.x-codex-turn-metadata carries thread_id, parent_thread_id, forked_from_thread_id, thread_source, turn_id, and session_id; lineage resolves natively without hooks."
+      ]
+    }
+  },
   "observedCliVersion": "0.147.0",
   "plugin": {
     "apps": {

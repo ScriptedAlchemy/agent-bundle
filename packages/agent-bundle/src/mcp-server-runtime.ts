@@ -24,6 +24,7 @@ import {
   available,
   createAgentRenderDispatcher,
   createWarmFlightHost,
+  lineageHostFromClient,
   projectMcpRenderStream,
   runAgentRequest,
   unavailable,
@@ -35,17 +36,20 @@ import type {
   AgentActorIdentity,
   AgentDocument,
   AgentHostIdentity,
+  AgentLineage,
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
   AgentSessionIdentity,
   AgentWorkspaceIdentity,
+  LineageHost,
   McpProgressNotificationParams,
   McpProgressToken,
   Observed,
   WarmFlightHost,
 } from '@agent-bundle/runtime';
 import type { AgentNoticeInboxSignaller, AgentNoticeInboxSignalOutcome } from '@agent-bundle/runtime/notices';
+import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 
 /** One route the generated server hosts, as the generated module records it. */
 export interface GeneratedRouteRecord {
@@ -78,7 +82,8 @@ export interface GeneratedMcpAppRecord {
 export interface GeneratedRouteRequestContext {
   readonly http?: { readonly authInfo?: { readonly clientId?: string } };
   readonly mcpReq: {
-    readonly _meta?: { readonly progressToken?: McpProgressToken };
+    /** Request `_meta`: the progress token plus host-specific correlation keys (`claudecode/toolUseId`, `x-codex-turn-metadata`). */
+    readonly _meta?: { readonly progressToken?: McpProgressToken } & Readonly<Record<string, unknown>>;
     readonly notify?: (notification: {
       readonly method: 'notifications/progress';
       readonly params: McpProgressNotificationParams;
@@ -99,15 +104,40 @@ export interface RenderedGeneratedRoute {
 interface GeneratedRouteIdentity {
   readonly actor?: Observed<AgentActorIdentity>;
   readonly host?: Observed<AgentHostIdentity>;
+  readonly lineage: Observed<AgentLineage>;
   readonly session?: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
+
+/**
+ * Lineage for one MCP tool call: Codex names it in `_meta`, Claude names the
+ * pre-tool hook's `tool_use_id` in `_meta`, Cursor names nothing — so the
+ * registry falls back to the open `MCP:<tool>` pre-tool hook. Without a
+ * registry (a project with no event routes, or the in-memory proof level) the
+ * axis is honestly absent.
+ */
+const toolCallLineage = (
+  registry: AgentLineageRegistry | undefined,
+  context: GeneratedRouteRequestContext,
+  toolName: string,
+  clientName: string | undefined,
+  fallbackHost: LineageHost | undefined,
+): Observed<AgentLineage> => {
+  if (registry === undefined) return unavailable<AgentLineage>('not-provided');
+  return registry.resolveToolCall({
+    host: lineageHostFromClient(clientName) ?? fallbackHost,
+    meta: context.mcpReq._meta,
+    toolName,
+  });
+};
 
 /** Identity the server derives from the transport's own request context. */
 const requestIdentity = (
   context: GeneratedRouteRequestContext,
   clientName: string | undefined,
+  lineage: Observed<AgentLineage>,
 ): GeneratedRouteIdentity => ({
+  lineage,
   ...(context.http?.authInfo?.clientId === undefined
     ? {}
     : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
@@ -157,9 +187,9 @@ export const renderGeneratedRoute = async (
   route: GeneratedRouteRecord,
   input: unknown,
   context: GeneratedRouteRequestContext,
-  identity?: { readonly clientName?: string },
+  identity?: { readonly clientName?: string; readonly lineage?: Observed<AgentLineage> },
 ): Promise<RenderedGeneratedRoute> => runAgentRequest({
-  ...requestIdentity(context, identity?.clientName),
+  ...requestIdentity(context, identity?.clientName, identity?.lineage ?? unavailable<AgentLineage>('not-provided')),
   invocation: { artifactEpoch, kind: 'tool', operationId: route.id, surface: route.name },
   signal: context.mcpReq.signal,
 }, async () => {
@@ -251,13 +281,22 @@ const settled = async <T>(operation: () => Promise<T>, afterRender: GeneratedRen
   }
 };
 
+export interface RegisterGeneratedRoutesOptions {
+  /** Runs after every render the server completes (notice delivery follow-up). */
+  readonly afterRender?: GeneratedRenderSettled;
+  /** The warm runtime's lineage registry; tool calls resolve their conversation through it. */
+  readonly lineage?: AgentLineageRegistry;
+  /** The artifact's host, used when the negotiated client name maps to none. */
+  readonly lineageHost?: LineageHost;
+}
+
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
 export const registerGeneratedRoutes = (
   server: McpServer,
   routes: Readonly<Record<string, GeneratedRouteRecord>>,
   dispatcher: AgentRenderDispatcher,
   artifactEpoch: string,
-  afterRender?: GeneratedRenderSettled,
+  options: RegisterGeneratedRoutesOptions = {},
 ): void => {
   for (const route of Object.values(routes)) {
     switch (route.kind) {
@@ -275,10 +314,10 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName },
+            { clientName, lineage: toolCallLineage(options.lineage, context, route.name, clientName, options.lineageHost) },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
-        }, afterRender)) as never);
+        }, options.afterRender)) as never);
         break;
       }
       case 'resource': {
@@ -300,7 +339,7 @@ export const registerGeneratedRoutes = (
               context,
               { clientName },
             )).result;
-          }, afterRender)) as never,
+          }, options.afterRender)) as never,
         );
         break;
       }
@@ -318,7 +357,7 @@ export const registerGeneratedRoutes = (
             context,
             { clientName },
           )).result;
-        }, afterRender)) as never);
+        }, options.afterRender)) as never);
         break;
       default: {
         const unreachable: never = route.kind;
@@ -468,6 +507,7 @@ export const createFlightWorkerHost = (
             host: context.host,
             id,
             invocation,
+            lineage: context.lineage,
             requestInvocation: context.invocation,
             session: context.session,
             type: 'render',
@@ -515,9 +555,18 @@ export interface CreateGeneratedRouteMcpServerOptions {
   readonly apps?: readonly GeneratedMcpAppRecord[];
   /** Identity every request carries, so a stale worker fails loudly. */
   readonly artifactEpoch: string;
+  /** Releases the lineage registry's durable store when the server closes. */
+  readonly disposeLineage?: () => Promise<void>;
   readonly events?: GeneratedEventRuntimeBinding;
   /** Renders one invocation to Flight bytes. Closed when the server closes. */
   readonly host: GeneratedRouteExecutionHost;
+  /**
+   * The runtime-held conversation registry (#host-lineage): subagent
+   * start/stop and pre-tool events feed it, and every event route and tool
+   * call reads `request.lineage` from it. Absent registries leave the axis
+   * `unavailable('not-provided')`.
+   */
+  readonly lineage?: AgentLineageRegistry;
   readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: Readonly<Record<string, GeneratedRouteRecord>>;
@@ -627,6 +676,30 @@ const installNoticeInboxSubscriptions = (
     else owed = true;
     return Promise.resolve();
   };
+
+const lineageHostFor = (target: string): LineageHost | undefined =>
+  target === 'claude' || target === 'codex' || target === 'cursor' ? target : undefined;
+
+/**
+ * Lineage for one hook event. Cloud Cursor agents run no user hooks at all, so
+ * a `sessionEnd`-less cloud payload can never feed the registry; the portable
+ * target has no subagent events by contract.
+ */
+const eventLineage = async (
+  registry: AgentLineageRegistry | undefined,
+  target: string,
+  event: CanonicalAgentEvent,
+  native: Readonly<Record<string, unknown>>,
+  idempotencyKey: string,
+  observedAt: string,
+): Promise<Observed<AgentLineage>> => {
+  const host = lineageHostFor(target);
+  if (host === undefined) return unavailable<AgentLineage>('no-subagent-events');
+  if (host === 'cursor' && native['is_background_agent'] === true) {
+    return unavailable<AgentLineage>('cloud-agent-no-user-hooks');
+  }
+  if (registry === undefined) return unavailable<AgentLineage>('not-provided');
+  return registry.observe({ event, host, idempotencyKey, native, observedAt });
 };
 
 const nativeString = (
@@ -657,6 +730,7 @@ const startEventRuntime = async (
   dispatcher: AgentRenderDispatcher,
   host: WarmFlightHost,
   afterRender: GeneratedRenderSettled | undefined,
+  registry: AgentLineageRegistry | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
   return events.createEventRuntimeServer({
@@ -686,6 +760,16 @@ const startEventRuntime = async (
       ?? (Array.isArray(workspaceRoots) && typeof workspaceRoots[0] === 'string'
         ? workspaceRoots[0]
         : undefined);
+    // The registry sees the event before the route renders, so the route
+    // observes its own subagent start/stop already applied.
+    const lineage = await eventLineage(
+      registry,
+      target,
+      event,
+      request.native,
+      props.canonical.idempotencyKey,
+      props.canonical.observedAt,
+    );
     return runAgentRequest({
       host: available({ name: target }, 'native'),
       invocation: {
@@ -695,6 +779,7 @@ const startEventRuntime = async (
         operationId: `event:${event}`,
         surface: event,
       },
+      lineage,
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
       signal,
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
@@ -746,8 +831,14 @@ export const createGeneratedRouteMcpServer = async (
     : installNoticeInboxSubscriptions(server, options.notices);
   const events = options.events === undefined
     ? undefined
-    : await startEventRuntime(options.events, dispatcher, options.host, afterRender);
-  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, afterRender);
+    : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage);
+  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
+    ...(afterRender === undefined ? {} : { afterRender }),
+    ...(options.lineage === undefined ? {} : { lineage: options.lineage }),
+    ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
+      ? {}
+      : { lineageHost: lineageHostFor(options.events.target) }),
+  });
   registerGeneratedMcpApps(server, options.apps ?? []);
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
@@ -757,7 +848,8 @@ export const createGeneratedRouteMcpServer = async (
     // abandons a notification write still pending rather than waiting on the
     // client's wire, so a subscriber that stopped reading cannot wedge this
     // teardown. Whatever fails on the way, the protocol and its transport are
-    // always closed; the teardown error surfaces once they are.
+    // always closed; the teardown error surfaces once they are. The lineage
+    // journal closes after the host, once no render can observe into it.
     try {
       try {
         await events?.close();
@@ -765,7 +857,11 @@ export const createGeneratedRouteMcpServer = async (
         try {
           await options.notices?.close();
         } finally {
-          await options.host.close();
+          try {
+            await options.host.close();
+          } finally {
+            await options.disposeLineage?.();
+          }
         }
       }
     } finally {

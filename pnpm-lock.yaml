@@ -115,6 +115,31 @@ importers:
         specifier: workspace:*
         version: link:../../packages/agent-bundle
 
+  examples/host-test:
+    dependencies:
+      '@agent-bundle/runtime':
+        specifier: workspace:*
+        version: link:../../packages/rsc-runtime
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
+    devDependencies:
+      '@rstest/core':
+        specifier: 0.11.10
+        version: 0.11.10
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      agent-bundle:
+        specifier: workspace:*
+        version: link:../../packages/agent-bundle
+
   examples/mcp-app:
     devDependencies:
       '@modelcontextprotocol/ext-apps':

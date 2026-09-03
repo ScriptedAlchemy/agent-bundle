@@ -25,7 +25,16 @@ const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state'
     value,
   }).strict(),
   z.object({
-    reason: z.enum(['not-provided', 'unsupported-surface', 'host-omitted', 'unauthenticated']),
+    reason: z.enum([
+      'not-provided',
+      'unsupported-surface',
+      'host-omitted',
+      'unauthenticated',
+      'no-subagent-events',
+      'id-not-resolvable',
+      'cloud-agent-no-user-hooks',
+      'no-shared-runtime',
+    ]),
     state: z.literal('unavailable'),
   }).strict(),
 ]);

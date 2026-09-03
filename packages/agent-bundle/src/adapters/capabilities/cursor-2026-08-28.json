@@ -315,6 +315,34 @@
       "state": "supported"
     }
   },
+  "lineage": {
+    "subagent-events": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03 live capture on Cursor 3.18.25 (docs/audits/2026-09-03-host-lineage-matrix.md): subagentStart/subagentStop carry subagent_id (= the parent's Task tool_call_id), parent_conversation_id, subagent_type, is_parallel_worker; the child's own conversation_id is not included."
+      ]
+    },
+    "root": {
+      "state": "degraded",
+      "reason": "2026-09-03: a child's events carry only their own fresh conversation_id, so the root is known only through the registry that bound the child at start (resolution: inferred)."
+    },
+    "parent": {
+      "state": "degraded",
+      "reason": "2026-09-03: parent_conversation_id appears only on subagentStart/subagentStop; the child conversation is bound to the most recent pending start by ordering, which is ambiguous for parallel workers."
+    },
+    "depth": {
+      "state": "degraded",
+      "reason": "2026-09-03: no depth counter is delivered; derived from the inferred parent chain."
+    },
+    "mcp-correlation": {
+      "state": "degraded",
+      "reason": "2026-09-03: tools/call _meta carries only progressToken and the client name is cursor-vscode; the generated server resolves the caller through the open preToolUse whose tool_name is MCP:<tool>."
+    },
+    "cloud": {
+      "state": "unavailable",
+      "reason": "2026-09-03: cloud agents run no user hooks (https://cursor.com/docs/hooks), so nothing feeds the registry there; request.lineage reports cloud-agent-no-user-hooks."
+    }
+  },
   "observedCliVersion": "2026-08-28",
   "plugin": {
     "agents": {

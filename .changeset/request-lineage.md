@@ -1,0 +1,6 @@
+---
+'@agent-bundle/runtime': patch
+'agent-bundle': patch
+---
+
+Add `request.lineage` to `AgentRequestContext` on every surface (event routes, generated MCP tools, routed CLI, rendered scripts): `{ conversation, root, parent?, depth, generation?, subagent?, resolution }` resolved by the new runtime-held agent lineage registry (`@agent-bundle/runtime/lineage`, journaled through the state kernel beside project state) that the `agent/start`/`agent/stop` and `tool/before`/`tool/after` families feed, with hook→MCP correlation from Claude `claudecode/toolUseId`, Codex `x-codex-turn-metadata`, and Cursor's open `MCP:<tool>` pre-tool hook. Unavailable lineage carries a typed reason (`no-subagent-events`, `id-not-resolvable`, `cloud-agent-no-user-hooks`, `no-shared-runtime`, `unsupported-surface`, `not-provided`); every pinned capability table gains dated `lineage` rows, the Workbench Lifecycles view shows the lineage axis and chain, `openInMemoryMcpServer` accepts `lineage`/`lineageHost`, and Claude `PostToolUse` hooks now accept the content-block array `tool_response` that MCP tools deliver instead of failing the route.

@@ -56,6 +56,7 @@
     "example:audiobook": "pnpm build && pnpm --filter @agent-bundle-example/audiobook-curator dev",
     "example:mcp-app": "pnpm build && pnpm --filter @agent-bundle-example/mcp-app dev",
     "example:skills": "pnpm build && pnpm --filter @agent-bundle-example/skills-starter dev",
+    "example:host-test": "pnpm build && pnpm --filter @agent-bundle-example/host-test dev",
     "examples:check": "pnpm build && node scripts/run-examples-check.mjs"
   },
   "devDependencies": {

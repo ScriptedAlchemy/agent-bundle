@@ -103,6 +103,9 @@ const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
         operationId: request.binding.routeId,
         surface: 'tool/after',
       },
+      lineage: sessionId === undefined
+        ? { reason: 'no-shared-runtime', state: 'unavailable' }
+        : { source: 'receipt', state: 'available', value: { conversation: sessionId, depth: 0, resolution: 'native', root: sessionId } },
       session: sessionId === undefined
         ? { reason: 'not-provided', state: 'unavailable' }
         : { source: 'receipt', state: 'available', value: { sessionId } },

@@ -131,7 +131,29 @@ export const requestRowsFor = (replay: LifecycleReplay): readonly LifecycleDetai
   observedRow('Session', replay.requestContext.session, ({ sessionId }) => sessionId),
   observedRow('Actor', replay.requestContext.actor, ({ id }) => id),
   observedRow('Workspace', replay.requestContext.workspace, ({ root }) => root),
+  observedRow('Lineage', replay.requestContext.lineage, ({ conversation, depth, resolution }) =>
+    `${conversation} · depth ${String(depth)} · ${resolution}`),
 ]);
+
+export interface LifecycleLineageNode {
+  readonly id: string;
+  readonly role: 'root' | 'ancestor' | 'current';
+}
+
+/**
+ * The root-to-current chain a replayed request sits on. A single receipt can
+ * name at most its root, its parent, and itself; the warm runtime holds the
+ * rest of the tree.
+ */
+export const lineageChainFor = (replay: LifecycleReplay): readonly LifecycleLineageNode[] => {
+  const lineage = replay.requestContext.lineage;
+  if (lineage.state !== 'available') return Object.freeze([]);
+  const { conversation, parent, root } = lineage.value;
+  const chain: LifecycleLineageNode[] = [{ id: root, role: conversation === root ? 'current' : 'root' }];
+  if (parent !== undefined && parent !== root && parent !== conversation) chain.push({ id: parent, role: 'ancestor' });
+  if (conversation !== root) chain.push({ id: conversation, role: 'current' });
+  return Object.freeze(chain.map((node) => Object.freeze(node)));
+};
 
 export const resultDiagnosticsFor = (replay: LifecycleReplay): readonly LifecycleResultDiagnostic[] => Object.freeze([
   ...(replay.projectionDiagnostic === undefined ? [] : [Object.freeze({

@@ -342,10 +342,11 @@ export const validateNativeEventEnvelope = (
         if (!Object.hasOwn(native, 'tool_response') || native.tool_response === undefined) {
           return nativeEventError('native tool_response is required');
         }
-      } else if (
-        typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response)
-      ) {
-        return nativeEventError('native tool_response must be an object');
+      } else if (typeof native.tool_response !== 'object' || native.tool_response === null) {
+        // Claude documents `tool_response` as an object, but PostToolUse for an
+        // MCP tool delivers the tool's content-block array (observed on Claude
+        // Code 2.1.257, docs/audits/2026-09-03-host-lineage-matrix.md §3).
+        return nativeEventError('native tool_response must be an object or an array');
       }
     }
   }

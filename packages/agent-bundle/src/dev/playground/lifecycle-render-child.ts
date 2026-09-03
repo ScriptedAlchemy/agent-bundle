@@ -67,6 +67,7 @@ const render = async (request: LifecycleRenderChildRequest): Promise<LifecycleRe
             ? {}
             : { surface: request.requestContext.invocation.surface }),
         },
+        lineage: request.requestContext.lineage,
         session: request.requestContext.session,
         workspace: request.requestContext.workspace,
       },

@@ -1325,6 +1325,38 @@ it('pins dated deferral rows for every explicitly deferred native callback from 
   }
 });
 
+it('advertises conversation lineage per host with dated 2026-09-03 evidence', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const rows = ['depth', 'mcp-correlation', 'parent', 'root', 'subagent-events'];
+  const files = {
+    claude: 'claude-2.1.250.json',
+    codex: 'codex-0.147.0.json',
+    cursor: 'cursor-2026-08-28.json',
+    portable: 'portable-1.0.0.json',
+  };
+  for (const [host, file] of Object.entries(files)) {
+    const table = JSON.parse(await readFile(new URL(`../src/adapters/capabilities/${file}`, import.meta.url), 'utf8')) as Record<string, unknown>;
+    const lineage = table.lineage as Record<string, { evidence?: readonly string[]; reason?: string; state: string }>;
+    expect(Object.keys(lineage).filter((row) => row !== 'cloud').sort()).toEqual(rows);
+    for (const row of rows) {
+      const entry = lineage[row]!;
+      expect(['supported', 'degraded', 'unavailable']).toContain(entry.state);
+      const dated = entry.state === 'supported' ? entry.evidence?.join(' ') : entry.reason;
+      expect(dated, `${host} lineage.${row}`).toMatch(/2026-09-03/u);
+    }
+    if (host === 'portable') {
+      expect(Object.values(lineage).every((entry) => entry.state === 'unavailable')).toBe(true);
+    } else {
+      // Every hook-bearing host names its subagents; none names a parent on the child's own events.
+      expect(lineage['subagent-events']!.state).toBe('supported');
+      expect(lineage['parent']!.state).toBe('degraded');
+    }
+    // Only Codex resolves MCP calls without a hook window; Cursor cannot correlate natively at all.
+    expect(lineage['mcp-correlation']!.state).toBe(host === 'cursor' ? 'degraded' : host === 'portable' ? 'unavailable' : 'supported');
+    if (host === 'cursor') expect(lineage['cloud']!.state).toBe('unavailable');
+  }
+});
+
 it('advertises notice delivery routes per host with dated unavailability (#99 stage 4)', async () => {
   const { readFile } = await import('node:fs/promises');
   const routes = ['current-response', 'directed-push', 'host-toast', 'mcp-inbox', 'mcp-resource-updated', 'next-event'];

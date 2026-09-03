@@ -44,3 +44,8 @@
 .lifecycle-detail-rows dt { font-size: 11px; font-weight: 750; margin-bottom: 5px; text-transform: uppercase; }
 .lifecycle-detail-rows dd { font: 12px/1.45 "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
 .lifecycle-json { background: #101822; border: 1px solid #25364b; color: #edf3fb; font: 13px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin: 0; max-height: 360px; overflow: auto; padding: 18px; white-space: pre-wrap; word-break: break-word; }
+.lifecycle-lineage-tree, .lifecycle-lineage-tree ul { list-style: none; margin: 0; padding-left: 0; }
+.lifecycle-lineage-tree ul { border-left: 2px solid #d9dee7; margin-left: 6px; margin-top: 6px; padding-left: 14px; }
+.lifecycle-lineage-node code { font-size: 12px; }
+.lifecycle-lineage-node span { color: #5b6473; font-size: 11px; margin-left: 8px; text-transform: uppercase; }
+.lifecycle-lineage-node--current > code { font-weight: 750; }

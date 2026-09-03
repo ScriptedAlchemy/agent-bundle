@@ -87,6 +87,7 @@ class RecordingService implements LifecycleReplayRouteService {
         operationId: 'event:tool/after',
         surface: 'tool/after',
       }),
+      lineage: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
       session: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
       workspace: Object.freeze({ reason: 'not-provided', state: 'unavailable' }),
     }),
@@ -175,7 +176,7 @@ it('preserves stale and real native-envelope diagnostics at the HTTP boundary', 
     await expect(malformed.json()).resolves.toEqual({
       diagnostic: {
         code: 'AB8211',
-        message: 'Agent Bundle event route error: native tool_response must be an object',
+        message: 'Agent Bundle event route error: native tool_response must be an object or an array',
       },
     });
 

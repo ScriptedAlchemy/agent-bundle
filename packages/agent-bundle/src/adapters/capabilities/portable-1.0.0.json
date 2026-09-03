@@ -122,6 +122,28 @@
       "state": "unavailable"
     }
   },
+  "lineage": {
+    "subagent-events": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks, so no subagent start/stop event exists; request.lineage reports no-subagent-events."
+    },
+    "root": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and the MCP request carries no conversation identity."
+    },
+    "parent": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks."
+    },
+    "depth": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks."
+    },
+    "mcp-correlation": {
+      "state": "unavailable",
+      "reason": "2026-09-03: no pre-tool hook exists to open a correlation window and tools/call _meta is host-defined."
+    }
+  },
   "observedSpecificationVersion": "1.0.0",
   "plugin": {
     "extensionDirectories": {

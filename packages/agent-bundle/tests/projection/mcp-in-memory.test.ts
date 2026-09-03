@@ -101,6 +101,7 @@ describe('the in-memory MCP projection level', () => {
         state: 'available',
         value: { name: 'agent-bundle-in-memory-projection' },
       },
+      lineage: { reason: 'not-provided', state: 'unavailable' },
       session: { reason: 'not-provided', state: 'unavailable' },
       workspace: {
         source: 'derived',

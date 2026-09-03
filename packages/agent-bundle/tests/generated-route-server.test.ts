@@ -178,6 +178,7 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
         state: 'available',
         value: { name: 'generated-route-test' },
       },
+      lineage: { reason: 'not-provided', state: 'unavailable' },
       session: { reason: 'not-provided', state: 'unavailable' },
       workspace: {
         source: 'derived',

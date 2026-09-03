@@ -52,7 +52,15 @@ export type AgentContextUnavailableReason =
   | 'not-provided'
   | 'unsupported-surface'
   | 'host-omitted'
-  | 'unauthenticated';
+  | 'unauthenticated'
+  /** The host defines no subagent start/stop events, so no tree can exist. */
+  | 'no-subagent-events'
+  /** The payload carried an id the runtime never saw start (registry cold, or the host omitted the link). */
+  | 'id-not-resolvable'
+  /** Cursor cloud agents run no user hooks, so nothing feeds the registry. */
+  | 'cloud-agent-no-user-hooks'
+  /** The route ran in a standalone hook process with no warm runtime holding the registry. */
+  | 'no-shared-runtime';
 
 export type Observed<T> =
   | { readonly source: ObservedSource; readonly state: 'available'; readonly value: T }
@@ -72,6 +80,44 @@ export interface AgentActorIdentity {
 
 export interface AgentWorkspaceIdentity {
   readonly root: string;
+}
+
+/** The subagent a lineage describes when the current conversation is not the root. */
+export interface AgentLineageSubagent {
+  /** The host's own id for the subagent (Claude/Codex `agent_id`, Cursor `subagent_id`). */
+  readonly id: string;
+  readonly isParallelWorker?: boolean;
+  /** The parent's tool call that spawned it, when the host names one. */
+  readonly toolCallId?: string;
+  readonly type?: string;
+}
+
+/**
+ * How the runtime arrived at `parent`/`root`/`depth`: straight from host fields
+ * (`native`), from the warm runtime's registry fed by subagent start/stop
+ * events (`registry`), or by ordering inference the host forced on it
+ * (`inferred`, e.g. Cursor binds a child conversation to the most recent
+ * pending `subagentStart`).
+ */
+export type AgentLineageResolution = 'native' | 'registry' | 'inferred';
+
+/**
+ * Where this request sits in the conversation tree (#host-lineage). The shape
+ * is identical on every surface: events, generated MCP tools, routed CLI, and
+ * rendered scripts. `conversation` identifies the agent whose activity this is
+ * — the host session for a root, the subagent id (Claude/Codex) or the child
+ * conversation id (Cursor) below it.
+ */
+export interface AgentLineage {
+  readonly conversation: string;
+  /** Root is depth 0; each subagent level adds one. */
+  readonly depth: number;
+  /** Turn-shaped id when the host has one: Cursor `generation_id`, Codex `turn_id`, Claude `prompt_id`. */
+  readonly generation?: string;
+  readonly parent?: string;
+  readonly resolution: AgentLineageResolution;
+  readonly root: string;
+  readonly subagent?: AgentLineageSubagent;
 }
 
 export interface AgentFilesystemAuthority {
@@ -154,6 +200,12 @@ export interface AgentRequestContext {
   readonly session: Observed<AgentSessionIdentity>;
   readonly actor: Observed<AgentActorIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
+  /**
+   * Conversation lineage resolved by the warm runtime's registry (fed by the
+   * subagent start/stop event families and pre-tool hooks) or straight from
+   * host fields; `unavailable` carries the per-host reason.
+   */
+  readonly lineage: Observed<AgentLineage>;
   readonly capabilities: AgentRequestCapabilities;
   readonly progress: AgentProgressReporter;
   readonly signal: AbortSignal;
@@ -191,6 +243,7 @@ export interface AgentRequestInitBase {
   readonly capabilities?: AgentRequestCapabilities;
   readonly host?: Observed<AgentHostIdentity>;
   readonly invocation: AgentInvocationInput;
+  readonly lineage?: Observed<AgentLineage>;
   /** Optional durable notice authority; omitted projects load no notice code. */
   readonly noticeLedger?: AgentNoticeLedger;
   readonly progress?: AgentProgressReporter;
@@ -289,6 +342,7 @@ interface FrozenValues {
   readonly capabilities: AgentRequestCapabilities;
   readonly host: Observed<AgentHostIdentity>;
   readonly invocation: AgentInvocation;
+  readonly lineage: Observed<AgentLineage>;
   readonly notices: AgentNoticesHandle | undefined;
   readonly progress: AgentProgressReporter;
   readonly providers: AgentProviderValues;
@@ -360,6 +414,9 @@ const createHandle = (lease: Lease): AgentRequestContext => Object.freeze({
   get workspace() {
     return open(lease).workspace;
   },
+  get lineage() {
+    return open(lease).lineage;
+  },
   get capabilities() {
     return open(lease).capabilities;
   },
@@ -427,6 +484,7 @@ export const runAgentRequest = async <T>(
   const actor = snapshotObserved(init.actor ?? unavailable<AgentActorIdentity>());
   const host = snapshotObserved(init.host ?? unavailable<AgentHostIdentity>());
   const invocation = invocationFrom(init.invocation);
+  const lineage = snapshotObserved(init.lineage ?? unavailable<AgentLineage>());
   const session = snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>());
   const signal = init.signal ?? new AbortController().signal;
   const workspace = snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>());
@@ -442,6 +500,7 @@ export const runAgentRequest = async <T>(
     capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
     host,
     invocation,
+    lineage,
     notices: noticeLease?.handle,
     progress: init.progress ?? silentProgress,
     providers: Object.freeze({ ...(init.providers ?? {}) }),

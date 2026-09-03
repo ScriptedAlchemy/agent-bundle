@@ -381,11 +381,63 @@ await renderRoute('tool:curator/status', {
 });
 ```
 
-The same seam accepts `actor`, `workspace`, and `capabilities`; tests can use
-`unavailable(...)` to pin a transport's honest absence semantics. `invokeCli`
-(routed commands) and `runScript` (conventional scripts) accept the same
-`context` for their rendered surfaces and open the request scope with the
+The same seam accepts `actor`, `workspace`, `lineage`, and `capabilities`;
+tests can use `unavailable(...)` to pin a transport's honest absence semantics.
+`invokeCli` (routed commands) and `runScript` (conventional scripts) accept the
+same `context` for their rendered surfaces and open the request scope with the
 surface-specific `invocation.kind` the generated executable would use.
+
+#### Conversation lineage (`request.lineage`)
+
+`(await agent()).lineage` is an `Observed<AgentLineage>` with one shape on
+every surface — event routes, generated MCP tools, routed CLI commands, and
+rendered scripts:
+
+```ts
+interface AgentLineage {
+  conversation: string;   // the agent whose activity this is
+  root: string;           // the user-facing conversation at depth 0
+  parent?: string;        // absent at the root
+  depth: number;          // 0 at the root, +1 per subagent level
+  generation?: string;    // Cursor generation_id, Codex turn_id, Claude prompt_id
+  subagent?: { id: string; type?: string; toolCallId?: string; isParallelWorker?: boolean };
+  resolution: 'native' | 'registry' | 'inferred';
+}
+```
+
+Hooks are thin clients to the warm runtime, so lineage is runtime-held state:
+the generated MCP process owns an **agent lineage registry**
+(`@agent-bundle/runtime/lineage`), journaled through the state kernel beside
+the project's own durable state (`<plugin root>/state`, definition id
+`@agent-bundle/runtime/agent-lineage/v1`, bounded retention of stopped nodes
+and unclaimed spawn calls). The `agent/start` and `agent/stop` families feed
+it, `tool/before`/`tool/after` open and close the correlation window every
+MCP call is matched against, and the registry resolves `parent`/`root`/`depth`
+for every event by the id the payload carries. The observed host vocabulary
+(2026-09-03, [evidence matrix](audits/2026-09-03-host-lineage-matrix.md)):
+
+| Host | `conversation` | `root` | Parent of a new subagent | MCP call correlation |
+| --- | --- | --- | --- | --- |
+| Claude | `agent_id`, else `session_id` | `session_id` | the agent whose `Agent`/`Task` `PreToolUse` is the newest unclaimed spawn | `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` |
+| Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
+| Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the newest pending start when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>` |
+
+`resolution` says which of those paths produced the answer. When none can,
+the axis is `unavailable` with a typed reason: `no-subagent-events` (the
+target defines no subagent families — portable), `id-not-resolvable` (the
+payload names an agent the registry never saw start, e.g. a cold runtime),
+`cloud-agent-no-user-hooks` (Cursor cloud agents run no user hooks),
+`no-shared-runtime` (a standalone hook process holds no registry; Claude and
+Codex root payloads still resolve to depth 0 from the payload alone),
+`unsupported-surface` (routed CLI and rendered scripts run outside any host
+conversation), or `not-provided` (no registry was mounted). Per-host
+capability rows live under `lineage` in each pinned capability table.
+
+Route-unit tests inject the axis through the same context seam
+(`context: { lineage: available({ conversation, root, depth: 0, resolution: 'native' }, 'native') }`);
+the in-memory MCP proof level accepts a registry
+(`openInMemoryMcpServer({ lineage, lineageHost })`) so hook→MCP correlation
+is testable without a spawned process.
 
 ### Migration nudges
 

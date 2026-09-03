@@ -230,7 +230,14 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   expect(source).toContain('createFlightWorkerHost(new URL("./mcp-curator-flight.mjs", import.meta.url), ARTIFACT_EPOCH)');
   expect(source).toContain('artifactEpoch: ARTIFACT_EPOCH');
   expect(source).toContain('plugin: {"name":"route-fixture","version":"1.2.3"}');
-  expect(source).toContain('export default async () => createGeneratedRouteMcpServer(');
+  expect(source).toContain('export default async () => {');
+  expect(source).toContain('return createGeneratedRouteMcpServer({');
+  // The lineage registry journals through the sqlite kernel beside project
+  // state and degrades to memory when the store cannot open (#host-lineage).
+  expect(source).toContain("from '@agent-bundle/runtime/lineage'");
+  expect(source).toContain('createSqliteStateDriver({ root: join(resolve(lineageAnchor), \'state\') })');
+  expect(source).toContain('lineage: lineage.registry,');
+  expect(source).toContain('disposeLineage: lineage.dispose,');
   // The event runtime's modules are aliased into the artifact, so the entry
   // imports them and hands them to the shared runtime; the wiring itself is
   // not re-templated here.
@@ -365,6 +372,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain(
     '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
   );
+  expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
     'e9126849e5ad955dbd1f3d56ccdcb0eabe1293d265f861dd5a10339c1e2a3bfb',
   );

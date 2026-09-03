@@ -48,6 +48,35 @@ const nativeText = (native: Readonly<Record<string, unknown>>, key: string): str
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 };
 
+/**
+ * What one replayed receipt proves about its place in the conversation tree:
+ * a Claude or Codex payload with no `agent_id` is the root itself; anything
+ * subagent-shaped (and every Cursor payload) needs the warm runtime's registry,
+ * which a deterministic replay does not have.
+ */
+const replayLineage = (
+  native: Readonly<Record<string, unknown>>,
+  target: string,
+): RequestContextProvenance['lineage'] => {
+  if (!concreteHosts.has(target)) return { reason: 'no-subagent-events', state: 'unavailable' };
+  if (target === 'cursor') return { reason: 'no-shared-runtime', state: 'unavailable' };
+  const root = nativeText(native, 'session_id');
+  const agentId = nativeText(native, 'agent_id');
+  if (root === undefined || agentId !== undefined) return { reason: 'no-shared-runtime', state: 'unavailable' };
+  const generation = target === 'codex' ? nativeText(native, 'turn_id') : nativeText(native, 'prompt_id');
+  return {
+    source: 'receipt',
+    state: 'available',
+    value: {
+      conversation: root,
+      depth: 0,
+      ...(generation === undefined ? {} : { generation }),
+      resolution: 'native',
+      root,
+    },
+  };
+};
+
 const replayRequestContext = (
   event: CanonicalAgentEvent,
   native: Readonly<Record<string, unknown>>,
@@ -72,6 +101,7 @@ const replayRequestContext = (
       operationId: routeId,
       surface: event,
     },
+    lineage: replayLineage(native, target),
     session: sessionId === undefined
       ? { reason: 'not-provided', state: 'unavailable' }
       : { source: 'receipt', state: 'available', value: { sessionId } },
@@ -95,6 +125,7 @@ const renderContext = (requestContext: RequestContextProvenance): RenderRouteCon
       ? {}
       : { surface: requestContext.invocation.surface }),
   },
+  lineage: requestContext.lineage,
   session: requestContext.session,
   workspace: requestContext.workspace,
 });

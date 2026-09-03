@@ -622,7 +622,7 @@ const eventRouteHookWrapperSource = (
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
-      ? ["import { agent, available, createAgentRenderDispatcher, runAgentRequest } from '@agent-bundle/runtime';"]
+      ? ["import { agent, available, createAgentRenderDispatcher, resolveNativeLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
       : []),
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
     `import { ${standalone ? 'createCanonicalEventProps, projectEventDocument, ' : ''}validateNativeEventEnvelope } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
@@ -676,6 +676,7 @@ const eventRouteHookWrapperSource = (
           '          host: context.host,',
           '          id,',
           '          invocation: dispatch.invocation,',
+          '          lineage: context.lineage,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
           '          type: "render",',
@@ -694,9 +695,12 @@ const eventRouteHookWrapperSource = (
           '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
+          // Standalone hooks hold no registry, so lineage is only what the payload proves (docs/audits/2026-09-03-host-lineage-matrix.md).
+          '  const lineage = target === "claude" || target === "codex" || target === "cursor" ? resolveNativeLineage(target, native) : unavailable("no-subagent-events");',
           '  const document = await runAgentRequest({',
           '    host: available({ name: target }, "native"),',
           '    invocation: { artifactEpoch, hostContractRevision: capabilityRevision, kind: "event", operationId: `event:${canonicalEvent}`, surface: canonicalEvent },',
+          '    lineage,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
@@ -1249,7 +1253,7 @@ export const nativeHookWrapperSource = (
     '    requireString(input, "tool_use_id");',
     '    if (canonicalEvent === "afterTool") {',
     '      if (target === "codex") { if (input.tool_response === undefined) fail("native PostToolUse tool_response is required"); }',
-    '      else if (!isRecord(input.tool_response)) fail("native PostToolUse tool_response must be an object");',
+    '      else if (typeof input.tool_response !== "object" || input.tool_response === null) fail("native PostToolUse tool_response must be an object or an array");',
     '    }',
     '    return;',
     '  }',
