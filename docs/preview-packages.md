@@ -4,7 +4,9 @@ Nothing is published to npm yet, deliberately: the current package names are
 placeholders, and npm publishing is deferred until the final name is chosen
 (it will then use [npm package provenance](https://docs.npmjs.com/generating-provenance-statements);
 the publish step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed
-release gates before `changeset publish`). Before enabling that path, the
+release gates before `changeset publish`, and only runs at all when the
+`AGENT_BUNDLE_NPM_PUBLISH` repository variable is `true` — see "How an npm
+release will flow" below). Before enabling that path, the
 release owner must resolve the repository-wide `"access": "restricted"`
 policy for `agent-bundle`, which does not currently override it with
 `publishConfig.access`. Until then
@@ -61,6 +63,20 @@ before the peer rewrite landed (PR #46, fixing #45) still carry the original
 `agent-bundle@^0.1.0` range on the then-named `@agent-bundle/rsc-runtime`
 package, so pair-installing those older shas with npm still requires
 `--legacy-peer-deps`.
+
+## How an npm release will flow
+
+Versioning is driven by Changesets (`.changeset/README.md`). Every PR that
+changes a publishable package carries a `.changeset/*.md`; on each push to
+`main`, `.github/workflows/release.yml` runs `changesets/action`, which keeps
+a machine-owned **Version Packages** pull request up to date with the pending
+bumps and `CHANGELOG.md` entries. Merging that PR versions the packages but,
+by default, publishes nothing: the workflow only runs the release gates
+(`pnpm check:release`). Publishing turns on when the repository variable
+`AGENT_BUNDLE_NPM_PUBLISH` is `true` *and* the `NPM_TOKEN` secret exists;
+the action then runs `pnpm release` (`pnpm check:release && changeset
+publish`) with npm provenance. Until then, previews below are the only
+installable artifacts.
 
 ## Where previews come from
 

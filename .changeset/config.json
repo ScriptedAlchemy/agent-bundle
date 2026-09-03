@@ -3,9 +3,15 @@
   "access": "restricted",
   "baseBranch": "main",
   "bumpVersionsWithWorkspaceProtocolOnly": true,
+  "changedFilePatterns": ["**", "!tests/**"],
   "commit": false,
   "fixed": [],
-  "ignore": [],
+  "ignore": [
+    "agent-bundle-workbench",
+    "@agent-bundle-example/*",
+    "@agent-bundle/rsc-agent-runtime-demo",
+    "@agent-bundle/docs"
+  ],
   "linked": [],
   "privatePackages": {
     "tag": false,
