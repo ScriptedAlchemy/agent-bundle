@@ -109,6 +109,10 @@ import {
   validateCursorPlugin,
   type CursorPluginValidationReport,
 } from './host-contracts/cursor-plugin-validation.ts';
+import {
+  validatePortablePlugin,
+  type PortablePluginValidationReport,
+} from './host-contracts/portable-plugin-validation.ts';
 import type { EvalComparison } from './eval/compare.ts';
 import { EvalRunStoreError } from './eval/errors.ts';
 import {
@@ -174,8 +178,13 @@ export type {
   NativeHost,
   RedactedEventEnvelope,
 } from './host-contracts/host-contract.ts';
-export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin };
-export type { ClaudePluginValidationReport, CodexPluginValidationReport, CursorPluginValidationReport };
+export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin, validatePortablePlugin };
+export type {
+  ClaudePluginValidationReport,
+  CodexPluginValidationReport,
+  CursorPluginValidationReport,
+  PortablePluginValidationReport,
+};
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
@@ -257,6 +266,7 @@ export interface ValidateResult {
     | ClaudePluginValidationReport
     | CodexPluginValidationReport
     | CursorPluginValidationReport
+    | PortablePluginValidationReport
   )[];
   readonly model?: NormalizedPlugin;
 }
@@ -480,6 +490,40 @@ const temporaryArtifact = async <Result>(
   }
 };
 
+type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
+
+const hostValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>([
+  'claude',
+  'codex',
+  'cursor',
+  'plugin',
+  'portable',
+]);
+
+const isHostValidatedTarget = (name: string): name is HostValidatedTarget => hostValidatedTargets.has(name);
+
+const hostValidationReport = (
+  target: HostValidatedTarget,
+  pluginDirectory: string,
+  strict: boolean | undefined,
+): Promise<NonNullable<ValidateResult['hostValidation']>[number]> => {
+  switch (target) {
+    case 'codex':
+      return validateCodexPlugin({ pluginDirectory, strict, target });
+    case 'cursor':
+      return validateCursorPlugin({ pluginDirectory, target });
+    case 'portable':
+      return validatePortablePlugin({ pluginDirectory, target });
+    case 'claude':
+    case 'plugin':
+      return validateClaudePlugin({ pluginDirectory, strict, target });
+    default: {
+      const exhaustive: never = target;
+      throw new TypeError(`Unknown host-validated target ${String(exhaustive)}.`);
+    }
+  }
+};
+
 export const validate = async (options: ValidateOptions): Promise<ValidateResult> => {
   if (options.artifact !== undefined) {
     const artifact = resolve(options.artifact);
@@ -493,24 +537,9 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
       const reports = await Promise.all(validated.snapshot.manifest.targets
-        .filter((target) =>
-          target.name === 'claude' || target.name === 'codex' || target.name === 'cursor' || target.name === 'plugin')
-        .map((target) => target.name === 'codex'
-          ? validateCodexPlugin({
-            pluginDirectory: join(artifact, target.name),
-            strict: options.strict,
-            target: target.name,
-          })
-          : target.name === 'cursor'
-            ? validateCursorPlugin({
-              pluginDirectory: join(artifact, target.name),
-              target: target.name,
-            })
-            : validateClaudePlugin({
-              pluginDirectory: join(artifact, target.name),
-              strict: options.strict,
-              target: target.name,
-            })));
+        .map((target) => target.name)
+        .filter(isHostValidatedTarget)
+        .map((target) => hostValidationReport(target, join(artifact, target), options.strict)));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,

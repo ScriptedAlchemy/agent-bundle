@@ -24,7 +24,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB5000` | General CLI and adapter failures. |
-| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body). |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7xxx` | Project preparation and development rebuilds. |
@@ -73,6 +73,40 @@ locally against emitted bytes.
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB6034` | error | An emitted `SKILL.md` has valid YAML frontmatter but no Markdown instruction body after it. The pinned Agent Skills specification requires frontmatter followed by Markdown content. | Add Markdown instructions after the Skill frontmatter, then rebuild the artifact. |
+
+## Agent Plugins portable validation (`AB6035`–`AB6038`)
+
+The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification)
+(specification 1.0.0) adapter. Its contract is pinned in
+`packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json` (schema
+hashes, specification repository commit, retrieval and re-verification dates).
+The standard publishes machine-readable schemas plus normative text the schemas
+cannot express; the text wins on conflict, so validation runs both lanes and
+never spawns a client CLI (the standard publishes no reference validator).
+
+Validation happens at three moments, all fail-closed:
+
+1. **Plan time** (`agent-bundle build`/`validate`): the emitted `plugin.json`
+   and `mcp.json` are validated against the pinned schemas before they are
+   written (`portable.schema.plugin`, `portable.schema.mcp`), authored manifest
+   metadata is checked field by field (`portable.manifest.<field>.invalid`), and
+   MCP path tokens are refused where the standard forbids them
+   (`portable.mcp.token.*`). These target-scoped codes are errors.
+2. **Artifact time** (`agent-bundle build`, `validate --artifact`): the generic
+   target-contract pass reports a missing required document as `AB6011` and a
+   pinned-schema rejection as `AB6012`; `validate --artifact --host-validation`
+   additionally runs the byte lane below and returns a `portable` host
+   validation report.
+3. **Installed bytes** (`agent-bundle doctor`): a Cursor local plugin whose root
+   `plugin.json` declares an Agent Plugins `$schema` is validated with the same
+   byte lane and reported under `AB7320` (an error marks the entry `corrupt`).
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6035` | error | The root `plugin.json` is missing, or a present `plugin.json`/`mcp.json` is unreadable, not valid JSON, or rejected by its pinned Agent Plugins 1.0.0 schema (closed manifest fields, plugin name constraints, reserved `PLUGIN_ROOT`/`PLUGIN_DATA` env keys, closed server variants). | Repair the generated Agent Plugins document so it satisfies the pinned 1.0.0 schema, then rebuild. |
+| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders (§7.2.1); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
+| `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
+| `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
 
 ## npm prepack gate (`AB7010`–`AB7013`)
 
@@ -411,7 +445,7 @@ host CLI, repair a bundle, or perform a live protocol exchange.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
-| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract; the loader-recognized entry remains `installed`. | Reinstall an invalid Cursor plugin or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, when a root `plugin.json` install that declares an Agent Plugins `$schema` violates the pinned Agent Plugins 1.0.0 contract (`AB6035`–`AB6037`, retained in the message), or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info naming the contract applied to an Agent Plugins install, or stating that a `.claude-plugin/plugin.json` (or schema-less root `plugin.json`) install has no Cursor-side pinned static document contract; loader-recognized entries remain `installed`. | Reinstall an invalid Cursor plugin, rebuild an invalid portable bundle, or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
 
 ## Development package build (`AB7103`)
 
