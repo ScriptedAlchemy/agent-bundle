@@ -62,6 +62,9 @@ const { result } = await renderRoute('tool:library/summarize', { input: { title:
 const chapters: number | undefined = result?.chapters; // 无需强制类型转换
 ```
 
+事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native }` 载荷（`signal` 由测试
+工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。
+
 这一切都不是必需的。目标若类型为 `string` 而非字面量，仍然合法，可用于动态查找；直接导入模块作为目标
 不受影响；而没有把生成文件纳入程序的项目——或尚未运行过一次构建或 `agent-bundle dev` 的项目——看到的
 仍是先前的类型：任意字符串 id、`unknown` 输入、`unknown` 结果。`@agent-bundle/runtime` 的

@@ -166,9 +166,11 @@ module-evaluation caveat that applies to provider-level state.
 
 The same file registers the route contracts themselves. One generated
 `AgentBundleRouteContracts` — `{ input, result }` per route id, inferred from
-each module's own `inputSchema`/`resultSchema` (or, for an event route, its
-component) — is registered on `@agent-bundle/runtime`'s `Register` interface in
-that one `declare module` block, so no per-route declaration file is emitted.
+each module's own `inputSchema`/`resultSchema`; an event route registers the
+`{ canonical, native }` payload the harness accepts (it supplies `signal`
+itself) and an `undefined` result — is registered on `@agent-bundle/runtime`'s
+`Register` interface in that one `declare module` block, so no per-route
+declaration file is emitted.
 `renderRoute('tool:library/summarize', { input })` then checks its id against
 the compiled ids, types `input` from the route's input schema, and types
 `result` from its result schema; `RegisteredRouteId`, `RegisteredRouteInput`,

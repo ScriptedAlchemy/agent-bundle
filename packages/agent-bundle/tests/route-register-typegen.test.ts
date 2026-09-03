@@ -72,7 +72,7 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
       "  plugin: { name: 'route-register-fixture', version: '1.0.0' },",
-      "  targets: ['portable'],",
+      "  targets: ['claude'],",
       '});',
       '',
     ].join('\n')),
@@ -90,29 +90,49 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       'export default async function Find() { return { hits: 1 }; }',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.ts', [
+      "import type { AgentEventRouteProps } from 'agent-bundle';",
+      'export default async function ToolAfter(props: AgentEventRouteProps) { return props.canonical.event; }',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'assertions.ts', [
+      "import type { AgentEventCanonicalIdentity, AgentEventNativePayload } from 'agent-bundle';",
       "import type { RegisteredRouteId, RegisteredRouteInput, RegisteredRouteResult } from '@agent-bundle/runtime';",
       "import { renderRoute, renderRouteEvents } from 'agent-bundle/test';",
       '',
       ...equalityHelpers,
       '',
-      "export type Ids = Assert<Equal<RegisteredRouteId, 'tool:curator/find' | 'tool:curator/status'>>;",
+      "export type Ids = Assert<Equal<RegisteredRouteId, 'event:tool/after' | 'tool:curator/find' | 'tool:curator/status'>>;",
       "export type FindInput = Assert<Equal<RegisteredRouteInput<'tool:curator/find'>, { query: string }>>;",
       "export type FindResult = Assert<Equal<RegisteredRouteResult<'tool:curator/find'>, { hits: number }>>;",
       "export type Unregistered = Assert<Equal<RegisteredRouteInput<'tool:curator/missing'>, unknown>>;",
+      '// An event route registers the harness payload — the component props without the `signal` the harness',
+      '// injects — and no result, since event modules export no resultSchema.',
+      "export type EventInput = Assert<Equal<keyof RegisteredRouteInput<'event:tool/after'>, 'canonical' | 'native'>>;",
+      "export type EventCanonical = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['canonical'], AgentEventCanonicalIdentity>>;",
+      "export type EventNative = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['native'], AgentEventNativePayload>>;",
+      "export type EventResult = Assert<Equal<RegisteredRouteResult<'event:tool/after'>, undefined>>;",
       '',
-      'export const typed = async (): Promise<void> => {',
+      'export const typed = async (canonical: AgentEventCanonicalIdentity, native: AgentEventNativePayload): Promise<void> => {',
       "  const found = await renderRoute('tool:curator/find', { input: { query: 'dune' } });",
       '  // `result` is the route\'s own resultSchema output, no cast.',
       '  const hits: number | undefined = found.result?.hits;',
       "  const streamed = await renderRouteEvents('tool:curator/status');",
       "  const status: 'ready' | undefined = streamed.result?.status;",
+      '  // A valid event-route call carries exactly `{ canonical, native }`; the harness supplies the signal.',
+      "  const after = await renderRoute('event:tool/after', { input: { canonical, native } });",
+      '  const none: undefined = after.result;',
       '  // A value typed string stays legal for dynamic lookups and observes unknown.',
       "  const dynamic: string = ['tool:curator/status'].join('');",
       '  const loose = await renderRoute(dynamic);',
       '  const anything: unknown = loose.result;',
-      '  void hits; void status; void anything;',
+      '  void hits; void status; void none; void anything;',
       '};',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-event-input.ts', [
+      "import { renderRoute } from 'agent-bundle/test';",
+      "export const mistyped = renderRoute('event:tool/after', { input: { canonical: 'tool/after', native: {} } });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'wrong-id.ts', [
@@ -145,6 +165,7 @@ it('types renderRoute ids, inputs, and results from the generated route registra
   ]);
 
   const result = await inspect({ root });
+  expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)).toEqual([]);
   expect(result.state).toBe('ready');
   const declarations = await readFile(join(root, '.agent-bundle', 'routes.d.ts'), 'utf8');
   expect(declarations).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n}");
@@ -153,10 +174,13 @@ it('types renderRoute ids, inputs, and results from the generated route registra
   const wrongId = typecheck(root, 'wrong-id.ts', true);
   expect(wrongId).toHaveLength(1);
   // The rejection names the registered ids, not `never`.
-  expect(wrongId[0]).toContain('Argument of type \'"tool:curator/missing"\' is not assignable to parameter of type \'"tool:curator/find" | "tool:curator/status"\'');
+  expect(wrongId[0]).toContain('Argument of type \'"tool:curator/missing"\' is not assignable to parameter of type \'"event:tool/after" | "tool:curator/find" | "tool:curator/status"\'');
   const wrongInput = typecheck(root, 'wrong-input.ts', true);
   expect(wrongInput).toHaveLength(1);
   expect(wrongInput[0]).toContain("Type 'number' is not assignable to type 'string'");
+  const wrongEventInput = typecheck(root, 'wrong-event-input.ts', true);
+  expect(wrongEventInput).toHaveLength(1);
+  expect(wrongEventInput[0]).toContain("Type 'string' is not assignable to type 'AgentEventCanonicalIdentity'");
   const wrongResult = typecheck(root, 'wrong-result.ts', true);
   expect(wrongResult).toHaveLength(1);
   expect(wrongResult[0]).toContain("Type 'number | undefined' is not assignable to type 'string | undefined'");

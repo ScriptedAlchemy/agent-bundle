@@ -71,6 +71,10 @@ const { result } = await renderRoute('tool:library/summarize', { input: { title:
 const chapters: number | undefined = result?.chapters; // no cast
 ```
 
+An event route registers what the harness actually takes and gives back: `input` is the
+`{ canonical, native }` payload (the harness supplies `signal` itself), and `result` is
+`undefined`, since event modules export no `resultSchema`.
+
 Nothing about it is required. A target typed `string` rather than a literal stays legal for
 dynamic lookups, a directly imported module target is unaffected, and a project that does not
 include the generated file — or has not run a build or `agent-bundle dev` yet — sees the previous

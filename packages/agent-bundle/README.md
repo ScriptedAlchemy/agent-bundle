@@ -493,7 +493,9 @@ The same generated `.agent-bundle/routes.d.ts` registers the route contracts on
 `@agent-bundle/runtime`'s `Register` interface. With that file in the project's
 TypeScript program (add it to `tsconfig.json` `include`), a string-literal route
 id is checked against the compiled ids, `input` is typed from the route's
-`inputSchema`, and `result` from its `resultSchema`; `RegisteredRouteId`,
+`inputSchema`, and `result` from its `resultSchema` (an event route's `input`
+is its `{ canonical, native }` payload and its `result` `undefined`);
+`RegisteredRouteId`,
 `RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime`
 name that surface for wrappers. A value typed `string`, a module target, or a
 program without the generated file sees the previous types — any id, `unknown`
