@@ -2,6 +2,12 @@ import { stableJson } from '../core/digest.ts';
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import { featureCapabilityName } from '../core/components.ts';
+import {
+  NOTICE_DELIVERY_ROUTES,
+  type NoticeDeliveryAdvertisement,
+  type NoticeDeliveryRoute,
+  type NoticeDeliveryRouteState,
+} from './notice-delivery.ts';
 import type { TargetAdapterMetadata } from './types.ts';
 
 export { featureCapabilityName } from '../core/components.ts';
@@ -80,6 +86,12 @@ export interface CapabilityTableRow {
   readonly state: string;
 }
 
+export interface NoticeDeliveryCapabilityTableEntry {
+  readonly reason?: string;
+  /** JSON imports widen literals; unknown table states fail closed below. */
+  readonly state: string;
+}
+
 /**
  * Converts one pinned table row into the shared capability-state namespace.
  * `supported` and `degraded` carry the adapter's pinned evidence identity;
@@ -133,6 +145,62 @@ export const frontmatterFeatureCapabilitiesFrom = (
       .map((field) => [featureCapabilityName(kindCapability, field), capabilityFromTableRow(block, evidence)]),
   ));
 };
+
+/**
+ * Converts a pinned host table's `noticeDelivery` rows into the typed
+ * advertisement the notice router consumes (#99 stage 4). Every route in the
+ * taxonomy must be present and `unavailable` rows must carry their dated
+ * reason; a row the table does not know how to describe fails closed rather
+ * than becoming a fabricated channel.
+ */
+export const noticeDeliveryAdvertisementFrom = (
+  target: string,
+  rows: Readonly<Record<string, NoticeDeliveryCapabilityTableEntry>>,
+): NoticeDeliveryAdvertisement => {
+  const entries = NOTICE_DELIVERY_ROUTES.map((route): [NoticeDeliveryRoute, NoticeDeliveryRouteState] => {
+    const row = rows[route];
+    if (row === undefined) {
+      throw new CapabilityStateError(`The pinned ${target} table advertises no notice delivery route ${route}.`);
+    }
+    switch (row.state) {
+      case 'supported':
+        return [route, Object.freeze({ state: 'supported' })];
+      case 'unavailable':
+        if (typeof row.reason !== 'string' || row.reason.trim() === '') {
+          throw new CapabilityStateError(
+            `The pinned ${target} table marks notice delivery route ${route} unavailable without a dated reason.`,
+          );
+        }
+        return [route, Object.freeze({ reason: row.reason, state: 'unavailable' })];
+      default:
+        throw new CapabilityStateError(
+          `Unsupported notice delivery route state ${JSON.stringify(row.state)} for ${route} in the pinned ${target} table.`,
+        );
+    }
+  });
+  return Object.freeze(Object.fromEntries(entries)) as NoticeDeliveryAdvertisement;
+};
+
+/**
+ * Intersects host advertisements for a composite adapter: a route is
+ * supported only where every host supports it, and the dated reasons of the
+ * hosts that do not are kept so the composite stays as honest as its parts.
+ */
+export const intersectNoticeDeliveryAdvertisements = (
+  left: NoticeDeliveryAdvertisement,
+  right: NoticeDeliveryAdvertisement,
+): NoticeDeliveryAdvertisement => Object.freeze(Object.fromEntries(
+  NOTICE_DELIVERY_ROUTES.map((route): [NoticeDeliveryRoute, NoticeDeliveryRouteState] => {
+    const reasons = [left[route], right[route]]
+      .flatMap((entry) => (entry.state === 'unavailable' ? [entry.reason] : []));
+    return reasons.length === 0
+      ? [route, Object.freeze({ state: 'supported' })]
+      : [route, Object.freeze({
+        reason: [...new Set(reasons)].sort((first, second) => first.localeCompare(second)).join('; '),
+        state: 'unavailable',
+      })];
+  }),
+)) as NoticeDeliveryAdvertisement;
 
 export const capabilityStateFromSupport = (
   supported: boolean,

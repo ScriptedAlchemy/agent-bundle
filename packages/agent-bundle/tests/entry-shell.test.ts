@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from '@rstest/core';
 import ts from 'typescript-5';
 
+import { claudeAdapter } from '../src/adapters/claude.ts';
+import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
 import {
@@ -927,6 +929,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
 
   const volatile = entryShellModule.generatedRouteFlightWorkerSource({
     ...base,
+    noticeDelivery: claudeAdapter.noticeDelivery!,
     state: state('process'),
   });
   expect(volatile).toContain('import stateDefinition from "/project/src/state.ts"');
@@ -949,6 +952,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(statelessEntry).not.toContain('@agent-bundle/runtime/notices/inbox-route');
   expect(statelessEntry).not.toContain('agent-bundle:notice-inbox');
   const volatileEntry = entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: claudeAdapter.noticeDelivery!,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
     serverName: 'curator',
@@ -972,6 +976,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   }
 
   const durableEntry = entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: claudeAdapter.noticeDelivery!,
     plugin: { name: 'route-fixture', version: '1.2.3' },
     routes: [route],
     serverName: 'curator',
@@ -988,8 +993,100 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durableEntry).not.toContain('import stateDefinition from');
   expect(durableEntry).not.toContain('createGeneratedRuntimeState');
 
+  // Each route is selected from its own advertised state: a durable store alone
+  // is not enough. A host whose pinned table marks `mcp-resource-updated`
+  // unavailable keeps the inbox but wires no subscription signal.
+  const withoutResourceUpdated: NoticeDeliveryAdvertisement = Object.freeze({
+    ...claudeAdapter.noticeDelivery!,
+    'mcp-resource-updated': Object.freeze({
+      reason: '2026-09-02: fixture host does not forward resources/updated.',
+      state: 'unavailable' as const,
+    }),
+  });
+  const unsupportedEntry = entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: withoutResourceUpdated,
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(unsupportedEntry).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
+  for (const identifier of [
+    'createGeneratedNoticeRuntime',
+    'createNoticeInboxSignaller',
+    '@agent-bundle/runtime/state/sqlite',
+    'notices: noticeDelivery',
+  ]) {
+    expect(unsupportedEntry).not.toContain(identifier);
+  }
+
+  // The inbox is a route of its own: a host that marks `mcp-inbox` unavailable,
+  // or a target with no advertisement at all, exposes no inbox resource — and
+  // therefore no subscription signal about it — in the server or its worker,
+  // however durable the store is.
+  const withoutInbox: NoticeDeliveryAdvertisement = Object.freeze({
+    ...claudeAdapter.noticeDelivery!,
+    'mcp-inbox': Object.freeze({
+      reason: '2026-09-02: fixture host does not list MCP resources.',
+      state: 'unavailable' as const,
+    }),
+  });
+  const unadvertisedEntry = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  const noInboxEntry = entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: withoutInbox,
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  const unadvertisedWorker = entryShellModule.generatedRouteFlightWorkerSource({
+    ...base,
+    state: state('workspace-durable'),
+  });
+  const noInboxWorker = entryShellModule.generatedRouteFlightWorkerSource({
+    ...base,
+    noticeDelivery: withoutInbox,
+    state: state('workspace-durable'),
+  });
+  for (const generated of [unadvertisedEntry, noInboxEntry, unadvertisedWorker, noInboxWorker]) {
+    for (const identifier of [
+      '@agent-bundle/runtime/notices/inbox-route',
+      'noticeInboxRoute',
+      'createGeneratedNoticeRuntime',
+      'createNoticeInboxSignaller',
+      'notices: noticeDelivery',
+    ]) {
+      expect(generated).not.toContain(identifier);
+    }
+  }
+  // The worker still mounts the durable ledger (routes publish into it); only
+  // the unadvertised read surface is withheld.
+  for (const generated of [unadvertisedWorker, noInboxWorker]) {
+    expect(generated).toContain('noticeLedger');
+    expect(generated).toContain('createSqliteStateDriver');
+  }
+  // The reserved inbox name stays reserved so a host that later advertises the
+  // route cannot collide with an authored one.
+  expect(() => entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: withoutInbox,
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [{ ...route, config: { uri: 'agent-bundle://notices/inbox' }, id: 'resource:curator/inbox', kind: 'resource' }],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  })).toThrow(/reserved URI/u);
+
   const durable = entryShellModule.generatedRouteFlightWorkerSource({
     ...base,
+    noticeDelivery: claudeAdapter.noticeDelivery!,
     state: state('workspace-durable'),
   });
   expect(durable).toContain("from '@agent-bundle/runtime/state/sqlite'");

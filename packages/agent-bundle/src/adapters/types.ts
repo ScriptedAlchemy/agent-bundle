@@ -14,11 +14,17 @@ import {
   type NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
+import type { NoticeDeliveryAdvertisement } from './notice-delivery.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
 export type { TargetHookEntry, TargetHookWrapper } from './hook-contract.ts';
+export type {
+  NoticeDeliveryAdvertisement,
+  NoticeDeliveryRoute,
+  NoticeDeliveryRouteState,
+} from './notice-delivery.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -537,6 +543,13 @@ export interface TargetAdapter {
   readonly metadata: TargetAdapterMetadata;
   readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
+  /**
+   * The host's per-route notice delivery advertisement (#99 stage 4), read
+   * from its pinned capability table. The generated MCP entry selects its
+   * cross-request delivery routes from this; an adapter that declares none
+   * advertises no cross-request route and its artifacts wire none.
+   */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   binSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   outputStylesSource?(config: Readonly<AgentBundleConfig>): string | undefined;

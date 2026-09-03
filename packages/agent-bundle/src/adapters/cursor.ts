@@ -21,6 +21,7 @@ import {
   cliBinCapability,
   featureCapabilitiesFrom,
   frontmatterFeatureCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
   supportedCapability,
   type CapabilityTableRow,
@@ -725,5 +726,6 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: cursorName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(cursorName, capabilityTable.noticeDelivery),
   plan: planCursorArtifacts,
 });

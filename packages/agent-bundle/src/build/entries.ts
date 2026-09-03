@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import {
   eventArtifactEpochToken,
   eventFlightArtifactEpochToken,
@@ -322,6 +323,8 @@ export const compileMcpEntries = async (
     readonly eventHooks: readonly NormalizedHook[];
     readonly layouts?: readonly CompiledLayout[];
     readonly meta: AgentBundleMeta;
+    /** The target adapter's notice delivery advertisement; absent wires no cross-request route. */
+    readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
@@ -358,6 +361,7 @@ export const compileMcpEntries = async (
       : generatedRouteMcpEntrySource({
         artifactEpoch: options.artifactEpoch,
         eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
@@ -374,6 +378,7 @@ export const compileMcpEntries = async (
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
         eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
         layouts: options.layouts ?? [],
+        ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         providers: options.providers ?? [],
         routes: server.generatedRoutes,
         serverName: server.name,
@@ -516,6 +521,7 @@ export const compileHooks = async (
     readonly artifactEpoch: string;
     readonly cwd: string;
     readonly meta: AgentBundleMeta;
+    readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
@@ -550,6 +556,7 @@ export const compileHooks = async (
       virtualSource: generatedRouteFlightWorkerSource({
         artifactEpoch: workerArtifactEpoch,
         eventRoutes: standaloneEventRoutes,
+        ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         providers: options.providers ?? [],
         routes: [],
         serverName: 'hooks',

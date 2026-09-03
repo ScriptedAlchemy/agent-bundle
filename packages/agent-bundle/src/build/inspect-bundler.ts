@@ -1,3 +1,4 @@
+import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import type { TargetHookEntry } from '../adapters/types.ts';
 import { isPlainRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
@@ -184,6 +185,7 @@ const mcpEntryEntries = async (
   model: NormalizedPlugin,
   target: string,
   tools: AgentBundleToolsConfig | undefined,
+  noticeDelivery: NoticeDeliveryAdvertisement | undefined,
 ): Promise<readonly BundlerInspectionEntry[]> => {
   const meta = projectMeta(model.metadata);
   const outputRoot = artifactOutputToken(target);
@@ -198,6 +200,7 @@ const mcpEntryEntries = async (
     const routeSource = generatedRoutes === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
+        ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
         plugin: { name: model.metadata.name, version: model.metadata.version },
         routes: generatedRoutes,
         serverName,
@@ -252,6 +255,7 @@ const mcpEntryEntries = async (
           virtualSource: generatedRouteFlightWorkerSource({
             artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
             layouts: model.layouts ?? [],
+            ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
             providers: model.providers ?? [],
             routes: generatedRoutes,
             serverName,
@@ -364,6 +368,7 @@ export const composeBundlerInspection = async (options: {
     readonly cliBin?: boolean;
     readonly hookEntries: readonly TargetHookEntry[];
     readonly name: string;
+    readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   }[];
   readonly tools?: AgentBundleToolsConfig;
 }): Promise<BundlerInspection> => {
@@ -373,7 +378,7 @@ export const composeBundlerInspection = async (options: {
     entries.push(
       ...(target.cliBin === true ? cliBinEntries(options.model, target.name, options.tools) : []),
       ...(await scriptEntries(options.model, target.name, options.tools)),
-      ...(await mcpEntryEntries(options.model, target.name, options.tools)),
+      ...(await mcpEntryEntries(options.model, target.name, options.tools, target.noticeDelivery)),
       ...hookEntries(target.hookEntries, meta, target.name, options.tools),
       ...mcpAppsEntry(options.model, target.name, options.tools),
     );

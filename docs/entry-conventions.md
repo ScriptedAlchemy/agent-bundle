@@ -160,14 +160,27 @@ own `bin/` directory instead, like the MCP worker. Notice authorization is delib
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger, while application authorization policy is deferred.
 
-For workspace-durable state only, the generated MCP server process also opens
-its own SQLite handle on the notice ledger (`createGeneratedNoticeRuntime`
-over the same anchor) and advertises `resources.subscribe`: a client that
-subscribes to `agent-bundle://notices/inbox` receives one
-`notifications/resources/updated` after a render leaves it newly eligible
-pending notices, recorded on the ledger as an availability receipt. Volatile
-lifetimes keep the store in the worker's heap, so those servers register no
-subscription handlers and advertise no subscribe capability.
+Each cross-request notice route is selected from the target host's pinned
+`noticeDelivery` table, exposed as `TargetAdapter.noticeDelivery` /
+`TargetRegistry.noticeDelivery(target)` (a local `NoticeDeliveryAdvertisement`
+shape, structurally identical to the runtime's so it types for
+`selectNoticeDeliveryRoutes` without making the optional `@agent-bundle/runtime`
+peer a declaration dependency); the unified `plugin` target advertises the
+intersection of its three hosts, and a target with no advertisement wires no
+cross-request route. The `agent-bundle://notices/inbox` resource is registered
+in the server and mounted in its worker only for stateful projects whose host
+advertises `mcp-inbox` (the worker still mounts the ledger so routes can
+publish; only the unadvertised read surface is withheld, and the reserved name
+stays reserved). For workspace-durable state only, and only when the host also
+advertises `mcp-resource-updated`, the server process opens its own SQLite
+handle on the notice ledger (`createGeneratedNoticeRuntime` over the same
+anchor) and advertises `resources.subscribe`: a client that subscribes to the
+inbox receives one `notifications/resources/updated` after a render leaves it
+newly eligible pending notices, recorded on the ledger as an availability
+receipt. Volatile lifetimes keep the store in the worker's heap, and a host
+whose table marks the route unavailable has no consumer for the signal, so
+those servers register no subscription handlers and advertise no subscribe
+capability.
 
 #### State mutation budgets
 

@@ -20,6 +20,7 @@ import {
   capabilityStateFromSupport,
   cliBinCapability,
   eventRouteCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedCapability,
   featureCapabilitiesFrom,
   unavailableCapability,
@@ -669,5 +670,6 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: portableName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(portableName, capabilityTable.noticeDelivery),
   plan,
 });

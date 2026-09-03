@@ -419,10 +419,12 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           },
         )),
       );
+      const noticeDelivery = options.registry.noticeDelivery(target.name);
       compiledHooks.push(...(await compileHooks(target.hookEntries, {
         artifactEpoch: options.projectContext.revision,
         cwd: options.projectRoot,
         meta,
+        ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         providers: options.model.providers ?? [],
@@ -438,6 +440,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           .map((entry) => entry.hook),
         layouts: options.model.layouts ?? [],
         meta,
+        ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         providers: options.model.providers ?? [],
