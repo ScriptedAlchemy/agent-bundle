@@ -175,6 +175,63 @@ jobs:
       # the nightly packed-matrix job and in pre-publish `pnpm check:release`.
       - run: pnpm check:release:ci
 
+  # Binary-gated real-host install proofs. The proof suites skip their Claude
+  # and Codex legs when the CLIs are absent, which is how #364 changed the
+  # Codex `interface.logo` emission and broke both proofs on main without CI
+  # noticing (#367/#368 repaired them from local runs). This job installs the
+  # exact CLI versions pinned in each adapter's schema PROVENANCE.json
+  # (`hostCli`, kept equal to `observedCliVersion` by scripts/host-cli-pins.mjs),
+  # fails closed if `claude`/`codex --version` differs from the pin, and runs
+  # the source-built proofs, the packed-tarball proofs, and the packed Claude
+  # plugin validation. Nothing here needs a login: every proof runs against an
+  # isolated HOME / CLAUDE_CONFIG_DIR / CODEX_HOME and no secrets are passed.
+  # Signed-in smokes (`claude -p`, `codex exec`, the Eval harnesses) stay in
+  # the opt-in native-host-smoke workflow.
+  host-install-proofs:
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
+    name: Host install proofs (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - name: Read pinned host CLI versions
+        id: pins
+        run: node scripts/host-cli-pins.mjs print
+      # The global npm prefix holding both CLIs (Claude Code and Codex ship
+      # platform-native binaries), keyed by OS, arch, and the exact pins so a
+      # deliberate re-pin misses the cache and installs fresh.
+      - name: Restore pinned host CLIs
+        id: host-cli-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/host-cli
+          key: host-cli-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.pins }}
+      - name: Install pinned host CLIs
+        if: steps.host-cli-cache.outputs.cache-hit != 'true'
+        run: node scripts/host-cli-pins.mjs install --prefix "$RUNNER_TEMP/host-cli"
+      - name: Expose host CLIs on PATH
+        run: echo "$RUNNER_TEMP/host-cli/bin" >> "$GITHUB_PATH"
+      - name: Verify host CLI versions match the schema pins
+        run: node scripts/host-cli-pins.mjs verify
+      - run: pnpm build
+      - name: Host install proofs (source-built bundle)
+        run: pnpm test:host-install
+      - name: Host install proofs (packed tarball)
+        run: pnpm test:host-install:packed
+      - name: Packed Claude plugin validation proof
+        env:
+          AGENT_BUNDLE_PACKAGE_PREBUILT: '1'
+        run: pnpm test:packed:native
+
   # Release-boundary scaffolder template matrix (mcp-server, cli-tool) plus
   # the full packed pool — the nightly form of pre-publish `check:release`.
   packed-matrix:
@@ -207,7 +264,8 @@ jobs:
   rsc-runtime-micro-eval:
     # Deterministic end-to-end spot-check of the built RSC runtime artifacts
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
-    # any real Claude/Codex host. Real native-host smokes stay skip-gated in
+    # any real Claude/Codex host. Login-free real-host install proofs run in
+    # the host-install-proofs job; signed-in native smokes stay skip-gated in
     # the manually dispatched native-host-smoke workflow on purpose.
     needs: changes
     if: >-

@@ -437,7 +437,12 @@ prove native-host install or dispatch, or an install mode that copies the
 artifact elsewhere. `host-install` is separate installed-layout process
 evidence: its deterministic adapter-simulator lane is unconditional, available
 Claude and Codex binaries also prove their public install paths, and Cursor
-records its unavailable non-interactive host-session surface explicitly.
+records its unavailable non-interactive host-session surface explicitly. The
+Claude and Codex legs skip when those binaries are absent, so the repository's
+CI runs them on every change against the exact CLI versions pinned beside each
+adapter's schema provenance (`hostCli` in `src/adapters/schemas/*/PROVENANCE.json`),
+signed out and with no secrets; only the `claude -p` session and Eval smokes
+remain login-gated.
 
 ### Contract matrix (`runContractMatrix` / `runPackedContractMatrix` / `runInstalledHostContractMatrix`)
 

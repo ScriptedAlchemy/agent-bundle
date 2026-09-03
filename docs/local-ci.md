@@ -21,8 +21,8 @@ Verify-equivalent leg on whatever Node is currently active, with the repo's
 normal local worker derivation. It skips the Node matrix and the
 examples/release/micro-eval gates, so it is a fast signal, not a merge gate.
 
-Docs-only PRs skip the hosted Verify, examples, release-gates, and micro-eval
-jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
+Docs-only PRs skip the hosted Verify, examples, release-gates, micro-eval, and
+host-install-proofs jobs. Docs-only means changes under `docs/` or `agent-patterns/`, changeset
 markdown (`.changeset/*.md`), or top-level markdown. Nested markdown elsewhere
 is treated as code. Pushes to `main` never use this skip. The allowlist and
 fail-open listing checks are implemented by `scripts/classify-docs-only.mjs`
@@ -75,6 +75,65 @@ duration × test census) is printed and written to
 `.worktrees/local-ci/summary.md` (plus `summary.json`); per-step logs land in
 `.worktrees/local-ci/logs/`. The command exits non-zero if any step fails.
 
+## Real-host install proofs
+
+The host-install proof suites (`host-install-proof.test.ts`,
+`packed-host-install-proof.test.ts`, `dev-host-install.test.ts`, and the
+packed Claude plugin validation in `packed-native-smoke.test.ts`) skip their
+Claude and Codex legs whenever the `claude` or `codex` CLI is not on PATH.
+That skip is what let #364 change the Codex `interface.logo` emission and
+break both proofs on `main` without CI noticing. Hosted CI therefore runs a
+dedicated `host-install-proofs` job (Node 22.19) on every PR and `main` push:
+
+1. `node scripts/host-cli-pins.mjs print` reads the pins — the `hostCli`
+   block in `packages/agent-bundle/src/adapters/schemas/claude/PROVENANCE.json`
+   (`@anthropic-ai/claude-code`) and `.../schemas/codex/PROVENANCE.json`
+   (`@openai/codex`). Each pin must equal that file's `observedCliVersion`,
+   so bumping the CLI CI runs is the same deliberate edit as re-pinning the
+   schemas observed against it.
+2. `node scripts/host-cli-pins.mjs install --prefix "$RUNNER_TEMP/host-cli"`
+   installs exactly those versions into a global npm prefix (cached by OS,
+   architecture, and pin), then re-runs Claude Code's `install.cjs` when npm
+   blocked its postinstall, which is what links the native binary.
+3. `node scripts/host-cli-pins.mjs verify` fails closed with one diagnostic
+   line per host when `claude --version` or `codex --version` on PATH is not
+   the pin.
+4. `pnpm build`, `pnpm test:host-install`, `pnpm test:host-install:packed`,
+   and `AGENT_BUNDLE_PACKAGE_PREBUILT=1 pnpm test:packed:native`.
+
+None of it needs a login or a secret: every proof runs against an isolated
+`HOME` / `CLAUDE_CONFIG_DIR` / `CODEX_HOME`, and the subcommands involved
+(`claude plugin marketplace add`, `plugin install`, `plugin list --json`,
+`plugin details`, `plugin validate --strict`; `codex plugin marketplace add`,
+`plugin add`, `plugin list`) work signed out. The job passes no workflow
+secrets.
+
+To run the same proofs locally:
+
+```sh
+pnpm check:host-cli           # your PATH claude/codex must match the pins
+pnpm build
+pnpm test:host-install
+pnpm test:host-install:packed
+AGENT_BUNDLE_PACKAGE_PREBUILT=1 pnpm test:packed:native
+```
+
+If your machine tracks a newer CLI, install the pinned versions into a
+throwaway prefix and put it first on PATH for the run:
+
+```sh
+node scripts/host-cli-pins.mjs install --prefix /tmp/host-cli
+PATH=/tmp/host-cli/bin:$PATH pnpm check:host-cli
+PATH=/tmp/host-cli/bin:$PATH pnpm test:host-install
+```
+
+What stays binary-gated *and* login-gated, and therefore outside this job:
+the `claude -p` session proofs (`AGENT_BUNDLE_HOST_INSTALL_CLAUDE_SESSION`,
+`AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE`), the Codex `exec` smoke
+(`AGENT_BUNDLE_NATIVE_CODEX_SMOKE`), and the packed Eval smokes
+(`AGENT_BUNDLE_PACKED_NATIVE_{CLAUDE,CODEX}_SMOKE`). Those still run only in
+the opt-in `native-host-smoke` workflow on a signed-in runner.
+
 ## Node provisioning
 
 The runner introduces no new tooling. For each hosted runtime line
@@ -116,6 +175,11 @@ never lets it drop below what its own pool shape requires.
   hosted-only, PR-time check.
 - **package-preview** (pkg.pr.new) and the **release publish** workflow are
   publish-side effects, not checks; nothing about them gates a merge.
+- **host-install-proofs** needs the pinned `claude` and `codex` CLIs on PATH
+  (see [Real-host install proofs](#real-host-install-proofs)). The local gate
+  does not install host CLIs into its legs, so run those proofs by hand with
+  the commands above when a change touches adapter emission, the installers,
+  or the proof suites.
 - **native-host-smoke** needs signed-in Claude/Codex CLIs and is opt-in even
   on hosted CI.
 - **Environment skew**: hosted runners are `ubuntu-latest`, and hosted jobs

@@ -241,7 +241,12 @@ const isAbsoluteUrl = (value: unknown): value is string => {
   }
 };
 
-const codexInterfaceFields = Object.freeze([
+/**
+ * Every `interface` field the adapter can emit — generated or authored through
+ * the `codex.interface` extension. The host-install proofs check installed
+ * manifests against this declared set so an undeclared emission cannot land.
+ */
+export const codexInterfaceFields = Object.freeze([
   'brandColor',
   'capabilities',
   'category',
