@@ -221,6 +221,12 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
         if (leased === 'superseded') continue;
         if (leased instanceof Error) evaluation = leaseFailedEvaluation(candidate.epochId, leased);
         else lease = leased.lease;
+        // A newer epoch may have been queued between #acquireLease's own check
+        // and this resumption; an obsolete candidate is never published or adopted.
+        if (this.#closed || candidate.sequence !== this.#sequence) {
+          await lease?.close().catch(() => undefined);
+          continue;
+        }
       }
       this.#latestEvaluation = evaluation;
       if (evaluation !== undefined) {

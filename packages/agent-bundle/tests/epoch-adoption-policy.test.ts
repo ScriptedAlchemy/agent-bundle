@@ -284,6 +284,68 @@ it('drains an epoch that arrives while the previous drain is finishing, at every
   }
 });
 
+it('never adopts a candidate superseded while its lease was being acquired, at every microtask depth', async () => {
+  // Epoch-1 passes; while its lease settles, epoch-2 is published from each
+  // microtask depth and then fails its contracts. Once epoch-2 has been
+  // published, epoch-1 is obsolete: it must not be adopted afterwards, so hosts
+  // never serve a stale epoch that a newer build already replaced.
+  for (let depth = 0; depth <= 8; depth += 1) {
+    const eventHub = new ProjectEventHub();
+    const adopted: string[] = [];
+    const releases: string[] = [];
+    let epoch2Published = false;
+    const policy = new EpochAdoptionPolicy({
+      contracts: () => ({ diagnostics: [], fixtures: {}, modulePath: '/project/fixtures.ts' }),
+      eventHub,
+      lease: async (epochId) => {
+        if (epochId === 'epoch-1') {
+          let publishLate = (): void => {
+            epoch2Published = true;
+            publish(eventHub, 'epoch-2');
+          };
+          for (let hop = 0; hop < depth; hop += 1) {
+            const next = publishLate;
+            publishLate = () => queueMicrotask(next);
+          }
+          publishLate();
+        }
+        return { close: async () => { releases.push(epochId); } };
+      },
+      run: async (epochId) => epochId === 'epoch-1'
+        ? passed(epochId)
+        : Object.freeze({
+            diagnostics: Object.freeze([]),
+            epochId,
+            failures: Object.freeze([]),
+            state: 'failed' as const,
+            summary: 'Development contract matrix reported 1 violation(s).',
+          }),
+    });
+    const adoptedAfterSupersession: string[] = [];
+    policy.subscribe((epochId) => {
+      adopted.push(epochId);
+      if (epoch2Published) adoptedAfterSupersession.push(epochId);
+    });
+
+    publish(eventHub, 'epoch-1');
+    await policy.settled();
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 0); });
+    await policy.settled();
+
+    expect(adoptedAfterSupersession, `microtask depth ${String(depth)}`).toEqual([]);
+    if (adopted.length === 0) {
+      // Superseded before adoption: discarded, and its lease released.
+      expect(policy.currentEpochId, `microtask depth ${String(depth)}`).toBeUndefined();
+      expect(releases, `microtask depth ${String(depth)}`).toEqual(['epoch-1']);
+    } else {
+      // Adopted before epoch-2 existed; the failing epoch-2 leaves it in place.
+      expect(adopted, `microtask depth ${String(depth)}`).toEqual(['epoch-1']);
+      expect(policy.currentEpochId, `microtask depth ${String(depth)}`).toBe('epoch-1');
+    }
+    await policy.close();
+  }
+});
+
 it('discards a superseded contract result and evaluates only the latest pending epoch', async () => {
   const eventHub = new ProjectEventHub();
   const first = Promise.withResolvers<EpochContractEvaluation>();
