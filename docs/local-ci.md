@@ -42,9 +42,13 @@ each other's temp traffic: suites that assert temp-root hygiene (for example
 `cli.test.ts` scans `os.tmpdir()` for leaked `agent-bundle-artifact-*`
 directories) only ever see their own leg's directories, so a sibling leg's
 in-flight work cannot fail them — while a directory the leg itself leaks
-still fails its own scan. Legs live under `.worktrees/local-ci/`
-(gitignored), are reused across runs for warm caches, and can be recreated
-with `--fresh`.
+still fails its own scan. Rstest re-hashes that leg directory, worker ID, and
+invocation identity to `/tmp/ab-rstest-<hash16>` before exposing its worker
+`TMPDIR`; this leaves headroom below Linux's 108-byte `sun_path` cap for nested
+socket fixtures without sacrificing per-leg, per-worker, or concurrent-run
+isolation. Legs live under
+`.worktrees/local-ci/` (gitignored), are reused across runs for warm caches,
+and can be recreated with `--fresh`.
 
 The three Verify legs below mirror the hosted `main`-push matrix. On PRs,
 only `verify (24)` runs hosted.
