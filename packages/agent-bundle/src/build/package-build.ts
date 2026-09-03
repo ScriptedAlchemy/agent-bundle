@@ -200,7 +200,7 @@ export const planPackageEntries = async (
     }
     const outputRelativePath = `bin/${name}.js`;
     const emittedBinDirectory = dirname(resolve(options.packageOutputRoot, outputRelativePath));
-    const relativeArtifact = relative(emittedBinDirectory, options.artifactRoot).replaceAll('\\', '/');
+    const relativeArtifact = toPosixRelative(emittedBinDirectory, options.artifactRoot);
     const source = packageBuild.bins[0]?.source ?? packageBuild.lib!.source;
     entries.push({
       aliases: { [installEntryRuntimeSpecifier]: installEntryRuntimePath() },
