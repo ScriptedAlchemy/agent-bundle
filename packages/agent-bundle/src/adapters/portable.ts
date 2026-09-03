@@ -17,7 +17,9 @@ import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
   capabilityStateFromSupport,
+  cliBinCapability,
   eventRouteCapabilitiesFrom,
+  supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
@@ -35,6 +37,7 @@ import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'j
 import {
   createAdapterValidator,
   payloadCopyEntries,
+  routedCliBinLayout,
   schemaDescriptorsFrom,
   sourceInputs,
   validateJsonSchemaDocument,
@@ -608,6 +611,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
     assets: 'assets',
+    cliBin: routedCliBinLayout,
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     rootDocuments: Object.freeze(['INSTALL.md', 'install.mjs']),
@@ -616,6 +620,10 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.eventRoutes, evidence),
+    // The routed CLI bin is not an Agent Plugins component; like `scripts/`
+    // it rides the plugin-root directory the standard's stdio MCP servers
+    // already execute from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
     commands: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     ),

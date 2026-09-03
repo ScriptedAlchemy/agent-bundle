@@ -709,6 +709,15 @@ Skill Markdown are inert in the workbench renderer.
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
 
+A project with routed `src/cli/**` commands also ships that CLI inside every host artifact as
+`<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when a command renders), a
+self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>` — so a script
+route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
+`${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in target
+publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
+the manifest records both files with bundle provenance. The npm package bin under `dist/bin/` is
+unchanged. See `docs/entry-conventions.md` for the layout and diagnostics (`AB4765`, `AB4766`).
+
 ### What gets hashed
 
 Hash pins cover vendored external content whose ground truth lives outside this repository and can

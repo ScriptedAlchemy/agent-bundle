@@ -22,6 +22,7 @@ import {
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   supportedEventRouteNamesFrom,
+  cliBinCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -3272,6 +3273,9 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document message channel declarations.',
     ),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,

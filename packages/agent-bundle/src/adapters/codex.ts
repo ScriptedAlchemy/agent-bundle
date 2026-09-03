@@ -21,6 +21,7 @@ import {
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   supportedEventRouteNamesFrom,
+  cliBinCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -1259,6 +1260,9 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
     commands: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no commands component.',
     ),

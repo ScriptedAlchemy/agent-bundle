@@ -9,23 +9,24 @@ import type {
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
-import { capabilityIsSupported } from './capability-state.ts';
+import { capabilityIsSupported, cliBinCapability } from './capability-state.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
 import { pluginAdapter } from './plugin.ts';
-import type {
-  TargetAdapter,
-  TargetArtifactDocumentContract,
-  TargetArtifactDocumentValidator,
-  TargetArtifactLayout,
-  TargetArtifactOutputLayout,
-  TargetArtifactSchemaContract,
-  TargetArtifactValidationContract,
-  TargetAdapterMetadata,
-  TargetSchemaDescriptor,
+import {
+  routedCliBinLayout,
+  type TargetAdapter,
+  type TargetArtifactDocumentContract,
+  type TargetArtifactDocumentValidator,
+  type TargetArtifactLayout,
+  type TargetArtifactOutputLayout,
+  type TargetArtifactSchemaContract,
+  type TargetArtifactValidationContract,
+  type TargetAdapterMetadata,
+  type TargetSchemaDescriptor,
 } from './types.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -181,11 +182,38 @@ const snapshotArtifactLayout = (
   hookContract: TargetHookContract | undefined,
   mcpRuntime: TargetMcpRuntimeContract | undefined,
 ): TargetArtifactLayout => {
+  // A supported `cli` capability promises a home for the compiled routed CLI,
+  // and the compiler emits it at exactly one place (`bin/<name>.mjs`), so the
+  // promise is checked before any early return and against that fixed layout.
+  // The judgment is the component one (`componentCapabilities ?? capabilities`)
+  // because that is what decides emission; malformed declarations are
+  // reported by the capability validators, not here.
+  const componentCapabilities = adapter.componentCapabilities === undefined
+    ? undefined
+    : record(adapter.componentCapabilities);
+  const cliJudgment = (componentCapabilities ?? adapter.capabilities)[cliBinCapability];
+  const cliSupported = isCapabilityState(cliJudgment) && capabilityIsSupported(cliJudgment);
+  const missingCliBinLayout = (): Error =>
+    new Error(`Target adapter "${adapter.name}" declares a supported ${cliBinCapability} capability without a routed CLI bin layout.`);
   const declaredLayout = adapter.artifactLayout;
-  if (declaredLayout === undefined) return emptyArtifactLayout;
+  if (declaredLayout === undefined) {
+    if (cliSupported) throw missingCliBinLayout();
+    return emptyArtifactLayout;
+  }
   const layout = record(declaredLayout);
   if (layout === undefined) throw new Error('Target adapter artifact layout must be a record.');
 
+  const cliBin = layout.cliBin === undefined ? undefined : snapshotOutputLayout(layout.cliBin, 'routed CLI bin');
+  if (cliBin === undefined && cliSupported) throw missingCliBinLayout();
+  if (
+    cliBin !== undefined &&
+    (cliBin.directory !== routedCliBinLayout.directory ||
+      !routedCliBinLayout.allowedSuffixes.every((suffix) => cliBin.allowedSuffixes.includes(suffix)))
+  ) {
+    throw new Error(
+      `Target adapter "${adapter.name}" routed CLI bin layout must use directory ${JSON.stringify(routedCliBinLayout.directory)} and admit ${routedCliBinLayout.allowedSuffixes.map((suffix) => JSON.stringify(suffix)).join(', ')}; the compiler emits the routed CLI only there.`,
+    );
+  }
   const commands = layout.commands === undefined ? undefined : snapshotOutputLayout(layout.commands, 'commands');
   const hookWrappers = layout.hookWrappers === undefined
     ? undefined
@@ -237,6 +265,7 @@ const snapshotArtifactLayout = (
   return Object.freeze({
     ...(assets === undefined ? {} : { assets }),
     ...(bin === undefined ? {} : { bin }),
+    ...(cliBin === undefined ? {} : { cliBin }),
     ...(commands === undefined ? {} : { commands }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),
@@ -651,8 +680,18 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return this.#adapters.get(name)?.capabilities[capability];
   }
 
+  componentCapabilityState(name: string, capability: string): CapabilityState | undefined {
+    const adapter = this.#adapters.get(name);
+    return adapter === undefined ? undefined : (adapter.componentCapabilities ?? adapter.capabilities)[capability];
+  }
+
   supports(name: string, capability: string): boolean {
     return capabilityIsSupported(this.capabilityState(name, capability));
+  }
+
+  /** True when the target emits components needing `capability`, by the same judgment `inspect` reports. */
+  hostsComponent(name: string, capability: string): boolean {
+    return capabilityIsSupported(this.componentCapabilityState(name, capability));
   }
 
   names(): readonly string[] {

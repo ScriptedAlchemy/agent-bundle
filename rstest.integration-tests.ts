@@ -14,6 +14,7 @@
 export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/agent-api.test.ts',
   'packages/agent-bundle/tests/api.test.ts',
+  'packages/agent-bundle/tests/artifact-cli-bin.test.ts',
   'packages/agent-bundle/tests/artifact-validator.test.ts',
   'packages/agent-bundle/tests/browser-stdio-bridge-spike.test.ts',
   'packages/agent-bundle/tests/build.test.ts',
