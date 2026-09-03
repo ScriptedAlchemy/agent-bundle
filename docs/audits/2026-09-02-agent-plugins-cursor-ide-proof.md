@@ -87,7 +87,6 @@ values (§9.2), the reserved `PLUGIN_ROOT`/`PLUGIN_DATA` subprocess variables
 are not provided (§9.1), and a plugin-relative `./` `command` is resolved
 against the workspace folder instead of the plugin root (§7.2.1). Full
 table, log excerpts, and 1440×900 captures:
-[`2026-09-03-agent-plugins-cursor-ide-proof.md`](./2026-09-03-agent-plugins-cursor-ide-proof.md);
-internal observations record (not submitted to Cursor, by maintainer decision):
-[`2026-09-03-cursor-agent-plugins-observations.md`](./2026-09-03-cursor-agent-plugins-observations.md).
-No capability row moved to `supported`.
+[`2026-09-03-agent-plugins-cursor-ide-proof.md`](./2026-09-03-agent-plugins-cursor-ide-proof.md).
+No report is sent to Cursor (maintainer decision, 2026-09-03). No capability
+row moved to `supported`.

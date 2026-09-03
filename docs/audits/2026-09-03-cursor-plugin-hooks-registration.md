@@ -219,20 +219,3 @@ Decision implemented in this change:
   { events: ['sessionStart'], state: 'registered', userHooksJson: 'absent' }`
   and runs the emitted `install.mjs --mode marketplace` twice (`Staged`, then
   `Already staged` with the same commit) and Doctor's `AB7324` guidance.
-
-## 7. Documentation discrepancies recorded on #407 (internal; not submitted to Cursor)
-
-Recorded as the #407 discrepancy note against https://cursor.com/docs/hooks;
-by maintainer decision (2026-09-03) no feedback is submitted to Cursor, so
-this stays an internal observation:
-the hooks documentation lists working directories for project, user,
-enterprise, and team hooks but not for plugin-delivered hooks; observed on
-3.18.25 they run from the plugin root with `${CURSOR_PLUGIN_ROOT}` expanded.
-On 3.16.21 (remote server build) plugin-declared `preToolUse`/`postToolUse`/
-`stop` hooks did not execute while the same commands in `~/.cursor/hooks.json`
-did; the CLI changelog of August 11, 2026 records a fix for plugin hooks in
-the CLI. Undocumented as of this build: the plugin hook working directory, the
-minimum build that delivers plugin hooks for tool events, and any
-non-interactive `cursor-agent plugin marketplace add` for local repositories
-(`file://`), so packs cannot be marketplace-installed without the Customize
-folder picker.

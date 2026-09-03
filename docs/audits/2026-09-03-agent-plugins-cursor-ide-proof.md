@@ -146,9 +146,8 @@ correct; only the §7.2.1/§9 path contract is missing.
   `mcp.evidence`) gain a dated 2026-09-03 line for the re-verification and the
   three additional observations; no row moves to `supported` because nothing
   was fixed.
-- The observations #426 tracks are recorded as internal reference in
-  [`2026-09-03-cursor-agent-plugins-observations.md`](./2026-09-03-cursor-agent-plugins-observations.md);
-  the maintainer chose not to submit them to Cursor.
+- No report is sent to Cursor for the gaps #426 tracked (maintainer decision,
+  2026-09-03); the evidence above and the `mcp.evidence` line are the record.
 - The "re-run when a Cursor release notes placeholder expansion" item stays
   time-gated on a Cursor release; the harness above (`/tmp/w426/iso-setup.sh`
   shape: five probes + the emitted pack, reload, read the three log surfaces)
