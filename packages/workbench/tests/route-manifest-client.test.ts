@@ -88,6 +88,13 @@ const manifest = {
     durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
     id: 'library/catalog',
     lifetime: 'workspace-durable',
+    // The dev server's manifest carries the resolved notice retention policy
+    // (#99 item 7); the strict wire schema must admit it or the whole catalog
+    // reads as unavailable.
+    noticeRetention: {
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 604_800_000 },
+      source: 'defaults',
+    },
     notices: ['Generated runtimes co-mount the notice ledger store at the same lifetime.'],
     source: 'src/state.ts',
   },
