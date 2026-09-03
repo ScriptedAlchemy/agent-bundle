@@ -1113,9 +1113,30 @@ export class NativePlaygroundService {
       for (const entry of staging) await this.#catalogStorage.remove(join(dirname(path), entry), { force: true });
       // The exited publisher may never have fsynced the directory after link():
       // flush it here so a crash cannot keep the orphan and lose the sidecar.
-      await this.#syncCatalogDirectory(dirname(path));
+      try {
+        await this.#syncCatalogDirectory(dirname(path));
+      } catch (error) {
+        await this.#restoreStagingGuard(path, staging);
+        throw new Error('Native Playground catalog snapshot is invalid.', { cause: error });
+      }
       if ((await file.stat()).nlink === 1) return settledOrWithdrawn();
       throw invalid();
+    }
+  }
+
+  /**
+   * A recovery whose directory fsync failed has not made the orphan's removal
+   * crash-durable, so the sidecar must not read as settled: re-create the
+   * staging links it removed, and if even that fails, withdraw the sidecar.
+   */
+  async #restoreStagingGuard(path: string, staging: readonly string[]): Promise<void> {
+    const restored = await Promise.allSettled(
+      staging.map((entry) => this.#catalogStorage.link(path, join(dirname(path), entry))),
+    );
+    if (restored.every((outcome) => outcome.status === 'fulfilled')) return;
+    try { await this.#catalogStorage.remove(path, { force: true }); }
+    catch {
+      // Nothing further can make this publication unsettled; the caller rejects it.
     }
   }
 

@@ -1744,6 +1744,7 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
   const reference = epoch('epoch-abandoned-staging', join(root, 'artifact'));
   const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
   const directorySyncs: string[] = [];
+  let directorySyncFailure: Error | undefined;
   const storage: NativePlaygroundCatalogStorage = {
     link,
     mkdir,
@@ -1754,6 +1755,7 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
           if (property === 'sync' && String(path) === catalogDirectory) {
             return async () => {
               directorySyncs.push(String(path));
+              if (directorySyncFailure !== undefined) throw directorySyncFailure;
               await target.sync();
             };
           }
@@ -1790,9 +1792,20 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     expect((await stat(sidecar)).nlink).toBe(2);
     await rm(live);
 
+    // A recovery whose directory fsync fails has not made the orphan's removal
+    // durable: the staging guard is restored and the sidecar stays unsettled.
+    const orphan = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`);
+    await link(sidecar, orphan);
+    directorySyncFailure = Object.assign(new Error('directory sync failed'), { code: 'EIO' });
+    const unsynced = serviceFor(async () => { throw new Error('An unsynced recovery must not fall back to discovery.'); });
+    await expect(unsynced.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await unsynced.close();
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+    directorySyncFailure = undefined;
+
     // A publisher that exited after link() but before cleanup left a complete,
     // fsynced sidecar behind: the reader withdraws the orphan and adopts it.
-    await link(sidecar, join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`));
     directorySyncs.length = 0;
     const reader = serviceFor(async () => { throw new Error('A recovered catalog must not fall back to discovery.'); });
     expect(await reader.catalog(reference)).toEqual(published);
