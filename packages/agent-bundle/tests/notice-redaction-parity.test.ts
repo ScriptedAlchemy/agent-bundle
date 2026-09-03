@@ -2,13 +2,17 @@ import { expect, it } from '@rstest/core';
 
 import {
   AGENT_NOTICE_DEFAULT_RETENTION,
+  NOTICE_SECRET_KEY_SOURCES,
   NOTICE_SECRET_PATTERN_SOURCES,
+  isSecretKey,
   redactSecretText,
 } from '@agent-bundle/runtime/notices';
 
 import { noticeRetentionDefaults } from '../src/config/notice-retention.ts';
 import {
+  CREDENTIAL_KEY_SOURCES,
   CREDENTIAL_TEXT_PATTERN_SOURCES,
+  isCredentialKey,
   redactCredentialText,
   urlUserinfoPattern,
 } from '../src/core/credentials.ts';
@@ -43,6 +47,18 @@ it('redacts the same corpus the same way on both sides of the peer boundary', ()
   const url = 'see https://ops:hunter2@vault.example.test/x and wss://u@relay.example.test/';
   expect(redactSecretText(url)).toBe(redactCredentialText(url).replace(urlUserinfoPattern, '$1[REDACTED]@'));
   expect(redactSecretText(url)).toBe('see https://[REDACTED]@vault.example.test/x and wss://[REDACTED]@relay.example.test/');
+});
+
+it('classifies credential-shaped keys identically on both sides of the peer boundary', () => {
+  expect(NOTICE_SECRET_KEY_SOURCES).toEqual(CREDENTIAL_KEY_SOURCES);
+  const keys = [
+    'password', 'PASSWORD', 'db_password', 'apiKey', 'API_KEY', 'OPENAI_API_KEY', 'authorization', 'accessToken',
+    'refresh-token', 'credentials', 'x-auth-token', 'clientSecret', 'SESSION_SECRET',
+    'user', 'path', 'note', 'tokenizer', 'secretary', 'PATH', 'HOME', 'count', 'passwordless',
+  ];
+  for (const key of keys) {
+    expect(isSecretKey(key), key).toBe(isCredentialKey(key));
+  }
 });
 
 it('keeps the static notice retention defaults equal to the runtime defaults', () => {

@@ -8,22 +8,31 @@
  *   detect or irreversibly remove credential *values* in arbitrary text.
  */
 
-const credentialKeywords = Object.freeze([
-  'authorization',
-  'credential',
-  'credentials',
-  'password',
-  'secret',
-  'token',
-]);
+/**
+ * Sources of the key-name classifier. The notice ledger in
+ * `@agent-bundle/runtime` (`notices/redaction.ts`, `NOTICE_SECRET_KEY_SOURCES`)
+ * carries the same table for structured notice content; the parity test pins
+ * them equal. Edit both together.
+ */
+export const CREDENTIAL_KEY_SOURCES = Object.freeze({
+  compactSuffix: String.raw`(?:apikey|apitoken|authtoken|accesstoken)$`,
+  keywords: Object.freeze(['authorization', 'credential', 'credentials', 'password', 'secret', 'token']),
+  // The segment heuristic subsumes these today (every match contains a `token`
+  // segment or an apikey/apitoken/accesstoken suffix), but they stay explicit
+  // so the union survives future keyword-list edits.
+  provider: Object.freeze([
+    String.raw`(?:^|_)(?:API_KEY|API_TOKEN|ACCESS_TOKEN)$`,
+    String.raw`^(?:ANTHROPIC|AZURE_OPENAI|CODEX|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE|GROQ|HUGGINGFACE|MISTRAL|OPENAI|PERPLEXITY|TOGETHER|XAI)_(?:API_KEY|TOKEN)$`,
+  ]),
+});
 
-// The segment heuristic in isCredentialKey subsumes these today (every match
-// contains a `token` segment or an apikey/apitoken/accesstoken suffix), but
-// they stay explicit so the union survives future keyword-list edits.
-const providerKeyPatterns = Object.freeze([
-  /(?:^|_)(?:API_KEY|API_TOKEN|ACCESS_TOKEN)$/iu,
-  /^(?:ANTHROPIC|AZURE_OPENAI|CODEX|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE|GROQ|HUGGINGFACE|MISTRAL|OPENAI|PERPLEXITY|TOGETHER|XAI)_(?:API_KEY|TOKEN)$/iu,
-]);
+const credentialKeywords = CREDENTIAL_KEY_SOURCES.keywords;
+
+const compactSuffixPattern = new RegExp(CREDENTIAL_KEY_SOURCES.compactSuffix, 'u');
+
+const providerKeyPatterns = Object.freeze(
+  CREDENTIAL_KEY_SOURCES.provider.map((source) => new RegExp(source, 'iu')),
+);
 
 /**
  * Union key-name classifier: keyword segments (authorization, credential,
@@ -40,7 +49,7 @@ export const isCredentialKey = (key: string): boolean => {
     .filter((segment) => segment.length > 0);
   const compact = segments.join('');
   return segments.some((segment) => credentialKeywords.includes(segment))
-    || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact)
+    || compactSuffixPattern.test(compact)
     || providerKeyPatterns.some((pattern) => pattern.test(key));
 };
 

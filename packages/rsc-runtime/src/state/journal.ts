@@ -353,15 +353,18 @@ export const replayJournal = <TState, TEvents extends AgentStateEventSchemas>(
       `State '${definition.id}' revision ${String(targetRevision)} predates the compaction at revision ${String(first.revision)}`,
     );
   }
-  let state = definition.initial;
-  let baselineRevision = 0;
+  // Only the latest baseline at or below the target is parsed. Earlier
+  // baselines — a `compact` or `reset` written before a later migration —
+  // still carry the state of the definition version they were written under,
+  // so parsing them against the current schema would fail a journal that is
+  // perfectly consistent from its live baseline onward.
+  let baseline: Extract<AgentStateJournalRecord, { kind: 'compact' | 'migrate' | 'reset' }> | undefined;
   for (const record of records) {
     if (record.revision > targetRevision) break;
-    if (isBaselineRecord(record)) {
-      state = parseBaselineState(definition, record);
-      baselineRevision = record.revision;
-    }
+    if (isBaselineRecord(record)) baseline = record;
   }
+  let state = baseline === undefined ? definition.initial : parseBaselineState(definition, baseline);
+  const baselineRevision = baseline?.revision ?? 0;
   for (const record of records) {
     if (record.revision <= baselineRevision || record.revision > targetRevision) continue;
     if (record.kind !== 'event') {

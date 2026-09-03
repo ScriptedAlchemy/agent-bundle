@@ -543,7 +543,7 @@ export interface GeneratedEventRuntimeBinding {
 /**
  * The observed identity a notice inbox subscription is recorded under: the
  * runtime's `AgentNoticePrincipal`, spelled here from the root runtime types
- * so this declaration never resolves through `@agent-bundle/runtime/notices`.
+ * so this declaration never resolves through the runtime's `notices` subpath.
  */
 export interface GeneratedNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
@@ -572,7 +572,7 @@ export type GeneratedNoticeInboxSignalOutcome =
  *
  * Structurally the runtime's `AgentNoticeInboxSignaller`, spelled locally so
  * the emitted `mcp-server-runtime.d.ts` stays self-contained for a packed
- * consumer without the optional `@agent-bundle/runtime/notices` subpath;
+ * consumer without the optional runtime peer's `notices` subpath;
  * `mcp-server-runtime.test.ts` pins the two mutually assignable.
  */
 export interface GeneratedNoticeDeliveryBinding {

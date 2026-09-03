@@ -181,9 +181,11 @@ it('imports the externalized config entry from a packed npm consumer', async () 
     // (#99 close-out): its notice binding is spelled locally, so no public or
     // aliased declaration resolves through `@agent-bundle/runtime/notices`.
     const installedDist = join(consumerRoot, 'node_modules', 'agent-bundle', 'dist');
+    // Module specifiers only: a doc comment may name the subpath, an import may not.
+    const noticesSpecifier = /(?:from\s*|import\(\s*)['"]@agent-bundle\/runtime\/notices(?:\/[^'"]*)?['"]/u;
     for (const declaration of ['mcp-server-runtime.d.ts', 'api.d.ts', 'index.d.ts', 'adapters/notice-delivery.d.ts', 'adapters/types.d.ts']) {
       const text = await readFile(join(installedDist, declaration), 'utf8');
-      expect(text, declaration).not.toContain('@agent-bundle/runtime/notices');
+      expect(text, declaration).not.toMatch(noticesSpecifier);
     }
     const aliasedRuntime = await readFile(join(installedDist, 'mcp-server-runtime.d.ts'), 'utf8');
     expect(aliasedRuntime).toContain('GeneratedNoticeDeliveryBinding');

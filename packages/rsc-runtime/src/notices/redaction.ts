@@ -90,12 +90,47 @@ export const redactSecretText = (value: string): string => {
 /** True when the secret pass would change `value`. */
 export const containsSecretText = (value: string): boolean => redactSecretText(value) !== value;
 
-const redactJson = (value: JsonValue): JsonValue => {
-  if (typeof value === 'string') return redactSecretText(value);
+/**
+ * Key-name classifier for structured content, mirroring the compiler's
+ * `isCredentialKey` (`packages/agent-bundle/src/core/credentials.ts`, pinned
+ * equal by `notice-redaction-parity.test.ts`): keyword segments, compact
+ * apikey/apitoken/authtoken/accesstoken suffixes, and provider
+ * environment-variable names. A JSON value under such a key is a credential
+ * by position — `{ password: "hunter2" }` never shows the assignment pass a
+ * `password:` prefix — so every string beneath it is masked whole.
+ */
+export const NOTICE_SECRET_KEY_SOURCES = Object.freeze({
+  compactSuffix: String.raw`(?:apikey|apitoken|authtoken|accesstoken)$`,
+  keywords: Object.freeze(['authorization', 'credential', 'credentials', 'password', 'secret', 'token']),
+  provider: Object.freeze([
+    String.raw`(?:^|_)(?:API_KEY|API_TOKEN|ACCESS_TOKEN)$`,
+    String.raw`^(?:ANTHROPIC|AZURE_OPENAI|CODEX|COHERE|DEEPSEEK|FIREWORKS|GEMINI|GOOGLE|GROQ|HUGGINGFACE|MISTRAL|OPENAI|PERPLEXITY|TOGETHER|XAI)_(?:API_KEY|TOKEN)$`,
+  ]),
+});
+
+const compactSuffixPattern = new RegExp(NOTICE_SECRET_KEY_SOURCES.compactSuffix, 'u');
+const providerKeyPatterns = NOTICE_SECRET_KEY_SOURCES.provider.map((source) => new RegExp(source, 'iu'));
+
+/** True when a record key or environment-variable name is credential-shaped. */
+export const isSecretKey = (key: string): boolean => {
+  const segments = key
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .toLocaleLowerCase('en-US')
+    .split(/[^a-z0-9]+/u)
+    .filter((segment) => segment.length > 0);
+  const compact = segments.join('');
+  return segments.some((segment) => NOTICE_SECRET_KEY_SOURCES.keywords.includes(segment))
+    || compactSuffixPattern.test(compact)
+    || providerKeyPatterns.some((pattern) => pattern.test(key));
+};
+
+const redactJson = (value: JsonValue, underSecretKey = false): JsonValue => {
+  if (typeof value === 'string') return underSecretKey ? NOTICE_REDACTION_MARK : redactSecretText(value);
   if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return Object.freeze(value.map((entry) => redactJson(entry as JsonValue)));
+  if (Array.isArray(value)) return Object.freeze(value.map((entry) => redactJson(entry as JsonValue, underSecretKey)));
   return Object.freeze(Object.fromEntries(
-    Object.entries(value as Readonly<Record<string, JsonValue>>).map(([key, entry]) => [key, redactJson(entry)]),
+    Object.entries(value as Readonly<Record<string, JsonValue>>)
+      .map(([key, entry]) => [key, redactJson(entry, underSecretKey || isSecretKey(key))]),
   ));
 };
 

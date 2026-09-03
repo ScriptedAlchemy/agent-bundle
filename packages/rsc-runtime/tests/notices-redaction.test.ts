@@ -112,7 +112,7 @@ describe('secret-pattern redaction', () => {
         children: [
           { kind: 'markdown', text: 'password: p4ss' },
           { kind: 'context', text: 'clean' },
-          { kind: 'json', value: { nested: ['token: t0k3n', 1, true, null], plain: 'ok' } },
+          { kind: 'json', value: { auth: { password: 'hunter2', user: 'ops' }, nested: ['token: t0k3n', 1, true, null], plain: 'ok', authorization: ['a', 'b'] } },
           { completed: 1, kind: 'progress', message: 'secret=abc', total: 2 },
           { data: 'QUJD', kind: 'image', mimeType: 'image/png' },
           { kind: 'resource', mimeType: 'text/plain', name: 'token: n', uri: 'https://u:p@h.example.test/r' },
@@ -131,17 +131,27 @@ describe('secret-pattern redaction', () => {
         children: [
           { kind: 'markdown', text: `password: ${NOTICE_REDACTION_MARK}` },
           { kind: 'context', text: 'clean' },
-          { kind: 'json', value: { nested: [`token: ${NOTICE_REDACTION_MARK}`, 1, true, null], plain: 'ok' } },
+          // A value under a credential-shaped key is a credential by position:
+          // masked whole, recursively, whatever its text looks like.
+          {
+            kind: 'json',
+            value: {
+              auth: { password: NOTICE_REDACTION_MARK, user: 'ops' },
+              nested: [`token: ${NOTICE_REDACTION_MARK}`, 1, true, null],
+              plain: 'ok',
+              authorization: [NOTICE_REDACTION_MARK, NOTICE_REDACTION_MARK],
+            },
+          },
           { completed: 1, kind: 'progress', message: `secret=${NOTICE_REDACTION_MARK}`, total: 2 },
           { data: 'QUJD', kind: 'image', mimeType: 'image/png' },
           { kind: 'resource', mimeType: 'text/plain', name: `token: ${NOTICE_REDACTION_MARK}`, uri: `https://${NOTICE_REDACTION_MARK}@h.example.test/r` },
           { code: 'E_SECRET', kind: 'error', message: `authorization: ${NOTICE_REDACTION_MARK}` },
         ],
         kind: 'result',
-        metadata: { credential: 'x' },
+        metadata: { credential: NOTICE_REDACTION_MARK },
       },
       status: 'success',
-      value: { secret: 'v' },
+      value: { secret: NOTICE_REDACTION_MARK },
       version: 1,
     });
     expect(Object.isFrozen(redacted.root)).toBe(true);
