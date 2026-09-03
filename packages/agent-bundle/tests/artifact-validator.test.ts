@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import { validate } from '../src/api.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import {
   validateModernMcpDocument,
@@ -887,6 +888,14 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
     ]);
     expect(normative.every((entry) => entry.severity === 'error' && entry.target === 'portable' && entry.recovery !== undefined)).toBe(true);
     expect(diagnostics).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'AB6012' })]));
+
+    // --host-validation runs host reports only over an artifact the ordinary lane
+    // accepted, so a failing byte lane is reported exactly once and never as a report.
+    const hostValidated = await validate({ artifact: root, hostValidation: true, registry, root });
+    expect(hostValidated.hostValidation).toBeUndefined();
+    expect(hostValidated.diagnostics.filter((entry) => entry.code === 'AB6036').map((entry) => entry.message))
+      .toEqual(normative.map((entry) => entry.message));
+    expect(hostValidated.diagnostics.some((entry) => entry.code === 'AB6038')).toBe(false);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
