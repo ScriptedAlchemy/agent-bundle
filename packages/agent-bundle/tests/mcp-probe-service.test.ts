@@ -205,6 +205,11 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               inputSchema: { type: 'object' as const },
               name: 'url-with-bare-user-and-email',
             },
+            {
+              description: 'Raw @ in the password https://alice:pa@ss@example.test/private?next=me@x and quote https://al"ice:s3cret@example.test/#top',
+              inputSchema: { type: 'object' as const },
+              name: 'url-with-at-and-quote-in-userinfo',
+            },
           ],
         }),
       }),
@@ -229,11 +234,18 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       'Private docs at https://[REDACTED]@example.test/private and postgres://[REDACTED]@db.internal:5432/app',
       // A bare user is masked too; an email address is not URL userinfo.
       'Bare user https://[REDACTED]@example.test/private; contact ops@example.test',
+      // Masking runs through the final authority `@` (the delimiter URL parsers
+      // honour), so a raw `@` or quote inside the password leaves nothing behind,
+      // while an `@` in the query is not userinfo.
+      'Raw @ in the password https://[REDACTED]@example.test/private?next=me@x and quote https://[REDACTED]@example.test/#top',
     ]);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('hunter2');
     expect(serialized).not.toContain('pa55');
     expect(serialized).not.toContain('alice');
+    expect(serialized).not.toContain('pa@ss');
+    expect(serialized).not.toContain('@ss@');
+    expect(serialized).not.toContain('s3cret');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

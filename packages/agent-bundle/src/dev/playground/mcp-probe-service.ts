@@ -149,8 +149,12 @@ const hasAbsolutePath = (value: string): boolean =>
  * URL userinfo (`scheme://user:secret@host`) is a credential that the generic
  * credential redaction does not recognize; because URLs are exempt from the
  * absolute-path fail-closed rule, the userinfo is stripped before that check.
+ * The authority runs until whitespace or a WHATWG authority terminator
+ * (`/`, `?`, `#`, `\`); within it the match is greedy through the *final*
+ * `@`, the delimiter URL parsers honour, so a raw `@` or quote inside a
+ * password cannot leave part of the credential behind.
  */
-const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@"'<>]+@/giu;
+const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#\\]*@/giu;
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
