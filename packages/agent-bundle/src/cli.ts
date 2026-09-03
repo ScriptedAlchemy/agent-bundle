@@ -24,6 +24,7 @@ import type {
 import type {
   installBundle,
   InstallHost,
+  InstallMode,
   InstallResult,
   InstallScope,
 } from './install/install.ts';
@@ -37,6 +38,7 @@ import type {
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { errorMessage } from './core/errors.ts';
+import { formatInstallResult } from './install/format.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
@@ -88,6 +90,7 @@ interface InstallCommandOptions {
   readonly from: string;
   readonly json?: boolean;
   readonly replace?: boolean;
+  readonly mode?: InstallMode;
   readonly scope: string;
 }
 
@@ -169,6 +172,11 @@ const installHost = (value: string): InstallHost => {
 
 const collectInstallHost = (value: string, previous: readonly InstallHost[]): readonly InstallHost[] =>
   [...previous, installHost(value)];
+
+const installMode = (value: string): InstallMode => {
+  if (value === 'local' || value === 'marketplace') return value;
+  throw new TypeError('Install mode must be local or marketplace.');
+};
 
 const installScope = (value: string): InstallScope => {
   if (value === 'user' || value === 'project' || value === 'local') return value;
@@ -278,35 +286,10 @@ const writeHumanPrepack = (output: Output, result: Awaited<ReturnType<typeof pre
   );
 };
 
-const installStateLabel = (state: InstallResult['state']): string => {
-  switch (state) {
-    case 'adopted':
-      return 'Adopted';
-    case 'already-installed':
-      return 'Already installed';
-    case 'installed':
-      return 'Installed';
-    case 'replaced':
-      return 'Replaced';
-    default: {
-      const exhaustive: never = state;
-      throw new TypeError(`Unknown install state ${String(exhaustive)}.`);
-    }
-  }
-};
-
 const shortContentHash = (hash: string): string => hash.slice(0, 12);
 
 const writeHumanInstall = (output: Output, result: InstallResult): void => {
-  const destination = result.destination ?? result.bundleRoot;
-  const content = result.previousContentHash !== undefined && result.contentHash !== undefined
-    ? ` (content ${shortContentHash(result.previousContentHash)} -> ${shortContentHash(result.contentHash)})`
-    : result.contentHash === undefined
-      ? ''
-      : ` (content ${shortContentHash(result.contentHash)})`;
-  output.write(
-    `${installStateLabel(result.state)} ${result.plugin}@${result.version} for ${result.host} at ${destination}${content}\n`,
-  );
+  output.write(formatInstallResult(result));
 };
 
 const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
@@ -652,6 +635,7 @@ export const runCli = async (
         'same-version content drift is replaced automatically and foreign installs are always refused',
     )
     .option('--force', 'Alias for --replace')
+    .option('--mode <mode>', 'Cursor delivery mode: local (default) or marketplace', installMode)
     .option('--json', 'Write one machine-readable JSON document');
   installCommand.action(async (
     host: InstallHost,
@@ -662,6 +646,7 @@ export const runCli = async (
       from: options.from,
       host,
       replace: options.replace === true || options.force === true,
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
       scope: installScope(options.scope),
     });
     if (options.json === true) writeMachine(stdout, result);

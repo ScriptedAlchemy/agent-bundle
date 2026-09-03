@@ -8,6 +8,7 @@ import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
 import { installReceiptFile } from '../src/install/receipt.ts';
+import { installBundle } from '../src/install/install.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
@@ -18,6 +19,7 @@ afterEach(async () => {
 });
 
 const fixture = async (options: {
+  readonly author?: string;
   readonly bin?: false | readonly string[];
   readonly target: 'cursor' | 'plugin' | 'portable';
 }): Promise<string> => {
@@ -38,6 +40,7 @@ const fixture = async (options: {
         : options.bin === false
           ? ['  bin: false,']
           : [`  bin: { ${options.bin.map((name) => `${JSON.stringify(name)}: './src/cli.ts'`).join(', ')} },`]),
+      ...(options.author === undefined ? [] : [`  cursor: { author: { name: ${JSON.stringify(options.author)} } },`]),
       "  lib: './src/index.ts',",
       "  plugin: { name: 'installer-fixture' },",
       `  targets: [${JSON.stringify(options.target)}],`,
@@ -83,7 +86,7 @@ it('builds a package-relative installer with fallback naming and built-host argv
 
   const help = await run(installer, [], { cwd: tmpdir() });
   expect(help).toMatchObject({ code: 0, stderr: '' });
-  expect(help.stdout).toContain('install <host> [--scope <scope>] [--replace|--force] [--json]');
+  expect(help.stdout).toContain('install <host> [--scope <scope>] [--mode local|marketplace] [--replace|--force] [--json]');
   expect(help.stdout).toContain('cursor');
   expect(help.stdout).not.toContain('claude');
 
@@ -134,11 +137,31 @@ it('builds a package-relative installer with fallback naming and built-host argv
   await writeFile(join(destination, 'INSTALL.md'), '# stale\n');
   const replaced = await run(installer, ['install', 'cursor'], { cwd: tmpdir(), env: { ...process.env, HOME: home } });
   expect(replaced).toMatchObject({ code: 0, stderr: '' });
-  expect(replaced.stdout).toMatch(/^Replaced installer-fixture@1\.2\.3 for cursor at .* \(content [0-9a-f]{12} -> [0-9a-f]{12}\)\n$/u);
+  expect(replaced.stdout).toMatch(/^Replaced installer-fixture@1\.2\.3 for cursor \(local mode\) at .* \(content [0-9a-f]{12} -> [0-9a-f]{12}\)\n$/u);
 
   const unknown = await run(installer, ['install', 'cursor', '--overwrite'], { cwd: tmpdir() });
   expect(unknown.code).toBe(1);
   expect(unknown.stderr).toContain('Unknown installer argument "--overwrite"');
+
+  const staged = await run(installer, ['install', 'cursor', '--mode', 'marketplace', '--json'], {
+    cwd: tmpdir(),
+    env: { ...process.env, HOME: home },
+  });
+  expect(staged).toMatchObject({ code: 0, stderr: '' });
+  const repository = join(home, '.cursor', 'agent-bundle', 'marketplaces', 'installer-fixture');
+  expect(JSON.parse(staged.stdout)).toMatchObject({
+    commit: expect.stringMatching(/^[0-9a-f]{40}$/u),
+    destination: repository,
+    marketplace: 'installer-fixture-marketplace',
+    mode: 'marketplace',
+    state: 'staged',
+  });
+  await expect(stat(join(repository, '.cursor-plugin', 'marketplace.json'))).resolves.toBeDefined();
+  await expect(stat(join(repository, 'plugins', 'installer-fixture', '.cursor-plugin', 'plugin.json'))).resolves.toBeDefined();
+
+  const badMode = await run(installer, ['install', 'cursor', '--mode', 'remote'], { cwd: tmpdir() });
+  expect(badMode.code).toBe(1);
+  expect(badMode.stderr).toContain('Install mode must be local or marketplace.');
 }, 120_000);
 
 it('chooses an unused installer name when both primary candidates are bins', async () => {
@@ -167,11 +190,11 @@ it('handles installer help when the project path contains a percent sign', async
   const help = await run(join(root, 'dist', 'bin', 'installer-fixture-install.js'), ['--help'], { cwd: tmpdir() });
 
   expect(help).toMatchObject({ code: 0, stderr: '' });
-  expect(help.stdout).toContain('install <host> [--scope <scope>] [--replace|--force] [--json]');
+  expect(help.stdout).toContain('install <host> [--scope <scope>] [--mode local|marketplace] [--replace|--force] [--json]');
 }, 120_000);
 
 it('uses the plugin name when free and skips portable-only artifacts', async () => {
-  const cursorRoot = await fixture({ bin: false, target: 'cursor' });
+  const cursorRoot = await fixture({ author: 'Fixture Owner', bin: false, target: 'cursor' });
   const cursor = await build({ output: 'host-packs', packageOutputs: true, root: cursorRoot });
   expect(cursor.packageBuild?.files.map((file) => file.path)).toContain('bin/installer-fixture.js');
 
@@ -179,6 +202,52 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   const portable = await build({ output: 'host-packs', packageOutputs: true, root: portableRoot });
   expect(portable.packageBuild?.files.map((file) => file.path))
     .not.toContain('bin/installer-fixture.js');
+  // The Agent Plugins pack has no .cursor-plugin manifest, so its install.mjs must refuse marketplace mode.
+  const portableHome = join(portableRoot, 'home');
+  await mkdir(join(portableHome, '.cursor'), { recursive: true });
+  const portableMarketplace = await run(
+    process.execPath,
+    [join(portableRoot, 'host-packs', 'portable', 'install.mjs'), '--mode', 'marketplace'],
+    { cwd: tmpdir(), env: { ...process.env, HOME: portableHome } },
+  );
+  expect(portableMarketplace.code).toBe(1);
+  expect(portableMarketplace.stderr).toContain('--mode marketplace requires a Cursor Plugin');
+  await expect(stat(join(portableHome, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+  // A bundle carrying nested Git metadata would be committed as an empty gitlink; the emitted installer refuses it.
+  const cursorHome = join(cursorRoot, 'home');
+  await mkdir(join(cursorHome, '.cursor'), { recursive: true });
+  await mkdir(join(cursorRoot, 'host-packs', 'cursor', 'vendor', '.git'), { recursive: true });
+  const nestedGit = await run(
+    process.execPath,
+    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
+  );
+  expect(nestedGit.code).toBe(1);
+  expect(nestedGit.stderr).toContain('refuses bundle-internal Git metadata at "vendor/.git"');
+  await expect(stat(join(cursorHome, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await rm(join(cursorRoot, 'host-packs', 'cursor', 'vendor'), { recursive: true });
+
+  // The emitted install.mjs and `agent-bundle install cursor --mode marketplace` derive owner/description from the
+  // same emitted manifest (authored cursor.author here), so staging with one and rerunning the other is idempotent.
+  const stagedByScript = await run(
+    process.execPath,
+    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
+  );
+  expect(stagedByScript).toMatchObject({ code: 0, stderr: '' });
+  const stagedManifest = JSON.parse(await readFile(
+    join(cursorHome, '.cursor', 'agent-bundle', 'marketplaces', 'installer-fixture', '.cursor-plugin', 'marketplace.json'),
+    'utf8',
+  ));
+  expect(stagedManifest.owner).toEqual({ name: 'Fixture Owner' });
+  const rerunByCli = await installBundle({
+    from: join(cursorRoot, 'host-packs', 'cursor'),
+    home: cursorHome,
+    host: 'cursor',
+    mode: 'marketplace',
+  });
+  expect(rerunByCli).toMatchObject({ mode: 'marketplace', state: 'already-installed' });
 
   const pluginRoot = await fixture({ bin: false, target: 'plugin' });
   const plugin = await build({ output: 'host-packs', packageOutputs: true, root: pluginRoot });

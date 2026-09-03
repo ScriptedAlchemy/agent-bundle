@@ -456,3 +456,37 @@ comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
 `version-mismatch`, `foreign`, or `not-installed` (see the package README's
 "Reinstall after a same-version rebuild"). Artifact validation rejects a
 built-in target whose required install surface is missing.
+
+### Cursor delivery modes and hook registration (#407)
+
+`agent-bundle install cursor` and the emitted `install.mjs` accept
+`--mode local` (default) or `--mode marketplace`:
+
+- **local** safe-copies the bundle into `~/.cursor/plugins/local/<name>`.
+  Cursor loads the `.cursor-plugin/plugin.json` manifest, its `hooks/hooks.json`,
+  `mcp.json`, rules, and skills after a reload. Plugin hooks are registered by
+  the manifest alone: Cursor runs each command from the plugin root with
+  `${CURSOR_PLUGIN_ROOT}` substituted, and no `~/.cursor/hooks.json` entry is
+  written or required (observed 2026-09-03 on Cursor 3.18.25 for `preToolUse`,
+  `postToolUse`, and `stop`; see
+  `docs/audits/2026-09-03-cursor-plugin-hooks-registration.md`). Customize
+  shows the plugin with a `Local` badge.
+- **marketplace** stages a committed Git repository at
+  `~/.cursor/agent-bundle/marketplaces/<name>` whose
+  `.cursor-plugin/marketplace.json` lists the plugin, prints its commit, and
+  prints the one Cursor-owned step the framework cannot perform
+  non-interactively: Customize -> Plugins -> "Add Plugins from Local
+  Repository" -> select that directory -> Install. Cursor then treats the
+  plugin as marketplace-installed (cached under `~/.cursor/plugins/cache`,
+  managed from Customize, not badged `Local`). `git` must be on PATH; the
+  installer fails closed with `AB7002` otherwise and re-runs are idempotent
+  (`already-installed` with the same commit). The result state is `staged`
+  until Cursor imports it.
+
+`agent-bundle doctor --host cursor` proves both: `AB7322` reports each local
+plugin's manifest hook registration as `registered`, `stale` (a
+`${CURSOR_PLUGIN_ROOT}` script is missing), or `missing`; `AB7323` warns when
+`~/.cursor/hooks.json` also points into a plugin (duplicate delivery) or is
+unparsable; `AB7324` reports a staged marketplace as imported or still
+awaiting the Customize step, and `doctor --from` resolves a marketplace-mode
+bundle to that staged copy instead of reporting it missing.

@@ -1,11 +1,17 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, chmod, cp, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, chmod, cp, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+import { Ajv } from 'ajv/dist/ajv.js';
+import addFormats from 'ajv-formats';
 
+import cursorMarketplaceSchema from '../src/adapters/schemas/cursor/marketplace.schema.json' with { type: 'json' };
+import { stageCursorMarketplace } from '../src/install/cursor-marketplace.ts';
+import { formatInstallResult } from '../src/install/format.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
   installReceiptFile,
@@ -21,8 +27,29 @@ interface CommandCall {
   readonly cwd: string;
 }
 
+/** What a faithful `git ls-tree -r -z HEAD` would print for the files under `root` (SHA-1 blob ids). */
+const fakeTreeListing = async (root: string, relative = ''): Promise<string> => {
+  let listing = '';
+  for (const name of (await readdir(join(root, relative))).sort()) {
+    if (relative === '' && name === '.git') continue;
+    const child = relative === '' ? name : `${relative}/${name}`;
+    const metadata = await lstat(join(root, child));
+    if (metadata.isDirectory()) {
+      listing += await fakeTreeListing(root, child);
+    } else if (metadata.isFile()) {
+      const bytes = await readFile(join(root, child));
+      const id = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+      listing += `100644 blob ${id}\t${child}\0`;
+    }
+  }
+  return listing;
+};
+
+/** Default fake git: answers `ls-tree` faithfully for the staged tree so byte proofs pass; everything else is silent. */
+const gitLike = async (call: CommandCall): Promise<string> => (call.args[0] === 'ls-tree' ? fakeTreeListing(call.cwd) : '');
+
 const recordingRunner = (
-  respond: (call: CommandCall) => string = () => '',
+  respond: (call: CommandCall) => string | Promise<string> = gitLike,
 ): {
   readonly calls: CommandCall[];
   readonly runner: InstallCommandRunner;
@@ -34,7 +61,7 @@ const recordingRunner = (
       run: async (command, args, options) => {
         const call = { args: [...args], command, cwd: options.cwd };
         calls.push(call);
-        return { code: 0, stderr: '', stdout: respond(call) };
+        return { code: 0, stderr: '', stdout: await respond(call) };
       },
     },
   };
@@ -1096,4 +1123,369 @@ it('dispatches the public CLI install command to the native installer', async ()
     plugin: 'fixture',
     state: 'installed',
   });
+});
+
+const marketplaceRepo = (home: string): string =>
+  join(home, '.cursor', 'agent-bundle', 'marketplaces', 'install-fixture');
+
+it('stages a committed local marketplace repository for Cursor in marketplace mode', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const repo = marketplaceRepo(home);
+  const { calls, runner } = recordingRunner();
+  try {
+    const result = await installBundle({
+      commandRunner: runner,
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      mode: 'marketplace',
+      scope: 'user',
+    });
+
+    expect(result).toMatchObject({
+      destination: repo,
+      host: 'cursor',
+      marketplace: 'install-fixture-marketplace',
+      mode: 'marketplace',
+      plugin: 'install-fixture',
+      state: 'staged',
+      version: '1.2.3',
+    });
+    expect(result.nextSteps?.[0]).toContain('Add Plugins from Local Repository');
+    expect(result.nextSteps?.[0]).toContain(repo);
+    const marketplaceManifest = JSON.parse(await readFile(join(repo, '.cursor-plugin/marketplace.json'), 'utf8')) as unknown;
+    expect(marketplaceManifest).toEqual({
+      metadata: { description: 'Agent Bundle local marketplace for install-fixture@1.2.3.' },
+      name: 'install-fixture-marketplace',
+      owner: { name: 'install-fixture' },
+      plugins: [{ name: 'install-fixture', source: 'plugins/install-fixture' }],
+    });
+    const validator = new Ajv({ allErrors: true, allowUnionTypes: true, strict: true });
+    (addFormats as unknown as (target: Ajv) => void)(validator);
+    const validate = validator.compile(cursorMarketplaceSchema);
+    expect(validate(marketplaceManifest), JSON.stringify(validate.errors)).toBe(true);
+    expect(await readFile(join(repo, 'plugins', 'install-fixture', 'payload.txt'), 'utf8')).toBe('payload\n');
+    expect(await readFile(join(repo, 'plugins', 'install-fixture', '.cursor-plugin/plugin.json'), 'utf8'))
+      .toContain('"install-fixture"');
+    expect(calls.map((call) => [call.command, call.args[0], call.args.at(-1)])).toEqual([
+      ['git', 'init', '--object-format=sha1'],
+      ['git', '-c', '--force'],
+      ['git', '-c', 'install-fixture@1.2.3'],
+      ['git', 'ls-tree', 'HEAD'],
+      ['git', 'rev-parse', 'HEAD'],
+    ]);
+    expect(calls[1]?.args).toEqual(['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', 'add', '--all', '--force']);
+    expect(calls.every((call) => call.cwd.startsWith(join(home, '.cursor', 'agent-bundle', 'marketplaces')))).toBe(true);
+    // Attributes that would rewrite bytes in the index are disabled for every path of the staged repository.
+    expect(await readFile(join(repo, '.git', 'info', 'attributes'), 'utf8')).toBe('* -text -eol -filter -ident -working-tree-encoding -export-ignore -export-subst\n');
+    await expect(access(join(home, '.cursor', 'plugins', 'local', 'install-fixture'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('re-runs marketplace mode idempotently with real git and refuses collisions', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const repo = marketplaceRepo(home);
+  try {
+    await writeFile(join(fixture.bundleRoot, '.gitignore'), '*.log\n');
+    await writeFile(join(fixture.bundleRoot, 'ignored.log'), 'kept\n');
+    // Attributes that would normalise bytes into the index must not change what Cursor imports.
+    await writeFile(join(fixture.bundleRoot, '.gitattributes'), '*.txt text eol=lf\n* ident\n');
+    await writeFile(join(fixture.bundleRoot, 'crlf.txt'), 'line one\r\nline two $Id$\r\n');
+    const first = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' });
+    const second = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' });
+
+    expect(first.state).toBe('staged');
+    expect(first.commit).toMatch(/^[0-9a-f]{40}$/u);
+    expect(second).toMatchObject({ commit: first.commit, destination: repo, state: 'already-installed' });
+    await access(join(repo, '.git', 'HEAD'));
+    // Files the bundle's own .gitignore would exclude are still committed (Cursor imports the commit, not the tree).
+    const { stdout: tracked } = await execFile('git', ['ls-files'], { cwd: repo });
+    expect(tracked.split('\n')).toEqual(expect.arrayContaining([
+      'plugins/install-fixture/.gitattributes',
+      'plugins/install-fixture/.gitignore',
+      'plugins/install-fixture/crlf.txt',
+      'plugins/install-fixture/ignored.log',
+      'plugins/install-fixture/payload.txt',
+    ]));
+    const { stdout: committedCrlf } = await execFile('git', ['cat-file', 'blob', 'HEAD:plugins/install-fixture/crlf.txt'], { cwd: repo, encoding: 'buffer' });
+    expect(Buffer.from(committedCrlf).toString('utf8')).toBe('line one\r\nline two $Id$\r\n');
+
+    const manifestPath = join(repo, '.cursor-plugin', 'marketplace.json');
+    const manifest = await readFile(manifestPath, 'utf8');
+    await writeJson(manifestPath, { ...JSON.parse(manifest), plugins: [{ name: 'other-plugin', source: 'plugins/other-plugin' }] });
+    const manifestError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((manifestError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
+    expect((manifestError as DiagnosticError).diagnostics[0]?.message).toContain('marketplace.json differs');
+    await writeFile(manifestPath, manifest);
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })).toMatchObject({ state: 'already-installed' });
+
+    // The working tree may match the bundle while HEAD records different bytes; Cursor imports HEAD, so refuse.
+    const git = async (args: readonly string[]): Promise<string> => (await execFile('git', [...args], { cwd: repo })).stdout;
+    await writeFile(join(repo, 'plugins', 'install-fixture', 'payload.txt'), 'committed elsewhere\n');
+    await git(['add', '--all']);
+    await git(['-c', 'user.name=t', '-c', 'user.email=t@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'edit']);
+    await writeFile(join(repo, 'plugins', 'install-fixture', 'payload.txt'), 'payload\n');
+    const dirtyError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((dirtyError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
+    expect((dirtyError as DiagnosticError).diagnostics[0]?.message).toContain('committed HEAD');
+    await git(['reset', '-q', '--hard', first.commit ?? 'HEAD~1']);
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })).toMatchObject({ commit: first.commit, state: 'already-installed' });
+
+    // An ignored, uncommitted file in the staged tree also means HEAD is not what was verified.
+    await writeFile(join(repo, 'plugins', 'install-fixture', 'stray.log'), 'not committed\n');
+    await writeFile(join(fixture.bundleRoot, 'stray.log'), 'not committed\n');
+    const ignoredError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((ignoredError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
+    expect((ignoredError as DiagnosticError).diagnostics[0]?.message).toContain('committed HEAD');
+    await rm(join(repo, 'plugins', 'install-fixture', 'stray.log'));
+    await rm(join(fixture.bundleRoot, 'stray.log'));
+
+    await writeFile(join(repo, 'plugins', 'install-fixture', 'payload.txt'), 'changed\n');
+    const contentError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((contentError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
+    expect((contentError as DiagnosticError).diagnostics[0]?.message).toContain('content collision');
+
+    await writeJson(join(repo, 'plugins', 'install-fixture', '.cursor-plugin/plugin.json'), {
+      name: 'install-fixture',
+      version: '9.0.0',
+    });
+    const versionError = await installBundle({ from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((versionError as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7005' }]);
+    expect((versionError as DiagnosticError).diagnostics[0]?.message).toContain('version collision');
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('fails closed without git in marketplace mode and leaves no staged repository', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const missing = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+  try {
+    const error = await installBundle({
+      commandRunner: { run: async () => { throw missing; } },
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      mode: 'marketplace',
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7002', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('--mode local');
+    await expect(access(marketplaceRepo(home))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('refuses marketplace mode for an Agent Plugins bundle without .cursor-plugin/plugin.json', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const { calls, runner } = recordingRunner();
+  try {
+    await rm(join(fixture.bundleRoot, '.cursor-plugin'), { recursive: true });
+    await writeJson(join(fixture.bundleRoot, 'plugin.json'), { name: 'install-fixture', version: '1.2.3' });
+    const error = await installBundle({
+      commandRunner: runner,
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      mode: 'marketplace',
+    }).catch((failure: unknown) => failure);
+
+    // The public install path already fails closed on the missing Cursor manifest (AB7001);
+    // stageCursorMarketplace repeats the check (AB7003) for direct callers.
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7001', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('No cursor bundle manifest');
+    expect(calls).toEqual([]);
+    await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const direct = await stageCursorMarketplace({
+      cursorRoot: join(home, '.cursor'),
+      identity: { bundleRoot: fixture.bundleRoot, plugin: 'install-fixture', version: '1.2.3' },
+      runner,
+      treeHash: async () => 'unused',
+    }).catch((failure: unknown) => failure);
+    expect((direct as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'cursor' }]);
+    expect((direct as DiagnosticError).diagnostics[0]?.message).toContain('--mode local');
+    expect(calls).toEqual([]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('refuses marketplace mode for a bundle that contains nested Git metadata', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const { calls, runner } = recordingRunner();
+  try {
+    // A `.git` anywhere in the bundle would be committed as an empty gitlink (mode 160000), not as files.
+    await mkdir(join(fixture.bundleRoot, 'vendor', 'tool', '.git'), { recursive: true });
+    await writeJson(join(fixture.bundleRoot, 'vendor', 'tool', '.git', 'config'), {});
+    const error = await installBundle({
+      commandRunner: runner,
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      mode: 'marketplace',
+    }).catch((failure: unknown) => failure);
+
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(join('vendor', 'tool', '.git'));
+    expect(calls).toEqual([]);
+    await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('fails closed when the committed tree does not hold the staged bytes', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  // A git that silently transformed one blob (e.g. through a clean filter) reports a different id for it.
+  const { runner } = recordingRunner(async (call) => (await gitLike(call))
+    .replace(/[0-9a-f]{40}(\tplugins\/install-fixture\/payload\.txt)/u, `${'0'.repeat(40)}$1`));
+  try {
+    const error = await installBundle({ commandRunner: runner, from: fixture.from, home, host: 'cursor', mode: 'marketplace' })
+      .catch((failure: unknown) => failure);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7004', target: 'cursor' }]);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugins/install-fixture/payload.txt');
+    await expect(access(marketplaceRepo(home))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(join(home, '.cursor', 'agent-bundle', 'marketplaces'))).toEqual([]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('rejects an install mode for hosts other than Cursor', async () => {
+  const fixture = await createHostBundle('claude');
+  const { calls, runner } = recordingRunner();
+  try {
+    const error = await installBundle({
+      commandRunner: runner,
+      from: fixture.from,
+      host: 'claude',
+      mode: 'marketplace',
+    }).catch((failure: unknown) => failure);
+
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7003', target: 'claude' }]);
+    expect(calls).toEqual([]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('passes --mode through the public CLI and prints the staged next steps', async () => {
+  const stderr: string[] = [];
+  const stdout: string[] = [];
+  const calls: unknown[] = [];
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const dependencies = {
+    installBundle: async (options: unknown) => {
+      calls.push(options);
+      return {
+        bundleRoot: '/tmp/example bundle',
+        commit: 'abc123',
+        destination: '/home/user/.cursor/agent-bundle/marketplaces/fixture',
+        host: 'cursor',
+        marketplace: 'fixture-marketplace',
+        mode: 'marketplace',
+        nextSteps: ['Open Cursor and import /home/user/.cursor/agent-bundle/marketplaces/fixture.'],
+        plugin: 'fixture',
+        state: 'staged',
+        version: '1.0.0',
+      };
+    },
+  } as unknown as Parameters<typeof runCli>[2];
+
+  const code = await runCli(
+    ['install', 'cursor', '--from', '/tmp/example bundle', '--mode', 'marketplace'],
+    {
+      stderr: { write: (chunk: string) => stderr.push(chunk) },
+      stdout: { write: (chunk: string) => stdout.push(chunk) },
+    },
+    dependencies,
+  );
+
+  expect(code).toBe(0);
+  expect(stderr.join('')).toBe('');
+  expect(calls).toEqual([{ from: '/tmp/example bundle', host: 'cursor', mode: 'marketplace', replace: false, scope: 'user' }]);
+  expect(stdout.join('')).toBe([
+    'Staged fixture@1.0.0 for cursor (marketplace mode) at /home/user/.cursor/agent-bundle/marketplaces/fixture',
+    'Marketplace: fixture-marketplace @ abc123',
+    'Next steps:',
+    '  1. Open Cursor and import /home/user/.cursor/agent-bundle/marketplaces/fixture.',
+    '',
+  ].join('\n'));
+
+  const invalid = await runCli(
+    ['install', 'cursor', '--from', '/tmp/example bundle', '--mode', 'remote'],
+    {
+      stderr: { write: (chunk: string) => stderr.push(chunk) },
+      stdout: { write: () => undefined },
+    },
+    dependencies,
+  );
+  expect(invalid).not.toBe(0);
+  expect(stderr.join('')).toContain('Install mode must be local or marketplace.');
+});
+
+it('labels a repeated marketplace-mode run as already staged, not installed', () => {
+  const base = {
+    bundleRoot: '/tmp/example bundle',
+    host: 'cursor' as const,
+    plugin: 'fixture',
+    state: 'already-installed' as const,
+    version: '1.0.0',
+  };
+  expect(formatInstallResult({
+    ...base,
+    commit: 'abc123',
+    destination: '/home/user/.cursor/agent-bundle/marketplaces/fixture',
+    marketplace: 'fixture-marketplace',
+    mode: 'marketplace',
+    nextSteps: ['Open Cursor and import the repository.'],
+  })).toBe([
+    'Already staged fixture@1.0.0 for cursor (marketplace mode) at /home/user/.cursor/agent-bundle/marketplaces/fixture',
+    'Marketplace: fixture-marketplace @ abc123',
+    'Next steps:',
+    '  1. Open Cursor and import the repository.',
+    '',
+  ].join('\n'));
+  expect(formatInstallResult({ ...base, destination: '/home/user/.cursor/plugins/local/fixture', mode: 'local' }))
+    .toBe('Already installed fixture@1.0.0 for cursor (local mode) at /home/user/.cursor/plugins/local/fixture\n');
 });

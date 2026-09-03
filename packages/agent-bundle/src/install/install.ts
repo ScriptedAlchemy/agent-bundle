@@ -10,6 +10,7 @@ import { errorMessage, isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
+import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import {
   compareInstalledTree,
   createInstallReceipt,
@@ -29,7 +30,15 @@ export type InstallScope = 'local' | 'project' | 'user';
  * `adopted`: a byte-identical pre-receipt Cursor copy gained its receipt under
  * `--replace`; no plugin file changed.
  */
-export type InstallResultState = 'adopted' | 'already-installed' | 'installed' | 'replaced';
+export type InstallResultState = 'adopted' | 'already-installed' | 'installed' | 'replaced' | 'staged';
+
+/**
+ * Cursor delivery mode: `local` copies into `~/.cursor/plugins/local/<name>`
+ * (loads on reload, shown as a local plugin); `marketplace` stages a committed
+ * local marketplace repository that Cursor's Customize import registers as a
+ * marketplace-installed plugin. See install/cursor-marketplace.ts.
+ */
+export type InstallMode = 'local' | 'marketplace';
 
 export interface InstallCommandResult {
   readonly code: number;
@@ -58,6 +67,8 @@ export interface InstallBundleOptions {
    * replaced automatically; foreign directories are always refused.
    */
   readonly replace?: boolean;
+  /** Cursor only; defaults to `local`. Other hosts reject an explicit mode. */
+  readonly mode?: InstallMode;
   readonly scope?: InstallScope;
 }
 
@@ -65,12 +76,21 @@ export interface InstallResult {
   readonly bundleRoot: string;
   /** sha256 over the artifact tree that was installed or found already installed. */
   readonly contentHash?: string;
+  /** Git commit of the staged marketplace repository (`mode: 'marketplace'`). */
+  readonly commit?: string;
   readonly destination?: string;
   readonly host: InstallHost;
   readonly marketplace?: string;
+  readonly mode?: InstallMode;
+  /** Remaining host-owned steps the installer cannot perform non-interactively. */
+  readonly nextSteps?: readonly string[];
   readonly plugin: string;
   /** Content hash of the copy a `replaced` install superseded. */
   readonly previousContentHash?: string;
+  /**
+   * `staged` means the marketplace repository is ready and Cursor's import step is still pending
+   * (`mode: 'marketplace'`).
+   */
   readonly state: InstallResultState;
   readonly version: string;
 }
@@ -508,14 +528,7 @@ const collisionMessage = (
   }
 };
 
-const installCursor = async (
-  options: InstallBundleOptions,
-  identity: PluginIdentity,
-  scope: InstallScope,
-): Promise<InstallResult> => {
-  if (scope !== 'user') {
-    throw failure('AB7003', `Cursor local plugin installation supports only user scope, not ${scope}.`, 'cursor');
-  }
+const resolveCursorRoot = async (options: InstallBundleOptions): Promise<string> => {
   const cursorRoot = join(options.home ?? homedir(), '.cursor');
   let cursorMetadata: Awaited<ReturnType<typeof lstat>>;
   try {
@@ -529,12 +542,56 @@ const installCursor = async (
   if (!cursorMetadata.isDirectory()) {
     throw failure('AB7002', `Cursor home ${JSON.stringify(cursorRoot)} is not a directory.`, 'cursor');
   }
+  return cursorRoot;
+};
+
+const installCursorMarketplace = async (
+  options: InstallBundleOptions,
+  identity: PluginIdentity,
+): Promise<InstallResult> => {
+  const cursorRoot = await resolveCursorRoot(options);
+  try {
+    const staged = await stageCursorMarketplace({
+      cursorRoot,
+      identity,
+      runner: options.commandRunner ?? defaultCommandRunner,
+      treeHash,
+    });
+    return {
+      bundleRoot: identity.bundleRoot,
+      ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+      destination: staged.destination,
+      host: 'cursor',
+      marketplace: staged.marketplace,
+      mode: 'marketplace',
+      nextSteps: staged.nextSteps,
+      plugin: identity.plugin,
+      state: staged.state,
+      version: identity.version,
+    };
+  } catch (error) {
+    if (error instanceof DiagnosticError) throw error;
+    throw failure('AB7004', errorMessage(error), 'cursor');
+  }
+};
+
+const installCursor = async (
+  options: InstallBundleOptions,
+  identity: PluginIdentity,
+  scope: InstallScope,
+): Promise<InstallResult> => {
+  if (scope !== 'user') {
+    throw failure('AB7003', `Cursor plugin installation supports only user scope, not ${scope}.`, 'cursor');
+  }
+  if (options.mode === 'marketplace') return installCursorMarketplace(options, identity);
+  const cursorRoot = await resolveCursorRoot(options);
   const installRoot = join(cursorRoot, 'plugins', 'local');
   const destination = join(installRoot, identity.plugin);
   const base = {
     bundleRoot: identity.bundleRoot,
     destination,
     host: 'cursor',
+    mode: 'local',
     plugin: identity.plugin,
     version: identity.version,
   } as const;
@@ -607,6 +664,13 @@ const installProgram = Effect.fnUntraced(function*(
   options: InstallBundleOptions,
 ): Effect.fn.Return<InstallResult, unknown> {
   const scope = options.scope ?? 'user';
+  if (options.mode !== undefined && options.host !== 'cursor') {
+    return yield* Effect.fail(failure(
+      'AB7003',
+      `Install mode ${JSON.stringify(options.mode)} applies to the cursor host only.`,
+      options.host,
+    ));
+  }
   const identity = yield* liftPromise(() => readIdentity(options.from, options.host));
   switch (options.host) {
     case 'claude':

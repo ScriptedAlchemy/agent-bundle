@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -776,6 +776,26 @@ it('reports unreadable Cursor local plugin directory as unknown inventory', asyn
     expect(report.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB7304', severity: 'error' }),
     ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an unreadable Cursor marketplace staging root as an AB7324 finding instead of aborting', async () => {
+  const fixture = await temporaryDoctor();
+  const stagingRoot = join(fixture.home, '.cursor', 'agent-bundle', 'marketplaces');
+  try {
+    await mkdir(dirname(stagingRoot), { recursive: true });
+    await writeFile(stagingRoot, 'not a directory');
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([]);
+    const staging = report.diagnostics.filter((entry) => entry.code === 'AB7324');
+    expect(staging).toEqual([expect.objectContaining({ severity: 'error' })]);
+    expect(staging[0]?.message).toContain('could not be read');
   } finally {
     await fixture.cleanup();
   }
@@ -1722,4 +1742,469 @@ it('rejects an invalid Doctor host as a usage error', async () => {
   );
   expect(code).toBe(2);
   expect(stderr.join('')).toContain('Doctor host must be claude, codex, or cursor.');
+});
+
+const writeHookedCursorPlugin = async (pluginRoot: string, version = '1.2.3'): Promise<void> => {
+  await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), {
+    description: 'Hooked doctor fixture.',
+    hooks: './hooks/hooks.json',
+    name: 'hooked-fixture',
+    version,
+  });
+  await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+    hooks: {
+      postToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/after-tool.mjs"', matcher: '^Shell$' }],
+      preToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/before-tool.mjs"', matcher: '^Shell$' }],
+      stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.mjs"' }],
+    },
+    version: 1,
+  });
+  await mkdir(join(pluginRoot, 'hooks'), { recursive: true });
+  for (const script of ['after-tool.mjs', 'before-tool.mjs', 'stop.mjs']) {
+    await writeFile(join(pluginRoot, 'hooks', script), 'export {};\n');
+  }
+};
+
+it('proves plugin-scoped Cursor hook registration and flags stale, missing, and duplicate delivery', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'hooked-fixture');
+  const doctor = (options: { readonly platform?: NodeJS.Platform } = {}) =>
+    runDoctor({ ...options, endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+  const hookDiagnostics = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7322' || entry.code === 'AB7323');
+  try {
+    await writeHookedCursorPlugin(pluginRoot);
+
+    const registered = await doctor();
+    expect(hostReport(registered, 'cursor').inventory.findings).toEqual([expect.objectContaining({
+      entry: 'hooked-fixture',
+      hooks: {
+        commands: 3,
+        duplicates: [],
+        events: ['postToolUse', 'preToolUse', 'stop'],
+        source: join(pluginRoot, 'hooks/hooks.json'),
+        state: 'registered',
+      },
+      state: 'installed',
+    })]);
+    expect(hookDiagnostics(registered)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'info' })]);
+    expect(hookDiagnostics(registered)[0]?.message).toContain('postToolUse, preToolUse, stop');
+
+    // Prompt hooks are a valid pinned-schema shape; they register without a script-path check.
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: {
+        postToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/after-tool.mjs"', matcher: '^Shell$' }],
+        preToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/before-tool.mjs"', matcher: '^Shell$', type: 'command' }],
+        stop: [{ prompt: 'Did the agent finish every task?', type: 'prompt' }],
+      },
+      version: 1,
+    });
+    const prompted = await doctor();
+    expect(hostReport(prompted, 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      commands: 2,
+      events: ['postToolUse', 'preToolUse', 'stop'],
+      state: 'registered',
+    });
+    expect(hookDiagnostics(prompted)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'info' })]);
+    expect(hookDiagnostics(prompted)[0]?.message).toContain('2 command(s), 1 prompt hook(s)');
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ type: 'prompt' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    // Shapes the pinned hooks.schema.json rejects (unknown event, extra entry property) never count as registered.
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { onToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/after-tool.mjs"' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.mjs"', unexpected: true }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    await writeHookedCursorPlugin(pluginRoot);
+
+    // A sibling plugin whose path shares this plugin's path as a prefix must not count as duplicate delivery.
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { preToolUse: [{ command: `node ${pluginRoot}-tools/hooks/before-tool.mjs` }] },
+      version: 1,
+    });
+    const sibling = await doctor();
+    expect(hostReport(sibling, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ duplicates: [], state: 'registered' });
+    expect(hookDiagnostics(sibling).map((entry) => entry.code)).toEqual(['AB7322']);
+
+    // User hooks run from ~/.cursor, so a relative command that lands inside the plugin is duplicate delivery too.
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { stop: [{ command: 'node ./plugins/local/hooked-fixture/hooks/stop.mjs' }] },
+      version: 1,
+    });
+    const relative = await doctor();
+    expect(hostReport(relative, 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      duplicates: ['node ./plugins/local/hooked-fixture/hooks/stop.mjs'],
+    });
+    expect(hookDiagnostics(relative).map((entry) => entry.code)).toEqual(['AB7322', 'AB7323']);
+    // Windows-relative spellings resolve the same way.
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { stop: [{ command: 'node .\\plugins\\local\\hooked-fixture\\hooks\\stop.mjs' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      duplicates: ['node .\\plugins\\local\\hooked-fixture\\hooks\\stop.mjs'],
+    });
+    // A leading shell assignment is not the command word.
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { stop: [{ command: 'NODE_ENV=production node ./plugins/local/hooked-fixture/hooks/stop.mjs' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      duplicates: ['NODE_ENV=production node ./plugins/local/hooked-fixture/hooks/stop.mjs'],
+    });
+    // On Windows the filesystem is case-insensitive, so a differently cased spelling still runs the plugin's file.
+    const upperCased = `node ${join(pluginRoot, 'hooks/before-tool.mjs').toUpperCase()}`;
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { preToolUse: [{ command: upperCased }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor({ platform: 'win32' }), 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      duplicates: [upperCased],
+    });
+    expect(hostReport(await doctor({ platform: 'linux' }), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ duplicates: [] });
+    // A plugin-local path passed as data to an unrelated script is not duplicate delivery.
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { stop: [{ command: 'node ./hooks/audit.mjs --output ./plugins/local/hooked-fixture/state/result.json' }] },
+      version: 1,
+    });
+    const dataArgument = await doctor();
+    expect(hostReport(dataArgument, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ duplicates: [], state: 'registered' });
+    expect(hookDiagnostics(dataArgument).map((entry) => entry.code)).toEqual(['AB7322']);
+
+    await writeJson(join(fixture.home, '.cursor', 'hooks.json'), {
+      hooks: { preToolUse: [{ command: `node ${join(pluginRoot, 'hooks/before-tool.mjs')}` }] },
+      version: 1,
+    });
+    const duplicated = await doctor();
+    expect(hostReport(duplicated, 'cursor').inventory.findings[0]?.hooks).toMatchObject({
+      duplicates: [`node ${join(pluginRoot, 'hooks/before-tool.mjs')}`],
+      state: 'registered',
+    });
+    expect(hookDiagnostics(duplicated).map((entry) => [entry.code, entry.severity])).toEqual([
+      ['AB7322', 'info'],
+      ['AB7323', 'warning'],
+    ]);
+    expect(hookDiagnostics(duplicated)[1]?.message).toContain('would run twice');
+
+    await writeFile(join(fixture.home, '.cursor', 'hooks.json'), '{ not json');
+    const unparsable = await doctor();
+    expect(hookDiagnostics(unparsable)[1]).toMatchObject({ code: 'AB7323', severity: 'warning' });
+    expect(hookDiagnostics(unparsable)[1]?.message).toContain('not a valid Cursor hooks document');
+    await rm(join(fixture.home, '.cursor', 'hooks.json'));
+
+    // Quoted paths containing whitespace stay one token.
+    await mkdir(join(pluginRoot, 'hooks'), { recursive: true });
+    await writeFile(join(pluginRoot, 'hooks', 'my hook.mjs'), 'export {};\n');
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/my hook.mjs" --quiet' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 1, state: 'registered' });
+
+    // Relative scripts passed to an interpreter resolve against the plugin root and are checked too.
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node ./hooks/gone.mjs --flag' }] },
+      version: 1,
+    });
+    const relativeArgument = await doctor();
+    expect(hostReport(relativeArgument, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    expect(hookDiagnostics(relativeArgument)[0]?.message).toContain(join(pluginRoot, 'hooks/gone.mjs'));
+
+    // Only the executed script is probed: other plugin-relative operands (outputs, config) may not exist yet.
+    await writeFile(join(pluginRoot, 'hooks', 'run.mjs'), 'export {};\n');
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node --no-warnings ./hooks/run.mjs --output ./state/result.json' }] },
+      version: 1,
+    });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 1, state: 'registered' });
+
+    // Value-taking interpreter options do not hide the entry script: the preload exists, the script does not.
+    await writeFile(join(pluginRoot, 'hooks', 'preload.cjs'), 'module.exports = {};\n');
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node --require ./hooks/preload.cjs --title=hook ./hooks/gone.mjs' }] },
+      version: 1,
+    });
+    const optionOperand = await doctor();
+    expect(hostReport(optionOperand, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    expect(hookDiagnostics(optionOperand)[0]?.message).toContain(join(pluginRoot, 'hooks/gone.mjs'));
+
+    // Bare relative operands resolve against the plugin root too (pinned schema: relative to the hook source root),
+    // and PowerShell's -File operand is the entry script.
+    for (const command of [
+      'node hooks/gone.mjs',
+      'pwsh -NoProfile -File hooks/gone.mjs',
+      'PowerShell.EXE -NoProfile -EXECUTIONPOLICY Bypass -File hooks/gone.mjs',
+      '/usr/bin/env node ./hooks/gone.mjs',
+      'NODE_ENV=production node hooks/gone.mjs',
+      'A=1 B=2 /usr/bin/env node ./hooks/gone.mjs',
+      'bun run "${CURSOR_PLUGIN_ROOT}/hooks/gone.mjs"',
+      'deno run -A ./hooks/gone.mjs',
+      'env FOO=1 -u BAR node hooks/gone.mjs',
+      'Node.exe "${CURSOR_PLUGIN_ROOT}\\hooks\\gone.mjs"',
+      'hooks/gone.mjs --flag',
+    ]) {
+      await writeJson(join(pluginRoot, 'hooks/hooks.json'), { hooks: { stop: [{ command }] }, version: 1 });
+      const bareRelative = await doctor();
+      expect(hostReport(bareRelative, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+      expect(hookDiagnostics(bareRelative)[0]?.message).toContain(join(pluginRoot, 'hooks/gone.mjs'));
+    }
+    // A bare executable word is a PATH lookup, not a plugin file.
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), { hooks: { stop: [{ command: 'gone-tool --flag hooks/gone.mjs' }] }, version: 1 });
+    expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 1, state: 'registered' });
+
+    // Inline source runs no script file, so there is nothing under the plugin root to probe.
+    for (const command of ['node -e "process.exit(0)" ./hooks/gone.mjs', 'PowerShell.EXE -COMMAND "Write-Output ok"']) {
+      await writeJson(join(pluginRoot, 'hooks/hooks.json'), { hooks: { stop: [{ command }] }, version: 1 });
+      expect(hostReport(await doctor(), 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 1, state: 'registered' });
+    }
+
+    // A hook target that traverses a regular file (ENOTDIR) is reported stale rather than aborting Doctor.
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.mjs/child.mjs"' }] },
+      version: 1,
+    });
+    const traversesFile = await doctor();
+    expect(hostReport(traversesFile, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    expect(hookDiagnostics(traversesFile)[0]?.message).toContain('stop.mjs/child.mjs');
+    await writeHookedCursorPlugin(pluginRoot);
+
+    await rm(join(pluginRoot, 'hooks', 'stop.mjs'));
+    const stale = await doctor();
+    expect(hostReport(stale, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ state: 'stale' });
+    expect(hookDiagnostics(stale)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'error' })]);
+    expect(hookDiagnostics(stale)[0]?.message).toContain('stop.mjs');
+
+    await rm(join(pluginRoot, 'hooks', 'hooks.json'));
+    const missing = await doctor();
+    expect(hostReport(missing, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 0, events: [], state: 'missing' });
+    expect(hookDiagnostics(missing)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'error' })]);
+    expect(hookDiagnostics(missing)[0]?.message).toContain('is missing');
+
+    // A hooks document that is not a regular file (a FIFO would block `readFile` forever) is stale, not a hang —
+    // both at the pinned `hooks/hooks.json` path and at a manifest-declared custom path.
+    if (process.platform !== 'win32') {
+      const mkfifo = (path: string) => new Promise<void>((resolvePromise, reject) => {
+        const child = spawn('mkfifo', [path], { stdio: 'ignore' });
+        child.on('error', reject);
+        child.on('exit', (code) => (code === 0 ? resolvePromise() : reject(new Error(`mkfifo exited ${code}`))));
+      });
+      await mkfifo(join(pluginRoot, 'hooks', 'hooks.json'));
+      const fifo = await doctor();
+      expect(hostReport(fifo, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 0, state: 'stale' });
+      expect(hookDiagnostics(fifo)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'error' })]);
+      await rm(join(pluginRoot, 'hooks', 'hooks.json'));
+      await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), {
+        description: 'Hooked doctor fixture.',
+        hooks: 'custom-hooks.json',
+        name: 'hooked-fixture',
+        version: '1.2.3',
+      });
+      await mkfifo(join(pluginRoot, 'custom-hooks.json'));
+      const customFifo = await doctor();
+      expect(hostReport(customFifo, 'cursor').inventory.findings[0]?.hooks).toMatchObject({ commands: 0, state: 'stale' });
+      expect(hookDiagnostics(customFifo)).toEqual([expect.objectContaining({ code: 'AB7322', severity: 'error' })]);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a plugin without declared hooks as having no hook registration', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await cp(bundle, join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture'), { recursive: true });
+
+    const report = await runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+
+    expect(hostReport(report, 'cursor').inventory.findings[0]?.hooks).toEqual({
+      commands: 0,
+      duplicates: [],
+      events: [],
+      state: 'none',
+    });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7322')).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('tracks staged Cursor marketplaces from staged to imported', async () => {
+  const fixture = await temporaryDoctor();
+  const repo = join(fixture.home, '.cursor', 'agent-bundle', 'marketplaces', 'doctor-fixture');
+  const commit = 'a'.repeat(40);
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await cp(bundle, join(repo, 'plugins', 'doctor-fixture'), { recursive: true });
+    await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'doctor-fixture' },
+      plugins: [{ name: 'doctor-fixture', source: 'plugins/doctor-fixture' }],
+    });
+    await mkdir(join(repo, '.git', 'refs', 'heads'), { recursive: true });
+    await writeFile(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    await writeFile(join(repo, '.git', 'refs', 'heads', 'main'), `${commit}\n`);
+    // Doctor verifies the staged repository through git (object exists, tree clean); the fixture is not a
+    // real repository, so answer those read-only probes here.
+    const gitState = { dirty: false, object: true };
+    const gitCalls: string[][] = [];
+    const fakeGit: DoctorCommandRunner = async (request) => {
+      expect(request.executable).toBe('git');
+      expect(request.cwd).toBe(repo);
+      gitCalls.push([...request.args]);
+      if (request.args[0] === 'cat-file') {
+        expect(request.args).toEqual(['cat-file', '-e', `${commit}^{commit}`]);
+        return commandResult(gitState.object ? {} : { exitCode: 128, stderr: 'fatal: Not a valid object name' });
+      }
+      expect(request.args).toEqual(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all', '--ignored=matching']);
+      return commandResult({ stdout: gitState.dirty ? '?? plugins/doctor-fixture/extra.txt\n' : '' });
+    };
+    const doctor = () => runDoctor({ commandRunner: fakeGit, endpointDirectory: fixture.endpointDirectory, from: bundle, home: fixture.home, hosts: ['cursor'] });
+
+    const staged = await doctor();
+    expect(gitCalls.map((args) => args.includes('cat-file') ? 'cat-file' : 'status')).toEqual(['cat-file', 'status', 'cat-file', 'status']);
+    const stagedFinding = {
+      commit,
+      entry: 'doctor-fixture',
+      manifest: '.cursor-plugin/marketplace.json',
+      marketplace: 'doctor-fixture-marketplace',
+      name: 'doctor-fixture',
+      path: repo,
+      version: '1.2.3',
+    };
+    expect(hostReport(staged, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'unregistered' }]);
+    expect(hostReport(staged, 'cursor').bundle).toMatchObject({ commit, marketplace: 'doctor-fixture-marketplace', path: repo, state: 'unregistered' });
+    const stagedDiagnostics = staged.diagnostics.filter((entry) => entry.code === 'AB7324');
+    expect(stagedDiagnostics.map((entry) => entry.severity)).toEqual(['warning', 'warning']);
+    expect(stagedDiagnostics[0]?.recovery).toContain('Add Plugins from Local Repository');
+    expect(staged.diagnostics.filter((entry) => entry.code === 'AB7307')).toEqual([]);
+
+    // The same plugin cached from a different marketplace does not prove this staged repository was imported.
+    await writeJson(
+      join(fixture.home, '.cursor', 'plugins', 'cache', 'some-other-marketplace', 'doctor-fixture', commit, '.cursor-plugin', 'plugin.json'),
+      { name: 'doctor-fixture', version: '1.2.3' },
+    );
+    const foreign = await doctor();
+    expect(hostReport(foreign, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'unregistered' }]);
+
+    // A cache directory without Cursor's `.cache-complete` receipt is a half-written copy, not an import.
+    const cacheRoot = join(fixture.home, '.cursor', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture');
+    const cached = join(cacheRoot, commit);
+    await writeJson(join(cached, '.cursor-plugin', 'plugin.json'), { name: 'doctor-fixture', version: '1.2.3' });
+    const incomplete = await doctor();
+    expect(hostReport(incomplete, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'unregistered' }]);
+
+    // A receipted copy from an earlier staging commit, or a malformed cache entry, does not prove this commit was imported.
+    const previous = join(cacheRoot, 'b'.repeat(40));
+    await writeJson(join(previous, '.cursor-plugin', 'plugin.json'), { name: 'doctor-fixture', version: '1.2.3' });
+    await writeFile(join(previous, '.cache-complete'), '');
+    await writeFile(join(cacheRoot, 'not-a-directory'), 'stray');
+    const staleReceipt = await doctor();
+    expect(hostReport(staleReceipt, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'unregistered' }]);
+
+    await writeFile(join(cached, '.cache-complete'), '');
+    const imported = await doctor();
+    expect(hostReport(imported, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'registered' }]);
+    expect(hostReport(imported, 'cursor').bundle?.state).toBe('registered');
+    expect(imported.diagnostics.filter((entry) => entry.code === 'AB7324').map((entry) => entry.severity)).toEqual(['info', 'info']);
+
+    // A stray regular file in the staging root is not a staged marketplace and must not abort Doctor.
+    await writeFile(join(fixture.home, '.cursor', 'agent-bundle', 'marketplaces', 'README.txt'), 'notes\n');
+    expect(hostReport(await doctor(), 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'registered' }]);
+
+    // Cursor imports the commit: a working tree that differs from HEAD (even when it matches the source bundle)
+    // is corrupt for both the inventory and `--from`, never "registered".
+    gitState.dirty = true;
+    const dirty = await doctor();
+    expect(hostReport(dirty, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'corrupt' }]);
+    expect(hostReport(dirty, 'cursor').bundle).toMatchObject({ path: repo, state: 'corrupt' });
+    expect(dirty.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('differs from committed HEAD');
+    gitState.dirty = false;
+
+    // A well-formed HEAD SHA whose commit object is absent cannot be imported either.
+    gitState.object = false;
+    const missingObject = await doctor();
+    expect(hostReport(missingObject, 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'corrupt' }]);
+    expect(missingObject.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('commit object does not exist');
+    gitState.object = true;
+    expect(hostReport(await doctor(), 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'registered' }]);
+
+    await writeFile(join(repo, 'plugins', 'doctor-fixture', 'payload.txt'), 'changed\n');
+    const drifted = await doctor();
+    expect(hostReport(drifted, 'cursor').bundle?.state).toBe('drifted');
+    expect(drifted.diagnostics.filter((entry) => entry.code === 'AB7308')[0]?.message).toContain('Staged Cursor marketplace copy');
+
+    // A parseable manifest that no longer lists the staged plugin is corrupt even when the cache matches.
+    await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'doctor-fixture' },
+      plugins: [{ name: 'other-plugin', source: 'plugins/other-plugin' }],
+    });
+    const unlisted = await doctor();
+    expect(hostReport(unlisted, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
+    expect(unlisted.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('not listing doctor-fixture at plugins/doctor-fixture');
+
+    // `doctor --from` must surface the same corrupt state once the staged bytes match the bundle again.
+    await cp(bundle, join(repo, 'plugins', 'doctor-fixture'), { force: true, recursive: true });
+    const corruptBundle = await doctor();
+    expect(hostReport(corruptBundle, 'cursor').bundle?.state).toBe('corrupt');
+
+    // A plugin manifest naming a different plugin than the entry is corrupt even with a valid marketplace entry.
+    await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'doctor-fixture' },
+      plugins: [{ name: 'doctor-fixture', source: 'plugins/doctor-fixture' }],
+    });
+    const stagedManifest = await readFile(join(repo, 'plugins', 'doctor-fixture', '.cursor-plugin', 'plugin.json'), 'utf8');
+    await writeJson(join(repo, 'plugins', 'doctor-fixture', '.cursor-plugin', 'plugin.json'), { name: 'someone-else', version: '1.2.3' });
+    const misnamed = await doctor();
+    expect(hostReport(misnamed, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
+    expect(misnamed.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('not named doctor-fixture');
+    await writeFile(join(repo, 'plugins', 'doctor-fixture', '.cursor-plugin', 'plugin.json'), stagedManifest);
+
+    // Any other pinned-schema violation in marketplace.json (here an empty owner name) is corrupt too.
+    await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: '' },
+      plugins: [{ name: 'doctor-fixture', source: 'plugins/doctor-fixture' }],
+    });
+    const invalidManifest = await doctor();
+    expect(hostReport(invalidManifest, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
+    expect(invalidManifest.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('pinned marketplace schema');
+    await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'doctor-fixture' },
+      plugins: [{ name: 'doctor-fixture', source: 'plugins/doctor-fixture' }],
+    });
+
+    // A .git directory whose HEAD cannot be resolved to a commit is not an importable repository.
+    await writeFile(join(repo, '.git', 'refs', 'heads', 'main'), 'not-a-sha\n');
+    const unbornHead = await doctor();
+    expect(hostReport(unbornHead, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
+    expect(unbornHead.diagnostics.filter((entry) => entry.code === 'AB7324')[0]?.message).toContain('no committed Git HEAD');
+    await writeFile(join(repo, '.git', 'refs', 'heads', 'main'), `${commit}\n`);
+    expect(hostReport(await doctor(), 'cursor').inventory.findings).toEqual([{ ...stagedFinding, state: 'registered' }]);
+
+    // A staged repository whose plugin copy was deleted is corrupt for `--from` too, not "missing".
+    await rm(join(repo, 'plugins', 'doctor-fixture'), { recursive: true });
+    const gonePlugin = await doctor();
+    expect(hostReport(gonePlugin, 'cursor').bundle).toMatchObject({ marketplace: 'doctor-fixture-marketplace', path: repo, state: 'corrupt' });
+    expect(gonePlugin.diagnostics.filter((entry) => entry.code === 'AB7307')).toEqual([]);
+    expect(gonePlugin.diagnostics.filter((entry) => entry.code === 'AB7324').length).toBeGreaterThan(0);
+    await cp(bundle, join(repo, 'plugins', 'doctor-fixture'), { recursive: true });
+
+    await rm(join(repo, '.git'), { recursive: true });
+    const corrupt = await doctor();
+    expect(hostReport(corrupt, 'cursor').inventory.findings).toEqual([expect.objectContaining({ entry: 'doctor-fixture', state: 'corrupt' })]);
+    expect(corrupt.diagnostics.filter((entry) => entry.code === 'AB7324')[0]).toMatchObject({ severity: 'error' });
+  } finally {
+    await fixture.cleanup();
+  }
 });

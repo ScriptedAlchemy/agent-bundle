@@ -117,7 +117,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
-| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
+| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, `--mode local\|marketplace` for Cursor, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
 | `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
@@ -174,6 +174,16 @@ agent-bundle install cursor --from artifact/cursor
 # or, from the emitted target directory:
 node ./install.mjs
 ```
+
+Cursor loads the copied `.cursor-plugin/plugin.json` and its manifest-declared
+`hooks/hooks.json` from that directory; plugin hooks run from the plugin root
+with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json`
+entry. `--mode marketplace` instead stages a committed local marketplace
+repository at `~/.cursor/agent-bundle/marketplaces/<name>` and prints the
+Customize -> Plugins -> "Add Plugins from Local Repository" step that makes
+Cursor manage the plugin as a marketplace install; `agent-bundle doctor --host
+cursor` reports hook registration (`AB7322`), duplicate user-level delivery
+(`AB7323`), and marketplace import state (`AB7324`).
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. A source-free artifact root is accepted

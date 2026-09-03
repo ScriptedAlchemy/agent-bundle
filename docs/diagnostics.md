@@ -36,7 +36,7 @@ even when no error diagnostic was reported.
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7321` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, and foreign-install detection (`AB7321`; see below). |
+| `AB7300`–`AB7324` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), and Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
@@ -796,3 +796,28 @@ artifact epochs. A package build failure never invalidates the artifact epoch
 that already committed; it surfaces as one `AB7103` **warning** on the
 succeeded build attempt, and the package build retries on the next
 invalidation. See `docs/entry-conventions.md` for the dev-watch contract.
+
+## Read-only Doctor Cursor hook registration and marketplace staging (`AB7322`–`AB7324`)
+
+Cursor delivers a plugin's hooks from its `.cursor-plugin/plugin.json` `hooks`
+declaration (observed 2026-09-03 on Cursor 3.18.25; see
+`docs/audits/2026-09-03-cursor-plugin-hooks-registration.md`). Doctor proves
+that registration statically and never writes `~/.cursor/hooks.json`.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB7322` | info / error | Info: an installed `.cursor-plugin/plugin.json` plugin registers plugin-scoped hooks (events and command count listed) and the script each command executes — `${CURSOR_PLUGIN_ROOT}/…` or any relative path, including an interpreter's entry operand — exists under the plugin root (`hooks.state = registered`). Error: the declared hooks file is missing (`missing`), is not a regular file or not a `{ version, hooks: { <event>: [{ command }] } }` document, or an executed script is absent (`stale`). Documents and scripts are probed with `stat` before any read, so a FIFO cannot stall Doctor. | Reinstall the plugin from a bundle whose emitted hooks document and scripts are intact. |
+| `AB7323` | warning | `~/.cursor/hooks.json` registers a command whose executed file (after leading `NAME=value` assignments, `env`, and interpreter options) points into an installed plugin directory — compared on path-component boundaries, case-folded on Windows — so Cursor would deliver that hook twice; or the file is not a valid hooks document. | Remove the plugin-pointing entries or repair the file; manifest registration alone is sufficient. |
+| `AB7324` | info / warning / error | A staged marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` (from `install cursor --mode marketplace`) is imported by Cursor (matching plugin under `~/.cursor/plugins/cache`; info, `registered`), still awaiting the Customize "Add Plugins from Local Repository" step (warning, `unregistered`), or incomplete (error, `corrupt`: manifests missing or failing the pinned schemas, no resolvable Git HEAD, HEAD naming a commit object that does not exist, or a working tree that differs from committed HEAD — verified read-only through `git cat-file -e` / `git --no-optional-locks status` when `git` is available). | Complete the Customize import, use `--mode local`, or remove the staged directory and rerun the installer. |
+
+The installer side reuses the `AB700x` codes: `AB7002` when `git` is missing
+in marketplace mode, `AB7003` when a mode is passed for a non-Cursor host, when
+marketplace mode is requested for a bundle without `.cursor-plugin/plugin.json`,
+or when the bundle contains nested Git metadata (`.git`, which `git add` would
+record as an empty gitlink), `AB7004` when a `git` step fails or the committed
+tree does not hold the staged bundle bytes (the installer disables `text`,
+`eol`, `filter`, `ident` and `working-tree-encoding` attributes through
+`.git/info/attributes`, adds with `core.autocrlf=false`, and proves every
+blob id in `git ls-tree -r HEAD` against the staged files; requires Git ≥ 2.29
+for `git init --object-format=sha1`), and `AB7005` for staged version or
+content collisions (including a working tree that differs from committed HEAD).

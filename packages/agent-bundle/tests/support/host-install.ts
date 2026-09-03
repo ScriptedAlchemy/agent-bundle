@@ -36,6 +36,7 @@ import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-in
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
+import { runDoctor } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
@@ -256,12 +257,27 @@ export interface CursorHostInstallReport {
     readonly mcp: 'schema-valid';
     readonly plugin: 'schema-valid';
   };
+  /** Doctor's read-only registration proof for the installed plugin's manifest hooks (#407). */
+  readonly hooksRegistration: {
+    readonly events: readonly string[];
+    readonly state: 'registered';
+    readonly userHooksJson: 'absent';
+  };
   readonly host: 'cursor';
   readonly install: {
     readonly first: 'installed';
     readonly sameVersionRebuild: SameVersionRebuildProof;
     readonly second: 'already-installed';
     readonly version: '1.0.0';
+  };
+  /** The emitted `install.mjs --mode marketplace` staging proof in the same isolated home (#407). */
+  readonly marketplace: {
+    readonly commit: 'git-sha';
+    readonly first: 'staged';
+    readonly imported: false;
+    readonly manifest: 'marketplace.json lists the plugin';
+    readonly repository: string;
+    readonly second: 'already-staged';
   };
   readonly logo: {
     readonly path: string;
@@ -1135,6 +1151,100 @@ const assertCursorPluginRootVariable = (input: {
   ]);
 };
 
+const assertCursorHooksRegistration = async (
+  home: string,
+  destination: string,
+): Promise<CursorHostInstallReport['hooksRegistration']> => {
+  await access(join(home, '.cursor', 'hooks.json')).then(
+    () => fail('Cursor install must not create ~/.cursor/hooks.json; plugin hooks are manifest-registered.'),
+    () => undefined,
+  );
+  const report = await runDoctor({ home, hosts: ['cursor'] });
+  const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+  const finding = cursor?.inventory.findings.find((entry) => entry.path === destination);
+  assertProof(finding !== undefined, 'Doctor did not inventory the installed Cursor plugin.');
+  assertProof(finding.hooks?.state === 'registered', `Doctor reported hooks ${JSON.stringify(finding.hooks)} instead of registered.`);
+  assertProof(finding.hooks.events.includes('sessionStart'), 'Doctor did not see the emitted sessionStart hook registration.');
+  assertProof(finding.hooks.duplicates.length === 0, 'Doctor reported duplicate user-level hook delivery.');
+  const proof = report.diagnostics.filter((entry) => entry.code === 'AB7322');
+  assertProof(
+    proof.length === 1 && proof[0]?.severity === 'info' && proof[0].message.includes('plugin-scoped hooks'),
+    `Doctor did not report AB7322 hook registration proof: ${JSON.stringify(proof)}`,
+  );
+  return Object.freeze({ events: finding.hooks.events, state: 'registered', userHooksJson: 'absent' });
+};
+
+const assertCursorMarketplaceStaging = async (
+  fixture: BuiltHostInstallFixture,
+  home: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<CursorHostInstallReport['marketplace']> => {
+  const installer = join(fixture.bundles.cursor, 'install.mjs');
+  const repository = join(home, '.cursor', 'agent-bundle', 'marketplaces', plugin);
+  const stage = async (expected: 'Already staged' | 'Staged'): Promise<string> => {
+    const result = await run(process.execPath, [installer, '--mode', 'marketplace'], {
+      cwd: fixture.bundles.cursor,
+      environment,
+    });
+    assertProof(result.exitCode === 0, `Cursor emitted installer (marketplace mode) failed: ${commandDetail(result)}`);
+    const [summary, marketplaceLine] = result.stdout.split('\n');
+    assertProof(
+      summary?.startsWith(`${expected} ${plugin}@${version} for cursor (marketplace mode) at ${repository}`) === true,
+      `Cursor emitted installer did not report ${expected.toLowerCase()}: ${JSON.stringify(summary)}`,
+    );
+    const commit = /@ ([0-9a-f]{40})$/u.exec(marketplaceLine ?? '')?.[1];
+    assertProof(commit !== undefined, `Cursor emitted installer did not print the marketplace commit: ${JSON.stringify(marketplaceLine)}`);
+    assertProof(
+      result.stdout.includes('Add Plugins from Local Repository') && result.stdout.includes(repository),
+      'Cursor emitted installer did not print the Customize import step.',
+    );
+    return commit;
+  };
+  const first = await stage('Staged');
+  const manifest = record(await readJson(join(repository, '.cursor-plugin', 'marketplace.json'), 'staged marketplace manifest'));
+  const plugins = manifest?.plugins;
+  assertProof(
+    manifest?.name === `${plugin}-marketplace` &&
+      Array.isArray(plugins) &&
+      record(plugins[0])?.name === plugin &&
+      record(plugins[0])?.source === `plugins/${plugin}` &&
+      Object.keys(record(plugins[0]) ?? {}).every((key) => ['description', 'minClientVersions', 'name', 'source'].includes(key)),
+    `Staged marketplace manifest did not list the plugin with pinned-schema entry fields only: ${JSON.stringify(manifest)}`,
+  );
+  const stagedPlugin = record(
+    await readJson(join(repository, 'plugins', plugin, '.cursor-plugin', 'plugin.json'), 'staged plugin manifest')
+      .catch(() => fail('Staged marketplace repository did not contain the plugin copy.')),
+  );
+  assertProof(
+    stagedPlugin?.name === plugin && stagedPlugin.version === version,
+    `Staged plugin copy did not carry the plugin version: ${JSON.stringify(stagedPlugin)}`,
+  );
+  await access(join(repository, '.git', 'HEAD')).catch(() => fail('Staged marketplace repository is not a git repository.'));
+  const second = await stage('Already staged');
+  assertProof(first === second, 'Re-running marketplace staging changed the commit.');
+
+  const report = await runDoctor({ from: fixture.bundles.cursor, home, hosts: ['cursor'] });
+  const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+  const staged = cursor?.inventory.findings.find((entry) => entry.path === repository);
+  assertProof(
+    staged?.state === 'unregistered' && staged.commit === first && staged.marketplace === `${plugin}-marketplace`,
+    `Doctor did not report the staged marketplace as awaiting import: ${JSON.stringify(staged)}`,
+  );
+  const pending = report.diagnostics.filter((entry) => entry.code === 'AB7324');
+  assertProof(
+    pending.length > 0 && pending.every((entry) => entry.severity === 'warning' && entry.recovery?.includes('Add Plugins from Local Repository') === true),
+    `Doctor did not report AB7324 import guidance: ${JSON.stringify(pending)}`,
+  );
+  return Object.freeze({
+    commit: 'git-sha',
+    first: 'staged',
+    imported: false,
+    manifest: 'marketplace.json lists the plugin',
+    repository: normalizedRelative(home, repository),
+    second: 'already-staged',
+  });
+};
+
 export const runCursorHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
   options: HostInstallProofOptions,
@@ -1194,6 +1304,9 @@ export const runCursorHostInstallProof = async (
       installedRoot: destination,
     });
 
+    const hooksRegistration = await assertCursorHooksRegistration(home, destination);
+    const marketplace = await assertCursorMarketplaceStaging(fixture, home, environment);
+
     return Object.freeze({
       destination: normalizedRelative(home, destination),
       documents: Object.freeze({
@@ -1201,6 +1314,7 @@ export const runCursorHostInstallProof = async (
         mcp: 'schema-valid',
         plugin: 'schema-valid',
       }),
+      hooksRegistration,
       host: 'cursor',
       install: Object.freeze({
         first: 'installed',
@@ -1208,6 +1322,7 @@ export const runCursorHostInstallProof = async (
         second: 'already-installed',
         version,
       }),
+      marketplace,
       logo: Object.freeze({
         path: logo,
         resolvesInsideDeployTree: true as const,

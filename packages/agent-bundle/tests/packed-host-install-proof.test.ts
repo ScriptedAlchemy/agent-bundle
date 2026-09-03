@@ -235,11 +235,20 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
       mcp: 'schema-valid',
       plugin: 'schema-valid',
     },
+    hooksRegistration: { events: ['sessionStart'], state: 'registered', userHooksJson: 'absent' },
     host: 'cursor',
     install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
     logo: {
       path: './assets/docs/media/logo.svg',
       resolvesInsideDeployTree: true,
+    },
+    marketplace: {
+      commit: 'git-sha',
+      first: 'staged',
+      imported: false,
+      manifest: 'marketplace.json lists the plugin',
+      repository: '.cursor/agent-bundle/marketplaces/host-install-proof',
+      second: 'already-staged',
     },
     pluginRootVariable: {
       locations: [
