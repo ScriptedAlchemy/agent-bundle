@@ -361,6 +361,8 @@ codexPluginIt(
           'defaultPrompt',
           'developerName',
           'displayName',
+          // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
+          'logo',
           'longDescription',
           'shortDescription',
         ],

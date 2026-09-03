@@ -140,6 +140,7 @@ export const planPackageEntries = async (
             name: model.metadata.name,
             version: model.metadata.version,
           },
+          providers: model.providers ?? [],
           routes: bin.generatedCli.routes,
           ...(model.state === undefined ? {} : { state: model.state }),
           ...(rendered ? { workerFile } : {}),
