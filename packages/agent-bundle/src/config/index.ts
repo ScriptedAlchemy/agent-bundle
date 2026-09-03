@@ -1,5 +1,6 @@
 import type { ClaudeConfigExtension } from '../adapters/claude.ts';
 import type { CodexConfigExtension } from '../adapters/codex.ts';
+import type { CursorConfigExtension } from '../adapters/cursor.ts';
 import type { PortableConfigExtension } from '../adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.ts';
 
@@ -36,6 +37,7 @@ export { validateModel, validateSource } from './validate.ts';
 export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension
   & CodexConfigExtension
+  & CursorConfigExtension
   & PortableConfigExtension;
 export type {
   AgentBundleConfigExtensions,

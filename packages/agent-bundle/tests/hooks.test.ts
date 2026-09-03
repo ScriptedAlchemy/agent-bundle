@@ -1225,6 +1225,109 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
   }
 }, 15_000);
 
+it('round-trips the documented Cursor subagent envelopes through published Cursor wrappers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-subagent-hook-codecs-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [
+      {
+        ...base.hooks[0]!,
+        event: 'agentStart',
+        id: 'hook:agent-start:subagent-start',
+        name: 'subagent-start',
+        source: join(sourceRoot, 'subagent-start.ts'),
+        targets: ['cursor'],
+      },
+      {
+        ...base.hooks[3]!,
+        event: 'agentStop',
+        id: 'hook:agent-stop:subagent-stop',
+        name: 'subagent-stop',
+        source: join(sourceRoot, 'subagent-stop.ts'),
+        targets: ['cursor'],
+      },
+    ],
+    targets: [
+      { id: 'target:cursor', name: 'cursor', provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') } },
+    ],
+  };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(
+        join(sourceRoot, 'subagent-start.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.toolUseId)}` });\n",
+      ),
+      writeFile(
+        join(sourceRoot, 'subagent-stop.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}:${String(event.agentType)}` });\n",
+      ),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const document = JSON.parse(await readFile(join(outputRoot, 'cursor', 'hooks', 'hooks.json'), 'utf8')) as {
+      readonly hooks: Readonly<Record<string, readonly unknown[]>>;
+      readonly version: number;
+    };
+    expect(document.version).toBe(1);
+    expect(document.hooks.subagentStart).toEqual([{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/subagent-start.mjs"' }]);
+    expect(document.hooks.subagentStop).toEqual([{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/subagent-stop.mjs"' }]);
+
+    const startInput = JSON.parse(await readFile(
+      new URL('./fixtures/events/cursor-subagent-start.json', import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const stopInput = JSON.parse(await readFile(
+      new URL('./fixtures/events/cursor-subagent-stop.json', import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    // https://cursor.com/docs/hooks#subagentstart: { permission, user_message }.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        permission: 'deny',
+        user_message: `${String(startInput.conversation_id)}:${String(startInput.subagent_id)}:${String(startInput.subagent_type)}:${String(startInput.tool_call_id)}`,
+      }),
+    });
+    // https://cursor.com/docs/hooks#subagentstop: { followup_message }.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}`,
+      }),
+    });
+    // The Claude/Codex agent_id/agent_type spelling is not the Cursor envelope.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), {
+      agent_id: 'abc-123',
+      agent_type: 'explore',
+      conversation_id: 'conv-456',
+      hook_event_name: 'subagentStart',
+    })).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native subagent_id must be a string\n',
+      stdout: '',
+    });
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), {
+      ...stopInput,
+      status: 'cancelled',
+    })).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native subagentStop status is invalid\n',
+      stdout: '',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 15_000);
+
 it('rejects malformed event-specific native input before calling generated Codex and Claude hooks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-input-'));
   const sourceRoot = join(root, 'src', 'hooks');

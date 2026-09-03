@@ -671,7 +671,7 @@ observed host version (`observedVersion`) and target, while adapters carry a mon
 `adapterRevision`. Git already versions repository-owned content; hashing it again inside the
 repository is self-referential and causes churn on every table edit.
 
-`AgentBundleConfig` merges bundled portable, Codex, and Claude declarations
+`AgentBundleConfig` merges bundled portable, Codex, Claude, and Cursor declarations
 through `AgentBundleConfigExtensions`. `TargetRegistry` owns the unique
 extension descriptor and adapter for each target. Ordinary projects need no
 extension key; extension values are strict finite JSON and host-specific values

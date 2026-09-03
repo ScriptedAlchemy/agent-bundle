@@ -208,7 +208,16 @@ export const createNativeEventStarter = (
         : { ...base, ...codexTurn, last_assistant_message: 'Lifecycle replay stopped.', stop_hook_active: false });
     case 'agent/start':
       return deepFreeze(target === 'cursor'
-        ? base
+        ? {
+            ...base,
+            is_parallel_worker: false,
+            parent_conversation_id: 'lifecycle-replay',
+            subagent_id: 'lifecycle-replay-agent',
+            subagent_model: 'default',
+            subagent_type: 'generalPurpose',
+            task: 'Lifecycle replay subagent task.',
+            tool_call_id: 'lifecycle-replay-tool',
+          }
         : {
             ...base,
             agent_id: 'lifecycle-replay-agent',
@@ -219,7 +228,20 @@ export const createNativeEventStarter = (
           });
     case 'agent/stop':
       return deepFreeze(target === 'cursor'
-        ? base
+        ? {
+            ...base,
+            agent_transcript_path: null,
+            description: 'Lifecycle replay subagent.',
+            duration_ms: 0,
+            loop_count: 0,
+            message_count: 0,
+            modified_files: [],
+            status: 'completed',
+            subagent_type: 'generalPurpose',
+            summary: 'Lifecycle replay subagent summary.',
+            task: 'Lifecycle replay subagent task.',
+            tool_call_count: 0,
+          }
         : {
             ...base,
             agent_id: 'lifecycle-replay-agent',
@@ -508,13 +530,34 @@ export const encodeCursorPlaygroundInput = (
   ...(nativeEvent === 'stop'
     ? { loop_count: input.stopHookActive === true ? 1 : 0, status: 'completed' }
     : {}),
+  // https://cursor.com/docs/hooks#subagentstart / #subagentstop (retrieved
+  // 2026-09-02): Cursor names the subagent fields subagent_* and reports the
+  // completion summary and follow-up loop count instead of Claude's
+  // last_assistant_message / stop_hook_active pair.
+  ...(nativeEvent === 'subagentStart'
+    ? {
+        subagent_id: input.agentId,
+        subagent_type: input.agentType,
+        task: '',
+        tool_call_id: input.toolUseId,
+      }
+    : {}),
+  ...(nativeEvent === 'subagentStop'
+    ? {
+        agent_transcript_path: input.agentTranscriptPath ?? null,
+        loop_count: input.stopHookActive === true ? 1 : 0,
+        status: 'completed',
+        subagent_type: input.agentType,
+        summary: input.lastAssistantMessage,
+      }
+    : {}),
   session_id: input.sessionId,
-  tool_input: input.toolInput,
-  tool_name: input.toolName,
+  ...(nativeEvent === 'subagentStart' || nativeEvent === 'subagentStop'
+    ? {}
+    : { tool_input: input.toolInput, tool_name: input.toolName, tool_use_id: input.toolUseId }),
   ...(nativeEvent === 'postToolUse' && input.toolResponse !== undefined
     ? { tool_output: JSON.stringify(input.toolResponse) }
     : {}),
-  tool_use_id: input.toolUseId,
   transcript_path: input.transcriptPath,
 });
 
@@ -523,8 +566,11 @@ export const encodeCursorPlaygroundOutput = (
   canonicalEvent: CanonicalHookEvent,
 ): Readonly<Record<string, unknown>> | undefined => {
   if (result === undefined) return undefined;
-  if (canonicalEvent === 'stop') {
+  if (canonicalEvent === 'stop' || canonicalEvent === 'agentStop') {
     return result.outcome === 'deny' ? defined({ followup_message: result.reason }) : undefined;
+  }
+  if (canonicalEvent === 'agentStart') {
+    return result.outcome === 'deny' ? defined({ permission: 'deny', user_message: result.reason }) : undefined;
   }
   if (canonicalEvent === 'beforeTool') {
     if (result.outcome === 'deny') {
@@ -704,15 +750,20 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  if (!isRecord(parsed)) fail("native tool_output must encode an object");',
   '  return parsed;',
   '};',
+  'const subagentEvent = canonicalEvent === "agentStart" || canonicalEvent === "agentStop";',
   'const decodeCursorNative = (nativeInput) => defined({',
+  '  agentId: canonicalEvent === "agentStart" ? nativeInput.subagent_id : undefined,',
+  '  agentTranscriptPath: canonicalEvent === "agentStop" ? nativeInput.agent_transcript_path ?? undefined : undefined,',
+  '  agentType: subagentEvent ? nativeInput.subagent_type : undefined,',
   '  cwd: nativeInput.cwd,',
   '  hookEventName: nativeInput.hook_event_name,',
-  '  sessionId: nativeInput.session_id ?? nativeInput.conversation_id,',
-  '  stopHookActive: canonicalEvent === "stop" ? nativeInput.loop_count > 0 : undefined,',
+  '  lastAssistantMessage: canonicalEvent === "agentStop" ? nativeInput.summary : undefined,',
+  '  sessionId: nativeInput.session_id ?? nativeInput.conversation_id ?? nativeInput.parent_conversation_id,',
+  '  stopHookActive: canonicalEvent === "stop" || canonicalEvent === "agentStop" ? nativeInput.loop_count > 0 : undefined,',
   '  toolInput: nativeInput.tool_input,',
   '  toolName: nativeInput.tool_name,',
   '  toolResponse: parsedToolOutput(nativeInput),',
-  '  toolUseId: nativeInput.tool_use_id,',
+  '  toolUseId: canonicalEvent === "agentStart" ? nativeInput.tool_call_id : nativeInput.tool_use_id,',
   '  transcriptPath: nativeInput.transcript_path ?? undefined,',
   '});',
   'const encodeCursorNative = (canonicalInput) => defined({',
@@ -720,11 +771,11 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  cwd: canonicalInput.cwd,',
   '  hook_event_name: nativeEvent,',
   '  ...(canonicalEvent === "stop" ? { loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed" } : {}),',
+  '  ...(canonicalEvent === "agentStart" ? { subagent_id: canonicalInput.agentId, subagent_type: canonicalInput.agentType, task: "", tool_call_id: canonicalInput.toolUseId } : {}),',
+  '  ...(canonicalEvent === "agentStop" ? { agent_transcript_path: canonicalInput.agentTranscriptPath ?? null, loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed", subagent_type: canonicalInput.agentType, summary: canonicalInput.lastAssistantMessage } : {}),',
   '  session_id: canonicalInput.sessionId,',
-  '  tool_input: canonicalInput.toolInput,',
-  '  tool_name: canonicalInput.toolName,',
+  '  ...(subagentEvent ? {} : { tool_input: canonicalInput.toolInput, tool_name: canonicalInput.toolName, tool_use_id: canonicalInput.toolUseId }),',
   '  ...(canonicalEvent === "afterTool" && canonicalInput.toolResponse !== undefined ? { tool_output: JSON.stringify(canonicalInput.toolResponse) } : {}),',
-  '  tool_use_id: canonicalInput.toolUseId,',
   '  transcript_path: canonicalInput.transcriptPath,',
   '});',
   'const validateResult = (result) => {',
@@ -736,16 +787,20 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  if (result.reason !== undefined && typeof result.reason !== "string") fail("handler result reason must be a string");',
   '  if (result.additionalContext !== undefined && typeof result.additionalContext !== "string") fail("handler result additionalContext must be a string");',
   '  if (result.updatedInput !== undefined && !isRecord(result.updatedInput)) fail("handler result updatedInput must be an object");',
-  '  if (result.reason !== undefined && !(result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop"))) fail("reason is only valid for a denied beforeTool or stop hook");',
-  '  if (result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop") && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
+  '  const supportsDeniedReason = canonicalEvent === "beforeTool" || canonicalEvent === "stop" || subagentEvent;',
+  '  if (result.reason !== undefined && !(result.outcome === "deny" && supportsDeniedReason)) fail("reason is only valid for a denied beforeTool, stop, agentStart, or agentStop hook");',
+  '  if (result.outcome === "deny" && supportsDeniedReason && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
   '  if ((canonicalEvent === "sessionStart" || canonicalEvent === "afterTool") && (result.outcome === "deny" || result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot deny, stop, or replace input`);',
   '  if (canonicalEvent === "beforeTool" && (result.outcome === "stop" || (result.outcome === "deny" && result.updatedInput !== undefined))) fail("beforeTool cannot stop or replace input while denying");',
   '  if (canonicalEvent === "stop" && (result.outcome === "stop" || result.updatedInput !== undefined || result.additionalContext !== undefined)) fail("stop only accepts continue or deny with a reason");',
+  '  if (subagentEvent && (result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot stop the parent flow or replace input`);',
+  '  if (subagentEvent && result.additionalContext !== undefined) fail(`Cursor ${nativeEvent} has no additional-context channel`);',
   '  return result;',
   '};',
   'const encodeOutput = (result) => {',
   '  if (result === undefined) return undefined;',
-  '  if (canonicalEvent === "stop") return result.outcome === "deny" ? defined({ followup_message: result.reason }) : undefined;',
+  '  if (canonicalEvent === "stop" || canonicalEvent === "agentStop") return result.outcome === "deny" ? defined({ followup_message: result.reason }) : undefined;',
+  '  if (canonicalEvent === "agentStart") return result.outcome === "deny" ? defined({ permission: "deny", user_message: result.reason }) : undefined;',
   '  if (canonicalEvent === "beforeTool") {',
   '    if (result.outcome === "deny") return defined({ agent_message: result.reason, permission: "deny", user_message: result.reason });',
   '    return result.updatedInput === undefined ? undefined : { permission: "allow", updated_input: result.updatedInput };',
@@ -754,7 +809,8 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '};',
   'const decodeOutput = (nativeOutput) => {',
   '  if (nativeOutput === undefined) return undefined;',
-  '  if (canonicalEvent === "stop") return typeof nativeOutput.followup_message === "string" ? { outcome: "deny", reason: nativeOutput.followup_message } : undefined;',
+  '  if (canonicalEvent === "stop" || canonicalEvent === "agentStop") return typeof nativeOutput.followup_message === "string" ? { outcome: "deny", reason: nativeOutput.followup_message } : undefined;',
+  '  if (canonicalEvent === "agentStart") return nativeOutput.permission === "deny" ? defined({ outcome: "deny", reason: nativeOutput.user_message }) : { outcome: "continue" };',
   '  if (canonicalEvent === "beforeTool") {',
   '    if (nativeOutput.permission === "deny") return defined({ outcome: "deny", reason: nativeOutput.agent_message });',
   '    return defined({ outcome: "continue", updatedInput: nativeOutput.updated_input });',
@@ -766,7 +822,7 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '};',
   'const validateNativeInput = (input) => {',
   '  if (input.hook_event_name !== nativeEvent) fail(`native hook_event_name must equal ${nativeEvent}`);',
-  '  if (typeof input.session_id !== "string" && typeof input.conversation_id !== "string") fail("native session_id or conversation_id must be a string");',
+  '  if (typeof input.session_id !== "string" && typeof input.conversation_id !== "string" && !(canonicalEvent === "agentStart" && typeof input.parent_conversation_id === "string")) fail("native session_id or conversation_id must be a string");',
   '  if (input.transcript_path !== undefined && input.transcript_path !== null && typeof input.transcript_path !== "string") fail("native transcript_path must be a string or null");',
   '  if (canonicalEvent === "sessionStart") return;',
   '  if (canonicalEvent === "beforeTool" || canonicalEvent === "afterTool") {',
@@ -774,6 +830,18 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '    if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
   '    requireString(input, "tool_use_id");',
   '    if (canonicalEvent === "afterTool") requireString(input, "tool_output");',
+  '    return;',
+  '  }',
+  '  if (canonicalEvent === "agentStart") {',
+  '    requireString(input, "subagent_id");',
+  '    requireString(input, "subagent_type");',
+  '    requireString(input, "task");',
+  '    return;',
+  '  }',
+  '  if (canonicalEvent === "agentStop") {',
+  '    requireString(input, "subagent_type");',
+  '    if (!["completed", "error", "aborted"].includes(input.status)) fail("native subagentStop status is invalid");',
+  '    if (typeof input.loop_count !== "number") fail("native subagentStop loop_count must be a number");',
   '    return;',
   '  }',
   '  if (typeof input.loop_count !== "number") fail("native stop loop_count must be a number");',

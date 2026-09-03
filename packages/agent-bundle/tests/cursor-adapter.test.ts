@@ -165,6 +165,101 @@ it('validates Cursor documents against the vendored real-host schemas', () => {
   })).toBe(true);
 });
 
+const withCursorConfig = (value: unknown): NormalizedPlugin => ({
+  ...plugin(),
+  extensions: {
+    cursor: {
+      id: 'extension:cursor',
+      key: 'cursor',
+      provenance: { kind: 'config', sourcePath: configPath },
+      target: 'cursor',
+      value,
+    },
+  },
+  targets: [
+    ...plugin().targets,
+    { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: configPath } },
+  ],
+});
+
+it('registers the cursor config extension and emits schema-admitted manifest metadata on both Cursor manifests', () => {
+  const registry = createDefaultRegistry();
+  expect(registry.configExtensions().map((extension) => extension.key)).toContain('cursor');
+
+  const model = withCursorConfig({
+    author: { email: 'devtools@example.test', name: 'Example DevTools' },
+    category: 'developer-tools',
+    homepage: 'https://example.test/cursor-review',
+    keywords: ['review', 'cursor'],
+    license: 'MIT',
+    minClientVersions: { cursor: '3.13.0' },
+    publisher: 'Example',
+    repository: 'https://github.com/example/cursor-review',
+    tags: ['code-review'],
+  });
+  const plan = cursorAdapter.plan(model);
+  expect(plan.diagnostics).toEqual([]);
+  const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).toMatchObject({
+    author: { email: 'devtools@example.test', name: 'Example DevTools' },
+    category: 'developer-tools',
+    homepage: 'https://example.test/cursor-review',
+    keywords: ['review', 'cursor'],
+    license: 'MIT',
+    minClientVersions: { cursor: '3.13.0' },
+    name: 'cursor-review',
+    publisher: 'Example',
+    repository: 'https://github.com/example/cursor-review',
+    tags: ['code-review'],
+  });
+  expect(cursorPluginValidator(manifest)).toBe(true);
+  const manifestEntry = plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json');
+  expect(manifestEntry?.sourceInputs).toContain(configPath);
+
+  const bundle = pluginAdapter.plan(model);
+  expect(bundle.diagnostics).toEqual([]);
+  const bundleManifest = JSON.parse(
+    (bundle.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
+  ) as Record<string, unknown>;
+  expect(bundleManifest).toMatchObject({ author: { name: 'Example DevTools' }, minClientVersions: { cursor: '3.13.0' }, publisher: 'Example' });
+  const claudeManifest = JSON.parse(
+    (bundle.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json') as { readonly content: string }).content,
+  ) as Record<string, unknown>;
+  expect(claudeManifest).not.toHaveProperty('publisher');
+  expect(claudeManifest).not.toHaveProperty('minClientVersions');
+});
+
+it('rejects cursor manifest metadata the pinned schema does not admit and emits no partial metadata', () => {
+  const model = withCursorConfig({
+    author: { name: 'Example', url: 'https://example.test' },
+    homepage: 'ftp://example.test',
+    keywords: ['ok', ''],
+    license: ' ',
+    minClientVersions: { cursor: '3.13' },
+    nativeHooks: './hooks.json',
+    repository: 'https://github.com/example/cursor-review',
+  });
+  const plan = cursorAdapter.plan(model);
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual([
+    'cursor.manifest.author.invalid',
+    'cursor.manifest.field.unknown',
+    'cursor.manifest.homepage.invalid',
+    'cursor.manifest.keywords.invalid',
+    'cursor.manifest.license.invalid',
+    'cursor.manifest.minClientVersions.invalid',
+  ]);
+  expect(plan.diagnostics.every((diagnostic) => diagnostic.severity === 'error' && diagnostic.target === 'cursor')).toBe(true);
+  const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  for (const field of ['author', 'homepage', 'keywords', 'license', 'minClientVersions', 'repository']) {
+    expect(manifest).not.toHaveProperty(field);
+  }
+  expect(pluginAdapter.plan(model).diagnostics.map((diagnostic) => diagnostic.code)).toContain('plugin.cursor.manifest.author.invalid');
+
+  expect(cursorAdapter.plan(withCursorConfig({ minClientVersions: {} })).diagnostics.map((diagnostic) => diagnostic.code))
+    .toEqual(['cursor.manifest.minClientVersions.invalid']);
+  expect(cursorAdapter.plan(withCursorConfig({})).diagnostics).toEqual([]);
+});
+
 it('copies plugin.logo into the artifact and references it from plugin.json', () => {
   const model: NormalizedPlugin = {
     ...plugin(),
