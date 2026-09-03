@@ -8,6 +8,7 @@ import {
   type Diagnostic,
   type DiagnosticSeverity,
 } from '../core/diagnostics.ts';
+import { mapConcurrent } from '../core/async.ts';
 import { isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { validateClaudePluginFiles } from '../host-contracts/claude-plugin-validation.ts';
@@ -1038,6 +1039,155 @@ const probeEndpoint = (path: string): Promise<EndpointProbe> => new Promise((res
   socket.once('error', onError);
 });
 
+/**
+ * Endpoints are probed concurrently, this many at a time, so a directory of
+ * listeners that accept connections but never answer (the silent-runtime
+ * failure Doctor exists to diagnose) costs roughly one status-probe timeout
+ * per batch rather than one per endpoint (#324 review).
+ */
+export const doctorEndpointProbeConcurrency = 8;
+const doctorRuntimeStatusTimeoutMs = 1_000;
+
+interface EndpointInspection {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly finding?: DoctorFinding;
+  readonly live: number;
+  readonly staleLocks: number;
+  readonly staleSockets: number;
+}
+
+const quietInspection: EndpointInspection = Object.freeze({
+  diagnostics: Object.freeze([]),
+  live: 0,
+  staleLocks: 0,
+  staleSockets: 0,
+});
+
+const inspectSocketEndpoint = async (path: string): Promise<EndpointInspection> => {
+  try {
+    const state = await probeEndpoint(path);
+    if (state === 'missing') return quietInspection;
+    if (state === 'live') {
+      const diagnostics: Diagnostic[] = [];
+      let runtime: DoctorRuntimeStatus;
+      try {
+        const probed = await requestEventRuntimeStatus({ endpoint: path, timeoutMs: doctorRuntimeStatusTimeoutMs });
+        runtime = probed;
+        if (probed.status === 'unsupported') {
+          diagnostics.push(diagnostic(
+            'AB7317',
+            `Runtime socket ${JSON.stringify(path)} predates read-only runtime identity introspection.`,
+            'Restart the runtime after upgrading Agent Bundle to expose its process-lifetime identity.',
+            'info',
+          ));
+        } else if (probed.status === 'unavailable') {
+          diagnostics.push(diagnostic(
+            'AB7318',
+            `Runtime socket ${JSON.stringify(path)} became unavailable during its status probe.`,
+            'Restart the runtime or inspect the socket, then rerun Doctor.',
+            'error',
+          ));
+        }
+      } catch (error) {
+        runtime = Object.freeze({ status: 'failed' });
+        diagnostics.push(diagnostic(
+          'AB7318',
+          `Runtime socket ${JSON.stringify(path)} status probe failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+          'Inspect the runtime protocol and socket responsiveness, then rerun Doctor.',
+          'error',
+        ));
+      }
+      return { ...quietInspection, diagnostics, finding: { path, runtime, state: 'live' }, live: 1 };
+    }
+    return {
+      ...quietInspection,
+      diagnostics: [diagnostic(
+        'AB7314',
+        `Runtime socket ${JSON.stringify(path)} refuses connections and is stale.`,
+        'Remove the stale socket manually or start the runtime; Doctor never removes it.',
+        'warning',
+      )],
+      finding: { path, state: 'stale-socket' },
+      staleSockets: 1,
+    };
+  } catch (error) {
+    return {
+      ...quietInspection,
+      diagnostics: [diagnostic(
+        'AB7315',
+        `Runtime socket ${JSON.stringify(path)} could not be probed: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+        'Inspect the socket and directory permissions, then rerun Doctor.',
+        'error',
+      )],
+    };
+  }
+};
+
+const inspectLockEndpoint = async (path: string, platform: NodeJS.Platform): Promise<EndpointInspection> => {
+  const sibling = path.slice(0, -'.lock'.length);
+  try {
+    const siblingState = await probeEndpoint(sibling);
+    if (siblingState === 'live') return { ...quietInspection, finding: { path, state: 'live' } };
+    let rawOwner: string;
+    try {
+      rawOwner = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return quietInspection;
+      throw error;
+    }
+    const owner = parseEndpointClaimOwner(rawOwner);
+    if (owner === undefined) {
+      return {
+        ...quietInspection,
+        diagnostics: [diagnostic(
+          'AB7314',
+          `Runtime claim ${JSON.stringify(path)} has no valid owner record, so the runtime cannot verify it and fails closed.`,
+          'After verifying no runtime is starting, remove the lock manually.',
+          'warning',
+        )],
+        finding: { path, state: 'stale-lock' },
+        staleLocks: 1,
+      };
+    }
+    if (await isEndpointClaimOwnerProvablyDead(owner, platform)) {
+      return {
+        ...quietInspection,
+        diagnostics: [diagnostic(
+          'AB7314',
+          `Runtime claim ${JSON.stringify(path)} is orphaned because owner pid ${owner.pid} is provably dead.`,
+          'The runtime reclaims provably-dead claims automatically at the next start, or remove the lock manually.',
+          'warning',
+        )],
+        finding: { path, state: 'stale-lock' },
+        staleLocks: 1,
+      };
+    }
+    return {
+      ...quietInspection,
+      diagnostics: [diagnostic(
+        'AB7314',
+        `Runtime claim ${JSON.stringify(path)} is held by pid ${owner.pid}, which cannot be proven dead, so the runtime fails closed rather than stealing it.`,
+        'If runtimes hang at startup, verify the owning process and remove the lock manually only once it is gone.',
+        'info',
+      )],
+      finding: { path, state: 'live' },
+    };
+  } catch (error) {
+    return {
+      ...quietInspection,
+      diagnostics: [diagnostic(
+        'AB7315',
+        `Runtime claim ${JSON.stringify(path)} could not be inspected: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+        'Inspect the claim and directory permissions, then rerun Doctor.',
+        'error',
+      )],
+    };
+  }
+};
+
 const scanEndpoints = async (
   directory: string,
   platform: NodeJS.Platform,
@@ -1084,124 +1234,46 @@ const scanEndpoints = async (
       summary: Object.freeze({ live: 0, staleLocks: 0, staleSockets: 0 }),
     });
   }
+  // Every endpoint is inspected independently and the per-entry results are
+  // stitched back together in directory order, so the report is byte-stable
+  // regardless of which probe answers first.
+  const socketEntries = entries.filter((entry) => /^event-.+\.sock$/u.test(entry));
+  const lockEntries = entries.filter((candidate) => /^event-.+\.lock$/u.test(candidate));
+  const socketResults: EndpointInspection[] = new Array<EndpointInspection>(socketEntries.length);
+  const lockResults: EndpointInspection[] = new Array<EndpointInspection>(lockEntries.length);
+  await mapConcurrent(
+    [
+      ...socketEntries.map((entry, index) => ({ entry, index, kind: 'socket' as const })),
+      ...lockEntries.map((entry, index) => ({ entry, index, kind: 'lock' as const })),
+    ],
+    doctorEndpointProbeConcurrency,
+    async ({ entry, index, kind }) => {
+      const path = join(directory, entry);
+      switch (kind) {
+        case 'socket':
+          socketResults[index] = await inspectSocketEndpoint(path);
+          break;
+        case 'lock':
+          lockResults[index] = await inspectLockEndpoint(path, platform);
+          break;
+        default: {
+          const exhaustive: never = kind;
+          throw new TypeError(`Unknown endpoint entry kind ${String(exhaustive)}.`);
+        }
+      }
+    },
+  );
   const findings: DoctorFinding[] = [];
   const diagnostics: Diagnostic[] = [];
   let live = 0;
   let staleLocks = 0;
   let staleSockets = 0;
-  const socketEntries = entries.filter((entry) => /^event-.+\.sock$/u.test(entry));
-  for (const entry of socketEntries) {
-    const path = join(directory, entry);
-    try {
-      const state = await probeEndpoint(path);
-      if (state === 'missing') continue;
-      if (state === 'live') {
-        live += 1;
-        let runtime: DoctorRuntimeStatus;
-        try {
-          const probed = await requestEventRuntimeStatus({ endpoint: path, timeoutMs: 1_000 });
-          runtime = probed;
-          if (probed.status === 'unsupported') {
-            diagnostics.push(diagnostic(
-              'AB7317',
-              `Runtime socket ${JSON.stringify(path)} predates read-only runtime identity introspection.`,
-              'Restart the runtime after upgrading Agent Bundle to expose its process-lifetime identity.',
-              'info',
-            ));
-          } else if (probed.status === 'unavailable') {
-            diagnostics.push(diagnostic(
-              'AB7318',
-              `Runtime socket ${JSON.stringify(path)} became unavailable during its status probe.`,
-              'Restart the runtime or inspect the socket, then rerun Doctor.',
-              'error',
-            ));
-          }
-        } catch (error) {
-          runtime = Object.freeze({ status: 'failed' });
-          diagnostics.push(diagnostic(
-            'AB7318',
-            `Runtime socket ${JSON.stringify(path)} status probe failed: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-            'Inspect the runtime protocol and socket responsiveness, then rerun Doctor.',
-            'error',
-          ));
-        }
-        findings.push({ path, runtime, state: 'live' });
-        continue;
-      }
-      staleSockets += 1;
-      findings.push({ path, state: 'stale-socket' });
-      diagnostics.push(diagnostic(
-        'AB7314',
-        `Runtime socket ${JSON.stringify(path)} refuses connections and is stale.`,
-        'Remove the stale socket manually or start the runtime; Doctor never removes it.',
-        'warning',
-      ));
-    } catch (error) {
-      diagnostics.push(diagnostic(
-        'AB7315',
-        `Runtime socket ${JSON.stringify(path)} could not be probed: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-        'Inspect the socket and directory permissions, then rerun Doctor.',
-        'error',
-      ));
-    }
-  }
-  for (const entry of entries.filter((candidate) => /^event-.+\.lock$/u.test(candidate))) {
-    const path = join(directory, entry);
-    const sibling = path.slice(0, -'.lock'.length);
-    try {
-      const siblingState = await probeEndpoint(sibling);
-      if (siblingState === 'live') {
-        findings.push({ path, state: 'live' });
-        continue;
-      }
-      let rawOwner: string;
-      try {
-        rawOwner = await readFile(path, 'utf8');
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) continue;
-        throw error;
-      }
-      const owner = parseEndpointClaimOwner(rawOwner);
-      if (owner === undefined) {
-        staleLocks += 1;
-        findings.push({ path, state: 'stale-lock' });
-        diagnostics.push(diagnostic(
-          'AB7314',
-          `Runtime claim ${JSON.stringify(path)} has no valid owner record, so the runtime cannot verify it and fails closed.`,
-          'After verifying no runtime is starting, remove the lock manually.',
-          'warning',
-        ));
-        continue;
-      }
-      if (await isEndpointClaimOwnerProvablyDead(owner, platform)) {
-        staleLocks += 1;
-        findings.push({ path, state: 'stale-lock' });
-        diagnostics.push(diagnostic(
-          'AB7314',
-          `Runtime claim ${JSON.stringify(path)} is orphaned because owner pid ${owner.pid} is provably dead.`,
-          'The runtime reclaims provably-dead claims automatically at the next start, or remove the lock manually.',
-          'warning',
-        ));
-        continue;
-      }
-      findings.push({ path, state: 'live' });
-      diagnostics.push(diagnostic(
-        'AB7314',
-        `Runtime claim ${JSON.stringify(path)} is held by pid ${owner.pid}, which cannot be proven dead, so the runtime fails closed rather than stealing it.`,
-        'If runtimes hang at startup, verify the owning process and remove the lock manually only once it is gone.',
-        'info',
-      ));
-    } catch (error) {
-      diagnostics.push(diagnostic(
-        'AB7315',
-        `Runtime claim ${JSON.stringify(path)} could not be inspected: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-        'Inspect the claim and directory permissions, then rerun Doctor.',
-        'error',
-      ));
-    }
+  for (const inspection of [...socketResults, ...lockResults]) {
+    if (inspection.finding !== undefined) findings.push(inspection.finding);
+    diagnostics.push(...inspection.diagnostics);
+    live += inspection.live;
+    staleLocks += inspection.staleLocks;
+    staleSockets += inspection.staleSockets;
   }
   const frozenDiagnostics = freezeDiagnostics(diagnostics);
   return Object.freeze({

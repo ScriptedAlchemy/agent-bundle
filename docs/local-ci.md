@@ -46,7 +46,13 @@ still fails its own scan. Rstest re-hashes that leg directory, worker ID, and
 invocation identity to `/tmp/ab-rstest-<hash16>` before exposing its worker
 `TMPDIR`; this leaves headroom below Linux's 108-byte `sun_path` cap for nested
 socket fixtures without sacrificing per-leg, per-worker, or concurrent-run
-isolation. Legs live under
+isolation. Because those hashed roots live beside the leg directory rather
+than inside it, each one carries an owner marker (`.ab-rstest-owner.json`)
+naming the leg `TMPDIR` and process it was derived from; the runner removes
+the roots owned by a leg's `TMPDIR` — and only those, once their creating
+process has exited — before the leg starts (leftovers of an interrupted run)
+and after it finishes (`scripts/rstest-worker-roots.mjs`), so reruns cannot
+accumulate worker caches or interrupted-test fixtures under `/tmp`. Legs live under
 `.worktrees/local-ci/` (gitignored), are reused across runs for warm caches,
 and can be recreated with `--fresh`.
 

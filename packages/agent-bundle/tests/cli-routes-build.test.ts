@@ -69,11 +69,17 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '',
     ].join('\n')),
     // A conventional request context provider (#313): every generated request
-    // scope — plain CLI, rendered CLI, rendered script — mounts the same value.
+    // scope — plain CLI, rendered CLI, projected MCP command, rendered script —
+    // mounts the same value.
     writeProjectFile(root, 'src/providers/library-tooling.ts', [
       'export default async function libraryTooling({ invocation, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
-      "  return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      // Branching on the documented kind fails loudly if a surface ever posts
+      // no invocation to its worker again (#319 review).
+      "  switch (invocation.kind) {",
+      "    case 'cli': case 'script': case 'tool': return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      "    default: throw new Error(`unexpected invocation kind ${String(invocation.kind)}`);",
+      '  }',
       '}',
       '',
     ].join('\n')),
@@ -143,11 +149,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
-      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string() }).strict();",
+      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string(), tooling: z.string() }).strict();",
       'export default async function Lookup({ input }) {',
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
-      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId };',
+      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
       '  return <Agent.Result value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
       '}',
       '',
@@ -271,10 +277,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   const projectedJson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"packed"}', '--json',
   ]);
+  // The projected command's provider sees `invocation.kind === 'tool'`, not the
+  // CLI surface it was typed on (#319 review).
   expect(JSON.parse(projectedJson.stdout)).toEqual({
     invocation: 'tool',
     message: 'packed',
     operationId: 'tool:harness/lookup',
+    tooling: 'tool:ffprobe 6.1',
   });
   const projectedNdjson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"events"}', '--ndjson',

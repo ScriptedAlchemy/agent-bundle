@@ -644,7 +644,7 @@ export default function AgentBundleWalkthrough() {
             n={5}
             title="Thin client prints the host-native response and exits 0"
             channel="wrapper → Claude · stdout"
-            note="Claude blocks the Write and surfaces the reason to the model. On tool/before the wrapper always answers: an explicit hookSpecificOutput.permissionDecision ('allow' unless the route denied, optionally with updatedInput / additionalContext) — even when the route renders no decision. Silence is reserved for observation-only families such as session/end."
+            note="Claude blocks the Write and surfaces the reason to the model. On tool/before the wrapper always answers: an explicit hookSpecificOutput.permissionDecision ('allow' unless the route denied, optionally with updatedInput / additionalContext) — even when the route renders no decision. That explicit-allow rule is specific to Claude/Codex tool/before: other families, including decision-capable ones such as stop and prompt/submit, project undefined (silence) when the route neither denies nor adds context, and observation-only families such as session/end are always silent."
             payload={WIRE_STDOUT}
             last
           />

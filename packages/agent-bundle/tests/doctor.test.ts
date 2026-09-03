@@ -10,6 +10,7 @@ import { runCli } from '../src/cli.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 import {
   doctorEndpointDirectory,
+  doctorEndpointProbeConcurrency,
   runDoctor,
   type DoctorCommandRunner,
   type DoctorHost,
@@ -1136,6 +1137,37 @@ it('bounds a silent runtime status probe', async () => {
     ]));
   } finally {
     await close(server);
+    await fixture.cleanup();
+  }
+});
+
+it('bounds a directory of silent runtimes as a whole by probing endpoints concurrently', async () => {
+  const fixture = await temporaryDoctor();
+  // Twice the concurrency cap would still be far below the serial cost:
+  // probed one at a time these would take at least `count` seconds.
+  const count = 6;
+  const endpoints = Array.from({ length: count }, (_, index) =>
+    join(fixture.endpointDirectory, `event-silent-${String(index)}.sock`));
+  const servers = await Promise.all(endpoints.map((endpoint) => listen(endpoint)));
+  try {
+    expect(count).toBeLessThanOrEqual(doctorEndpointProbeConcurrency);
+    const started = Date.now();
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: [],
+    });
+    const elapsed = Date.now() - started;
+    // One batch of 1 s status-probe timeouts plus slack, not N seconds.
+    expect(elapsed).toBeLessThan(3_500);
+    // Every silent endpoint is still reported, in directory order.
+    expect(report.endpoints.findings.map((finding) => finding.path)).toEqual([...endpoints].sort((left, right) => left.localeCompare(right)));
+    expect(report.endpoints.findings).toEqual(endpoints.map(() =>
+      expect.objectContaining({ runtime: { status: 'failed' }, state: 'live' })));
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7318')).toHaveLength(count);
+    expect(report.endpoints.summary).toMatchObject({ live: count, staleLocks: 0, staleSockets: 0 });
+  } finally {
+    await Promise.all(servers.map((server) => close(server)));
     await fixture.cleanup();
   }
 });

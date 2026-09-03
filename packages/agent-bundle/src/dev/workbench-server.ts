@@ -893,14 +893,21 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   // begins its asynchronous App/SSE drain. The coordinator repeats this fence
   // defensively during lifecycle close, but that happens too late for a proxy
   // open already pending when callers request server.close().
-  const closeForeground = (): Promise<void> => {
+  const closeForeground = async (): Promise<void> => {
     foregroundClosing = true;
     // Fence authenticated runtime routes before the foreground begins closing;
     // the lifecycle retains the service for its ordered preview cleanup.
     void appPreviews.prepareClose().catch(() => undefined);
     void mcpApps?.prepareClose().catch(() => undefined);
     clientSurfaces.beginClose();
-    return foreground.close();
+    try {
+      await foreground.close();
+    } finally {
+      // Probe transports whose teardown outlived their response boundary own
+      // their plugin-data removal; joining them here (bounded by the probe's
+      // teardown cap) keeps shutdown from leaving those directories behind.
+      await mcpProbe.settle();
+    }
   };
   try {
     const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });

@@ -192,9 +192,12 @@ export default defineConfig({
 });
 ```
 
-`output.distPath` defaults to `dist`. A CLI `--output <path>` overrides the
-configured path, so precedence is CLI `--output`, then `output.distPath`, then
-`dist`; existing projects are unchanged. The configured directory is excluded
+`output.distPath` defaults to `dist` for the programmatic `build()` API and to
+`artifact` for the `agent-bundle build` and `agent-bundle prepack` commands,
+which also emit the npm package build into `dist/`. A CLI `--output <path>`
+overrides the configured path, so precedence is CLI `--output`, then
+`output.distPath`, then the operation default; existing projects are
+unchanged. The configured directory is excluded
 from project source snapshots (as `dist` always was), ignored by the dev
 watcher, and used by Workbench host discovery and doctor drift checks.
 
