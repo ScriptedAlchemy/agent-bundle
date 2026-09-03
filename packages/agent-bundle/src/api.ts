@@ -3,10 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
+import { capabilityIsSupported, cliBinCapability, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
+import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import {
   packInventoryDiagnostics,
@@ -274,12 +275,13 @@ export interface ValidateResult {
 
 export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capability';
 
-export type InspectionComponentKind = 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+export type InspectionComponentKind = 'cli' | 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
 
 /**
  * The target's own four-state judgment of the capability a component needs,
  * named so a reader can find the pinned row. Scripts need no host capability
- * and carry none.
+ * and carry none; the routed CLI bin (`cli`) needs the target's `cli` row
+ * (#387).
  */
 export type InspectionComponentCapability = CapabilityState & { readonly name: string };
 
@@ -595,6 +597,15 @@ interface InspectableComponent {
 }
 
 const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
+  // The routed CLI bin is offered to every selected target; the host's `cli`
+  // capability row decides whether the artifact hosts it (#387).
+  ...routedCliBins(model).map((bin) => ({
+    capability: cliBinCapability,
+    id: bin.id,
+    kind: 'cli' as const,
+    name: bin.name,
+    targets: model.targets.map((target) => target.name),
+  })),
   ...(model.commands ?? []).map((command) => ({ capability: 'commands', id: command.id, kind: 'command' as const, name: command.name, targets: command.targets })),
   ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
   ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
@@ -756,7 +767,11 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     try {
       bundler = await composeBundlerInspection({
         model,
-        targets: plans.map((plan) => ({ hookEntries: plan.hookEntries, name: plan.target })),
+        targets: plans.map((plan) => ({
+          cliBin: targetHostsCliBin(prepared.registry, plan.target),
+          hookEntries: plan.hookEntries,
+          name: plan.target,
+        })),
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
     } catch {

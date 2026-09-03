@@ -18,6 +18,7 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  cliBinCapability,
   supportedEventRouteNamesFrom,
   supportedCapability,
   unavailableCapability,
@@ -700,6 +701,9 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     ...contractCapabilities,
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,

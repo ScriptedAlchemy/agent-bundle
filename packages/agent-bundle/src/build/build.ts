@@ -21,6 +21,13 @@ import {
   type CompiledHookEntry,
   type CompiledMcpEntry,
 } from './entries.ts';
+import {
+  cliBinCollisionDiagnostics,
+  compileCliBins,
+  planCompiledCliBins,
+  targetHostsCliBin,
+  type CompiledCliBin,
+} from './cli-bins.ts';
 import { projectMeta } from './meta.ts';
 import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
 import {
@@ -45,6 +52,8 @@ import { deepFreeze } from '../core/freeze.ts';
 
 
 export interface BuildResult {
+  /** The routed-CLI executables emitted into host artifacts (#387), one per hosting target. */
+  readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
@@ -65,12 +74,15 @@ export interface BuildOptions {
 }
 
 interface PlannedTarget {
+  /** True when the target's adapter publishes the `cli` capability, admitting the routed CLI bin. */
+  readonly cliBin: boolean;
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
   readonly name: string;
 }
 
 interface StagedTarget extends PlannedTarget {
+  readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
@@ -157,7 +169,10 @@ const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
         });
       }
     }
+    const cliBin = targetHostsCliBin(options.registry, target.name);
+    if (cliBin) diagnostics.push(...cliBinCollisionDiagnostics(options.model, target.name, plan.entries));
     planned.push({
+      cliBin,
       entries: plan.entries,
       hookEntries,
       name: target.name,
@@ -185,7 +200,10 @@ const planStagedTargets = (options: {
     outDir: root,
     target: target.name,
   });
-  return { ...target, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
+  const compiledCliBins = target.cliBin
+    ? planCompiledCliBins(options.model, { outDir: root, target: target.name })
+    : Object.freeze([]);
+  return { ...target, compiledCliBins, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
 });
 
 const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[] =>
@@ -193,6 +211,7 @@ const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[
     ...target.entries.map((entry) =>
       resolveArtifactDestination(target.root, entry.relativePath),
     ),
+    ...target.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
     ...target.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
     ...target.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
     ...target.compiledMcpApps.map((entry) => entry.output),
@@ -212,6 +231,7 @@ const hookIndexSourceInputs = (
 
 const outputCandidatesFor = (options: {
   readonly artifactRoot: string;
+  readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
@@ -226,6 +246,15 @@ const outputCandidatesFor = (options: {
     path: resolveArtifactDestination(target.root, entry.relativePath),
     sourceInputs: entry.sourceInputs,
   }))),
+  ...options.compiledCliBins.flatMap((entry) => [{
+    kind: 'bundle' as const,
+    path: entry.output,
+    sourceInputs: entry.sourceInputs,
+  }, ...(entry.workerOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.workerOutput,
+    sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
+  }])]),
   ...options.compiledEntries.flatMap((entry) => [{
     kind: entry.outputKind,
     path: entry.output,
@@ -346,6 +375,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     });
     assertUniqueArtifactDestinations(plannedDestinations(stagedTargets));
 
+    const compiledCliBins: CompiledCliBin[] = [];
     const compiledEntries: CompiledEntry[] = [];
     const compiledHooks: CompiledHookEntry[] = [];
     const compiledMcpApps: CompiledMcpApp[] = [];
@@ -355,6 +385,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
     for (const target of stagedTargets) {
+      // MCP Apps compile first: their Rsbuild pass asserts the target root
+      // holds nothing but its own HTML, so every other surface follows it.
       const targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
         cwd: options.projectRoot,
         meta,
@@ -364,6 +396,15 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       });
       compiledMcpApps.push(...targetMcpApps);
       await emitPlanEntries({ entries: target.entries, root: target.root });
+      if (target.cliBin) {
+        compiledCliBins.push(...(await compileCliBins(options.model, {
+          cwd: options.projectRoot,
+          meta,
+          outDir: target.root,
+          target: target.name,
+          ...tools,
+        })));
+      }
       compiledEntries.push(
         ...(await compileEntries(
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
@@ -427,6 +468,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       artifactRoot: stageRoot,
       outputs: outputCandidatesFor({
         artifactRoot: stageRoot,
+        compiledCliBins,
         compiledEntries,
         compiledHooks,
         compiledMcpApps,
@@ -466,6 +508,11 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     }
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({
+      compiledCliBins: Object.freeze(compiledCliBins.map((entry) => Object.freeze({
+        ...entry,
+        output: publishedOutput(entry),
+        ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
+      }))),
       compiledEntries: publishedCompiledEntries,
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
         ...entry,

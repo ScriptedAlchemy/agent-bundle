@@ -414,7 +414,14 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFre
  */
 export interface TargetArtifactLayout {
   readonly assets?: string;
+  /** A host-native executable directory copied verbatim (Claude Code's `bin/`). */
   readonly bin?: string;
+  /**
+   * The compiled routed-CLI executable and its Flight worker
+   * (`bin/<plugin-name>.mjs`, `bin/<plugin-name>-flight.mjs`); required
+   * whenever the adapter publishes a supported `cli` capability (#387).
+   */
+  readonly cliBin?: TargetArtifactOutputLayout;
   readonly commands?: TargetArtifactOutputLayout;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
@@ -429,12 +436,26 @@ export interface TargetArtifactLayout {
 }
 
 /**
+ * The one layout the compiler emits the routed CLI into (#387):
+ * `bin/<plugin-name>.mjs` plus `bin/<plugin-name>-flight.mjs`. Every adapter
+ * that publishes a supported `cli` capability must declare a `cliBin` layout
+ * naming this directory and admitting this suffix; the registry rejects any
+ * other spelling because the compiler would otherwise emit files its own
+ * artifact validation rejects.
+ */
+export const routedCliBinLayout: TargetArtifactOutputLayout = Object.freeze({
+  allowedSuffixes: Object.freeze(['.mjs']),
+  directory: 'bin',
+});
+
+/**
  * Direct-file artifact layout shared by every plugin-shaped target adapter
  * (Claude, Codex): hook wrappers, MCP apps/entries, scripts, and skills all
  * land in the same target-agnostic directories with the same suffix policy.
  */
 export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
   assets: 'assets',
+  cliBin: routedCliBinLayout,
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),

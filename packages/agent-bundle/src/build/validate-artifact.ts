@@ -505,6 +505,7 @@ const isTargetArtifactPath = (
   const mcpRuntime = registry.mcpRuntime(target);
   return isRecursiveArtifactPath(relativePath, layout.assets) ||
     isRecursiveArtifactPath(relativePath, layout.bin) ||
+    isDirectOutputLayoutPath(relativePath, layout.cliBin) ||
     isDirectOutputLayoutPath(relativePath, layout.commands) ||
     isDirectOutputLayoutPath(relativePath, layout.hookWrappers) ||
     isDirectOutputLayoutPath(relativePath, layout.mcpApps) ||

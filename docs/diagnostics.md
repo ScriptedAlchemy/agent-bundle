@@ -24,6 +24,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
+| `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
@@ -387,6 +388,21 @@ identity is never served as a real one.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |
+
+## Artifact-hosted routed CLI (`AB4765`–`AB4766`)
+
+A generated-mode `src/cli/**` surface compiles into the npm package bin
+(`dist/bin/<name>.js`) **and** into every host artifact whose adapter
+publishes a supported `cli` capability, as `bin/<plugin-name>.mjs` (plus
+`bin/<plugin-name>-flight.mjs` when any command renders). Every built-in
+target hosts it; the two codes cover a target that does not and a host file
+that claims the same path. See “The routed CLI shell” in
+`docs/entry-conventions.md` for the layout and the sibling-path convention.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4765` | warning | The project has a routed CLI but a selected target's adapter publishes no supported `cli` capability, so that artifact ships no `bin/<name>.mjs`. Skills, hooks, and scripts in that artifact cannot invoke the routed CLI. `inspect` lists the same omission as an `unsupported-capability` skip of the `cli` component. Publish the capability (with a `cliBin` artifact layout) on the adapter, or keep references to the bin out of that target's surfaces. |
+| `AB4766` | error (build) | A target plan already emits `bin/<name>.mjs` or `bin/<name>-flight.mjs` (for example a Claude `claude.bin` directory shipping a file of that name), compared case-insensitively because those are one file on macOS and Windows. The routed CLI owns those paths, so the build refuses instead of choosing. Rename or remove the host-emitted file, or set `bin: false` to keep it and drop the routed CLI executable. |
 
 ## Config beside a route-generated MCP server (`AB4340`)
 

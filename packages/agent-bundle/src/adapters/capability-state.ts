@@ -17,6 +17,17 @@ export const supportedCapability = (evidence: CapabilityEvidence): CapabilitySta
   state: 'supported',
 });
 
+/**
+ * The capability that admits the compiled routed CLI (`src/cli/**`) into a
+ * target's host artifact as `bin/<plugin-name>.mjs` (#387). It asks nothing of
+ * the host beyond what `scripts/` and `mcp/` entries already rely on — the
+ * artifact root is installed as a plain directory Node can execute from — so a
+ * target publishes it whenever its plugin root is such a directory. An adapter
+ * that publishes no row reads as an honest `unavailable`, and the bin is
+ * omitted from that target with an inspect entry naming the reason.
+ */
+export const cliBinCapability = 'cli';
+
 export const unavailableCapability = (reason: string): CapabilityState => Object.freeze({
   reason,
   state: 'unavailable',

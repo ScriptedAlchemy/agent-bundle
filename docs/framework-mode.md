@@ -172,7 +172,11 @@ the handwritten `runRscCli` compatibility path still serializes validated
 results and never renders JSX. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
-is plain.
+is plain. The routed CLI ships twice from one build: as the npm package bin
+(`dist/bin/<name>.js`) for users who install the package, and as
+`bin/<name>.mjs` inside every host artifact so the plugin's own skills,
+hooks, and scripts can run it with `node` from the installed plugin root
+(see [Entry conventions](entry-conventions.md#the-routed-cli-inside-host-artifacts)).
 
 ## Release identity in source: `agent-bundle/meta`
 
@@ -276,7 +280,7 @@ only the string shorthand, not Rsbuild 2.x's per-asset `DistPathConfig` for
 such paths as JavaScript, CSS, and SVG subdirectories.
 `output.filename` templates, `output.assetPrefix`, and `output.cleanDistPath`
 are also deliberately deferred: host packs have a framework-owned
-`<target>/skills|mcp|scripts|assets/...` layout content-addressed by the
+`<target>/skills|mcp|scripts|bin|assets/...` layout content-addressed by the
 artifact manifest. Unlike machine-local Rsbuild config, the hashed, portable
 release-identity config rejects absolute paths. The per-invocation CLI
 `--output` flag can override the configured relative artifact root, but it is

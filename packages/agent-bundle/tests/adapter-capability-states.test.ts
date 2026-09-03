@@ -946,6 +946,70 @@ it('rejects a malformed capability declaration when the adapter registers', () =
   expect(() => new TargetRegistry().register(source)).not.toThrow();
 });
 
+it('publishes the routed CLI bin capability with its bin layout on every built-in target (#387)', () => {
+  const registry = createDefaultRegistry();
+  for (const name of registry.names()) {
+    const adapter = registry.get(name);
+    expect(adapter.capabilities.cli?.state, name).toBe('supported');
+    expect(registry.artifactLayout(name).cliBin, name).toEqual({ allowedSuffixes: ['.mjs'], directory: 'bin' });
+  }
+
+  // A supported `cli` row promises a place for the executable, so an adapter
+  // without the layout — or with no artifact layout at all — cannot register;
+  // one that publishes no row stays valid and simply hosts no bin.
+  const cursor = registry.get('cursor');
+  const { cliBin: _cliBin, ...layoutWithoutBin } = cursor.artifactLayout!;
+  expect(() => new TargetRegistry().register({ ...cursor, artifactLayout: layoutWithoutBin }))
+    .toThrow(/supported cli capability without a routed CLI bin layout/u);
+  const { artifactLayout: _layout, ...cursorWithoutLayout } = cursor;
+  expect(() => new TargetRegistry().register(cursorWithoutLayout))
+    .toThrow(/supported cli capability without a routed CLI bin layout/u);
+  const { cli: _cli, ...capabilitiesWithoutCli } = cursor.capabilities;
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    capabilities: capabilitiesWithoutCli,
+  })).not.toThrow();
+
+  // The compiler emits the routed CLI at exactly `bin/<name>.mjs`, so a
+  // `cliBin` layout naming any other directory or omitting `.mjs` is rejected
+  // instead of producing files artifact validation would reject.
+  for (const cliBin of [
+    { allowedSuffixes: ['.mjs'], directory: 'cli' },
+    { allowedSuffixes: ['.js'], directory: 'bin' },
+  ]) {
+    expect(() => new TargetRegistry().register({
+      ...cursor,
+      artifactLayout: { ...layoutWithoutBin, cliBin },
+    })).toThrow(/routed CLI bin layout must use directory "bin" and admit "\.mjs"/u);
+  }
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: { ...layoutWithoutBin, cliBin: { allowedSuffixes: ['.js', '.mjs'], directory: 'bin' } },
+  })).not.toThrow();
+
+  // Emission follows the component judgment `inspect` reports
+  // (`componentCapabilities ?? capabilities`), so an override that withdraws
+  // `cli` hosts no bin (and needs no layout), while an override that grants it
+  // needs the layout even if the top-level row is absent.
+  const withdrawn = new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    componentCapabilities: { ...cursor.componentCapabilities, cli: unavailableCapability('withdrawn for this host') },
+  });
+  expect(withdrawn.supports('cursor', 'cli')).toBe(true);
+  expect(withdrawn.hostsComponent('cursor', 'cli')).toBe(false);
+  expect(withdrawn.componentCapabilityState('cursor', 'cli')).toEqual({ reason: 'withdrawn for this host', state: 'unavailable' });
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    capabilities: capabilitiesWithoutCli,
+    componentCapabilities: { cli: cursor.capabilities.cli! },
+  })).toThrow(/supported cli capability without a routed CLI bin layout/u);
+  expect(registry.hostsComponent('cursor', 'cli')).toBe(true);
+  expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
+});
+
 it('rejects a malformed inspection component capability when the adapter registers', () => {
   const source = createDefaultRegistry().get('cursor');
 

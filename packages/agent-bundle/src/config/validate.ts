@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
+import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -2130,6 +2132,74 @@ export const validateSource = (
   return diagnostics;
 };
 
+/**
+ * AB4765 (#387): the compiled routed CLI is offered to every selected target,
+ * but a host artifact receives `bin/<name>.mjs` only when its adapter
+ * publishes a supported `cli` capability. Every built-in target does; a
+ * custom adapter that publishes no row (or a non-supported one) omits the
+ * bin, and that omission is reported here — never silently — so skills and
+ * scripts installed with that target are not written against a file that is
+ * not there. `inspect` lists the same omission as an `unsupported-capability`
+ * skip.
+ */
+const routedCliBinTargetDiagnostics = (
+  model: NormalizedPlugin,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  // The judgment must be the one emission and `inspect` use: the adapter's
+  // component override when published, otherwise its plain capabilities. A
+  // registry exposing neither accessor falls back to its boolean view.
+  const judgmentFor = (target: string): { readonly known: true; readonly state: CapabilityState | undefined } | { readonly known: false } => {
+    if (registry.componentCapabilityState !== undefined) {
+      return { known: true, state: registry.componentCapabilityState(target, cliBinCapability) };
+    }
+    if (registry.capabilityState !== undefined) {
+      return { known: true, state: registry.capabilityState(target, cliBinCapability) };
+    }
+    return { known: false };
+  };
+  for (const bin of model.packageBuild?.bins ?? []) {
+    if (bin.generatedCli === undefined) continue;
+    for (const target of model.targets) {
+      if (!registry.has(target.name)) continue;
+      const judged = judgmentFor(target.name);
+      const supported = judged.known
+        ? capabilityIsSupported(judged.state)
+        : registry.supports(target.name, cliBinCapability);
+      if (supported) continue;
+      const capability = judged.known ? judged.state : undefined;
+      let judgment: string;
+      if (capability === undefined) {
+        judgment = `the target publishes no ${cliBinCapability} capability row`;
+      } else {
+        switch (capability.state) {
+          case 'supported':
+            continue;
+          case 'degraded':
+          case 'unavailable':
+          case 'prohibited':
+            judgment = `its ${cliBinCapability} capability is ${capability.state}: ${capability.reason}`;
+            break;
+          default: {
+            const exhaustive: never = capability;
+            return exhaustive;
+          }
+        }
+      }
+      diagnostics.push({
+        code: 'AB4765',
+        message: `Routed CLI ${JSON.stringify(bin.name)} is not emitted into target ${JSON.stringify(target.name)}: ${judgment}. Skills, hooks, and scripts in that artifact cannot invoke bin/${bin.name}.mjs.`,
+        recovery: `Publish a supported ${cliBinCapability} capability (and a cliBin artifact layout) on the ${target.name} adapter, or drop the target from the surfaces that reference the routed CLI.`,
+        severity: 'warning',
+        sourcePath: bin.provenance.sourcePath,
+        target: target.name,
+      });
+    }
+  }
+  return diagnostics;
+};
+
 export const validateModel = (
   model: NormalizedPlugin,
   registry: NormalizationTargetRegistry,
@@ -2147,6 +2217,8 @@ export const validateModel = (
       });
     }
   }
+
+  diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
 
   const ids = new Map<string, string>();
   const components = [
