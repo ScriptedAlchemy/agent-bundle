@@ -1,1 +1,0 @@
-{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"A unified service-readiness assistant with MCP, Skills, Hooks, scripts, and evaluation.","name":"mcp-app-example","version":"1.0.0"}
