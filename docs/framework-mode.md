@@ -71,7 +71,10 @@ returns the invocation plus `Observed` `host`, `session`, `actor`, and
 progress, the request signal, and the `state`, `notices`, and `providers`
 slots. The handle is request-scoped: it survives `await`, two concurrent
 requests never observe each other, and reading a captured handle after the
-request closes throws a typed `AgentRequestError`.
+request closes throws a typed `AgentRequestError`. A synchronous Server
+Component or utility that cannot `await` calls `useAgent()` instead; it
+returns the identical handle under the same lease rules and never suspends.
+Async components should still prefer `await agent()`.
 
 A **context provider** contributes one request-scoped value without touching
 the compiler. Each `src/providers/<name>.{ts,tsx}` module default-exports a

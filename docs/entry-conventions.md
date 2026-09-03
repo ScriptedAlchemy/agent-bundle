@@ -163,7 +163,9 @@ modules, so a test chooses exactly the values a component observes.
 
 Conventional route components receive only their surface props, such as
 `{ input, signal }`. They read transport-owned request context with
-`await agent()` from `@agent-bundle/runtime`. The handle exposes the
+`await agent()` from `@agent-bundle/runtime` — or, in a synchronous component
+or utility, `useAgent()`, which returns the identical handle under the same
+lease rules without suspending. The handle exposes the
 invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
 Each identity axis is `Observed`: transports publish an `available` value and
 source when they know it, or `unavailable` with a typed reason when they do
