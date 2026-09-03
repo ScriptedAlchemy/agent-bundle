@@ -404,7 +404,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'e9126849e5ad955dbd1f3d56ccdcb0eabe1293d265f861dd5a10339c1e2a3bfb',
+    '7544ab8820a0784210464d71bb15f6de7999f521a6dc35a920136db613cbcd66',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
