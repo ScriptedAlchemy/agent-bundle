@@ -106,6 +106,7 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
       }),
     }),
     read: reject,
+    recordWithholding: reject,
     releaseAvailability: reject,
     reserveAvailability: reject,
     retain: reject,

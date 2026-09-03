@@ -358,10 +358,16 @@ advertisement: `inbox()` omits withheld notices and hands out disclosed content
 (the inbox resource projection reports `sensitivity` and
 `disclosure.redacted`), event admission neither authorizes nor attempts a
 withheld notice, `read()` deliveries carry `disclosure` and the disclosed
-`content`, and the signaller never sends `resources/updated` for a notice the
-inbox would withhold. Every refusal is durable evidence, not a state change:
-the notice records `withheld[route] = { count, firstAt, lastAt, reason }` and
-stays eligible for a route whose row admits it. The built-in hosts admit
+`content`, `acknowledge()` returns the notice only as the acknowledging
+request's route may disclose it (an admitted event is held to `next-event`,
+every other invocation to the inbox ceiling; a withheld class comes back as
+the `[REDACTED]` mark, so an id learned from a redacted inbox unlocks nothing),
+and the signaller never sends `resources/updated` for a notice the inbox would
+withhold, recording that refusal itself through
+`recordWithholding()` once per subscription. Every refusal is durable evidence,
+not a state change: the notice records
+`withheld[route] = { count, firstAt, lastAt, reason }` and stays eligible for
+a route whose row admits it. The built-in hosts admit
 `secret` on `current-response` and `next-event` (the hook response returns to
 the recipient's own host process) and `internal` on `mcp-inbox` and
 `mcp-resource-updated` (transport-derived identity the host does not

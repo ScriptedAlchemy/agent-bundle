@@ -39,10 +39,12 @@ import {
   type AgentNoticeState,
   type AgentNoticeWithdrawOptions,
   type AgentNoticeWithheldEntry,
+  type AgentNoticeWithholdingOptions,
   type AgentRecipient,
 } from './contract.js';
 import {
   AGENT_NOTICE_DEFAULT_SENSITIVITY,
+  NOTICE_REDACTION_MARK,
   disclosedNoticeContent,
   isNoticeSensitivity,
   type AgentNoticeDisclosure,
@@ -117,6 +119,47 @@ const discloseFor = (
 const disclosedNotice = (notice: AgentNotice, disclosure: Disclosed): AgentNotice => {
   const content = disclosedNoticeContent(notice.content, disclosure);
   return content === undefined || content === notice.content ? notice : Object.freeze({ ...notice, content });
+};
+
+/**
+ * The route whose disclosure an acknowledging request is held to: an admitted
+ * event could have received the notice through `next-event`; every other
+ * invocation kind could only have read it through the inbox, whose ceiling is
+ * the conservative one for transport-derived identity.
+ */
+const acknowledgementRoute = (request: AgentNoticeRequest): AgentNoticeDeliveryRoute =>
+  request.invocation.kind === 'event' ? 'next-event' : 'mcp-inbox';
+
+/**
+ * A notice returned from `acknowledge()`: the state moved, but the content
+ * comes back only as the request's route may disclose it. A withheld class
+ * yields a placeholder document (the mark, same status and version) rather
+ * than the authored text an id learned from a redacted inbox would otherwise
+ * unlock.
+ */
+const acknowledgedNotice = (
+  notice: AgentNotice,
+  route: AgentNoticeDeliveryRoute,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
+): AgentNotice => {
+  const disclosure = resolveNoticeDisclosure(route, sensitivityOf(notice), advertisement);
+  switch (disclosure.kind) {
+    case 'disclosed':
+      return disclosedNotice(notice, disclosure);
+    case 'withheld':
+      return Object.freeze({
+        ...notice,
+        content: Object.freeze({
+          root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
+          status: notice.content.status,
+          version: notice.content.version,
+        }),
+      });
+    default: {
+      const exhaustive: never = disclosure;
+      return exhaustive;
+    }
+  }
 };
 
 type NoticeStore = AgentStateStore<AgentNoticeLedgerState, typeof agentNoticeEventSchemas>;
@@ -643,7 +686,11 @@ export const createAgentNoticeLedger = (
                 `Notice ${noticeId} is not acknowledgeable from state ${acknowledged?.state ?? 'missing'}`,
               ));
             }
-            return acknowledged;
+            // The acknowledgement is a state transition, not a read surface:
+            // the content comes back exactly as the route that could have
+            // shown it to this request discloses it, so an id learned from a
+            // redacted inbox cannot fetch the authored text through here.
+            return acknowledgedNotice(acknowledged, acknowledgementRoute(request), advertisement);
           }));
         },
         inbox() {
@@ -677,6 +724,29 @@ export const createAgentNoticeLedger = (
   async read(): Promise<AgentNoticeLedgerSnapshot> {
     const snapshot = await store.read();
     return snapshotFrom(snapshot.revision, snapshot.state);
+  },
+
+  recordWithholding(withholdingOptions: AgentNoticeWithholdingOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const at = yield* noticeEffect(() => timestamp(withholdingOptions.at, 'Notice withholding time'));
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(withholdingOptions.idempotencyKey, 'Notice withholding idempotency key'));
+      const entries = yield* noticeEffect(() => {
+        if (withholdingOptions.withheld.length === 0) {
+          throw new AgentNoticeError('invalid-input', 'Notice withholding requires at least one notice');
+        }
+        return withholdingOptions.withheld.map((entry) => ({
+          id: nonEmptyText(entry.id, 'Notice id'),
+          reason: entry.reason,
+        }));
+      });
+      const committed = yield* storeEffect(() => store.dispatch(
+        'withheld',
+        { at, entries, route: withholdingOptions.route },
+        { idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
   },
 
   retain(retention: AgentNoticeRetainOptions): Promise<AgentNoticeRetentionReport> {

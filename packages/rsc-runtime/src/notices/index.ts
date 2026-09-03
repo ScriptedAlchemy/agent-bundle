@@ -49,6 +49,7 @@ export type {
   AgentNoticeWithdrawOptions,
   AgentNoticeWithheldEntry,
   AgentNoticeWithholding,
+  AgentNoticeWithholdingOptions,
   AgentNoticeWithholdingReason,
   AgentNoticeWithholdings,
   AgentRecipient,

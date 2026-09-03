@@ -218,6 +218,12 @@ export const agentNoticeEventSchemas = {
     at: z.string().min(1),
     id: z.string().min(1),
   }).strict(),
+  /** A route refused the listed notices; recorded by the surface that decided (the signaller). */
+  withheld: z.object({
+    at: z.string().min(1),
+    entries: z.array(withheldEntrySchema).min(1),
+    route: routeSchema,
+  }).strict(),
 } as const satisfies AgentStateEventSchemas;
 
 const sameRecipient = (left: AgentRecipient, right: AgentRecipient): boolean =>
@@ -660,6 +666,16 @@ export const agentNoticeStateDefinition = (
             notices: state.notices.map((notice) => noticeIds.has(notice.id)
               ? withoutReservation(notice, event.payload.reservationKey)
               : notice),
+          };
+        }
+        case 'withheld': {
+          const refused = withheldById(event.payload.entries);
+          return {
+            ...state,
+            notices: state.notices.map((notice) => {
+              const reason = refused.get(notice.id);
+              return reason === undefined ? notice : withholding(notice, event.payload.route, event.payload.at, reason);
+            }),
           };
         }
         case 'pruned': {

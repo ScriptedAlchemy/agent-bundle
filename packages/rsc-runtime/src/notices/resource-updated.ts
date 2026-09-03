@@ -10,6 +10,7 @@ import {
 } from './contract.js';
 import { AGENT_NOTICE_DEFAULT_SENSITIVITY } from './redaction.js';
 import { resolveNoticeDisclosure, type AgentNoticeDeliveryAdvertisement } from './router.js';
+import type { AgentNoticeWithheldEntry, AgentNoticeWithholdingReason } from './contract.js';
 import { recipientMatchesPrincipal } from './state.js';
 
 /** Consecutive compare-and-swap losses tolerated before a reservation reports failure. */
@@ -132,6 +133,8 @@ interface InboxSubscription {
   readonly id: string;
   readonly principal: AgentNoticePrincipal;
   readonly signalled: Set<string>;
+  /** Notices whose refusal this subscription already recorded, so a refusal is evidence once, not once per render. */
+  readonly withheld: Set<string>;
 }
 
 /** A send that succeeded on the wire whose availability receipt has not been committed yet. */
@@ -141,18 +144,28 @@ interface PendingReceipt {
   readonly reservationKey: string;
 }
 
-/** The signal and the inbox it points at must both admit the notice's class. */
-const disclosable = (notice: AgentNotice, advertisement: AgentNoticeDeliveryAdvertisement | undefined): boolean => {
+/**
+ * The signal and the inbox it points at must both admit the notice's class;
+ * a refetch of an inbox that would withhold the notice would announce only
+ * that something was withheld. Returns the refusal to record, or `undefined`
+ * when the notice may be signalled.
+ */
+const signalRefusal = (
+  notice: AgentNotice,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
+): AgentNoticeWithholdingReason | undefined => {
   const sensitivity = notice.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY;
-  return resolveNoticeDisclosure('mcp-resource-updated', sensitivity, advertisement).kind === 'disclosed'
-    && resolveNoticeDisclosure('mcp-inbox', sensitivity, advertisement).kind === 'disclosed';
+  for (const route of ['mcp-resource-updated', 'mcp-inbox'] as const) {
+    const disclosure = resolveNoticeDisclosure(route, sensitivity, advertisement);
+    if (disclosure.kind === 'withheld') return disclosure.reason;
+  }
+  return undefined;
 };
 
 const eligibleForSignal = (
   notice: AgentNotice,
   principal: AgentNoticePrincipal,
   nowMs: number,
-  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
 ): boolean => {
   switch (notice.state) {
     case 'pending':
@@ -180,7 +193,7 @@ const eligibleForSignal = (
   if (reservation !== undefined && Date.parse(reservation.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > nowMs) {
     return false;
   }
-  return disclosable(notice, advertisement) && recipientMatchesPrincipal(notice.recipient, principal);
+  return recipientMatchesPrincipal(notice.recipient, principal);
 };
 
 export const createNoticeInboxSignaller = (
@@ -266,10 +279,40 @@ export const createNoticeInboxSignaller = (
       if (snapshot === CLOSED || pendingUnsubscribes > 0 || subscription !== current) return { kind: 'unsubscribed' };
       const at = now().toISOString();
       const nowMs = Date.parse(at);
-      const noticeIds = Object.freeze(snapshot.notices
-        .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs, options.delivery))
-        .map((notice) => notice.id)
-        .toSorted((left, right) => left.localeCompare(right)));
+      const candidates = snapshot.notices
+        .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs))
+        .toSorted((left, right) => left.id.localeCompare(right.id));
+      // A notice the inbox would withhold is refused here too, and the
+      // refusal is durable evidence like the inbox's own: recorded once per
+      // subscription, before any send, so the ledger says why a matching
+      // subscriber was never signalled about it.
+      const refused: AgentNoticeWithheldEntry[] = [];
+      const noticeIds: string[] = [];
+      for (const notice of candidates) {
+        const reason = signalRefusal(notice, options.delivery);
+        if (reason === undefined) {
+          noticeIds.push(notice.id);
+        } else if (!current.withheld.has(notice.id)) {
+          refused.push(Object.freeze({ id: notice.id, reason }));
+        }
+      }
+      if (refused.length > 0) {
+        signalSequence += 1;
+        try {
+          const recorded = await untilClosed(ledger.recordWithholding({
+            at,
+            idempotencyKey: `agent-notices:withheld:${current.id}:${String(signalSequence)}`,
+            route: 'mcp-resource-updated',
+            withheld: refused,
+          }));
+          if (recorded === CLOSED) return { kind: 'unsubscribed' };
+          for (const entry of refused) current.withheld.add(entry.id);
+          // The recording moved the revision the eligibility was judged against.
+          continue;
+        } catch (error) {
+          return { error, kind: 'failed', stage: 'record' };
+        }
+      }
       if (noticeIds.length === 0) return { kind: 'nothing-eligible', revision: snapshot.revision };
       signalSequence += 1;
       const reservationKey = `${current.id}:${String(signalSequence)}`;
@@ -583,6 +626,7 @@ export const createNoticeInboxSignaller = (
           id: randomUUID(),
           principal,
           signalled: new Set<string>(),
+          withheld: new Set<string>(),
         });
       });
     },

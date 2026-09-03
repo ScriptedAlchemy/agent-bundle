@@ -336,12 +336,26 @@ export interface AgentNoticeLedgerInspection {
   readonly revision: number;
 }
 
+/**
+ * A route's refusal to carry notices, recorded by the surface that made the
+ * decision (the `resources/updated` signaller records its own; the inbox and
+ * event admission record theirs inside their own events).
+ */
+export interface AgentNoticeWithholdingOptions {
+  readonly at: string;
+  readonly idempotencyKey: string;
+  readonly route: AgentNoticeDeliveryRoute;
+  readonly withheld: readonly AgentNoticeWithheldEntry[];
+}
+
 export interface AgentNoticeLedger {
   expire(options: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot>;
   /** Retention facts for diagnostics; never notice content. */
   inspect(): Promise<AgentNoticeLedgerInspection>;
   openRequest(request: AgentNoticeRequest): Promise<AgentNoticeRequestLease>;
   read(): Promise<AgentNoticeLedgerSnapshot>;
+  /** Records that a route withheld the listed notices; evidence only, no state moves. */
+  recordWithholding(options: AgentNoticeWithholdingOptions): Promise<AgentNoticeLedgerSnapshot>;
   /** Applies the retention policy now: prunes eligible terminal notices, then compacts an oversized journal. */
   retain(options: AgentNoticeRetainOptions): Promise<AgentNoticeRetentionReport>;
   /** Releases a reservation whose resources/updated send failed; no budget was spent. */

@@ -337,9 +337,39 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     await driver.close();
   });
 
-  it('never signals resources/updated for a notice the inbox would withhold', async () => {
+  it('returns acknowledged notices only as the acknowledging route may disclose them', async () => {
+    const { driver, ledger } = await openLedger(advertisement({ 'mcp-inbox': 'internal', 'next-event': 'secret' }));
+    const internal = await publish(ledger, { id: 'internal' });
+    const secret = await publish(ledger, { id: 'secret', sensitivity: 'secret' });
+    const open = await publish(ledger, { id: 'public', sensitivity: 'public' });
+    const ack = (id: string, invocation: string, kind: 'event' | 'tool') => run(ledger, {
+      actorId: 'recipient',
+      id: invocation,
+      kind,
+      startedAt: '2026-09-03T10:30:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(id));
+    // A tool invocation is held to the inbox ceiling: internal comes back
+    // redacted, a secret's id learned from the inbox unlocks only the mark.
+    const internalAck = await ack(internal.notice.id, 'ack-1', 'tool');
+    expect(internalAck.state).toBe('acknowledged');
+    expect((internalAck.content.root as { text: string }).text).toBe(redactSecretText(SECRET_TEXT));
+    const secretAck = await ack(secret.notice.id, 'ack-2', 'tool');
+    expect(secretAck.state).toBe('acknowledged');
+    expect(secretAck.content).toEqual({ root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 });
+    const publicAck = await ack(open.notice.id, 'ack-3', 'tool');
+    expect((publicAck.content.root as { text: string }).text).toBe(SECRET_TEXT);
+    // The store still holds every notice as authored; only the handle's view was disclosed.
+    expect((await ledger.read()).notices.every((notice) => (notice.content.root as { text: string }).text === SECRET_TEXT)).toBe(true);
+    // An admitted event is held to the next-event ceiling, which admits secret here.
+    const another = await publish(ledger, { id: 'secret-2', sensitivity: 'secret' });
+    const eventAck = await ack(another.notice.id, 'ack-4', 'event');
+    expect((eventAck.content.root as { text: string }).text).toBe(SECRET_TEXT);
+    await driver.close();
+  });
+
+  it('never signals resources/updated for a notice the inbox would withhold, and records that refusal once', async () => {
     const { driver, ledger } = await openLedger(advertisement({ 'mcp-inbox': 'internal' }));
-    await publish(ledger, { id: 'secret', sensitivity: 'secret' });
+    const hidden = await publish(ledger, { id: 'secret', sensitivity: 'secret' });
     const visible = await publish(ledger, { id: 'internal' });
     const principal: AgentNoticePrincipal = {
       actor: actor('recipient'),
@@ -364,6 +394,22 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     });
     expect(again).toEqual({ kind: 'idle', reason: 'nothing-eligible', revision: expect.any(Number) });
     expect(sends).toHaveLength(1);
+    // The refusal is durable evidence on the withheld notice — recorded by
+    // the signaller itself, once for the subscription, never per render.
+    const refused = (await ledger.read()).notices.find((notice) => notice.id === hidden.notice.id);
+    expect(refused).toMatchObject({
+      state: 'pending',
+      withheld: {
+        'mcp-resource-updated': {
+          count: 1,
+          firstAt: '2026-09-03T10:20:00.000Z',
+          lastAt: '2026-09-03T10:20:00.000Z',
+          reason: 'sensitivity-exceeds-route',
+        },
+      },
+    });
+    expect(refused?.availability).toBeUndefined();
+    expect((await ledger.read()).notices.find((notice) => notice.id === visible.notice.id)?.withheld).toBeUndefined();
     await signaller.close();
     await driver.close();
   });
