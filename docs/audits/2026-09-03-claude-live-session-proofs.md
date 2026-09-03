@@ -37,10 +37,15 @@ is reproduced here beyond counts, codes, and field names.
   unchanged after every run (05:34, 08:12, 08:12, and 08:23 UTC respectively,
   all earlier than the first isolated turn of the day at 16:55 UTC). The
   isolated home was removed after the runs.
-- The `packedNativeEnvironment` allowlist strips every credential-shaped
-  variable name (`*TOKEN*`, `*KEY*`, …), so a `CLAUDE_CODE_OAUTH_TOKEN`
-  environment transplant would not reach the host; the on-disk credentials
-  file is the only route these proofs can authenticate through.
+- `packedNativeEnvironment` drops `NODE_PATH`, the alternate-provider
+  variables, and any name that (case-insensitively, ignoring separators)
+  contains `apikey`, `apitoken`, `authtoken`, `accesstoken`, `authorization`,
+  `credential`, `password`, `secret`, or `token` (`credentialEnvironmentKey`
+  in `packages/agent-bundle/tests/support/packed-native-smoke.ts`). Generic
+  names such as `AWS_ACCESS_KEY_ID` are not filtered. Because
+  `CLAUDE_CODE_OAUTH_TOKEN` matches `token`, an environment transplant would
+  not reach the host; the on-disk credentials file is the only route these
+  proofs can authenticate through.
 
 ## Results
 
