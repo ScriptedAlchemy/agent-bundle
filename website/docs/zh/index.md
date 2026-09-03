@@ -9,7 +9,7 @@ hero:
   tagline: 一次性描述技能、钩子、MCP 服务器与脚本，编译出可直接安装到 Claude Code、Codex 与 Cursor 的产物。
   image:
     src: /logo.svg
-    alt: agent-bundle logo
+    alt: agent-bundle 徽标
   actions:
     - theme: brand
       text: 类型 API
