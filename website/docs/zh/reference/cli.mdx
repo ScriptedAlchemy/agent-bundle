@@ -72,7 +72,7 @@ proxy 从父命令 `dev` 继承 `--root`，并把诊断写到 stderr。
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `--output <path>` | 配置中的 `output.distPath`，否则为 `dist` | 相对 `--root` 的产物输出路径。 |
+| `--output <path>` | 配置中的 `output.distPath`，否则为 `artifact` | 相对 `--root` 的产物输出路径。CLI 构建同时会把包构建写入 `dist/`，因此其产物默认目录是互不重叠的 `artifact/`；不带 `packageOutputs` 的编程式 `build()` 则默认为 `dist`。 |
 
 当项目声明了 `bin` 或 `lib` 时，两者都会构建包输出。
 
@@ -94,6 +94,7 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | --- | --- | --- |
 | `--host <host>` | 全部受支持的宿主 | 要检查的宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
 | `--from <bundle-dir>` | —— | 用于比对的 target 捆绑包目录或产物根目录。 |
+| `--json` | 关闭 | 输出一份机器可读的 JSON 文档，而不是人类可读的报告。 |
 
 当 Doctor 报告任何 error 级诊断时以 `1` 退出，并且绝不修改任何东西。
 
