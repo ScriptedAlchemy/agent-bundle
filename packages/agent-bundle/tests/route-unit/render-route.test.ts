@@ -1,4 +1,4 @@
-import { Agent, agent } from '@agent-bundle/runtime';
+import { Agent, agent, useAgent } from '@agent-bundle/runtime';
 import { describe, expect, it } from '@rstest/core';
 import { createElement } from 'react';
 
@@ -293,6 +293,33 @@ describe('renderRoute through the real renderer', () => {
       routeId: 'tool:harness/providers (module)',
     });
     expectDocument(unfixtured).toHaveValue({ frozen: true, keys: [], library: undefined });
+  });
+
+  it('serves useAgent() synchronously inside a rendered Server Component', async () => {
+    // A synchronous component cannot await agent(); useAgent() hands it the
+    // same request handle from the same store, so identity axes, providers,
+    // and the invocation are observable without suspending.
+    const Synchronous = (): unknown => {
+      const context = useAgent();
+      return createElement(Agent.Result, {
+        value: {
+          invocation: context.invocation.kind,
+          library: context.providers['library'] as never,
+          workspace: context.workspace.state === 'available' ? context.workspace.value.root : context.workspace.reason,
+        },
+      }, createElement(Agent.Text, null, 'synchronous context observed'));
+    };
+
+    const rendered = await renderRoute({ default: Synchronous as never }, {
+      context: { providers: { library: { stages: ['discover'] } }, workspace },
+      routeId: 'tool:harness/use-agent (module)',
+    });
+
+    expectDocument(rendered).toHaveStatus('success').toHaveValue({
+      invocation: 'tool',
+      library: { stages: ['discover'] },
+      workspace: '/tmp/harness-library',
+    });
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {
