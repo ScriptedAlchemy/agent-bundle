@@ -204,10 +204,10 @@ export default defineConfig({
 
 ```sh
 npx agent-bundle inspect --root . --routes
-npx agent-bundle mcp list --artifact dist --target claude --server curator
-npx agent-bundle mcp invoke --artifact dist --target claude --server curator \
+npx agent-bundle mcp list --artifact artifact --target claude --server curator
+npx agent-bundle mcp invoke --artifact artifact --target claude --server curator \
   --tool status --input '{"verbose":true}'
-npx agent-bundle mcp run --artifact dist --target claude --server curator
+npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
 `mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有

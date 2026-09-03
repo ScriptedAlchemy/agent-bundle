@@ -115,8 +115,8 @@ Skill、MCP 服务器与脚本都按约定被发现。只有钩子需要声明�
 <Tabs>
 <Tab label="Claude Code">
 
-```text title="dist/claude/"
-dist/claude/
+```text title="artifact/claude/"
+artifact/claude/
 ├── .claude-plugin/
 │   ├── plugin.json
 │   └── marketplace.json
@@ -135,8 +135,8 @@ dist/claude/
 </Tab>
 <Tab label="Codex">
 
-```text title="dist/codex/"
-dist/codex/
+```text title="artifact/codex/"
+artifact/codex/
 ├── .codex-plugin/plugin.json
 ├── .agents/plugins/marketplace.json
 ├── .mcp.json
@@ -154,8 +154,8 @@ dist/codex/
 </Tab>
 <Tab label="Portable">
 
-```text title="dist/portable/"
-dist/portable/
+```text title="artifact/portable/"
+artifact/portable/
 ├── plugin.json
 ├── mcp.json
 ├── mcp/mcp-status-….mjs
@@ -172,7 +172,7 @@ Agent Plugins 开放标准没有钩子这一表面，所以钩子会被报告为
 </Tab>
 </Tabs>
 
-生成的包装脚本文件名以一段短摘要结尾，摘要来自编译它的声明，而非文件内容。`dist/agent-bundle.manifest.json`
+生成的包装脚本文件名以一段短摘要结尾，摘要来自编译它的声明，而非文件内容。`artifact/agent-bundle.manifest.json`
 记录每个输出文件及其 SHA-256，因此后续校验比对的是真实字节，而不是检查某个路径是否存在。
 
 </div>

@@ -99,10 +99,12 @@ shadows it. The `bin: false` and `lib: false` opt-outs stay silent.
 
 ### Host artifacts
 
-One directory per selected target under the artifact root (`dist` by default):
+One directory per selected target under the artifact root. The CLI defaults that root to
+`artifact/`, so it never collides with the package build below; `output.distPath` or `--output`
+moves it:
 
 ```text
-dist/
+artifact/
 ├── agent-bundle.manifest.json # every emitted file with its SHA-256
 └── plugin/                    # targets: ['plugin'] — one multi-host bundle
     ├── .claude-plugin/
@@ -118,7 +120,7 @@ dist/
 ```
 
 Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
-`agent-bundle.manifest.json` sits at the output root beside the target directories and records
+`agent-bundle.manifest.json` sits at the artifact root beside the target directories and records
 every emitted file with its SHA-256, so artifact validation is content-addressed rather than a guess.
 
 `output.distPath` moves the artifact root; it never changes the framework-owned layout inside
@@ -138,8 +140,9 @@ dist/
 ```
 
 `dist` is a mandatory-ignored directory: package outputs never enter project source snapshots or
-Skill and asset discovery. Because both outputs would otherwise collide, a project with package
-entries must keep host artifacts somewhere else (`AB4706`):
+Skill and asset discovery. The two outputs must not overlap: pointing `output.distPath` or
+`--output` at `dist` on a project with package entries is `AB4706`. The default already keeps
+them apart, and spelling it out is harmless:
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';

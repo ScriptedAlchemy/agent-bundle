@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
 | `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
 | `routes` | Route-graph policy | Convention-derived. |
-| `output` | `{ distPath? }` | `dist`. |
+| `output` | `{ distPath? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. |
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
@@ -92,8 +92,10 @@ without a reason fails.
 
 ## output and runtime
 
-`output.distPath` is the artifact output directory relative to the project root, defaulting to
-`dist`. The per-invocation `--output` flag wins, but is subject to the same project-root
+`output.distPath` is the artifact output directory relative to the project root. The CLI
+(`build`, `prepack`, `dev`) defaults it to `artifact`, because the CLI also runs the package build
+and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `packageOutputs: true`.
+The per-invocation `--output` flag wins, but is subject to the same project-root
 containment check; an output path that is absolute or external, has an invalid shape, or lands
 in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
 

@@ -72,7 +72,7 @@ Both take the source option group plus:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--output <path>` | config `output.distPath`, else `dist` | Artifact output path relative to `--root`. |
+| `--output <path>` | config `output.distPath`, else `artifact` | Artifact output path relative to `--root`. `dist` belongs to the package build. |
 
 Both build package outputs when the project declares `bin` or `lib`.
 
@@ -94,6 +94,7 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | --- | --- | --- |
 | `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
 | `--from <bundle-dir>` | — | Target bundle directory or artifact root to compare against. |
+| `--json` | off | Write one machine-readable JSON document. |
 
 Doctor exits `1` when it reports any error diagnostic, and never modifies anything.
 

@@ -86,7 +86,7 @@ pnpm exec agent-bundle mcp run --server status --target portable
 ```
 
 `mcp run` 会从 portable target 的 MCP 清单解析出生成的入口，并先构建一份临时产物；传入
-`--artifact dist` 可改为复用 `pnpm build` 的输出。关闭 stdin 以 0 退出，Ctrl-C 以 130 退出，
+`--artifact artifact` 可改为复用 `pnpm build` 的输出。关闭 stdin 以 0 退出，Ctrl-C 以 130 退出，
 每个服务器的状态持久化在 `.agent-bundle/mcp-run/portable/status` 下。
 
 该命令默认会加载项目根目录的 `.env` 集合，包括所选 `--mode` 的变体。启动环境的优先级是清单 env，

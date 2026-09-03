@@ -117,8 +117,8 @@ declaration, because a handler has to be bound to an event.
 <Tabs>
 <Tab label="Claude Code">
 
-```text title="dist/claude/"
-dist/claude/
+```text title="artifact/claude/"
+artifact/claude/
 ├── .claude-plugin/
 │   ├── plugin.json
 │   └── marketplace.json
@@ -137,8 +137,8 @@ dist/claude/
 </Tab>
 <Tab label="Codex">
 
-```text title="dist/codex/"
-dist/codex/
+```text title="artifact/codex/"
+artifact/codex/
 ├── .codex-plugin/plugin.json
 ├── .agents/plugins/marketplace.json
 ├── .mcp.json
@@ -156,8 +156,8 @@ dist/codex/
 </Tab>
 <Tab label="Portable">
 
-```text title="dist/portable/"
-dist/portable/
+```text title="artifact/portable/"
+artifact/portable/
 ├── plugin.json
 ├── mcp.json
 ├── mcp/mcp-status-….mjs
@@ -176,7 +176,7 @@ this target instead of being silently dropped.
 </Tabs>
 
 Generated wrapper names end in a short digest of the declaration they were compiled from, not of
-their contents. `dist/agent-bundle.manifest.json` records every emitted file with its SHA-256, so
+their contents. `artifact/agent-bundle.manifest.json` records every emitted file with its SHA-256, so
 later validation compares real bytes rather than checking that a path exists.
 
 </div>

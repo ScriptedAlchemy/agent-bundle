@@ -22,10 +22,10 @@ agent-bundle inverts that. Host-specific layout is the compiler's job, so it sta
 source tree:
 
 ```sh
-npx agent-bundle build --root . --output dist
+npx agent-bundle build --root .
 ```
 
-With `targets: ['plugin']`, that single command emits one multi-host bundle at `dist/plugin/`:
+With `targets: ['plugin']`, that single command emits one multi-host bundle at `artifact/plugin/`:
 `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`,
 `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to
 install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`,

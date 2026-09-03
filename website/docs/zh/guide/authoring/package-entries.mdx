@@ -30,8 +30,8 @@ export default defineConfig({
 配置沉默时，`src/cli.ts` 与 `src/index.ts` 这两个约定会补齐它们。配置总是胜出，而 `bin: false` /
 `lib: false` 则用于退出。
 
-由于包输出位于 `dist/`，带有包入口的项目必须把宿主产物放到别处（`AB4706`）——
-`output: { distPath: 'artifact' }` 无需 CLI 参数即可提供这种隔离。`dist` 是强制忽略的目录：包输出
+由于包输出位于 `dist/`，宿主产物必须放在别处：命令行默认的产物根目录是 `artifact/`，而在带有包入口的项目上把
+`output.distPath` 或 `--output` 指向 `dist` 就是 `AB4706`。`dist` 是强制忽略的目录：包输出
 永远不会进入项目源码快照，也不会进入 Skill 与资源发现。
 
 输出会被暂存并原子发布，其 provenance——字节数、SHA-256，以及排序后的项目相对源码输入——会像产物文件

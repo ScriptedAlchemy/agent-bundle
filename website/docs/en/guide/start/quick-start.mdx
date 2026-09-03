@@ -81,7 +81,7 @@ deprecated compatibility axis, but a value that disagrees with `package.json` re
 ## Build, or work interactively
 
 ```sh
-npx agent-bundle build --root . --output dist   # write installable artifacts
+npx agent-bundle build --root .                 # write installable artifacts to artifact/
 npx agent-bundle dev --root .                   # local workbench with live rebuilds
 ```
 
@@ -109,17 +109,17 @@ bundle's real plugin and marketplace names. With the `portable`, `codex`, and `c
 built above, the host installs are:
 
 ```sh
-npx agent-bundle install claude --from dist/claude --scope user
-npx agent-bundle install codex --from dist/codex
+npx agent-bundle install claude --from artifact/claude --scope user
+npx agent-bundle install codex --from artifact/codex
 ```
 
-Add `cursor` to `targets` to build `dist/cursor`, and `npx agent-bundle install cursor --from
-dist/cursor` installs it the same way. A `plugin` build has one `INSTALL.md` covering every host.
+Add `cursor` to `targets` to build `artifact/cursor`, and `npx agent-bundle install cursor --from
+artifact/cursor` installs it the same way. A `plugin` build has one `INSTALL.md` covering every host.
 
 For an install-free development loop against Claude Code:
 
 ```sh
-claude --plugin-dir dist/claude plugin list --json
+claude --plugin-dir artifact/claude plugin list --json
 ```
 
 ## Next steps

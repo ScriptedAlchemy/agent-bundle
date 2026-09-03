@@ -222,9 +222,9 @@ Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的
 
 ```sh
 npx agent-bundle inspect --root . --hooks
-npx agent-bundle hooks list --artifact dist --target claude
-npx agent-bundle hooks simulate --artifact dist --target claude \
-  --hook session-start-session-start-1a2b3c4d \
+npx agent-bundle hooks list --artifact artifact --target claude
+npx agent-bundle hooks simulate --artifact artifact --target claude \
+  --hook session-start-session-start-7ab7e8a5 \
   --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
 ```
 

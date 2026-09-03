@@ -62,5 +62,5 @@ pnpm build
 pnpm exec agent-bundle eval --case release-artifact-is-ready --trials 1
 ```
 
-`pnpm check` 就是不打开 Workbench 的“校验加构建”这一对。生成的输出落在 `dist/`，其根契约是
-`dist/agent-bundle.manifest.json`。`.agent-bundle/` 目录存放开发期状态，不是源码材料。
+`pnpm check` 就是不打开 Workbench 的“校验加构建”这一对。生成的输出落在 `artifact/`，其根契约是
+`artifact/agent-bundle.manifest.json`。`.agent-bundle/` 目录存放开发期状态，不是源码材料。

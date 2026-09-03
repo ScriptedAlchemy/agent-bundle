@@ -42,7 +42,7 @@ When Claude Code is on `PATH`, artifact validation runs
 CI should use strict validation:
 
 ```sh
-npx agent-bundle validate --artifact dist --strict
+npx agent-bundle validate --artifact artifact --strict
 ```
 
 Use `--no-host-validation` when a deterministic schema-only check is required — a machine without
@@ -51,7 +51,7 @@ the hosts installed must still be able to run the same gate and get the same sch
 During development you can load a built target without installing it and verify registration:
 
 ```sh
-claude --plugin-dir dist/claude plugin list --json
+claude --plugin-dir artifact/claude plugin list --json
 ```
 
 ## Codex and Cursor: pinned schemas
@@ -103,7 +103,7 @@ npx agent-bundle prepack --root . --output artifact --json
 `prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
 agreement. `--output` is an artifact path relative to `--root` that overrides the configured
-`output.distPath`, defaulting to `dist`. Use it as an npm `prepack` script; `--ignore-scripts`
+`output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
 
 | Code | Meaning |

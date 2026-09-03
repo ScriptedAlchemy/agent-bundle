@@ -95,10 +95,11 @@ export default defineConfig({
 
 ### 宿主产物
 
-在产物根目录（默认 `dist`）下，每个所选 target 一个目录：
+在产物根目录下，每个所选 target 一个目录。命令行把该根目录默认为 `artifact/`，因此它永远不会与下文的包构建
+冲突；`output.distPath` 或 `--output` 可以移动它：
 
 ```text
-dist/
+artifact/
 ├── agent-bundle.manifest.json # 每个产出文件及其 SHA-256
 └── plugin/                    # targets: ['plugin'] — 一个多宿主捆绑包
     ├── .claude-plugin/
@@ -114,7 +115,7 @@ dist/
 ```
 
 单宿主布局由 `claude`、`codex`、`cursor` 与 `portable` 这几个 target 提供。
-`agent-bundle.manifest.json` 位于输出根目录、与各 target 目录并列，记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
+`agent-bundle.manifest.json` 位于产物根目录、与各 target 目录并列，记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
 
 `output.distPath` 只移动产物根目录；它从不改变每个 target 内部由框架拥有的布局。优先级是 CLI
 `--output`，然后 `output.distPath`，最后是 `dist`。取值必须是非空、限定在项目根目录内的相对 POSIX
@@ -132,8 +133,9 @@ dist/
 └── **/*.d.ts                  # 声明文件，当 lib.dts 开启时
 ```
 
-`dist` 是强制忽略的目录：包输出永远不会进入项目源码快照，也不会进入 Skill 与资源发现。由于两类输出
-本会相互冲突，带有包入口的项目必须把宿主产物放到别处（`AB4706`）：
+`dist` 是强制忽略的目录：包输出永远不会进入项目源码快照，也不会进入 Skill 与资源发现。两类输出不得重叠：
+在带有包入口的项目上把 `output.distPath` 或 `--output` 指向 `dist` 就是 `AB4706`。默认值已经把二者分开，
+显式写出也无妨：
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';

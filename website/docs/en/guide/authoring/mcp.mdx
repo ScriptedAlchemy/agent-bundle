@@ -219,10 +219,10 @@ should not apply — `custom` for a handwritten server, `command` for an externa
 
 ```sh
 npx agent-bundle inspect --root . --routes
-npx agent-bundle mcp list --artifact dist --target claude --server curator
-npx agent-bundle mcp invoke --artifact dist --target claude --server curator \
+npx agent-bundle mcp list --artifact artifact --target claude --server curator
+npx agent-bundle mcp invoke --artifact artifact --target claude --server curator \
   --tool status --input '{"verbose":true}'
-npx agent-bundle mcp run --artifact dist --target claude --server curator
+npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
 `mcp run` executes one built stdio server in the foreground: it resolves the generated entry

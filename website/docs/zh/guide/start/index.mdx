@@ -19,10 +19,10 @@ agent-bundle 把一个智能体插件——由一份带类型的配置描述的 
 agent-bundle 把这件事反转过来。宿主专属布局是编译器的职责，因此它不会出现在你的源码树中：
 
 ```sh
-npx agent-bundle build --root . --output dist
+npx agent-bundle build --root .
 ```
 
-当 `targets: ['plugin']` 时，这一条命令会在 `dist/plugin/` 生成一份多宿主捆绑包：`.claude-plugin/`、
+当 `targets: ['plugin']` 时，这一条命令会在 `artifact/plugin/` 生成一份多宿主捆绑包：`.claude-plugin/`、
 `.codex-plugin/` 与 `.cursor-plugin/` 三份清单，共享同一套 `skills/`、`hooks/`、`mcp/` 与 `scripts/`
 目录。捆绑包中生成的 `AGENTS.md` 会说明如何把它安装到各个宿主。单宿主布局则由 `claude`、`codex`、
 `cursor` 与 `portable` 这几个 target 提供。

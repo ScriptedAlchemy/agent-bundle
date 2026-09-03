@@ -38,7 +38,7 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 CI 应当使用严格校验：
 
 ```sh
-npx agent-bundle validate --artifact dist --strict
+npx agent-bundle validate --artifact artifact --strict
 ```
 
 当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
@@ -47,7 +47,7 @@ npx agent-bundle validate --artifact dist --strict
 在开发期，你可以在不安装的情况下加载一个已构建 target 并核实注册情况：
 
 ```sh
-claude --plugin-dir dist/claude plugin list --json
+claude --plugin-dir artifact/claude plugin list --json
 ```
 
 ## Codex 与 Cursor：被固定的 schema
@@ -93,7 +93,7 @@ npx agent-bundle prepack --root . --output artifact --json
 
 `prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、清单
 哈希、包 bin 目标以及发布版本一致性把关。`--output` 是相对 `--root` 的产物路径，会覆盖配置中的
-`output.distPath`，默认值为 `dist`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
+`output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
 而且任何 npm 生命周期都绝不会执行宿主安装。
 
 | 代码 | 含义 |

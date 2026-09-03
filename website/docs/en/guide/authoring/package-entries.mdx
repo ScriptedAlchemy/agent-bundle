@@ -31,9 +31,9 @@ export default defineConfig({
 The conventions `src/cli.ts` and `src/index.ts` fill these in when the config is silent. Config
 always wins, and `bin: false` / `lib: false` opt out.
 
-Because package outputs live in `dist/`, a project with package entries must keep host artifacts
-somewhere else (`AB4706`) — `output: { distPath: 'artifact' }` provides that separation without a
-CLI flag. `dist` is a mandatory-ignored directory: package outputs never enter project source
+Because package outputs live in `dist/`, host artifacts must live somewhere else: the CLI's
+default artifact root is `artifact/`, and pointing `output.distPath` or `--output` at `dist` on a
+project with package entries is `AB4706`. `dist` is a mandatory-ignored directory: package outputs never enter project source
 snapshots or Skill and asset discovery.
 
 Outputs are staged and published atomically, and their provenance — bytes, SHA-256, and sorted
