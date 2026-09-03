@@ -10,17 +10,11 @@
     }
   },
   "properties": {
-    "agent_id": {
-      "type": "string"
-    },
-    "agent_type": {
-      "type": "string"
-    },
     "cwd": {
       "type": "string"
     },
     "hook_event_name": {
-      "const": "PermissionRequest",
+      "const": "SessionStart",
       "type": "string"
     },
     "model": {
@@ -39,16 +33,17 @@
     "session_id": {
       "type": "string"
     },
-    "tool_input": true,
-    "tool_name": {
+    "source": {
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact"
+      ],
       "type": "string"
     },
     "transcript_path": {
       "$ref": "#/definitions/NullableString"
-    },
-    "turn_id": {
-      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
-      "type": "string"
     }
   },
   "required": [
@@ -57,11 +52,9 @@
     "model",
     "permission_mode",
     "session_id",
-    "tool_input",
-    "tool_name",
-    "transcript_path",
-    "turn_id"
+    "source",
+    "transcript_path"
   ],
-  "title": "permission-request.command.input",
+  "title": "session-start.command.input",
   "type": "object"
 }

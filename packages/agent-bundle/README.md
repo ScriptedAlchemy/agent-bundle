@@ -45,6 +45,19 @@ plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_im
 contribute only to that host's native matcher. A hook that selects tools must leave every selected
 target with at least one applicable selector, otherwise the build fails.
 
+Codex hooks follow the release contract pinned in `codex-0.147.0.json` (`hooks.contract`). The
+emitted and authored (`codex.nativeHooks`) `hooks/hooks.json` is closed to the eleven
+release-documented events; `Interrupt` stays deferred until the pin moves to a release that ships
+its generated schema. Native documents may use every documented `command` handler field
+(`commandWindows`, `timeout`, `statusMessage`, `additionalContextLimit`, `async`) and `mcp_tool`
+handlers (`server`, `tool`, `input`, `timeout`, `statusMessage`); `prompt` and `agent` handlers,
+which Codex parses but skips, fail with `codex.native-hooks.handler.skipped`. Rules the host would
+otherwise apply silently fail the build instead: `mcp_tool`, `async`, or a timeout above three
+seconds on `SessionEnd`, `additionalContextLimit` on an event that returns no `additionalContext`,
+a `matcher` on `UserPromptSubmit` or `Stop`, and a `codex:WebSearch`-style hosted-tool selector.
+Hook trust (review by current hash in `/hooks`, plugin hooks skipped until trusted, managed hooks
+immutable) is host-owned and is recorded as unavailable rather than claimed.
+
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
 optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the

@@ -14,7 +14,7 @@
   },
   "deferredNativeEvents": {
     "Interrupt": {
-      "reason": "retrieved 2026-09-02: generated Interrupt schema exists in the codex repository, but release documentation and a pinned CLI revision do not yet agree on its contract (#258 defer list).",
+      "reason": "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks now documents Interrupt (main-thread turn interruption; matcher ignored; one-second default and three-second maximum timeout; systemMessage-only output), but the pinned rust-v0.147.0 generated hook schema directory has no interrupt.command.{input,output}.schema.json (those files exist only on main), and Agent Bundle has no canonical interrupt event route (#97 owns route expansion). Deferred until the Codex pin moves to a release that ships the generated Interrupt schemas; authored native Interrupt hooks fail closed with codex.native-hooks.event.deferred.",
       "state": "unavailable"
     }
   },
@@ -81,6 +81,154 @@
       "file.write": "^(?:apply_patch|Edit|Write)$",
       "mcp": "^mcp__",
       "shell": "^Bash$"
+    },
+    "releaseEvents": [
+      "PermissionRequest",
+      "PostCompact",
+      "PostToolUse",
+      "PreCompact",
+      "PreToolUse",
+      "SessionEnd",
+      "SessionStart",
+      "Stop",
+      "SubagentStart",
+      "SubagentStop",
+      "UserPromptSubmit"
+    ],
+    "contract": {
+      "releaseEvents": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks lists SessionStart, SessionEnd, PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, UserPromptSubmit, SubagentStart, SubagentStop, and Stop as the release events; Interrupt is documented on the same page but has no generated schema at rust-v0.147.0 and stays in deferredNativeEvents.",
+          "retrieved 2026-09-02: the pinned hooks.schema.json closes the hooks object to exactly these eleven event keys, so an authored native document naming any other event fails before publication instead of being emitted for the host to ignore.",
+          "retrieved 2026-09-02: the SubagentStart and SubagentStop mappings, wrapper codec rules, and pinned subagent schemas were corrected by PR #194 (fix/codex-subagent-events) and the agent/start and agent/stop routes by the #258 events lanes (PRs #351 and #360); this pass credits those lanes and does not reimplement the mapping."
+        ],
+        "state": "supported"
+      },
+      "handlerCommand": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents command handlers with command, commandWindows (Windows-only override; TOML also accepts command_windows), timeout in seconds, statusMessage, additionalContextLimit, and async; commands run with the session cwd as their working directory.",
+          "retrieved 2026-09-02: generated Agent Bundle hooks compile to command handlers whose command is node \"${PLUGIN_ROOT}/hooks/<wrapper>.mjs\"; the pinned schema admits every documented command-handler field for authored native documents."
+        ],
+        "fields": ["command", "commandWindows", "timeout", "statusMessage", "additionalContextLimit", "async"],
+        "state": "supported"
+      },
+      "handlerMcpTool": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents mcp_tool handlers with required server and tool, optional input (argument templates, default {}), timeout (default 600 seconds), and statusMessage; ${field.nested} placeholders expand from the hook event, keep their JSON type when they fill a whole value, render as text inside larger strings, and expand recursively through objects and arrays.",
+          "retrieved 2026-09-02: the pinned hooks.schema.json admits mcp_tool handlers in authored native documents and the adapter rejects them under SessionEnd, which the hooks page documents as unsupported for MCP tool hooks."
+        ],
+        "fields": ["server", "tool", "input", "timeout", "statusMessage"],
+        "reason": "mcp_tool handlers are admitted and validated in authored Codex native hook documents, but canonical Agent Bundle hooks always compile to command handlers and the compiler cannot verify that the named server is connected or that the tool exists.",
+        "state": "degraded"
+      },
+      "handlerPromptAgent": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states that command and mcp_tool handlers are supported while prompt and agent handlers are parsed but skipped."
+        ],
+        "reason": "Codex 0.147.0 parses prompt and agent handlers but never runs them, so the compiler rejects them with codex.native-hooks.handler.skipped instead of emitting handlers the host would silently drop.",
+        "state": "unavailable"
+      },
+      "mcpToolExecution": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states MCP tool hooks use an existing connection and never start or reconnect servers; errors, missing servers, and unavailable tools do not block the operation; they run synchronously, request no tool approval, and trigger no other hooks; the shorter of the hook or server timeout applies and elicitation waits are excluded; SessionStart hooks may run before a server is ready without blocking the session; SessionEnd does not support MCP tool hooks."
+        ],
+        "reason": "Connected-server requirement, synchronous non-recursive execution, and timeout arbitration are Codex runtime behavior that the compiler cannot enforce; it validates handler shape and rejects SessionEnd mcp_tool handlers only.",
+        "state": "unavailable",
+        "unsupportedEvents": ["SessionEnd"]
+      },
+      "asyncCommandHooks": {
+        "concurrencyLimit": 8,
+        "synchronousEvents": ["SessionEnd"],
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents async: true command hooks that share input, matcher, trust review, timeout, and large-output handling with synchronous hooks; output is delivered at the next safe point (next model request in an active turn, otherwise the next user turn) and cannot block, approve, rewrite, or otherwise control the triggering operation.",
+          "retrieved 2026-09-02: the same page limits a session to eight concurrent background hooks, lets them finish out of order, cancels unfinished background hooks and discards undelivered output at session end, and states SessionEnd hooks always run synchronously."
+        ],
+        "reason": "Authored native documents may set async on command handlers and the adapter rejects async on SessionEnd, but canonical Agent Bundle hooks have no async authoring surface and the eight-per-session limit, ordering, cancellation, and non-controlling output rules are host runtime behavior.",
+        "state": "degraded"
+      },
+      "additionalContextLimit": {
+        "additionalContextEvents": ["SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "UserPromptSubmit"],
+        "defaultTokens": 2500,
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks caps each model-visible hook output message at roughly 2,500 tokens, spills larger additionalContext to <temp_dir>/hook_outputs/<session_id>/ with a head-and-tail preview, and falls back to a truncated preview when the file cannot be written.",
+          "retrieved 2026-09-02: additionalContextLimit accepts a positive integer threshold or 0 for unlimited pass-through, applies only to additionalContext, is evaluated per matching handler, and is ignored with a configuration warning on events that cannot produce additional context; the hooks page documents additionalContext output for SessionStart, SubagentStart, PreToolUse, PostToolUse, and UserPromptSubmit only."
+        ],
+        "reason": "Authored native documents may set additionalContextLimit and the adapter rejects it on events that cannot return additionalContext, but canonical Agent Bundle hooks cannot author the limit and the spill-to-disk behavior is host runtime behavior.",
+        "state": "degraded"
+      },
+      "commandWindows": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents commandWindows as an optional Windows-only command override; TOML accepts command_windows or commandWindows, and hooks.json uses commandWindows."
+        ],
+        "reason": "Authored native documents may set commandWindows, but generated Agent Bundle wrappers emit one node command for every platform and expose no per-platform override.",
+        "state": "degraded"
+      },
+      "statusMessage": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents statusMessage as an optional message shown while a command or mcp_tool hook runs."
+        ],
+        "reason": "Authored native documents may set statusMessage, but canonical Agent Bundle hooks have no status-message authoring surface.",
+        "state": "degraded"
+      },
+      "timeoutRules": {
+        "defaultSeconds": 600,
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states timeout is in seconds and defaults to 600 for most hooks, while SessionEnd and Interrupt default to 1 second and support at most 3 seconds; SessionEnd timeouts or errors are reported as hook failures.",
+          "retrieved 2026-09-02: generated hooks project hook.timeoutMs to whole seconds and the adapter rejects SessionEnd handlers whose timeout exceeds the documented three-second maximum."
+        ],
+        "shortTimeoutEvents": { "SessionEnd": { "defaultSeconds": 1, "maximumSeconds": 3 } },
+        "state": "supported"
+      },
+      "matcherSemantics": {
+        "applyPatchAliases": ["Edit", "Write"],
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents matcher as a regex applied to tool name for PreToolUse, PostToolUse, and PermissionRequest (including apply_patch aliases Edit and Write while tool_name still reports apply_patch), to trigger (manual|auto) for PreCompact and PostCompact, to reason (other) for SessionEnd, to source (startup|resume|clear|compact) for SessionStart, and to agent_type for SubagentStart and SubagentStop; UserPromptSubmit, Stop, and Interrupt ignore any configured matcher.",
+          "retrieved 2026-09-02: the tool-coverage table routes shell and unified exec as Bash, apply_patch as apply_patch|Edit|Write, MCP tools as mcp__<server>__<tool>, and other local function tools such as update_plan (spawn_agent also matches Agent) through PreToolUse and PostToolUse, while hosted tools such as WebSearch never reach the local function-tool hook path.",
+          "retrieved 2026-09-02: canonical shell, file.write, and mcp selectors compile to ^Bash$, ^(?:apply_patch|Edit|Write)$, and ^mcp__; codex-scoped native selectors compile to anchored exact-name matchers for local function tools; matchers on UserPromptSubmit and Stop and native selectors naming the documented hosted tool fail before publication."
+        ],
+        "hostedToolExclusions": ["WebSearch"],
+        "ignoredMatcherEvents": ["UserPromptSubmit", "Stop"],
+        "matcherSubjects": {
+          "PermissionRequest": "tool_name",
+          "PostCompact": "trigger",
+          "PostToolUse": "tool_name",
+          "PreCompact": "trigger",
+          "PreToolUse": "tool_name",
+          "SessionEnd": "reason",
+          "SessionStart": "source",
+          "SubagentStart": "agent_type",
+          "SubagentStop": "agent_type"
+        },
+        "state": "supported"
+      },
+      "trustReview": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks records trust against each non-managed hook's current hash, marks new or changed hooks for review and skips them until trusted, exposes /hooks to inspect sources, review, trust, or disable individual non-managed hooks, and prints a startup warning when review is pending.",
+          "retrieved 2026-09-02: installing or enabling a plugin does not trust its hooks; Codex skips plugin-bundled hooks until the user reviews and trusts the current definition; managed hooks from system, MDM, cloud, or requirements.toml sources are trusted by policy and cannot be disabled from the user hook browser; --dangerously-bypass-hook-trust runs enabled hooks without persisted trust for one invocation."
+        ],
+        "reason": "Hook trust is a host-owned per-user review decision keyed to the emitted hook hash; the compiler cannot pre-trust generated or native plugin hooks, and emitted hooks stay skipped until the user trusts them in /hooks.",
+        "state": "unavailable"
+      },
+      "generatedSchemaValidation": {
+        "evidence": [
+          "retrieved 2026-09-02: https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated publishes 21 generated command schemas (input and output for PermissionRequest, PostCompact, PostToolUse, PreCompact, PreToolUse, SessionStart, Stop, SubagentStart, SubagentStop, and UserPromptSubmit, plus SessionEnd input only); every file is byte-pinned under schemas/codex/generated with its upstream SHA-256 recorded in validation.pinnedGeneratedComparison.",
+          "retrieved 2026-09-02: the Codex lifecycle-replay starter envelope for every supported semantic event route validates against the matching pinned input schema, and the native output codec's encoded results validate against the matching pinned output schema, so event I/O is checked against the generated wire contract rather than the open-ended event map."
+        ],
+        "schemas": {
+          "PermissionRequest": { "input": "permission-request.command.input.schema.json", "output": "permission-request.command.output.schema.json" },
+          "PostCompact": { "input": "post-compact.command.input.schema.json", "output": "post-compact.command.output.schema.json" },
+          "PostToolUse": { "input": "post-tool-use.command.input.schema.json", "output": "post-tool-use.command.output.schema.json" },
+          "PreCompact": { "input": "pre-compact.command.input.schema.json", "output": "pre-compact.command.output.schema.json" },
+          "PreToolUse": { "input": "pre-tool-use.command.input.schema.json", "output": "pre-tool-use.command.output.schema.json" },
+          "SessionEnd": { "input": "session-end.command.input.schema.json" },
+          "SessionStart": { "input": "session-start.command.input.schema.json", "output": "session-start.command.output.schema.json" },
+          "Stop": { "input": "stop.command.input.schema.json", "output": "stop.command.output.schema.json" },
+          "SubagentStart": { "input": "subagent-start.command.input.schema.json", "output": "subagent-start.command.output.schema.json" },
+          "SubagentStop": { "input": "subagent-stop.command.input.schema.json", "output": "subagent-stop.command.output.schema.json" },
+          "UserPromptSubmit": { "input": "user-prompt-submit.command.input.schema.json", "output": "user-prompt-submit.command.output.schema.json" }
+        },
+        "state": "supported"
+      }
     }
   },
   "mcp": {
@@ -324,9 +472,17 @@
         "permission-request.command.output.schema.json",
         "post-compact.command.input.schema.json",
         "post-compact.command.output.schema.json",
+        "post-tool-use.command.input.schema.json",
+        "post-tool-use.command.output.schema.json",
         "pre-compact.command.input.schema.json",
         "pre-compact.command.output.schema.json",
+        "pre-tool-use.command.input.schema.json",
+        "pre-tool-use.command.output.schema.json",
         "session-end.command.input.schema.json",
+        "session-start.command.input.schema.json",
+        "session-start.command.output.schema.json",
+        "stop.command.input.schema.json",
+        "stop.command.output.schema.json",
         "subagent-start.command.input.schema.json",
         "subagent-start.command.output.schema.json",
         "subagent-stop.command.input.schema.json",
@@ -335,13 +491,21 @@
         "user-prompt-submit.command.output.schema.json"
       ],
       "pinnedRepositorySha256": {
-        "permission-request.command.input.schema.json": "75c73d7a38cfc0e73ef06bd1fc506a44d25874522069ec4fb85e0bf1e7d6b8fb",
-        "permission-request.command.output.schema.json": "749c73245b4b6d43537c3049f76720ab1c2bd48d7e4752b744b376925b9d57a1",
+        "permission-request.command.input.schema.json": "ffe7200494f1113307efc1c958816fbaa3c16297ce4bb358bc5b22172a437a70",
+        "permission-request.command.output.schema.json": "69c0a581b3f02ec44b22d4f8a7f2f3c15d37dc2df4bb106b3e4395f5e0c70972",
         "post-compact.command.input.schema.json": "d5cecd14bd2ca18605ba8209108f76291f886ffe3cb4762d70e712c148836f31",
         "post-compact.command.output.schema.json": "811b7ae2a4b277cd51c9df989f347e494fa981d01e346bc2a757506e97734882",
+        "post-tool-use.command.input.schema.json": "d569956a287ec0864b514d8ff5dbdf0b70bfbb370d89e61a1207bbdf9208ba7d",
+        "post-tool-use.command.output.schema.json": "fe7271d436266554150b2be783ca10da08dded8784eb8af2ffd00fb81668988a",
         "pre-compact.command.input.schema.json": "5728b5da4c63e1e07f2d53ac8b2adc18306cd3dc8b01b556fc422e75b32a8734",
         "pre-compact.command.output.schema.json": "98ba0dbf0848d8283cfe48a85122f4d9122baae1b457f50e239504864900247e",
+        "pre-tool-use.command.input.schema.json": "d5cb38c98a7d931907aa96614c4c52a5bc0c37d61b3f897837e32331842d3100",
+        "pre-tool-use.command.output.schema.json": "1ba5f66f888f5a8362ff8c46883b4cb1297de53d3d802b92d25535460cfdd0fc",
         "session-end.command.input.schema.json": "99bf6e75091525b96926dd85a0adf6589dea93fe0d181394027fabda8139402e",
+        "session-start.command.input.schema.json": "9a2fe5c4541eb733c1b9a402b28b3c50939bd3d3bb76cf6d7ec7e56cc1441f5d",
+        "session-start.command.output.schema.json": "72c8cded2efc7024abfd62692b84934b1b1999cb595665f4a520dc8ebb5eb690",
+        "stop.command.input.schema.json": "b162ebcae8c3b872aee3725128b436769557fc1fe0c83336c4e76eed62b22626",
+        "stop.command.output.schema.json": "37679d1a933fdc3dc8cea5ff12d7d0e2dacfc036208d134aefc09247e1222d88",
         "subagent-start.command.input.schema.json": "e1cacc5cd92217e96e327cf182038fa93099d194c3107439b4dad4b806d414cc",
         "subagent-start.command.output.schema.json": "531f7a457ad8430de82388319ff2bf030fd3a1dc0e9a0d4078447bc30948448b",
         "subagent-stop.command.input.schema.json": "27842578768e74fb8bcd86b30156b207011829a81dc01b00cfd55340df8b079f",
@@ -379,7 +543,12 @@
       "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and hooks/src/lib.rs inventory contain no tool-failure event, so tool/failure is unavailable rather than inferred from PostToolUse.",
       "retrieved 2026-09-02: rust-v0.147.0 pre-compact.command.input.schema.json pins PreCompact trigger, model, turn_id, session, cwd, and nullable transcript input (sha256 065f0ae3cd628ac9af8c0cf9bd1d5a673bcbd5ea1d7dcdc0c6437f34dd0189d9); its output schema accepts only common continue, stopReason, suppressOutput, and systemMessage fields (sha256 c392f3054ae6750f427d4dec07380fd67e8c58a7939a35d5c69bfa070c7ca032).",
       "retrieved 2026-09-02: rust-v0.147.0 post-compact.command.input.schema.json pins PostCompact with the same input fields and no compact summary field (sha256 4a4b3f3022c939a15ab12e95f5c5c17b18bb20f74fe962ae0a51b2a3e76e63f9); its output schema accepts only the same common fields (sha256 48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed).",
-      "2026-09-02: the generated compact output schemas do not document event-level runtime effects for continue:false or the other common fields, so Agent Bundle exposes no canonical compact result channel until runtime evidence pins those semantics."
+      "2026-09-02: the generated compact output schemas do not document event-level runtime effects for continue:false or the other common fields, so Agent Bundle exposes no canonical compact result channel until runtime evidence pins those semantics.",
+      "retrieved 2026-09-02: rust-v0.147.0 pre-tool-use.command.input.schema.json requires cwd, hook_event_name, model, permission_mode, session_id, tool_input (any JSON), tool_name, tool_use_id, nullable transcript_path, and turn_id (upstream sha256 fabed428f0fe75767c5700208b166da5faef4e031d601dfc8bff2f96d340c682); its output schema admits continue, decision approve|block, reason, stopReason, suppressOutput, systemMessage, and hookSpecificOutput with permissionDecision allow|deny|ask, permissionDecisionReason, updatedInput, and additionalContext (upstream sha256 e684f81c63fbb5972892f6a848b49fec68c8ce137931651093d2dd1da56a1dd6).",
+      "retrieved 2026-09-02: rust-v0.147.0 post-tool-use.command.input.schema.json adds tool_response (any JSON) to the PreToolUse input fields (upstream sha256 8ea1e4bccb262fad05b85c300d562d2653c5a64118d6a2c5704468fc4ea836a9); its output schema admits decision block, reason, the common fields, and hookSpecificOutput with additionalContext and updatedMCPToolOutput (upstream sha256 a823d0e2c941e98d7d3af825dfdb0b1dfa6a935696ff8b8529e8e83232a1b0c8).",
+      "retrieved 2026-09-02: rust-v0.147.0 session-start.command.input.schema.json requires cwd, hook_event_name, model, permission_mode, session_id, source startup|resume|clear|compact, and nullable transcript_path with no turn_id (upstream sha256 690c0eef7c9f3ddcd41e24207b81b362101a300b4abec076b990a1cd79a66e20); its output schema admits the common fields plus hookSpecificOutput.additionalContext (upstream sha256 f375e6de1c59ecbabd8c1aff05a67976d0f3aa2ef061808838de4c7c20be1c71).",
+      "retrieved 2026-09-02: rust-v0.147.0 stop.command.input.schema.json requires cwd, hook_event_name, nullable last_assistant_message, model, permission_mode, session_id, stop_hook_active, nullable transcript_path, and turn_id (upstream sha256 7db4793c404b5c46b230c27b9507eb1a558fd958689d8715221c5dd81351a06a); its output schema admits decision block, reason, and the common fields with no hookSpecificOutput (upstream sha256 dc2b30e84c97beca5825aa64ca46e1337e402781dc5a9142b67111d10523f15c). The Codex wrapper and envelope validator accept a null last_assistant_message for Stop because this pinned schema allows it.",
+      "retrieved 2026-09-02: the GitHub contents API for codex-rs/hooks/schema/generated at rust-v0.147.0 lists exactly 21 files and no interrupt schema; the same directory on main adds interrupt.command.{input,output}.schema.json, and the latest release at retrieval time was rust-v0.153.0, so Interrupt remains deferred until the Codex pin moves."
     ]
   }
 }

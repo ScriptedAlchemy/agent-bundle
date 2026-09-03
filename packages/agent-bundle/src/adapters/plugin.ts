@@ -110,6 +110,23 @@ const interfaceUnifiedReason =
   'The unified bundle emits the Codex-only interface install surface, but the pinned Claude and Cursor plugin contracts declare no shared interface metadata field.';
 const mcpPolicyUnifiedReason =
   'The MCP approval policy is enforced by the Codex host at install time; the pinned Claude and Cursor contracts publish no shared per-plugin MCP policy surface.';
+const hookContractUnifiedReason =
+  'The unified bundle emits the Codex-only hook handler contract, but the pinned Claude and Cursor hook contracts declare no shared handler-type, timeout, matcher, or trust surface.';
+const codexHookContractCapabilities = [
+  'hookAdditionalContextLimit',
+  'hookAsyncCommands',
+  'hookCommandWindows',
+  'hookGeneratedSchemas',
+  'hookHandlerCommand',
+  'hookHandlerMcpTool',
+  'hookHandlerPromptAgent',
+  'hookMatcherSemantics',
+  'hookMcpToolExecution',
+  'hookReleaseEvents',
+  'hookStatusMessage',
+  'hookTimeoutRules',
+  'hookTrustReview',
+] as const;
 const reconciledMatcherKeys = new Set(['file.read', 'file.write']);
 const claudeMatchers: Readonly<Record<string, string>> = claudeCapabilityTable.hooks.matchers;
 const codexMatchers: Readonly<Record<string, string>> = codexCapabilityTable.hooks.matchers;
@@ -191,7 +208,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.21.0',
+  adapterRevision: '1.22.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -584,6 +601,16 @@ const componentCapabilities = Object.freeze(Object.fromEntries(
   ]),
 ));
 
+const codexHookContractUnifiedCapabilities = Object.freeze(Object.fromEntries(
+  codexHookContractCapabilities.map((capability) => [
+    capability,
+    intersectCapabilityStates(
+      codexAdapter.capabilities[capability]!,
+      unavailableCapability(hookContractUnifiedReason),
+    ),
+  ]),
+));
+
 const agentCapabilities = Object.freeze(Object.fromEntries(
   Object.keys(claudeCapabilityTable.plugin.agents).map((rowName) => {
     const capability = rowName === 'component' ? 'agents' : `agents.${rowName}`;
@@ -604,6 +631,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactLayout,
   capabilities: Object.freeze({
     ...agentCapabilities,
+    ...codexHookContractUnifiedCapabilities,
     ...compositeEventCapabilities,
     bin: unavailableCapability(
       'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',

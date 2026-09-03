@@ -27,12 +27,10 @@ const schemaGenerationTimeoutMs = 15_000;
 const versionTimeoutMs = 5_000;
 const pinnedRevision = capabilityTable.observedCliVersion;
 
-const generatedSchemaNames = Object.freeze([
-  'subagent-start.command.input.schema.json',
-  'subagent-start.command.output.schema.json',
-  'subagent-stop.command.input.schema.json',
-  'subagent-stop.command.output.schema.json',
-]);
+/** Every generated hook command schema pinned from the rust-v0.147.0 tag. */
+const generatedSchemaNames = Object.freeze(
+  Object.keys(capabilityTable.validation.pinnedGeneratedComparison.pinnedRepositorySha256).sort(),
+);
 
 type CodexPluginTermination = 'output-limit' | 'timed-out';
 type CodexPluginDiagnosticCode = 'AB6030' | 'AB6031' | 'AB6032' | 'AB6033';

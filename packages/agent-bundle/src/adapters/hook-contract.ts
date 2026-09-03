@@ -108,9 +108,13 @@ export const createNativeEventStarter = (
     ? { command: '*** Begin Patch\n*** Add File: lifecycle-replay.txt\n+Lifecycle replay\n*** End Patch' }
     : { file_path: 'lifecycle-replay.txt' };
   const toolName = target === 'codex' ? 'apply_patch' : 'Write';
+  // The pinned rust-v0.147.0 generated input schemas require model and
+  // permission_mode on every Codex event below, and turn_id on turn-scoped ones.
+  const codexSession = target === 'codex' ? { model: 'default', permission_mode: 'default' } : {};
+  const codexTurn = target === 'codex' ? { ...codexSession, turn_id: 'lifecycle-replay-turn' } : {};
   switch (canonicalEvent) {
     case 'session/start':
-      return deepFreeze(target === 'cursor' ? base : { ...base, source: 'startup' });
+      return deepFreeze(target === 'cursor' ? base : { ...base, ...codexSession, source: 'startup' });
     case 'session/end':
       return deepFreeze(target === 'cursor'
         ? {
@@ -184,6 +188,7 @@ export const createNativeEventStarter = (
     case 'tool/before':
       return deepFreeze({
         ...base,
+        ...codexTurn,
         tool_input: toolInput,
         tool_name: toolName,
         tool_use_id: 'lifecycle-replay-tool',
@@ -191,6 +196,7 @@ export const createNativeEventStarter = (
     case 'tool/after':
       return deepFreeze({
         ...base,
+        ...codexTurn,
         tool_input: toolInput,
         tool_name: toolName,
         ...(target === 'cursor' ? { tool_output: '{}' } : { tool_response: {} }),
@@ -199,7 +205,7 @@ export const createNativeEventStarter = (
     case 'stop':
       return deepFreeze(target === 'cursor'
         ? { ...base, loop_count: 0 }
-        : { ...base, last_assistant_message: 'Lifecycle replay stopped.', stop_hook_active: false });
+        : { ...base, ...codexTurn, last_assistant_message: 'Lifecycle replay stopped.', stop_hook_active: false });
     case 'agent/start':
       return deepFreeze(target === 'cursor'
         ? base
@@ -1171,7 +1177,7 @@ export const nativeHookWrapperSource = (
     '    return;',
     '  }',
     '  if (typeof input.stop_hook_active !== "boolean") fail("native Stop stop_hook_active must be a boolean");',
-    '  requireString(input, "last_assistant_message");',
+    '  if (target === "codex") requireNullableString(input, "last_assistant_message"); else requireString(input, "last_assistant_message");',
     '};',
     'const run = async () => {',
     '  const handler = Reflect.get(handlerModule, "default");',
