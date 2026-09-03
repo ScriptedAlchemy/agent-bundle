@@ -195,16 +195,17 @@ development-only fallback can never produce a release artifact, so
 | `AB4011` | warning | `package.json` is unusable — unparsable, not a JSON object, or symlinked outside the project root. |
 | `AB4013` | error (build) | `agent-bundle build` refuses a project with no release version: `plugin.version` is omitted and `package.json` declares no valid semantic version. |
 
-## Migration nudges and convention claims (`AB4730`–`AB4737`)
+## Migration nudges and convention claims (`AB4730`–`AB4738`)
 
 The entry conventions and the framework-owned stdio lifecycle shell (RFC #50)
 replaced patterns consumers previously wrote by hand. When `validate`,
 `inspect`, `build`, or `dev` prepares project source and finds one of those
 pre-convention patterns, it reports a migration diagnostic. `AB4730`–`AB4735`
-are **informational** nudges and never block anything. `AB4736` and `AB4737`
-are errors: the removed top-level authored-document locations are no longer
-discovered, and a rendered script without a `main` export cannot double as a
-package bin, so the compiler refuses to omit or misbuild them silently. The CLI prints these in
+are **informational** nudges and never block anything. `AB4736`–`AB4738` are
+errors: the removed top-level authored-document locations are no longer
+discovered, and a conventional script whose `bin` entry would run an export
+the artifact script ignores cannot ship on both surfaces, so the compiler
+refuses to omit or misbuild them silently. The CLI prints these in
 human `validate` output and includes them in every `--json` diagnostics array.
 
 Which explicit config keys *claim* a conventional module out of discovery is
@@ -305,6 +306,24 @@ Recover: export a named `main(argv)` from the module for the bin surface;
 point the `bin` entry at a plain module that exports `main`; rename the
 script to `.ts` so one plain module ships as both the bin and the artifact
 script; or prefix a path segment with `_` (`src/scripts/_name.tsx`) to keep
+the module out of script discovery and bin-only.
+
+### `AB4738` — plain script claimed as a package bin entry runs only as the bin
+
+An explicit `bin` entry references a conventional plain script
+(`src/scripts/<name>.ts`) that exports a `default` but no named `main`. Both
+the bin envelope and the artifact-script envelope wrap a `main(argv)` export
+and bundle a self-executing module (no `main`, no `default`) byte for byte,
+so those shapes run identically on both surfaces. Only the bin envelope falls
+back to invoking a default export: the artifact `scripts/<name>.mjs` would
+merely define the function and exit, so a successful build would publish an
+inert script beside a working bin. The detection is the same static export
+scan the package build uses. The message names every `bin` entry referencing
+the module.
+
+Recover: export a named `main(argv)` so both surfaces run the same entry;
+make the module self-executing (drop the default export and run at top
+level); or prefix a path segment with `_` (`src/scripts/_name.ts`) to keep
 the module out of script discovery and bin-only.
 
 ## Prebuilt payloads (`AB4740`–`AB4750`)

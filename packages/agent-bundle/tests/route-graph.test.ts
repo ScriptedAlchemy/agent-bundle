@@ -328,6 +328,40 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
   expect(graph.scripts.map((route) => route.id)).toEqual(['script:render-notes', 'script:render-poster']);
 });
 
+it('gates a bin-claimed plain script with AB4738 only when its bin would run a default export the script ignores (#389)', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      '  bin: {',
+      "    'default-only': './src/scripts/default-only.ts',",
+      "    hauler: './src/scripts/hauler.ts',",
+      "    plain: './src/scripts/plain.ts',",
+      '  },',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    // The bin envelope would run this default export; the artifact script
+    // pipeline only wraps main, so scripts/default-only.mjs would be inert.
+    'src/scripts/default-only.ts': 'export default async (argv: readonly string[]): Promise<number> => argv.length;\n',
+    // main is wrapped by both envelopes; a self-executing module bundles
+    // byte for byte on both surfaces.
+    'src/scripts/hauler.ts': 'export const main = async (argv: readonly string[]): Promise<number> => argv.length;\n',
+    'src/scripts/plain.ts': "process.stdout.write('plain\\n');\n",
+  });
+
+  const result = await validate({ root: project });
+  const gate = result.diagnostics.filter(({ code }) => code === 'AB4738');
+  expect(gate).toHaveLength(1);
+  expect(gate[0]).toMatchObject({
+    message: expect.stringContaining('default-only.ts is also the entry of bin "default-only" and exports a default but no main'),
+    severity: 'error',
+    sourcePath: join(project, 'src/scripts/default-only.ts'),
+  });
+  expect(result.diagnostics.filter(({ code }) => code === 'AB4737')).toEqual([]);
+});
+
 it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
   const root = await createRoot();
   await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
