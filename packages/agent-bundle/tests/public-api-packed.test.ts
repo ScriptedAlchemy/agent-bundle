@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, it } from '@rstest/core';
+import { beforeAll, expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
@@ -50,6 +50,31 @@ const producerFrom = async (output: string): Promise<{ readonly name: string; re
   ) as { readonly producer: { readonly name: string; readonly version: string } };
   return manifest.producer;
 };
+
+/**
+ * Warms this worker's npm cache with the packed tarball's full dependency
+ * tree once, so the three consumer installs below are cache-backed
+ * (`--prefer-offline` then serves every tarball and metadata record from
+ * disk). The download is the one network-bound step in this file: about
+ * 180 MB of registry tarballs, and a CI runner's npm cache is empty at job
+ * start (pnpm/setup caches only the pnpm store), so the Release gates and
+ * Verify jobs always pay it exactly once here, never inside a test's 30 s
+ * budget. The budget below covers that cold download on a slow runner
+ * network; a warm worker cache finishes in a few seconds.
+ */
+beforeAll(async () => {
+  const { tarball } = await sharedPackedTarball('agent-bundle');
+  const warmRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-npm-warm-'));
+  try {
+    await writeFile(join(warmRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', ...cachedNpmInstallArguments, tarball],
+      { cwd: warmRoot, env: isolatedCommandEnvironment() },
+    );
+  } finally {
+    await rm(warmRoot, { force: true, recursive: true });
+  }
+}, 180_000);
 
 it('writes the package version as the producer of a packed CLI manifest', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');

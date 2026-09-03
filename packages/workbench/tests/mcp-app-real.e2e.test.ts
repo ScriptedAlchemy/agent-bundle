@@ -424,6 +424,15 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
 
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
     await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
+    // A visible iframe only proves the element mounted. The graceful /close
+    // handshake below needs a proxy that has loaded and an app that has
+    // initialized (a preview closed before its proxy signals readiness is
+    // released by DELETE, with nothing to acknowledge a teardown), so wait for
+    // the reopened binding's own `initialized` notification first.
+    await expect.poll(() => appRequests.filter((request) => {
+      const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
+      return request.path.endsWith('/messages') && message?.method === 'ui/notifications/initialized';
+    }).length, { timeout: browserTimeout }).toBe(2);
     const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
     const closedSession = page.waitForRequest((request) =>
       request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: 30_000 * timeScale });
@@ -595,14 +604,40 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await page.getByLabel('Runtime target').selectOption('portable');
     await page.getByRole('radio', { name: 'Raw JSON' }).check();
     await page.locator('#runtime-input-raw').fill('{}');
+    // The App preview create request is the last link of a chain: Run admits
+    // a runtime run, the run settles, and only a run that succeeded with App
+    // binding evidence makes the stage mount a preview (which then POSTs
+    // /api/runtime/apps). Wait on each link in order so a failed or
+    // evidence-less run reports its own diagnostics instead of surfacing as a
+    // create request that never arrives.
+    const runAdmitted = page.waitForResponse((response) =>
+      response.url() === `${fixture.url}/api/runtime/runs` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     const createRequest = page.waitForRequest((request) =>
       request.url() === `${fixture.url}/api/runtime/apps` && request.method() === 'POST', { timeout: 30_000 * timeScale });
     const createResponse = page.waitForResponse((response) =>
       response.url() === `${fixture.url}/api/runtime/apps` && response.request().method() === 'POST', { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Run', exact: true }).click();
-    const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]);
+    const admittedRun = await runAdmitted;
+    if (!admittedRun.ok()) throw new Error(`Runtime run admission failed with HTTP ${admittedRun.status()}: ${await admittedRun.text()}`);
     const history = page.getByRole('region', { name: 'Runtime run history' }).locator('ol > li');
     await expect(history).toHaveCount(1, { timeout: 15_000 * timeScale });
+    const runStatus = (): Promise<string | undefined> => history.first().locator('button').first().textContent()
+      .then((label) => /· (succeeded|failed) ·/u.exec(label ?? '')?.[1]);
+    await expect.poll(runStatus, { timeout: 30_000 * timeScale }).toBeDefined();
+    if (await runStatus() !== 'succeeded') {
+      throw new Error(`Runtime run did not succeed: ${JSON.stringify({
+        console: browserConsole,
+        pageErrors: pageErrors.map((error) => error.message),
+        stage: await page.getByRole('region', { name: 'Runtime output stage' }).textContent(),
+      })}`);
+    }
+    const [createdRequest, createdResponse] = await Promise.all([createRequest, createResponse]).catch(async (error: unknown) => {
+      throw new Error(`Runtime App preview create request did not follow the succeeded run: ${JSON.stringify({
+        console: browserConsole,
+        pageErrors: pageErrors.map((error) => error.message),
+        stage: await page.getByRole('region', { name: 'Runtime output stage' }).textContent(),
+      })}`, { cause: error });
+    });
     const runId = await history.first().getAttribute('data-runtime-run-id');
     const expectedGenerationId = await runtimeIdentity.getAttribute('data-runtime-generation');
     if (runId === null || expectedGenerationId === null) throw new Error('Expected selected Runtime run identity.');

@@ -505,6 +505,36 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         const response = await rebuilt;
         if (!response.ok()) throw new Error(`${label} rebuild returned HTTP ${response.status()}: ${await response.text()}`);
       };
+      const buildStatusFrom = (toolResult: Awaited<ReturnType<typeof client.callTool>>, label: string) => {
+        const build = record(record(record(toolResult.structuredContent, `${label} result`).status, `${label} status`).build, `${label} build`);
+        const attemptIds = new Set<string>();
+        for (const key of ['activeAttempt', 'lastAttempt'] as const) {
+          const attempt = build[key];
+          if (attempt !== undefined) attemptIds.add(string(record(attempt, `${label} ${key}`).id, `${label} ${key} id`));
+        }
+        return { attemptIds, state: string(build.state, `${label} build state`) };
+      };
+      /**
+       * Replaces one watched source and waits for the packed dev server's own
+       * watcher-driven rebuild of that write to settle before the caller
+       * touches the Rebuild button. The coordinator publishes every attempt
+       * through project_status, so the first completed attempt the status did
+       * not report before the write is the watcher's build of it. Clicking
+       * Rebuild while that build is still pending (or not yet started: the
+       * watcher debounces and a loaded runner delivers the event late) races
+       * two builds of one edit; whichever lands last silently replaces the
+       * epoch every later phase pinned, which is the "epoch mismatch" this
+       * phase-labelled suite used to fail with. Same contract as
+       * replaceWatchedSourceAndAwaitRebuild for in-process dev servers.
+       */
+      const replaceSourceAndAwaitWatcherRebuild = async (label: string, sourcePath: string, content: string): Promise<void> => {
+        const known = buildStatusFrom(await call('project_status'), `${label} pre-edit`).attemptIds;
+        await replaceWatchedSource(project, sourcePath, content);
+        await expect.poll(async () => {
+          const build = buildStatusFrom(await call('project_status'), `${label} post-edit`);
+          return build.state !== 'building' && [...build.attemptIds].some((id) => !known.has(id));
+        }, { timeout: browserTimeout }).toBe(true);
+      };
       const settleNativeSelection = (): Promise<void> => page.evaluate(async () => {
         await new Promise<void>((resolvePromise) => requestAnimationFrame(() => requestAnimationFrame(() => resolvePromise())));
       });
@@ -552,7 +582,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'good edit rebuild B';
       const epochBMarker = 'Epoch B changed the packed review guidance.';
-      await replaceWatchedSource(project, skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
+      await replaceSourceAndAwaitWatcherRebuild('epoch B', skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('epoch B');
@@ -605,7 +635,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expectGeneratedSkill('last-good epoch B', lastGoodEpochB, epochBMarker);
       const invalidConfig = originalConfig.replace('ui://packed-release/dashboard.html', 'https://packed-release.example/dashboard.html');
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
-      await replaceWatchedSource(project, configSource, invalidConfig);
+      await replaceSourceAndAwaitWatcherRebuild('invalid epoch B', configSource, invalidConfig);
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromOverview('invalid epoch B');
@@ -620,10 +650,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'repaired edit rebuild C';
       const epochCMarker = 'Epoch C repaired the packed review guidance.';
-      await Promise.all([
-        replaceWatchedSource(project, configSource, originalConfig),
-        replaceWatchedSource(project, skillSource, `${originalSkill}\n\n${epochCMarker}\n`),
-      ]);
+      // Two edits, each awaited: two renames inside one watcher debounce
+      // window usually coalesce into one build, but nothing guarantees it, and
+      // a second build landing after the manual rebuild below would replace
+      // epoch C after later phases pinned it.
+      await replaceSourceAndAwaitWatcherRebuild('epoch C config', configSource, originalConfig);
+      await replaceSourceAndAwaitWatcherRebuild('epoch C skill', skillSource, `${originalSkill}\n\n${epochCMarker}\n`);
       await rebuildFromOverview('epoch C');
       const epochCStatus = activeEpochFrom(await call('project_status'), 'epoch C');
       expect(epochCStatus.artifactStatus.state).toBe('active');

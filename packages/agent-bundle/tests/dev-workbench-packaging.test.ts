@@ -60,11 +60,14 @@ it('prunes stale copied workbench assets without removing the package library ou
     await mkdir(join(workbench, 'static', 'js', 'async'), { recursive: true });
     await writeFile(stale, 'obsolete workbench output\n');
     await expect(access(stale)).resolves.toBeUndefined();
+    // installedEnvironment() gives this build its own persistent-cache
+    // directory: packed-consumer rebuilds the same config from another
+    // worker, and Rslib keys the shared default by the config root.
     await execFile(join(workspaceRoot, 'node_modules', '.bin', 'rslib'), [
       'build',
       '--config', join(packageRoot, 'rslib.config.ts'),
       '--dist-path', isolatedDist,
-    ], { cwd: workspaceRoot });
+    ], { cwd: workspaceRoot, env: installedEnvironment() });
     await expect(access(stale)).rejects.toThrow();
     await expect(access(join(isolatedDist, 'cli.js'))).resolves.toBeUndefined();
     expect(await readdir(workbench, { recursive: true })).not.toContain('index.js.map');

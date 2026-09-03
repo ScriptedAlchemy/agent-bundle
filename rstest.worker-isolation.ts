@@ -91,6 +91,22 @@ export const isolateWorkerEnvironment = (): void => {
 
 let commandSerial = 0;
 
+/**
+ * The worker's npm cache. It is shared by every command this worker spawns
+ * (not per command) on purpose: a packed consumer install pulls the package's
+ * full dependency tree (~180 MB of registry tarballs), and a per-command cache
+ * made every install in a file start cold — on a CI runner, whose npm cache is
+ * always empty at job start, that was the whole 30 s budget of each
+ * public-api-packed test. Sequential commands in one worker now hit the cache
+ * after the first install, and `--prefer-offline` then skips the registry
+ * round trips entirely. Concurrent installs within one worker (packed-consumer
+ * installs two consumers at once) share it safely: cacache is content
+ * addressed with atomic writes, the same property every developer machine
+ * relies on for parallel `npm install`s against ~/.npm. Workers never share a
+ * cache with each other.
+ */
+export const rstestWorkerNpmCacheDirectory = (): string => rstestWorkerCacheDirectory('npm');
+
 export const isolatedCommandEnvironment = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
   commandSerial += 1;
   const stamp = String(process.pid) + '-' + String(commandSerial);
@@ -99,7 +115,12 @@ export const isolatedCommandEnvironment = (base: NodeJS.ProcessEnv = process.env
   mkdirSync(tmp, { recursive: true });
   const { NODE_PATH: _nodePath, ...rest } = base;
   const environment: NodeJS.ProcessEnv = { ...rest };
-  environment['npm_config_cache'] = cache;
+  environment['npm_config_cache'] = rstestWorkerNpmCacheDirectory();
+  // Rslib's persistent Rspack build cache is keyed by the built config's
+  // root (`<package>/node_modules/.cache/rspack`), not by `--dist-path`, so
+  // two workers rebuilding the same package into isolated dists would share
+  // one cache lock. packages/*/rslib.config.ts honor this override.
+  environment['AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY'] = join(cache, 'rslib');
   environment['TMPDIR'] = tmp;
   environment['TMP'] = tmp;
   environment['TEMP'] = tmp;
