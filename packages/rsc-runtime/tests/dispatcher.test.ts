@@ -177,8 +177,21 @@ describe('decodeAgentDocument', () => {
       expect.objectContaining({ code: 'document-bytes-exceeded' }),
     );
     expect(() => decodeAgentDocument(split({ note: 'o' }), { maxDocumentBytes: 2_048 })).not.toThrow();
-    // Nothing is discarded when the keys are disjoint: the finished document alone decides.
-    expect(() => decodeAgentDocument(split({ other: 'o' }), { maxDocumentBytes: 1_400 })).not.toThrow();
+    // Disjoint keys discard no payload, only the inner wrapper's few structural bytes.
+    expect(() => decodeAgentDocument(split({ other: 'o' }), { maxDocumentBytes: 1_500 })).not.toThrow();
+
+    // Removed result wrappers count too: three metadata-free containers around
+    // one valued route flatten to the layout-free document, yet the authored
+    // tree carried three `{"children":[…],"kind":"result"}` shells.
+    const flat = createElement('agent-result', { value: 1 }, createElement('agent-text', null, 't'.repeat(200)));
+    const flatBytes = Buffer.byteLength(JSON.stringify(decodeAgentDocument(flat)), 'utf8');
+    const shelled = createElement('agent-result', null, createElement('agent-result', null, createElement('agent-result', null, flat)));
+    expect(decodeAgentDocument(shelled)).toEqual(decodeAgentDocument(flat));
+    expect(() => decodeAgentDocument(flat, { maxDocumentBytes: flatBytes + 20 })).not.toThrow();
+    expect(() => decodeAgentDocument(shelled, { maxDocumentBytes: flatBytes + 20 })).toThrow(
+      expect.objectContaining({ code: 'document-bytes-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(shelled, { maxDocumentBytes: flatBytes + 120 })).not.toThrow();
 
     // Inner metadata is measured one level below the container, exactly where
     // it was authored, so lifting it into the container cannot buy a level.

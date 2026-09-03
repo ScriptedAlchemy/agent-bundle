@@ -67,7 +67,7 @@ interface DeclaredValue {
 
 interface DecodeState {
   bytes: number;
-  /** Serialized bytes of authored metadata that merging overwrote or dropped, so they never leave the finished document's byte budget. */
+  /** Serialized bytes merging removed from the authored tree (inner result wrappers, overwritten or dropped metadata), so they never leave the finished document's byte budget. */
   discardedBytes: number;
   readonly limits: AgentRenderLimits;
   nodes: number;
@@ -143,25 +143,11 @@ const adoptedValue = (declared: DeclaredValue, state: DecodeState): DeclaredValu
  * declares no metadata at all adopts the inner result's. Both operands are
  * already budgeted snapshots (every result charges its metadata where it was
  * authored), so nested layouts pay for each authored object exactly once.
- * Whatever the merge overwrites or drops is recorded in `discardedBytes`: the
- * finished document is measured together with it, so splitting a payload
- * between overwritten metadata and retained content cannot slip past
- * `maxDocumentBytes`.
  */
-const mergedMetadata = (
-  outer: JsonValue | undefined,
-  nested: JsonValue | undefined,
-  state: DecodeState,
-): JsonValue | undefined => {
+const mergedMetadata = (outer: JsonValue | undefined, nested: JsonValue | undefined): JsonValue | undefined => {
   if (outer === undefined) return nested;
   if (nested === undefined) return outer;
-  if (isJsonObject(outer) && isJsonObject(nested)) {
-    const merged = { ...nested, ...outer };
-    state.discardedBytes += jsonBytes(nested) + jsonBytes(outer) - jsonBytes(merged);
-    return merged;
-  }
-  state.discardedBytes += jsonBytes(nested);
-  return outer;
+  return isJsonObject(outer) && isJsonObject(nested) ? { ...nested, ...outer } : outer;
 };
 
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
@@ -173,7 +159,11 @@ const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(v
  * the inner result's value becomes the container's, its children take its
  * place, and the metadata combine per {@link mergedMetadata}. Only the first
  * valued child merges; a container with no valued child stays a plain
- * grouping node, exactly as before.
+ * grouping node, exactly as before. Everything a merge removes from the
+ * serialized tree — the inner result's wrapper, its metadata label,
+ * overwritten or dropped metadata — is recorded in `discardedBytes`: the
+ * finished document is measured together with it, so flattening cannot buy
+ * room under `maxDocumentBytes` that the authored tree did not have.
  */
 const decodeResult = (
   props: Record<string, unknown>,
@@ -190,7 +180,7 @@ const decodeResult = (
   const children = merged === undefined
     ? decoded
     : [...decoded.slice(0, mergeIndex), ...merged.children, ...decoded.slice(mergeIndex + 1)];
-  const metadata = merged === undefined ? ownMetadata : mergedMetadata(ownMetadata, merged.metadata, state);
+  const metadata = merged === undefined ? ownMetadata : mergedMetadata(ownMetadata, merged.metadata);
   const node: AgentResultNode = {
     children,
     kind: 'result',
@@ -200,6 +190,14 @@ const decodeResult = (
     if (ownValue !== undefined) state.resultValues.set(node, { charged: false, depth, value: ownValue });
     return node;
   }
+  // The node as authored, with the inner result still in place, against the
+  // node as merged: the difference is exactly what this merge removed.
+  const authored: AgentResultNode = {
+    children: decoded,
+    kind: 'result',
+    ...(ownMetadata === undefined ? {} : { metadata: ownMetadata }),
+  };
+  state.discardedBytes += jsonBytes(authored) - jsonBytes(node);
   state.resultValues.set(node, adoptedValue(state.resultValues.get(merged)!, state));
   return node;
 };
@@ -280,7 +278,7 @@ export const decodeAgentDocument = (
     ...(value === undefined ? {} : { value }),
     version: 1,
   }, resolved);
-  // The authored tree is what the budget bounds: metadata a merge discarded
+  // The authored tree is what the budget bounds: whatever merging removed
   // still counts alongside the document that replaced it.
   if (state.discardedBytes > 0 && state.discardedBytes + jsonBytes(document) > resolved.maxDocumentBytes) {
     throw new AgentContractError(
