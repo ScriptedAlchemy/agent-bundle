@@ -65,14 +65,16 @@ export default defineConfig({
 | `stop` | 智能体即将停止时。 |
 | `agentStart` | 子智能体启动时。 |
 | `agentStop` | 子智能体停止时。 |
-| `workspaceOpen` | 工作区被打开时。 |
+| `workspaceOpen` | 工作区被打开时。请以[事件路由](#事件路由)（`src/events/workspace/open.tsx`）声明它，而不是配置钩子：没有任何 target 会映射这种朴素钩子形式，因此配置声明的 `workspaceOpen` 在每个宿主上都是构建错误——包括 Cursor，它只通过路由形式支持该事件。 |
 
 不实现某个事件的宿主，就不会收到对应的钩子；输出的文档保持诚实，而不是发明一个等价物。
 
 ## 工具选择器
 
-`tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——每个适配器都知道如何
-翻译它们。它同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
+`tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——在宿主有对应原生匹配器时
+翻译过去。Cursor 映射全部五个；Claude Code 没有 `agent`；Codex 没有 `agent` 也没有 `file.read`。钩子上的每个
+选择器都必须在每个所选 target 上可映射，因此以 `codex` 为 target 的 `tools: ['file.read', 'shell']` 会导致构建
+失败，尽管单独的 `shell` 本可以工作。[事件与钩子矩阵](../../reference/events.md)渲染了这张匹配器表。`tools` 同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
 `codex:view_image`，这类选择器只会贡献给该宿主的原生匹配器。
 
 选择了工具的钩子必须让每个所选 target 都至少留下一个可用的选择器。一个只限定 `claude:WebSearch`

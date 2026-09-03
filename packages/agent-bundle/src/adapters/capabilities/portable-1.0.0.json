@@ -152,6 +152,11 @@
     },
     "skills": true
   },
+  "tokens": {
+    "pluginData": "${PLUGIN_DATA}",
+    "pluginRoot": "${PLUGIN_ROOT}",
+    "workspaceRoot": false
+  },
   "specificationSections": {
     "clientExtensions": "8",
     "componentDiscovery": "6",

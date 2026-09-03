@@ -66,7 +66,7 @@ export default defineConfig({
 | `stop` | The agent is about to stop. |
 | `agentStart` | A subordinate agent starts. |
 | `agentStop` | A subordinate agent stops. |
-| `workspaceOpen` | A workspace is opened. |
+| `workspaceOpen` | A workspace is opened. Declare it as an [event route](#event-routes) (`src/events/workspace/open.tsx`), not a config hook: no target maps the plain hook, so a config-declared `workspaceOpen` is a build error on every host, including Cursor, which supports the event only through the route form. |
 
 A host that does not implement an event simply does not receive that hook; the emitted document
 stays honest rather than inventing an equivalent.
@@ -74,7 +74,11 @@ stays honest rather than inventing an equivalent.
 ## Tool selectors
 
 `tools` accepts the canonical selectors — `shell`, `file.read`, `file.write`, `mcp`, `agent` —
-which every adapter knows how to translate. It also accepts explicit host-native selectors
+each translated to the host's native matcher where the host has one. Cursor maps all five; Claude
+Code has no `agent`; Codex has no `agent` and no `file.read`. Every selector on a hook must map on
+every selected target, so `tools: ['file.read', 'shell']` targeting `codex` fails the build even
+though `shell` alone would have worked. The [Event and hook matrix](../../reference/events.md)
+renders the matcher table. `tools` also accepts explicit host-native selectors
 spelled `<target>:<native-name>`, such as `claude:WebSearch` or `codex:view_image`, which
 contribute only to that host's native matcher.
 

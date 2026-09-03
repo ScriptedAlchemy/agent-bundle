@@ -183,6 +183,7 @@
   "plugin": {
     "commands": true,
     "manifest": ".cursor-plugin/plugin.json",
+    "marketplace": ".cursor-plugin/marketplace.json",
     "rules": true,
     "skills": true,
     "localInstall": {
