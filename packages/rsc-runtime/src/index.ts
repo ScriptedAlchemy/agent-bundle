@@ -101,3 +101,5 @@ export type {
 } from './notices/contract.js';
 export type { RscRequestContext } from './request-context.js';
 export * from './plugin.js';
+
+// changeset-check probe (temporary)
