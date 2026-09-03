@@ -1,0 +1,73 @@
+name: Docs
+
+# Validates the Rspress documentation site (website/) on every pull request
+# and push to main, and deploys website/doc_build to GitHub Pages from main.
+#
+# No `paths:` filter on purpose: package-source changes can break TypeDoc
+# generation and the generated reference pages without touching website/**,
+# and a path-filtered workflow can never safely become a required check.
+# Website-only PRs skip the heavy jobs in ci.yml (scripts/classify-docs-only.mjs
+# treats website/** as docs-only) because this workflow covers them.
+#
+# One-time prerequisite: repository Settings -> Pages -> Source must be
+# "GitHub Actions" (REST: build_type=workflow), or deploy-pages fails.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR pushes cancel the superseded run of the same PR; main pushes and manual
+# dispatches get SHA-keyed groups with no cancellation (same pattern as ci.yml).
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Docs site (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      # Typecheck the site config, build it (TypeDoc, generated reference,
+      # Twoslash, dead-link/anchor/image and language-parity checks), then
+      # assert every required artifact exists.
+      - run: pnpm docs:site:build
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/doc_build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Never cancel an in-flight Pages deployment.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/configure-pages@v6
+      - id: deployment
+        uses: actions/deploy-pages@v5

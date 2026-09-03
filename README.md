@@ -2,6 +2,8 @@
 
 agent-bundle compiles an agent plugin — skills, hooks, MCP servers, and scripts, described by one typed config — into installable artifacts for Claude Code, Codex, and Cursor, plus a portable layout. You write the plugin once; the compiler emits each host's manifests and wrappers.
 
+Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
+
 Requires Node.js 22.19 or later.
 
 ## Install

@@ -92,15 +92,16 @@ GitHub 的安全公告数据库，另外两项是发布的副作用，而不是�
 本站点是一个私有工作区包。请在仓库根目录运行：
 
 ```sh
-pnpm docs:dev       # 带热更新的本地开发服务器
-pnpm docs:check     # 类型检查、构建，并核实构建产物
-pnpm docs:preview   # 提供已构建的站点
+pnpm docs:site:dev       # 带热更新的本地开发服务器
+pnpm docs:site:build     # 类型检查、构建，并核实构建产物
+pnpm docs:site:preview   # 提供已构建的站点
 ```
 
-`pnpm docs:check` 就是门禁。遇到失效的站内链接、失效的锚点、缺失的图片，或某个页面只在一个语言下存在
+`pnpm docs:site:build` 就是门禁，`Docs` 工作流会在每个 pull request 上运行它，并把 `main` 部署到
+GitHub Pages。遇到失效的站内链接、失效的锚点、缺失的图片，或某个页面只在一个语言下存在
 时，构建都会失败——最后这一条正是 `guide/`、`reference/`、`examples/` 与 `contributing/` 下每个英文页面
 都有一个结构相同的中文对照页的原因。TypeScript 示例在两个语言下保持一致；散文与代码注释需要翻译。
-生成的类型 API 是镜像的，不翻译。
+生成的类型 API、宿主能力、事件、通知与诊断参考页在构建时由仓库中的事实来源渲染而来，只做镜像，不翻译。
 
 ## 仓库约定
 

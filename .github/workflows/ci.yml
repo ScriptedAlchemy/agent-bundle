@@ -22,11 +22,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # PR-only docs allowlist: docs/**, agent-patterns/**, .changeset/*.md, and
-  # top-level *.md. Nested markdown elsewhere is code because examples and
-  # packages contain compiled SKILL.md artifacts, and package markdown affects
-  # npm pack audits. Classification fails open so uncertain PRs run every heavy
-  # job; pushes to main never skip any job based on changed paths.
+  # PR-only docs allowlist: docs/**, agent-patterns/**, website/** (the
+  # Rspress site, validated by docs.yml), .changeset/*.md, and top-level *.md.
+  # Nested markdown elsewhere is code because examples and packages contain
+  # compiled SKILL.md artifacts, and package markdown affects npm pack audits.
+  # Classification fails open so uncertain PRs run every heavy job; pushes to
+  # main never skip any job based on changed paths.
   # Path rules and fail-open listing checks live in
   # scripts/classify-docs-only.mjs (unit-tested). This job sparse-checkouts
   # only that script so the vendored Effect subtree never lands on the

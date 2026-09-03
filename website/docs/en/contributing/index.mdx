@@ -102,16 +102,18 @@ and the other two are publish-side effects rather than checks.
 This site is a private workspace package. Run it from the repository root:
 
 ```sh
-pnpm docs:dev       # local dev server with hot reload
-pnpm docs:check     # typecheck, build, and verify the build artifacts
-pnpm docs:preview   # serve the built site
+pnpm docs:site:dev       # local dev server with hot reload
+pnpm docs:site:build     # typecheck, build, and verify the build artifacts
+pnpm docs:site:preview   # serve the built site
 ```
 
-`pnpm docs:check` is the gate. The build fails on a dead internal link, a dead anchor, a missing
+`pnpm docs:site:build` is the gate, and the `Docs` workflow runs it on every pull request and
+deploys `main` to GitHub Pages. The build fails on a dead internal link, a dead anchor, a missing
 image, or a page that exists in one locale but not the other — the last one is why every English
 page under `guide/`, `reference/`, `examples/`, and `contributing/` has a Chinese counterpart with
 the same structure. TypeScript samples stay identical across locales; prose and code comments are
-translated. The generated Type API is mirrored, not translated.
+translated. The generated Type API, host capability, event, notice, and diagnostics reference
+pages are rendered from repository sources of truth at build time and mirrored, not translated.
 
 ## Repository conventions
 
