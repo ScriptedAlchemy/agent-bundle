@@ -210,11 +210,12 @@ human `validate` output and includes them in every `--json` diagnostics array.
 
 Which explicit config keys *claim* a conventional module out of discovery is
 tabulated in `docs/entry-conventions.md` ("Which config keys claim a
-conventional module"). In short: `scripts`, `hooks`, and `mcp` entries claim
-the module they reference; `bin` and `lib` entries claim every conventional
-module **except** one under `src/scripts/`, which keeps shipping as an
-artifact script beside the package output because the two outputs are
-disjoint. That dual-surface shape is intentional and raises no diagnostic.
+conventional module"). In short: `scripts`, `hooks`, `lib`, and `mcp` entries
+claim the module they reference; a `bin` entry claims every conventional
+module **except** a safely named direct `src/scripts/<name>` child, which
+keeps shipping as an artifact script beside the bin because the two outputs
+are disjoint and both envelopes run the same `main`. That dual-surface shape
+is intentional and raises no diagnostic.
 
 ### `AB4730` — self-connecting stdio MCP entry
 

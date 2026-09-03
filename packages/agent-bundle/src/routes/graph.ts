@@ -205,36 +205,36 @@ const claimedModuleEntry = (value: unknown): string | undefined => {
 
 interface ConfigClaimedSources {
   /**
-   * Modules an artifact-side declaration (`scripts`, `hooks`, `mcp`)
+   * Modules an explicit `scripts`, `hooks`, `lib`, or `mcp` declaration
    * references. They belong to that declaration and never become
    * conventional routes.
    */
   readonly artifact: ReadonlySet<string>;
   /**
-   * Modules the package build (`bin`, `lib`) compiles. They leave route
-   * discovery too, except a direct `src/scripts/<name>` child:
-   * `dist/bin/<name>.js` and `<target>/scripts/<name>.mjs` are disjoint
-   * outputs, so one entry ships as both an npm bin and an artifact script
-   * instead of silently losing the script (#389).
+   * Modules explicit `bin` entries compile. They leave route discovery too,
+   * except a direct `src/scripts/<name>` child: `dist/bin/<name>.js` and
+   * `<target>/scripts/<name>.mjs` are disjoint outputs and both envelopes
+   * run the same `main`, so one entry ships as both an npm bin and an
+   * artifact script instead of silently losing the script (#389).
    */
-  readonly packageBuild: ReadonlySet<string>;
+  readonly bin: ReadonlySet<string>;
 }
 
 /**
  * Absolute module paths explicit configuration already claims. Config always
  * wins — the rule the entry conventions established — so a module an explicit
- * `scripts`, `hooks`, or `mcp` declaration references belongs to that
+ * `scripts`, `hooks`, `lib`, or `mcp` declaration references belongs to that
  * declaration and never becomes a conventional route. Two shipped examples
  * declare `scripts` entries under `src/scripts/`; this rule keeps their
- * layouts route-free without a migration. Package-build claims (`bin`, `lib`)
- * are reported separately because they coexist with a conventional script.
+ * layouts route-free without a migration. `bin` claims are reported
+ * separately because a bin coexists with a conventional script.
  */
 const configClaimedSources = (
   projectRoot: string,
   config: Readonly<AgentBundleConfig>,
 ): ConfigClaimedSources => {
   const artifact = new Set<string>();
-  const packageBuild = new Set<string>();
+  const bin = new Set<string>();
   const claimInto = (claimed: Set<string>, value: unknown): void => {
     const entry = claimedModuleEntry(value);
     if (entry !== undefined && entry.trim().length > 0) claimed.add(resolve(projectRoot, entry));
@@ -252,11 +252,11 @@ const configClaimedSources = (
       }
     }
   }
-  const bin = configValue(config, 'bin');
-  if (isRecord(bin)) {
-    for (const value of Object.values(bin)) claimInto(packageBuild, value);
+  const bins = configValue(config, 'bin');
+  if (isRecord(bins)) {
+    for (const value of Object.values(bins)) claimInto(bin, value);
   }
-  claimInto(packageBuild, configValue(config, 'lib'));
+  claim(configValue(config, 'lib'));
   const mcp = configValue(config, 'mcp');
   const servers = isRecord(mcp) && isRecord(mcp.servers) ? mcp.servers : undefined;
   for (const server of Object.values(servers ?? {})) {
@@ -269,15 +269,15 @@ const configClaimedSources = (
       claim(app.template);
     }
   }
-  return { artifact, packageBuild };
+  return { artifact, bin };
 };
 
 /**
  * True for a direct child of the conventional scripts root whose stem is a
  * safe route identity — the only shape the flat scripts artifact can ship. A
- * nested or unsafely named module a package-build entry names stays claimed:
- * keeping it discovered would only turn a valid package-only configuration
- * into an AB4808 or AB4803 error.
+ * nested or unsafely named module a `bin` entry names stays claimed: keeping
+ * it discovered would only turn a valid bin-only configuration into an
+ * AB4808 or AB4803 error.
  */
 const isConventionalScriptPath = (relativePath: string): boolean => {
   const segments = relativePath.split('/');
@@ -567,7 +567,7 @@ export const compileRouteGraph = async (
   for (const source of sources) {
     if (claimed.artifact.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
-    if (claimed.packageBuild.has(source) && !isConventionalScriptPath(relativePath)) continue;
+    if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
     if (

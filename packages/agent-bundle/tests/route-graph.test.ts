@@ -258,7 +258,7 @@ it('never compiles a module explicit configuration claims: config always wins', 
   expect('routeGraph' in discovered).toBe(false);
 });
 
-it('keeps a bin- or lib-claimed src/scripts module in script discovery (#389)', async () => {
+it('keeps a bin-claimed src/scripts module in script discovery while lib still claims (#389)', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'src/cli/doctor.ts': moduleSource,
@@ -282,12 +282,13 @@ it('keeps a bin- or lib-claimed src/scripts module in script discovery (#389)', 
   }));
 
   expect(graph.diagnostics).toEqual([]);
-  // Package-build claims never remove a safely named direct src/scripts/<name>
-  // child: the bin and the artifact script are disjoint outputs, so both
-  // surfaces ship. The nested and the unsafely named modules stay claimed —
-  // discovering them would only turn a valid package-only configuration into
-  // AB4808 or AB4803.
-  expect(graph.scripts.map((route) => route.id)).toEqual(['script:hauler', 'script:shared']);
+  // A bin claim never removes a safely named direct src/scripts/<name> child:
+  // the bin and the artifact script are disjoint outputs running the same
+  // main, so both surfaces ship. The nested and the unsafely named modules
+  // stay claimed — discovering them would only turn a valid bin-only
+  // configuration into AB4808 or AB4803 — and a lib entry still claims its
+  // module: a library is not a script.
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:hauler']);
   // Every other route kind still belongs to the claiming declaration.
   expect(graph.cli).toBeUndefined();
 });
