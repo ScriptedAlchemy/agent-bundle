@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { AgentStateError } from '../state/index.js';
+import { AgentStateError, canonicalJson } from '../state/index.js';
 import {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AgentNoticeError,
@@ -80,7 +80,10 @@ export interface AgentNoticeInboxSignaller {
    * Records the connection as the inbox subscriber for `principal`. Fails
    * closed: the durable store must be readable before a subscription exists,
    * so an unavailable store yields a rejected subscribe instead of a
-   * subscription that could never be honoured.
+   * subscription that could never be honoured. Repeating the call for the
+   * same principal while subscribed is idempotent and keeps what has already
+   * been signalled; tracking resets only after `unsubscribe()` or when the
+   * principal changes.
    */
   subscribe(principal: AgentNoticePrincipal): Promise<void>;
   /**
@@ -456,6 +459,15 @@ export const createNoticeInboxSignaller = (
       return serialized(async () => {
         const ledger = await options.store.noticeLedger();
         await ledger.read();
+        // A client that repeats resources/subscribe without unsubscribing is
+        // still the same continuously subscribed connection: keeping its
+        // signalled set means a notice with retryBudget > 1 is not re-sent
+        // (and its budget not spent again) for a subscription that never
+        // lapsed. Tracking resets only after a completed unsubscribe or when
+        // the connection's observed identity actually changed.
+        if (subscription !== undefined && canonicalJson(subscription.principal) === canonicalJson(principal)) {
+          return;
+        }
         subscription = Object.freeze({
           id: randomUUID(),
           principal,

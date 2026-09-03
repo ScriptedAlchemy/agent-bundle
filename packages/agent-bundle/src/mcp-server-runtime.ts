@@ -727,10 +727,13 @@ export const createGeneratedRouteMcpServer = async (
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
     await events?.close();
+    // The signaller drains any receipt still owed for a send that reached the
+    // wire, so it must close while the ledger it commits to is still open:
+    // the host owns (or shares) that store and closes after it.
     try {
-      await options.host.close();
-    } finally {
       await options.notices?.close();
+    } finally {
+      await options.host.close();
     }
     await close();
   };

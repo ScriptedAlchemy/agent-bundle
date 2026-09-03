@@ -288,8 +288,24 @@ describe('notice inbox resources/updated signaller', () => {
 
     await signaller.subscribe(principal('s1'));
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
-    // Same connection re-subscribing is a new subscription: the durable budget
-    // (two) still has one signal left, and the in-memory dedupe restarts.
+    // A client repeating resources/subscribe without unsubscribing is the same
+    // continuously subscribed connection: what was already signalled stays
+    // signalled, so the notice's second budget slot is not spent on it.
+    await signaller.subscribe(principal('s1'));
+    expect(signaller.subscribed).toBe(true);
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    // Subscribing under a different observed identity is a new subscription
+    // (and, being another principal, matches its own recipients only).
+    await signaller.subscribe(principal('s2'));
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
+
+    // Only a completed unsubscribe followed by a subscribe restarts the
+    // in-memory dedupe; the durable budget (two) then has one signal left.
+    await signaller.unsubscribe();
     await signaller.subscribe(principal('s1'));
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
