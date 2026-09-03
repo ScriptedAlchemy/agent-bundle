@@ -70,8 +70,9 @@ export const unavailableMetaModuleSource = (manifest: AgentBundleTestManifest): 
  * (`generatedMetaModuleSource` over `projectMeta`), fed from the manifest's
  * plugin identity — the identity the same compiler pass reports in
  * `initialize` — so a source module importing `{ name, version }` observes
- * under a test exactly what a compiled surface would. Without one it is the
- * throwing module above: the placeholder identity is never served.
+ * under a test exactly what a compiled surface would. Without one — the
+ * manifest still carries the frozen sentinel object — it is the throwing
+ * module above: the placeholder identity is never served.
  */
 export const testMetaModuleSource = (manifest: AgentBundleTestManifest): string =>
   isFallbackPluginIdentity(manifest.plugin)

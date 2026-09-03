@@ -125,7 +125,7 @@ export interface TestManifestPluginIdentity {
 /**
  * The identity a manifest carries when preparation produced no plugin model
  * (the configuration could not be loaded or normalized). It is one frozen
- * placeholder rather than a guess at the project, and {@link isFallbackPluginIdentity}
+ * sentinel rather than a guess at the project, and {@link isFallbackPluginIdentity}
  * recognizes it so no harness surface — the Rstest presets' `agent-bundle/meta`
  * alias in particular — ever serves it as a real identity.
  */
@@ -134,15 +134,17 @@ export const FALLBACK_PLUGIN_IDENTITY: TestManifestPluginIdentity = Object.freez
   version: '0.0.0',
 });
 
-/** True when a manifest's identity is the model-less placeholder, by reference or by value. */
+/**
+ * True when a manifest's identity is the model-less sentinel. The check is
+ * by reference only: `deepFreeze` freezes in place, so the manifest the
+ * compiler pass hands the presets still carries the sentinel object itself,
+ * while a real project that happens to declare `plugin.name: 'unknown'` and
+ * `plugin.version: '0.0.0'` is a distinct model-backed object and keeps its
+ * identity. A manifest that crossed a JSON boundary has already been handed
+ * to a worker; only the preset, in the runner process, asks this question.
+ */
 export const isFallbackPluginIdentity = (plugin: TestManifestPluginIdentity): boolean =>
-  plugin === FALLBACK_PLUGIN_IDENTITY
-  || (
-    plugin.name === FALLBACK_PLUGIN_IDENTITY.name
-    && plugin.version === FALLBACK_PLUGIN_IDENTITY.version
-    && plugin.packageName === undefined
-    && plugin.packageVersion === undefined
-  );
+  plugin === FALLBACK_PLUGIN_IDENTITY;
 
 /** The conventional state module the generated route-unit registry can load. */
 export interface TestableStateDescriptor {

@@ -98,17 +98,24 @@ describe('agentBundleRstest aliases agent-bundle/meta (#386)', () => {
     }
   });
 
-  it('recognizes the placeholder by reference and by value, and nothing else', () => {
+  it('recognizes the sentinel by reference only, so a real identity with the same values is served', () => {
     const placeholder = testManifestFromRouteGraph({ graph: emptyCompiledRouteGraph, projectRoot: '/tmp/none' });
+    // A model-backed project may legitimately declare these exact values.
+    const lookalike = testManifestFromRouteGraph({
+      graph: emptyCompiledRouteGraph,
+      plugin: { name: 'unknown', version: '0.0.0' },
+      projectRoot: '/tmp/lookalike',
+    });
 
     expect(placeholder.plugin).toBe(FALLBACK_PLUGIN_IDENTITY);
     expect(isFallbackPluginIdentity(placeholder.plugin)).toBe(true);
-    expect(isFallbackPluginIdentity({ name: 'unknown', version: '0.0.0' })).toBe(true);
-    expect(isFallbackPluginIdentity({ name: 'unknown', packageName: 'unknown', version: '0.0.0' })).toBe(false);
+    expect(isFallbackPluginIdentity(lookalike.plugin)).toBe(false);
     expect(isFallbackPluginIdentity({ name: 'meta-consumer', version: '3.4.5' })).toBe(false);
 
     expect(testMetaModuleSource(placeholder)).toContain('throwUnavailable()');
     expect(testMetaModuleSource(placeholder)).not.toContain('export const name = "unknown"');
+    expect(testMetaModuleSource(lookalike))
+      .toBe(generatedMetaModuleSource(projectMeta({ name: 'unknown', version: '0.0.0' })));
     expect(testMetaModuleSource({ ...placeholder, plugin: { name: 'meta-consumer', version: '3.4.5' } }))
       .toBe(generatedMetaModuleSource(projectMeta({ name: 'meta-consumer', version: '3.4.5' })));
   });
