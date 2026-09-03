@@ -10,6 +10,7 @@ import {
   unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -556,12 +557,108 @@ it.each([
     reason: expect.stringContaining(reason),
     state: 'unavailable',
   });
-  for (const target of ['codex', 'cursor', 'portable'] as const) {
+  for (const target of ['cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
     expect(registry.supports(target, capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
   expect(registry.supports('plugin', capability)).toBe(false);
+});
+
+const codexManifestPackageCapabilities = [
+  'manifestMetadata',
+  'manifestPaths',
+  'optionalAssets',
+  'submissionPolicy',
+] as const;
+
+it('records dated Codex manifest and package capability rows', () => {
+  const registry = createDefaultRegistry();
+  const manifestPackage = codexCapabilityTable.plugin.manifestPackage;
+
+  expect(Object.keys(manifestPackage).sort()).toEqual([...codexManifestPackageCapabilities].sort());
+  for (const capability of codexManifestPackageCapabilities) {
+    const row = manifestPackage[capability];
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+    const state = registry.get('codex').capabilities[capability];
+    expect(state?.state).toBe(row.state);
+    if ('reason' in row) {
+      expect(state).toMatchObject({ reason: row.reason });
+    } else {
+      expect(state).toMatchObject({ evidence: { target: 'codex' } });
+    }
+  }
+
+  expect(manifestPackage.manifestMetadata.fields).toEqual([
+    'author.name',
+    'author.email',
+    'author.url',
+    'homepage',
+    'repository',
+    'license',
+    'keywords',
+  ]);
+  expect(manifestPackage.manifestPaths).toMatchObject({
+    admitted: {
+      hooks: ['path', 'path-array', 'inline-object', 'inline-object-array'],
+      mcpServers: ['path', 'inline-object'],
+      skills: ['path'],
+    },
+    emitted: {
+      hooks: './hooks/hooks.json',
+      mcpServers: './.mcp.json',
+      skills: './skills/',
+    },
+    state: 'degraded',
+  });
+  expect(manifestPackage.optionalAssets.assets).toEqual([
+    'interface.composerIcon',
+    'interface.logo',
+    'interface.logoDark',
+    'interface.screenshots',
+  ]);
+  expect(manifestPackage.submissionPolicy.constraints).toEqual([
+    'Apps Management write access',
+    'verified developer or business identity',
+    'listing and policy URLs',
+    'production MCP review materials',
+    'five positive and three negative test cases',
+    'country or region availability',
+    'release notes and policy attestations',
+  ]);
+});
+
+it('mirrors Codex manifest metadata and path states through the unified adapter', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('codex').capabilities.manifestMetadata).toMatchObject({
+    evidence: { target: 'codex' },
+    state: 'supported',
+  });
+  expect(registry.get('codex').capabilities.manifestPaths).toMatchObject({
+    evidence: { target: 'codex' },
+    reason: expect.stringContaining('canonical'),
+    state: 'degraded',
+  });
+  expect(registry.get('plugin').capabilities.manifestMetadata).toEqual(intersectCapabilityStates(
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.manifestMetadata!,
+      registry.get('codex').capabilities.manifestMetadata!,
+    ),
+    unavailableCapability(
+      'The pinned Cursor plugin contract does not share the authored Codex and Claude manifest metadata fields.',
+    ),
+  ));
+  expect(registry.get('plugin').capabilities.manifestPaths).toEqual(intersectCapabilityStates(
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.manifestPaths!,
+      registry.get('codex').capabilities.manifestPaths!,
+    ),
+    unavailableCapability(
+      'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
+    ),
+  ));
 });
 
 it('intersects supported composite capabilities and merges both evidence records', () => {

@@ -186,7 +186,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.17.0',
+  adapterRevision: '1.18.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -724,15 +724,21 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     // honestly unavailable even though the Claude half still emits `.lsp.json`.
     lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
     manifestMetadata: intersectCapabilityStates(
-      claudeAdapter.capabilities.manifestMetadata!,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities.manifestMetadata!,
+        codexAdapter.capabilities.manifestMetadata!,
+      ),
       unavailableCapability(
-        'The pinned Codex and Cursor plugin contracts do not share Claude manifest metadata fields; displayName, metadata, and defaultEnabled reach Claude Code only.',
+        'The pinned Cursor plugin contract does not share the authored Codex and Claude manifest metadata fields.',
       ),
     ),
     manifestPaths: intersectCapabilityStates(
-      claudeAdapter.capabilities.manifestPaths!,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities.manifestPaths!,
+        codexAdapter.capabilities.manifestPaths!,
+      ),
       unavailableCapability(
-        'The unified bundle emits canonical default component directories and the pinned Codex and Cursor contracts do not share Claude custom manifest path rules.',
+        'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
       ),
     ),
     mcp: intersectCapabilityStates(
