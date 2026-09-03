@@ -52,7 +52,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.6.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -237,6 +237,21 @@ it('records observed capability versions and rehashes schema snapshots against p
         committedAt: '2026-08-19T16:34:23Z',
         url: 'https://github.com/agentplugins/agent-plugins-spec',
       });
+      expect(provenance.reverifiedAt).toBe('2026-09-02');
+      expect(provenance.reverification).toEqual(expect.stringContaining('a2afd7ec7edb916da638fc5c94640d4a7ba4480f'));
+      // Every Agent Plugins 1.0.0 feature carries an honest, dated capability row.
+      const plugin = capabilityTable.plugin as Record<string, unknown>;
+      const mcp = capabilityTable.mcp as Record<string, unknown>;
+      expect(plugin.manifestMetadata).toMatchObject({
+        fields: ['author', 'homepage', 'keywords', 'license', 'repository'],
+        state: 'supported',
+      });
+      expect(plugin.extensions).toMatchObject({ configKey: 'portable.extensions', state: 'supported' });
+      expect(plugin.extensionDirectories).toMatchObject({
+        reason: expect.stringContaining('2026-09-02'),
+        state: 'unavailable',
+      });
+      expect(mcp.legacySse).toMatchObject({ reason: expect.stringContaining('AB4339'), state: 'unavailable' });
     }
   }
 });

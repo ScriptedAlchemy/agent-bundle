@@ -16,6 +16,7 @@ import {
   validateCursorPluginFiles,
   validateCursorPluginSymlinks,
 } from '../host-contracts/cursor-plugin-validation.ts';
+import { validatePortablePluginFiles } from '../host-contracts/portable-plugin-validation.ts';
 import type {
   BoundedChildProcessRequest,
   BoundedChildProcessResult,
@@ -509,19 +510,64 @@ const cursorManifestCandidates = Object.freeze([
   'plugin.json',
 ]);
 
+/**
+ * Static byte lane per pinned loader manifest flavor: the Cursor-native
+ * flavor gets Cursor's pinned document contract, a root `plugin.json` that
+ * declares an Agent Plugins `$schema` (Cursor loads that format natively,
+ * #306 dogfood) gets the pinned Agent Plugins 1.0.0 contract, and every
+ * flavor gets Cursor local-root symlink containment.
+ */
+const installedCursorStaticIssues = async (
+  installed: InstalledCursorManifest,
+  path: string,
+  installRoot: string,
+): Promise<readonly DoctorStaticValidationIssue[]> => {
+  if (installed.manifest === cursorManifestCandidates[0]) {
+    return validateCursorPluginFiles({ containmentRoot: installRoot, pluginDirectory: path, target: 'cursor' });
+  }
+  const symlinks = validateCursorPluginSymlinks({
+    containmentRoot: installRoot,
+    pluginDirectory: path,
+    target: 'cursor',
+  });
+  if (!isAgentPluginsManifest(installed)) return symlinks;
+  const [portable, containment] = await Promise.all([
+    validatePortablePluginFiles({ pluginDirectory: path, target: 'portable' }),
+    symlinks,
+  ]);
+  return Object.freeze([...portable, ...containment]);
+};
+
+interface InstalledCursorManifest {
+  readonly manifest: string;
+  readonly name: string;
+  /** Declared `$schema`, when the manifest carries one (Agent Plugins manifests always do). */
+  readonly schema?: string;
+  readonly version?: string;
+}
+
+const agentPluginsSchemaPrefix = 'https://agent-plugins.org/schemas/';
+
+/** A root `plugin.json` that declares an Agent Plugins schema identifier is an Agent Plugins package. */
+const isAgentPluginsManifest = (installed: InstalledCursorManifest): boolean =>
+  installed.manifest === cursorManifestCandidates[2] &&
+  installed.schema !== undefined &&
+  installed.schema.startsWith(agentPluginsSchemaPrefix);
+
 const readInstalledManifest = async (
   root: string,
-): Promise<{ readonly manifest: string; readonly name: string; readonly version?: string } | undefined> => {
+): Promise<InstalledCursorManifest | undefined> => {
   for (const manifest of cursorManifestCandidates) {
     try {
       const value = JSON.parse(await readFile(join(root, manifest), 'utf8')) as unknown;
       if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
-      const record = value as { readonly name?: unknown; readonly version?: unknown };
+      const record = value as { readonly $schema?: unknown; readonly name?: unknown; readonly version?: unknown };
       if (typeof record.name !== 'string') continue;
       if (record.version !== undefined && typeof record.version !== 'string') continue;
       return Object.freeze({
         manifest,
         name: record.name,
+        ...(typeof record.$schema === 'string' ? { schema: record.$schema } : {}),
         ...(typeof record.version === 'string' ? { version: record.version } : {}),
       });
     } catch (error) {
@@ -624,24 +670,23 @@ const cursorInventory = async (
       ));
       continue;
     }
-    const staticIssues = manifest.manifest === cursorManifestCandidates[0]
-      ? await validateCursorPluginFiles({
-        containmentRoot: installRoot,
-        pluginDirectory: path,
-        target: 'cursor',
-      })
-      : await validateCursorPluginSymlinks({
-        containmentRoot: installRoot,
-        pluginDirectory: path,
-        target: 'cursor',
-      });
+    const staticIssues = await installedCursorStaticIssues(manifest, path, installRoot);
     const staticDiagnostics = staticValidationDiagnostics(
       'AB7320',
       'cursor',
       path,
       staticIssues,
     );
-    if (manifest.manifest !== cursorManifestCandidates[0]) {
+    if (isAgentPluginsManifest(manifest)) {
+      diagnostics.push(diagnostic(
+        'AB7320',
+        `Cursor plugin entry ${JSON.stringify(path)} is a root plugin.json declaring ${JSON.stringify(manifest.schema)}, ` +
+          'which Cursor loads as an Agent Plugins package; Doctor validated it against the pinned Agent Plugins 1.0.0 contract.',
+        'Rebuild the portable bundle from valid source bytes if the Agent Plugins contract reports errors.',
+        'info',
+        'cursor',
+      ));
+    } else if (manifest.manifest !== cursorManifestCandidates[0]) {
       diagnostics.push(diagnostic(
         'AB7320',
         `Cursor plugin entry ${JSON.stringify(path)} uses loader manifest flavor ` +

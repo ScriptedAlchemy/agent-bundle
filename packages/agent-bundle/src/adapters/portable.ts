@@ -40,13 +40,35 @@ import { withInstallSurface } from '../install/surface.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
+/** Agent Plugins 1.0.0 §5.4 `author` object: optional `name`, `email`, and `url` strings. */
+export interface PortableAuthorConfig {
+  readonly email?: string;
+  readonly name?: string;
+  readonly url?: string;
+}
+
+/**
+ * Portable-only manifest metadata layered onto the emitted root `plugin.json`
+ * (Agent Plugins 1.0.0 §5.4 metadata fields and §5.6/§8.1 `extensions`).
+ * Every field is optional; omitted fields are omitted from the manifest.
+ */
+export interface PortableManifestConfig {
+  readonly author?: PortableAuthorConfig;
+  /** Client extension namespaces (reverse-domain, §8) mapped to their opaque object payloads. */
+  readonly extensions?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly homepage?: string;
+  readonly keywords?: readonly string[];
+  readonly license?: string;
+  readonly repository?: string;
+}
+
 export interface PortableConfigExtension {
-  portable?: AgentBundlePortableConfig;
+  portable?: AgentBundlePortableConfig & PortableManifestConfig;
 }
 
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
-    portable?: AgentBundlePortableConfig;
+    portable?: AgentBundlePortableConfig & PortableManifestConfig;
   }
 }
 
@@ -58,7 +80,7 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.5.0',
+  adapterRevision: '1.6.0',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -122,6 +144,228 @@ const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableN
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
+
+const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  [null, Object.prototype].includes(Object.getPrototypeOf(value));
+
+const isNonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const isAbsoluteHttpUrl = (value: unknown): value is string => {
+  if (!isNonemptyString(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isEmail = (value: unknown): value is string =>
+  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+
+/** §8: client extension namespaces are reverse-domain identifiers such as `com.example.client`. */
+const isExtensionNamespace = (value: string): boolean =>
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/u.test(value);
+
+const manifestMetadataFields = Object.freeze([
+  'author',
+  'extensions',
+  'homepage',
+  'keywords',
+  'license',
+  'repository',
+] as const);
+
+type ManifestMetadataField = (typeof manifestMetadataFields)[number];
+
+interface PortableManifestMetadataPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document: Readonly<Record<string, unknown>>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noManifestMetadataPlan: PortableManifestMetadataPlan = deepFreeze({
+  diagnostics: [],
+  document: {},
+  sourceInputs: [],
+});
+
+const manifestMetadataDiagnostic = (
+  field: ManifestMetadataField | 'author.email' | 'author.name' | 'author.url',
+  message: string,
+  recovery: string,
+): Diagnostic => ({
+  ...errorDiagnostic(`portable.manifest.${field}.invalid`, message),
+  recovery,
+});
+
+const planAuthor = (
+  author: unknown,
+  diagnostics: Diagnostic[],
+): Readonly<Record<string, string>> | undefined => {
+  if (!isPlainDataRecord(author)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'author',
+      'Portable author must be a plain object (Agent Plugins 1.0.0 §5.4).',
+      'Set portable.author to an object with optional name, email, and url strings, or remove it.',
+    ));
+    return undefined;
+  }
+  const unknownFields = Object.keys(author).filter((field) => !['email', 'name', 'url'].includes(field));
+  if (unknownFields.length > 0) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'author',
+      `Portable author contains unsupported field${unknownFields.length === 1 ? '' : 's'} ` +
+        `${unknownFields.map((field) => JSON.stringify(field)).join(', ')}; Agent Plugins 1.0.0 §5.4 permits only name, email, and url.`,
+      'Keep only portable.author.name, portable.author.email, and portable.author.url.',
+    ));
+  }
+  const { email, name, url } = author;
+  if (name !== undefined && !isNonemptyString(name)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'author.name',
+      'Portable author.name must be a nonempty string after trimming whitespace.',
+      'Set portable.author.name to the author or team name, or remove it.',
+    ));
+  }
+  if (email !== undefined && !isEmail(email)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'author.email',
+      'Portable author.email must be a nonempty email address.',
+      'Set portable.author.email to a contact email address, or remove it.',
+    ));
+  }
+  if (url !== undefined && !isAbsoluteHttpUrl(url)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'author.url',
+      'Portable author.url must be an absolute HTTP or HTTPS URL.',
+      'Set portable.author.url to the author or team homepage, or remove it.',
+    ));
+  }
+  if (
+    unknownFields.length > 0 ||
+    (name !== undefined && !isNonemptyString(name)) ||
+    (email !== undefined && !isEmail(email)) ||
+    (url !== undefined && !isAbsoluteHttpUrl(url))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...(email === undefined ? {} : { email }),
+    ...(name === undefined ? {} : { name }),
+    ...(url === undefined ? {} : { url }),
+  });
+};
+
+const planExtensions = (
+  extensions: unknown,
+  diagnostics: Diagnostic[],
+): Readonly<Record<string, unknown>> | undefined => {
+  if (!isPlainDataRecord(extensions)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'extensions',
+      'Portable extensions must be a plain object keyed by client extension namespace (Agent Plugins 1.0.0 §8.1).',
+      'Set portable.extensions to { "<reverse.domain.namespace>": { ... } }, or remove it.',
+    ));
+    return undefined;
+  }
+  let valid = true;
+  const planned: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [namespace, value] of Object.entries(extensions)) {
+    if (!isExtensionNamespace(namespace)) {
+      valid = false;
+      diagnostics.push(manifestMetadataDiagnostic(
+        'extensions',
+        `Portable extension namespace ${JSON.stringify(namespace)} is not a reverse-domain identifier (Agent Plugins 1.0.0 §8).`,
+        'Key portable.extensions by a reverse-domain namespace such as "com.example.client".',
+      ));
+      continue;
+    }
+    if (!isPlainDataRecord(value)) {
+      valid = false;
+      diagnostics.push(manifestMetadataDiagnostic(
+        'extensions',
+        `Portable extension namespace ${JSON.stringify(namespace)} must map to a plain object (Agent Plugins 1.0.0 §8.1).`,
+        `Set portable.extensions[${JSON.stringify(namespace)}] to an object, or remove it.`,
+      ));
+      continue;
+    }
+    planned[namespace] = value;
+  }
+  return valid ? Object.freeze({ ...planned }) : undefined;
+};
+
+/**
+ * Agent Plugins 1.0.0 §5.4 metadata and §5.6 `extensions` authored under the
+ * `portable` config extension. Metadata beyond the JSON-type floor is checked
+ * (§5.4 recommends SPDX and URL forms; a client MUST NOT reject them, but this
+ * compiler refuses to ship values it knows to be malformed).
+ */
+const planPortableManifestMetadata = (model: NormalizedPlugin): PortableManifestMetadataPlan => {
+  const extension = model.extensions[portableName];
+  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
+  const declared = extension.value;
+  if (manifestMetadataFields.every((field) => declared[field] === undefined)) return noManifestMetadataPlan;
+
+  const diagnostics: Diagnostic[] = [];
+  const document: Record<string, unknown> = {};
+  const { author, extensions, homepage, keywords, license, repository } = declared;
+  if (author !== undefined) {
+    const planned = planAuthor(author, diagnostics);
+    if (planned !== undefined) document['author'] = planned;
+  }
+  for (const [field, value] of [['homepage', homepage], ['repository', repository]] as const) {
+    if (value === undefined) continue;
+    if (isAbsoluteHttpUrl(value)) {
+      document[field] = value;
+      continue;
+    }
+    diagnostics.push(manifestMetadataDiagnostic(
+      field,
+      `Portable ${field} must be an absolute HTTP or HTTPS URL.`,
+      `Set portable.${field} to an absolute URL, or remove it.`,
+    ));
+  }
+  if (license !== undefined) {
+    if (isNonemptyString(license)) document['license'] = license;
+    else {
+      diagnostics.push(manifestMetadataDiagnostic(
+        'license',
+        'Portable license must be a nonempty string (an SPDX identifier is recommended by Agent Plugins 1.0.0 §5.4).',
+        'Set portable.license to a license identifier such as MIT or Apache-2.0, or remove it.',
+      ));
+    }
+  }
+  if (keywords !== undefined) {
+    const invalidIndex = Array.isArray(keywords)
+      ? keywords.findIndex((keyword) => !isNonemptyString(keyword))
+      : undefined;
+    if (Array.isArray(keywords) && invalidIndex === -1) document['keywords'] = Object.freeze([...keywords]);
+    else {
+      diagnostics.push(manifestMetadataDiagnostic(
+        'keywords',
+        invalidIndex === undefined
+          ? 'Portable keywords must be an array of nonempty strings.'
+          : `Portable keywords[${invalidIndex}] must be a nonempty string after trimming whitespace.`,
+        'Set portable.keywords to discovery tags such as ["research", "crm"], or remove it.',
+      ));
+    }
+  }
+  if (extensions !== undefined) {
+    const planned = planExtensions(extensions, diagnostics);
+    if (planned !== undefined) document['extensions'] = planned;
+  }
+
+  return Object.freeze({
+    diagnostics: Object.freeze(diagnostics),
+    document: Object.freeze(document),
+    sourceInputs: Object.freeze([extension.provenance.sourcePath]),
+  });
+};
 
 const planMcpServer = (
   server: NormalizedMcpServer,
@@ -226,6 +470,8 @@ const planMcpServer = (
 
 const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   const diagnostics: Diagnostic[] = [];
+  const manifestMetadata = planPortableManifestMetadata(model);
+  diagnostics.push(...manifestMetadata.diagnostics);
   const plugin = {
     $schema: portablePluginSchema,
     ...(model.metadata.description === undefined
@@ -233,6 +479,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       : { description: model.metadata.description }),
     name: model.metadata.name,
     version: model.metadata.version,
+    ...manifestMetadata.document,
   };
   const entries: TargetArtifactEntry[] = [
     {
@@ -242,6 +489,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       sourceInputs: sourceInputs(
         model.metadata.provenance.sourcePath,
         ...model.targets.filter((target) => target.name === portableName).map((target) => target.provenance.sourcePath),
+        ...manifestMetadata.sourceInputs,
       ),
     },
   ];
@@ -333,14 +581,26 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     commands: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     ),
+    extensionDirectories: unavailableCapability(capabilityTable.plugin.extensionDirectories.reason),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
     install: unavailableCapability(capabilityTable.install.reason),
+    manifestExtensions: capabilityStateFromSupport(
+      capabilityTable.plugin.extensions.state === 'supported',
+      evidence,
+      'Agent Plugins 1.0.0 does not define a manifest extensions field.',
+    ),
+    manifestMetadata: capabilityStateFromSupport(
+      capabilityTable.plugin.manifestMetadata.state === 'supported',
+      evidence,
+      'Agent Plugins 1.0.0 does not define manifest metadata fields.',
+    ),
     marketplace: unavailableCapability('Agent Plugins 1.0.0 does not define a marketplace document.'),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
       'Agent Plugins 1.0.0 does not support both required modern MCP transports.',
     ),
+    mcpLegacySse: unavailableCapability(capabilityTable.mcp.legacySse.reason),
     rules: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
     ),

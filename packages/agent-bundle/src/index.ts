@@ -106,6 +106,8 @@ export type AgentBundleConfig = CoreAgentBundleConfig
   & CodexConfigExtension
   & PortableConfigExtension;
 
+export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
+
 export type {
   AgentBundleConfigExtensions,
   AgentBundleDevConfig,

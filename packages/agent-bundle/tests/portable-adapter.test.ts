@@ -116,6 +116,129 @@ it('plans a schema-valid skills-only plugin with every discovered resource', () 
   ]);
 });
 
+const portableExtension = (value: unknown): NormalizedPlugin['extensions'] => ({
+  portable: {
+    id: 'extension:portable',
+    key: 'portable',
+    provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+    target: 'portable',
+    value,
+  },
+});
+
+it('emits every Agent Plugins 1.0.0 §5.4 metadata field and §5.6 extensions from the portable config extension', () => {
+  const plan = portableAdapter.plan({
+    ...plugin(),
+    extensions: portableExtension({
+      author: { email: 'team@example.com', name: 'Example Team', url: 'https://example.com/team' },
+      extensions: { 'com.example.client': { setting: true }, 'org.example-tools.ide': {} },
+      homepage: 'https://docs.example.com/plugin',
+      keywords: ['reports', 'summaries'],
+      license: 'MIT',
+      repository: 'https://github.com/example/plugin',
+    }),
+  });
+  const manifest = plan.entries.find((entry) => entry.relativePath === 'plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({ kind: 'write', sourceInputs: ['/workspace/agent-bundle.config.ts'] });
+  expect(JSON.parse((manifest as Extract<typeof manifest, { readonly kind: 'write' }>).content)).toEqual({
+    $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+    author: { email: 'team@example.com', name: 'Example Team', url: 'https://example.com/team' },
+    description: 'A portable test plugin',
+    extensions: { 'com.example.client': { setting: true }, 'org.example-tools.ide': {} },
+    homepage: 'https://docs.example.com/plugin',
+    keywords: ['reports', 'summaries'],
+    license: 'MIT',
+    name: 'portable-test',
+    repository: 'https://github.com/example/plugin',
+    version: '1.2.3',
+  });
+});
+
+it('leaves plugin.json byte-identical to the pre-metadata contract when no portable metadata is declared', () => {
+  const bare = portableAdapter.plan(plugin());
+  const emptyExtension = portableAdapter.plan({ ...plugin(), extensions: portableExtension({}) });
+  const expected =
+    '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"A portable test plugin","name":"portable-test","version":"1.2.3"}\n';
+
+  for (const plan of [bare, emptyExtension]) {
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.entries.find((entry) => entry.relativePath === 'plugin.json')).toMatchObject({ content: expected });
+  }
+});
+
+it('refuses malformed portable manifest metadata with one field-scoped diagnostic each', () => {
+  const plan = portableAdapter.plan({
+    ...plugin(),
+    extensions: portableExtension({
+      author: { email: 'not-an-email', name: '  ', role: 'maintainer', url: 'ftp://example.com' },
+      extensions: { 'no-dot-namespace': {}, 'com.example.client': 'not an object' },
+      homepage: 'docs.example.com',
+      keywords: ['reports', ''],
+      license: '',
+      repository: 'git@github.com:example/plugin.git',
+    }),
+  });
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'portable.manifest.author.invalid',
+    'portable.manifest.author.name.invalid',
+    'portable.manifest.author.email.invalid',
+    'portable.manifest.author.url.invalid',
+    'portable.manifest.homepage.invalid',
+    'portable.manifest.repository.invalid',
+    'portable.manifest.license.invalid',
+    'portable.manifest.keywords.invalid',
+    'portable.manifest.extensions.invalid',
+    'portable.manifest.extensions.invalid',
+  ]);
+  expect(plan.diagnostics.every((diagnostic) =>
+    diagnostic.severity === 'error' && diagnostic.target === 'portable' && typeof diagnostic.recovery === 'string')).toBe(true);
+  // Invalid fields never reach the manifest; the required identity still does.
+  const manifest = plan.entries.find((entry) => entry.relativePath === 'plugin.json');
+  expect(JSON.parse((manifest as Extract<typeof manifest, { readonly kind: 'write' }>).content)).toEqual({
+    $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+    description: 'A portable test plugin',
+    name: 'portable-test',
+    version: '1.2.3',
+  });
+});
+
+it('declares an honest capability row for every Agent Plugins 1.0.0 feature', () => {
+  const { capabilities } = createDefaultRegistry().get('portable');
+
+  expect(capabilities.skills).toMatchObject({ state: 'supported' });
+  expect(capabilities.mcp).toMatchObject({ state: 'supported' });
+  expect(capabilities.manifestMetadata).toMatchObject({ evidence: { target: 'portable' }, state: 'supported' });
+  expect(capabilities.manifestExtensions).toMatchObject({ evidence: { target: 'portable' }, state: 'supported' });
+  for (const [name, fragment] of [
+    ['extensionDirectories', '§8.2'],
+    ['mcpLegacySse', '§7.2.1'],
+    ['hooks', 'hooks'],
+    ['commands', 'commands'],
+    ['rules', 'rules'],
+    ['marketplace', 'marketplace'],
+    ['install', 'profile'],
+  ] as const) {
+    expect(capabilities[name]).toMatchObject({ reason: expect.stringContaining(fragment), state: 'unavailable' });
+  }
+  expect(capabilities.extensionDirectories).toMatchObject({ reason: expect.stringContaining('2026-09-02') });
+  expect(capabilities.mcpLegacySse).toMatchObject({ reason: expect.stringContaining('2026-09-02') });
+});
+
+it('rejects non-object portable author and extensions values', () => {
+  const plan = portableAdapter.plan({
+    ...plugin(),
+    extensions: portableExtension({ author: 'Example Team', extensions: ['com.example.client'] }),
+  });
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'portable.manifest.author.invalid',
+    'portable.manifest.extensions.invalid',
+  ]);
+});
+
 it('copies project assets selected for portable and skips assets scoped to other targets', () => {
   const assetProvenance = { kind: 'conventional' as const, sourcePath: '/workspace/agent-bundle.config.ts' };
   const plan = portableAdapter.plan({

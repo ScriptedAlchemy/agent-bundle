@@ -18,6 +18,7 @@ import {
 } from '../../src/adapters/cursor.ts';
 import { createAdapterValidator } from '../../src/adapters/types.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
+import { validatePortablePluginFiles } from '../../src/host-contracts/portable-plugin-validation.ts';
 import { validateCodexOpenaiYaml } from '../../src/schemas/skill-hosts/contract.ts';
 import {
   compileTestManifest,
@@ -235,6 +236,8 @@ export interface CursorHostInstallReport {
 }
 
 export interface PortableHostInstallReport {
+  /** The installed bytes pass the same pinned byte lane `validate --host-validation` and Doctor run. */
+  readonly contract: 'agent-plugins-1.0.0 byte lane clean (AB6035–AB6037)';
   readonly destination: string;
   readonly documents: {
     readonly mcp: 'schema-valid';
@@ -247,6 +250,7 @@ export interface PortableHostInstallReport {
     readonly second: 'already-installed';
     readonly version: '1.0.0';
   };
+  readonly manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config';
   readonly pluginVariables: {
     readonly allowedLocations: 'args/env values/cwd only';
     readonly locations: readonly string[];
@@ -1154,6 +1158,15 @@ export const runPortableHostInstallProof = async (
       pluginManifest.name === portablePlugin && pluginManifest.version === version,
       'Portable plugin manifest did not carry the fixture identity.',
     );
+    assertProof(
+      record(pluginManifest.author)?.name === 'Agent Bundle proof harness' &&
+        pluginManifest.license === 'MIT' &&
+        pluginManifest.homepage === 'https://github.com/ScriptedAlchemy/agent-bundle' &&
+        pluginManifest.repository === 'https://github.com/ScriptedAlchemy/agent-bundle' &&
+        JSON.stringify(pluginManifest.keywords) === JSON.stringify(['proof', 'agent-plugins']) &&
+        record(record(pluginManifest.extensions)?.['com.example.proof'])?.fixture === true,
+      'Portable plugin manifest did not carry the authored Agent Plugins §5.4 metadata and §5.6 extensions.',
+    );
 
     const mcpServers = record(mcpManifest.mcpServers);
     assertProof(mcpServers !== undefined, 'Portable MCP document had no server map.');
@@ -1236,9 +1249,16 @@ export const runPortableHostInstallProof = async (
       );
     }
 
+    const contractDiagnostics = await validatePortablePluginFiles({ pluginDirectory: destination, target: 'portable' });
+    assertProof(
+      contractDiagnostics.length === 0,
+      `Portable installed bytes failed the pinned Agent Plugins byte lane: ${JSON.stringify(contractDiagnostics)}`,
+    );
+
     await install('Already installed');
 
     return Object.freeze({
+      contract: 'agent-plugins-1.0.0 byte lane clean (AB6035–AB6037)',
       destination: normalizedRelative(home, destination),
       documents: Object.freeze({
         mcp: 'schema-valid',
@@ -1251,6 +1271,7 @@ export const runPortableHostInstallProof = async (
         second: 'already-installed',
         version,
       }),
+      manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: Object.freeze({
         allowedLocations: 'args/env values/cwd only',
         locations: Object.freeze(placeholderLocations),
