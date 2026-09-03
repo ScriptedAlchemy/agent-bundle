@@ -161,28 +161,31 @@
       "state": "supported",
       "evidence": [
         "live model 2026-09-03, Claude Code 2.1.257 (claude-sonnet-5; fixtures/host-lineage/claude-2.1.257.ndjson and claude-2.1.257-foreground.ndjson, docs/audits/2026-09-03-host-lineage-matrix.md): SubagentStart/SubagentStop carry agent_id and agent_type; every hook inside a subagent carries the subagent's agent_id and the root session_id.",
-        "live model 2026-09-03, Claude Code 2.1.257: the parent's Agent PostToolUse tool_response.agentId names the child (status async_launched for a background spawn right after SubagentStart, completed for a foreground spawn after the child's SubagentStop); Stop/SubagentStop background_tasks[] lists only background subagents still running, including the stopping agent itself; a finished background child re-enters the root as a <task-notification> UserPromptSubmit carrying task-id and tool-use-id."
+        "live model 2026-09-03, Claude Code 2.1.257: the parent's Agent PostToolUse tool_response.agentId names the child (status async_launched for a background spawn right after SubagentStart, completed for a foreground spawn after the child's SubagentStop); Stop/SubagentStop background_tasks[] lists only background subagents still running, including the stopping agent itself; a finished background child re-enters the root as a <task-notification> UserPromptSubmit carrying task-id and tool-use-id.",
+        "live model 2026-09-03, Claude Code 2.1.259 (fixtures/host-lineage/claude-2.1.259-orchestration.ndjson, four claude -p turns resumed into one session): two Agent calls issued in one message arrive serialised — SubagentStart for the first fires before the second Agent PreToolUse opens — so each child binds to its own spawn call; an Explore subagent carries the same agent_id/agent_type fields and can call the plugin's MCP tools; PostToolUseFailure inside a subagent carries the subagent's agent_id like PostToolUse; SessionStart source resume/compact and PreCompact/PostCompact are root-only and carry no agent_id."
       ]
     },
     "root": {
       "state": "supported",
       "evidence": [
-        "live model 2026-09-03, Claude Code 2.1.257: session_id is the root session on every hook payload, including nested subagents — 88 hook payloads across two sessions, every one carrying the root session_id; CLAUDE_CODE_SESSION_ID in hook and MCP server processes is the root id."
+        "live model 2026-09-03, Claude Code 2.1.257: session_id is the root session on every hook payload, including nested subagents — 88 hook payloads across two sessions, every one carrying the root session_id; CLAUDE_CODE_SESSION_ID in hook and MCP server processes is the root id.",
+        "live model 2026-09-03, Claude Code 2.1.259: the root session_id survives --resume and a manual /compact — all 127 hook payloads of a four-turn session (5 SessionStart with source startup/resume/compact, 4 SessionEnd) carry the same session_id."
       ]
     },
     "parent": {
       "state": "degraded",
-      "reason": "live model 2026-09-03, Claude Code 2.1.257: no hook payload names a subagent's parent (host gap tracked in #422: SubagentStart carries only the child agent_id, and a subagent's own hooks carry session_id + agent_id); the runtime registry infers it from the Agent/Task PreToolUse that is the newest unclaimed spawn when SubagentStart fires (resolution: registry) — verified at depth 1 and 2 in both background and foreground spawn paths, exact for sequential spawns, refused as id-not-resolvable when two parents have unclaimed spawns, and toolCallId is withheld when siblings from one parent were claimed blind; the parent's Agent PostToolUse tool_response.agentId confirms the inference after the fact."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257 and 2.1.259: no hook payload names a subagent's parent (host gap tracked in #422: SubagentStart carries only the child agent_id, and a subagent's own hooks carry session_id + agent_id); the runtime registry infers it from the Agent/Task PreToolUse that is the newest unclaimed spawn when SubagentStart fires (resolution: registry) — verified at depth 1 and 2 in background, foreground and parallel spawn paths, exact for sequential spawns and for the 2.1.259 parallel pair (the host serialises SubagentStart before the next Agent PreToolUse), refused as id-not-resolvable when two parents have unclaimed spawns, and toolCallId is withheld when siblings from one parent were claimed blind; the parent's Agent PostToolUse tool_response.agentId confirms the inference after the fact, and the host's stream-json task_started envelope (task_id, tool_use_id) agrees, but that stream is not delivered to plugins."
     },
     "depth": {
       "state": "degraded",
-      "reason": "live model 2026-09-03, Claude Code 2.1.257: no depth counter is delivered (#422; the result document's subagent_stats.max_depth is not a hook field); the registry derives it from the inferred parent chain, so it is exactly as certain as parent."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257 and 2.1.259: no depth counter is delivered to hooks (#422; the result document's subagent_stats.max_depth and the stream-json task_started.spawn_depth are not hook fields); the registry derives it from the inferred parent chain, so it is exactly as certain as parent — it matched spawn_depth 1 and 2 in the 2.1.259 orchestration run."
     },
     "mcp-correlation": {
       "state": "supported",
       "evidence": [
         "live model 2026-09-03, Claude Code 2.1.257: tools/call _meta carries claudecode/toolUseId equal to the PreToolUse tool_use_id, so the generated server resolves the caller's conversation through the open pre-tool hook; it matched on every MCP call at depth 0, 1, and 2, including calls the model issued in parallel with two pre-tool windows open.",
-        "live model 2026-09-03, Claude Code 2.1.257: MCP PostToolUse tool_response is a string and built-in-tool tool_response an object in every live payload."
+        "live model 2026-09-03, Claude Code 2.1.257: MCP PostToolUse tool_response is a string and built-in-tool tool_response an object in every live payload.",
+        "live model 2026-09-03, Claude Code 2.1.259: claudecode/toolUseId matched the open PreToolUse on all five probe calls of the orchestration run (three depth-1 agents, the depth-2 agent, the root), and the generated dump tool's request.lineage resolved live at depth 2 for the first time; a failed MCP call closes its window through PostToolUseFailure."
       ]
     }
   },

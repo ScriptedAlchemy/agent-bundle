@@ -4,7 +4,7 @@
 // uninstall. Nothing here touches the real ~/.claude, ~/.codex, or ~/.cursor.
 //
 //   node scripts/probe.mjs install   <claude|codex|cursor> [--no-auth] [--root <dir>]
-//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text>] [--model <m>] [--timeout <ms>] [--scripted-model]
+//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text> | --scenario <file.json>] [--model <m>] [--timeout <ms>] [--scripted-model]
 //   node scripts/probe.mjs uninstall <claude|codex|cursor> [--keep-home]
 //   node scripts/probe.mjs status    <claude|codex|cursor>
 import { spawn, spawnSync } from 'node:child_process';
@@ -29,6 +29,7 @@ const parseArgs = (argv) => {
       case '--keep-home': flags.keepHome = true; break;
       case '--root': flags.root = rest[++index]; break;
       case '--prompt': flags.prompt = rest[++index]; break;
+      case '--scenario': flags.scenario = rest[++index]; break;
       case '--model': flags.model = rest[++index]; break;
       case '--timeout': flags.timeout = Number(rest[++index]); break;
       case '--scripted-model': flags.scriptedModel = true; break;
@@ -239,16 +240,66 @@ const scenarioPrompt = () => flags.prompt ?? [
 ].join('\n');
 
 /**
+ * The ordered prompts of one capture session. `--prompt` is a one-turn
+ * scenario; `--scenario <file.json>` is `{ "turns": ["...", ...] }` (a turn may
+ * also be `{ "prompt": "..." }`), every turn after the first resuming the same
+ * host session so turn boundaries show up in the hook stream.
+ */
+const scenarioTurns = () => {
+  if (flags.scenario === undefined) return [scenarioPrompt()];
+  const file = resolve(flags.scenario);
+  const scenario = JSON.parse(readFileSync(file, 'utf8'));
+  const turns = Array.isArray(scenario) ? scenario : scenario?.turns;
+  if (!Array.isArray(turns) || turns.length === 0) throw new Error(`${file}: expected {"turns": [<prompt>, ...]} with at least one turn`);
+  return turns.map((turn, index) => {
+    const prompt = typeof turn === 'string' ? turn : turn?.prompt;
+    if (typeof prompt !== 'string' || prompt.length === 0) throw new Error(`${file}: turn ${String(index + 1)} has no prompt`);
+    return prompt;
+  });
+};
+
+const parseStream = (stdout) => stdout.split('\n').filter(Boolean).flatMap((line) => {
+  try {
+    return [JSON.parse(line)];
+  } catch {
+    return [];
+  }
+});
+
+/** One line per turn about what the model's own stream shows: tool calls by name, and how many envelopes came from inside a subagent. */
+const describeStream = (envelopes) => {
+  const toolUses = new Map();
+  let fromSubagents = 0;
+  for (const envelope of envelopes) {
+    if (envelope.parent_tool_use_id) fromSubagents += 1;
+    if (envelope.type !== 'assistant') continue;
+    for (const block of envelope.message?.content ?? []) {
+      if (block.type === 'tool_use') toolUses.set(block.name, (toolUses.get(block.name) ?? 0) + 1);
+    }
+  }
+  const result = envelopes.find((envelope) => envelope.type === 'result');
+  const tools = [...toolUses].map(([name, count]) => `${name}×${String(count)}`).join(' ');
+  return `${String(envelopes.length)} stream envelope(s), ${String(fromSubagents)} from inside subagents (parent_tool_use_id set); result ${result?.subtype ?? 'missing'} after ${String(result?.num_turns ?? '?')} model turn(s); tool_use: ${tools || 'none'}`;
+};
+
+/**
  * With --scripted-model the real Claude Code binary talks to a local scripted
  * Messages API (scripts/mock-anthropic.mjs) instead of Anthropic, so the hook,
  * MCP, and subagent plumbing under test is the host's own while no account is
  * needed; the model text in the transcript is then not evidence of anything.
+ *
+ * Every turn runs `claude -p --output-format stream-json --verbose`, so the
+ * model's tool-use stream (with `parent_tool_use_id` on envelopes produced
+ * inside a subagent) is captured next to the hook payloads; turns after the
+ * first `--resume` the session id the first turn's `system/init` envelope
+ * reported.
  */
 const captureClaude = () => {
   const scripted = flags.scriptedModel === true;
-  const args = [
-    '-p', scripted ? 'You are exercising the host-test probe plugin. Do the scripted steps.' : scenarioPrompt(),
-    '--output-format', 'json',
+  const turns = scripted ? ['You are exercising the host-test probe plugin. Do the scripted steps.'] : scenarioTurns();
+  const baseArgs = [
+    '--output-format', 'stream-json',
+    '--verbose',
     '--dangerously-skip-permissions',
     '--model', flags.model ?? (scripted ? 'claude-sonnet-4-5' : 'sonnet'),
   ];
@@ -268,16 +319,39 @@ const captureClaude = () => {
         }
       : {}),
   };
-  log(`claude ${args.slice(2).join(' ')}${scripted ? ` (scripted model on 127.0.0.1:${String(port)})` : ''}`);
+  log(`claude -p <prompt> ${baseArgs.join(' ')}${scripted ? ` (scripted model on 127.0.0.1:${String(port)})` : ''}; ${String(turns.length)} turn(s)`);
+  const results = [];
+  let sessionId;
   try {
     if (mock !== undefined) spawnSync(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 800)']);
-    return run('claude', args, { cwd: paths.workspace, env: environment, timeout: flags.timeout ?? 900_000 });
+    for (const [index, prompt] of turns.entries()) {
+      const args = ['-p', prompt, ...baseArgs, ...(sessionId === undefined ? [] : ['--resume', sessionId])];
+      const result = run('claude', args, { cwd: paths.workspace, env: environment, timeout: flags.timeout ?? 900_000 });
+      const envelopes = parseStream(result.stdout ?? '');
+      sessionId ??= envelopes.find((envelope) => typeof envelope.session_id === 'string')?.session_id;
+      log(`turn ${String(index + 1)}/${String(turns.length)}: exit ${String(result.status)}, session ${sessionId ?? 'unknown'}; ${describeStream(envelopes)}`);
+      results.push({ ...result, stdoutExtension: 'stream.ndjson' });
+      if (result.status !== 0) break;
+      if (sessionId === undefined && index + 1 < turns.length) {
+        log('the first turn reported no session_id, so the remaining turns cannot resume it');
+        break;
+      }
+    }
   } finally {
     mock?.kill();
   }
+  return results;
+};
+
+/** Multi-turn scenarios are only wired for Claude (`--resume`); the other drivers take the one prompt. */
+const singleTurnPrompt = () => {
+  const turns = scenarioTurns();
+  if (turns.length > 1) throw new Error(`${host}: probe:capture drives one turn per session for this host; --scenario turns beyond the first are only wired for claude`);
+  return turns[0];
 };
 
 const captureCodex = () => {
+  const prompt = singleTurnPrompt();
   const args = [
     'exec',
     '--skip-git-repo-check',
@@ -286,21 +360,21 @@ const captureCodex = () => {
     '--json',
     '-C', paths.workspace,
     ...(flags.model === undefined ? [] : ['--model', flags.model]),
-    scenarioPrompt(),
+    prompt,
   ];
   log(`codex ${args.slice(0, -1).join(' ')} "<prompt>"`);
-  return run('codex', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 });
+  return [{ ...run('codex', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 }), stdoutExtension: 'stdout.ndjson' }];
 };
 
 const captureCursor = () => {
   const args = [
-    '-p', scenarioPrompt(),
+    '-p', singleTurnPrompt(),
     '--output-format', 'json',
     '--force',
     ...(flags.model === undefined ? [] : ['--model', flags.model]),
   ];
   log(`cursor-agent ${args.slice(2).join(' ')} (IDE sessions are driven manually; see probe:install output)`);
-  return run('cursor-agent', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 });
+  return [{ ...run('cursor-agent', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 }), stdoutExtension: 'stdout.json' }];
 };
 
 const capture = () => {
@@ -311,16 +385,21 @@ const capture = () => {
   // live log ends before the host starts.
   const logFile = join(paths.logDir, 'captures.ndjson');
   const startOffset = existsSync(logFile) ? statSync(logFile).size : 0;
-  let result;
+  let turns;
   switch (host) {
-    case 'claude': result = captureClaude(); break;
-    case 'codex': result = captureCodex(); break;
-    case 'cursor': result = captureCursor(); break;
+    case 'claude': turns = captureClaude(); break;
+    case 'codex': turns = captureCodex(); break;
+    case 'cursor': turns = captureCursor(); break;
     default: throw new Error(`unreachable host ${host}`);
   }
-  writeFileSync(join(paths.captures, `session-${stamp}.stdout.txt`), result.stdout ?? '');
-  writeFileSync(join(paths.captures, `session-${stamp}.stderr.txt`), result.stderr ?? '');
-  log(`host exit ${result.status}; transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
+  for (const [index, turn] of turns.entries()) {
+    const name = turns.length === 1 ? `session-${stamp}` : `session-${stamp}.turn-${String(index + 1)}`;
+    writeFileSync(join(paths.captures, `${name}.${turn.stdoutExtension}`), turn.stdout ?? '');
+    writeFileSync(join(paths.captures, `${name}.stderr.txt`), turn.stderr ?? '');
+  }
+  // The session failed if any turn did.
+  const result = turns.find((turn) => turn.status !== 0) ?? turns[turns.length - 1];
+  log(`host exit ${String(result.status)} over ${String(turns.length)} turn(s); transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
   const appended = existsSync(logFile) ? readFileSync(logFile).subarray(startOffset).toString('utf8') : '';
   const records = appended.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const kinds = new Set(records.map((record) => record.kind));

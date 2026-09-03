@@ -77,6 +77,22 @@ pnpm --filter @agent-bundle-example/host-test probe:uninstall claude
   land in `/tmp/host-test/<host>/`, followed by a rendered `host-test dump`.
   Earlier runs' records are never re-copied, and the command exits non-zero
   when the host fails or when the run produced no hook record or no MCP record.
+- `probe:capture <host> --scenario <file.json>` replaces the default prompt with
+  an ordered list of turns (`{ "turns": ["...", "..."] }`; a turn may also be
+  `{ "prompt": "..." }`). For Claude every turn after the first runs
+  `claude -p --resume <session_id>` against the session the first turn's
+  `system/init` envelope reported, so one capture holds a multi-turn session
+  with `SessionStart source: resume`, a fresh `prompt_id` per turn, and one
+  `Stop`/`SessionEnd` per turn. Codex and Cursor drivers take the first turn
+  only and refuse longer scenarios. `scenarios/claude-orchestration.json` is
+  the checked-in orchestration scenario (two parallel `Agent` spawns, one
+  sequential spawn that nests another, the `host-test:host-test` skill, a
+  plugin-command probe, a manual `/compact`, a final stop).
+- Claude turns run with `--output-format stream-json --verbose`, so the model's
+  own tool-use stream is saved next to the hook payloads as
+  `session-<stamp>[.turn-N].stream.ndjson`; envelopes produced inside a
+  subagent carry `parent_tool_use_id` (the parent's `Agent` `tool_use_id`),
+  which is how the transcript and the hook log are cross-checked.
 - Host processes get an allowlisted environment (PATH, locale, display, proxy,
   TLS plumbing) plus the isolated `HOME`; nothing else from your shell is
   inherited, and even allowlisted values are dropped when they carry a
