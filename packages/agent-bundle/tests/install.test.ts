@@ -1,4 +1,4 @@
-import { access, cp, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -561,6 +561,14 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
 
+    // Flipping only the executable bit is a content change: the installed copy must receive it.
+    await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+    const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(executable).toMatchObject({ state: 'replaced' });
+    expect((await stat(join(destination, 'payload.txt'))).mode & 0o111).not.toBe(0);
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
+      .toMatchObject({ state: 'already-installed' });
+
     // An operator hard link to an owned file under an unrelated name is not ours: incoming path → collision.
     await link(join(destination, 'payload.txt'), join(destination, 'hard-linked.txt'));
     await writeFile(join(fixture.bundleRoot, 'hard-linked.txt'), 'from the artifact\n');
@@ -687,7 +695,10 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
 it('ignores receipts whose file list could escape the plugin root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-receipt-'));
   try {
-    for (const files of [['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile]]) {
+    for (const files of [
+      ['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile],
+      ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
+    ]) {
       await writeJson(join(root, installReceiptFile), {
         contentHash: 'abc',
         files,

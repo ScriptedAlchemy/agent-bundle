@@ -681,7 +681,7 @@ install receipt, `.agent-bundle-install.json`, beside the plugin manifest:
 
 ```json
 {
-  "contentHash": "<sha256 over path\\0bytes\\0 for every owned file>",
+  "contentHash": "<sha256 over path\\0mode\\0bytes\\0 for every owned file; mode is x when executable>",
   "files": [".cursor-plugin/plugin.json", "INSTALL.md", "install.mjs", "..."],
   "format": "agent-bundle-install-receipt/1",
   "host": "cursor",

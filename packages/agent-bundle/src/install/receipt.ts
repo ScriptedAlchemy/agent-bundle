@@ -88,8 +88,20 @@ const sortNames = (names: readonly string[]): readonly string[] =>
 
 const toPosix = (path: string): string => path.replaceAll('\\', '/');
 
-const hashEntry = (hash: ReturnType<typeof createHash>, relativePath: string, bytes: Uint8Array): void => {
+/**
+ * `path\0mode\0bytes\0` per file, where mode is `x` for an executable and `-`
+ * otherwise: a rebuild that only flips the executable bit on an MCP script is
+ * a content change the host must receive.
+ */
+const hashEntry = (
+  hash: ReturnType<typeof createHash>,
+  relativePath: string,
+  metadata: Stats,
+  bytes: Uint8Array,
+): void => {
   hash.update(toPosix(relativePath));
+  hash.update('\0');
+  hash.update((metadata.mode & 0o111) === 0 ? '-' : 'x');
   hash.update('\0');
   hash.update(bytes);
   hash.update('\0');
@@ -116,7 +128,7 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
       return;
     }
     files.push(toPosix(relativePath));
-    hashEntry(hash, relativePath, await readFile(path));
+    hashEntry(hash, relativePath, metadata, await readFile(path));
   };
   for (const name of sortNames(await readdir(root))) {
     if (name === installReceiptFile) {
@@ -214,7 +226,7 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
       throw error;
     }
     if (metadata.isSymbolicLink() || !metadata.isFile()) throw unsupportedEntry(relativePath);
-    hashEntry(hash, relativePath, await readFile(path));
+    hashEntry(hash, relativePath, metadata, await readFile(path));
   }
   return hash.digest('hex');
 };
@@ -222,7 +234,9 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
 /**
  * Receipt paths drive deletions, so they must be exactly what `treeInventory`
  * emits: POSIX-relative, no backslashes (a Windows `..\outside` must not slip
- * past POSIX normalization), no empty, `.`, or `..` segments, no drive letter.
+ * past POSIX normalization), no empty, `.`, or `..` segments, no drive letter,
+ * and no segment Windows would normalise onto another entry (reserved
+ * characters, alternate-stream colons, trailing dots or spaces).
  */
 export const isReceiptPath = (value: unknown): value is string =>
   typeof value === 'string' &&
@@ -230,8 +244,14 @@ export const isReceiptPath = (value: unknown): value is string =>
   value !== installReceiptFile &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
-  !/^[a-z]:/iu.test(value) &&
-  value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+  value.split('/').every((segment) =>
+    segment !== '' &&
+    segment !== '.' &&
+    segment !== '..' &&
+    !/[<>:"|?*]/u.test(segment) &&
+    [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
+    !segment.endsWith('.') &&
+    !segment.endsWith(' '));
 
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isReceiptPath);
