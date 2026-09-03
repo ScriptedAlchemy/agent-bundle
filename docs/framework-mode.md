@@ -107,7 +107,11 @@ the file is part of the project's TypeScript program (add
 `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
 stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
 `renderRoute(id, { context: { providers: { library } } })`; the harness never
-executes provider modules on a test's behalf.
+executes provider modules on a test's behalf. Because the augmentation makes
+declared keys required, the same program also requires `context.providers`
+(and the harness `options` argument) on every `renderRoute`, `invokeCli`, and
+in-memory MCP call, and `providers` on a direct `runAgentRequest`: a handler
+typed against `providers.library` can never observe an unchecked `undefined`.
 
 ### What reaches the MCP wire
 

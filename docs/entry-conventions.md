@@ -177,7 +177,11 @@ counter, so provider filenames must not derive that key.
 Route-unit and CLI-dispatch tests inject provider values through the same
 `context` seam as identity axes (`renderRoute(id, { context: { providers:
 { library: fixture } } })`); the harness never executes conventional provider
-modules, so a test chooses exactly the values a component observes.
+modules, so a test chooses exactly the values a component observes. Once the
+generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, the
+harness `options` and its `context.providers` become required (as does
+`providers` on a direct `runAgentRequest`), so omitting a fixture the route's
+types promise is a compile error rather than a runtime `undefined`.
 
 ### Handler request context
 

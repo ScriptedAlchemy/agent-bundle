@@ -13,7 +13,7 @@ import {
   packOutputFromJson,
   type PackOutput,
 } from './build/pack-inventory.ts';
-import type { CapabilityState } from './core/capabilities.ts';
+import type { CapabilityEvidence, CapabilityState } from './core/capabilities.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -616,14 +616,40 @@ const componentCapabilityFor = (
   capabilities: Readonly<Record<string, CapabilityState>>,
 ): InspectionComponentCapability | undefined => {
   if (component.capability === undefined) return undefined;
-  const state = capabilities[component.capability];
-  return Object.freeze({
-    name: component.capability,
-    ...(state ?? unavailableCapability(
-      `The ${target} adapter publishes no ${component.capability} capability row.`,
-    )),
-  });
+  const state = capabilities[component.capability] ?? unavailableCapability(
+    `The ${target} adapter publishes no ${component.capability} capability row.`,
+  );
+  return Object.freeze({ ...capabilityContract(state), name: component.capability });
 };
+
+/**
+ * Projects only the four-state contract fields of an adapter-owned capability
+ * row. `isCapabilityState` admits extension fields on JavaScript and third-party
+ * adapters, and copying them would let one named `name` shadow the canonical
+ * capability name or a cyclic one break `inspect --json`.
+ */
+const capabilityContract = (state: CapabilityState): CapabilityState => {
+  switch (state.state) {
+    case 'supported':
+      return { evidence: capabilityEvidenceContract(state.evidence), state: state.state };
+    case 'degraded':
+      return {
+        ...(state.evidence === undefined ? {} : { evidence: capabilityEvidenceContract(state.evidence) }),
+        reason: state.reason,
+        state: state.state,
+      };
+    case 'unavailable':
+    case 'prohibited':
+      return { reason: state.reason, state: state.state };
+    default: {
+      const exhaustive: never = state;
+      throw new Error(`Unhandled capability state ${JSON.stringify(exhaustive)}`);
+    }
+  }
+};
+
+const capabilityEvidenceContract = (evidence: CapabilityEvidence): CapabilityEvidence =>
+  Object.freeze({ observedVersion: evidence.observedVersion, target: evidence.target });
 
 interface AccountedComponents {
   readonly selected: readonly InspectionSelectedComponent[];

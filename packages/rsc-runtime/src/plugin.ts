@@ -29,6 +29,8 @@ export type {
   AgentRequestContext,
   AgentRequestErrorCode,
   AgentRequestInit,
+  AgentRequestInitBase,
+  AgentRequestProvidersInit,
   AgentServiceRegistry,
   AgentScriptInvocationProps,
   AgentSessionIdentity,
