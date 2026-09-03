@@ -1952,9 +1952,12 @@ const validateConventionalScripts = (
         // `main` is judged by the bin envelope's own scan (which ignores
         // type-only exports); the component by the route compiler's scan (an
         // async default function, not mere default-export presence, since
-        // `export default {}` would build and fail at run time).
+        // `export default {}` would build and fail at run time). A default
+        // re-exported from another module (`export { default } from`) cannot
+        // be judged statically and is accepted; the worker still verifies it.
         const hasMain = scriptEntryExports(route.source)?.hasMainExport === true;
-        const hasComponent = renderedScriptExports(route.source, relativePath)?.asyncDefault === true;
+        const routeExports = renderedScriptExports(route.source, relativePath);
+        const hasComponent = routeExports?.asyncDefault === true || routeExports?.named.has('default') === true;
         if (hasMain && hasComponent) break;
         const missing = !hasMain && !hasComponent
           ? 'neither an async default Server Component nor a named main'

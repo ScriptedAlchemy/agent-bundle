@@ -301,12 +301,21 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       "    notes: './src/scripts/render-notes.tsx',",
       "    object: './src/scripts/render-object.tsx',",
       "    poster: './src/scripts/render-poster.tsx',",
+      "    reexport: './src/scripts/render-reexport.tsx',",
       "    tool: './src/scripts/render-tool.tsx',",
       "    typed: './src/scripts/render-typed.tsx',",
       '  },',
       "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
       '};',
+      '',
+    ].join('\n'),
+    // A default re-exported from a private sibling cannot be judged
+    // statically; it is accepted (the worker still verifies it at run time).
+    'src/scripts/_component.tsx': 'export default async () => undefined;\n',
+    'src/scripts/render-reexport.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      "export { default } from './_component.tsx';",
       '',
     ].join('\n'),
     // main plus a type-only default alias of an async function binding: no
@@ -363,6 +372,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       notes: './src/scripts/render-notes.tsx',
       object: './src/scripts/render-object.tsx',
       poster: './src/scripts/render-poster.tsx',
+      reexport: './src/scripts/render-reexport.tsx',
       tool: './src/scripts/render-tool.tsx',
       typed: './src/scripts/render-typed.tsx',
     },
@@ -371,6 +381,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
     'script:render-notes',
     'script:render-object',
     'script:render-poster',
+    'script:render-reexport',
     'script:render-tool',
     'script:render-typed',
   ]);

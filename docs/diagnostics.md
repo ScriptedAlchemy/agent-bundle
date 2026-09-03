@@ -293,7 +293,10 @@ An explicit `bin` entry references a conventional rendered script
 (`src/scripts/<name>.tsx` or `.jsx`) that does not export **both** an async
 default Server Component and a named `main`. The component check is the
 route compiler's own static scan — the default export must be an async
-function, so `export default {}` does not count. A plain `src/scripts/<name>.ts` module
+function, so `export default {}` does not count; a default re-exported from
+another module (`export { default } from './component.tsx'`) cannot be judged
+statically and is accepted (the rendered worker still verifies it at run
+time). A plain `src/scripts/<name>.ts` module
 ships happily on both surfaces — the npm bin envelope calls its `main(argv)`
 and the artifact script is the same bundle — but a rendered script's default
 export is an async Server Component the Agent renderer drives with
