@@ -51,8 +51,11 @@ export { AgentTestError } from './errors.ts';
 export type { AgentTestErrorCode } from './errors.ts';
 export { renderRoute, renderRouteEvents } from './render.ts';
 export type {
+  HarnessOptionsArguments,
   RenderRouteContext,
+  RenderRouteContextInit,
   RenderRouteOptions,
+  RenderRouteOptionsBase,
   RenderRouteTarget,
   RenderedRoute,
   RenderedRouteEvents,
@@ -119,6 +122,7 @@ export type {
 export type {
   InMemoryMcpSession,
   InMemoryMcpSessionOptions,
+  InMemoryMcpSessionOptionsBase,
   McpContentBlock,
   McpInvocationOptions,
   McpProjectionProvenance,
@@ -128,7 +132,7 @@ export type {
   McpToolInvocation,
 } from './mcp.ts';
 export { cliJson, cliNdjson, invokeCli } from './cli.ts';
-export type { CliDispatchProvenance, CliInvocation, CliRenderedEvent, InvokeCliOptions } from './cli.ts';
+export type { CliDispatchProvenance, CliInvocation, CliRenderedEvent, InvokeCliOptions, InvokeCliOptionsBase } from './cli.ts';
 export { openPackedMcpServer, removeProjectSource } from './packed.ts';
 export type {
   DeletedSourceReceipt,
