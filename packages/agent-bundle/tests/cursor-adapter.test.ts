@@ -260,6 +260,33 @@ it('rejects cursor manifest metadata the pinned schema does not admit and emits 
   expect(cursorAdapter.plan(withCursorConfig({})).diagnostics).toEqual([]);
 });
 
+it('rejects cursor URLs that new URL() would normalize but the pinned uri format rejects, without a generic schema error', () => {
+  const normalizedByUrlParser = [
+    ' https://example.test/cursor-review ',
+    'https://example.test/cursor review',
+    'https://example.test/päth',
+    'https://example.test/<review>',
+  ];
+  for (const url of normalizedByUrlParser) {
+    expect(() => new URL(url)).not.toThrow();
+    const model = withCursorConfig({ homepage: url, repository: 'https://github.com/example/cursor-review' });
+    const plan = cursorAdapter.plan(model);
+    expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['cursor.manifest.homepage.invalid']);
+    const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+    expect(manifest).not.toHaveProperty('homepage');
+    expect(manifest).not.toHaveProperty('repository');
+  }
+  const exact = withCursorConfig({
+    homepage: 'https://example.test',
+    repository: 'https://EXAMPLE.test/a%2Fb?ref=main#readme',
+  });
+  const plan = cursorAdapter.plan(exact);
+  expect(plan.diagnostics).toEqual([]);
+  const manifest = JSON.parse(writeContents(exact)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest['homepage']).toBe('https://example.test');
+  expect(manifest['repository']).toBe('https://EXAMPLE.test/a%2Fb?ref=main#readme');
+});
+
 it('copies plugin.logo into the artifact and references it from plugin.json', () => {
   const model: NormalizedPlugin = {
     ...plugin(),

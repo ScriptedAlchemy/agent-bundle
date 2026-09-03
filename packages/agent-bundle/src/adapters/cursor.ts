@@ -110,6 +110,12 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
+/**
+ * The exact `format: "uri"` check the pinned plugin schema applies to
+ * `homepage`/`repository`, so metadata is validated as the string that will
+ * be emitted rather than as the normalized form `new URL()` would accept.
+ */
+const validateSchemaUri = validator.compile({ type: 'string', format: 'uri' });
 
 /** The pinned Cursor document validators, shared with the unified bundle adapter. */
 export const cursorPluginValidator = validatePlugin;
@@ -294,7 +300,7 @@ const isNonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
 const isAbsoluteUrl = (value: unknown): value is string => {
-  if (!isNonemptyString(value)) return false;
+  if (!isNonemptyString(value) || !validateSchemaUri(value)) return false;
   try {
     const url = new URL(value);
     return url.protocol === 'http:' || url.protocol === 'https:';
@@ -395,7 +401,7 @@ export const planCursorManifestMetadata = (
     const url = value[field];
     if (url === undefined) continue;
     if (isAbsoluteUrl(url)) document[field] = url;
-    else diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.${field}.invalid`, `Cursor ${field} must be an absolute HTTP or HTTPS URL.`));
+    else diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.${field}.invalid`, `Cursor ${field} must be an absolute HTTP or HTTPS URL written exactly as the pinned schema's uri format admits (no surrounding whitespace or unescaped characters).`));
   }
   for (const field of ['category', 'license', 'publisher'] as const) {
     const text = value[field];
