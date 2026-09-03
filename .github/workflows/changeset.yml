@@ -36,7 +36,11 @@ jobs:
       - name: Require a changeset for publishable package changes
         env:
           SKIP_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changeset') }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # Only the machine-owned release branch of this repository is exempt;
+          # a fork or contributor branch that happens to share the name is not.
+          IS_RELEASE_BRANCH: >-
+            ${{ github.event.pull_request.head.ref == 'changeset-release/main' &&
+            github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
@@ -44,12 +48,10 @@ jobs:
             echo "::notice::skip-changeset label present; not requiring a changeset."
             exit 0
           fi
-          case "$HEAD_REF" in
-            changeset-release/*)
-              echo "::notice::Version Packages branch; changesets are consumed here, not added."
-              exit 0
-              ;;
-          esac
+          if [ "$IS_RELEASE_BRANCH" = "true" ]; then
+            echo "::notice::Version Packages branch; changesets are consumed here, not added."
+            exit 0
+          fi
 
           # Exit 1 when a publishable package changed (per changedFilePatterns
           # in .changeset/config.json; tests/** is exempt) and this PR adds no

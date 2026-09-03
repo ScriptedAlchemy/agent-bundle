@@ -78,7 +78,8 @@ too). Commit the file with the change it describes.
 --since=origin/main` on every pull request. It fails when a publishable
 package changed (per `changedFilePatterns`) and the PR adds no
 `.changeset/*.md`. It is skipped for the `skip-changeset` label and for the
-machine-owned `changeset-release/*` branch. Docs-only PRs pass automatically
+machine-owned `changeset-release/main` branch of this repository (not for a
+fork or contributor branch of the same name). Docs-only PRs pass automatically
 because they change no publishable package.
 
 ## Versioning decisions
@@ -108,7 +109,12 @@ because they change no publishable package.
    `main`. While changesets are pending it pushes `changeset-release/main`
    and opens or refreshes the **Version Packages** pull request, which
    deletes the consumed changesets, bumps versions, and writes `CHANGELOG.md`
-   entries. Review it, never edit it.
+   entries. Review it, never edit it. GitHub does not start workflows for
+   events created with the built-in `GITHUB_TOKEN`, so for that PR to get
+   PR CI the repository needs a `CHANGESETS_GITHUB_TOKEN` secret (fine-grained
+   PAT or GitHub App installation token with `contents: write` and
+   `pull-requests: write` on this repository); the workflow falls back to
+   `GITHUB_TOKEN`, in which case close and reopen the PR to trigger CI.
 3. Merging Version Packages pushes a `Version Packages` commit to `main`
    with no pending changesets. With publishing disabled (the default) the
    workflow then runs the release gates (`pnpm check:release`) and stops;
