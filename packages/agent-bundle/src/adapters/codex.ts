@@ -54,6 +54,7 @@ import {
   type TargetArtifactDocumentValidator,
   type TargetArtifactPlan,
 } from './types.ts';
+import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
 import { withInstallSurface } from '../install/surface.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
@@ -156,7 +157,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.5.0',
+  adapterRevision: '1.6.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -495,7 +496,8 @@ const planCodexInterface = (
     } else {
       let valid = true;
       for (const [index, item] of items.entries()) {
-        if (isNonemptyString(item) && item.length <= 128) continue;
+        // Code points, not UTF-16 units, to match JSON Schema maxLength.
+        if (isNonemptyString(item) && [...item].length <= 128) continue;
         valid = false;
         diagnostics.push(errorDiagnostic(
           'codex.interface.default-prompt.item.invalid',
@@ -823,16 +825,22 @@ export const planCodexArtifacts = (
   }
 
   const description = model.metadata.description ?? model.metadata.name;
+  // The generated fallback prompt must stay within the pinned 128-code-point
+  // defaultPrompt limit even for maximum-length plugin names.
+  const generatedPrompt = [...`Help me use ${model.metadata.name}.`].slice(0, 128).join('');
   const generatedInterface = {
     capabilities: [
       ...(mcp === undefined ? [] : ['mcp']),
       ...(hookDocument === undefined ? [] : ['hooks']),
       ...(model.skills.some((skill) => isSelected(skill.targets)) ? ['skills'] : []),
     ],
-    defaultPrompt: [`Help me use ${model.metadata.name}.`],
+    defaultPrompt: [generatedPrompt],
     developerName: model.metadata.name,
     category: 'Productivity',
     displayName: model.metadata.name,
+    ...(model.metadata.logo === undefined
+      ? {}
+      : { logo: pluginLogoManifestRef(model.metadata.logo.path) }),
     longDescription: description,
     shortDescription: description,
   } satisfies Readonly<Record<string, unknown>>;
@@ -866,7 +874,7 @@ export const planCodexArtifacts = (
   const marketplaceValid = validateMarketplace(marketplace);
   diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
-  return withInstallSurface(standardPluginArtifactPlan({
+  const basePlan = standardPluginArtifactPlan({
     additionalPluginSourceInputs: sourceInputs(
       ...manifestMetadata.sourceInputs,
       ...interfacePlan.sourceInputs,
@@ -896,7 +904,13 @@ export const planCodexArtifacts = (
     ...(options.sharedCopyEntries === undefined ? {} : { sharedCopyEntries: options.sharedCopyEntries }),
     pluginRelativePath: codexArtifactPaths.plugin,
     targetName,
-  }), model, targetName === 'plugin' ? 'plugin' : 'codex');
+  });
+  // interface.logo references an artifact path, so the referenced image must
+  // ship; shared-copy suppression leaves emission to the composite's owner.
+  const plan = options.sharedCopyEntries === false
+    ? basePlan
+    : Object.freeze({ ...basePlan, entries: withPluginLogoEntry(basePlan.entries, model) });
+  return withInstallSurface(plan, model, targetName === 'plugin' ? 'plugin' : 'codex');
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({
