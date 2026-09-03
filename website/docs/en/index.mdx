@@ -169,8 +169,9 @@ artifact/portable/
 └── INSTALL.md
 ```
 
-The Agent Plugins open standard has no hook surface, so the hook is reported as unavailable on
-this target instead of being silently dropped.
+The Agent Plugins open standard has no hook surface. The hook above declares no `targets`, so it
+inherits only the selected targets that support hooks and `portable` is skipped here without a
+diagnostic. Naming it explicitly — `targets: ['portable']` — is `AB4204` at build time instead.
 
 </Tab>
 </Tabs>

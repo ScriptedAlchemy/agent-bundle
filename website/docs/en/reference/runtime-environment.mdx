@@ -20,7 +20,7 @@ compiler writes the right spelling per target rather than assuming one:
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
 | Cursor | `${CURSOR_PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
-| Codex | `${PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
+| Codex | `${PLUGIN_ROOT}` in hook commands only; MCP `command`, `args`, and `env` reject every path token, and generated MCP entries use `./` paths resolved against a plugin-root `cwd` instead | — (rejected: no documented host equivalent) |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 Substitution is **positional, not global**. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` and

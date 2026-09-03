@@ -162,7 +162,7 @@ const messages = {
     eventsDescription:
       'Canonical event routes per host, config-declared hook events, canonical tool selectors mapped to native matchers, and the host-native events deliberately deferred.',
     eventsIntro:
-      'Event routes under `src/events/**` and config-declared `hooks` both compile against the same per-host tables. A canonical event lowers to the host-native event named here; a host without that event receives no hook document for it, and the reason is recorded rather than inferred.',
+      'Event routes under `src/events/**` and config-declared `hooks` both compile against the same per-host tables. A canonical event lowers to the host-native event named here. A host without that event has nothing to lower to, so a route or hook that still selects that host fails the build (`<target>.hook.event.*`, or `AB4204` for an explicit config-hook target): exclude the host through the route\'s `config.targets` or the hook\'s `targets`. A config hook with no explicit `targets` inherits only the selected hosts that support hooks, so unsupported hosts are skipped there without a diagnostic. Every unavailable cell records its reason rather than inferring one.',
     eventRoutes: 'Canonical event routes',
     eventRoutesIntro:
       'Rows are the canonical event families a `src/events/<family>/*.tsx` route may declare; columns are the pinned hosts. A cell names the native event the route lowers to.',
@@ -235,7 +235,7 @@ const messages = {
     eventsDescription:
       '各宿主的规范事件路由、配置声明的钩子事件、规范工具选择器到原生匹配器的映射，以及被有意推迟的宿主原生事件。',
     eventsIntro:
-      '`src/events/**` 下的事件路由与配置声明的 `hooks` 都基于同一组按宿主固定的表编译。规范事件会降级为此处列出的宿主原生事件；不具备该事件的宿主不会收到对应的钩子文档，原因会被记录而非推断。',
+      '`src/events/**` 下的事件路由与配置声明的 `hooks` 都基于同一组按宿主固定的表编译。规范事件会降级为此处列出的宿主原生事件。不具备该事件的宿主没有可降级的目标，因此仍然选中该宿主的路由或 hook 会让构建失败（`<target>.hook.event.*`，显式配置 hook 目标则为 `AB4204`）：请通过路由的 `config.targets` 或 hook 的 `targets` 排除该宿主。未显式声明 `targets` 的配置 hook 只继承所选宿主中支持 hook 的那些，因此不受支持的宿主会在那里被跳过且不产生诊断。每个不可用单元格都记录其原因，而非推断。',
     eventRoutes: '规范事件路由',
     eventRoutesIntro:
       '行是 `src/events/<family>/*.tsx` 路由可以声明的规范事件族；列是固定宿主。单元格给出该路由降级到的原生事件。',

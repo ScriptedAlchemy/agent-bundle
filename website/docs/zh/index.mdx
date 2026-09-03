@@ -167,7 +167,8 @@ artifact/portable/
 └── INSTALL.md
 ```
 
-Agent Plugins 开放标准没有钩子这一表面，所以钩子会被报告为在该 target 上不可用，而不是被悄悄丢弃。
+Agent Plugins 开放标准没有钩子这一表面。上面的钩子没有声明 `targets`，因此只继承所选 target 中支持钩子的那些，`portable`
+在这里会被跳过且不产生诊断。若显式写出 `targets: ['portable']`，构建时则会得到 `AB4204`。
 
 </Tab>
 </Tabs>
