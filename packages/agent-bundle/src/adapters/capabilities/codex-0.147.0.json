@@ -25,6 +25,8 @@
     "eventRoutes": {
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
+      "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
+      "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
@@ -154,16 +156,22 @@
       "liveRevision": "codex-cli 0.147.0 app-server protocol",
       "matchingRelativePaths": [],
       "missingPinnedRelativePaths": [
+        "session-end.command.input.schema.json",
         "subagent-start.command.input.schema.json",
         "subagent-start.command.output.schema.json",
         "subagent-stop.command.input.schema.json",
-        "subagent-stop.command.output.schema.json"
+        "subagent-stop.command.output.schema.json",
+        "user-prompt-submit.command.input.schema.json",
+        "user-prompt-submit.command.output.schema.json"
       ],
       "pinnedRepositorySha256": {
+        "session-end.command.input.schema.json": "99bf6e75091525b96926dd85a0adf6589dea93fe0d181394027fabda8139402e",
         "subagent-start.command.input.schema.json": "e1cacc5cd92217e96e327cf182038fa93099d194c3107439b4dad4b806d414cc",
         "subagent-start.command.output.schema.json": "531f7a457ad8430de82388319ff2bf030fd3a1dc0e9a0d4078447bc30948448b",
         "subagent-stop.command.input.schema.json": "27842578768e74fb8bcd86b30156b207011829a81dc01b00cfd55340df8b079f",
-        "subagent-stop.command.output.schema.json": "a3987dab22b8684ab108bbb76ec5306471d9e01b1b7cac007b1ed90bc9e055cf"
+        "subagent-stop.command.output.schema.json": "a3987dab22b8684ab108bbb76ec5306471d9e01b1b7cac007b1ed90bc9e055cf",
+        "user-prompt-submit.command.input.schema.json": "31d3d5e094ae9baa9478bc8e3d09f689de5a74228a404d2dffe60fc8fa89e3a0",
+        "user-prompt-submit.command.output.schema.json": "12a741340d3a5acaf139721ad086d79d6dc0d961f752c6d82bd7a315f374e641"
       },
       "pinnedRevision": "rust-v0.147.0 hook command schemas",
       "reason": "The command emits app-server protocol schemas, not the vendored hook command schemas. There are no matching relative paths to hash-compare, so this output is unpinned for plugin conformance.",
@@ -176,7 +184,7 @@
     "workspaceRoot": false
   },
   "provenance": {
-    "observedAt": "2026-09-01",
+    "observedAt": "2026-09-02",
     "source": "https://learn.chatgpt.com/docs/hooks",
     "evidence": [
       "The Codex 0.147.0 hooks reference lists SubagentStart and SubagentStop as lifecycle events whose matcher filters agent_type; subagent hook session_id is the parent session id.",
@@ -187,7 +195,11 @@
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.input.schema.json (sha256 ce7dc9b5ae8826d1e0c59ffcea793e558aebceb7917a2eb9bb2edd8a7ac37aa9).",
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.output.schema.json (sha256 34e8ec95393d2aa930d7932a34c3fb29a5e5f90c264fdbcc581393c5838b4660).",
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.input.schema.json (sha256 94dc8df29f4691195ac2338ae6de876230e5100a10b94ef48df4e732424b5df5).",
-      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.output.schema.json (sha256 8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a)."
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.output.schema.json (sha256 8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.input.schema.json pins UserPromptSubmit input (sha256 e6b923bc519896197c44c4fc267a9d115cef24ac418dde9c27db699f4e3b65fd).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.output.schema.json pins decision:block plus reason and hookSpecificOutput.additionalContext, with no prompt-rewrite field (sha256 5e290303db710f3ccc12f4a2744e8586e7749b3ca2b6bf9f57781ed75bf17b2b).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/session-end.command.input.schema.json pins observe-only SessionEnd input with reason const other (sha256 23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c); the same generated directory has no session-end.command.output.schema.json (GitHub contents API returned 404), so no output is projected.",
+      "2026-09-02: live codex-cli 0.147.0 non-interactive capture recorded UserPromptSubmit and SessionEnd; the scrubbed envelopes are tests/fixtures/events/codex-user-prompt-submit.json and tests/fixtures/events/codex-session-end.json."
     ]
   }
 }

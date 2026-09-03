@@ -11,6 +11,7 @@ import {
 } from '../src/adapters/capability-state.ts';
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
+import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -824,6 +825,8 @@ it('reports the evidence-backed G10 event family matrix without inferred support
   const allNativeHosts = [
     'event:agent/start',
     'event:agent/stop',
+    'event:prompt/submit',
+    'event:session/end',
     'event:session/start',
     'event:stop',
     'event:tool/after',
@@ -840,6 +843,13 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     evidence: { observedVersion: '2026-08-28', target: 'cursor' },
     state: 'supported',
   });
+  expect(cursorCapabilityTable.hooks.eventRoutes['session/end'].availability).toEqual({
+    cloud: {
+      reason: expect.stringContaining('https://cursor.com/docs/hooks'),
+      state: 'unavailable',
+    },
+    desktop: { state: 'supported' },
+  });
   for (const target of ['claude', 'codex'] as const) {
     for (const capability of allNativeHosts) {
       expect(registry.get(target).capabilities[capability]).toMatchObject({
@@ -852,7 +862,12 @@ it('reports the evidence-backed G10 event family matrix without inferred support
       state: 'unavailable',
     });
   }
-  for (const capability of ['event:agent/start', 'event:agent/stop']) {
+  for (const capability of [
+    'event:agent/start',
+    'event:agent/stop',
+    'event:prompt/submit',
+    'event:session/end',
+  ]) {
     expect(registry.get('plugin').capabilities[capability]).toMatchObject({
       evidence: { target: 'claude+codex+cursor' },
       state: 'supported',

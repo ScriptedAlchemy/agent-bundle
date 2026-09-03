@@ -81,3 +81,82 @@ it('validates Cursor workspaceOpen without inventing an agent session', () => {
     target: 'cursor',
   })).toThrow(/native session_id or conversation_id must be a string/u);
 });
+
+it('validates prompt/submit and session/end host envelopes fail closed', () => {
+  const promptEnvelopes = [
+    {
+      native: {
+        cwd: '/workspace',
+        hook_event_name: 'UserPromptSubmit',
+        permission_mode: 'default',
+        prompt: 'Review this change.',
+        session_id: 'session-1',
+        transcript_path: '/workspace/transcript.jsonl',
+      },
+      target: 'claude',
+    },
+    {
+      native: {
+        cwd: '/workspace',
+        hook_event_name: 'UserPromptSubmit',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        prompt: 'Review this change.',
+        session_id: 'session-1',
+        transcript_path: null,
+        turn_id: 'turn-1',
+      },
+      target: 'codex',
+    },
+    {
+      native: {
+        attachments: [],
+        conversation_id: 'session-1',
+        hook_event_name: 'beforeSubmitPrompt',
+        prompt: 'Review this change.',
+      },
+      target: 'cursor',
+    },
+  ] as const;
+  for (const { native, target } of promptEnvelopes) {
+    expect(validateNativeEventEnvelope(native, {
+      canonicalEvent: 'prompt/submit',
+      nativeEvent: target === 'cursor' ? 'beforeSubmitPrompt' : 'UserPromptSubmit',
+      target,
+    })).toBe(native);
+  }
+  expect(() => validateNativeEventEnvelope({
+    ...promptEnvelopes[1].native,
+    permission_mode: 'invalid',
+  }, {
+    canonicalEvent: 'prompt/submit',
+    nativeEvent: 'UserPromptSubmit',
+    target: 'codex',
+  })).toThrow(/native permission_mode is invalid/u);
+  expect(() => validateNativeEventEnvelope({
+    ...promptEnvelopes[2].native,
+    attachments: [{ file_path: '', type: 'file' }],
+  }, {
+    canonicalEvent: 'prompt/submit',
+    nativeEvent: 'beforeSubmitPrompt',
+    target: 'cursor',
+  })).toThrow(/native attachments.*file_path/u);
+
+  const sessionEnd = {
+    cwd: '/workspace',
+    hook_event_name: 'SessionEnd',
+    reason: 'other',
+    session_id: 'session-1',
+    transcript_path: null,
+  };
+  expect(validateNativeEventEnvelope(sessionEnd, {
+    canonicalEvent: 'session/end',
+    nativeEvent: 'SessionEnd',
+    target: 'codex',
+  })).toBe(sessionEnd);
+  expect(() => validateNativeEventEnvelope({ ...sessionEnd, reason: 'clear' }, {
+    canonicalEvent: 'session/end',
+    nativeEvent: 'SessionEnd',
+    target: 'codex',
+  })).toThrow(/native reason must equal other/u);
+});

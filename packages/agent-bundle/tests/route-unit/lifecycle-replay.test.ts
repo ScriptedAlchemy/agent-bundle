@@ -27,6 +27,22 @@ const createFixtureProject = async () => {
   await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
   await Promise.all([
     writeProjectFile(root, 'package.json', JSON.stringify({ name: 'lifecycle-replay-fixture', type: 'module' })),
+    writeProjectFile(root, 'src/events/prompt/submit.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function PromptSubmit() {',
+      "  return createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Prompt rejected.' } });",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/session/end.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function SessionEnd() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
@@ -42,7 +58,11 @@ const createFixtureProject = async () => {
     ].join('\n')),
   ]);
   const graph = await compileRouteGraph(root, { targets: ['claude', 'codex'] } as never);
-  expect(graph.events.map((route) => route.id)).toEqual(['event:tool/after']);
+  expect(graph.events.map((route) => route.id)).toEqual([
+    'event:prompt/submit',
+    'event:session/end',
+    'event:tool/after',
+  ]);
   return { graph, root };
 };
 
@@ -123,6 +143,49 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
         hookEventName: 'PostToolUse',
       },
     });
+  }
+});
+
+it('replays captured prompt/submit and session/end fixtures through native projection', { timeout: 30_000 }, async () => {
+  const { graph } = await createFixtureProject();
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude', 'codex'] }),
+  });
+  for (const target of ['claude', 'codex'] as const) {
+    const promptNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/${target}-user-prompt-submit.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const prompt = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: 'event:prompt/submit',
+        target,
+      },
+      native: promptNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in prompt).toBe(false);
+    expect((prompt as LifecycleReplay).nativeResponse).toEqual({
+      decision: 'block',
+      reason: 'Prompt rejected.',
+    });
+
+    const sessionNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/${target}-session-end.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const sessionEnd = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: 'event:session/end',
+        target,
+      },
+      native: sessionNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in sessionEnd).toBe(false);
+    expect((sessionEnd as LifecycleReplay).nativeResponse).toBeUndefined();
   }
 });
 

@@ -12,6 +12,14 @@
   "eventRoutes": {
     "agent/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "agent/stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "prompt/submit": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native UserPromptSubmit/beforeSubmitPrompt equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "session/end": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native SessionEnd/sessionEnd equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "session/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "tool/after": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },

@@ -230,6 +230,8 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | Event family | Cursor | Claude Code 2.1.250 | Codex 0.147.0 |
 | --- | --- | --- | --- |
 | `session/start` | Supported | `SessionStart` | `SessionStart` |
+| `session/end` | `sessionEnd` (observe-only; desktop only) | `SessionEnd` (observe-only) | `SessionEnd` (observe-only) |
+| `prompt/submit` | `beforeSubmitPrompt` (deny) | `UserPromptSubmit` (deny + context) | `UserPromptSubmit` (deny + context) |
 | `tool/before` | Supported | `PreToolUse` | `PreToolUse` |
 | `tool/after` | Supported | `PostToolUse` | `PostToolUse` |
 | `stop` | Supported | `Stop` | `Stop` |
@@ -248,6 +250,13 @@ with the native `decision: "block"` plus `reason` contract. Codex
 `SubagentStop` exit-0 output is always JSON; its generated 0.147.0 output
 schema has no `additionalContext` field, so the route projection rejects that
 unsupported effect rather than silently fabricating one.
+`session/end` and `prompt/submit` are event-route-only families and do not add
+`config.hooks.sessionEnd` or `config.hooks.promptSubmit` handler keys.
+`session/end` rejects every result effect because each native event is
+observe-only. `prompt/submit` maps canonical deny to each host's blocking
+contract; Claude Code and Codex also accept `Agent.Context`, while Cursor has
+no context or prompt-rewrite channel. Cursor cloud agents do not expose
+`sessionEnd`.
 
 ## Extension-author guide
 

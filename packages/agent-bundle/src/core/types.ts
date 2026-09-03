@@ -40,6 +40,14 @@ export const canonicalHookEvents = Object.freeze([
 
 export type CanonicalHookEvent = (typeof canonicalHookEvents)[number];
 
+export const eventRouteOnlyHookEvents = Object.freeze([
+  'sessionEnd',
+  'promptSubmit',
+] as const);
+
+export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];
+export type NormalizedHookEvent = CanonicalHookEvent | EventRouteOnlyHookEvent;
+
 export const canonicalHookTools = Object.freeze(['shell', 'file.read', 'file.write', 'mcp', 'agent'] as const);
 
 export type CanonicalHookTool = (typeof canonicalHookTools)[number];
@@ -469,7 +477,7 @@ export interface NormalizedPackageBuild {
 export interface NormalizedHook {
   /** Extra command arguments appended after the handler path; prebuilt hooks only. */
   readonly args?: readonly string[];
-  readonly event: CanonicalHookEvent;
+  readonly event: NormalizedHookEvent;
   /** Filesystem event-route execution metadata; absent for config-declared hook escape hatches. */
   readonly eventRoute?: Readonly<{
     readonly event: CanonicalAgentEvent;

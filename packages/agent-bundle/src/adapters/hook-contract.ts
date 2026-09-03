@@ -2,18 +2,20 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
-import type {
-  CanonicalHookEvent,
-  CanonicalHookTool,
-  NormalizedHook,
-  NormalizedNativeHook,
-  NormalizedPlugin,
+import {
+  canonicalHookEvents,
+  type CanonicalHookEvent,
+  type CanonicalHookTool,
+  type NormalizedHook,
+  type NormalizedHookEvent,
+  type NormalizedNativeHook,
+  type NormalizedPlugin,
 } from '../core/types.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
 export interface TargetHookWrapper {
-  readonly event: CanonicalHookEvent;
+  readonly event: NormalizedHookEvent;
   readonly hook: NormalizedHook;
   /** False when this wrapper is a host-document variant of an indexed hook rather than its canonical entry. */
   readonly indexed?: false;
@@ -109,6 +111,27 @@ export const createNativeEventStarter = (
   switch (canonicalEvent) {
     case 'session/start':
       return deepFreeze(target === 'cursor' ? base : { ...base, source: 'startup' });
+    case 'session/end':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            duration_ms: 0,
+            final_status: 'completed',
+            is_background_agent: false,
+            reason: 'completed',
+          }
+        : { ...base, reason: 'other' });
+    case 'prompt/submit':
+      return deepFreeze(target === 'cursor'
+        ? { ...base, attachments: [], prompt: 'Lifecycle replay prompt.' }
+        : {
+            ...base,
+            permission_mode: 'default',
+            prompt: 'Lifecycle replay prompt.',
+            ...(target === 'codex'
+              ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+              : {}),
+          });
     case 'tool/before':
       return deepFreeze({
         ...base,
@@ -289,18 +312,20 @@ const nativeHookInputFields = deepFreeze([
 const defined = (value: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 
-const canonicalEventOrder: readonly CanonicalHookEvent[] = [
+const canonicalEventOrder: readonly NormalizedHookEvent[] = [
   'sessionStart',
+  'promptSubmit',
   'beforeTool',
   'afterTool',
   'stop',
   'agentStart',
   'agentStop',
   'workspaceOpen',
+  'sessionEnd',
 ];
 
 export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
-  canonicalEventOrder.find((candidate) => candidate === event);
+  canonicalHookEvents.find((candidate) => candidate === event);
 
 export const encodeNativeHookPlaygroundInput = (
   input: Readonly<Record<string, unknown>>,
@@ -826,8 +851,9 @@ export const planHooks = (
   const groups: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
   const hookEntries: TargetHookEntry[] = [];
   for (const hook of selected) {
+    const configEvent = canonicalHookEventFor(hook.event);
     const nativeEvent = hook.eventRoute === undefined
-      ? contract.eventNames[hook.event]
+      ? configEvent === undefined ? undefined : contract.eventNames[configEvent]
       : contract.eventRouteNames?.[hook.eventRoute.event];
     if (typeof nativeEvent !== 'string' || nativeEvent.trim().length === 0) {
       diagnostics.push(error(
