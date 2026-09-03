@@ -624,6 +624,59 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(first).toContain('type ContractResult<Contract> =');
   expect(first).toContain('export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;');
   expect(first).toContain('export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;');
+  // A provider-free graph declares no provider surface and never augments the runtime.
+  expect(first).not.toContain('AgentBundleProviders');
+  expect(first).not.toContain("declare module '@agent-bundle/runtime'");
+});
+
+it('generates provider declarations and the runtime augmentation in execution order', () => {
+  const graph: CompiledRouteGraph = {
+    diagnostics: [],
+    digest: 'provider-typegen-digest',
+    events: [],
+    providers: [
+      {
+        id: 'provider:zeta',
+        name: 'zeta',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/zeta.ts' },
+        source: '/workspace/project/src/providers/zeta.ts',
+      },
+      {
+        id: 'provider:project-auth',
+        name: 'project-auth',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/project-auth.tsx' },
+        source: '/workspace/project/src/providers/project-auth.tsx',
+      },
+    ],
+    scripts: [],
+    servers: [{
+      id: 'mcp:curator',
+      mode: 'generated',
+      name: 'curator',
+      routes: [{
+        config: emptyRouteConfig,
+        id: 'tool:curator/inspect',
+        kind: 'tool',
+        provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        serverId: 'mcp:curator',
+        source: '/workspace/project/src/mcp/curator/tools/inspect.tsx',
+      }],
+    }],
+  };
+
+  const first = routesModule.generateRouteTypes(graph);
+  expect(routesModule.generateRouteTypes(structuredClone(graph))).toBe(first);
+  // Providers import in camel-cased key order — the order generated scopes execute them.
+  expect(first).toContain('import type * as provider0 from "../src/providers/project-auth.js";');
+  expect(first).toContain('import type * as provider1 from "../src/providers/zeta.js";');
+  expect(first).toContain('type ProviderValueOf<Factory> = Factory extends (...args: never[]) => infer Value ? Awaited<Value> : never;');
+  expect(first).toContain('export interface AgentBundleProviders {');
+  expect(first).toContain('  readonly "projectAuth": ProviderValueOf<typeof provider0.default>;');
+  expect(first).toContain('  readonly "zeta": ProviderValueOf<typeof provider1.default>;');
+  expect(first).toContain('export type ProviderKey = keyof AgentBundleProviders;');
+  expect(first).toContain('export type ProviderValue<Key extends ProviderKey> = AgentBundleProviders[Key];');
+  expect(first).toContain("declare module '@agent-bundle/runtime' {\n  interface AgentProviderValues {\n    readonly \"projectAuth\": ProviderValueOf<typeof provider0.default>;\n    readonly \"zeta\": ProviderValueOf<typeof provider1.default>;\n  }\n}");
+  expect(first.indexOf('AgentBundleRoutes')).toBeLessThan(first.indexOf('AgentBundleProviders'));
 });
 
 it('resolves generated helper types for schema and event route contracts', async () => {

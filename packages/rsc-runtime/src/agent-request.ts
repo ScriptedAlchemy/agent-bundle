@@ -109,7 +109,30 @@ export interface AgentProgressReporter {
 
 export type AgentServiceRegistry = Readonly<Record<string, unknown>>;
 
-export type AgentProviderValues = Readonly<Record<string, unknown>>;
+/**
+ * The framework-owned `processLifetime` provider every generated request
+ * scope installs: one identity per generated process (Flight worker,
+ * rendered-route worker, or routed-CLI executable) with a per-request hit
+ * counter. Absent outside generated scopes, so it is typed optional.
+ */
+export interface AgentProcessLifetime {
+  readonly hits: number;
+  readonly instanceId: string;
+  readonly pid: number;
+}
+
+/**
+ * Request-scoped provider values keyed by camel-cased provider name. This is
+ * an augmentable interface: the compiler's generated `.agent-bundle/routes.d.ts`
+ * declares the project's conventional `src/providers/*` keys with their
+ * resolved factory return types, so `(await agent()).providers.<key>` is typed
+ * without a framework change per provider. Keys without a declaration remain
+ * `unknown`.
+ */
+export interface AgentProviderValues {
+  readonly [key: string]: unknown;
+  readonly processLifetime?: AgentProcessLifetime;
+}
 
 export interface AgentInvocation {
   readonly artifactEpoch?: string;

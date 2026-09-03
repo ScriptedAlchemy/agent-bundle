@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import type { AgentProviderContext } from 'agent-bundle';
+
 export interface LibraryContext {
   readonly tooling: {
     readonly ffmpeg: {
@@ -14,11 +16,6 @@ export interface LibraryContext {
   };
   readonly stages: readonly string[];
   readonly probedAt: string;
-}
-
-interface ProviderContext {
-  readonly invocation: unknown;
-  readonly signal: AbortSignal;
 }
 
 interface ToolProbe {
@@ -41,7 +38,7 @@ const probeTool = async (tool: 'ffmpeg' | 'ffprobe', signal: AbortSignal): Promi
 };
 
 export default async function libraryProvider(
-  { signal }: ProviderContext,
+  { signal }: AgentProviderContext,
 ): Promise<LibraryContext> {
   const [ffmpeg, ffprobe] = await Promise.all([
     probeTool('ffmpeg', signal),

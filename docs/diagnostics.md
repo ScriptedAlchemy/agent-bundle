@@ -278,7 +278,15 @@ compiles silently with an empty config.
 Generated route declarations are published at `.agent-bundle/routes.d.ts` from
 the same graph. Development writes a sibling temporary file and renames it over
 the prior complete declaration atomically; invalid source retains the prior
-last-good file, while a successful route-free preparation removes it.
+last-good file, while a successful route-free, provider-free preparation
+removes it. Beside `AgentBundleRoutes`, a graph with conventional providers
+declares `AgentBundleProviders` (`ProviderKey`, `ProviderValue<Key>`) — each
+camel-cased key mapped to its factory's awaited return type, in execution
+order — and augments `@agent-bundle/runtime`'s `AgentProviderValues` so
+`(await agent()).providers.<key>` observes that type in projects whose
+TypeScript program includes the file. Provider-free graphs emit no
+augmentation, so the declaration never references a module the project has no
+reason to depend on.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
