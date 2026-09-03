@@ -234,6 +234,9 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `prompt/submit` | `beforeSubmitPrompt` (deny) | `UserPromptSubmit` (deny + context) | `UserPromptSubmit` (deny + context) |
 | `tool/before` | Supported | `PreToolUse` | `PreToolUse` |
 | `tool/after` | Supported | `PostToolUse` | `PostToolUse` |
+| `tool/failure` | `postToolUseFailure` (observe-only) | `PostToolUseFailure` (context) | Unavailable |
+| `compact/before` | `preCompact` (observe-only; native `user_message` not modeled) | `PreCompact` (deny) | `PreCompact` (observe-only) |
+| `compact/after` | Unavailable | `PostCompact` (observe-only) | `PostCompact` (observe-only; no summary field) |
 | `stop` | Supported | `Stop` | `Stop` |
 | `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
 | `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
@@ -257,6 +260,13 @@ observe-only. `prompt/submit` maps canonical deny to each host's blocking
 contract; Claude Code and Codex also accept `Agent.Context`, while Cursor has
 no context or prompt-rewrite channel. Cursor cloud agents do not expose
 `sessionEnd`.
+`tool/failure`, `compact/before`, and `compact/after` are also event-route-only
+families. Claude Code alone maps `tool/failure` context and
+`compact/before` deny; every other result effect fails closed. Cursor's
+`preCompact.user_message` is user-facing rather than agent context, and the
+Codex compact schemas do not pin event-level semantics for their common output
+fields, so neither channel is projected. Codex has no tool-failure event,
+Cursor has no post-compaction event, and Codex `PostCompact` carries no summary.
 
 ## Extension-author guide
 

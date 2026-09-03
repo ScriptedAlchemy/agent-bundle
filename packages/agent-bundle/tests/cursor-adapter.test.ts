@@ -431,7 +431,7 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
   expect(toolWrapper?.virtualSource).toContain('tool_output');
 });
 
-it('lowers route-only prompt and session families without exposing config hook names', () => {
+it('lowers supported route-only families without exposing config hook names', () => {
   const model = plugin();
   const plan = cursorAdapter.plan({
     ...model,
@@ -456,6 +456,26 @@ it('lowers route-only prompt and session families without exposing config hook n
         targets: ['cursor'],
         tools: [],
       },
+      {
+        event: 'toolFailure',
+        eventRoute: { event: 'tool/failure', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:tool-failure',
+        name: 'event-route-tool-failure',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/tool/failure.tsx' },
+        source: '/workspace/src/events/tool/failure.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
+      {
+        event: 'compactBefore',
+        eventRoute: { event: 'compact/before', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:compact-before',
+        name: 'event-route-compact-before',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/compact/before.tsx' },
+        source: '/workspace/src/events/compact/before.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
     ],
   });
 
@@ -470,6 +490,12 @@ it('lowers route-only prompt and session families without exposing config hook n
       }],
       sessionEnd: [{
         command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-session-end.mjs"',
+      }],
+      postToolUseFailure: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-tool-failure.mjs"',
+      }],
+      preCompact: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-compact-before.mjs"',
       }],
     },
     version: 1,

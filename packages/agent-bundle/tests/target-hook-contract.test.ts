@@ -82,6 +82,9 @@ it('keeps event-route-only hook identities out of config hook parsing', () => {
   expect(canonicalHookEventFor('sessionStart')).toBe('sessionStart');
   expect(canonicalHookEventFor('sessionEnd')).toBeUndefined();
   expect(canonicalHookEventFor('promptSubmit')).toBeUndefined();
+  expect(canonicalHookEventFor('toolFailure')).toBeUndefined();
+  expect(canonicalHookEventFor('compactBefore')).toBeUndefined();
+  expect(canonicalHookEventFor('compactAfter')).toBeUndefined();
 });
 
 it('plans route-only hook identities through event route mappings', () => {

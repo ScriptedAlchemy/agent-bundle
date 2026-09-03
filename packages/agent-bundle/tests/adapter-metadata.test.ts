@@ -51,7 +51,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.4.0',
+    adapterRevision: '1.5.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -98,7 +98,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.20.0',
+    adapterRevision: '1.21.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -144,7 +144,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.6.0',
+    adapterRevision: '1.7.0',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -210,10 +210,10 @@ it('records observed capability versions and rehashes schema snapshots against p
     }
 
     if (target === 'claude') {
-      expect(sha256Hex(capability)).toBe('a767ea61ff5a9379133e75096fc44478fdec5d89ea6efa4bee0c9c869649f465');
+      expect(sha256Hex(capability)).toBe('6052f0f66b2116d95d6551cd608c40905400546f4248073fae5ea1852a92047d');
     }
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('f25f3d27b6f9ef4b75ecb02039f67cc3f3f942faec916b55cdccc49abf1f4f6e');
+      expect(sha256Hex(capability)).toBe('dcd7277289b9c7f161d582e40eedcd08e007bc0e233cec883f41363f46af5b54');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',
@@ -290,6 +290,42 @@ it('pins and validates the Codex 0.147.0 event wire schemas', async () => {
       name: 'session-end.command.input.schema.json',
       sha256: '23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c',
     },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PreCompact',
+        model: 'gpt-5.6-sol',
+        session_id: 'session-codex-1',
+        transcript_path: null,
+        trigger: 'manual',
+        turn_id: 'turn-codex-1',
+      },
+      name: 'pre-compact.command.input.schema.json',
+      sha256: '065f0ae3cd628ac9af8c0cf9bd1d5a673bcbd5ea1d7dcdc0c6437f34dd0189d9',
+    },
+    {
+      name: 'pre-compact.command.output.schema.json',
+      output: { continue: true },
+      sha256: 'c392f3054ae6750f427d4dec07380fd67e8c58a7939a35d5c69bfa070c7ca032',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PostCompact',
+        model: 'gpt-5.6-sol',
+        session_id: 'session-codex-1',
+        transcript_path: null,
+        trigger: 'manual',
+        turn_id: 'turn-codex-1',
+      },
+      name: 'post-compact.command.input.schema.json',
+      sha256: '4a4b3f3022c939a15ab12e95f5c5c17b18bb20f74fe962ae0a51b2a3e76e63f9',
+    },
+    {
+      name: 'post-compact.command.output.schema.json',
+      output: {},
+      sha256: '48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed',
+    },
   ] as const;
   const validator = createDraft7AdapterValidator();
 
@@ -302,7 +338,9 @@ it('pins and validates the Codex 0.147.0 event wire schemas', async () => {
     const validate = validator.compile(JSON.parse(bytes.toString()));
     const value = 'fixture' in schema
       ? JSON.parse(await readFile(new URL(`./fixtures/events/${schema.fixture}`, import.meta.url), 'utf8'))
-      : schema.output;
+      : 'input' in schema
+        ? schema.input
+        : schema.output;
     expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
   }
 });

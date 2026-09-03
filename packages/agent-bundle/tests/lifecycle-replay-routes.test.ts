@@ -38,6 +38,14 @@ const graph = Object.freeze({
       provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
       source: '/project/src/events/tool/after.tsx',
     },
+    {
+      config: Object.freeze({}),
+      event: 'tool/failure',
+      id: 'event:tool/failure',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/failure.tsx' }),
+      source: '/project/src/events/tool/failure.tsx',
+    },
   ]),
   providers: Object.freeze([]),
   scripts: Object.freeze([]),
@@ -186,6 +194,27 @@ it('preserves stale and real native-envelope diagnostics at the HTTP boundary', 
       diagnostic: {
         code: 'AB8211',
         message: 'Agent Bundle event route error: native prompt must be a string',
+      },
+    });
+
+    const malformedFailure = await post(`${started.url}/api/lifecycles/replays`, {
+      binding: { manifestDigest: 'manifest-a', routeId: 'event:tool/failure', target: 'claude' },
+      native: {
+        cwd: '/tmp/lifecycle-replay',
+        hook_event_name: 'PostToolUseFailure',
+        session_id: 'session-1',
+        tool_input: {},
+        tool_name: 'Bash',
+        tool_use_id: 'tool-1',
+        transcript_path: '/tmp/lifecycle-replay/transcript.jsonl',
+      },
+      source: 'observed',
+    });
+    expect(malformedFailure.status).toBe(400);
+    await expect(malformedFailure.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8211',
+        message: 'Agent Bundle event route error: native error must be a string',
       },
     });
   } finally {
