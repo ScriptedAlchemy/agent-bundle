@@ -6,7 +6,7 @@ import { expect, it } from '@rstest/core';
 
 const workspaceRoot = process.cwd();
 const projectLicense = 'Apache-2.0';
-/** SHA-256 of https://www.apache.org/licenses/LICENSE-2.0.txt (canonical text, LF line endings). */
+/** SHA-256 of https://www.apache.org/licenses/LICENSE-2.0.txt (canonical text; .gitattributes pins LF endings). */
 const canonicalApache2Sha256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30';
 const publishablePackages = ['agent-bundle', 'rsc-runtime', 'create-agent-bundle'] as const;
 
