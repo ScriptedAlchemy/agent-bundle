@@ -6,35 +6,72 @@
       "pattern": "^\\./(?!(?:.*[\\/\\\\])?\\.\\.(?:[\\/\\\\]|$))[^\\\\]+$",
       "type": "string"
     },
+    "hookCommandHandler": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContextLimit": { "minimum": 0, "type": "integer" },
+        "async": { "type": "boolean" },
+        "command": { "minLength": 1, "type": "string" },
+        "commandWindows": { "minLength": 1, "type": "string" },
+        "statusMessage": { "type": "string" },
+        "timeout": { "minimum": 1, "type": "integer" },
+        "type": { "const": "command" }
+      },
+      "required": ["type", "command"],
+      "type": "object"
+    },
+    "hookMcpToolHandler": {
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "object" },
+        "server": { "minLength": 1, "type": "string" },
+        "statusMessage": { "type": "string" },
+        "timeout": { "minimum": 1, "type": "integer" },
+        "tool": { "minLength": 1, "type": "string" },
+        "type": { "const": "mcp_tool" }
+      },
+      "required": ["type", "server", "tool"],
+      "type": "object"
+    },
+    "hookMatcherGroups": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "hooks": {
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/hookCommandHandler" },
+                { "$ref": "#/$defs/hookMcpToolHandler" }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "matcher": { "type": "string" }
+        },
+        "required": ["hooks"],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "hookDocument": {
       "additionalProperties": false,
       "properties": {
         "description": { "type": "string" },
         "hooks": {
-          "additionalProperties": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "hooks": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "command": { "minLength": 1, "type": "string" },
-                      "timeout": { "minimum": 1, "type": "integer" },
-                      "type": { "const": "command" }
-                    },
-                    "required": ["type", "command"],
-                    "type": "object"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "matcher": { "type": "string" }
-              },
-              "required": ["hooks"],
-              "type": "object"
-            },
-            "type": "array"
+          "additionalProperties": false,
+          "properties": {
+            "PermissionRequest": { "$ref": "#/$defs/hookMatcherGroups" },
+            "PostCompact": { "$ref": "#/$defs/hookMatcherGroups" },
+            "PostToolUse": { "$ref": "#/$defs/hookMatcherGroups" },
+            "PreCompact": { "$ref": "#/$defs/hookMatcherGroups" },
+            "PreToolUse": { "$ref": "#/$defs/hookMatcherGroups" },
+            "SessionEnd": { "$ref": "#/$defs/hookMatcherGroups" },
+            "SessionStart": { "$ref": "#/$defs/hookMatcherGroups" },
+            "Stop": { "$ref": "#/$defs/hookMatcherGroups" },
+            "SubagentStart": { "$ref": "#/$defs/hookMatcherGroups" },
+            "SubagentStop": { "$ref": "#/$defs/hookMatcherGroups" },
+            "UserPromptSubmit": { "$ref": "#/$defs/hookMatcherGroups" }
           },
           "type": "object"
         }

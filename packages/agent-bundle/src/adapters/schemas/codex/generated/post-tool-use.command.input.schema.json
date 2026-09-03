@@ -20,7 +20,7 @@
       "type": "string"
     },
     "hook_event_name": {
-      "const": "PermissionRequest",
+      "const": "PostToolUse",
       "type": "string"
     },
     "model": {
@@ -43,6 +43,10 @@
     "tool_name": {
       "type": "string"
     },
+    "tool_response": true,
+    "tool_use_id": {
+      "type": "string"
+    },
     "transcript_path": {
       "$ref": "#/definitions/NullableString"
     },
@@ -59,9 +63,11 @@
     "session_id",
     "tool_input",
     "tool_name",
+    "tool_response",
+    "tool_use_id",
     "transcript_path",
     "turn_id"
   ],
-  "title": "permission-request.command.input",
+  "title": "post-tool-use.command.input",
   "type": "object"
 }

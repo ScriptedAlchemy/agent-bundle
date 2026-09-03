@@ -317,7 +317,15 @@ export const validateNativeEventEnvelope = (
     if (typeof native.stop_hook_active !== 'boolean') {
       return nativeEventError('native stop_hook_active must be a boolean');
     }
-    requireNativeString(native, 'last_assistant_message');
+    // The pinned rust-v0.147.0 stop.command.input schema types
+    // last_assistant_message as string | null; Claude documents a string.
+    if (target === 'codex') {
+      if (native.last_assistant_message !== null && typeof native.last_assistant_message !== 'string') {
+        return nativeEventError('native last_assistant_message must be a string or null');
+      }
+    } else {
+      requireNativeString(native, 'last_assistant_message');
+    }
   }
   return native;
 };
