@@ -197,6 +197,7 @@ const tableCapability = (row: { readonly reason?: string; readonly state: string
 
 const hookContractTable = capabilityTable.hooks.contract;
 const distributionTable = capabilityTable.distribution;
+const overviewSurfacesTable = capabilityTable.plugin.overviewSurfaces;
 const codexReleaseHookEvents: readonly string[] = capabilityTable.hooks.releaseEvents;
 const codexHookRules = Object.freeze({
   additionalContextEvents: hookContractTable.additionalContextLimit.additionalContextEvents as readonly string[],
@@ -1326,6 +1327,9 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     repoMarketplaceDiscovery: tableCapability(distributionTable.repoMarketplaceDiscovery),
     restrictToAllowedSources: tableCapability(distributionTable.restrictToAllowedSources),
     workspacePublishing: tableCapability(distributionTable.workspacePublishing),
+    browserExtensions: tableCapability(overviewSurfacesTable.browserExtensions),
+    mcpUi: tableCapability(overviewSurfacesTable.mcpUi),
+    scheduledTaskTemplates: tableCapability(overviewSurfacesTable.scheduledTaskTemplates),
     hooks: supportedCapability(evidence),
     hookAdditionalContextLimit: tableCapability(hookContractTable.additionalContextLimit),
     hookAsyncCommands: tableCapability(hookContractTable.asyncCommandHooks),

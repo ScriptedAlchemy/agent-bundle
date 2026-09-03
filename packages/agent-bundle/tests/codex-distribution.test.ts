@@ -338,6 +338,38 @@ it.each([
   expect(rejected.document).toBeUndefined();
 });
 
+it('records the overview-level plugin parts (optional MCP UI, browser extensions, scheduled task templates) as dated rows', () => {
+  const registry = createDefaultRegistry();
+  const unified = registry.get('plugin');
+  const table = codexCapabilityTable.plugin.overviewSurfaces as Readonly<Record<string, {
+    readonly evidence: readonly string[];
+    readonly reason: string;
+    readonly state: string;
+  }>>;
+  const expected = { browserExtensions: 'unavailable', mcpUi: 'degraded', scheduledTaskTemplates: 'unavailable' } as const;
+
+  expect(Object.keys(table).sort()).toEqual(Object.keys(expected).sort());
+  for (const [capability, expectedState] of Object.entries(expected)) {
+    const row = table[capability]!;
+    expect(row.state, capability).toBe(expectedState);
+    expect(row.evidence.length, capability).toBeGreaterThan(1);
+    expect(row.evidence.every((line) => /^(?:retrieved|observed) 2026-09-03:/u.test(line)), capability).toBe(true);
+    expect(row.reason, capability).toMatch(/\S/u);
+    expect(codexAdapter.capabilities[capability]).toMatchObject({
+      reason: row.reason,
+      state: expectedState,
+      ...(expectedState === 'degraded' ? { evidence: { observedVersion: '0.147.0', target: 'codex' } } : {}),
+    });
+    expect(registry.supports('codex', capability)).toBe(false);
+    expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
+    expect(registry.supports('plugin', capability)).toBe(false);
+  }
+  // No authoring field is inferred: the closed manifest schema rejects any attempt.
+  expect(table.mcpUi!.evidence.some((line) => line.includes('_meta.ui.resourceUri'))).toBe(true);
+  expect(table.browserExtensions!.reason).toContain('no schema-backed authoring field');
+  expect(table.scheduledTaskTemplates!.reason).toContain('no schema-backed authoring field');
+});
+
 it('keeps NOT_AVAILABLE documented in the pinned schema but refuses it for the self-installing artifact', () => {
   // Live codex-cli 0.147.0 registers a NOT_AVAILABLE marketplace entry and then refuses
   // `codex plugin add <plugin>@<marketplace>`, the exact command INSTALL.md and installBundle() run.
