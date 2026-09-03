@@ -369,6 +369,48 @@ it('errors with AB4340 when a declaration for a route-generated server redeclare
   expect(codesOf(validation.diagnostics)).not.toContain('AB4800');
 });
 
+it('checks an augmenting declaration\'s Apps against the route-declared Apps of the same server', async () => {
+  const configWithApps = (apps: string): string => [
+    'export default {',
+    `  mcp: { servers: { curator: { apps: { ${apps} } } } },`,
+    "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n');
+  const routes = {
+    'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'views/panel.ts': "document.body.textContent = 'panel';\n",
+  };
+
+  // Same resourceUri under another name: AB4330, not two Apps on one URI.
+  const sameUri = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("panel: { entry: './views/panel.ts', resourceUri: 'ui://curator/dashboard.html' }"),
+  });
+  const sameUriErrors = (await validate({ root: sameUri })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(sameUriErrors)).toEqual(['AB4330']);
+
+  // Same name as a route App: AB4325 from validation, before the duplicate ID would surface as AB4101.
+  const sameName = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("dashboard: { entry: './views/panel.ts', resourceUri: 'ui://curator/panel.html' }"),
+  });
+  const sameNameErrors = (await validate({ root: sameName })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(sameNameErrors)).toEqual(['AB4325']);
+
+  // A distinct name and URI still augments cleanly beside the route App.
+  const distinct = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("panel: { entry: './views/panel.ts', resourceUri: 'ui://curator/panel.html' }"),
+  });
+  expect((await validate({ root: distinct })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+  const ready = (await inspect({ root: distinct })) as ReadyInspectResult;
+  expect(ready.state).toBe('ready');
+  expect(ready.model.mcpApps?.map((app) => app.id)).toEqual(['mcp-app:curator:dashboard', 'mcp-app:curator:panel']);
+});
+
 it('applies the local-entry field rules to an augmenting declaration', async () => {
   const project = await createInspectProject({
     'agent-bundle.config.ts': [

@@ -906,11 +906,25 @@ const validateMcp = (
   // The same judgment normalization applies: a server the route graph
   // compiles in generated mode is declared by its route modules, and a config
   // block for it augments rather than redeclares (#380).
-  const generated = new Set((discovered.routeGraph?.servers ?? [])
-    .filter((server) => server.mode === 'generated' && server.routes.length > 0)
-    .map((server) => server.name));
+  const generatedServers = (discovered.routeGraph?.servers ?? [])
+    .filter((server) => server.mode === 'generated' && server.routes.length > 0);
+  const generated = new Set(generatedServers.map((server) => server.name));
+  // Route-declared Apps (`src/mcp/<server>/apps/*`) take part in the same
+  // name and resourceUri collision checks as configured ones: a config App
+  // that reuses a route App's name is AB4325 (a route module is never an
+  // identical config declaration) and one that reuses its resourceUri under
+  // another name is AB4330, instead of both Apps reaching the generated server.
   const names = new Map<string, string | undefined>();
   const uris = new Map<string, string>();
+  for (const server of generatedServers) {
+    for (const route of server.routes) {
+      if (route.kind !== 'app') continue;
+      const appName = route.id.slice(route.id.lastIndexOf('/') + 1);
+      if (!names.has(appName)) names.set(appName, undefined);
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri === 'string' && !uris.has(resourceUri)) uris.set(resourceUri, appName);
+    }
+  }
   return Object.entries(mcp.servers).flatMap(([name, server]) => {
     const isGenerated = generated.has(name);
     const diagnostics = isGenerated

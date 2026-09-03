@@ -100,7 +100,7 @@ server (config wins, conventions fill):
 | `env` | — | Applied verbatim beneath the injected plugin-root anchor (`AB4312` shape rules). |
 | `args` | The content-hashed entry path | Appended after the entry path (`AB4311` shape rules). |
 | `targets` | The project's selected targets | Replaces the default selection (`AB4305` shape rules). |
-| `apps` | `src/mcp/<server>/apps/*` routes | Config-side Apps are compiled and registered on the generated server beside the route-declared ones (`AB432x` rules; `AB4334` checks App targets against the declared server targets). |
+| `apps` | `src/mcp/<server>/apps/*` routes | Config-side Apps are compiled and registered on the generated server beside the route-declared ones (`AB432x` rules; `AB4334` checks App targets against the declared server targets). The route-declared Apps take part in the collision checks: reusing a route App's name is `AB4325`, reusing its `resourceUri` under another name is `AB4330`. |
 
 Provenance stays `conventional` (the first route module) because the routes
 supply the entry; `inspect` shows the merged `env`, `args`, and `targets`.
