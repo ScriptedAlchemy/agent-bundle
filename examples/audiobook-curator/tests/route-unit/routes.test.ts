@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -106,6 +106,37 @@ it('renders composed inspection and inventory tool documents with unchanged valu
       summary: { files: 0 },
     });
   } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+it('caps rendered inventory probe errors while retaining the complete receipt', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'curator-route-unit-inventory-errors-'));
+  const previousPath = process.env['PATH'];
+  try {
+    const source = join(directory, 'library');
+    await mkdir(source);
+    await Promise.all(Array.from({ length: 25 }, (_, index) =>
+      writeFile(join(source, `broken-${String(index)}.mp3`), 'not audio')));
+    process.env['PATH'] = directory;
+
+    const rendered = await renderRoute('tool:curator/inventory_sources', {
+      input: { source, strict: true },
+    });
+    const receipt = rendered.document.value as {
+      readonly errors: readonly unknown[];
+    };
+    if (rendered.document.root.kind !== 'result') throw new Error('expected inventory result document');
+    const errorCallouts = rendered.document.root.children.filter((node) => node.kind === 'error');
+
+    expect(receipt.errors).toHaveLength(25);
+    expect(errorCallouts).toHaveLength(20);
+    expectDocument(rendered)
+      .toContainMarkdown('_+5 more probe errors retained in the structured receipt._')
+      .toHaveValue(receipt);
+  } finally {
+    if (previousPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = previousPath;
     await rm(directory, { force: true, recursive: true });
   }
 });

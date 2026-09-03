@@ -13,6 +13,7 @@ export interface InspectionShelfProps {
 }
 
 const maximumCards = 20;
+const maximumCallouts = 20;
 
 interface RemainingFilesProps {
   readonly count: number;
@@ -53,9 +54,12 @@ export const InventoryShelf = ({ receipt }: InventoryShelfProps) => (
       <FileCard {...fileCardModel(file)} key={file.path} />
     ))}
     <RemainingFiles count={receipt.files.length} />
-    {receipt.errors.map((row, index) => (
+    {receipt.errors.slice(0, maximumCallouts).map((row, index) => (
       <Callout key={`${row.path}:${String(index)}`} tone="error">{`${row.path}: ${row.error}`}</Callout>
     ))}
+    {receipt.errors.length > maximumCallouts
+      ? <Agent.Markdown>{`_+${String(receipt.errors.length - maximumCallouts)} more probe errors retained in the structured receipt._`}</Agent.Markdown>
+      : null}
   </>
 );
 
