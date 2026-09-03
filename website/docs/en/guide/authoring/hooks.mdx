@@ -208,9 +208,13 @@ listed above.
 Both shapes share the emitted `hooks/hooks.json` wiring, and both compile into a wrapper the host
 invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). The
 unified `plugin` target also writes `hooks/hooks-cursor.json` and `hooks/<name>.cursor.mjs` for
-Cursor (`preToolUse` / `postToolUse` camelCase). `.claude-plugin/plugin.json` names
-`./hooks/hooks.json` so Claude Code loads only the Claude/Codex document and does not invoke those
-Cursor wrappers with PascalCase `hook_event_name` values (`PreToolUse` / `PostToolUse`). A
+Cursor (`preToolUse` / `postToolUse` camelCase). Claude Code and Codex load `hooks/hooks.json` by
+convention and never scan `hooks/` for other documents, so the Claude manifest carries no `hooks`
+pointer: Claude Code reports a pointer at the conventional file as a duplicate hooks file
+(`manifest.hooks` is for additional documents only). Each wrapper compares the envelope's
+`hook_event_name` against the spelling baked for its own host (`PreToolUse` / `PostToolUse` for
+Claude and Codex), so `native hook_event_name must equal postToolUse` on a Claude session means a
+Cursor-built wrapper is installed under the Claude plugin root, not that Claude sends camelCase. A
 config-declared handler runs in-process inside that wrapper. An event route with
 `runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
 process, so hooks share state with tools:

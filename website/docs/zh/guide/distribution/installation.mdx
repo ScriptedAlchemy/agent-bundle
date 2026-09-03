@@ -20,7 +20,7 @@ target 目录。
 
 | 宿主 | 机制 | 作用域 |
 | --- | --- | --- |
-| Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。统一 `plugin` 捆绑包的 `.claude-plugin/plugin.json` 会写明 `./hooks/hooks.json`，因此 Claude 加载 Claude/Codex 文档而不是 `hooks/hooks-cursor.json`。 | `user`、`project`、`local` |
+| Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。Claude Code 会自行加载插件根目录下的 `hooks/hooks.json`，因此 `.claude-plugin/plugin.json` 不带 `hooks` 指针（Claude Code 会把指向该文件的指针报告为重复的 hooks 文件）；统一 `plugin` 捆绑包的 `hooks/hooks-cursor.json` 从不会被 Claude Code 读取。对于 `directory` 类型的市场，Claude Code 会把 `${CLAUDE_PLUGIN_ROOT}` 解析为该目录本身而不是其插件缓存，因此重新构建该目录会改变正在运行的会话所执行的钩子。 | `user`、`project`、`local` |
 | Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。 | `user` |
 | Cursor | 把捆绑包复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载插件清单所指定的 hooks 文档（`cursor` 目标为 `hooks/hooks.json`，统一 `plugin` 目标为 `hooks/hooks-cursor.json`），因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
 

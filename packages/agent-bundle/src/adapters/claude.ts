@@ -3155,13 +3155,18 @@ export const planClaudeArtifacts = (
   const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
 
+  // Claude Code loads the conventional `hooks/hooks.json` on its own; the
+  // manifest `hooks` field is only for *additional* documents. Naming the
+  // conventional file there makes Claude Code (2.1.259 observed) record a
+  // `hook-load-failed` plugin error, "Duplicate hooks file detected ... The
+  // standard hooks/hooks.json is loaded automatically, so manifest.hooks
+  // should only reference additional hook files", so no pointer is emitted.
   const plugin = {
     author: { name: model.metadata.name },
     ...manifestMetadata.document,
     ...(channels.document === undefined ? {} : { channels: channels.document }),
     ...(dependencies.document === undefined ? {} : { dependencies: dependencies.document }),
     description: model.metadata.description ?? model.metadata.name,
-    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
     ...(userConfig.document === undefined ? {} : { userConfig: userConfig.document }),
     version: model.metadata.version,

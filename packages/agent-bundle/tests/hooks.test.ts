@@ -1611,9 +1611,9 @@ it('plans deterministic Codex and Claude hook configurations from the same model
     expect(JSON.parse(writes(codex.entries)['.codex-plugin/plugin.json']!)).toMatchObject({
       hooks: './hooks/hooks.json',
     });
-    expect(JSON.parse(writes(claude.entries)['.claude-plugin/plugin.json']!)).toMatchObject({
-      hooks: './hooks/hooks.json',
-    });
+    // Claude Code loads hooks/hooks.json by convention and flags a manifest
+    // pointer at that same file as a duplicate, so only Codex names it.
+    expect(JSON.parse(writes(claude.entries)['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
     expect(JSON.parse(writes(codex.entries)['hooks/hooks.json']!)).toEqual({
       hooks: {
         PostToolUse: [{
