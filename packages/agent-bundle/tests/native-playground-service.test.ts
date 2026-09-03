@@ -1744,14 +1744,24 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
   const reference = epoch('epoch-abandoned-staging', join(root, 'artifact'));
   const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
   const directorySyncs: string[] = [];
-  let directorySyncFailure: Error | undefined;
-  // Fault injection for the recovery fallback chain: fail re-linking the
-  // removed staging names and unlinking the sidecar, but let a fresh guard link.
+  // Fault injection for the recovery fallback chain. Directory fsync failures
+  // are counted down so that the recovery fsync fails while the fsync that
+  // makes the compensating guard durable succeeds.
+  let directorySyncFailuresLeft = 0;
+  const directorySyncFailure = Object.assign(new Error('directory sync failed'), { code: 'EIO' });
   let relinkFailure: Error | undefined;
+  let concurrentRestorer = false;
   let sidecarRemoveFailure: Error | undefined;
   const storage: NativePlaygroundCatalogStorage = {
     link: async (source, destination) => {
-      if (relinkFailure !== undefined && String(destination).endsWith('-orphan')) throw relinkFailure;
+      if (String(destination).endsWith('-orphan')) {
+        if (relinkFailure !== undefined) throw relinkFailure;
+        if (concurrentRestorer) {
+          // Another reader restored the same alias a moment earlier.
+          await link(source, destination);
+          throw Object.assign(new Error('link exists'), { code: 'EEXIST' });
+        }
+      }
       await link(source, destination);
     },
     mkdir,
@@ -1762,7 +1772,10 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
           if (property === 'sync' && String(path) === catalogDirectory) {
             return async () => {
               directorySyncs.push(String(path));
-              if (directorySyncFailure !== undefined) throw directorySyncFailure;
+              if (directorySyncFailuresLeft > 0) {
+                directorySyncFailuresLeft -= 1;
+                throw directorySyncFailure;
+              }
               await target.sync();
             };
           }
@@ -1788,6 +1801,11 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     planFixture: async () => fixturePlan,
     projectRoot: '/project',
   });
+  const rejectsUnsettled = async (label: string): Promise<void> => {
+    const reader = serviceFor(async () => { throw new Error(`${label} must not fall back to discovery.`); });
+    await expect(reader.catalog(reference)).rejects.toThrow();
+    await reader.close();
+  };
   try {
     const writer = serviceFor(async () => suite());
     const published = await writer.catalog(reference);
@@ -1796,56 +1814,61 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     // A publisher that is still running owns its staging link: the reader waits out the deadline and rejects.
     const live = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(process.pid)}-live`);
     await link(sidecar, live);
-    const blocked = serviceFor(async () => { throw new Error('A blocked catalog must not fall back to discovery.'); });
-    await expect(blocked.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
-    await blocked.close();
+    await rejectsUnsettled('A blocked catalog');
     expect((await stat(sidecar)).nlink).toBe(2);
     await rm(live);
 
     // A recovery whose directory fsync fails has not made the orphan's removal
-    // durable: the staging guard is restored and the sidecar stays unsettled.
+    // durable: the staging guard is restored, fsynced, and the sidecar stays unsettled.
     const orphan = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`);
     await link(sidecar, orphan);
-    directorySyncFailure = Object.assign(new Error('directory sync failed'), { code: 'EIO' });
-    const unsynced = serviceFor(async () => { throw new Error('An unsynced recovery must not fall back to discovery.'); });
-    await expect(unsynced.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
-    await unsynced.close();
+    directorySyncFailuresLeft = 1;
+    directorySyncs.length = 0;
+    await rejectsUnsettled('An unsynced recovery');
     expect((await stat(sidecar)).nlink).toBe(2);
     expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+    expect(directorySyncs).toEqual([catalogDirectory, catalogDirectory]);
 
-    // Two readers recovering the same orphan while fsync fails: the second one's
-    // guard re-link meets EEXIST from the first, which is the same alias, so the
-    // sidecar is kept rather than withdrawn.
-    const [firstRacer, secondRacer] = [
-      serviceFor(async () => { throw new Error('A racing recovery must not fall back to discovery.'); }),
-      serviceFor(async () => { throw new Error('A racing recovery must not fall back to discovery.'); }),
-    ];
-    const raced = await Promise.allSettled([firstRacer.catalog(reference), secondRacer.catalog(reference)]);
-    expect(raced.map((outcome) => outcome.status)).toEqual(['rejected', 'rejected']);
-    await Promise.all([firstRacer.close(), secondRacer.close()]);
+    // A concurrent recoverer restored the same alias first: EEXIST on an entry
+    // that already aliases the sidecar counts as a restored guard.
+    directorySyncFailuresLeft = 1;
+    concurrentRestorer = true;
+    await rejectsUnsettled('A racing recovery');
+    concurrentRestorer = false;
     expect((await stat(sidecar)).nlink).toBe(2);
     expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
 
     // When the guard cannot be re-linked and the sidecar cannot be unlinked
-    // either, a fresh guard under this process's pid keeps it doubly linked.
+    // either, a fresh fsynced guard under this process's pid keeps it doubly linked.
+    directorySyncFailuresLeft = 1;
     relinkFailure = Object.assign(new Error('relink denied'), { code: 'EPERM' });
     sidecarRemoveFailure = Object.assign(new Error('sidecar busy'), { code: 'EBUSY' });
-    const guarded = serviceFor(async () => { throw new Error('A guarded recovery must not fall back to discovery.'); });
-    await expect(guarded.catalog(reference)).rejects.toThrow();
-    await guarded.close();
+    await rejectsUnsettled('A guarded recovery');
     expect((await stat(sidecar)).nlink).toBe(2);
     const guards = (await readdir(catalogDirectory)).filter((name) => name.includes(`.stage-${String(process.pid)}-guard-`));
     expect(guards).toHaveLength(1);
     expect((await stat(join(catalogDirectory, guards[0]!))).ino).toBe((await stat(sidecar)).ino);
     // A live-pid guard is honoured by the next reader until this process exits.
-    const held = serviceFor(async () => { throw new Error('A guarded catalog must not fall back to discovery.'); });
-    await expect(held.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
-    await held.close();
+    await rejectsUnsettled('A guarded catalog');
     await rm(join(catalogDirectory, guards[0]!));
     await link(sidecar, orphan);
     relinkFailure = undefined;
     sidecarRemoveFailure = undefined;
-    directorySyncFailure = undefined;
+
+    // When every fsync keeps failing, the sidecar is withdrawn rather than left
+    // singly linked: the guard chain never trusts an unsynced step.
+    directorySyncFailuresLeft = Number.POSITIVE_INFINITY;
+    await rejectsUnsettled('A withdrawn recovery');
+    directorySyncFailuresLeft = 0;
+    await expect(stat(sidecar)).rejects.toMatchObject({ code: 'ENOENT' });
+    const republisher = serviceFor(async () => suite());
+    expect(await republisher.catalog(reference)).toEqual(published);
+    await republisher.close();
+    // The restored orphan name still aliases the withdrawn inode; a fresh
+    // sidecar is singly linked and unaffected by it.
+    expect((await stat(sidecar)).nlink).toBe(1);
+    await rm(orphan);
+    await link(sidecar, orphan);
 
     // A publisher that exited after link() but before cleanup left a complete,
     // fsynced sidecar behind: the reader withdraws the orphan and adopts it.

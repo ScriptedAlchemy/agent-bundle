@@ -1130,25 +1130,36 @@ export class NativePlaygroundService {
    * staging links it removed, and if even that fails, withdraw the sidecar.
    */
   async #restoreStagingGuard(path: string, staging: readonly string[]): Promise<void> {
-    const restored = await Promise.allSettled(staging.map((entry) => this.#restoreStagingLink(path, entry)));
-    const failures = restored.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason] : []));
-    if (failures.length === 0) return;
-    try {
-      await this.#catalogStorage.remove(path, { force: true });
-      return;
-    } catch (error) {
-      failures.push(error);
-    }
+    const directory = dirname(path);
+    const failures: unknown[] = [];
+    // Each compensating step is only trusted once the directory is fsynced;
+    // an unsynced guard could vanish in a crash while the earlier unlink persists.
+    const durable = async (step: () => Promise<void>): Promise<boolean> => {
+      try {
+        await step();
+        await this.#syncCatalogDirectory(directory);
+        return true;
+      } catch (error) {
+        failures.push(error);
+        return false;
+      }
+    };
+    if (await durable(async () => {
+      const restored = await Promise.allSettled(staging.map((entry) => this.#restoreStagingLink(path, entry)));
+      const rejected = restored.find((outcome) => outcome.status === 'rejected');
+      if (rejected !== undefined) throw rejected.reason;
+    })) return;
+    if (await durable(() => this.#catalogStorage.remove(path, { force: true }))) return;
     // Last resort: a fresh guard under this process's pid keeps the sidecar
     // doubly linked (and recoverable once this process exits) rather than
     // leaving a singly linked file that the next reader would adopt.
-    const guard = join(dirname(path), `.${basename(path, '.json')}.stage-${process.pid}-guard-${Math.random().toString(16).slice(2)}`);
-    try {
-      await this.#catalogStorage.link(path, guard);
-    } catch (error) {
-      failures.push(error);
-      throw new AggregateError(failures, 'Native Playground catalog recovery could not keep the sidecar guarded.', { cause: error });
-    }
+    const guard = join(directory, `.${basename(path, '.json')}.stage-${process.pid}-guard-${Math.random().toString(16).slice(2)}`);
+    if (await durable(() => this.#catalogStorage.link(path, guard))) return;
+    throw new AggregateError(
+      failures,
+      'Native Playground catalog recovery could not keep the sidecar guarded.',
+      { cause: failures.at(-1) },
+    );
   }
 
   /** Re-links one staging entry; a concurrent recoverer that already restored the same alias counts as success. */
