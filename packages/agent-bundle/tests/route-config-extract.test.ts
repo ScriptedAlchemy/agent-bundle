@@ -298,16 +298,38 @@ it('diagnoses an App reference that matches no App route (AB4826) and drops the 
     sourcePath: '/project/src/mcp/notes/tools/search.ts',
   });
   expect(resolved.diagnostics[0]!.message).toContain('references MCP App "missing" at 2:53');
-  expect(resolved.diagnostics[0]!.message).toContain('known App routes: app:notes/dashboard');
+  expect(resolved.diagnostics[0]!.message).toContain('known App routes of "notes": app:notes/dashboard');
 
-  // Outside an MCP server the bare form has no server to resolve against.
+  // Outside an MCP server there is no generated server to register an App on.
   const fromScript = resolveRouteConfigAppReferences(
     extracted,
     { relativePath: 'src/scripts/report.ts', source: '/project/src/scripts/report.ts' },
+    notesApps,
+  );
+  expect(codes(fromScript.diagnostics)).toEqual(['AB4826']);
+  expect(fromScript.diagnostics[0]!.message).toContain('App references resolve only from MCP route modules');
+
+  // Another server's App is never a target, even through the qualified forms.
+  const crossServer = extract([
+    "import { appResourceUri } from 'agent-bundle/routes';",
+    "export const config = { _meta: { ui: { resourceUri: appResourceUri('app:notes/dashboard') } } };",
+  ].join('\n'), 'src/mcp/reporter/tools/summarize.ts');
+  const fromOtherServer = resolveRouteConfigAppReferences(
+    crossServer,
+    { relativePath: 'src/mcp/reporter/tools/summarize.ts', serverName: 'reporter', source: '/project/src/mcp/reporter/tools/summarize.ts' },
+    notesApps,
+  );
+  expect(codes(fromOtherServer.diagnostics)).toEqual(['AB4826']);
+  expect(fromOtherServer.diagnostics[0]!.message).toContain('which is app:notes/dashboard on another server');
+  expect(fromOtherServer.config).toBe(emptyRouteConfig);
+
+  // A server without any App names that in the message.
+  const noApps = resolveRouteConfigAppReferences(
+    extracted,
+    { relativePath: 'src/mcp/notes/tools/search.ts', serverName: 'notes', source: '/project/src/mcp/notes/tools/search.ts' },
     [],
   );
-  expect(fromScript.diagnostics[0]!.message).toContain("the bare '<app>' form needs an MCP route on the same server");
-  expect(fromScript.diagnostics[0]!.message).toContain('no App route declares a static config.resourceUri');
+  expect(noApps.diagnostics[0]!.message).toContain('no App route of the generated "notes" server declares a static config.resourceUri');
 });
 
 it.each([

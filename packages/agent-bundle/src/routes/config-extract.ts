@@ -96,7 +96,7 @@ const emptyExtraction: ExtractedRouteConfig = deepFreeze({
 
 const declarationRecovery = 'Export the route config as a single top-level `export const config = { ... }` object literal, then inspect again.';
 const grammarRecovery = `Restrict the config initializer to the static grammar (${routeConfigGrammar}). A string value may reference a top-level const string literal declared in this module or exported by a relative sibling module (\`import { X } from './constants'\`), or reference an MCP App route through \`${appResourceUriHelperName}('<app>')\` imported from ${routeHelpersSpecifier}; then inspect again.`;
-const appReferenceRecovery = `Reference an App route as '<app>' (same server), '<server>/<app>', 'app:<server>/<app>', or a relative module path from the referencing module, and make sure that App route declares a static config.resourceUri; then inspect again.`;
+const appReferenceRecovery = `Reference an App route of the same generated server as '<app>', '<server>/<app>', 'app:<server>/<app>', or a relative module path from the referencing module, and make sure that App route declares a static config.resourceUri; then inspect again.`;
 
 const routeConfigError = (
   code: 'AB4805' | 'AB4806' | 'AB4826',
@@ -667,12 +667,35 @@ const cloneWithSubstitutions = (
   return value;
 };
 
+/** Why one `appResourceUri()` reference did not resolve, for the AB4826 message. */
+const describeUnresolvedAppReference = (
+  reference: string,
+  site: AppReferenceSite,
+  local: readonly AppReferenceTarget[],
+  apps: readonly AppReferenceTarget[],
+): string => {
+  if (site.serverName === undefined) {
+    return 'App references resolve only from MCP route modules (src/mcp/<server>/{tools,resources,prompts,apps}/*), whose generated server registers the App';
+  }
+  const foreign = findAppTarget(reference, site, apps);
+  if (foreign !== undefined) {
+    return `which is ${foreign.id} on another server; a generated server registers only its own Apps, so ${JSON.stringify(site.serverName)} cannot serve it`;
+  }
+  const known = local.length === 0
+    ? `no App route of the generated ${JSON.stringify(site.serverName)} server declares a static config.resourceUri`
+    : `known App routes of ${JSON.stringify(site.serverName)}: ${local.map((app) => app.id).sort((left, right) => left.localeCompare(right)).join(', ')}`;
+  return `which matches no App route of the same server; ${known}`;
+};
+
 /**
  * Substitutes every `appResourceUri()` reference of an extraction with the
- * target App route's `resourceUri`. A reference that matches no App route
- * (or an App route whose own `resourceUri` is not a static string) is
- * AB4826, and — like every dynamic config — the route compiles with the
- * empty config beside the diagnostic rather than with a half-resolved one.
+ * target App route's `resourceUri`. Only Apps of the referencing route's own
+ * server are targets — a generated server registers exactly its own Apps, so
+ * a URI from another server could never be read through it. A reference that
+ * matches no such App (an unknown name, another server's App, an App whose
+ * own `resourceUri` is not a static string, or any reference from a non-MCP
+ * route) is AB4826, and — like every dynamic config — the route compiles
+ * with the empty config beside the diagnostic rather than a half-resolved one.
  */
 export const resolveRouteConfigAppReferences = (
   extracted: ExtractedRouteConfig,
@@ -680,20 +703,17 @@ export const resolveRouteConfigAppReferences = (
   apps: readonly AppReferenceTarget[],
 ): ExtractedRouteConfig => {
   if (extracted.appReferences.length === 0) return extracted;
+  const local = site.serverName === undefined
+    ? []
+    : apps.filter((app) => app.id.startsWith(`app:${site.serverName}/`));
   const substitutions = new Map<string, string>();
   const diagnostics: Diagnostic[] = [...extracted.diagnostics];
   for (const reference of extracted.appReferences) {
-    const target = findAppTarget(reference.reference, site, apps);
+    const target = findAppTarget(reference.reference, site, local);
     if (target === undefined) {
-      const known = apps.length === 0
-        ? 'no App route declares a static config.resourceUri'
-        : `known App routes: ${apps.map((app) => app.id).sort((left, right) => left.localeCompare(right)).join(', ')}`;
-      const bareHint = site.serverName === undefined && !reference.reference.includes('/') && !reference.reference.startsWith('app:')
-        ? ' (the bare \'<app>\' form needs an MCP route on the same server)'
-        : '';
       diagnostics.push(routeConfigError(
         'AB4826',
-        `Route module ${site.relativePath} references MCP App ${JSON.stringify(reference.reference)} at ${reference.position}, which matches no App route${bareHint}; ${known}.`,
+        `Route module ${site.relativePath} references MCP App ${JSON.stringify(reference.reference)} at ${reference.position}, ${describeUnresolvedAppReference(reference.reference, site, local, apps)}.`,
         appReferenceRecovery,
         site.source,
       ));

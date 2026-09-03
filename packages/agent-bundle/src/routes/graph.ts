@@ -637,15 +637,22 @@ export const compileRouteGraph = async (
   const appTargets = appReferenceTargets(pending, serverModes);
   for (const { metadata, module } of pending) {
     const moduleText = moduleTextBySource.get(module.source);
-    const resolved = resolveRouteConfigAppReferences(
-      metadata.extracted,
-      {
-        relativePath: module.relativePath,
-        ...(module.serverName === undefined ? {} : { serverName: module.serverName }),
-        source: module.source,
-      },
-      appTargets,
-    );
+    // Routes of a server that is not generated never ship their config: the
+    // mode diagnostic (AB4800) or explicit override is the actionable fact,
+    // so their App references are left as authored rather than reported.
+    const shipsConfig = module.serverName === undefined
+      || serverModes.get(module.serverName)?.mode === 'generated';
+    const resolved = shipsConfig
+      ? resolveRouteConfigAppReferences(
+        metadata.extracted,
+        {
+          relativePath: module.relativePath,
+          ...(module.serverName === undefined ? {} : { serverName: module.serverName }),
+          source: module.source,
+        },
+        appTargets,
+      )
+      : metadata.extracted;
     diagnostics.push(...resolved.diagnostics);
     const route = compiledRoute(module, resolved.config, metadata.inputSchema);
     if (route.kind === 'event-route' && moduleText !== undefined) {

@@ -152,17 +152,19 @@ export type RouteMeta = Readonly<Record<string, unknown>> & {
 
 /**
  * References an MCP App route's `config.resourceUri` from another route's
- * static `config` (typically `_meta.ui.resourceUri`). Accepted references:
+ * static `config` (typically `_meta.ui.resourceUri`). The App must belong to
+ * the same generated server as the referencing route — a generated server
+ * registers only its own Apps. Accepted references:
  *
- * - `'<app>'` — an App route on the same generated server as the referencing
- *   route (`src/mcp/<server>/apps/<app>.{ts,tsx}`);
- * - `'<server>/<app>'` or `'app:<server>/<app>'` — the App route id;
+ * - `'<app>'` — the App route `src/mcp/<server>/apps/<app>.{ts,tsx}` of the
+ *   referencing route's server;
+ * - `'<server>/<app>'` or `'app:<server>/<app>'` — the same App by route id;
  * - `'./…'` or `'../…'` — the App route module relative to the referencing
- *   module, with or without its extension.
+ *   module, with or without its `.ts`/`.tsx` extension.
  *
  * The compiler evaluates the call statically while extracting `config` and
- * replaces it with the target App's `resourceUri`; an unknown reference is
- * `AB4826`. The route module still evaluates at run time (generated entries
+ * replaces it with the target App's `resourceUri`; a reference to no App of
+ * the same server is `AB4826`. The route module still evaluates at run time (generated entries
  * import it for its default export), where the call returns the reference
  * unchanged — generated servers read the compiled config, never this value.
  */

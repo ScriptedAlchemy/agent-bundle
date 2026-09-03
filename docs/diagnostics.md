@@ -371,16 +371,21 @@ in every tool that opens it:
   `Agent.Result metadata`).
 - **`appResourceUri('<app>')`** imported from `agent-bundle/routes`. The
   compiler resolves the reference to the target App route's static
-  `config.resourceUri` while compiling the graph. References are `'<app>'`
-  (an App on the same generated server), `'<server>/<app>'`,
+  `config.resourceUri` while compiling the graph. The App must belong to the
+  referencing route's own generated server — a generated server registers
+  exactly its own Apps, so another server's URI could never be read through
+  it. References are `'<app>'`, `'<server>/<app>'`,
   `'app:<server>/<app>'`, or a module path relative to the referencing file
   (`'../apps/dashboard'`, with or without its `.ts`/`.tsx` extension — a
   `.js`/`.jsx` spelling maps onto the TypeScript source, and any other suffix
   is part of the App name). The argument may be a
   string literal or a const identifier of the first form. An unknown
-  reference — or a reference to an App whose own `resourceUri` is not a
-  static string, or whose server is not generated — is `AB4826`, and the
-  route compiles with the empty config beside it. Whether referenced or
+  reference — another server's App, an App whose own `resourceUri` is not a
+  static string, or any reference from a non-MCP route — is `AB4826`, and the
+  route compiles with the empty config beside it. Routes of a server that is
+  not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) never
+  ship their config, so their references are left as authored rather than
+  reported. Whether referenced or
   written as a literal, an advertised `_meta.ui.resourceUri` must name an App
   the server builds for every target it ships to (`AB4828` otherwise). At run time the helper returns the reference unchanged: generated
   servers read the compiled config, never the module's evaluated `config`, so
@@ -517,7 +522,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4823` | error | An event route declares an event outside the v1 event vocabulary. |
 | `AB4824` | error | An event route selects an unknown target or requires an event capability that the selected target does not support. |
 | `AB4825` | error | An event route's `config.targets` is not a nonempty array of nonempty target names. |
-| `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of a generated server with a static `config.resourceUri` (Apps of servers packaged as `custom`/`command`/`remote`, or left in an `AB4800` conflict, are never built, so they are not targets). The message lists the known App route ids; reference the App as `'<app>'` (same server), `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
+| `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of the route's own generated server with a static `config.resourceUri`: an unknown name, another server's App (a generated server registers only its own Apps), or a reference from a non-MCP route. The message names the cause and lists the server's known App route ids; reference the App as `'<app>'`, `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
 | `AB4827` | error | An MCP App route's `config.template` is ambiguous or missing: both the route-relative and the project-root-relative interpretation name different existing files, or neither exists. The message names both candidate paths; templates resolve relative to the route module, so rewrite the path as `'./<file>.html'` beside the route. |
 | `AB4828` | error | A generated MCP route advertises `_meta.ui.resourceUri` of an App on its server (through `appResourceUri()` or a literal) that is not built for every target the server ships to, because the App's `config.targets` (or a config-declared App's `targets`) is narrower. Widen the App's targets or restrict `mcp.servers.<server>.targets`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |

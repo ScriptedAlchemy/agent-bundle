@@ -701,13 +701,7 @@ it('resolves appResourceUri() references and imported const identifiers to the A
     ].join('\n'),
     'src/mcp/curator/tools/inspect.ts': [
       "import { appResourceUri as app } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: app('dashboard') } }, related: [app('../apps/dashboard')] };",
-      moduleSource,
-    ].join('\n'),
-    // A tool on another server addresses the App through its qualified id.
-    'src/mcp/reporter/tools/summarize.ts': [
-      "import { appResourceUri } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: appResourceUri('curator/dashboard') } } };",
+      "export const config = { _meta: { ui: { resourceUri: app('dashboard') } }, related: [app('../apps/dashboard'), app('curator/dashboard')] };",
       moduleSource,
     ].join('\n'),
   });
@@ -719,8 +713,7 @@ it('resolves appResourceUri() references and imported const identifiers to the A
     'app:curator/dashboard': { resourceUri: 'ui://curator/dashboard.html', template: './dashboard.html' },
     'prompt:curator/curate': { _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } } },
     'resource:curator/catalog': { _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } }, uri: 'catalog://books' },
-    'tool:curator/inspect': { _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } }, related: ['ui://curator/dashboard.html'] },
-    'tool:reporter/summarize': { _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } } },
+    'tool:curator/inspect': { _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } }, related: ['ui://curator/dashboard.html', 'ui://curator/dashboard.html'] },
   });
   expect(Object.isFrozen(configs['tool:curator/inspect'])).toBe(true);
 
@@ -769,7 +762,7 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
   const unknownApp = graph.diagnostics.find((diagnostic) => diagnostic.code === 'AB4826')!;
   expect(unknownApp.sourcePath).toBe(join(root, 'src/mcp/curator/tools/inspect.ts'));
   expect(unknownApp.message).toContain('references MCP App "panel"');
-  expect(unknownApp.message).toContain('known App routes: app:curator/dashboard');
+  expect(unknownApp.message).toContain('known App routes of "curator": app:curator/dashboard');
   const nonLiteral = graph.diagnostics.find((diagnostic) => diagnostic.code === 'AB4806')!;
   expect(nonLiteral.sourcePath).toBe(join(root, 'src/mcp/curator/tools/search.ts'));
   expect(nonLiteral.message).toContain('whose `export const APP_RESOURCE_URI` initializer is not a string literal');
@@ -780,41 +773,72 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
   expect(routes.find((route) => route.kind === 'app')!.config).toEqual({ resourceUri: 'ui://curator/dashboard.html' });
 });
 
-it('never resolves an appResourceUri() reference to an App whose server is not generated', async () => {
-  const tree = {
-    'src/mcp/curator/apps/dashboard.tsx': [
-      "export const config = { resourceUri: 'ui://curator/dashboard.html' };",
-      moduleSource,
-    ].join('\n'),
-    'src/mcp/reporter/tools/summarize.ts': [
-      "import { appResourceUri } from 'agent-bundle/routes';",
-      "export const config = { _meta: { ui: { resourceUri: appResourceUri('curator/dashboard') } } };",
-      moduleSource,
-    ].join('\n'),
-  };
+it('resolves appResourceUri() references only against Apps of the same generated server', async () => {
+  const app = "export const config = { resourceUri: 'ui://curator/dashboard.html' };\n" + moduleSource;
+  const referencing = (reference: string): string => [
+    "import { appResourceUri } from 'agent-bundle/routes';",
+    `export const config = { _meta: { ui: { resourceUri: appResourceUri('${reference}') } } };`,
+    moduleSource,
+  ].join('\n');
 
-  // An override keeps the curator entry custom: its App is never built, so the
-  // cross-server reference has nothing to point at.
+  // A generated server registers only its own Apps, so a route on another
+  // server can never serve this URI: the qualified form is rejected too.
+  const crossServer = await createRoot();
+  await writeTree(crossServer, {
+    'src/mcp/curator/apps/dashboard.tsx': app,
+    'src/mcp/reporter/tools/summarize.ts': referencing('curator/dashboard'),
+  });
+  const crossServerGraph = await compileRouteGraph(crossServer, fixtureConfig());
+  expect(codesOf(crossServerGraph.diagnostics)).toEqual(['AB4826']);
+  expect(crossServerGraph.diagnostics[0]!.sourcePath).toBe(join(crossServer, 'src/mcp/reporter/tools/summarize.ts'));
+  expect(crossServerGraph.diagnostics[0]!.message).toContain('which is app:curator/dashboard on another server');
+  expect(crossServerGraph.diagnostics[0]!.message).toContain('"reporter" cannot serve it');
+  expect(crossServerGraph.servers.find((server) => server.name === 'reporter')!.routes[0]!.config).toBe(emptyRouteConfig);
+
+  // Non-MCP routes have no generated server to register an App on.
+  const script = await createRoot();
+  await writeTree(script, {
+    'src/mcp/curator/apps/dashboard.tsx': app,
+    'src/scripts/report.ts': referencing('curator/dashboard'),
+  });
+  const scriptGraph = await compileRouteGraph(script, fixtureConfig());
+  expect(codesOf(scriptGraph.diagnostics)).toEqual(['AB4826']);
+  expect(scriptGraph.diagnostics[0]!.message).toContain('App references resolve only from MCP route modules');
+
+  // A server kept custom by override ships no route config at all, so its
+  // references are neither resolved nor reported; the override is the fact.
   const custom = await createRoot();
-  await writeTree(custom, tree);
+  await writeTree(custom, {
+    'src/mcp/curator/apps/dashboard.tsx': app,
+    'src/mcp/curator/tools/open.ts': referencing('dashboard'),
+  });
   const customGraph = await compileRouteGraph(custom, fixtureConfig({ routes: { servers: { curator: 'custom' } } }));
-  expect(codesOf(customGraph.diagnostics)).toEqual(['AB4826']);
-  expect(customGraph.diagnostics[0]!.sourcePath).toBe(join(custom, 'src/mcp/reporter/tools/summarize.ts'));
-  expect(customGraph.diagnostics[0]!.message).toContain('no App route declares a static config.resourceUri');
-  expect(customGraph.servers.find((server) => server.name === 'reporter')!.routes[0]!.config).toBe(emptyRouteConfig);
+  expect(customGraph.diagnostics).toEqual([]);
+  expect(customGraph.servers[0]).toMatchObject({ mode: 'custom', routes: [] });
 
-  // An unresolved entry conflict (AB4800) is not a generated server either.
+  // An unresolved entry conflict reports AB4800 alone; the routes stay visible
+  // with their authored reference until the mode is decided.
   const conflict = await createRoot();
-  await writeTree(conflict, { ...tree, 'src/mcp/curator.ts': moduleSource });
+  await writeTree(conflict, {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/apps/dashboard.tsx': app,
+    'src/mcp/curator/tools/open.ts': referencing('dashboard'),
+  });
   const conflictGraph = await compileRouteGraph(conflict, fixtureConfig());
-  expect(codesOf(conflictGraph.diagnostics).sort()).toEqual(['AB4800', 'AB4826']);
+  expect(codesOf(conflictGraph.diagnostics)).toEqual(['AB4800']);
+  expect(conflictGraph.servers[0]!.routes.find((route) => route.kind === 'tool')!.config)
+    .toEqual({ _meta: { ui: { resourceUri: 'dashboard' } } });
 
-  // The explicit generated override restores the target.
+  // The explicit generated override resolves the reference.
   const generated = await createRoot();
-  await writeTree(generated, { ...tree, 'src/mcp/curator.ts': moduleSource });
+  await writeTree(generated, {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/apps/dashboard.tsx': app,
+    'src/mcp/curator/tools/open.ts': referencing('app:curator/dashboard'),
+  });
   const generatedGraph = await compileRouteGraph(generated, fixtureConfig({ routes: { servers: { curator: 'generated' } } }));
   expect(generatedGraph.diagnostics).toEqual([]);
-  expect(generatedGraph.servers.find((server) => server.name === 'reporter')!.routes[0]!.config)
+  expect(generatedGraph.servers[0]!.routes.find((route) => route.kind === 'tool')!.config)
     .toEqual({ _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } } });
 });
 
