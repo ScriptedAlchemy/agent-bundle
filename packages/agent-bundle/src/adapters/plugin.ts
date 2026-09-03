@@ -72,13 +72,15 @@ const pluginName = 'plugin';
  * convention, so the Claude document owns that slot; Codex's manifest carries
  * explicit pointers, so its MCP document relocates under `.codex-plugin/`.
  *
- * Hooks ship once: both hosts document discovering `hooks/hooks.json` at the
- * plugin root, Codex documents exporting `CLAUDE_PLUGIN_ROOT` into hook
- * processes as a compatibility alias and running commands through a real
- * shell, and its hook envelope and output contract match Claude's - so one
- * Claude-format hook document plus one runtime-host-detecting wrapper per
- * hook serves both hosts. Per-host `nativeHooks` passthrough stays with the
- * host targets.
+ * Hooks ship once: Codex documents discovering `hooks/hooks.json` at the
+ * plugin root, exporting `CLAUDE_PLUGIN_ROOT` into hook processes as a
+ * compatibility alias and running commands through a real shell, and its
+ * hook envelope and output contract match Claude's — so one Claude-format
+ * hook document plus one runtime-host-detecting wrapper per hook serves
+ * both hosts. Claude Code's `.claude-plugin/plugin.json` names that same
+ * `./hooks/hooks.json` so the host does not also load `hooks/hooks-cursor.json`
+ * (Cursor's camelCase `hook_event_name` values) from the shared `hooks/`
+ * directory. Per-host `nativeHooks` passthrough stays with the host targets.
  *
  * The full Cursor Plugin contract consumes the same root through `.cursor-plugin/plugin.json`: shared
  * `skills/` as-is, the conventional root `mcp.json`, and - because
@@ -361,7 +363,7 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
           '- `rules/` — Cursor rules (`.mdc`), Cursor only; Claude Code and Codex have no rules surface.',
         ]
       : []),
-    '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
+    '- `hooks/` — one `hooks.json` with a host-detecting wrapper per hook (Claude Code and Codex; named by `.claude-plugin/plugin.json`), plus `hooks-cursor.json` with per-hook Cursor wrappers (`<name>.cursor.mjs`).',
     '- `skills/` — agent skills (`SKILL.md` per skill), shared by every host.',
     '- `scripts/`, `mcp/`, `mcp-apps/`, `assets/` — compiled shared surfaces.',
     '',
@@ -419,6 +421,32 @@ const mergeEntries = (
   return [...merged.values()];
 };
 
+/**
+ * The Claude half is planned hook-free so this adapter can emit one shared
+ * `hooks/hooks.json`. Stamp the Claude manifest with that path so Claude
+ * Code loads it instead of also discovering `hooks/hooks-cursor.json`.
+ */
+const attachClaudeHookManifest = (
+  entries: TargetArtifactEntry[],
+  hookSourceInputs: readonly string[],
+): void => {
+  const index = entries.findIndex((entry) => entry.relativePath === claudeArtifactPaths.plugin);
+  if (index === -1) return;
+  const existing = entries[index]!;
+  if (existing.kind !== 'write') {
+    throw new Error('Agent plugin bundle Claude plugin.json must be a generated write entry.');
+  }
+  const parsed: unknown = JSON.parse(existing.content);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Agent plugin bundle Claude plugin.json must be a JSON object.');
+  }
+  entries[index] = Object.freeze({
+    ...existing,
+    content: `${stableJson({ ...parsed, hooks: `./${bundleHookContract.manifestPath}` })}\n`,
+    sourceInputs: sourceInputs(...existing.sourceInputs, ...hookSourceInputs),
+  });
+};
+
 const cursorMcpPlanContext = Object.freeze({ codePrefix: 'plugin.cursor', errorDiagnostic });
 
 const cursorBundleHookContract = createCursorHookContract({
@@ -469,6 +497,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     const hookSourceInputs = model.hooks
       .filter((hook) => hook.targets.includes(pluginName))
       .map((hook) => hook.provenance.sourcePath);
+    attachClaudeHookManifest(entries, hookSourceInputs);
     entries.push({
       content: `${stableJson(hookDocument)}\n`,
       kind: 'write',

@@ -20,7 +20,7 @@ the root contains the selected host's target directory.
 
 | Host | Mechanism | Scopes |
 | --- | --- | --- |
-| Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. | `user`, `project`, `local` |
+| Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. The unified `plugin` bundle's `.claude-plugin/plugin.json` names `./hooks/hooks.json` so Claude loads the Claude/Codex document and not `hooks/hooks-cursor.json`. | `user`, `project`, `local` |
 | Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. | `user` |
 | Cursor | Copies the bundle into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hooks document the plugin manifest names (`hooks/hooks.json` for the `cursor` target, `hooks/hooks-cursor.json` for the unified `plugin` target), so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
 
