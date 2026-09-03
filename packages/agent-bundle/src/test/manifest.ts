@@ -163,6 +163,8 @@ export interface AgentBundleTestManifest {
   readonly diagnostics: readonly Diagnostic[];
   /** The route graph digest: project-relative route identity, equal on every machine. */
   readonly digest: string;
+  /** Generated MCP server that owns the shared event runtime, when event routes and a generated server coexist. */
+  readonly eventRuntimeServerId?: string;
   /** Plugin name and version, as the generated MCP server reports them in `initialize`. */
   readonly plugin: TestManifestPluginIdentity;
   readonly projectRoot: string;
@@ -258,12 +260,16 @@ export const testManifestFromRouteGraph = (input: {
 }): AgentBundleTestManifest => {
   const routes: Record<string, TestableRouteDescriptor> = {};
   for (const route of graphRoutes(input.graph)) routes[route.id] = descriptorOf(route);
+  const eventRuntimeServerId = input.graph.events.length === 0
+    ? undefined
+    : input.graph.servers.find((server) => server.mode === 'generated')?.id;
   return deepFreeze({
     apps: appDescriptors(input.apps ?? [], input.projectRoot),
     cliCommands: [...(input.graph.cli?.commands ?? [])],
     ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
     diagnostics: [...(input.diagnostics ?? input.graph.diagnostics)],
     digest: input.graph.digest,
+    ...(eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId }),
     plugin: input.plugin ?? { name: 'unknown', version: '0.0.0' },
     projectRoot: input.projectRoot,
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,

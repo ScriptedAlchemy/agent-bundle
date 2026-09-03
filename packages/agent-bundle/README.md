@@ -428,7 +428,9 @@ idempotent commit replay, and typed budget rejection. A caller-supplied
 same-store `restart` callback adds durability evidence at that boundary;
 without one the check is honestly `not-applicable`. Packed callers should wire
 that callback into the existing packed journey's restart rather than creating
-a second pack/build/install path.
+a second pack/build/install path. A lifecycle fixture's optional
+`state.catalog` assertion pins its declared id and lifetime to the compiler
+manifest used by that same mounted-state replay.
 
 **`runInstalledHostContractMatrix` (`host-install`)** runs against an
 already-open session from `openInstalledHostMcpServer`. The opener reads the
@@ -440,12 +442,16 @@ running-process versions separately and fails closed when any value is missing
 or differs. Metadata records the host binary version when observed, adapter
 revision, manifest/schema digest, and framework version. Module-backed checks
 remain honestly not-applicable because loading project modules would cross back
-into the source/build tree.
+into the source/build tree. When the compiled manifest contains event routes,
+the packed and installed-host boundaries sample the read-only event-runtime
+status before and throughout sequential matrix events. The
+`runtime-instance-identity` check fails if the warm `instanceId` changes, the
+artifact epoch drifts, or availability degrades to `runtime-restarted` /
+`runtime-unavailable`.
 
-No matrix boundary proves browser App HTML, artifact-rebuild replay,
-state-lifetime catalog identity, or running-process identity beyond what the
-live MCP session reports; deeper runtime-instance introspection depends on
-#269.
+No matrix boundary proves browser App HTML or artifact-rebuild replay.
+In-memory runs and compiled artifacts without event routes report runtime
+identity as honestly `not-applicable`.
 
 When the advertised input schema declares `additionalProperties: false`, plain
 `z.object` tool routes may still strip unknown keys without a protocol failure.
@@ -472,6 +478,7 @@ await runContractMatrix({
 
 // Packed: pass an already-open session and a manifest compiled before source removal.
 await runPackedContractMatrix({
+  eventRuntime: { endpointId: packedEventRuntimeEndpointId },
   session: packedSession,
   manifest: compiledManifest,
   fixtures: { /* same shape */ },

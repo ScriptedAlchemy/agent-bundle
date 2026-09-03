@@ -92,6 +92,7 @@ export {
 export type {
   ContractCheckOutcome,
   ContractCheckStatus,
+  ContractEventRuntimeAddress,
   ContractLifecycleFixture,
   ContractLifecyclePhase,
   ContractLifecycleTransition,
