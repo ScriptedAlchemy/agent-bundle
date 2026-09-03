@@ -34,7 +34,10 @@
 ## Pull requests
 
 - Every PR: CI green first, then wait for the automated reviewer
-  (`chatgpt-codex-connector`, posts within minutes of each push) to finish.
+  (`chatgpt-codex-connector`) to finish. It does not re-review on its own
+  after a rebase or force-push: after every push, post an `@codex review` PR
+  comment if no fresh review appears within a few minutes, and confirm its
+  summary comment cites the current head SHA before merging.
 - Address every review thread — fix it in the same PR or reply with a precise
   reason — and reply on every thread. After each push, re-check for new
   threads and repeat until there are none. Only then merge.
