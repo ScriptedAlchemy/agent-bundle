@@ -27,6 +27,7 @@ const publicApiEntryPoints = [
   'mcp-apps.ts',
   'meta.ts',
   'mcp-entry.ts',
+  'routes/public.ts',
   'rstest/index.ts',
   'test/index.ts',
   'test/browser.ts',

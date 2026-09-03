@@ -24,6 +24,7 @@ Every public entry point is documented from its declarations:
 | `agent-bundle/mcp-apps` | The MCP App resource registry contract, replaced by the compiler in local MCP servers. |
 | `agent-bundle/cli-entry` | The routed-CLI shell every generated CLI executable is built on. |
 | `agent-bundle/mcp-entry` | The stdio MCP entry shell every generated MCP server is wrapped in. |
+| `agent-bundle/routes` | The route-module authoring types (`AgentEventRouteProps`, `ToolRouteProps`, `CliRouteProps`, the `config` shapes) and `appResourceUri`, the static reference to a sibling MCP App the compiler resolves to its `resourceUri`. |
 
 Because it is generated, it always matches the shipped types: signatures, unions, defaults, and
 the error classes each surface can throw. When this Reference section and the generated pages
