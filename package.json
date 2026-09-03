@@ -33,7 +33,7 @@
     "test:packed:native": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-native-smoke.test.ts",
     "test:packed:native:claude": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native",
     "test:packed:native:codex": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native",
-    "test:host-install": "rstest --config rstest.config.ts packages/agent-bundle/tests/host-install-proof.test.ts packages/agent-bundle/tests/dev-host-install.test.ts",
+    "test:host-install": "rstest --config rstest.config.ts packages/agent-bundle/tests/host-install-proof.test.ts packages/agent-bundle/tests/dev-host-install.test.ts packages/agent-bundle/tests/dev-live-host.test.ts",
     "test:host-install:build": "pnpm build && pnpm test:host-install",
     "test:host-install:packed": "rstest --config rstest.config.ts packages/agent-bundle/tests/packed-host-install-proof.test.ts",
     "test:host-install:packed:build": "pnpm build && pnpm test:host-install:packed",

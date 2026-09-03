@@ -1,9 +1,12 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { parse as parseYaml } from 'yaml';
 
 import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
@@ -30,11 +33,13 @@ import { openInstalledHostMcpServer } from '../../src/test/installed.ts';
 import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-install-manager.ts';
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
+import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
 } from './packed-native-smoke.ts';
+import { replaceWatchedSource } from './watched-files.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -1262,6 +1267,445 @@ export const runPortableHostInstallProof = async (
   } finally {
     await rm(home, { force: true, recursive: true });
   }
+};
+
+export interface DevLiveHostProofReport {
+  readonly connection: {
+    readonly initialized: 1;
+    readonly observations: readonly [string, string];
+    readonly toolsListChanged: 1;
+  };
+  readonly host: InstallHost;
+  readonly hostBinaryVersion: string | 'not-required';
+  readonly install: {
+    readonly commandFromInstalledDocument: true;
+    readonly hostCliCommandCount: number;
+    readonly hostCliCommandsUnchangedAcrossRebuild: true;
+  };
+  readonly resync: {
+    readonly hook: 'v2';
+    readonly markerAdvanced: true;
+    readonly skill: 'v2';
+  };
+  readonly sessionEvidence: string;
+  readonly status: 'passed';
+}
+
+export interface ClaudeLiveDevSessionReport {
+  readonly attempts: 2;
+  readonly host: 'claude';
+  readonly hostBinaryVersion: string;
+  readonly normalHome: {
+    readonly settingsAndPlugins: 'unchanged';
+  };
+  readonly reinstalledAfterRebuild: false;
+  readonly sessionMode: 'resumed inline installed-tree session';
+  readonly status: 'passed';
+  readonly toolOutputs: readonly [string, string];
+}
+
+interface LiveHostObservationContext {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly installedRoot: string;
+  readonly version: 'v1' | 'v2';
+}
+
+interface LiveHostScenarioResult {
+  readonly hostBinaryVersion: string | 'not-required';
+  readonly report: DevLiveHostProofReport;
+}
+
+const liveMcpSource = (version: 'v1' | 'v2'): string => [
+  "import { McpServer } from '@modelcontextprotocol/server';",
+  "import { z } from 'zod';",
+  '',
+  `const version = ${JSON.stringify(version)};`,
+  '',
+  'export default () => {',
+  "  const server = new McpServer({ name: 'host-install-proof', version: '1.0.0' });",
+  "  server.registerTool('echo', {",
+  "    description: 'Reports the live development epoch.',",
+  '    inputSchema: { message: z.string() },',
+  '  }, async ({ message }) => ({',
+  '    content: [{ text: `${version}:${message}`, type: \'text\' }],',
+  '    structuredContent: { message, operationId: \'tool:probe/echo\', version },',
+  '  }));',
+  '  return server;',
+  '};',
+  '',
+].join('\n');
+
+const liveSkillSource = (version: 'v1' | 'v2'): string => [
+  '---',
+  'name: probe',
+  `description: Live development proof ${version}.`,
+  '---',
+  '',
+  `# Live development proof ${version}`,
+  '',
+].join('\n');
+
+const liveHookSource = (version: 'v1' | 'v2'): string =>
+  `export default () => ({ additionalContext: 'live development proof ${version}', outcome: 'continue' as const });\n`;
+
+const hostMcpDocument = (host: InstallHost): string => host === 'cursor' ? 'mcp.json' : '.mcp.json';
+
+const liveHostDestination = (
+  host: InstallHost,
+  roots: { readonly claudeConfig: string; readonly codexHome: string; readonly home: string },
+): string => {
+  switch (host) {
+    case 'claude':
+      return join(roots.claudeConfig, 'plugins', 'cache', marketplace, plugin, version);
+    case 'codex':
+      return join(roots.codexHome, 'plugins', 'cache', marketplace, plugin, version);
+    case 'cursor':
+      return join(roots.home, '.cursor', 'plugins', 'local', plugin);
+    default: {
+      const exhaustive: never = host;
+      return fail(`Unsupported live development host ${String(exhaustive)}.`);
+    }
+  }
+};
+
+const textToolResult = (result: Awaited<ReturnType<Client['callTool']>>): string => {
+  const first = result.content[0];
+  return first?.type === 'text'
+    ? first.text
+    : fail('The installed development MCP tool returned no text content.');
+};
+
+const waitFor = async (
+  condition: () => Promise<boolean>,
+  message: string,
+  timeout = 20_000,
+): Promise<void> => {
+  const started = Date.now();
+  while (!await condition()) {
+    if (Date.now() - started >= timeout) fail(message);
+    await new Promise<void>((resolvePromise) => {
+      setTimeout(resolvePromise, 20);
+    });
+  }
+};
+
+const commandLines = async (path: string): Promise<readonly string[]> => {
+  const text = await readFile(path, 'utf8').catch((error: unknown) => {
+    if (record(error)?.code === 'ENOENT') return '';
+    throw error;
+  });
+  return text.split('\n').filter((line) => line.length > 0);
+};
+
+const hostCliInstallCommandCount = async (path: string): Promise<number> =>
+  (await commandLines(path)).filter((line) => {
+    const args = parseJson<readonly string[]>(line, 'recorded host CLI command');
+    return args[0] === 'plugin';
+  }).length;
+
+const installHostCommandRecorder = async (
+  host: Exclude<InstallHost, 'cursor'>,
+  root: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<{ readonly environment: NodeJS.ProcessEnv; readonly log: string; readonly version: string }> => {
+  const versioned = await run(host, ['--version'], { cwd: root, environment });
+  assertProof(versioned.exitCode === 0, `${host} --version failed: ${commandDetail(versioned)}`);
+  const observedVersion = /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(versioned.stdout)?.[1];
+  assertProof(observedVersion !== undefined, `${host} --version did not report a semantic version.`);
+  const located = await run('which', [host], { cwd: root, environment });
+  assertProof(located.exitCode === 0, `Could not resolve the real ${host} binary: ${commandDetail(located)}`);
+  const realBinary = located.stdout.trim().split('\n')[0];
+  assertProof(realBinary !== undefined && isAbsolute(realBinary), `Resolved ${host} binary was not absolute.`);
+  const wrappers = join(root, 'host-command-wrappers');
+  const log = join(root, `${host}-commands.jsonl`);
+  await mkdir(wrappers, { recursive: true });
+  await writeFile(join(wrappers, host), [
+    `#!${process.execPath}`,
+    "import { appendFileSync } from 'node:fs';",
+    "import { spawnSync } from 'node:child_process';",
+    '',
+    "appendFileSync(process.env.AGENT_BUNDLE_HOST_COMMAND_LOG, `${JSON.stringify(process.argv.slice(2))}\\n`);",
+    'const result = spawnSync(process.env.AGENT_BUNDLE_REAL_HOST_BINARY, process.argv.slice(2), {',
+    '  env: process.env,',
+    "  stdio: ['ignore', 'inherit', 'inherit'],",
+    '});',
+    'process.exit(result.status ?? 1);',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return Object.freeze({
+    environment: {
+      ...environment,
+      AGENT_BUNDLE_HOST_COMMAND_LOG: log,
+      AGENT_BUNDLE_REAL_HOST_BINARY: realBinary,
+      PATH: `${wrappers}${delimiter}${environment.PATH ?? ''}`,
+    },
+    log,
+    version: observedVersion,
+  });
+};
+
+const withProcessEnvironment = async <Value>(
+  environment: NodeJS.ProcessEnv,
+  action: () => Promise<Value>,
+): Promise<Value> => {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(environment)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await action();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+};
+
+const runLiveHostScenario = async (
+  fixture: BuiltHostInstallFixture,
+  host: InstallHost,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+  observe?: (context: LiveHostObservationContext) => Promise<void>,
+): Promise<LiveHostScenarioResult> => {
+  const scenarioRoot = await mkdtemp(join(tmpdir(), `agent-bundle-dev-live-${host}-`));
+  const projectRoot = dirname(fixture.artifactRoot);
+  const roots = Object.freeze({
+    claudeConfig: join(scenarioRoot, 'claude'),
+    codexHome: join(scenarioRoot, 'codex'),
+    home: join(scenarioRoot, 'home'),
+  });
+  await Promise.all([
+    mkdir(roots.claudeConfig, { recursive: true }),
+    mkdir(roots.codexHome, { recursive: true }),
+    mkdir(join(roots.home, '.cursor'), { recursive: true }),
+  ]);
+  let environment = isolatedEnvironment(options.environment, {
+    CLAUDE_CONFIG_DIR: roots.claudeConfig,
+    CODEX_HOME: roots.codexHome,
+    HOME: roots.home,
+  });
+  let hostBinaryVersion: string | 'not-required' = 'not-required';
+  let commandLog = join(scenarioRoot, 'cursor-no-host-commands.jsonl');
+  if (host !== 'cursor') {
+    const recorded = await installHostCommandRecorder(host, scenarioRoot, environment);
+    environment = recorded.environment;
+    commandLog = recorded.log;
+    hostBinaryVersion = recorded.version;
+  }
+  const mcpSource = join(projectRoot, 'src', 'mcp', 'probe.ts');
+  const skillSource = join(projectRoot, 'src', 'skills', 'probe', 'SKILL.md');
+  const hookSource = join(projectRoot, 'src', 'hooks', 'session-start.ts');
+  await Promise.all([
+    writeFile(mcpSource, liveMcpSource('v1')),
+    writeFile(skillSource, liveSkillSource('v1')),
+    writeFile(hookSource, liveHookSource('v1')),
+  ]);
+  const destination = liveHostDestination(host, roots);
+  let client: Client | undefined;
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  try {
+    return await withProcessEnvironment(environment, async () => {
+      server = await startDevServer({ installHosts: [host], open: false, port: 0, root: projectRoot });
+      const markerBefore = parseJson<{ readonly epochId: string }>(
+        await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
+        `${host} initial live development marker`,
+      );
+      const document = record(parseJson<unknown>(
+        await readFile(join(destination, hostMcpDocument(host)), 'utf8'),
+        `${host} installed development MCP document`,
+      ));
+      const declared = record(record(document?.mcpServers)?.probe);
+      assertProof(typeof declared?.command === 'string', `${host} installed development MCP command was absent.`);
+      assertProof(
+        Array.isArray(declared.args) && declared.args.every((argument) => typeof argument === 'string'),
+        `${host} installed development MCP arguments were absent.`,
+      );
+      const transport = new StdioClientTransport({
+        args: [...declared.args as readonly string[]],
+        command: declared.command,
+        cwd: destination,
+        env: stringEnvironment(environment),
+        stderr: 'pipe',
+      });
+      client = new Client({ name: 'agent-bundle-live-host-proof', version: '1.0.0' });
+      await client.connect(transport);
+      let toolsListChanged = 0;
+      const changed = Promise.withResolvers<void>();
+      client.setNotificationHandler('notifications/tools/list_changed', async () => {
+        toolsListChanged += 1;
+        changed.resolve();
+      });
+      const listed = await client.listTools();
+      assertProof(listed.tools.some((tool) => tool.name === 'echo'), `${host} live proxy did not list echo.`);
+      const first = textToolResult(await client.callTool({ arguments: { message: host }, name: 'echo' }));
+      assertProof(first === `v1:${host}`, `${host} live proxy did not observe v1.`);
+      await observe?.({ environment, installedRoot: destination, version: 'v1' });
+      const installCommandsBeforeRebuild = await hostCliInstallCommandCount(commandLog);
+      await Promise.all([
+        replaceWatchedSource(projectRoot, mcpSource, liveMcpSource('v2')),
+        replaceWatchedSource(projectRoot, skillSource, liveSkillSource('v2')),
+        replaceWatchedSource(projectRoot, hookSource, liveHookSource('v2')),
+      ]);
+      await Promise.race([
+        changed.promise,
+        new Promise<never>((_resolvePromise, rejectPromise) => {
+          setTimeout(() => rejectPromise(new Error(`${host} tools/list_changed timed out.`)), 30_000);
+        }),
+      ]);
+      const second = textToolResult(await client.callTool({ arguments: { message: host }, name: 'echo' }));
+      assertProof(second === `v2:${host}`, `${host} live proxy did not observe v2.`);
+      await waitFor(async () => {
+        const marker = parseJson<{ readonly epochId: string }>(
+          await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
+          `${host} rebuilt live development marker`,
+        );
+        return marker.epochId !== markerBefore.epochId;
+      }, `${host} installed development marker did not advance.`);
+      await waitFor(
+        async () => (await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).includes('proof v2'),
+        `${host} installed skill did not re-sync to v2.`,
+      );
+      const hookName = (await readdir(join(destination, 'hooks'))).find((name) => name.endsWith('.mjs'));
+      assertProof(hookName !== undefined, `${host} installed hooks contained no executable module.`);
+      await waitFor(
+        async () => (await readFile(join(destination, 'hooks', hookName), 'utf8')).includes('proof v2'),
+        `${host} installed hook did not re-sync to v2.`,
+      );
+      const installCommandsAfterRebuild = await hostCliInstallCommandCount(commandLog);
+      assertProof(
+        installCommandsAfterRebuild === installCommandsBeforeRebuild,
+        `${host} rebuild invoked another host CLI install command.`,
+      );
+      await observe?.({ environment, installedRoot: destination, version: 'v2' });
+      const sessionEvidence = host === 'cursor'
+        ? 'unavailable: Cursor exposes no non-interactive plugin-loading session surface'
+        : host === 'codex'
+          ? 'unavailable: Codex exec authenticates non-interactively but exposes no inline plugin loader for the isolated dev install; exact installed proxy observed v1→v2 on one connection'
+          : 'host-owned installation and exact installed proxy observed v1→v2 on one connection';
+      const report: DevLiveHostProofReport = Object.freeze({
+        connection: Object.freeze({
+          initialized: 1,
+          observations: Object.freeze([first, second] as const),
+          toolsListChanged: toolsListChanged === 1
+            ? 1
+            : fail(`${host} emitted ${String(toolsListChanged)} tools/list_changed notifications.`),
+        }),
+        host,
+        hostBinaryVersion,
+        install: Object.freeze({
+          commandFromInstalledDocument: true,
+          hostCliCommandCount: installCommandsBeforeRebuild,
+          hostCliCommandsUnchangedAcrossRebuild: true,
+        }),
+        resync: Object.freeze({
+          hook: 'v2',
+          markerAdvanced: true,
+          skill: 'v2',
+        }),
+        sessionEvidence,
+        status: 'passed',
+      });
+      return Object.freeze({ hostBinaryVersion, report });
+    });
+  } finally {
+    await client?.close().catch(() => undefined);
+    await server?.close().catch(() => undefined);
+    await rm(scenarioRoot, { force: true, recursive: true });
+  }
+};
+
+export const runDevLiveHostProof = async (
+  fixture: BuiltHostInstallFixture,
+  host: InstallHost,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+): Promise<DevLiveHostProofReport> => (await runLiveHostScenario(fixture, host, options)).report;
+
+export const runClaudeLiveDevSessionProof = async (
+  fixture: BuiltHostInstallFixture,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+): Promise<ClaudeLiveDevSessionReport> => {
+  const sessionId = randomUUID();
+  const normalEnvironment = { ...packedNativeEnvironment(options.environment) };
+  delete normalEnvironment.CLAUDE_CONFIG_DIR;
+  const toolOutputs: string[] = [];
+  const unchangedTurns: boolean[] = [];
+  const scenario = await runLiveHostScenario(
+    fixture,
+    'claude',
+    options,
+    async ({ installedRoot, version: liveVersion }) => {
+      const expected = `${liveVersion}:claude-session`;
+      const prompt = `Invoke the inline host-install-proof plugin's probe MCP echo tool exactly once with message `
+        + `"claude-session". Reply with only the tool's text result, which must be ${expected}.`;
+      const args = [
+        '--plugin-dir',
+        installedRoot,
+        '--model',
+        'sonnet',
+        '--output-format',
+        'text',
+        '--allowedTools',
+        'mcp__plugin_host-install-proof_probe__echo',
+        ...(liveVersion === 'v1' ? ['--session-id', sessionId] : ['--resume', sessionId]),
+        '-p',
+        prompt,
+      ];
+      let result: CommandResult | undefined;
+      const settingsAndPluginsUnchanged = await normalClaudeSettingsAndPluginsUnchanged(
+        normalEnvironment,
+        async () => {
+          result = await run('claude', args, {
+            cwd: dirname(fixture.artifactRoot),
+            environment: normalEnvironment,
+            timeout: 300_000,
+          });
+        },
+      );
+      assertProof(result !== undefined, `Claude ${liveVersion} inline live development turn did not run.`);
+      const rawOutput = result.stdout.trim();
+      assertProof(
+        result.exitCode === 0,
+        `Claude ${liveVersion} inline live development turn failed; stdout=${JSON.stringify(rawOutput)}; `
+          + `stderr=${JSON.stringify(result.stderr.trim())}.`,
+      );
+      assertProof(
+        rawOutput.includes(expected),
+        `Claude ${liveVersion} inline live development turn returned ${JSON.stringify(rawOutput)} instead of ${expected}.`,
+      );
+      assertProof(
+        settingsAndPluginsUnchanged,
+        `The real Claude settings or installed-plugin tree changed during the ${liveVersion} inline turn.`,
+      );
+      unchangedTurns.push(settingsAndPluginsUnchanged);
+      toolOutputs.push(rawOutput);
+    },
+  );
+  assertProof(
+    unchangedTurns.length === 2 && unchangedTurns.every(Boolean),
+    'The real Claude settings or installed-plugin tree changed during an inline live development turn.',
+  );
+  assertProof(scenario.hostBinaryVersion !== 'not-required', 'Claude live session recorded no binary version.');
+  const [v1Output, v2Output] = toolOutputs;
+  assertProof(
+    v1Output !== undefined && v1Output.includes('v1:claude-session')
+      && v2Output !== undefined && v2Output.includes('v2:claude-session'),
+    'Claude live session did not observe both development epochs.',
+  );
+  return Object.freeze({
+    attempts: 2,
+    host: 'claude',
+    hostBinaryVersion: scenario.hostBinaryVersion,
+    normalHome: Object.freeze({
+      settingsAndPlugins: 'unchanged',
+    }),
+    reinstalledAfterRebuild: false,
+    sessionMode: 'resumed inline installed-tree session',
+    status: 'passed',
+    toolOutputs: Object.freeze([v1Output, v2Output] as const),
+  });
 };
 
 interface SessionMarkers {
