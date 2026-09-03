@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -283,6 +283,69 @@ nativeIt('accepts the emitted Claude marketplace under strict native validation'
     expect(validation.code, validation.output).toBe(0);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict validation accepts package metadata without running the dependency install', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-package-validation-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await Promise.all([
+      writeFile(join(root, 'package.json'), `${JSON.stringify({
+        dependencies: { 'native-validation-proof': '1.0.0' },
+        name: 'native-package-proof',
+        version: '1.0.0',
+      })}\n`),
+      writeFile(join(root, 'package-lock.json'), `${JSON.stringify({
+        lockfileVersion: 3,
+        name: 'native-package-proof',
+        packages: {
+          '': {
+            dependencies: { 'native-validation-proof': '1.0.0' },
+            name: 'native-package-proof',
+            version: '1.0.0',
+          },
+        },
+        requires: true,
+        version: '1.0.0',
+      })}\n`),
+    ]);
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('package.json');
+    expect(validation.output).not.toContain('package-lock.json');
+    await expect(access(join(root, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict validation does not catch a path-escaping plugin symlink', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-symlink-validation-'));
+  const externalSkill = `${root}-outside-skill`;
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await mkdir(externalSkill, { recursive: true });
+    await writeFile(
+      join(externalSkill, 'SKILL.md'),
+      '---\nname: outside-skill\ndescription: Lives outside the plugin root.\n---\nOutside.\n',
+    );
+    await mkdir(join(root, 'skills'), { recursive: true });
+    await symlink(externalSkill, join(root, 'skills', 'outside-skill'), 'dir');
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('outside-skill');
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(externalSkill, { force: true, recursive: true }),
+    ]);
   }
 });
 
