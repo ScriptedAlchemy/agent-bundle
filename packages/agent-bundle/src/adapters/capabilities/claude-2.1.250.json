@@ -12,6 +12,68 @@
     "source": "https://code.claude.com/docs/en/discover-plugins",
     "state": "supported"
   },
+  "deferredNativeEvents": {
+    "ConfigChange-policy_settings": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: ConfigChange block decisions cannot stop policy_settings changes; recorded so the config/change family's deny channel is not overstated.",
+      "state": "unavailable"
+    },
+    "CwdChanged": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: host environment callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "DirectoryAdded": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: host workspace-registration callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "Elicitation": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: MCP protocol callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "ElicitationResult": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: MCP protocol callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "InstructionsLoaded": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: host context-load callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "MessageDisplay": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: UI display callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "Notification": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: delivery-channel surface tracked by #99 delivery evidence, not an application event route (#258 defer list).",
+      "state": "unavailable"
+    },
+    "PostModelSwitch": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: model-lifecycle callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "PostToolBatch": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: batch-scheduling callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "PreModelSwitch": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: model-lifecycle callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "Setup": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: one-time init/maintenance callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "UserPromptExpansion": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: command-expansion callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "WorktreeCreate": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: worktree-provisioning callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    },
+    "WorktreeRemove": {
+      "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: worktree-provisioning callback outside the canonical application-event vocabulary (#258 defer list).",
+      "state": "unavailable"
+    }
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {

@@ -210,10 +210,10 @@ it('records observed capability versions and rehashes schema snapshots against p
     }
 
     if (target === 'claude') {
-      expect(sha256Hex(capability)).toBe('59e190a26734a6bcca0f22ceee6151ebdd73c690eddb979a78b6b25f0136cb45');
+      expect(sha256Hex(capability)).toBe('98938d9685411227acee422f90d2e5bb51f33da96ba499aa2ad7b5d3422b37f1');
     }
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('52b1fb8776ffe0848e9ee8c35a604052c59fb292cabbfbaf7a482cd03ce3d918');
+      expect(sha256Hex(capability)).toBe('e36e84f829f1c69562647a4bc26ecfbaea2dbd0559f194ed7f52bbf133688fe5');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',
