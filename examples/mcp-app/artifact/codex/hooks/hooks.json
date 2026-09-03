@@ -1,0 +1,1 @@
+{"hooks":{"SessionStart":[{"hooks":[{"command":"node \"${PLUGIN_ROOT}/hooks/session-start-session-start-7ab7e8a5.mjs\"","type":"command"}]}]}}

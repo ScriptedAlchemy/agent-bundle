@@ -1,0 +1,1 @@
+{"interface":{"displayName":"skills-starter"},"name":"skills-starter-marketplace","plugins":[{"category":"Productivity","name":"skills-starter","policy":{"authentication":"ON_INSTALL","installation":"AVAILABLE"},"source":{"path":"./","source":"local"}}]}

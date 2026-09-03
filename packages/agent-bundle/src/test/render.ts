@@ -215,9 +215,45 @@ const cliArguments = (
   );
 };
 
+/**
+ * The executable surface name the generated entry records and hands to
+ * providers, derived like the artifact derives it: a routed CLI command is
+ * its space-joined command path (`tooling report`), a script is its
+ * path-derived name (`script:tooling-summary` -> `tooling-summary`), and an
+ * event route is its canonical event. The compiled command graph is the
+ * authority for command paths; without a manifest (module-direct renders)
+ * the harness falls back to the route id's own path segments.
+ */
+const executableSurface = (
+  kind: RenderableRouteKind,
+  routeId: string,
+  manifest: AgentBundleTestManifest | undefined,
+): string => {
+  switch (kind) {
+    case 'prompt':
+    case 'resource':
+    case 'tool':
+      return protocolName(routeId);
+    case 'event-route':
+      return routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId;
+    case 'cli': {
+      const command = manifest?.cliCommands.find((candidate) => candidate.routeId === routeId);
+      if (command !== undefined) return command.path.join(' ');
+      return (routeId.startsWith('cli:') ? routeId.slice('cli:'.length) : routeId).replaceAll('/', ' ');
+    }
+    case 'script':
+      return routeId.startsWith('script:') ? routeId.slice('script:'.length) : routeId;
+    default: {
+      const exhaustive: never = kind;
+      throw new AgentTestError('unsupported-route-kind', `Unsupported renderable route kind ${String(exhaustive)}.`);
+    }
+  }
+};
+
 const invocationFor = (
   kind: RenderableRouteKind,
   routeId: string,
+  surface: string,
   options: RenderRouteOptions,
   provenance: RenderedRouteProvenance,
 ): AgentRenderInvocation => {
@@ -233,20 +269,14 @@ const invocationFor = (
       // The generated server names the canonical event, not the route id, and
       // carries the host envelope as `payload`; the harness matches both so a
       // route sees the props the artifact would hand it.
-      return {
-        kind: 'event',
-        props: {
-          event: routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId,
-          payload: (options.input ?? {}) as never,
-        },
-      };
+      return { kind: 'event', props: { event: surface, payload: (options.input ?? {}) as never } };
     case 'cli':
-      return { kind: 'cli', props: { args: cliArguments(options, provenance), command: routeId } };
+      // The generated executable passes `command.path.join(' ')`, never the
+      // route id, so providers branching on `command` see the artifact's value.
+      return { kind: 'cli', props: { args: cliArguments(options, provenance), command: surface } };
     case 'script':
-      return {
-        kind: 'script',
-        props: { input: cliArguments(options, provenance) as never, name: routeId },
-      };
+      // The generated script passes its path-derived name (`tooling-summary`).
+      return { kind: 'script', props: { input: cliArguments(options, provenance) as never, name: surface } };
     default: {
       const exhaustive: never = kind;
       throw new AgentTestError(
@@ -313,14 +343,20 @@ const componentProps = (
   }
 };
 
-/** The request-scope invocation the generated server opens for one route. */
+/**
+ * The request-scope invocation the generated entry opens for one route:
+ * `operationId` is the route id and `surface` the executable surface name on
+ * every kind, exactly as the generated MCP server, CLI, and script shells
+ * record them.
+ */
 const requestInvocation = (
   invocation: AgentRenderInvocation,
   routeId: string,
+  surface: string,
 ): AgentInvocationInput => ({
   kind: invocation.kind,
-  ...(invocation.kind === 'tool' ? { operationId: routeId } : {}),
-  surface: invocation.kind === 'tool' ? protocolName(routeId) : routeId,
+  operationId: routeId,
+  surface,
 });
 
 const componentOf = (
@@ -748,7 +784,8 @@ const prepareRender = async (
 ): Promise<PreparedRender> => {
   const resolved = await resolveTarget(target, options);
   const renderer = await loadRenderer();
-  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
+  const surface = executableSurface(resolved.kind, resolved.provenance.routeId, resolved.manifest);
+  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, surface, options, resolved.provenance);
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
@@ -773,7 +810,7 @@ const prepareRender = async (
         signal: request.signal,
       }),
       invocation: {
-        ...requestInvocation(request.invocation, resolved.provenance.routeId),
+        ...requestInvocation(request.invocation, resolved.provenance.routeId, surface),
         ...context.invocation,
         kind: request.invocation.kind,
       },

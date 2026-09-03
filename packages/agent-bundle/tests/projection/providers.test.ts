@@ -79,13 +79,24 @@ describe('conventional providers through the harness', () => {
     });
   });
 
-  it('mounts providers for a rendered script with the script invocation', async () => {
+  it('mounts providers for a rendered script with the script name the generated script passes', async () => {
     const rendered = await renderRoute('script:tooling-summary', { args: ['--fast', 'a.mp4'] });
 
+    // The generated script passes `name: 'tooling-summary'`, never the route id.
     expect(rendered.result).toEqual({
       arguments: 2,
       keys: ['libraryTooling', 'processLifetime'],
-      libraryTooling: { kind: 'script', surface: 'script:tooling-summary', tool: 'ffprobe 6.1' },
+      libraryTooling: { kind: 'script', surface: 'tooling-summary', tool: 'ffprobe 6.1' },
+    });
+  });
+
+  it('mounts providers for a rendered CLI route at the route-unit level with the command path', async () => {
+    const rendered = await renderRoute('cli:tooling/report');
+
+    // The generated executable passes `command.path.join(' ')`, never the route id.
+    expect(rendered.result).toEqual({
+      keys: ['libraryTooling', 'processLifetime'],
+      libraryTooling: { kind: 'cli', surface: 'tooling report', tool: 'ffprobe 6.1' },
     });
   });
 

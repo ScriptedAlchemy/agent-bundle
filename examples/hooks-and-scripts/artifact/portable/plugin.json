@@ -1,0 +1,1 @@
+{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Hook simulation, script traces, logs, and recovery.","name":"hooks-and-scripts","version":"1.0.0"}

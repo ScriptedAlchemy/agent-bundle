@@ -16,7 +16,12 @@ export const AGENT_TEST_REGISTRY_SYMBOL_KEY = 'agent-bundle/test-route-registry'
 
 const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
 
-export const AGENT_TEST_REGISTRY_VERSION = 3;
+/**
+ * Bumped whenever the registry layout changes so a setup module and the
+ * helpers reading it never silently disagree about what the registry carries.
+ * 4: `providerLoaders` (conventional context providers mounted by the harness).
+ */
+export const AGENT_TEST_REGISTRY_VERSION = 4;
 
 export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;

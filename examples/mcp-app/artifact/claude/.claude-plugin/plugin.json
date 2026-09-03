@@ -1,0 +1,1 @@
+{"author":{"name":"mcp-app-example"},"description":"A unified service-readiness assistant with MCP, Skills, Hooks, scripts, and evaluation.","hooks":"./hooks/hooks.json","name":"mcp-app-example","version":"1.0.0"}
