@@ -1,0 +1,56 @@
+{
+  "success": false,
+  "strict": true,
+  "target": "/bundle/claude/.claude-plugin/plugin.json",
+  "manifest": {
+    "file": "/bundle/claude/.claude-plugin/plugin.json",
+    "type": "plugin",
+    "errors": [],
+    "warnings": [
+      {
+        "path": "displayNme",
+        "message": "Unknown field 'displayNme' — did you mean 'displayName'? Claude Code ignores unrecognized fields at load time, so this field has no effect.",
+        "code": null
+      },
+      {
+        "path": "bogus",
+        "message": "Unknown field 'bogus'. Claude Code ignores it at load time.",
+        "code": null
+      }
+    ],
+    "notes": []
+  },
+  "contents": [
+    {
+      "file": "/bundle/claude/agents/bad.md",
+      "type": "agent",
+      "errors": [],
+      "warnings": [
+        {
+          "path": "description",
+          "message": "No description in frontmatter. A description helps users and Claude understand when to use this agent.",
+          "code": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "file": "/bundle/claude/hooks/hooks.json",
+      "type": "hooks",
+      "errors": [],
+      "warnings": [
+        {
+          "path": "hooks",
+          "message": "hooks.Stop.0.hooks.0: Unknown hook type \"bogus\"; entry ignored at runtime",
+          "code": null
+        },
+        {
+          "path": "hooks",
+          "message": "hooks.postToolUse: unknown hook event; entry ignored at runtime",
+          "code": null
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

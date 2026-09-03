@@ -193,7 +193,7 @@ it('runs strict validation before the subscription-backed stream command and ret
       executable: 'claude',
     },
     {
-      args: ['plugin', 'validate', '--strict', '/candidate/plugin'],
+      args: ['plugin', 'validate', '--strict', '/candidate/plugin/.claude-plugin/plugin.json'],
       cwd: '/fresh/fixture',
       environment: { PATH: '/usr/bin' },
       executable: 'claude',
@@ -494,7 +494,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
   expect(calls).toEqual([
     { args: ['--version'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
     { args: ['auth', 'status', '--json'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
-    { args: ['plugin', 'validate', '--strict', '/candidate/plugin'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
+    { args: ['plugin', 'validate', '--strict', '/candidate/plugin/.claude-plugin/plugin.json'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
     expect.objectContaining({ executable: 'claude' }),
   ]);
 });

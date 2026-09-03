@@ -46,6 +46,32 @@ even when no error diagnostic was reported.
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
+## Claude Code host validation (`AB6019`–`AB6022`)
+
+`agent-bundle validate --artifact <dir>` runs the installed Claude Code
+validator for the `claude` and `plugin` targets when `--host-validation` is on.
+Claude Code decides what to check from the manifest it is pointed at: a run
+against the bundle directory picks `.claude-plugin/marketplace.json` when it is
+present and never opens the plugin's skill, agent, command, or hook files
+(Claude Code docs, "Create and distribute a plugin marketplace" →
+"Marketplace validation errors"). Agent Bundle emits both manifests side by
+side, so it runs `claude plugin validate <dir>/.claude-plugin/plugin.json --strict`
+first, which covers `plugin.json`, `hooks/hooks.json`, and the `skills/`,
+`agents/`, and `commands/` directories, and then
+`claude plugin validate <dir>/.claude-plugin/marketplace.json --strict`, dropping
+the marketplace run's `plugins[N] plugin.json →` copies of manifest findings the
+plugin run already reported. On Claude Code 2.1.259 or later both runs add
+`--json` and each finding is attributed to its file (`generatedPath`); older
+releases fall back to the text report, attributed by its `Validating <type>:
+<file>` headers.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6019` | info | The `claude` CLI is not installed or not on `PATH`, so host validation was skipped. Local pinned-schema validation (`AB6011`/`AB6012`) still runs. | Install Claude Code and ensure `claude` is on `PATH`, then rerun artifact validation. |
+| `AB6020` | warning (error in strict mode) / info | One Claude Code validation warning, or (info) one note, from the plugin or marketplace run. The message names the validated file and Claude Code's field path, for example `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`. Claude Code tolerates these at load time; `agent-bundle validate --strict` promotes warnings to errors, mirroring `claude plugin validate --strict`. | Run `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`, repair the reported Claude artifact, and rebuild. |
+| `AB6021` | error | One Claude Code validation error from the plugin or marketplace run, such as invalid JSON in `hooks/hooks.json`, frontmatter that fails to parse, or a duplicate plugin name in `marketplace.json`. Claude Code loads the plugin without the failing component or refuses the marketplace. | Same as `AB6020`. |
+| `AB6022` | error | The bounded `claude --version` probe or a validation run could not start, exited nonzero without a report, timed out, exceeded 1 MiB of output, or (2.1.259+) returned no JSON report; the message carries the CLI's stderr when there is one. | Verify the Claude CLI starts and responds, then rerun `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`. |
+
 ## Cursor built-artifact validation (`AB6026`–`AB6029`)
 
 | Code | Severity | Trigger | Recovery |

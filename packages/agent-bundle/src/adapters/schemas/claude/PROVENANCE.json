@@ -52,7 +52,7 @@
       "url": "https://code.claude.com/docs/en/plugins-reference"
     }
   },
-  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Artifact validation can additionally invoke `claude plugin validate <bundle-dir> --strict`; Agent Bundle preserves host warnings unless its own strict option is enabled, and reports an explicit unavailable diagnostic when the CLI is absent.",
+  "validation": "Pinned JSON Schema snapshots are validated locally with Ajv. Artifact validation additionally invokes `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict` and, when the bundle emits one, `claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict`; a directory run would validate the marketplace and never open hooks/, skills/, agents/, or commands/ (plugin-marketplaces reference, Marketplace validation errors). Both runs add `--json` on Claude Code 2.1.259 or later (plugins-reference, plugin validate) and fall back to the text report before that. Agent Bundle preserves host warnings unless its own strict option is enabled, and reports an explicit unavailable diagnostic when the CLI is absent.",
   "developerTools": {
     "retrievedAt": "2026-09-01",
     "source": "https://code.claude.com/docs/en/plugins-reference",

@@ -31,11 +31,25 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 ## Claude Code 严格校验
 
 当 Claude Code 位于 `PATH` 上时，产物校验会为输出的 `claude` target 以及统一的 `plugin` target 运行
-`claude plugin validate <bundle-dir> --strict`：
+已安装的 `claude plugin validate`。Claude Code 根据被指向的清单决定检查什么：一个同时包含
+`.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json` 的 bundle 目录会被当作 marketplace，
+而 marketplace 校验从不打开插件的 hook、skill、agent 或 command 文件。因此 Agent Bundle 运行两条命令：
 
-- 宿主的 **error** 会变成 Agent Bundle 的 error。
-- 宿主的 **warning** 保持为 warning，除非设置了 `agent-bundle validate --strict`。
-- 二进制文件缺失会被报告为一次显式的信息性**跳过**，绝不会伪造成功。
+```sh
+# plugin.json、hooks/hooks.json、skills/、agents/、commands/
+claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+# marketplace schema、插件名、source 路径
+claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+```
+
+- 宿主的 **error** 会变成 Agent Bundle 的 error（`AB6021`）。
+- 宿主的 **warning** 保持为 warning（`AB6020`），除非设置了 `agent-bundle validate --strict`。
+- 每条发现都会点名 Claude Code 检查的文件，例如
+  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`。在 Claude Code 2.1.259
+  及更高版本上，Agent Bundle 读取 CLI 的 `--json` 报告；更早的版本则解析文本报告。marketplace 那次
+  运行中对插件运行已报告过的清单发现的 `plugins[0] plugin.json →` 副本会被丢弃。
+- 二进制文件缺失会被报告为一次显式的信息性**跳过**（`AB6019`），绝不会伪造成功；探测或运行无法完成
+  时为 `AB6022`。
 
 CI 应当使用严格校验：
 
@@ -46,7 +60,15 @@ npx agent-bundle validate --artifact artifact --strict
 当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
 同一道门禁，并得到同样的 schema 结论。
 
-在开发期，你可以在不安装的情况下加载一个已构建 target 并核实注册情况：
+在开发期，先在不安装的情况下为单个会话加载已构建 target，然后迭代：
+
+```sh
+claude --plugin-dir artifact/claude
+```
+
+在 `agent-bundle build` 重写了 `hooks/`、`.mcp.json` 或 `agents/` 之后，在该会话中运行
+`/reload-plugins`；`SKILL.md` 的修改无需它即可生效。`--plugin-dir` 插件对不带参数的
+`claude plugin list` 不可见；把该标志放在子命令之前即可查看：
 
 ```sh
 claude --plugin-dir artifact/claude plugin list --json

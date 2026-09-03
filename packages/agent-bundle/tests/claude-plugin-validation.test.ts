@@ -1,16 +1,54 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
 
 import {
+  claudeSupportsJsonValidationReport,
   validateClaudePlugin,
   validateClaudePluginFiles,
   type ClaudePluginCommandRunner,
 } from '../src/host-contracts/claude-plugin-validation.ts';
 
 const fixtureRoots: string[] = [];
+
+/** Reports recorded from the real Claude CLI on this machine; `/bundle/claude` stands in for the bundle path. */
+const recordedReport = async (name: string, pluginDirectory: string): Promise<string> =>
+  (await readFile(new URL(`./fixtures/claude-plugin-validate/${name}`, import.meta.url), 'utf8'))
+    .replaceAll('/bundle/claude', pluginDirectory);
+
+/** A bundle directory shaped like `agent-bundle build --target claude` output: both manifests side by side. */
+const emittedClaudeBundle = async (withMarketplace = true): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-bundle-'));
+  fixtureRoots.push(root);
+  await mkdir(join(root, '.claude-plugin'), { recursive: true });
+  await writeFile(join(root, '.claude-plugin', 'plugin.json'), '{"name":"fixture"}\n');
+  if (withMarketplace) {
+    await writeFile(join(root, '.claude-plugin', 'marketplace.json'), '{"name":"fixture","plugins":[]}\n');
+  }
+  return root;
+};
+
+const runByTarget = (
+  responses: Readonly<Record<string, Readonly<{ exitCode: number; stderr?: string; stdout: string }>>>,
+  version = '2.1.259',
+): { readonly calls: readonly string[][]; readonly run: ClaudePluginCommandRunner } => {
+  const calls: string[][] = [];
+  return {
+    calls,
+    run: async (request) => {
+      calls.push([...request.args]);
+      if (request.args[0] === '--version') {
+        return { exitCode: 0, signal: null, stderr: '', stdout: `${version} (Claude Code)\n` };
+      }
+      const target = request.args[2] ?? '';
+      const response = responses[target.endsWith('marketplace.json') ? 'marketplace' : 'plugin'];
+      if (response === undefined) throw new Error(`unexpected validation target ${target}`);
+      return { exitCode: response.exitCode, signal: null, stderr: response.stderr ?? '', stdout: response.stdout };
+    },
+  };
+};
 
 afterEach(async () => {
   await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
@@ -319,4 +357,177 @@ it('fails host validation when the Claude version probe cannot be spawned', asyn
     })],
     status: 'failed',
   });
+});
+
+it('gates the --json report on Claude Code 2.1.259 or later', () => {
+  expect(claudeSupportsJsonValidationReport(undefined)).toBe(false);
+  expect(claudeSupportsJsonValidationReport('2.1.250')).toBe(false);
+  expect(claudeSupportsJsonValidationReport('2.1.258')).toBe(false);
+  expect(claudeSupportsJsonValidationReport('2.1.259')).toBe(true);
+  expect(claudeSupportsJsonValidationReport('2.1.300')).toBe(true);
+  expect(claudeSupportsJsonValidationReport('2.2.0')).toBe(true);
+  expect(claudeSupportsJsonValidationReport('3.0.0')).toBe(true);
+  expect(claudeSupportsJsonValidationReport('nightly')).toBe(false);
+});
+
+it('validates the plugin manifest and the marketplace manifest separately with --json on 2.1.259', async () => {
+  const bundle = await emittedClaudeBundle();
+  const fixture = runByTarget({
+    marketplace: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+    plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(fixture.calls).toEqual([
+    ['--version'],
+    ['plugin', 'validate', join(bundle, '.claude-plugin', 'plugin.json'), '--strict', '--json'],
+    ['plugin', 'validate', join(bundle, '.claude-plugin', 'marketplace.json'), '--strict', '--json'],
+  ]);
+  expect(report).toEqual({ diagnostics: [], host: 'claude', status: 'passed', target: 'claude', version: '2.1.259' });
+});
+
+it('skips the marketplace run when the bundle emits no marketplace.json', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const fixture = runByTarget({
+    plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+  });
+  await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+  expect(fixture.calls.map((call) => call[2])).toEqual([undefined, join(bundle, '.claude-plugin', 'plugin.json')]);
+});
+
+it('attributes --json findings to their file and de-duplicates marketplace re-reports of manifest findings', async () => {
+  const bundle = await emittedClaudeBundle();
+  const fixture = runByTarget({
+    marketplace: { exitCode: 1, stdout: await recordedReport('2.1.259-marketplace-strict-findings.json', bundle) },
+    plugin: { exitCode: 1, stdout: await recordedReport('2.1.259-plugin-strict-findings.json', bundle) },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(report.status).toBe('warnings');
+  expect(report.diagnostics).toEqual([
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: '.claude-plugin/plugin.json',
+      message: "Claude plugin validation (plugin .claude-plugin/plugin.json): displayNme: Unknown field 'displayNme' " +
+        "— did you mean 'displayName'? Claude Code ignores unrecognized fields at load time, so this field has no effect.",
+      severity: 'warning',
+    }),
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: '.claude-plugin/plugin.json',
+      message: expect.stringContaining("bogus: Unknown field 'bogus'"),
+    }),
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: 'agents/bad.md',
+      message: expect.stringContaining('(agent agents/bad.md): description: No description in frontmatter'),
+    }),
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: 'hooks/hooks.json',
+      message: expect.stringContaining('(hooks hooks/hooks.json): hooks: hooks.Stop.0.hooks.0: Unknown hook type "bogus"'),
+    }),
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: 'hooks/hooks.json',
+      message: expect.stringContaining('hooks.postToolUse: unknown hook event'),
+    }),
+  ]);
+  // The marketplace run's `plugins[0] plugin.json → …` copies of the two manifest warnings are dropped.
+  expect(report.diagnostics.filter((entry) => entry.message.includes('plugins[0]'))).toEqual([]);
+
+  const strict = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, strict: true, target: 'claude' });
+  expect(strict.status).toBe('failed');
+  expect(strict.diagnostics.every((entry) => entry.severity === 'error')).toBe(true);
+});
+
+it('keeps marketplace-only findings and maps JSON errors to AB6021', async () => {
+  const bundle = await emittedClaudeBundle();
+  const marketplace = JSON.stringify({
+    contents: [],
+    manifest: {
+      errors: [{ code: null, message: 'Duplicate plugin name "fixture" found in marketplace', path: 'plugins' }],
+      file: join(bundle, '.claude-plugin', 'marketplace.json'),
+      notes: [{ code: null, message: 'Marketplace has one plugin.', path: null }],
+      type: 'marketplace',
+      warnings: [{ code: null, message: 'No marketplace description provided', path: 'description' }],
+    },
+    strict: true,
+    success: false,
+    target: join(bundle, '.claude-plugin', 'marketplace.json'),
+  });
+  const fixture = runByTarget({
+    marketplace: { exitCode: 1, stdout: marketplace },
+    plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(report.status).toBe('failed');
+  expect(report.diagnostics).toEqual([
+    expect.objectContaining({
+      code: 'AB6021',
+      generatedPath: '.claude-plugin/marketplace.json',
+      message: 'Claude plugin validation (marketplace .claude-plugin/marketplace.json): plugins: ' +
+        'Duplicate plugin name "fixture" found in marketplace',
+      severity: 'error',
+    }),
+    expect.objectContaining({ code: 'AB6020', severity: 'warning', message: expect.stringContaining('No marketplace description') }),
+    expect.objectContaining({ code: 'AB6020', severity: 'info', message: expect.stringContaining('Marketplace has one plugin.') }),
+  ]);
+});
+
+it('reports AB6022 when a 2.1.259 run returns no JSON report (exit 2 writes only to stderr)', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const fixture = runByTarget({
+    plugin: { exitCode: 2, stderr: 'Error: EACCES: permission denied', stdout: '' },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(report).toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB6022',
+      message: 'Claude host artifact validation did not return a JSON report (exit code 2): Error: EACCES: permission denied.',
+      severity: 'error',
+    })],
+    status: 'failed',
+    version: '2.1.259',
+  });
+});
+
+it('falls back to text parsing with file attribution on the CI-pinned Claude Code 2.1.250', async () => {
+  const bundle = await emittedClaudeBundle();
+  const text = await recordedReport('2.1.250-plugin-strict-findings.txt', bundle);
+  const fixture = runByTarget({
+    marketplace: { exitCode: 0, stdout: `Validating marketplace manifest: ${join(bundle, '.claude-plugin', 'marketplace.json')}\n\n✔ Validation passed\n` },
+    plugin: { exitCode: 1, stdout: text },
+  }, '2.1.250');
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(fixture.calls[1]).toEqual(['plugin', 'validate', join(bundle, '.claude-plugin', 'plugin.json'), '--strict']);
+  expect(fixture.calls[2]).toEqual(['plugin', 'validate', join(bundle, '.claude-plugin', 'marketplace.json'), '--strict']);
+  expect(report.status).toBe('failed');
+  expect(report.diagnostics).toEqual([
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: '.claude-plugin/plugin.json',
+      message: expect.stringContaining("(plugin .claude-plugin/plugin.json): displayNme: Unknown field 'displayNme'"),
+    }),
+    expect.objectContaining({ code: 'AB6020', generatedPath: '.claude-plugin/plugin.json' }),
+    expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: 'agents/bad.md',
+      message: expect.stringContaining('(agent agents/bad.md): description: No description in frontmatter'),
+    }),
+    expect.objectContaining({
+      code: 'AB6021',
+      generatedPath: 'hooks/hooks.json',
+      message: 'Claude plugin validation (hooks hooks/hooks.json): hooks.Stop.0.hooks.0.type: Invalid input',
+      severity: 'error',
+    }),
+    expect.objectContaining({
+      code: 'AB6021',
+      generatedPath: 'hooks/hooks.json',
+      message: 'Claude plugin validation (hooks hooks/hooks.json): hooks.postToolUse: Invalid key in record',
+    }),
+  ]);
 });

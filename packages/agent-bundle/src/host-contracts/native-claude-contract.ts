@@ -622,8 +622,10 @@ const runNativeClaudeSmokeUnchecked = async (options: NativeClaudeSmokeOptions):
     });
   }
 
+  // Name the plugin manifest, not the directory: with `.claude-plugin/marketplace.json` beside it,
+  // a directory run validates the marketplace and never opens hooks/, skills/, or agents/.
   const validationRequest: NativeClaudeProcessRequest = Object.freeze({
-    args: Object.freeze(['plugin', 'validate', '--strict', options.pluginDirectory]),
+    args: Object.freeze(['plugin', 'validate', '--strict', join(options.pluginDirectory, '.claude-plugin', 'plugin.json')]),
     cwd: options.cwd,
     environment,
     executable: 'claude',
