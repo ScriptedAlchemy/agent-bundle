@@ -45,7 +45,14 @@ export const mcpProbeFailureTextLimit = 2_048;
 
 const mcpProbeCapabilityLimit = 32;
 const mcpProbeNameTextLimit = 256;
+/** How long a probe response waits for transport teardown before detaching it. */
 const mcpProbeTeardownWaitMs = 50;
+/**
+ * Upper bound a detached teardown may hold the plugin-data directory. The
+ * stdio transport's close runs its own TERM/KILL sequence, so this only guards
+ * against a transport whose close never settles.
+ */
+export const mcpProbePluginDataTeardownCapMs = 10_000;
 const safeCapabilityName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 const connectionErrorCodes = new Set([
   'EACCES',
@@ -126,8 +133,13 @@ const bundlePathPattern = (bundleRoot: string): RegExp => {
   return new RegExp(String.raw`(?:file:\/\/)?${root}${suffix}`, 'gu');
 };
 
+/**
+ * An absolute POSIX path starts the text or follows a separator; a `:` counts
+ * as a separator (`cwd:/private`) only when it is not the `://` of a URI
+ * scheme, so `https://example.com/docs` is link guidance, not a local path.
+ */
 const hasAbsolutePath = (value: string): boolean =>
-  /(?:file:|(?:^|[\s"'([{=,:])\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
+  /(?:file:|(?:^|[\s"'([{=,]|:(?!\/\/))\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
@@ -239,6 +251,7 @@ export class McpProbeService {
   readonly #createStreamableHttpTransport: NonNullable<McpProbeServiceOptions['createStreamableHttpTransport']>;
   readonly #inFlight = new Map<string, Promise<McpProbeReport>>();
   readonly #now: () => Date;
+  readonly #pendingTeardowns = new Set<Promise<void>>();
   readonly #prepared: McpProbeServiceOptions['prepared'];
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
@@ -284,6 +297,17 @@ export class McpProbeService {
     return probe;
   }
 
+  /**
+   * Resolve once every detached teardown — a transport close that outlived
+   * its probe's response boundary, followed by that probe's plugin-data
+   * removal — has settled. Probe responses never wait on this.
+   */
+  async settle(): Promise<void> {
+    while (this.#pendingTeardowns.size > 0) {
+      await Promise.allSettled([...this.#pendingTeardowns]);
+    }
+  }
+
   async #run(options: {
     readonly host: McpProbeHost;
     readonly serverName: string;
@@ -305,8 +329,10 @@ export class McpProbeService {
     const runtime = this.#runtime(options.host);
     const server = await this.#server(bundleRoot, options.host, runtime, options.serverName);
     const pluginData = await this.#createPluginData();
+    let launch: ResolvedMcpSessionLaunch;
+    let projectedLaunch: McpProbeLaunch;
     try {
-      const launch = resolveMcpSessionLaunch({
+      launch = resolveMcpSessionLaunch({
         pluginData,
         resolved: {
           runtime,
@@ -316,21 +342,52 @@ export class McpProbeService {
         },
         workspaceRoot: this.#projectRoot,
       });
-      const projectedLaunch = inspectorLaunch(
+      projectedLaunch = inspectorLaunch(
         mcpSessionInspectorConfig(launch, bundleRoot).launch,
       );
-      return await this.#execute({
-        bundleRoot,
-        generatedAt,
-        host: options.host,
-        launch,
-        projectedLaunch,
-        serverName: options.serverName,
-        startedAt,
-      });
-    } finally {
+    } catch (error) {
+      // No transport was opened, so nothing can still hold the directory.
       await rm(pluginData, { force: true, recursive: true });
+      throw error;
     }
+    // From here on the transport teardown owns plugin-data removal (#execute):
+    // the launched server may have the directory open until its close settles.
+    return this.#execute({
+      bundleRoot,
+      generatedAt,
+      host: options.host,
+      launch,
+      pluginData,
+      projectedLaunch,
+      serverName: options.serverName,
+      startedAt,
+    });
+  }
+
+  /**
+   * Remove the probe's plugin-data directory once transport teardown has
+   * settled (or the teardown cap has elapsed), never at the response
+   * boundary: a stdio server that still holds the directory open while it
+   * shuts down would otherwise race the removal — on Windows the `rm` can
+   * reject outright and turn an honest timed-out report into a generic
+   * failure, elsewhere the directory can vanish under the exiting child.
+   * Removal failures stay on this detached path; they never reach the report.
+   */
+  #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
+    let cap: NodeJS.Timeout | undefined;
+    const capped = new Promise<void>((resolvePromise) => {
+      cap = setTimeout(resolvePromise, mcpProbePluginDataTeardownCapMs);
+      cap.unref();
+    });
+    const pending = Promise.race([teardown, capped])
+      .then(() => {
+        if (cap !== undefined) clearTimeout(cap);
+        return rm(pluginData, { force: true, recursive: true });
+      })
+      .then(() => undefined, () => undefined);
+    this.#pendingTeardowns.add(pending);
+    void pending.then(() => this.#pendingTeardowns.delete(pending));
+    return pending;
   }
 
   #runtime(host: McpProbeHost): TargetMcpRuntimeContract {
@@ -374,12 +431,21 @@ export class McpProbeService {
     readonly generatedAt: string;
     readonly host: McpProbeHost;
     readonly launch: ResolvedMcpSessionLaunch;
+    readonly pluginData: string;
     readonly projectedLaunch: McpProbeLaunch;
     readonly serverName: string;
     readonly startedAt: number;
   }): Promise<McpProbeReport> {
-    const client = this.#createClient();
-    const transport = this.#transport(options.launch);
+    let client: McpProbeClient;
+    let transport: McpProbeTransport;
+    try {
+      client = this.#createClient();
+      transport = this.#transport(options.launch);
+    } catch (error) {
+      // Nothing was launched, so the directory cannot be in use.
+      await rm(options.pluginData, { force: true, recursive: true });
+      throw error;
+    }
     let report: McpProbeReport;
     try {
       try {
@@ -468,14 +534,17 @@ export class McpProbeService {
     } finally {
       let timer: NodeJS.Timeout | undefined;
       // Keep transport teardown running through its TERM/KILL path without
-      // allowing a stalled close to extend the probe's total time budget.
+      // allowing a stalled close to extend the probe's total time budget. The
+      // plugin-data removal is chained behind that teardown, so a close that
+      // outlives this wait detaches together with the removal it gates.
       const teardown = Promise.allSettled([client.close(), transport.close()]);
+      const cleanup = this.#removePluginDataAfter(teardown, options.pluginData);
       const teardownWait = new Promise<void>((resolvePromise) => {
         timer = setTimeout(resolvePromise, mcpProbeTeardownWaitMs);
         timer.unref();
       });
       try {
-        await Promise.race([teardown, teardownWait]);
+        await Promise.race([cleanup, teardownWait]);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }

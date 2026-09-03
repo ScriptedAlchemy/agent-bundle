@@ -16,7 +16,8 @@
       "Inline mcpServers values must be objects; inline hook documents use the same closed eleven-event, command-or-mcp_tool handler shape as hooks.schema.json.",
       "The closed interface object admits every documented install-surface field; brandColor requires a six-digit hexadecimal value, external links require http(s), asset paths must stay inside the plugin root, and screenshots must be ./assets/-relative PNG paths.",
       "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id.",
-      "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root, and they reject control characters and Unicode line terminators (U+0000-U+001F, U+007F, U+2028, U+2029) so a line break cannot hide a parent segment from the containment lookahead; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization."
+      "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root, and they reject control characters and Unicode line terminators (U+0000-U+001F, U+007F, U+2028, U+2029) so a line break cannot hide a parent segment from the containment lookahead; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization.",
+      "The screenshots item pattern applies the same containment lookahead and character exclusions as the other asset paths (backslashes rejected as separators, control characters and Unicode line terminators rejected) on top of its ./assets/ prefix and .png suffix, so a Windows-form or line-break-hidden parent segment cannot escape the assets directory."
     ],
     "marketplace.schema.json": [
       "Transcribed 2026-09-02 from the Marketplace metadata section of https://developers.openai.com/plugins/build/plugins: top-level name, interface.displayName, and plugins[] entries with name, source, policy, and category.",
@@ -52,8 +53,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 6598,
-      "sha256": "4ad476545c96c83d899c4524dcccd4eb4fe7d3299c307878a0cd46a237f48d58",
+      "bytes": 6651,
+      "sha256": "074c6c71966a3e6560ccbceb8d82ec6a40cb1eccee2f2d863fb4ef1e2276a814",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

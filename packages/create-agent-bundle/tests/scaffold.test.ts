@@ -166,6 +166,61 @@ describe('scaffold', () => {
     }
   });
 
+  it('renders README install instructions for the selected targets', async () => {
+    const [defaults, cursorOnly, pluginOnly, portableOnly, minimal] = await Promise.all([
+      scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['cursor'] }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['plugin'] }),
+      scaffoldTemplate('cli-tool', { pluginName: 'greeter', targets: ['portable'] }),
+      scaffoldTemplate('minimal', { pluginName: 'skills-only', targets: ['portable'] }),
+    ]);
+    try {
+      // Default targets (portable, codex, claude): one line per installable host,
+      // in the package build's host order; the template's hard-coded `claude`
+      // example never survives as the only instruction (#317 review).
+      const defaultReadme = await readFile(join(defaults.root, 'README.md'), 'utf8');
+      expect(defaultReadme).toContain([
+        '# after publishing/installing the package',
+        'npx greeter-install install claude',
+        'npx greeter-install install codex',
+        '',
+      ].join('\n'));
+      expect(defaultReadme).not.toContain('install cursor');
+      expect(defaultReadme).toContain('The installer accepts the\nselected host targets only: `claude`, `codex`.');
+
+      // A cursor-only scaffold's installer rejects `claude`, so the README must
+      // not suggest it.
+      const cursorReadme = await readFile(join(cursorOnly.root, 'README.md'), 'utf8');
+      expect(cursorReadme).toContain('npx status-plugin install cursor\n');
+      expect(cursorReadme).not.toContain('install claude');
+      expect(cursorReadme).not.toContain('install codex');
+
+      // The composite plugin target installs into every host.
+      const pluginReadme = await readFile(join(pluginOnly.root, 'README.md'), 'utf8');
+      expect(pluginReadme).toContain([
+        'npx status-plugin install claude',
+        'npx status-plugin install codex',
+        'npx status-plugin install cursor',
+      ].join('\n'));
+
+      // Portable-only scaffolds ship no installer bin at all.
+      const portableReadme = await readFile(join(portableOnly.root, 'README.md'), 'utf8');
+      expect(portableReadme).not.toMatch(/^npx \S+ install /mu);
+      expect(portableReadme).toContain("no installable host target ('portable')");
+      expect(portableReadme).toContain('add `claude`, `codex`, or `cursor` to `targets`');
+
+      // The skills-only template has no install section and passes through.
+      const minimalReadme = await readFile(join(minimal.root, 'README.md'), 'utf8');
+      expect(minimalReadme).toBe(
+        (await readFile(join(templatesRoot, 'minimal', 'README.md'), 'utf8')).replaceAll(placeholderName, 'skills-only'),
+      );
+    } finally {
+      await Promise.all([defaults, cursorOnly, pluginOnly, portableOnly, minimal].map(
+        ({ root }) => rm(root, { force: true, recursive: true }),
+      ));
+    }
+  });
+
   it('leaves the skills-only template without package-build packaging fields', async () => {
     const { root } = await scaffoldTemplate('minimal');
     try {

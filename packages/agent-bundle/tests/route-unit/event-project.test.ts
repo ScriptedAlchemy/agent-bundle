@@ -5,6 +5,7 @@ import { createElement, Suspense } from 'react';
 import {
   createCanonicalEventProps,
   projectEventDocument,
+  validateNativeEventEnvelope,
 } from '../../src/events/project.ts';
 import { renderRoute } from '../../src/test/render.ts';
 
@@ -526,6 +527,57 @@ it('projects permission/request decisions through the pinned PermissionRequest o
   }, routeInput);
   expect(() => projectEventDocument(contextual.document, 'permission/request', 'claude', 'PermissionRequest'))
     .toThrow(/no additional-context channel/u);
+});
+
+it('admits any-JSON permission/request tool_input only for Codex and keeps Claude object-shaped', async () => {
+  const claudeEnvelope = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionRequest',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  const codexEnvelope = {
+    ...claudeEnvelope,
+    model: 'gpt-5-codex',
+    tool_input: 'apply_patch',
+    tool_name: 'apply_patch',
+    transcript_path: null,
+    turn_id: 'turn-1',
+  };
+  const options = { canonicalEvent: 'permission/request', nativeEvent: 'PermissionRequest' } as const;
+
+  // Codex's pinned input schema declares `tool_input: true`, so a scalar
+  // envelope validates and renders through the same route as an object one.
+  const codexNative = validateNativeEventEnvelope(codexEnvelope, { ...options, target: 'codex' });
+  const codexProps = createCanonicalEventProps(
+    'permission/request', codexNative, 'codex', 'PermissionRequest', '0.147.0', new AbortController().signal,
+  );
+  const denied = await renderRoute({
+    default: async ({ native }: { readonly native: Readonly<Record<string, JsonValue>> }) => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: `Denied ${String(native.tool_input)}.` } },
+    ),
+  }, {
+    input: { canonical: codexProps.canonical, native: codexProps.native },
+    kind: 'event-route',
+    routeId: 'event:permission/request',
+  });
+  expect(projectEventDocument(denied.document, 'permission/request', 'codex', 'PermissionRequest')).toEqual({
+    hookSpecificOutput: {
+      decision: { behavior: 'deny', message: 'Denied apply_patch.' },
+      hookEventName: 'PermissionRequest',
+    },
+  });
+
+  // Claude's envelope keeps the object-shaped contract of its other tool events.
+  for (const toolInput of [null, [], 'rm -rf build', 7]) {
+    expect(() => validateNativeEventEnvelope({ ...claudeEnvelope, tool_input: toolInput }, { ...options, target: 'claude' }))
+      .toThrow(/native tool_input must be an object/u);
+  }
+  expect(validateNativeEventEnvelope(claudeEnvelope, { ...options, target: 'claude' })).toBe(claudeEnvelope);
 });
 
 it('projects permission/denied and stop/failure as observation-only Claude families', async () => {

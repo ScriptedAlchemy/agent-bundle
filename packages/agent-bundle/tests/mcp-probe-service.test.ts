@@ -162,6 +162,65 @@ it('redacts absolute paths after key-value and list separators', async () => {
   }
 });
 
+it('keeps URLs while redacting real absolute and bundle paths (#316 review)', async () => {
+  const root = await createBundle();
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        getInstructions: () => 'See https://example.com/docs/getting-started and http://localhost:8080/health for guidance.',
+        getServerVersion: () => ({
+          name: 'timeline',
+          title: 'Docs: https://docs.example.com/timeline',
+          version: '1.2.3',
+        }),
+        listTools: async () => ({
+          tools: [
+            {
+              description: `Reads ${join(root, 'data', 'catalog.json')} and serves https://example.com/api`,
+              inputSchema: { type: 'object' as const },
+              name: 'bundle-path-and-url',
+            },
+            {
+              description: 'Docs at https://example.com/docs; config at /etc/private/timeline.json',
+              inputSchema: { type: 'object' as const },
+              name: 'url-then-absolute-path',
+            },
+            {
+              description: 'cwd:/var/private/timeline',
+              inputSchema: { type: 'object' as const },
+              name: 'colon-separated-absolute-path',
+            },
+            {
+              description: 'file:///home/alice/private.json',
+              inputSchema: { type: 'object' as const },
+              name: 'file-url',
+            },
+          ],
+        }),
+      }),
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+
+    // A URI scheme's `://` is not a path separator: link guidance survives.
+    expect(report.snapshot?.instructions)
+      .toBe('See https://example.com/docs/getting-started and http://localhost:8080/health for guidance.');
+    expect(report.snapshot?.serverInfo.title).toBe('Docs: https://docs.example.com/timeline');
+    expect(report.snapshot?.tools.map((tool) => tool.description)).toEqual([
+      // Bundle paths become the <bundle> label and the URL beside them stays.
+      'Reads <bundle>/data/catalog.json and serves https://example.com/api',
+      // A real absolute path anywhere in the text still fails closed...
+      '[REDACTED]',
+      // ...including after a genuine `:` separator...
+      '[REDACTED]',
+      // ...and file: URLs are local paths.
+      '[REDACTED]',
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('truncates server instructions to the named text budget', async () => {
   const root = await createBundle();
   try {
@@ -325,6 +384,60 @@ it('throws typed not-found errors for unavailable trusted probe targets', async 
       serverName: 'timeline',
     })).rejects.toBeInstanceOf(McpProbeTargetNotFoundError);
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('removes plugin data only after a slow transport teardown settles (#316 review)', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  const events: string[] = [];
+  const closeStarted = Promise.withResolvers<void>();
+  let releaseClose!: () => void;
+  const closeReleased = new Promise<void>((resolvePromise) => {
+    releaseClose = resolvePromise;
+  });
+  try {
+    const service = serviceFor(root, {
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      createStdioTransport: () => transport(async () => {
+        // A stdio server that takes longer than the 50 ms response-boundary
+        // wait to exit: the directory it may still hold must survive until
+        // this close settles.
+        closeStarted.resolve();
+        await closeReleased;
+        events.push('transport-closed');
+      }),
+    });
+
+    const report = await Promise.race([
+      service.probe({ host: 'claude', serverName: 'timeline' }),
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error('The probe response waited on the slow teardown.')),
+        2_000,
+      ).unref()),
+    ]);
+    events.push('report-returned');
+    await closeStarted.promise;
+
+    // The response came back with teardown still pending and the plugin data intact.
+    expect(report.status).toBe('ok');
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).resolves.toBe('present');
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 120));
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).resolves.toBe('present');
+
+    // Once the transport close settles, the detached path removes the directory.
+    releaseClose();
+    await service.settle();
+    events.push('plugin-data-removed');
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events).toEqual(['report-returned', 'transport-closed', 'plugin-data-removed']);
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }
 });

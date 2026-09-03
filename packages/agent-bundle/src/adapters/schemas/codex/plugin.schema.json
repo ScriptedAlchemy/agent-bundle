@@ -125,7 +125,7 @@
         "logoDark": { "pattern": "^\\./(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$))[^\\\\\\u0000-\\u001F\\u007F\\u2028\\u2029]+$", "type": "string" },
         "longDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
         "privacyPolicyURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
-        "screenshots": { "items": { "pattern": "^\\./assets/(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.png$", "type": "string" }, "type": "array" },
+        "screenshots": { "items": { "pattern": "^\\./assets/(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$))[^\\\\\\u0000-\\u001F\\u007F\\u2028\\u2029]+\\.png$", "type": "string" }, "type": "array" },
         "shortDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
         "termsOfServiceURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
         "websiteURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" }
