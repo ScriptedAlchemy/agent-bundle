@@ -563,7 +563,9 @@ const installCursor = async (
     });
     if (comparison.status === 'current') {
       if (comparison.ownership === 'legacy' && options.replace === true) {
+        // Adoption created nothing: the legacy copy's directories are not the installer's to prune.
         await writeInstallReceipt(destination, createInstallReceipt({
+          directories: [],
           host: 'cursor',
           inventory: artifact,
           plugin: identity.plugin,
@@ -581,7 +583,7 @@ const installCursor = async (
     }
     const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
     try {
-      await replaceInstalledTree({ comparison, destination, staged });
+      await replaceInstalledTree({ comparison, destination, receipt, staged });
     } finally {
       await rm(staged.parent, { force: true, recursive: true });
     }

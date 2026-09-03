@@ -372,6 +372,8 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
+      // A fresh install created every directory, so it owns them all.
+      directories: ['.cursor-plugin'],
       files: ['.cursor-plugin/plugin.json', 'payload.txt'],
       format: 'agent-bundle-install-receipt/1',
       host: 'cursor',
@@ -427,12 +429,33 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
+      directories: ['.cursor-plugin', 'skills', 'skills/new'],
       files: ['.cursor-plugin/plugin.json', 'payload.txt', 'skills/new/SKILL.md'],
     });
 
     const again = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(again).toMatchObject({ contentHash: artifact.hash, state: 'already-installed' });
     expect(again.previousContentHash).toBeUndefined();
+
+    // Directories the installer created are pruned once a rebuild empties them; a directory that
+    // existed before the installer wrote beneath it is not the installer's to delete.
+    await mkdir(join(destination, 'operator-dir'));
+    await mkdir(join(fixture.bundleRoot, 'operator-dir'));
+    await writeFile(join(fixture.bundleRoot, 'operator-dir', 'shipped.md'), '# shipped\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
+    await rm(join(fixture.bundleRoot, 'operator-dir'), { recursive: true });
+    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'replaced' });
+    expect((await stat(join(destination, 'operator-dir'))).isDirectory()).toBe(true);
+    expect(await readdir(join(destination, 'operator-dir'))).toEqual([]);
+    await expect(access(join(destination, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin']);
+    await rm(join(destination, 'operator-dir'), { recursive: true });
+    await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'replaced' });
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['.cursor-plugin', 'skills', 'skills/new']);
 
     // An incoming file that would land on an existing unowned file aborts before any change.
     await writeFile(join(fixture.bundleRoot, 'operator-note.txt'), 'from the artifact\n');
@@ -469,7 +492,8 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     expect(await readInstallReceipt(destination)).toBeUndefined();
     const adopted = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' });
     expect(adopted).toMatchObject({ contentHash: (await treeInventory(fixture.bundleRoot)).hash, state: 'adopted' });
-    expect(await readInstallReceipt(destination)).toMatchObject({ plugin: 'install-fixture', version: '1.2.3' });
+    // Adoption created no directories, so the legacy copy's directories are never pruned.
+    expect(await readInstallReceipt(destination)).toMatchObject({ directories: [], plugin: 'install-fixture', version: '1.2.3' });
     await rm(join(destination, installReceiptFile));
 
     await writeFile(join(destination, 'payload.txt'), 'stale\n');
@@ -496,7 +520,7 @@ it('requires --replace for a legacy pre-receipt Cursor copy and then adopts it',
     expect(await readFile(join(destination, 'operator-note.txt'), 'utf8')).toBe('keep me\n');
     expect(await readFile(join(destination, 'dropped-by-rebuild.txt'), 'utf8')).toBe('old artifact file\n');
     const receipt = await readInstallReceipt(destination);
-    expect(receipt).toMatchObject({ contentHash: artifact.hash, plugin: 'install-fixture' });
+    expect(receipt).toMatchObject({ contentHash: artifact.hash, directories: [], plugin: 'install-fixture' });
     expect(receipt?.files).toEqual(artifact.files);
     // From now on the leftovers are unowned: a later same-version replace leaves them alone.
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
@@ -681,6 +705,7 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
     await rm(receiptPath);
     await writeFile(join(elsewhere, 'receipt.json'), JSON.stringify({
       contentHash: 'abc',
+      directories: [],
       files: ['payload.txt'],
       format: 'agent-bundle-install-receipt/1',
       host: 'cursor',
@@ -724,19 +749,25 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
       ['state/plugin.sqlite'], ['state'], ['State/plugin.sqlite'], ['STATE'],
     ]) {
-      await writeJson(join(root, installReceiptFile), {
-        contentHash: 'abc',
-        files,
-        format: 'agent-bundle-install-receipt/1',
-        host: 'cursor',
-        installedAt: '2026-09-03T00:00:00.000Z',
-        plugin: 'install-fixture',
-        version: '1.2.3',
-      });
-      expect(await readInstallReceipt(root), JSON.stringify(files)).toBeUndefined();
+      // The same rules gate the owned-directory list: it drives `rmdir`, exactly like files drive `rm`.
+      for (const field of ['files', 'directories'] as const) {
+        await writeJson(join(root, installReceiptFile), {
+          contentHash: 'abc',
+          directories: [],
+          files: [],
+          format: 'agent-bundle-install-receipt/1',
+          host: 'cursor',
+          installedAt: '2026-09-03T00:00:00.000Z',
+          plugin: 'install-fixture',
+          version: '1.2.3',
+          [field]: files,
+        });
+        expect(await readInstallReceipt(root), `${field} ${JSON.stringify(files)}`).toBeUndefined();
+      }
     }
     const complete = {
       contentHash: 'abc',
+      directories: ['skills', 'skills/probe'],
       files: ['skills/probe/SKILL.md', 'plugin.json'],
       format: 'agent-bundle-install-receipt/1',
       host: 'cursor',
@@ -744,13 +775,16 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       plugin: 'install-fixture',
       version: '1.2.3',
     };
-    for (const missing of ['host', 'installedAt', 'contentHash', 'version', 'plugin', 'format'] as const) {
+    for (const missing of ['host', 'installedAt', 'contentHash', 'version', 'plugin', 'format', 'directories', 'files'] as const) {
       const { [missing]: _omitted, ...partial } = complete;
       await writeJson(join(root, installReceiptFile), partial);
       expect(await readInstallReceipt(root), missing).toBeUndefined();
     }
     await writeJson(join(root, installReceiptFile), complete);
-    expect(await readInstallReceipt(root)).toMatchObject({ files: ['skills/probe/SKILL.md', 'plugin.json'] });
+    expect(await readInstallReceipt(root)).toMatchObject({
+      directories: ['skills', 'skills/probe'],
+      files: ['skills/probe/SKILL.md', 'plugin.json'],
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

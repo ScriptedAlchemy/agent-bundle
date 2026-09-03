@@ -682,6 +682,7 @@ install receipt, `.agent-bundle-install.json`, beside the plugin manifest:
 ```json
 {
   "contentHash": "<sha256 over path\\0mode\\0bytes\\0 for every owned file; mode is x when executable>",
+  "directories": [".cursor-plugin", "..."],
   "files": [".cursor-plugin/plugin.json", "INSTALL.md", "install.mjs", "..."],
   "format": "agent-bundle-install-receipt/1",
   "host": "cursor",
@@ -715,13 +716,15 @@ Every `AB7005`, `AB7308`, `AB7309`, and `AB7321` message carries the comparison
 `installed <name>@<version> content <hash> vs artifact <name>@<version> content
 <hash> (same version, different content | different version | same content)`.
 Cursor replacement is in place and touches owned files only: stale owned files
-are removed and their empty directories pruned, staged files are renamed over
-their predecessors, and the receipt lands last. Entries the installer does not
-own — notably workspace-durable `state/` stores — are never removed or
-rewritten; when a rebuilt artifact introduces a path that an existing unowned
-entry already occupies, replacement aborts before any change (`AB7004`,
-"Refusing to overwrite unowned files") and names the colliding paths. Receipt
-file lists are validated as strict POSIX-relative paths (no backslashes, no
+are removed and the emptied directories the installer itself created
+(`directories` in the receipt) are pruned, staged files are renamed over their
+predecessors, and the receipt lands last. Entries the installer does not own —
+notably workspace-durable `state/` stores, and any directory that already
+existed before the installer wrote beneath it — are never removed or rewritten;
+when a rebuilt artifact introduces a path that an existing unowned entry already
+occupies, replacement aborts before any change (`AB7004`, "Refusing to overwrite
+unowned files") and names the colliding paths. Receipt file and directory lists
+are validated as strict POSIX-relative paths (no backslashes, no
 `..`/`.`/empty segments, no drive letters, nothing under a runtime root such as
 `state/`) before they can drive a deletion; a receipt that fails validation
 reads as absent, and a receipt that is not a regular file (a symbolic link, a

@@ -203,6 +203,7 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     // The emitted receipt is byte-compatible with the core reader.
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: firstArtifact.hash,
+      directories: ['.cursor-plugin'],
       files: firstArtifact.files,
       host: 'cursor',
       plugin: 'install-fixture',
@@ -276,6 +277,24 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(flattened).toMatchObject({ code: 0, stderr: '' });
     expect(flattened.stdout).toContain('Replaced install-fixture@1.2.3');
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+
+    // Only installer-created directories are pruned when a rebuild empties them; a pre-existing
+    // operator directory that a rebuild wrote beneath stays. (This copy was adopted from a legacy
+    // layout above, so `.cursor-plugin` predates the receipt and is not owned either.)
+    await mkdir(join(destination, 'operator-dir'));
+    await mkdir(join(bundle, 'operator-dir'));
+    await writeFile(join(bundle, 'operator-dir', 'shipped.md'), '# shipped\n');
+    await mkdir(join(bundle, 'skills', 'new'), { recursive: true });
+    await writeFile(join(bundle, 'skills', 'new', 'SKILL.md'), '# new\n');
+    expect((await run(installer, [], home)).stdout).toContain('Replaced install-fixture@1.2.3');
+    expect((await readInstallReceipt(destination))?.directories).toEqual(['skills', 'skills/new']);
+    await rm(join(bundle, 'operator-dir'), { recursive: true });
+    await rm(join(bundle, 'skills'), { recursive: true });
+    expect((await run(installer, [], home)).stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(await readdir(join(destination, 'operator-dir'))).toEqual([]);
+    await expect(readdir(join(destination, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readInstallReceipt(destination))?.directories).toEqual([]);
+    await rm(join(destination, 'operator-dir'), { recursive: true });
 
     // A receipt whose inventory drifted is refreshed even when the owned bytes hash equal.
     await writeFile(join(bundle, 'transient.txt'), 'transient\n');

@@ -183,7 +183,8 @@ every host treats it differently. `agent-bundle install` and the emitted
 - **Receipt.** Every Cursor copy an agent-bundle installer places carries
   `.agent-bundle-install.json` beside the plugin manifest: the plugin name,
   version, host, the sha256 content hash of the artifact tree, when it was
-  installed, and the exact list of files the installer owns. The receipt never
+  installed, the exact list of files the installer owns, and the directories
+  it created (the only ones it will ever prune). The receipt never
   participates in the content hash, so an installed copy hashes like the
   artifact it came from.
 - **No-op.** Re-running install on an identical artifact reports

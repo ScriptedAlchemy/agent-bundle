@@ -55,6 +55,12 @@ export const installSurfaceMarkerFiles: readonly string[] = Object.freeze(['INST
 
 export interface InstallReceipt {
   readonly contentHash: string;
+  /**
+   * Directories the installer created (POSIX-relative, sorted). Only these
+   * are ever pruned when they empty out; a directory that existed before the
+   * installer wrote beneath it belongs to whoever made it.
+   */
+  readonly directories: readonly string[];
   readonly files: readonly string[];
   readonly format: typeof installReceiptFormat;
   readonly host: string;
@@ -96,6 +102,19 @@ const sortNames = (names: readonly string[]): readonly string[] =>
   [...names].sort((left, right) => left.localeCompare(right));
 
 const toPosix = (path: string): string => path.replaceAll('\\', '/');
+
+/** Every ancestor directory of the given POSIX-relative files, deduplicated and sorted. */
+export const directoriesOf = (files: readonly string[]): readonly string[] => {
+  const directories = new Set<string>();
+  for (const file of files) {
+    let directory = dirname(file);
+    while (directory !== '.' && directory !== '') {
+      directories.add(directory);
+      directory = dirname(directory);
+    }
+  }
+  return Object.freeze(sortNames([...directories]));
+};
 
 /**
  * `path\0mode\0bytes\0` per file, where mode is `x` for an executable and `-`
@@ -295,12 +314,14 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
     typeof record['host'] !== 'string' ||
     typeof record['contentHash'] !== 'string' ||
     typeof record['installedAt'] !== 'string' ||
-    !isReceiptFileList(record['files'])
+    !isReceiptFileList(record['files']) ||
+    !isReceiptFileList(record['directories'])
   ) {
     return undefined;
   }
   return Object.freeze({
     contentHash: record['contentHash'],
+    directories: Object.freeze([...record['directories']]),
     files: Object.freeze([...record['files']]),
     format: installReceiptFormat,
     host: record['host'],
@@ -310,7 +331,14 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
   });
 };
 
+/**
+ * Builds a receipt for an inventory. `directories` defaults to every ancestor
+ * of the inventoried files — right for a fresh install, where the installer
+ * created all of them; callers that adopt or replace an existing tree pass
+ * exactly the directories they created.
+ */
 export const createInstallReceipt = (options: {
+  readonly directories?: readonly string[];
   readonly host: string;
   readonly installedAt?: string;
   readonly inventory: TreeInventory;
@@ -318,6 +346,7 @@ export const createInstallReceipt = (options: {
   readonly version: string;
 }): InstallReceipt => Object.freeze({
   contentHash: options.inventory.hash,
+  directories: options.directories ?? directoriesOf(options.inventory.files),
   files: options.inventory.files,
   format: installReceiptFormat,
   host: options.host,
@@ -480,20 +509,51 @@ export const stageArtifact = async (options: {
   }
 };
 
-const pruneEmptyDirectories = async (destination: string, removedFiles: readonly string[]): Promise<void> => {
-  const candidates = new Set<string>();
-  for (const file of removedFiles) {
-    let directory = dirname(file);
-    while (directory !== '.' && directory !== '') {
-      candidates.add(directory);
-      directory = dirname(directory);
-    }
-  }
+/**
+ * Removes the now-empty ancestors of removed files, deepest first, but only
+ * those the installer created: a pre-existing directory that merely became an
+ * ancestor of an owned file is not ours to delete. Returns what was pruned.
+ */
+const pruneEmptyDirectories = async (
+  destination: string,
+  removedFiles: readonly string[],
+  ownedDirectories: ReadonlySet<string>,
+): Promise<ReadonlySet<string>> => {
+  const pruned = new Set<string>();
+  const candidates = directoriesOf(removedFiles).filter((directory) => ownedDirectories.has(directory));
   for (const directory of [...candidates].sort((left, right) => right.length - left.length)) {
     try {
       await rmdir(join(destination, directory));
+      pruned.add(directory);
     } catch (error) {
       if (!isErrno(error, 'ENOTEMPTY') && !isErrno(error, 'ENOENT') && !isErrno(error, 'EEXIST')) throw error;
+    }
+  }
+  return pruned;
+};
+
+/**
+ * Creates the missing ancestors of a target path one level at a time and
+ * reports the ones this call created, so the receipt can own exactly those.
+ */
+const ensureAncestors = async (
+  destination: string,
+  file: string,
+  created: Set<string>,
+): Promise<void> => {
+  const ancestors: string[] = [];
+  let directory = dirname(file);
+  while (directory !== '.' && directory !== '') {
+    ancestors.unshift(directory);
+    directory = dirname(directory);
+  }
+  for (const ancestor of ancestors) {
+    if (created.has(ancestor)) continue;
+    try {
+      await mkdir(join(destination, ancestor));
+      created.add(ancestor);
+    } catch (error) {
+      if (!isErrno(error, 'EEXIST')) throw error;
     }
   }
 };
@@ -520,17 +580,21 @@ const previouslyOwnedFiles = async (
 };
 
 /**
- * True when a directory is entirely previous-installer territory: at least
- * one file, every file owned, and no empty directories anywhere beneath (an
- * empty directory is no evidence of ownership and would survive pruning).
+ * True when a directory is entirely previous-installer territory: the
+ * directory and every directory beneath it were created by the installer, it
+ * holds at least one file, every file is owned, and no directory anywhere
+ * beneath is empty (an empty directory is no evidence of ownership and would
+ * survive pruning). Only such a directory may make way for an incoming file.
  */
 const isWhollyOwnedDirectory = async (
   destination: string,
   relativePath: string,
   owned: ReadonlySet<string>,
+  ownedDirectories: ReadonlySet<string>,
 ): Promise<boolean> => {
   let files = 0;
   const visit = async (directory: string): Promise<boolean> => {
+    if (!await isOwnedEntry(destination, ownedDirectories, directory)) return false;
     const entries = sortNames(await readdir(join(destination, directory)));
     if (entries.length === 0) return false;
     for (const name of entries) {
@@ -550,15 +614,26 @@ const isWhollyOwnedDirectory = async (
 };
 
 /**
+ * Directories the previous installer created. A receipt says so exactly; a
+ * legacy copy has no inventory, so none of its directories are ours.
+ */
+const previouslyOwnedDirectories = (comparison: InstalledTreeComparison): readonly string[] =>
+  comparison.ownership === 'receipt' && comparison.receipt !== undefined ? comparison.receipt.directories : [];
+
+/**
  * Replaces an agent-bundle-owned install in place: stale owned files leave
- * first (their now-empty directories are pruned), every staged file then
- * moves over its predecessor with an atomic rename, and the receipt lands
- * last as the commit marker. Unowned entries are never touched; an incoming
- * file that would land on an existing unowned entry aborts before any change.
+ * first (their now-empty installer-created directories are pruned), every
+ * staged file then moves over its predecessor with an atomic rename, and the
+ * receipt — recording the files and the directories the installer owns after
+ * this replacement — lands last as the commit marker. Unowned entries,
+ * including directories that existed before the installer wrote beneath
+ * them, are never touched; an incoming file that would land on an existing
+ * unowned entry aborts before any change.
  */
 export const replaceInstalledTree = async (options: {
   readonly comparison: InstalledTreeComparison;
   readonly destination: string;
+  readonly receipt: { readonly host: string; readonly installedAt?: string; readonly plugin: string; readonly version: string };
   readonly staged: StagedArtifact;
 }): Promise<void> => {
   if (options.comparison.ownership === 'foreign') {
@@ -567,6 +642,7 @@ export const replaceInstalledTree = async (options: {
   const incoming = new Set(options.staged.inventory.files);
   const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison, incoming);
   const owned = new Set(previouslyOwned);
+  const ownedDirectories = new Set(previouslyOwnedDirectories(options.comparison));
   await assertRealAncestors(options.destination, previouslyOwned);
   await assertRealAncestors(options.destination, options.staged.inventory.files, owned);
   // An existing entry at an incoming path is fine when it is the owned file itself (exact name, or
@@ -585,7 +661,7 @@ export const replaceInstalledTree = async (options: {
       throw error;
     }
     const tolerated = metadata.isDirectory() && !metadata.isSymbolicLink()
-      ? await isWhollyOwnedDirectory(options.destination, file, owned)
+      ? await isWhollyOwnedDirectory(options.destination, file, owned, ownedDirectories)
       : metadata.isFile() && await isOwnedEntry(options.destination, owned, file);
     if (!tolerated) collisions.push(file);
   }
@@ -599,11 +675,22 @@ export const replaceInstalledTree = async (options: {
   for (const file of stale) {
     await rm(join(options.destination, file), { force: true });
   }
-  await pruneEmptyDirectories(options.destination, stale);
+  const pruned = await pruneEmptyDirectories(options.destination, stale, ownedDirectories);
+  const created = new Set<string>();
   for (const file of options.staged.inventory.files) {
-    const target = join(options.destination, file);
-    await mkdir(dirname(target), { recursive: true });
-    await rename(join(options.staged.root, file), target);
+    await ensureAncestors(options.destination, file, created);
+    await rename(join(options.staged.root, file), join(options.destination, file));
   }
+  // The receipt owns what the installer owns now: the surviving directories it created before plus
+  // the ones this replacement created. It is finalised in the private staging copy, then committed.
+  const directories = sortNames([...new Set([
+    ...[...ownedDirectories].filter((directory) => !pruned.has(directory)),
+    ...created,
+  ])]);
+  await writeFile(
+    join(options.staged.root, installReceiptFile),
+    receiptDocument(createInstallReceipt({ ...options.receipt, directories, inventory: options.staged.inventory })),
+    'utf8',
+  );
   await rename(join(options.staged.root, installReceiptFile), join(options.destination, installReceiptFile));
 };

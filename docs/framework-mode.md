@@ -364,7 +364,7 @@ agent-bundle install cursor --from artifact/cursor
 Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
 include a standalone `install.mjs`. Its staged copy is idempotent for identical
 content, records an install receipt (`.agent-bundle-install.json`: plugin,
-version, content hash, owned files), replaces a same-version stale copy of its
+version, content hash, owned files and directories), replaces a same-version stale copy of its
 own plugin in place (owned files only; `state/` survives), and accepts
 `--replace` (alias `--force`) to replace a different installed version or adopt
 a pre-receipt copy. Foreign directories are refused with a content-hash
