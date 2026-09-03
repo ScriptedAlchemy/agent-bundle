@@ -649,6 +649,34 @@ const noticeInboxRecord = (state: NormalizedStateDefinition | undefined): readon
     ? []
     : ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),'];
 
+/**
+ * The server process's own handle on the workspace-durable notice store its
+ * Flight worker mounts (#99 stage 4): SQLite is the one lifetime two threads
+ * can share, so only durable artifacts wire `resources/subscribe` and
+ * `notifications/resources/updated` for the inbox; volatile lifetimes live in
+ * the worker's heap and honestly advertise no subscription capability. The
+ * anchor resolution matches the worker's so both open the same files.
+ */
+const noticeDeliveryImports = (state: NormalizedStateDefinition | undefined): readonly string[] =>
+  state?.lifetime === 'workspace-durable'
+    ? [
+      "import { join } from 'node:path';",
+      "import { fileURLToPath } from 'node:url';",
+      "import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';",
+      "import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';",
+      "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
+    ]
+    : [];
+
+const noticeDeliveryOwner = (state: NormalizedStateDefinition | undefined): readonly string[] =>
+  state?.lifetime === 'workspace-durable'
+    ? [
+      "const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
+      "const noticeDelivery = createNoticeInboxSignaller({ store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable' }) });",
+      '',
+    ]
+    : [];
+
 const eventRouteImports = (
   routes: readonly NormalizedHook[],
   offset: number,
@@ -892,6 +920,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
         ]
       : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
+    ...noticeDeliveryImports(options.state),
     ...noticeInboxImport(options.state),
     ...routeImports(routes),
     '',
@@ -901,6 +930,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...noticeInboxRecord(options.state),
     '});',
     '',
+    ...noticeDeliveryOwner(options.state),
     ...(hasEvents
       ? [
           // The endpoint identity is artifact-location dependent, so it stays
@@ -925,6 +955,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     '  artifactEpoch: ARTIFACT_EPOCH,',
     ...(hasEvents ? ['  events,'] : []),
     `  host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
+    ...(options.state?.lifetime === 'workspace-durable' ? ['  notices: noticeDelivery,'] : []),
     `  plugin: ${stableJson(options.plugin)},`,
     '  routes,',
     '});',

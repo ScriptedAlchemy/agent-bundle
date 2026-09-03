@@ -1,0 +1,6 @@
+---
+"@agent-bundle/runtime": patch
+"agent-bundle": patch
+---
+
+Wire the #99 stage-4 `mcp-resource-updated` delivery route into generated stateful MCP servers. `@agent-bundle/runtime/notices` gains `createNoticeInboxSignaller` — one connection's subscription to the reserved inbox resource (`AGENT_NOTICE_INBOX_URI`) that, after each completed render, sends at most one `notifications/resources/updated` for the subscriber's newly eligible pending notices and records it through `signalAvailability()` as an availability receipt (never delivery), honouring `nextAttemptAt` and bounding signals per notice by `retryBudget` across restarts; `@agent-bundle/runtime/mount` gains `createGeneratedNoticeRuntime` and `GeneratedRuntimeState.noticeLedger()` so a server process can hold its own handle on the durable store its worker mounts. Generated workspace-durable MCP entries now register `resources/subscribe`/`resources/unsubscribe` for the inbox URI only, advertise `resources.subscribe` exactly when that wiring is active, fail subscriptions closed when the store is unreadable, and the inbox projection exposes the `availability` receipt alongside `exposure`. Volatile lifetimes keep the store in the worker's heap and advertise no subscription capability.

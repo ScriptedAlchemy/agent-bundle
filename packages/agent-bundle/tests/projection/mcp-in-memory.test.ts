@@ -365,6 +365,106 @@ describe('the in-memory MCP projection level', () => {
   };
   void typedTaskSurfaceSentinel;
 
+  it('emits notifications/resources/updated for the notice inbox only to subscribed matching sessions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-updated-'));
+    const inboxUri = 'agent-bundle://notices/inbox';
+    const sessionIdentity = (sessionId: string) => ({
+      source: 'native' as const,
+      state: 'available' as const,
+      value: { sessionId },
+    });
+    const durable = (sessionId: string) => openInMemoryMcpServer({
+      context: { session: sessionIdentity(sessionId) },
+      state: { definition: stateDefinition, driver: createSqliteStateDriver({ root }) },
+    });
+    const settle = async (): Promise<void> => {
+      // Notifications ride the transport ahead of the request result; one turn
+      // of the event loop lets the linked in-memory pair deliver them.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+    const readInbox = async (client: (typeof subscribed)['client']) => {
+      const read = await client.readResource({ uri: inboxUri });
+      const content = read.contents[0];
+      if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+      return (JSON.parse(content.text) as { notices: readonly Readonly<Record<string, unknown>>[] }).notices;
+    };
+    const subscribed = await durable('s1');
+    const bystander = await durable('s2');
+    const updates = { s1: [] as string[], s2: [] as string[] };
+    subscribed.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+      updates.s1.push(notification.params.uri);
+    });
+    bystander.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+      updates.s2.push(notification.params.uri);
+    });
+    try {
+      expect(subscribed.client.getServerCapabilities()?.resources).toMatchObject({ subscribe: true });
+      // Only the inbox is subscribable: static resources never change per session.
+      await expect(subscribed.client.subscribeResource({ uri: 'harness://notes' })).rejects.toThrow(/does not support subscriptions/u);
+      await subscribed.client.subscribeResource({ uri: inboxUri });
+
+      // s1 publishes to itself: the subscribed session gets exactly one signal.
+      await subscribed.client.callTool({ arguments: { message: 'for s1', recipientSession: 's1' }, name: 'publish-notice' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+
+      // Availability is a receipt on the pending notice, not a state change;
+      // the client's re-read records exposure and triggers no further signal.
+      const inbox = await readInbox(subscribed.client);
+      expect(inbox).toEqual([expect.objectContaining({
+        availability: expect.objectContaining({ channel: 'mcp-resource-updated', count: 1 }),
+        exposure: expect.objectContaining({ channel: 'mcp-inbox', count: 1 }),
+        state: 'pending',
+      })]);
+      await subscribed.client.callTool({ arguments: { message: 'unrelated render' }, name: 'echo' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+
+      // An unsubscribed session is never signalled, even for its own notice;
+      // the subscribed session is not signalled for a notice it cannot read.
+      await bystander.client.callTool({ arguments: { message: 'for s2', recipientSession: 's2' }, name: 'publish-notice' });
+      await subscribed.client.callTool({ arguments: { message: 'observe' }, name: 'echo' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+      const bystanderInbox = await readInbox(bystander.client);
+      expect(bystanderInbox).toEqual([expect.objectContaining({ state: 'pending' })]);
+      expect(bystanderInbox[0]).not.toHaveProperty('availability');
+
+      // Unsubscribing stops delivery; the notice stays pending for the inbox route.
+      await subscribed.client.unsubscribeResource({ uri: inboxUri });
+      await subscribed.client.callTool({ arguments: { message: 'for s1 again', recipientSession: 's1' }, name: 'publish-notice' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+      expect(await readInbox(subscribed.client)).toHaveLength(2);
+    } finally {
+      await subscribed.close();
+      await bystander.close();
+    }
+
+    // Volatile state lives in the render side's heap, so the server honestly
+    // advertises no subscription capability and registers no subscribe handler.
+    const volatile = await openInMemoryMcpServer({
+      state: {
+        definition: defineState({
+          events: { changed: z.object({ value: z.string() }).strict() },
+          id: 'mcp-in-memory/volatile',
+          initial: { value: '' },
+          lifetime: 'process',
+          reduce: (_state, event) => ({ value: event.payload.value }),
+          schema: z.object({ value: z.string() }).strict(),
+        }),
+        driver: createMemoryStateDriver({ lifetime: 'process' }),
+      },
+    });
+    try {
+      expect(volatile.client.getServerCapabilities()?.resources?.subscribe).toBeUndefined();
+      await expect(volatile.client.subscribeResource({ uri: inboxUri })).rejects.toThrow(/Method not found/u);
+    } finally {
+      await volatile.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it('leaves the browser App surface off the in-memory server', async () => {
     const surface = await listMcpSurface();
 

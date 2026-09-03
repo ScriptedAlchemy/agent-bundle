@@ -257,6 +257,22 @@ expires instead of retaining unused attempts. Wire-level
 `signalAvailability()` as availability receipts, and MCP inbox reads record
 exposure receipts; neither is a delivery claim.
 
+`createNoticeInboxSignaller({ store })` is the `mcp-resource-updated` route
+itself: one long-lived MCP connection's subscription to the reserved inbox
+resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
+own handle on the workspace-durable store its Flight worker mounts
+(`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
+after every completed render `observe(send)` reads the ledger, sends at most
+one `notifications/resources/updated` for the subscriber's newly eligible
+pending notices, and records the availability receipt. Eligibility is
+recipient-matched against the subscriber's observed identity, respects
+`nextAttemptAt`, and is bounded by `retryBudget` (availability signals per
+notice, durable across restarts); exposure and availability receipts never
+re-trigger a signal, so a subscribed client cannot be driven into a refetch
+loop. Subscribing fails closed when the store is unreadable, and only the
+workspace-durable lifetime is wired — volatile stores live in the worker's
+heap, so those servers honestly advertise no `resources.subscribe`.
+
 States are `pending | attempted | expired | unavailable | withdrawn |
 acknowledged`. The ledger still does not claim `delivered` or `read` as
 states: observing the recipient process is not evidence the agent saw the

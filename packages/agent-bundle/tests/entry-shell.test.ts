@@ -957,6 +957,36 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   });
   expect(volatileEntry).toContain('import * as noticeInboxRoute from "@agent-bundle/runtime/notices/inbox-route"');
   expect(volatileEntry).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
+  // Volatile stores live in the worker's heap: the server process has no
+  // handle on them, so it must not advertise inbox subscriptions.
+  for (const generated of [statelessEntry, volatileEntry]) {
+    for (const identifier of [
+      'createGeneratedNoticeRuntime',
+      'createNoticeInboxSignaller',
+      '@agent-bundle/runtime/notices\'',
+      '@agent-bundle/runtime/state/sqlite',
+      'notices: noticeDelivery',
+    ]) {
+      expect(generated).not.toContain(identifier);
+    }
+  }
+
+  const durableEntry = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(durableEntry).toContain("import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';");
+  expect(durableEntry).toContain("import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';");
+  expect(durableEntry).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';");
+  expect(durableEntry).toContain("const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
+  expect(durableEntry).toContain("createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable' })");
+  expect(durableEntry).toContain('  notices: noticeDelivery,');
+  // The server process never evaluates the project's own state definition.
+  expect(durableEntry).not.toContain('import stateDefinition from');
+  expect(durableEntry).not.toContain('createGeneratedRuntimeState');
 
   const durable = entryShellModule.generatedRouteFlightWorkerSource({
     ...base,
@@ -1005,6 +1035,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     volatile,
     statelessEntry,
     volatileEntry,
+    durableEntry,
     durable,
     renderedWorker,
     statelessCli,

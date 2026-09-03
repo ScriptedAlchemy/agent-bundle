@@ -55,6 +55,16 @@ export type {
   CreateAgentNoticeLedgerOptions,
 } from './ledger.js';
 export {
+  AGENT_NOTICE_INBOX_URI,
+  createNoticeInboxSignaller,
+} from './resource-updated.js';
+export type {
+  AgentNoticeInboxSignaller,
+  AgentNoticeInboxSignalOutcome,
+  AgentNoticeInboxStore,
+  CreateNoticeInboxSignallerOptions,
+} from './resource-updated.js';
+export {
   agentNoticeEventSchemas,
   agentNoticeStateDefinition,
   recipientMatchesPrincipal,

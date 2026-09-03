@@ -560,6 +560,97 @@ it('observes one process-lifetime provider across consecutive generated tool cal
   }
 });
 
+it('emits notifications/resources/updated for the durable notice inbox to the subscribed stdio client', { retry: 2, timeout: 90_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-inbox-updated-'));
+  roots.push(root);
+  await writeGeneratedProject(root, {
+    'src/state.ts': [
+      "import { defineState } from '@agent-bundle/runtime/state';",
+      "import { z } from 'zod';",
+      'export default defineState({',
+      "  events: { changed: z.object({ value: z.string() }).strict() },",
+      "  id: 'generated-routes/durable-state',",
+      '  initial: { value: "" },',
+      "  lifetime: 'workspace-durable',",
+      '  reduce: (_state, event) => ({ value: event.payload.value }),',
+      '  schema: z.object({ value: z.string() }).strict(),',
+      '});',
+      '',
+    ].join('\n'),
+    'src/mcp/curator/tools/notify.tsx': [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Publish a notice to a host-scoped recipient.' };",
+      'export const inputSchema = z.object({ host: z.string(), message: z.string() }).strict();',
+      "export const resultSchema = z.object({ noticeId: z.string(), state: z.literal('pending') }).strict();",
+      'export default async function Notify({ input }) {',
+      '  const context = await agent();',
+      "  if (context.notices === undefined) throw new TypeError('notices unavailable');",
+      '  const published = await context.notices.publish({',
+      "    content: { root: { kind: 'text', text: input.message }, status: 'success', version: 1 },",
+      "    priority: 'normal',",
+      '    recipient: { host: { name: input.host } },',
+      '  }, { idempotencyKey: `notice:${input.host}:${input.message}` });',
+      '  const value = { noticeId: published.notice.id, state: published.notice.state };',
+      "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `published ${value.noticeId}`));",
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const inboxUri = 'agent-bundle://notices/inbox';
+  const session = await connectGeneratedServer(root);
+  const updates: string[] = [];
+  session.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+    updates.push(notification.params.uri);
+  });
+  const settle = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+  const readInbox = async (): Promise<readonly Readonly<Record<string, unknown>>[]> => {
+    const read = await session.client.readResource({ uri: inboxUri });
+    const content = read.contents[0];
+    if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+    return (JSON.parse(content.text) as { notices: readonly Readonly<Record<string, unknown>>[] }).notices;
+  };
+  try {
+    // The packed server process holds its own SQLite handle on the store the
+    // Flight worker mounts, so it can honestly advertise inbox subscriptions.
+    expect(session.client.getServerCapabilities()?.resources).toMatchObject({ subscribe: true });
+    await expect(session.client.subscribeResource({ uri: 'ui://curator/missing.html' })).rejects.toThrow(/does not support subscriptions/u);
+    await session.client.subscribeResource({ uri: inboxUri });
+
+    // stdio identity is transport-only: the client name is the one observed
+    // axis, so a host-scoped notice reaches this connection and an
+    // actor-scoped one cannot.
+    await session.client.callTool({ arguments: { host: 'someone-else', message: 'not for you' }, name: 'notify' }, { signal: AbortSignal.timeout(10_000) });
+    await settle();
+    expect(updates).toEqual([]);
+    await session.client.callTool({ arguments: { host: 'generated-route-test', message: 'for this client' }, name: 'notify' }, { signal: AbortSignal.timeout(10_000) });
+    await settle();
+    expect(updates).toEqual([inboxUri]);
+
+    const inbox = await readInbox();
+    expect(inbox).toEqual([expect.objectContaining({
+      availability: expect.objectContaining({ channel: 'mcp-resource-updated', count: 1 }),
+      content: { root: { kind: 'text', text: 'for this client' }, status: 'success', version: 1 },
+      exposure: expect.objectContaining({ channel: 'mcp-inbox', count: 1 }),
+      state: 'pending',
+    })]);
+    // The re-read advanced the ledger without producing a further signal.
+    await settle();
+    expect(updates).toEqual([inboxUri]);
+
+    await session.client.unsubscribeResource({ uri: inboxUri });
+    await session.client.callTool({ arguments: { host: 'generated-route-test', message: 'after unsubscribe' }, name: 'notify' }, { signal: AbortSignal.timeout(10_000) });
+    await settle();
+    expect(updates).toEqual([inboxUri]);
+    expect(await readInbox()).toHaveLength(2);
+  } finally {
+    await session.close();
+  }
+});
+
 it('emits MCP progress notifications only when a progress token is supplied', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-progress-'));
   roots.push(root);
