@@ -71,9 +71,9 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
   // the foreground fixture's spawns block until the child finishes. Lineage
   // must come out the same either way.
   it.each([
-    ['background root spawn', 'claude-2.1.257.ndjson'],
-    ['foreground spawns', 'claude-2.1.257-foreground.ndjson'],
-  ])('Claude 2.1.257 (%s): subagent events resolve to their own agent under the root session, nested depth 2, parent inferred from the open Agent call', async (_label, name) => {
+    ['background root spawn', 'claude-2.1.257.ndjson', 'confirmed'],
+    ['foreground spawns', 'claude-2.1.257-foreground.ndjson', 'registry'],
+  ])('Claude 2.1.257 (%s): subagent events resolve to their own agent under the root session, nested depth 2, parent inferred from the open Agent call', async (_label, name, liveResolution) => {
     const registry = createAgentLineageRegistry();
     const records = fixture(name);
     const lineages = await replay('claude', records, registry);
@@ -121,10 +121,19 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     expect(new Set(spawnResults.map((result) => result.agentId))).toEqual(new Set([subagent, nested]));
     for (const result of spawnResults) expect(['async_launched', 'completed']).toContain(result.status);
 
-    // The MCP probe call carries claudecode/toolUseId, which names the open PreToolUse.
+    // The MCP probe call carries claudecode/toolUseId, which names the open
+    // PreToolUse. A background child's probe runs after the root's `Agent`
+    // PostToolUse already named it, so its edge is host-confirmed; a
+    // foreground child's runs while the parent's call is still open, so the
+    // edge still rests on the registry's match.
     const probes = lineages.filter((entry) => entry.kind === 'mcp:probe');
     expect(probes.map((entry) => value(entry.lineage).depth)).toEqual([0, 1, 2]);
-    expect(value(probes[1]!.lineage)).toMatchObject({ conversation: subagent, resolution: 'registry' });
+    expect(value(probes[1]!.lineage)).toMatchObject({ conversation: subagent, parent: root, resolution: liveResolution });
+    // The nested child is confirmed only by its parent's PostToolUse, which in
+    // both captures arrives after the nested child's own hooks have all fired.
+    expect(value(probes[2]!.lineage)).toMatchObject({ conversation: nested, parent: subagent, resolution: 'registry' });
+    const subagentStop = lineages.find((entry) => entry.kind === 'agent/stop' && entry.native?.['agent_id'] === subagent)!;
+    expect(value(subagentStop.lineage)).toMatchObject({ conversation: subagent, resolution: liveResolution });
 
     // PostToolUse for MCP tools now arrives (string tool_response), so every window closes.
     expect(registry.snapshot().openCalls).toEqual([]);
@@ -132,6 +141,11 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     const snapshot = registry.snapshot();
     expect(Object.values(snapshot.nodes).filter((node) => node.stoppedAt !== undefined).map((node) => node.id).sort())
       .toEqual([nested, root, subagent].sort());
+    // Every edge the registry matched was later named by the host: the
+    // inference never disagreed with the parent's PostToolUse in either run.
+    expect(snapshot.nodes[subagent]).toMatchObject({ confirmed: true, parent: root, toolCallId: spawnCalls[0] });
+    expect(snapshot.nodes[nested]).toMatchObject({ confirmed: true, parent: subagent, toolCallId: spawnCalls[1] });
+    expect(snapshot.unplacedStarts ?? []).toEqual([]);
   });
 
   // Live Claude Code 2.1.259 (claude-sonnet-5, 2026-09-03), driven by
@@ -759,6 +773,8 @@ describe('lineage registry spawn evidence (review round 9)', () => {
     });
     expect(start).toEqual(unavailable('id-not-resolvable'));
     expect(registry.snapshot().nodes['orphan']).toBeUndefined();
+    // The start's own facts wait for the host to name the edge.
+    expect(registry.snapshot().unplacedStarts).toMatchObject([{ id: 'orphan', root: 'root', type: 'general-purpose' }]);
   });
 
   it('does not mistake a generated MCP tool named spawn_agent for the Codex collaboration spawn', async () => {
@@ -970,5 +986,191 @@ describe('lineage registry Cursor child binding precision (desktop hooks-service
     expect(nodes['root']?.workspace).toMatch(/^[0-9a-f]{16}$/u);
     expect(nodes['call-a']?.workspace).toMatch(/^[0-9a-f]{16}$/u);
     expect(JSON.stringify(nodes)).not.toContain('/ws/');
+  });
+});
+
+// Claude Code 2.1.257 names no parent on `SubagentStart` (#422), but the
+// parent's own `Agent` PostToolUse carries `tool_use_id`, the caller's
+// `agent_id` (none for the root) and `tool_response.agentId` — the child's id
+// (captured 2026-09-03: `status: "async_launched"` for a background spawn,
+// `status: "completed"` for a foreground one; hooks reference "PostToolUse",
+// sub-agents "Resume subagents": Claude receives the child's agent ID when it
+// completes). The registry treats that hook as the host's word on the edge.
+describe('lineage registry Claude spawn confirmation from the Agent PostToolUse (#422)', () => {
+  const claude = (registry: AgentLineageRegistry) =>
+    (event: string, key: string, native: Record<string, unknown>, observedAt = '2026-09-03T00:00:00.000Z') =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt });
+  const session = (agentId?: string) => ({ session_id: 'root', ...(agentId === undefined ? {} : { agent_id: agentId, agent_type: 'general-purpose' }) });
+  const spawnBefore = (toolUseId: string, agentId?: string) =>
+    ({ ...session(agentId), hook_event_name: 'PreToolUse', tool_input: { prompt: 'x' }, tool_name: 'Agent', tool_use_id: toolUseId });
+  const spawnAfter = (toolUseId: string, child: string, status: 'async_launched' | 'completed', agentId?: string) => ({
+    ...session(agentId),
+    hook_event_name: 'PostToolUse',
+    tool_input: { prompt: 'x' },
+    tool_name: 'Agent',
+    tool_response: status === 'completed'
+      ? { agentId: child, agentType: 'general-purpose', content: [], status }
+      : { agentId: child, isAsync: true, status },
+    tool_use_id: toolUseId,
+  });
+  const start = (agentId: string) => ({ ...session(agentId), hook_event_name: 'SubagentStart' });
+  const stop = (agentId: string) => ({ ...session(agentId), hook_event_name: 'SubagentStop', stop_hook_active: false });
+  const bash = (toolUseId: string, agentId?: string) =>
+    ({ ...session(agentId), hook_event_name: 'PreToolUse', tool_input: { command: 'pwd' }, tool_name: 'Bash', tool_use_id: toolUseId });
+
+  it('places a start two parents could have produced once the spawning parent names it, and confirms the chain edge by edge', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('agent/start', 'p', start('p'));
+    await observe('tool/before', 'sp2', spawnBefore('sp2'));
+    await observe('tool/before', 'sp3', spawnBefore('sp3', 'p'));
+    // Two parents, two open spawns: the start payload cannot pick, so no guess.
+    expect(await observe('agent/start', 'n', start('n'), '2026-09-03T00:00:05.000Z')).toEqual(unavailable('id-not-resolvable'));
+    expect(await observe('tool/before', 'n-bash', bash('n-bash', 'n'))).toEqual(unavailable('id-not-resolvable'));
+    // The nested parent's PostToolUse says sp3 produced n: placed under p at
+    // depth 2, as it started (time and type), with the spawn call named.
+    await observe('tool/after', 'sp3-done', spawnAfter('sp3', 'n', 'async_launched', 'p'), '2026-09-03T00:00:06.000Z');
+    expect(registry.snapshot().nodes['n']).toMatchObject({ confirmed: true, depth: 2, parent: 'p', root: 'root', startedAt: '2026-09-03T00:00:05.000Z', toolCallId: 'sp3', type: 'general-purpose' });
+    expect(registry.snapshot().unplacedStarts).toEqual([]);
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['sp2']);
+    // n's own edge is host-named but p's still rests on the registry's match, so the chain is not confirmed yet.
+    const nestedTool = await observe('tool/before', 'n-bash-2', bash('n-bash-2', 'n'));
+    expect(value(nestedTool)).toMatchObject({ conversation: 'n', depth: 2, parent: 'p', resolution: 'registry', root: 'root', subagent: { id: 'n', toolCallId: 'sp3' } });
+    // The root's PostToolUse names p: every edge from n to the root is now the host's.
+    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'p', 'async_launched'));
+    expect(value(await observe('tool/before', 'n-bash-3', bash('n-bash-3', 'n')))).toMatchObject({ conversation: 'n', depth: 2, parent: 'p', resolution: 'confirmed' });
+    expect(value(await observe('tool/before', 'p-bash', bash('p-bash', 'p')))).toMatchObject({ conversation: 'p', depth: 1, parent: 'root', resolution: 'confirmed', subagent: { toolCallId: 'sp1' } });
+    // The root itself stays native: it has no edge to confirm.
+    expect(value(await observe('tool/before', 'root-bash', bash('root-bash')))).toMatchObject({ conversation: 'root', depth: 0, resolution: 'native' });
+    // The MCP path agrees with the hook path.
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'n-bash-3' }, toolName: 'probe' }))
+      .toMatchObject({ value: { conversation: 'n', resolution: 'confirmed' } });
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'root-bash' }, toolName: 'probe' }))
+      .toMatchObject({ value: { conversation: 'root', resolution: 'registry' } });
+  });
+
+  it('fills in which sibling came from which spawn call once the parent names each child', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('tool/before', 'sp2', spawnBefore('sp2'));
+    expect(value(await observe('agent/start', 'a', start('a'))).subagent?.toolCallId).toBeUndefined();
+    expect(value(await observe('agent/start', 'b', start('b'))).subagent?.toolCallId).toBeUndefined();
+    // The host's order is the reverse of the registry's blind pick.
+    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'b', 'async_launched'));
+    await observe('tool/after', 'sp2-done', spawnAfter('sp2', 'a', 'async_launched'));
+    expect(registry.snapshot().nodes['a']).toMatchObject({ confirmed: true, parent: 'root', toolCallId: 'sp2' });
+    expect(registry.snapshot().nodes['b']).toMatchObject({ confirmed: true, parent: 'root', toolCallId: 'sp1' });
+    expect(value(await observe('tool/before', 'a-bash', bash('a-bash', 'a')))).toMatchObject({ resolution: 'confirmed', subagent: { id: 'a', toolCallId: 'sp2' } });
+  });
+
+  it('recovers a start whose spawn PreToolUse was never seen, keeping its start and stop times, through a durable journal', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const registry = createAgentLineageRegistry({ store });
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    // Missed PreToolUse: nothing to claim, so the start waits, and so does its stop.
+    expect(await observe('agent/start', 'x', start('x'), '2026-09-03T00:00:01.000Z')).toEqual(unavailable('id-not-resolvable'));
+    await observe('agent/stop', 'x-stop', stop('x'), '2026-09-03T00:00:02.000Z');
+    expect(registry.snapshot().unplacedStarts).toMatchObject([{ id: 'x', stoppedAt: '2026-09-03T00:00:02.000Z' }]);
+    const before = (await store.read()).revision;
+    await observe('tool/after', 'sp-done', spawnAfter('sp-missed', 'x', 'completed'), '2026-09-03T00:00:03.000Z');
+    expect(registry.snapshot().nodes['x']).toMatchObject({
+      confirmed: true, depth: 1, parent: 'root', root: 'root', startedAt: '2026-09-03T00:00:01.000Z', stoppedAt: '2026-09-03T00:00:02.000Z', toolCallId: 'sp-missed',
+    });
+    expect(registry.snapshot().unplacedStarts).toEqual([]);
+    // A redelivered PostToolUse replays the same journal entries; nothing moves.
+    const after = (await store.read()).revision;
+    expect(after).toBeGreaterThan(before);
+    await observe('tool/after', 'sp-done', spawnAfter('sp-missed', 'x', 'completed'), '2026-09-03T00:00:09.000Z');
+    expect((await store.read()).revision).toBe(after);
+    expect(registry.snapshot().nodes['x']?.stoppedAt).toBe('2026-09-03T00:00:02.000Z');
+    // A fresh registry over the same journal sees the confirmed node.
+    const rehydrated = createAgentLineageRegistry({ store });
+    expect(value(await rehydrated.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'late', native: bash('late', 'x') })))
+      .toMatchObject({ conversation: 'x', depth: 1, parent: 'root', resolution: 'confirmed' });
+    await store.close();
+    await driver.close();
+  });
+
+  it('moves a child the spawn window filed under the wrong parent, rebases what it spawned, and materializes the real child', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('agent/start', 'p', start('p'));
+    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'p', 'async_launched'));
+    // p opens a spawn; the root's own second spawn PreToolUse is lost, so the
+    // root's child q is the only start beside p's open call and is filed under p.
+    await observe('tool/before', 'sp2', spawnBefore('sp2', 'p'));
+    expect(value(await observe('agent/start', 'q', start('q')))).toMatchObject({ depth: 2, parent: 'p', subagent: { toolCallId: 'sp2' } });
+    await observe('tool/before', 'sp4', spawnBefore('sp4', 'q'));
+    expect(value(await observe('agent/start', 'r', start('r')))).toMatchObject({ depth: 3, parent: 'q' });
+    // The root's PostToolUse for the lost call names q: q moves under the
+    // root, r follows one level up, and the call is recorded on q.
+    await observe('tool/after', 'lost-done', spawnAfter('sp-lost', 'q', 'async_launched'));
+    expect(registry.snapshot().nodes['q']).toMatchObject({ confirmed: true, depth: 1, parent: 'root', root: 'root', toolCallId: 'sp-lost' });
+    expect(registry.snapshot().nodes['r']).toMatchObject({ depth: 2, parent: 'q', root: 'root' });
+    expect(value(await observe('tool/before', 'r-bash', bash('r-bash', 'r')))).toMatchObject({ depth: 2, parent: 'q', resolution: 'registry' });
+    // p's PostToolUse names the child sp2 really produced, one whose start the
+    // registry never saw: it exists from the confirmation on, under p.
+    await observe('tool/after', 'sp2-done', spawnAfter('sp2', 'real', 'completed', 'p'), '2026-09-03T00:00:07.000Z');
+    expect(registry.snapshot().nodes['real']).toMatchObject({ confirmed: true, depth: 2, parent: 'p', startedAt: '2026-09-03T00:00:07.000Z', stoppedAt: '2026-09-03T00:00:07.000Z', toolCallId: 'sp2' });
+    expect(value(await observe('tool/before', 'q-bash', bash('q-bash', 'q')))).toMatchObject({ depth: 1, parent: 'root', resolution: 'confirmed' });
+  });
+
+  it('ignores a confirmation that names the carrier itself, a root, or would make a parent descend from its own child', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('agent/start', 'p', start('p'));
+    await observe('tool/before', 'sp2', spawnBefore('sp2', 'p'));
+    await observe('agent/start', 'q', start('q'));
+    const before = registry.snapshot().nodes;
+    await observe('tool/after', 'self', spawnAfter('sp-self', 'p', 'async_launched', 'p'));
+    await observe('tool/after', 'root-child', spawnAfter('sp-root', 'root', 'async_launched', 'p'));
+    await observe('tool/after', 'cycle', spawnAfter('sp-cycle', 'p', 'async_launched', 'q'));
+    expect(registry.snapshot().nodes).toEqual(before);
+    // A spawn response without an agentId (2.1.250-era shape) confirms nothing either.
+    await observe('tool/after', 'sp1-done', { ...session(), hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Agent', tool_response: { status: 'async_launched' }, tool_use_id: 'sp1' });
+    expect(registry.snapshot().nodes['p']?.confirmed).toBeUndefined();
+  });
+
+  it('takes a confirmation that precedes the child\'s start, then lets the start add its type without claiming another spawn', async () => {
+    // Claude Code 2.1.259 (fixtures/host-lineage/claude-2.1.259-orchestration.ndjson
+    // rows 12–17, PR #455): for a background Explore spawn the `Agent`
+    // PostToolUse (`async_launched`, agentId) fires before that child's
+    // SubagentStart, and the root's next spawn follows at once.
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'explore', 'async_launched'), '2026-09-03T00:00:01.000Z');
+    expect(registry.snapshot().nodes['explore']).toMatchObject({ confirmed: true, depth: 1, parent: 'root', startedAt: '2026-09-03T00:00:01.000Z', toolCallId: 'sp1' });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+    const started = await observe('agent/start', 'explore', { ...session('explore'), agent_type: 'Explore', hook_event_name: 'SubagentStart' }, '2026-09-03T00:00:02.000Z');
+    expect(value(started)).toMatchObject({ conversation: 'explore', depth: 1, parent: 'root', resolution: 'confirmed', subagent: { id: 'explore', toolCallId: 'sp1', type: 'Explore' } });
+    expect(registry.snapshot().nodes['explore']).toMatchObject({ confirmed: true, startedAt: '2026-09-03T00:00:02.000Z', type: 'Explore' });
+    // The redelivered start changes nothing.
+    await observe('agent/start', 'explore-again', { ...session('explore'), agent_type: 'Explore', hook_event_name: 'SubagentStart' }, '2026-09-03T00:00:09.000Z');
+    expect(registry.snapshot().nodes['explore']?.startedAt).toBe('2026-09-03T00:00:02.000Z');
+    // The root's second spawn is claimed by its own child, not by the one already placed.
+    await observe('tool/before', 'sp2', spawnBefore('sp2'));
+    expect(value(await observe('agent/start', 'gp', start('gp')))).toMatchObject({ depth: 1, parent: 'root', resolution: 'registry', subagent: { toolCallId: 'sp2' } });
+  });
+
+  it('drops the unplaced starts of a session that ends', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('agent/start', 'x', start('x'));
+    expect(registry.snapshot().unplacedStarts).toHaveLength(1);
+    await observe('session/end', 'e', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'root' });
+    expect(registry.snapshot().unplacedStarts).toEqual([]);
   });
 });

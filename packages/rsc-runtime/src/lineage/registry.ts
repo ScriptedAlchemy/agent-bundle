@@ -80,6 +80,34 @@ const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> 
   cursor: (toolName) => toolName === 'Task',
 });
 
+/** The host named the child a spawn call produced, on the spawn's own post-tool hook. */
+interface SpawnConfirmation {
+  readonly child: string;
+  /** The host reports the child already finished (Claude foreground `Agent`: `status: "completed"`). */
+  readonly completed: boolean;
+}
+
+/**
+ * Which spawn post-tool payloads name their child. Claude's `Agent`
+ * PostToolUse (hooks reference, "PostToolUse") returns `tool_response.agentId`
+ * — the same id the child's own `SubagentStart`/`SubagentStop` and every hook
+ * it fires carry as `agent_id` — beside `status: "async_launched"` for a
+ * background agent still running or `status: "completed"` for a foreground
+ * one that already stopped (captured 2026-09-03, Claude Code 2.1.257). Codex
+ * and Cursor spawn responses name no child.
+ */
+const SPAWN_CONFIRMATIONS: Readonly<Record<LineageHost, (native: Readonly<Record<string, unknown>>) => SpawnConfirmation | undefined>> = Object.freeze({
+  claude: (native) => {
+    const response = native['tool_response'];
+    if (response === null || typeof response !== 'object' || Array.isArray(response)) return undefined;
+    const record = response as Readonly<Record<string, unknown>>;
+    const child = nativeString(record, 'agentId');
+    return child === undefined ? undefined : { child, completed: record['status'] === 'completed' };
+  },
+  codex: () => undefined,
+  cursor: () => undefined,
+});
+
 /**
  * Cursor events only the user-facing conversation emits; a subagent's
  * conversation never carries them. Observed on a conversation the registry
@@ -142,7 +170,7 @@ interface JournalKeys {
   next(name: keyof LineageEvents, payload: unknown): string;
 }
 
-const RECEIPT_TIMESTAMPS = new Set(['openedAt', 'startedAt', 'stoppedAt']);
+const RECEIPT_TIMESTAMPS = new Set(['at', 'openedAt', 'startedAt', 'stoppedAt']);
 /** Journal keys a storeless registry remembers to suppress redeliveries. */
 const APPLIED_KEY_RETENTION = 4096;
 
@@ -257,6 +285,25 @@ export const createAgentLineageRegistry = (
     conversation === undefined ? undefined : state.nodes[conversation];
 
   /**
+   * Every edge from the node to its root was named by the host, so nothing in
+   * its `parent`/`root`/`depth` rests on the spawn-window inference any more.
+   * A root has no edge and is never "confirmed"; it resolves natively.
+   */
+  const chainConfirmed = (node: LineageNode): boolean => {
+    if (node.depth === 0) return false;
+    let current: LineageNode | undefined = node;
+    for (let hops = 0; current !== undefined && current.depth > 0 && hops <= Object.keys(state.nodes).length; hops += 1) {
+      if (current.confirmed !== true) return false;
+      current = nodeFor(current.parent);
+    }
+    return current !== undefined && current.depth === 0;
+  };
+
+  /** The non-native resolution for a subagent node: the host-named edge chain, or the registry's own match. */
+  const registryResolution = (node: LineageNode, fallback: AgentLineageResolution): AgentLineageResolution =>
+    fallback === 'registry' && chainConfirmed(node) ? 'confirmed' : fallback;
+
+  /**
    * The spawn call that produced the subagent starting now: the most recent
    * unclaimed one *under the same root*, so two sessions sharing one durable
    * registry never claim each other's spawns. Claude keeps the call open
@@ -355,7 +402,7 @@ export const createAgentLineageRegistry = (
     if (node === undefined) return unavailable('id-not-resolvable');
     const resolution: AgentLineageResolution = node.depth === 0 && (host !== 'cursor' || state.pendingChildren.length === 0)
       ? 'native'
-      : fallback;
+      : registryResolution(node, fallback);
     return available(lineageOf(node, carrier.generation, resolution), resolution === 'native' ? 'native' : 'derived');
   };
 
@@ -390,14 +437,39 @@ export const createAgentLineageRegistry = (
     if (agentId === undefined || root === undefined) return;
     // A replayed start must not claim a second spawn or rewrite the node — even
     // after retention pruned the node, the start identity is remembered.
-    if (state.seenStarts.includes(agentId) || state.nodes[agentId] !== undefined) return;
+    if (state.seenStarts.includes(agentId)) return;
+    const materialized = state.nodes[agentId];
+    if (materialized !== undefined) {
+      // The host confirmed the spawn before the child's start arrived (Claude
+      // fires a background `Agent` PostToolUse ahead of `SubagentStart`): the
+      // node exists by the host's word; the start adds what only it carries.
+      if (materialized.depth === 0) return;
+      await dispatch('nodeStarted', {
+        ...materialized,
+        ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
+        startedAt: observedAt,
+        ...(nativeString(native, 'agent_type') === undefined ? {} : { type: nativeString(native, 'agent_type')! }),
+      }, keys);
+      return;
+    }
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true, undefined);
     if (rootNodeValue === undefined) return;
     const claim = await claimSpawn(host, rootNodeValue.root, keys);
     // No spawn to claim (the pre-tool hook was missed, or the registry
-    // restarted) proves nothing about the parent: a nested agent would be
-    // misfiled under the root, so the start stays unresolved.
-    if (claim.kind !== 'claimed') return;
+    // restarted), or several parents with one, proves nothing about the
+    // parent: a nested agent would be misfiled under the root, so the start
+    // stays unplaced until the host names its edge (Claude's `Agent`
+    // PostToolUse), keeping what the start itself said.
+    if (claim.kind !== 'claimed') {
+      await dispatch('startUnplaced', {
+        ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
+        id: agentId,
+        root: rootNodeValue.root,
+        startedAt: observedAt,
+        ...(nativeString(native, 'agent_type') === undefined ? {} : { type: nativeString(native, 'agent_type')! }),
+      }, keys);
+      return;
+    }
     const parent = nodeFor(claim.call.conversation) ?? rootNodeValue;
     await dispatch('nodeStarted', {
       depth: parent.depth + 1,
@@ -421,7 +493,11 @@ export const createAgentLineageRegistry = (
           return Object.values(state.nodes).find((node) => node.subagentId === subagentId)?.id;
         })()
       : nativeString(native, 'agent_id');
-    if (stopped === undefined || state.nodes[stopped] === undefined) return;
+    if (stopped === undefined) return;
+    // A stop for a start still waiting on its edge is kept with that start, so
+    // a late confirmation materializes an already-finished node.
+    const unplaced = (state.unplacedStarts ?? []).some((start) => start.id === stopped);
+    if (state.nodes[stopped] === undefined && !unplaced) return;
     await dispatch('nodeStopped', { id: stopped, stoppedAt: observedAt }, keys);
   };
 
@@ -515,6 +591,23 @@ export const createAgentLineageRegistry = (
         if (event === 'tool/failure' && SPAWN_TOOLS[host](toolName)) {
           await dispatch('spawnFailed', { toolCallId }, keys);
         }
+        // The spawn's own post-tool hook names the child (Claude
+        // `tool_response.agentId`): the carrier is the parent, by the host's
+        // word. That places a start the claim window could not, confirms an
+        // edge it matched, or moves one it matched wrong — the same event in
+        // every case, so a redelivery is idempotent.
+        const confirmation = event === 'tool/after' && SPAWN_TOOLS[host](toolName)
+          ? SPAWN_CONFIRMATIONS[host](native)
+          : undefined;
+        if (confirmation !== undefined && confirmation.child !== carrier.conversation) {
+          await dispatch('spawnConfirmed', {
+            at: observedAt,
+            child: confirmation.child,
+            ...(confirmation.completed ? { completed: true } : {}),
+            parent: carrier.conversation,
+            toolCallId,
+          }, keys);
+        }
       }
     }
     return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
@@ -599,7 +692,7 @@ export const createAgentLineageRegistry = (
       if (call === undefined) return unavailable('id-not-resolvable');
       const node = nodeFor(call.conversation);
       if (node === undefined) return unavailable('id-not-resolvable');
-      const resolution: AgentLineageResolution = claudeToolUseId !== undefined ? 'registry' : 'inferred';
+      const resolution: AgentLineageResolution = claudeToolUseId !== undefined ? registryResolution(node, 'registry') : 'inferred';
       return available(lineageOf(node, call.generation, resolution), 'derived');
     },
 

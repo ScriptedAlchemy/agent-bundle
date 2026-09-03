@@ -1,0 +1,6 @@
+---
+"@agent-bundle/runtime": patch
+"agent-bundle": patch
+---
+
+Take Claude Code's own word for a subagent's parent: the parent's `Agent` `PostToolUse` carries the spawn `tool_use_id` and `tool_response.agentId`, the child's `agent_id`, so the lineage registry behind `request.lineage` now confirms the edge it matched from spawn-call ordering, fills in `subagent.toolCallId` for siblings it had claimed blind, places a `SubagentStart` no spawn window could (none open, or two parents with one — the start's id, type, time and stop are kept meanwhile), moves a child it had filed under the wrong parent and re-bases that child's descendants, and holds a child the host names before its start arrives. Add `'confirmed'` to `AgentLineageResolution` (`@agent-bundle/runtime`, `RequestLineageProvenance` in `agent-bundle`): a subagent's `parent`/`root`/`depth` resolve `confirmed` once every edge up to the root is host-named — right after `SubagentStart` for a background spawn, after `SubagentStop` for a foreground one — and stay `registry` otherwise. The Claude capability table's `lineage.parent`/`lineage.depth` rows record the confirmation and its timing, and the generated hosts page gains a "Conversation lineage" section rendered from every host's `lineage` rows. (#422)
