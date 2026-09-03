@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
@@ -19,7 +20,8 @@ interface RstestRun {
  * `rstest --config <file>` from the project root, resolving the preset from
  * this repository's source. The default reporter is pinned because Rstest
  * switches to its agent report when it detects a non-interactive caller;
- * output is merged so a failure prints the whole run in the assertion message.
+ * output is merged and stripped of escape sequences so a failure prints the
+ * whole run in the assertion message and Node's colorized error dumps match.
  */
 const runFixturePool = (configFile: string): Promise<RstestRun> =>
   new Promise((resolvePromise, reject) => {
@@ -34,7 +36,7 @@ const runFixturePool = (configFile: string): Promise<RstestRun> =>
     child.stdout.on('data', (chunk: string) => { output += chunk; });
     child.stderr.on('data', (chunk: string) => { output += chunk; });
     child.on('error', reject);
-    child.on('close', (code) => { resolvePromise({ code, output }); });
+    child.on('close', (code) => { resolvePromise({ code, output: stripVTControlCharacters(output) }); });
   });
 
 describe('a consumer project whose source imports agent-bundle/meta (#386)', () => {

@@ -4,6 +4,7 @@ import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
@@ -1056,12 +1057,15 @@ it('rejects the built identity module with the intended error, not a TDZ Referen
     });
   });
   expect(code).toBe(1);
-  expect(stderr).toContain('[AB4760] agent-bundle/meta is available only inside a surface Agent Bundle compiles');
+  // Node 24 colorizes the uncaught-error property dump even on a piped
+  // stderr, so the assertions read the text without its escape sequences.
+  const plain = stripVTControlCharacters(stderr);
+  expect(plain).toContain('[AB4760] agent-bundle/meta is available only inside a surface Agent Bundle compiles');
   // The recovery rides on the message, so a bare `node` process prints the
   // exact fix without any diagnostic formatter (#386).
-  expect(stderr).toContain('recovery: Run the test under agentBundleRstest() or agentBundleBrowserRstest()');
-  expect(stderr).toContain("code: 'AB4760'");
-  expect(stderr).not.toContain('ReferenceError');
+  expect(plain).toContain('recovery: Run the test under agentBundleRstest() or agentBundleBrowserRstest()');
+  expect(plain).toContain("code: 'AB4760'");
+  expect(plain).not.toContain('ReferenceError');
 });
 
 it('uses the selected streamable HTTP manifest with propagated cancellation and cleans data before rejecting tampering', async () => {
