@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Promote canonical `session/end` and `prompt/submit` event-route families across

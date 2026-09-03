@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
 Add the versioned realm-singleton request store, `await agent()`, and

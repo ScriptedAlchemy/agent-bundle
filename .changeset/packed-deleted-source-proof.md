@@ -1,5 +1,5 @@
 ---
-'agent-bundle': minor
+'agent-bundle': patch
 ---
 
 Add the `packed-deleted-source` consumer proof level to `agent-bundle/test`.

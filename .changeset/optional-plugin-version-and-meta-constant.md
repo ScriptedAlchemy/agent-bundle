@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Make `plugin.version` optional and derive it from `package.json`, so a packaged plugin declares its release version once. A declared value that is not a nonempty string still reports `AB4001`, and a declared value that disagrees with `package.json` still reports the `AB4008` warning. Development keeps the labeled `0.0.0-dev` fallback, while `agent-bundle build` now refuses a project with no release version at all with the new `AB4013` error, so a development fallback can never reach a release artifact.

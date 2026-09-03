@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
 Add incremental Flight decoding and an invocation-local Suspense reconciler.

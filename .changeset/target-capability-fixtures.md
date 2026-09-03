@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add explicit target-capability fixtures to `agent-bundle/test`.

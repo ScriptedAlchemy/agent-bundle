@@ -1,6 +1,6 @@
 ---
-"@agent-bundle/runtime": minor
-"agent-bundle": minor
+"@agent-bundle/runtime": patch
+"agent-bundle": patch
 ---
 
 Mount the #98 state kernel and #99 notice ledger into generated request

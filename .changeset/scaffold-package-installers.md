@@ -1,5 +1,5 @@
 ---
-"create-agent-bundle": minor
+"create-agent-bundle": patch
 ---
 
 Adopt framework-generated package installers and prepack inventory validation

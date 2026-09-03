@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Exercise rendered CLI command routes through the public `cli-dispatch` test

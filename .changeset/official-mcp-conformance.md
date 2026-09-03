@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add an opt-in MCP conformance lane that builds a generated route server,

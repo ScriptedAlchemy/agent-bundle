@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Harden the generated-executable build path (Rspack/Rslib/Rsbuild

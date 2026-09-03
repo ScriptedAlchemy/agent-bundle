@@ -1,6 +1,6 @@
 ---
-"agent-bundle": minor
-"@agent-bundle/runtime": minor
+"agent-bundle": patch
+"@agent-bundle/runtime": patch
 ---
 
 Add the seven v1 semantic event-route descriptors and the `Agent.Context`

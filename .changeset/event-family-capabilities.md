@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Publish evidence-backed event-route support states for Claude, Codex, Cursor,

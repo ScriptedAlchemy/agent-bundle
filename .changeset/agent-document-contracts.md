@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
 Add the versioned immutable Agent Document, bounded sequence-numbered render
