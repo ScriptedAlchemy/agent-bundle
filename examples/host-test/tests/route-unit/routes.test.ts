@@ -12,6 +12,7 @@ import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
 
 import { LOG_DIR_ENV } from '../../src/log.js';
+import { DEFAULT_DUMP_LIMIT } from '../../src/mcp/host-test/tools/dump.js';
 import {
   capturesStateDefinition,
   type CaptureEvents,
@@ -193,6 +194,35 @@ it('keeps a bounded durable summary and dumps by any carried id', async () => {
   expect(everything.document.value).toMatchObject({ matched: 5, total: 5 });
   const records = (everything.document.value as { records: Record<string, unknown>[] }).records;
   expect(records.at(-1)).toMatchObject({ kind: 'mcp', observed: { tool: 'dump' }, request: { invocation: { kind: 'tool' } } });
+});
+
+// Live Claude Code 2.1.259 (2026-09-03): a bare `dump` over a ~180-record log
+// rendered past the Agent Document node limit and the host reported
+// PostToolUseFailure, so the model had to guess a limit.
+it('a bare dump returns only the newest records while matched counts the whole log', async () => {
+  for (let index = 0; index < DEFAULT_DUMP_LIMIT + 5; index += 1) {
+    await render('event:tool/before', eventInput('tool/before', {
+      cwd: '/repo',
+      hook_event_name: 'PreToolUse',
+      session_id: 'root-session',
+      tool_input: { command: 'pwd' },
+      tool_name: 'Bash',
+      tool_use_id: `toolu_${String(index).padStart(3, '0')}`,
+      transcript_path: '/tmp/transcript.jsonl',
+    }));
+  }
+  const dumped = await render('tool:host-test/dump', {});
+  expectDocument(dumped).toHaveStatus('success');
+  const value = dumped.document.value as { filter: { limit?: number }; matched: number; records: { ids: { tool_use_id?: string } }[]; total: number };
+  // The events plus the dump call itself.
+  expect(value).toMatchObject({ filter: { limit: DEFAULT_DUMP_LIMIT }, matched: DEFAULT_DUMP_LIMIT + 6, total: DEFAULT_DUMP_LIMIT + 6 });
+  expect(value.records).toHaveLength(DEFAULT_DUMP_LIMIT);
+  // Newest first-dropped: the oldest events fall off, the dump call itself stays.
+  expect(value.records[0]).toMatchObject({ ids: expect.objectContaining({ tool_use_id: 'toolu_006' }) });
+  expect(value.records.at(-1)).toMatchObject({ kind: 'mcp' });
+
+  const explicit = await render('tool:host-test/dump', { limit: 5 });
+  expect((explicit.document.value as { records: unknown[] }).records).toHaveLength(5);
 });
 
 it('reset clears the log and the durable summary', async () => {

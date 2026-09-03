@@ -102,6 +102,25 @@ is reproduced here beyond counts, codes, and field names.
    the `native-host-smoke` workflow's Claude source leg will report
    `harness-failure` on every run against 2.1.257.
 
+## Re-run later the same day: unmodified harness, Claude Code 2.1.259
+
+After the operator signed in again, `probe:install claude` — the checked-in
+harness, byte-for-byte copy of `~/.claude/.credentials.json`, no local edits —
+produced a signed-in isolated home at `/tmp/host-test/claude-home`
+(`claude auth status` → `loggedIn: true`, `authMethod: claude.ai`). The three
+proofs were re-run with `HOME=/tmp/host-test/claude-home` (raw logs under
+`/tmp/claude-live/orch/`), right after that home had hosted the four-turn
+orchestration capture (`docs/audits/2026-09-03-host-lineage-matrix.md`,
+"orchestration run"):
+
+| Proof | Result | Assertions that held |
+| --- | --- | --- |
+| `pnpm test:host-install:session:claude` | **pass** — 2/2, 0 skipped | the same assertions as above against Claude Code 2.1.259 |
+| `pnpm test:packed:native:claude` | **pass** — 8/8, 0 skipped, no fix needed this time (defects 1–2 are merged) | `hosts = ['claude']`, `status: 'passed'`, Eval `pass: 1, fail: 0` |
+| `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE=1 rstest …/native-claude-contract.test.ts` | **fail** — 17/18, `status: 'harness-failure'` | everything measured held again (`authentication.status: 'subscription-session'`, `version: '2.1.259'`, `validation.exitCode: 0`, `stream.activationEvidence: 'observed'`, `stream.authSource: 'non-environment'`, `stream.plugins: ['agent-bundle-native-smoke']`, `errorEnvelopes: []`, one `result`/`success`, `stderr.present: false`); sole diagnostic `claude-native.normal-home.changed` — defect 3, still open as [#439](https://github.com/ScriptedAlchemy/agent-bundle/issues/439), reproduced on 2.1.259 |
+
+The real `~/.claude` was again never written by any of these runs.
+
 ## Cost and footprint
 
 The two lineage captures reported `total_cost_usd` of roughly $0.44 and
@@ -112,4 +131,6 @@ isolated home used here was under `/tmp/claude-recapture/` or
 claude` removed the probe's home (`/tmp/host-test/claude-home` and
 `/tmp/host-test/claude-workspace` are gone; the captures under
 `/tmp/host-test/claude/` remain) and `rm -rf /tmp/claude-recapture/proof-home`
-removed the proofs' home.
+removed the proofs' home. The 2.1.259 orchestration capture cost about $1.23
+across its four turns (`total_cost_usd` 0.79 + 0.14 + 0.24 + 0.07); its
+isolated home was removed by `probe:uninstall claude` after the re-run above.

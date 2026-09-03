@@ -4,7 +4,7 @@
 // uninstall. Nothing here touches the real ~/.claude, ~/.codex, or ~/.cursor.
 //
 //   node scripts/probe.mjs install   <claude|codex|cursor> [--no-auth] [--root <dir>]
-//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text>] [--model <m>] [--timeout <ms>] [--scripted-model]
+//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text> | --scenario <file.json> | --scripted-model] [--model <m>] [--timeout <ms>]
 //   node scripts/probe.mjs uninstall <claude|codex|cursor> [--keep-home]
 //   node scripts/probe.mjs status    <claude|codex|cursor>
 import { spawn, spawnSync } from 'node:child_process';
@@ -24,13 +24,29 @@ const parseArgs = (argv) => {
   const flags = { auth: true, keepHome: false };
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
+    // A value flag with nothing after it must not fall back to the default
+    // silently: `--scenario` at the end would run the default scenario under
+    // the requested one's name. Only absence is rejected — the next argument
+    // is the value whatever it looks like, so `--prompt "--help"` or a file
+    // named `--baseline.json` still work.
+    const value = () => {
+      const next = rest[index + 1];
+      if (next === undefined) throw new Error(`${flag} needs a value`);
+      index += 1;
+      return next;
+    };
     switch (flag) {
       case '--no-auth': flags.auth = false; break;
       case '--keep-home': flags.keepHome = true; break;
-      case '--root': flags.root = rest[++index]; break;
-      case '--prompt': flags.prompt = rest[++index]; break;
-      case '--model': flags.model = rest[++index]; break;
-      case '--timeout': flags.timeout = Number(rest[++index]); break;
+      case '--root': flags.root = value(); break;
+      case '--prompt': flags.prompt = value(); break;
+      case '--scenario': flags.scenario = value(); break;
+      case '--model': flags.model = value(); break;
+      case '--timeout': {
+        flags.timeout = Number(value());
+        if (!Number.isFinite(flags.timeout) || flags.timeout <= 0) throw new Error('--timeout needs a positive number of milliseconds');
+        break;
+      }
       case '--scripted-model': flags.scriptedModel = true; break;
       default: throw new Error(`Unknown flag ${flag}`);
     }
@@ -239,16 +255,75 @@ const scenarioPrompt = () => flags.prompt ?? [
 ].join('\n');
 
 /**
+ * The ordered prompts of one capture session. `--prompt` is a one-turn
+ * scenario; `--scenario <file.json>` is `{ "turns": ["...", ...] }` (a turn may
+ * also be `{ "prompt": "..." }`), every turn after the first resuming the same
+ * host session so turn boundaries show up in the hook stream.
+ */
+const scenarioTurns = () => {
+  if (flags.scenario === undefined) return [scenarioPrompt()];
+  // Both flags name the prompts of the run; honouring one and dropping the
+  // other would capture a different experiment than the caller asked for.
+  if (flags.prompt !== undefined) throw new Error('--prompt and --scenario both supply the prompts: pass one of them');
+  const file = resolve(flags.scenario);
+  const scenario = JSON.parse(readFileSync(file, 'utf8'));
+  const turns = Array.isArray(scenario) ? scenario : scenario?.turns;
+  if (!Array.isArray(turns) || turns.length === 0) throw new Error(`${file}: expected {"turns": [<prompt>, ...]} with at least one turn`);
+  return turns.map((turn, index) => {
+    const prompt = typeof turn === 'string' ? turn : turn?.prompt;
+    if (typeof prompt !== 'string' || prompt.length === 0) throw new Error(`${file}: turn ${String(index + 1)} has no prompt`);
+    return prompt;
+  });
+};
+
+const parseStream = (stdout) => stdout.split('\n').filter(Boolean).flatMap((line) => {
+  try {
+    return [JSON.parse(line)];
+  } catch {
+    return [];
+  }
+});
+
+/** One line per turn about what the model's own stream shows: tool calls by name, and how many envelopes came from inside a subagent. */
+const describeStream = (envelopes) => {
+  const toolUses = new Map();
+  let fromSubagents = 0;
+  for (const envelope of envelopes) {
+    if (envelope.parent_tool_use_id) fromSubagents += 1;
+    if (envelope.type !== 'assistant') continue;
+    for (const block of envelope.message?.content ?? []) {
+      if (block.type === 'tool_use') toolUses.set(block.name, (toolUses.get(block.name) ?? 0) + 1);
+    }
+  }
+  const result = envelopes.find((envelope) => envelope.type === 'result');
+  const tools = [...toolUses].map(([name, count]) => `${name}×${String(count)}`).join(' ');
+  return `${String(envelopes.length)} stream envelope(s), ${String(fromSubagents)} from inside subagents (parent_tool_use_id set); result ${result?.subtype ?? 'missing'} after ${String(result?.num_turns ?? '?')} model turn(s); tool_use: ${tools || 'none'}`;
+};
+
+/**
  * With --scripted-model the real Claude Code binary talks to a local scripted
  * Messages API (scripts/mock-anthropic.mjs) instead of Anthropic, so the hook,
  * MCP, and subagent plumbing under test is the host's own while no account is
  * needed; the model text in the transcript is then not evidence of anything.
+ *
+ * Every turn runs `claude -p --output-format stream-json --verbose`, so the
+ * model's tool-use stream (with `parent_tool_use_id` on envelopes produced
+ * inside a subagent) is captured next to the hook payloads; turns after the
+ * first `--resume` the session id the first turn's `system/init` envelope
+ * reported.
  */
 const captureClaude = () => {
   const scripted = flags.scriptedModel === true;
-  const args = [
-    '-p', scripted ? 'You are exercising the host-test probe plugin. Do the scripted steps.' : scenarioPrompt(),
-    '--output-format', 'json',
+  // The scripted model answers one canned transcript; it cannot follow a
+  // scenario, so refuse the combination instead of silently running the
+  // canned turn under the scenario's name.
+  if (scripted && (flags.scenario !== undefined || flags.prompt !== undefined)) {
+    throw new Error('--scripted-model plays a fixed transcript and ignores prompts: drop --scenario/--prompt, or run the scenario against the real model');
+  }
+  const turns = scripted ? ['You are exercising the host-test probe plugin. Do the scripted steps.'] : scenarioTurns();
+  const baseArgs = [
+    '--output-format', 'stream-json',
+    '--verbose',
     '--dangerously-skip-permissions',
     '--model', flags.model ?? (scripted ? 'claude-sonnet-4-5' : 'sonnet'),
   ];
@@ -268,16 +343,50 @@ const captureClaude = () => {
         }
       : {}),
   };
-  log(`claude ${args.slice(2).join(' ')}${scripted ? ` (scripted model on 127.0.0.1:${String(port)})` : ''}`);
+  log(`claude -p <prompt> ${baseArgs.join(' ')}${scripted ? ` (scripted model on 127.0.0.1:${String(port)})` : ''}; ${String(turns.length)} turn(s)`);
+  const results = [];
+  let sessionId;
   try {
     if (mock !== undefined) spawnSync(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 800)']);
-    return run('claude', args, { cwd: paths.workspace, env: environment, timeout: flags.timeout ?? 900_000 });
+    for (const [index, prompt] of turns.entries()) {
+      const args = ['-p', prompt, ...baseArgs, ...(sessionId === undefined ? [] : ['--resume', sessionId])];
+      // A timeout or spawn error on a later turn must not discard the turns
+      // already captured: record it as a failed turn and let `capture()`
+      // write the partial evidence and exit non-zero.
+      const spawned = spawnSync('claude', args, { cwd: paths.workspace, encoding: 'utf8', env: environment, maxBuffer: 64 * 1024 * 1024, timeout: flags.timeout ?? 900_000 });
+      if (spawned.error) {
+        log(`turn ${String(index + 1)}/${String(turns.length)}: ${spawned.error.message}`);
+        results.push({ ...spawned, failure: `turn ${String(index + 1)} did not finish: ${spawned.error.message}`, status: spawned.status ?? null, stdoutExtension: 'stream.ndjson' });
+        break;
+      }
+      const result = spawned;
+      const envelopes = parseStream(result.stdout ?? '');
+      sessionId ??= envelopes.find((envelope) => typeof envelope.session_id === 'string')?.session_id;
+      log(`turn ${String(index + 1)}/${String(turns.length)}: exit ${String(result.status)}, session ${sessionId ?? 'unknown'}; ${describeStream(envelopes)}`);
+      if (result.status === 0 && sessionId === undefined && index + 1 < turns.length) {
+        // A multi-turn scenario without a session to resume is not the
+        // scenario: fail the turn so `capture()` refuses the partial run.
+        results.push({ ...result, failure: 'the first turn reported no session_id, so the remaining turns cannot resume it', stdoutExtension: 'stream.ndjson' });
+        break;
+      }
+      results.push({ ...result, stdoutExtension: 'stream.ndjson' });
+      if (result.status !== 0) break;
+    }
   } finally {
     mock?.kill();
   }
+  return results;
+};
+
+/** Multi-turn scenarios are only wired for Claude (`--resume`); the other drivers take the one prompt. */
+const singleTurnPrompt = () => {
+  const turns = scenarioTurns();
+  if (turns.length > 1) throw new Error(`${host}: probe:capture drives one turn per session for this host; --scenario turns beyond the first are only wired for claude`);
+  return turns[0];
 };
 
 const captureCodex = () => {
+  const prompt = singleTurnPrompt();
   const args = [
     'exec',
     '--skip-git-repo-check',
@@ -286,21 +395,21 @@ const captureCodex = () => {
     '--json',
     '-C', paths.workspace,
     ...(flags.model === undefined ? [] : ['--model', flags.model]),
-    scenarioPrompt(),
+    prompt,
   ];
   log(`codex ${args.slice(0, -1).join(' ')} "<prompt>"`);
-  return run('codex', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 });
+  return [{ ...run('codex', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 }), stdoutExtension: 'stdout.ndjson' }];
 };
 
 const captureCursor = () => {
   const args = [
-    '-p', scenarioPrompt(),
+    '-p', singleTurnPrompt(),
     '--output-format', 'json',
     '--force',
     ...(flags.model === undefined ? [] : ['--model', flags.model]),
   ];
   log(`cursor-agent ${args.slice(2).join(' ')} (IDE sessions are driven manually; see probe:install output)`);
-  return run('cursor-agent', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 });
+  return [{ ...run('cursor-agent', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 }), stdoutExtension: 'stdout.json' }];
 };
 
 const capture = () => {
@@ -311,16 +420,23 @@ const capture = () => {
   // live log ends before the host starts.
   const logFile = join(paths.logDir, 'captures.ndjson');
   const startOffset = existsSync(logFile) ? statSync(logFile).size : 0;
-  let result;
+  let turns;
   switch (host) {
-    case 'claude': result = captureClaude(); break;
-    case 'codex': result = captureCodex(); break;
-    case 'cursor': result = captureCursor(); break;
+    case 'claude': turns = captureClaude(); break;
+    case 'codex': turns = captureCodex(); break;
+    case 'cursor': turns = captureCursor(); break;
     default: throw new Error(`unreachable host ${host}`);
   }
-  writeFileSync(join(paths.captures, `session-${stamp}.stdout.txt`), result.stdout ?? '');
-  writeFileSync(join(paths.captures, `session-${stamp}.stderr.txt`), result.stderr ?? '');
-  log(`host exit ${result.status}; transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
+  for (const [index, turn] of turns.entries()) {
+    const name = turns.length === 1 ? `session-${stamp}` : `session-${stamp}.turn-${String(index + 1)}`;
+    writeFileSync(join(paths.captures, `${name}.${turn.stdoutExtension}`), turn.stdout ?? '');
+    writeFileSync(join(paths.captures, `${name}.stderr.txt`), turn.stderr ?? '');
+  }
+  // The session failed if any turn did, or if the driver could not run the
+  // whole scenario (`failure`).
+  const result = turns.find((turn) => turn.status !== 0 || turn.failure !== undefined) ?? turns[turns.length - 1];
+  const failed = result.status !== 0 || result.failure !== undefined;
+  log(`host exit ${String(result.status)} over ${String(turns.length)} turn(s); transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
   const appended = existsSync(logFile) ? readFileSync(logFile).subarray(startOffset).toString('utf8') : '';
   const records = appended.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const kinds = new Set(records.map((record) => record.kind));
@@ -338,9 +454,9 @@ const capture = () => {
   // session nor a session that produced no hook AND no MCP evidence is a
   // capture: automation must see the failure.
   const missing = ['event', 'mcp'].filter((kind) => !kinds.has(kind));
-  if (result.status !== 0) {
-    log(`host session failed with exit ${String(result.status)}; captures above are partial evidence at best`);
-    process.exitCode = result.status ?? 1;
+  if (failed) {
+    log(`host session failed (${result.failure ?? `exit ${String(result.status)}`}); captures above are partial evidence at best`);
+    process.exitCode = result.status === 0 || result.status === null ? 1 : result.status;
   } else if (missing.length > 0) {
     log(`host session exited 0 but produced no ${missing.join(' and no ')} record; the scenario requires both`);
     process.exitCode = 1;

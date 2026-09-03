@@ -134,6 +134,117 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
       .toEqual([nested, root, subagent].sort());
   });
 
+  // Live Claude Code 2.1.259 (claude-sonnet-5, 2026-09-03), driven by
+  // examples/host-test/scenarios/claude-orchestration.json: four `claude -p`
+  // turns resumed into one session. Turn 1 spawned an `Explore` and a
+  // `general-purpose` subagent in parallel (both run in the background by the
+  // host), then a sequential subagent that nested another; turn 2 ran the
+  // `host-test:host-test` skill at the root; turn 3 was a manual `/compact`;
+  // turn 4 stopped. The `.stream.ndjson` twin is the model's own
+  // `--output-format stream-json` transcript of the same session.
+  it('Claude 2.1.259 orchestration: parallel, sequential and nested spawns, resumed turns and a manual compact all resolve under one root, agreeing with the model stream', async () => {
+    const registry = createAgentLineageRegistry();
+    const records = fixture('claude-2.1.259-orchestration.ndjson');
+    const lineages = await replay('claude', records, registry);
+    const natives = records.flatMap((record) => (record.event === undefined ? [] : [record.event.native]));
+    const root = natives[0]!['session_id'] as string;
+
+    // One session id across every hook of every turn, including the compact and the resumes.
+    expect(new Set(natives.map((native) => native['session_id']))).toEqual(new Set([root]));
+    expect(natives.filter((native) => native['hook_event_name'] === 'SessionStart').map((native) => native['source']))
+      .toEqual(['startup', 'resume', 'resume', 'compact', 'resume']);
+    expect(natives.filter((native) => native['hook_event_name'] === 'SessionEnd')).toHaveLength(4);
+    expect(natives.filter((native) => native['hook_event_name'] === 'PreCompact')).toMatchObject([{ trigger: 'manual' }]);
+    expect(natives.filter((native) => native['hook_event_name'] === 'PostCompact')).toMatchObject([{ trigger: 'manual' }]);
+
+    // Four spawns: two parallel from the root, one sequential from the root, one nested from the sequential one.
+    const starts = natives.filter((native) => native['hook_event_name'] === 'SubagentStart');
+    const [explore, parallel, sequential, nested] = starts.map((native) => native['agent_id'] as string);
+    expect(starts.map((native) => native['agent_type'])).toEqual(['Explore', 'general-purpose', 'general-purpose', 'general-purpose']);
+    const spawnResults = natives
+      .filter((native) => native['hook_event_name'] === 'PostToolUse' && native['tool_name'] === 'Agent')
+      .map((native) => ({ agentId: (native['tool_response'] as { agentId: string }).agentId, caller: native['agent_id'], status: (native['tool_response'] as { status: string }).status, toolUseId: native['tool_use_id'] }));
+    expect(spawnResults).toMatchObject([
+      { agentId: explore, caller: undefined, status: 'async_launched' },
+      { agentId: parallel, caller: undefined, status: 'async_launched' },
+      { agentId: nested, caller: sequential, status: 'completed' },
+      { agentId: sequential, caller: undefined, status: 'completed' },
+    ]);
+    const spawnCall = new Map(spawnResults.map((result) => [result.agentId, result.toolUseId]));
+
+    // Every child hook resolves to its own agent under the root; parents and depths follow the spawn tree.
+    const expectedParent: Record<string, { depth: number; parent: string }> = {
+      [explore]: { depth: 1, parent: root },
+      [nested]: { depth: 2, parent: sequential },
+      [parallel]: { depth: 1, parent: root },
+      [sequential]: { depth: 1, parent: root },
+    };
+    let childEvents = 0;
+    for (const entry of lineages) {
+      const agentId = entry.native?.['agent_id'] as string | undefined;
+      if (agentId === undefined) continue;
+      childEvents += 1;
+      expect(value(entry.lineage)).toMatchObject({ conversation: agentId, resolution: 'registry', root, ...expectedParent[agentId]! });
+    }
+    expect(childEvents).toBe(natives.filter((native) => native['agent_id'] !== undefined).length);
+    // Root-side hooks, including the resumed turns, the compact pair and the failed `dump` calls, stay at depth 0.
+    for (const entry of lineages) {
+      if (entry.native !== undefined && entry.native['agent_id'] === undefined) {
+        expect(value(entry.lineage)).toMatchObject({ conversation: root, depth: 0, resolution: 'native', root });
+      }
+    }
+    // The spawn each child came from is certain even for the parallel pair: the host emitted
+    // PreToolUse → SubagentStart for one `Agent` call before opening the next.
+    const startLineages = lineages.filter((entry) => entry.kind === 'agent/start').map((entry) => value(entry.lineage));
+    expect(startLineages.map((lineage) => lineage.subagent?.toolCallId)).toEqual([explore, parallel, sequential, nested].map((id) => spawnCall.get(id)));
+    // Generations follow the prompt that owned the work: the sequential and nested spawns
+    // ran under the `<task-notification>` re-prompt the host issued after the parallel pair finished.
+    const prompts = natives.filter((native) => native['hook_event_name'] === 'UserPromptSubmit').map((native) => native['prompt_id'] as string);
+    expect(new Set(prompts).size).toBe(4);
+    expect(startLineages.map((lineage) => lineage.generation)).toEqual([prompts[0], prompts[0], prompts[1], prompts[1]]);
+
+    // MCP `probe` calls: `claudecode/toolUseId` names the open PreToolUse, so each resolves to the agent that made it.
+    const probes = lineages.filter((entry) => entry.kind === 'mcp:probe').map((entry) => value(entry.lineage));
+    expect(probes.map((lineage) => [lineage.conversation, lineage.depth])).toEqual([[explore, 1], [parallel, 1], [sequential, 1], [nested, 2], [root, 0]]);
+
+    // PostToolUseFailure closes a window like PostToolUse; nothing stays open, all five nodes stopped.
+    expect(natives.filter((native) => native['hook_event_name'] === 'PostToolUseFailure')).toHaveLength(3);
+    const snapshot = registry.snapshot();
+    expect(snapshot.openCalls).toEqual([]);
+    expect(Object.keys(snapshot.nodes).sort()).toEqual([explore, nested, parallel, root, sequential].sort());
+    expect(Object.values(snapshot.nodes).every((node) => node.stoppedAt !== undefined)).toBe(true);
+
+    // The model's own stream agrees: `task_started` names the same agent id (`task_id`) and
+    // spawn call (`tool_use_id`) per child, with the depth the registry derived.
+    interface StreamEnvelope {
+      readonly is_backgrounded?: boolean;
+      readonly parent_tool_use_id?: string | null;
+      readonly session_id: string;
+      readonly spawn_depth?: number;
+      readonly subtype?: string;
+      readonly task_id?: string;
+      readonly tool_use_id?: string;
+      readonly turn: number;
+      readonly type: string;
+    }
+    const stream = readFileSync(resolve(import.meta.dirname, '../../../fixtures/host-lineage/claude-2.1.259-orchestration.stream.ndjson'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line) as StreamEnvelope);
+    expect(new Set(stream.map((envelope) => envelope.session_id))).toEqual(new Set([root]));
+    expect(new Set(stream.map((envelope) => envelope.turn))).toEqual(new Set([1, 2, 3, 4]));
+    const taskStarts = stream.filter((envelope) => envelope.subtype === 'task_started');
+    expect(taskStarts.map((envelope) => [envelope.task_id, envelope.tool_use_id, envelope.spawn_depth, envelope.is_backgrounded])).toEqual([
+      [explore, spawnCall.get(explore), 1, true],
+      [parallel, spawnCall.get(parallel), 1, true],
+      [sequential, spawnCall.get(sequential), 1, false],
+      [nested, spawnCall.get(nested), 2, false],
+    ]);
+    // Envelopes produced inside a subagent carry the parent's `Agent` call; the stream shows
+    // depth-1 children only, so the nested agent is visible through hooks alone.
+    const parentCalls = new Set(stream.map((envelope) => envelope.parent_tool_use_id).filter((id): id is string => typeof id === 'string'));
+    expect(parentCalls).toEqual(new Set([spawnCall.get(explore), spawnCall.get(parallel), spawnCall.get(sequential)]));
+    expect(stream.filter((envelope) => envelope.subtype === 'compact_boundary')).toHaveLength(1);
+  });
+
   it('Codex 0.147.0: MCP _meta resolves lineage natively including parent_thread_id; hooks agree', async () => {
     const registry = createAgentLineageRegistry();
     const lineages = await replay('codex', fixture('codex-0.147.0.ndjson'), registry);
