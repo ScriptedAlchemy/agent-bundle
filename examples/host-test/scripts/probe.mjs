@@ -24,14 +24,27 @@ const parseArgs = (argv) => {
   const flags = { auth: true, keepHome: false };
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
+    // A value flag with nothing (or another flag) after it must not fall back
+    // to the default silently: `--scenario` at the end would run the default
+    // scenario under the requested one's name.
+    const value = () => {
+      const next = rest[index + 1];
+      if (next === undefined || next.startsWith('--')) throw new Error(`${flag} needs a value`);
+      index += 1;
+      return next;
+    };
     switch (flag) {
       case '--no-auth': flags.auth = false; break;
       case '--keep-home': flags.keepHome = true; break;
-      case '--root': flags.root = rest[++index]; break;
-      case '--prompt': flags.prompt = rest[++index]; break;
-      case '--scenario': flags.scenario = rest[++index]; break;
-      case '--model': flags.model = rest[++index]; break;
-      case '--timeout': flags.timeout = Number(rest[++index]); break;
+      case '--root': flags.root = value(); break;
+      case '--prompt': flags.prompt = value(); break;
+      case '--scenario': flags.scenario = value(); break;
+      case '--model': flags.model = value(); break;
+      case '--timeout': {
+        flags.timeout = Number(value());
+        if (!Number.isFinite(flags.timeout) || flags.timeout <= 0) throw new Error('--timeout needs a positive number of milliseconds');
+        break;
+      }
       case '--scripted-model': flags.scriptedModel = true; break;
       default: throw new Error(`Unknown flag ${flag}`);
     }
@@ -332,7 +345,16 @@ const captureClaude = () => {
     if (mock !== undefined) spawnSync(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 800)']);
     for (const [index, prompt] of turns.entries()) {
       const args = ['-p', prompt, ...baseArgs, ...(sessionId === undefined ? [] : ['--resume', sessionId])];
-      const result = run('claude', args, { cwd: paths.workspace, env: environment, timeout: flags.timeout ?? 900_000 });
+      // A timeout or spawn error on a later turn must not discard the turns
+      // already captured: record it as a failed turn and let `capture()`
+      // write the partial evidence and exit non-zero.
+      const spawned = spawnSync('claude', args, { cwd: paths.workspace, encoding: 'utf8', env: environment, maxBuffer: 64 * 1024 * 1024, timeout: flags.timeout ?? 900_000 });
+      if (spawned.error) {
+        log(`turn ${String(index + 1)}/${String(turns.length)}: ${spawned.error.message}`);
+        results.push({ ...spawned, failure: `turn ${String(index + 1)} did not finish: ${spawned.error.message}`, status: spawned.status ?? null, stdoutExtension: 'stream.ndjson' });
+        break;
+      }
+      const result = spawned;
       const envelopes = parseStream(result.stdout ?? '');
       sessionId ??= envelopes.find((envelope) => typeof envelope.session_id === 'string')?.session_id;
       log(`turn ${String(index + 1)}/${String(turns.length)}: exit ${String(result.status)}, session ${sessionId ?? 'unknown'}; ${describeStream(envelopes)}`);
