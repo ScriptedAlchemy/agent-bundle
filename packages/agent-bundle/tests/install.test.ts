@@ -750,7 +750,8 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   try {
     for (const files of [
       ['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile],
-      [installReceiptFile.toUpperCase()], ['.Agent-Bundle-Install.json'],
+      [installReceiptFile.toUpperCase()], ['.Agent-Bundle-Install.json'], [`${installReceiptFile}/nested`],
+      ['.Agent-Bundle-Install.json/payload'],
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
       ['state/plugin.sqlite'], ['state'], ['State/plugin.sqlite'], ['STATE'],
     ]) {
@@ -820,6 +821,13 @@ it('refuses artifact paths that could not round-trip through a receipt', async (
     await writeFile(join(fixture.bundleRoot, 'skills', 'odd.', 'SKILL.md'), '# odd\n');
     await expect(treeInventory(fixture.bundleRoot)).rejects.toThrow('Refusing unsupported filesystem entry "skills/odd./SKILL.md"');
     await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    // So is a directory spelled like the receipt: on a case-insensitive filesystem it is the receipt's path.
+    await mkdir(join(fixture.bundleRoot, '.Agent-Bundle-Install.json'));
+    await writeFile(join(fixture.bundleRoot, '.Agent-Bundle-Install.json', 'payload'), 'odd\n');
+    await expect(treeInventory(fixture.bundleRoot)).rejects.toThrow(
+      'Refusing unsupported filesystem entry ".Agent-Bundle-Install.json/payload"',
+    );
+    await rm(join(fixture.bundleRoot, '.Agent-Bundle-Install.json'), { recursive: true });
     expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'installed' });
   } finally {
     await Promise.all([

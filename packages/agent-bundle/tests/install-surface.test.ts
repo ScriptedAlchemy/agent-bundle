@@ -210,6 +210,12 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
       expect(alias.code).toBe(1);
       expect(alias.stderr).toContain('Refusing unsupported filesystem entry ".Agent-Bundle-Install.json"');
       await rm(join(bundle, '.Agent-Bundle-Install.json'));
+      await mkdir(join(bundle, '.Agent-Bundle-Install.json'));
+      await writeFile(join(bundle, '.Agent-Bundle-Install.json', 'payload'), 'odd\n');
+      const aliasDirectory = await run(installer, [], home);
+      expect(aliasDirectory.code).toBe(1);
+      expect(aliasDirectory.stderr).toContain('Refusing unsupported filesystem entry ".Agent-Bundle-Install.json/payload"');
+      await rm(join(bundle, '.Agent-Bundle-Install.json'), { recursive: true });
     }
 
     // Empty directories are not plugin content: never hashed, installed, or owned.
