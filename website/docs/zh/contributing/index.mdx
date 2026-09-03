@@ -7,7 +7,9 @@ description: 'agent-bundle 的贡献者工作流：三道本地门禁、本地�
 这一页是给**改动 agent-bundle 本身**的人看的。其中没有任何一项是编写插件的前提——插件作者只需要
 `agent-bundle` 与 Node.js，本页内容一概不需要。
 
-仓库是一个 pnpm 工作区。这里以 Node.js 22.19 为下限，原因和框架本身以它为下限是同一个：
+仓库是一个 pnpm 工作区。这里以 Node.js 22.19 为下限，原因和框架本身以它为下限是同一个。
+
+从全新检出开始：
 
 ```sh
 pnpm install
@@ -21,7 +23,7 @@ pnpm build
 | 命令 | 证明什么 | 何时运行 |
 | --- | --- | --- |
 | `pnpm check` | 本地交付门禁：构建、单元、路由单元、投影与集成测试、lint、类型检查。 | 开发过程中，以及每次推送之前。 |
-| `pnpm check:release` | 在上面之外加上打包门禁：`npm pack` dry run、发布审计，以及含脚手架模板矩阵的打包测试池。 | 改动打包、导出或已发布表面之前。 |
+| `pnpm check:release` | 与 `pnpm check` 并列的打包证据：`npm pack` dry run、发布审计，以及含脚手架模板矩阵的打包测试池。 | 改动打包、导出或已发布表面之前。 |
 | `pnpm check:local-ci` | 完整的托管 CI 门禁——三个 Node 版本的 verify 矩阵，加上示例、发布与微 eval 作业——在并行的本地 worktree 中运行。 | 作为合并门禁。 |
 
 还有一些范围更小的脚本用于迭代：`pnpm test:unit`、`pnpm test:route-unit`、
@@ -44,10 +46,10 @@ pnpm build
 腿。它跳过 Node 矩阵以及示例、发布与微 eval 门禁，因此是快速信号，而不是合并门禁。当怀疑复用的腿
 worktree 已经陈旧时，用 `--fresh` 重建它们。
 
-运行器按顺序从 `mise`、`~/.nvm`、当前进程，或显式的 `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26`
-覆盖项中解析每条托管 Node 线（22.19.x、24.x、26.x），并在使用前对每个二进制做版本校验。缺少某条线时
+运行器按顺序从显式的 `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26` 覆盖项、`mise`、`~/.nvm`、
+当前进程中解析每条托管 Node 线（22.19.x、24.x、26.x），并在使用前对每个二进制做版本校验。缺少某条线时
 它会带上确切的安装命令失败，而不是悄悄用错运行时。腿的 worktree、逐步骤日志，以及“腿 × 步骤 × 状态 ×
-时长”的汇总表都位于被 git 忽略的 `.worktrees/local-ci/` 目录下。
+时长 × 测试普查”的汇总表都位于被 git 忽略的 `.worktrees/local-ci/` 目录下。
 
 [`docs/local-ci.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/local-ci.md)
 是完整契约，包括本地门禁刻意不覆盖的那些内容。

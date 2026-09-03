@@ -49,7 +49,7 @@ those features, not the build. This example has no hooks.
   `context.progress`, then places its asynchronous analysis behind React `Suspense` with an
   `Agent.Progress` fallback. The generated projector streams the progress state and replaces it
   with the completed analysis without changing the final structured receipt.
-- **The framework owns the package build.** No `bin` or `scripts` field is declared. The routed
+- **The framework owns the package build.** The config declares no `bin` or `scripts` field. The routed
   `src/cli/` commands compile into `dist/bin/audiobook-curator.js` for `package.json` `bin`, and
   `dist/index.js` plus declarations serve `exports`. See
   [CLI and library package entries](../guide/authoring/package-entries.mdx).

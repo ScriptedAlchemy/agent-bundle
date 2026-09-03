@@ -8,7 +8,9 @@ This page is for people changing **agent-bundle itself**. None of it is a requir
 authoring a plugin — a plugin author needs `agent-bundle` and Node.js, and nothing on this page.
 
 The repository is a pnpm workspace. Node.js 22.19 or later is the floor here for the same reason
-it is the floor for the framework:
+it is the floor for the framework.
+
+From a fresh checkout:
 
 ```sh
 pnpm install
@@ -23,7 +25,7 @@ so it comes first after a fresh install.
 | Command | What it proves | When to run it |
 | --- | --- | --- |
 | `pnpm check` | The local delivery gate: build, unit, route-unit, projection, and integration tests, lint, typecheck. | While working, and before every push. |
-| `pnpm check:release` | The packaging gates on top: `npm pack` dry run, the release audit, and the packed test pools including the scaffolder template matrix. | Before touching packaging, exports, or the published surface. |
+| `pnpm check:release` | Packaging evidence alongside `pnpm check`: `npm pack` dry run, the release audit, and the packed test pools including the scaffolder template matrix. | Before touching packaging, exports, or the published surface. |
 | `pnpm check:local-ci` | The full hosted CI gate — the three-Node verify matrix plus the examples, release, and micro-eval jobs — in parallel local worktrees. | As the merge gate. |
 
 Narrower scripts exist for iteration: `pnpm test:unit`, `pnpm test:route-unit`,
@@ -47,12 +49,12 @@ the active Node. It skips the Node matrix and the examples, release, and micro-e
 is a fast signal rather than a merge gate. `--fresh` recreates the reused leg worktrees when
 staleness is suspected.
 
-The runner resolves each hosted Node line (22.19.x, 24.x, 26.x) from `mise`, from `~/.nvm`, from
-the current process, or from an explicit `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26`
-override, and version-checks every binary before use. A missing line fails with the exact
-install command rather than silently running the wrong runtime. The leg worktrees, the per-step
-logs, and the leg × step × status × duration summary all live under the gitignored
-`.worktrees/local-ci/` directory.
+The runner resolves each hosted Node line (22.19.x, 24.x, 26.x) from an explicit
+`AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26` override first, then `mise`, then `~/.nvm`,
+then the current process, and version-checks every binary before use. A missing line fails
+with the exact install command rather than silently running the wrong runtime. The leg
+worktrees, the per-step logs, and the leg × step × status × duration × test census summary
+all live under the gitignored `.worktrees/local-ci/` directory.
 
 [`docs/local-ci.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/local-ci.md)
 is the full contract, including what the local gate deliberately does not cover.

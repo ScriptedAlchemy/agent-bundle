@@ -1,12 +1,12 @@
 ---
 pageType: home
-description: '用一份带类型的配置描述技能、钩子、MCP 服务器与脚本，编译为可直接安装到 Claude Code、Codex 与 Cursor 的产物。'
+description: '用一份带类型的配置描述 Skill、钩子、MCP 服务器与脚本，编译为可直接安装到 Claude Code、Codex 与 Cursor 的产物。'
 titleSuffix: ' - 面向 Claude Code、Codex 与 Cursor 的 Agent 插件编译器'
 
 hero:
   name: agent-bundle
   text: 一份带类型的配置，适配所有 Agent 宿主
-  tagline: 一次性描述技能、钩子、MCP 服务器与脚本，编译出可直接安装到 Claude Code、Codex 与 Cursor 的产物。
+  tagline: 一次性描述 Skill、钩子、MCP 服务器与脚本，编译出可直接安装到 Claude Code、Codex 与 Cursor 的产物。
   image:
     src: /logo.svg
     alt: agent-bundle 徽标
@@ -25,8 +25,8 @@ features:
     link: /zh/guide/authoring/
     span: 6
   - icon: 🛠️
-    title: 技能、钩子、MCP、脚本与包入口
-    details: 在同一份配置表面上编写技能、生命周期钩子、MCP 服务器与 MCP App、脚本与静态资源，以及 CLI 或库的包入口。
+    title: Skill、钩子、MCP、脚本与包入口
+    details: 在同一份配置表面上编写 Skill、生命周期钩子、MCP 服务器与 MCP App、脚本与静态资源，以及 CLI 或库的包入口。
     link: /zh/guide/authoring/skills
     span: 6
   - icon: 🖥️

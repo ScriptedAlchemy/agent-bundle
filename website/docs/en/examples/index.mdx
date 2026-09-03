@@ -19,8 +19,9 @@ to reach a useful state.
 ## Running them
 
 Run the `pnpm example:*` scripts from the repository root. Each one builds the workspace first,
-then starts that example's foreground `agent-bundle dev` server and opens the developer
-[Workbench](../guide/development/workbench.mdx):
+then starts that example's foreground `agent-bundle dev` server and prints the loopback
+[Workbench](../guide/development/workbench.mdx) URL. Pass `--open` (for example
+`pnpm example:<name> -- --open`) to open a browser:
 
 ```sh
 pnpm install

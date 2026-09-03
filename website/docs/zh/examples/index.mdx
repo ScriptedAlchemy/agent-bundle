@@ -18,7 +18,8 @@ description: '四个可运行的 agent-bundle 示例：Skill 起步项目、钩�
 ## 如何运行
 
 `pnpm example:*` 脚本要在仓库根目录运行。每个脚本先构建工作区，然后启动该示例的前台
-`agent-bundle dev` 服务器并打开开发者 [Workbench](../guide/development/workbench.mdx)：
+`agent-bundle dev` 服务器并打印回环 [Workbench](../guide/development/workbench.mdx) URL。传入
+`--open`（例如 `pnpm example:<name> -- --open`）才会打开浏览器：
 
 ```sh
 pnpm install

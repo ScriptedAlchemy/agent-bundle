@@ -19,7 +19,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 ## 它证明什么
 
-- **MCP 入口约定。** `src/mcp/status.ts` 默认导出 `status` 服务器工厂，而配置完全没有声明 `entry`——构建
+- **MCP 入口约定。** `src/mcp/status.ts` 默认导出 `status` 服务器工厂，而配置没有声明服务器 `entry`——构建
   通过 `src/mcp/<server-id>.ts` 约定发现它。见
   [MCP 服务器与 MCP App](../guide/authoring/mcp.mdx)。
 - **生成的 stdio 生命周期不由你来写。** 构建会把那个工厂包进生命周期外壳：console 重定向到 stderr 的

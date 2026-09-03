@@ -21,7 +21,7 @@ to see how the surfaces fit together instead of studying one of them alone.
 ## What it proves
 
 - **The MCP entry convention.** `src/mcp/status.ts` default-exports the `status` server factory,
-  and the config declares no `entry` at all — the build discovers it through the
+  and the config declares no server `entry` — the build discovers it through the
   `src/mcp/<server-id>.ts` convention. See
   [MCP servers and MCP Apps](../guide/authoring/mcp.mdx).
 - **The generated stdio lifecycle is not yours to write.** The build wraps that factory in the
