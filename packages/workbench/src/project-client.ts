@@ -82,6 +82,7 @@ const projectEventTypes = [
   'build.failed',
   'build.started',
   'dev.contract.status',
+  'dev.host.sync',
   'invalidation',
   'replay.gap',
   'runtime.event',
