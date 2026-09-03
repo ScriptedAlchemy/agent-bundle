@@ -63,20 +63,20 @@
 
 ## Pull requests
 
-- Every PR: CI green first, then wait for the automated reviewer
-  (`chatgpt-codex-connector`) to finish. It does not re-review on its own
-  after a rebase or force-push: after every push, post an `@codex review` PR
-  comment if no fresh review appears within a few minutes, and confirm its
-  summary comment cites the current head SHA before merging.
-- Reviewer quota fallback: if the connector answers "usage limits reached", or
-  no review arrives within about ten minutes of two `@codex review` requests,
-  record the last-reviewed and unreviewed head SHAs in the PR body's "Review
-  status" section and merge on green CI. Re-request the review once credits
-  return; a thread it opens on an already-merged PR is answered in a
-  follow-up PR like any other.
-- Address every review thread — fix it in the same PR or reply with a precise
-  reason — and reply on every thread. After each push, re-check for new
-  threads and repeat until there are none. Only then merge.
+- Every PR gets a self-review before merge: spawn a local reviewer subagent
+  (`change-risk-reviewer` if available, else `generalPurpose`; prefer a
+  different model from the author's, e.g. `gpt-5.6-sol-high`) with the repo
+  path and the PR number or branch, asking for concrete merge risks only —
+  bugs, breaking changes, missed tests, doc or changeset gaps — against the
+  current diff vs `origin/main`. Fix or explicitly dismiss every finding in
+  the PR description under a "Self-review" section (reviewer model, findings,
+  disposition), run the reviewer once more after fixes, then merge on green
+  CI.
+- Never solicit external reviews: no `@codex review` comments, no waiting for
+  the connector, no unreviewed-SHA bookkeeping. Review comments that arrive
+  on their own (Codex or human) are still addressed — fix in the same PR or
+  reply with a precise reason — and re-checked after each push until none
+  remain.
 - PRs are squash-merged. Review threads left on an already-merged PR must
   still be answered, in a follow-up PR.
 
