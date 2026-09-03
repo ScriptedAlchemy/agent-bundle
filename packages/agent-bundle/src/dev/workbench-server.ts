@@ -734,6 +734,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const epochAdoption = new EpochAdoptionPolicy({
     contracts: () => latestValidPreparedProject?.devContracts,
     eventHub,
+    lease: (epochId) => epochStore.acquireEpochReference(epochId),
     run: (epochId, contracts) => {
       const prepared = latestValidPreparedProject;
       if (prepared === undefined || prepared.devContracts !== contracts) {

@@ -1473,7 +1473,7 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
   }
 });
 
-it('adopts a linked winner while its staging link is still present instead of rejecting the doubly linked sidecar', async () => {
+it('waits for a linked winner to release its staging link, then adopts it instead of rejecting the doubly linked sidecar', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-linked-winner-'));
   const catalogDirectory = join(root, 'catalog');
   const reference = epoch('epoch-linked-winner', join(root, 'artifact'));
@@ -1513,15 +1513,85 @@ it('adopts a linked winner while its staging link is still present instead of re
     const winning = winner.catalog(reference);
     await linked;
     // The winner has linked its staging file into place but has not released
-    // it yet: the published sidecar is legitimately doubly linked here.
+    // it yet: the published sidecar is legitimately doubly linked here, and a
+    // reader must treat it as a publication still in progress.
     expect((await stat(sidecar)).nlink).toBe(2);
 
-    const losing = await loser.catalog(reference);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
     expect((await stat(sidecar)).nlink).toBe(2);
     releaseWinnerCleanup();
-    expect(await winning).toEqual(losing);
+    expect(await winning).toEqual(await losing);
     expect((await stat(sidecar)).nlink).toBe(1);
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    await Promise.all([winner.close(), loser.close()]);
+  } finally {
+    releaseWinnerCleanup();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('never adopts a staged sidecar that its publisher rolls back, and republishes its own instead', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-withdrawn-winner-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-withdrawn-winner', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const cleanupFailure = new Error('winner stage cleanup failed');
+  let winnerStaging: string | undefined;
+  let signalLinked!: () => void;
+  const linked = new Promise<void>((resolvePromise) => { signalLinked = resolvePromise; });
+  let releaseWinnerCleanup!: () => void;
+  const winnerCleanup = new Promise<void>((resolvePromise) => { releaseWinnerCleanup = resolvePromise; });
+  const winnerStorage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      winnerStaging = String(source);
+      signalLinked();
+    },
+    mkdir,
+    open,
+    remove: async (path, options) => {
+      if (String(path) === winnerStaging) {
+        // The winner's staging cleanup stalls, then fails: the sidecar stays
+        // doubly linked the whole time and is rolled back afterwards.
+        await winnerCleanup;
+        throw cleanupFailure;
+      }
+      await rm(path, options);
+    },
+  };
+  const serviceFor = (storage?: NativePlaygroundCatalogStorage): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    ...(storage === undefined ? {} : { catalogStorage: storage }),
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const winner = serviceFor(winnerStorage);
+  const loser = serviceFor();
+  try {
+    const winning = winner.catalog(reference);
+    await linked;
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
+    releaseWinnerCleanup();
+    await expect(winning).rejects.toMatchObject({ errors: [cleanupFailure] });
+    // The reader saw the publication withdrawn rather than adopting the rolled
+    // back inode, so it discovered and persisted a singly linked sidecar itself.
+    const adopted = await losing;
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect(await loser.catalog(reference)).toEqual(adopted);
     await Promise.all([winner.close(), loser.close()]);
   } finally {
     releaseWinnerCleanup();

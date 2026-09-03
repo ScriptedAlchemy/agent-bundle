@@ -345,12 +345,14 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 
 ## Parked toolchain follow-ups
 
-Toolchain pins that are deliberately held back ride the same named chore as
-the Effect RC re-pin (see `AGENTS.md`). Each row records the pin, the exact
-registry state observed when the row was written (`npm view <pkg> dist-tags`
-/ `versions`), and the trigger that turns the row into a chore. Re-verify
-every row during a re-pin; when a trigger has fired, do the upgrade in its
-own chore PR and retire the row.
+Toolchain pins that are deliberately held back are tracked here. Only the
+`repos/effect` subtree update is coupled to the Effect RC re-pin (see
+`AGENTS.md`); every other row has its own independent trigger. Each row
+records the pin, the exact registry state observed when the row was written
+(`npm view <pkg> dist-tags` / `versions`), and the trigger that turns the row
+into a chore. Re-verify every row during a re-pin, but never delay or bundle a
+row whose trigger has already fired: do that upgrade in its own chore PR as
+soon as the trigger fires and retire the row.
 
 | Recorded | Pin (where) | Observed registry state | Trigger / action |
 | --- | --- | --- | --- |

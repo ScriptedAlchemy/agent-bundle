@@ -204,6 +204,9 @@ const nativeHosts = new Set<NativePlaygroundHost>(NATIVE_HOSTS);
 const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
 const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
+/** How long a reader waits for a hard-link publisher to release its staging link before rejecting the sidecar. */
+const stagingPublicationSettleDeadlineMs = 5_000;
+const stagingPublicationPollMs = 10;
 const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotDepth = 16;
@@ -1020,8 +1023,9 @@ export class NativePlaygroundService {
         if (!metadata.isFile() || metadata.nlink < 1 || metadata.size > maximumCatalogSnapshotBytes) {
           throw new Error('Native Playground catalog snapshot is invalid.');
         }
-        if (!allowMultipleLinks && metadata.nlink !== 1 && !(await this.#stagingLinkAccountsFor(file, path, metadata))) {
-          throw new Error('Native Playground catalog snapshot is invalid.');
+        if (!allowMultipleLinks && metadata.nlink !== 1) {
+          const settled = await this.#awaitStagedPublication(file, path, metadata);
+          if (settled === 'withdrawn') return undefined;
         }
         const buffer = Buffer.allocUnsafe(maximumCatalogSnapshotBytes + 1);
         let offset = 0;
@@ -1048,15 +1052,35 @@ export class NativePlaygroundService {
 
   /**
    * Hard-link publication leaves a freshly linked sidecar doubly linked until
-   * the winner releases its staging file. A concurrent reader must adopt that
-   * winner rather than reject it, so the extra link is accounted for by
-   * identity: exactly one staging sibling of this epoch shares the sidecar's
-   * dev/ino, or the staging link was released while the directory was being
-   * listed and the still-open handle now reports a single link. Any other
-   * extra link is hostile aliasing and stays rejected.
+   * the winner releases its staging file, and that winner may still roll the
+   * sidecar back if its directory fsync or staging cleanup fails. A concurrent
+   * reader therefore treats a matching staging link as a publication in
+   * progress: it waits until the still-open handle reports a single link with
+   * the sidecar path still naming this inode (`settled`), or until the sidecar
+   * was withdrawn or replaced (`withdrawn`). The extra link is accounted for by
+   * identity — exactly one staging sibling of this epoch shares the sidecar's
+   * dev/ino; any other extra link is hostile aliasing and stays rejected, as
+   * does a staging link that never settles within the deadline.
    */
-  async #stagingLinkAccountsFor(file: FileHandle, path: string, metadata: Stats): Promise<boolean> {
-    if (metadata.nlink !== 2) return false;
+  async #awaitStagedPublication(file: FileHandle, path: string, metadata: Stats): Promise<'settled' | 'withdrawn'> {
+    const invalid = () => new Error('Native Playground catalog snapshot is invalid.');
+    if (metadata.nlink !== 2 || !(await this.#stagingLinkAccountsFor(path, metadata))) {
+      if ((await file.stat()).nlink === 1) return (await this.#sidecarStillLinked(path, metadata)) ? 'settled' : 'withdrawn';
+      throw invalid();
+    }
+    const deadline = Date.now() + stagingPublicationSettleDeadlineMs;
+    for (;;) {
+      await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, stagingPublicationPollMs); });
+      const current = await file.stat();
+      if (current.nlink < 1) return 'withdrawn';
+      if (current.nlink === 1) return (await this.#sidecarStillLinked(path, metadata)) ? 'settled' : 'withdrawn';
+      if (current.nlink !== 2 || !(await this.#stagingLinkAccountsFor(path, metadata))) throw invalid();
+      if (!(await this.#sidecarStillLinked(path, metadata))) return 'withdrawn';
+      if (Date.now() >= deadline) throw invalid();
+    }
+  }
+
+  async #stagingLinkAccountsFor(path: string, metadata: Stats): Promise<boolean> {
     const directory = dirname(path);
     const stagingPrefix = `.${basename(path, '.json')}.stage-`;
     for (const entry of await readdir(directory)) {
@@ -1068,7 +1092,17 @@ export class NativePlaygroundService {
         if (!isErrno(error, 'ENOENT')) throw error;
       }
     }
-    return (await file.stat()).nlink === 1;
+    return false;
+  }
+
+  async #sidecarStillLinked(path: string, metadata: Stats): Promise<boolean> {
+    try {
+      const current = await lstat(path);
+      return current.isFile() && sameFile(current, metadata);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return false;
+      throw error;
+    }
   }
 
   async #persistSnapshot(
