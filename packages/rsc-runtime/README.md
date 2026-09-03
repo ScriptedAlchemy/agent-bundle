@@ -408,8 +408,10 @@ a project-scoped `sk-proj-…` key of production length (~160) is not
 recognized. Authors pasting either should publish as `secret`; both are
 reportable upstream fixes. A redacted document that has grown past the
 Agent Document byte bound (the mark is longer than the shortest values it
-replaces) is handed out as the one-line `[REDACTED]` placeholder instead, so
-the bound made at publish holds on egress. The compiler keeps its
+replaces) is handed out as the one-line `[REDACTED]` placeholder instead
+(`noticeRedactionPlaceholder(snapshot)`, the same document a withholding
+route hands out, keeping the original `status` and `version`), so the bound
+made at publish holds on egress. The compiler keeps its
 own, older credential pass for probe and log text
 (`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
 parity, and no vendored-code notice is involved — `flare-redact` is an
