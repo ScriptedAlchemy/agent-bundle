@@ -40,9 +40,10 @@ jobs:
           install: false
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
-      # Typecheck the site config, build it (TypeDoc, generated reference,
-      # Twoslash, dead-link/anchor/image and language-parity checks), then
-      # assert every required artifact exists.
+      # Typecheck the site config and build it. Rspress's own dead-link,
+      # dead-anchor, dead-image, and language-parity checks fail the build if
+      # TypeDoc or the generated reference pages are missing, since the
+      # authored pages link to them.
       - run: pnpm docs:site:build
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
