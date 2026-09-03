@@ -246,7 +246,9 @@ generated stdio session at the `dev-epoch` proof level. Passing epochs atomicall
 behind existing live host MCP connections and refresh opted-in development host installs. Failing or
 timed-out epochs remain inactive on those host-facing surfaces (`AB7211`), leaving the last passing
 epoch connected and installed. On a cold start whose initial build fails, the last-good epoch the
-epoch store restored is run through the same gate before hosts serve it.
+epoch store restored is seeded through the same gate before hosts serve it; when the project no
+longer prepares at all, the `dev.contracts` declaration cannot be read and the restored epoch is
+adopted directly, exactly as an undeclared project would be.
 
 The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
 carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
