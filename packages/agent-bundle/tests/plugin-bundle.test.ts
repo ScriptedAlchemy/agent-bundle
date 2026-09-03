@@ -621,7 +621,7 @@ it('emits Claude-only dependencies from the unified plugin target', () => {
         target: 'claude',
         value: {
           dependencies: [
-            'audit-logger',
+            { marketplace: 'acme-shared', name: 'audit-logger' },
             { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
           ],
         },
@@ -633,7 +633,7 @@ it('emits Claude-only dependencies from the unified plugin target', () => {
 
   expect(plan.diagnostics).toEqual([]);
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!).dependencies).toEqual([
-    'audit-logger',
+    { marketplace: 'acme-shared', name: 'audit-logger' },
     { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0' },
   ]);
   expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('dependencies');

@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
-import type { NormalizedPlugin } from '../src/core/types.ts';
+import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
@@ -584,7 +584,7 @@ nativeIt('accepts emitted Claude experimental themes and monitors under strict n
   try {
     const written = await writeClaudeArtifact(root, withClaudeExperimental({
       monitors: [{
-        command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+        command: `node ${pathTokens.pluginRoot}/scripts/watch.mjs`,
         description: 'Watch the review queue.',
         name: 'review-queue',
         when: 'always',
@@ -600,6 +600,9 @@ nativeIt('accepts emitted Claude experimental themes and monitors under strict n
       'monitors/monitors.json',
       'themes/dracula.json',
     ]));
+    expect(JSON.parse(
+      await readFile(join(root, 'monitors', 'monitors.json'), 'utf8'),
+    )[0].command).toBe('node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs');
     const validation = await runClaudeValidation(root, root);
 
     expect(validation.code, validation.output).toBe(0);
@@ -883,8 +886,8 @@ nativeIt('accepts emitted Claude plugin dependencies under strict native validat
 
   try {
     await writeClaudeArtifact(root, withClaudeDependencies([
-      'audit-logger',
-      { name: 'secrets-vault', version: '~2.1.0' },
+      { marketplace: 'acme-shared', name: 'audit-logger' },
+      { marketplace: 'acme-shared', name: 'secrets-vault', version: '~2.1.0' },
     ]));
     const validation = await runClaudeValidation(root, root);
 

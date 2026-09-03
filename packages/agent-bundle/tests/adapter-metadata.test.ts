@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.16.0',
+    adapterRevision: '1.17.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -134,7 +134,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'theme',
         revision: '2.1.250',
-        sha256: '1ee6c8485855bf90402a1c527830efeca0643be7037ca2ff3e178c51e5973089',
+        sha256: '721aa9b0bc7c60cd9359343e5c7205ffbdfea82da312f601720c9dfaa2d8cf0d',
       },
     ],
   });

@@ -643,6 +643,19 @@ it('enriches the generated Claude marketplace with the complete authored catalog
   await validateDocuments('claude', writeContents(model, 'claude'));
 });
 
+it('counts Claude marketplace relevance topics by Unicode code point', () => {
+  const topic = '😀'.repeat(64);
+  const model = withClaudeMarketplace(plugin, {
+    plugin: { relevance: { signals: { cli: ['git'] }, topic } },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(
+    writeContents(model, 'claude')['.claude-plugin/marketplace.json']!,
+  ).plugins[0].relevance.topic).toBe(topic);
+});
+
 it.each([
   ['./plugins/review-tools', undefined],
   ['review-tools', { pluginRoot: './plugins' }],
@@ -1454,7 +1467,7 @@ it.each([
       server: 'stdio',
       userConfig: { bot_token: { description: 'Token.', title: 'Token', type: 'secret' } },
     }],
-    code: 'claude.userConfig.type.invalid',
+    code: 'claude.channels[0].userConfig.type.invalid',
     label: 'an invalid per-channel option declaration',
   },
 ])('rejects $label without emitting channels', ({ channels, code }) => {
@@ -1925,7 +1938,7 @@ it('emits no Claude settings document when the host config declares none', () =>
 it('emits validated Claude themes and monitors at their default experimental locations', () => {
   const model = withClaudeExperimental(plugin, {
     monitors: [{
-      command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+      command: `node ${pathTokens.pluginRoot}/scripts/watch.mjs`,
       description: 'Watch the review queue.',
       name: 'review-queue',
       when: 'on-skill-invoke:review',
@@ -1985,6 +1998,7 @@ it.each([
   { code: 'claude.themes.field.unknown', label: 'an unknown theme field', themes: { dark: { base: 'dark', typo: true } } },
   { code: 'claude.themes.base.required', label: 'a missing theme base', themes: { dark: { name: 'Dark' } } },
   { code: 'claude.themes.base.required', label: 'an empty theme base', themes: { dark: { base: '' } } },
+  { code: 'claude.themes.base.invalid', label: 'an unknown theme base preset', themes: { dark: { base: 'drak' } } },
   { code: 'claude.themes.name.invalid', label: 'an empty theme display name', themes: { dark: { base: 'dark', name: '' } } },
   { code: 'claude.themes.overrides.invalid', label: 'a non-object overrides map', themes: { dark: { base: 'dark', overrides: [] } } },
   { code: 'claude.themes.overrides.value.invalid', label: 'a non-string override', themes: { dark: { base: 'dark', overrides: { error: 7 } } } },
@@ -2030,6 +2044,8 @@ it('pins and registers the closed Claude theme and monitor schemas', async () =>
   const validateMonitors = validator.compile(monitorsModule.default);
 
   expect(validateTheme({ base: 'dark', name: 'Dracula', overrides: { claude: '#bd93f9' } })).toBe(true);
+  expect(validateTheme({ base: 'light', name: 'Paper' })).toBe(true);
+  expect(validateTheme({ base: 'drak', name: 'Typo' })).toBe(false);
   expect(validateTheme({ base: 'dark', typo: true })).toBe(false);
   expect(validateTheme({ name: 'No base' })).toBe(false);
   expect(validateTheme({ base: 'dark', overrides: { error: 7 } })).toBe(false);
@@ -2049,8 +2065,8 @@ it('pins and registers the closed Claude theme and monitor schemas', async () =>
 
 it('emits Claude plugin dependencies in authored order with closed object keys and extension provenance', async () => {
   const model = withClaudeDependencies(plugin, [
-    'audit-logger',
-    { version: '~2.1.0', name: 'secrets-vault' },
+    { marketplace: 'acme-shared', name: 'review-tools', version: '*' },
+    { marketplace: 'acme-shared', version: '~2.1.0', name: 'secrets-vault' },
     { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
   ]);
   const plan = createDefaultRegistry().get('claude').plan(model);
@@ -2060,8 +2076,8 @@ it('emits Claude plugin dependencies in authored order with closed object keys a
   expect(entry?.kind).toBe('write');
   if (entry?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
   expect(JSON.parse(entry.content).dependencies).toEqual([
-    'audit-logger',
-    { name: 'secrets-vault', version: '~2.1.0' },
+    { marketplace: 'acme-shared', name: 'review-tools', version: '*' },
+    { marketplace: 'acme-shared', name: 'secrets-vault', version: '~2.1.0' },
     { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
   ]);
   expect(entry.sourceInputs).toContain('/workspace/dependencies.config.ts');
@@ -2086,6 +2102,8 @@ it.each([
     label: 'a duplicate cross-marketplace name',
   },
   { dependencies: ['review-tools'], code: 'claude.dependencies.self', label: 'a self dependency' },
+  { dependencies: ['audit-logger'], code: 'claude.dependencies.unresolved', label: 'an unresolvable bare-name dependency' },
+  { dependencies: [{ name: 'audit-logger', version: '^2.0' }], code: 'claude.dependencies.unresolved', label: 'an unresolvable same-marketplace dependency object' },
   { dependencies: [{ name: 'audit-logger', version: 'latest' }], code: 'claude.dependencies.version.invalid', label: 'an invalid version range' },
   { dependencies: [{ marketplace: '', name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'an empty marketplace' },
   { dependencies: [{ marketplace: 7, name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'a non-string marketplace' },
@@ -2108,6 +2126,9 @@ it.each([
   '^2.0',
   '>=1.4',
   '=2.1.0',
+  '*',
+  'x',
+  'X',
   '2.x',
   '1.2.3 - 2.0.0',
   '>=2.0 <3.0',
