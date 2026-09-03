@@ -385,15 +385,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
     for (const target of stagedTargets) {
-      if (target.cliBin) {
-        compiledCliBins.push(...(await compileCliBins(options.model, {
-          cwd: options.projectRoot,
-          meta,
-          outDir: target.root,
-          target: target.name,
-          ...tools,
-        })));
-      }
+      // MCP Apps compile first: their Rsbuild pass asserts the target root
+      // holds nothing but its own HTML, so every other surface follows it.
       const targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
         cwd: options.projectRoot,
         meta,
@@ -403,6 +396,15 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       });
       compiledMcpApps.push(...targetMcpApps);
       await emitPlanEntries({ entries: target.entries, root: target.root });
+      if (target.cliBin) {
+        compiledCliBins.push(...(await compileCliBins(options.model, {
+          cwd: options.projectRoot,
+          meta,
+          outDir: target.root,
+          target: target.name,
+          ...tools,
+        })));
+      }
       compiledEntries.push(
         ...(await compileEntries(
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
