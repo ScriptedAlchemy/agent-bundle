@@ -44,6 +44,10 @@ it('streams library analysis after the audit shell while preserving the canonica
       && documentText(document).includes('"kind":"progress"'))).toBe(true);
     expectDocument(rendered)
       .toContainMarkdown('**Reclaimable bytes:** 4')
+      // The JSX-authored measured-files table lowers to one GFM table block.
+      .toContainMarkdown('| File | Bytes | Status |')
+      .toContainMarkdown(`| ${join(library, 'Shared title.flac')} | 15 | measured |`)
+      .toContainMarkdown(`| ${join(library, 'Shared title.mp3')} | 4 | measured |`)
       .toContainMarkdown(`- ${join(library, 'Shared title.flac')}\n- ${join(library, 'Shared title.mp3')}`)
       .toContainContext('Duplicate candidate group')
       .toHaveValue(rendered.result);

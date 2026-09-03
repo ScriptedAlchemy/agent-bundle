@@ -46,7 +46,12 @@ synchronous compatibility APIs remain operative.
 The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
 APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
 `projectMcpRenderStream`, `createWarmFlightHost`, `decodeAgentFlightStream`,
-and the `@agent-bundle/runtime/flight/server` render entry. The Flight-facing versions
+and the `@agent-bundle/runtime/flight/server` render entry. Rich Markdown
+authoring rides [rsc-markdown-stream](https://github.com/ScriptedAlchemy/rsc-markdown-stream):
+`renderToMarkdown` / `renderToMarkdownStream` are re-exported, and the async
+`MarkdownContent` component renders JSX children — headings, lists, GFM
+tables, task lists, nested async components — to one escaped Markdown string
+inside `Agent.Markdown`, replacing hand-concatenated strings in routes. The Flight-facing versions
 are exact compatibility pins: React/React DOM `19.2.8` and
 `react-server-dom-rspack` `0.1.0`; the proof example compiles them with
 `rsbuild-plugin-rsc` `0.1.1`. The package does not own application state,

@@ -81,6 +81,13 @@ export type {
 } from './warm-runtime.js';
 export { decodeAgentFlightStream } from './reconciler.js';
 export type { AgentFlightDecodeOptions } from './reconciler.js';
+export { MarkdownContent, renderToMarkdown, renderToMarkdownStream } from './markdown-content.js';
+export type {
+  MarkdownContentProps,
+  MarkdownOptions,
+  MarkdownSerializer,
+  MarkdownSerializerHelpers,
+} from './markdown-content.js';
 export { lowerHookResult } from './lower-hook.js';
 export type { NativePostToolUseOutput } from './lower-hook.js';
 export { lowerMcpResult } from './lower-mcp.js';
