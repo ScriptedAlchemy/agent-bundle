@@ -1,7 +1,10 @@
 import { stableJson } from '../core/digest.ts';
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
+import { featureCapabilityName } from '../core/components.ts';
 import type { TargetAdapterMetadata } from './types.ts';
+
+export { featureCapabilityName } from '../core/components.ts';
 
 /** Builds immutable evidence from a target's pinned capability-table metadata. */
 export const capabilityEvidence = (
@@ -101,6 +104,34 @@ export const capabilityFromTableRow = (
     default:
       throw new TypeError(`Unsupported ${evidence.target} capability-table state ${JSON.stringify(row.state)}.`);
   }
+};
+
+/** Publishes one row per feature from a pinned `{ <feature>: row }` table block. */
+export const featureCapabilitiesFrom = (
+  kindCapability: string,
+  features: Readonly<Record<string, CapabilityTableRow>>,
+  evidence: CapabilityEvidence,
+): Readonly<Record<string, CapabilityState>> => Object.freeze(Object.fromEntries(
+  Object.entries(features)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([feature, row]) => [featureCapabilityName(kindCapability, feature), capabilityFromTableRow(row, evidence)]),
+));
+
+/**
+ * Publishes one row per frontmatter field from a pinned frontmatter block whose
+ * single state covers every field (`fields` is a list or an authored→emitted map).
+ */
+export const frontmatterFeatureCapabilitiesFrom = (
+  kindCapability: string,
+  block: CapabilityTableRow & { readonly fields: readonly string[] | Readonly<Record<string, string>> },
+  evidence: CapabilityEvidence,
+): Readonly<Record<string, CapabilityState>> => {
+  const fields = Array.isArray(block.fields) ? block.fields : Object.keys(block.fields);
+  return Object.freeze(Object.fromEntries(
+    [...fields]
+      .sort((left, right) => left.localeCompare(right))
+      .map((field) => [featureCapabilityName(kindCapability, field), capabilityFromTableRow(block, evidence)]),
+  ));
 };
 
 export const capabilityStateFromSupport = (

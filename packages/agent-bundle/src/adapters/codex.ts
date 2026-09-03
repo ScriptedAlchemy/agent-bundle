@@ -20,6 +20,7 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  featureCapabilitiesFrom,
   supportedEventRouteNamesFrom,
   cliBinCapability,
   supportedCapability,
@@ -176,7 +177,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.10.0',
+  adapterRevision: '1.11.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -1264,6 +1265,9 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     // The routed CLI bin rides the same plugin-root directory the pinned
     // contract already executes `mcp/` and `scripts/` files from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): one row per host feature a kind may use.
+    ...featureCapabilitiesFrom('hooks', capabilityTable.hooks.features, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no commands component.',
     ),

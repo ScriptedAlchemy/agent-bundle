@@ -61,6 +61,15 @@ export const agentComponentKinds: readonly AgentComponentKind[] = Object.freeze(
 export const componentKindCapability = (kind: AgentComponentKind): AgentComponentKindCapability =>
   componentKindCapabilities[kind];
 
+/**
+ * Component feature rows (#100): `<kind capability>.<feature>` names one host
+ * feature a component kind may use (a command frontmatter field, a rule
+ * frontmatter field, a hook matcher or timeout, a Skill IR feature class).
+ * Build-time enforcement and `inspect` look the row up under exactly this name.
+ */
+export const featureCapabilityName = (kindCapability: string, feature: string): string =>
+  `${kindCapability}.${feature}`;
+
 /** The fixed capability row a kind needs, or undefined for per-component and capability-free kinds. */
 export const componentKindCapabilityName = (kind: AgentComponentKind): string | undefined => {
   const judgment = componentKindCapabilities[kind];

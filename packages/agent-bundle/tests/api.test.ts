@@ -717,8 +717,10 @@ it('reports skipped target/component pairs against each target emission surface'
     await Promise.all([
       writeFile(join(root, 'src', 'commands', 'shared.md'), '---\ndescription: Shared command\n---\nShared command prompt.\n'),
       writeFile(
+        // Cursor's commands surface is frontmatter-free, so a Cursor-required
+        // command carries only the authoring-only `targets` key (#100 feature sets).
         join(root, 'src', 'commands', 'cursor-only.md'),
-        '---\ndescription: Cursor-only command\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
+        '---\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
       ),
       writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
       writeFile(join(root, 'src', 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
@@ -1111,6 +1113,60 @@ it('never reports an lsp component as selected when the declaring planner reject
   }
 });
 
+it('reports omitted component features per target from the host feature rows (#100 feature sets)', async () => {
+  const root = await createProject();
+  try {
+    await Promise.all([
+      mkdir(join(root, 'src', 'commands'), { recursive: true }),
+      mkdir(join(root, 'src', 'rules'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(root, 'src', 'commands', 'deploy.md'), '---\nargumentHint: <env>\ndescription: Deploy\n---\nDeploy prompt.\n'),
+      writeFile(join(root, 'src', 'rules', 'style.mdc'), '---\nalwaysApply: true\nglobs: src/**\n---\nStyle guidance.\n'),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  hooks: { beforeTool: { handler: './src/hook.ts', timeout: 3, tools: ['shell'] } },",
+        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  targets: ['claude', 'cursor', 'plugin'],",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    const result = await readyInspection({ root });
+    const selectedOn = (target: string, kind: string) =>
+      result.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === kind)!;
+
+    // Cursor ships the command body only: both authored fields are reported as
+    // omitted with the host's own `commands.<field>` judgment, in feature order.
+    expect(selectedOn('cursor', 'command').omittedFeatures).toEqual([
+      { capability: { name: 'commands.argumentHint', reason: expect.stringContaining('frontmatter-free'), state: 'unavailable' }, feature: 'argumentHint' },
+      { capability: { name: 'commands.description', reason: expect.stringContaining('frontmatter-free'), state: 'unavailable' }, feature: 'description' },
+    ]);
+    expect(Object.isFrozen(selectedOn('cursor', 'command').omittedFeatures)).toBe(true);
+    // Claude documents every field and the composite emits Claude-format
+    // commands, so neither omits anything; a component with no omissions has no key.
+    expect(selectedOn('claude', 'command')).not.toHaveProperty('omittedFeatures');
+    expect(selectedOn('plugin', 'command')).not.toHaveProperty('omittedFeatures');
+    // Cursor documents every .mdc field; hooks pin timeout and matchers on both hosts.
+    expect(selectedOn('cursor', 'rule')).not.toHaveProperty('omittedFeatures');
+    expect(selectedOn('plugin', 'rule')).not.toHaveProperty('omittedFeatures');
+    for (const target of ['claude', 'cursor', 'plugin']) {
+      expect(selectedOn(target, 'hook')).not.toHaveProperty('omittedFeatures');
+    }
+    // `validate` surfaces the matching omit-with-reason warnings for the
+    // implicit Cursor target; inspect stays a ready plan.
+    const validated = await validate({ root });
+    expect(validated.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4928')).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('Command "deploy" uses argumentHint, which cursor omits'), severity: 'warning', target: 'cursor' }),
+      expect.objectContaining({ message: expect.stringContaining('Command "deploy" uses description, which cursor omits'), severity: 'warning', target: 'cursor' }),
+    ]);
+    expect(validated.diagnostics.some((diagnostic) => diagnostic.code === 'AB4927' || diagnostic.code === 'AB4907' || diagnostic.code === 'AB4908')).toBe(false);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
 it('never counts an opaque third-party lspServers declaration as emitted by a host that does not lower it (#100)', async () => {
   const root = await createProject();
   const registry = createDefaultRegistry().register({
@@ -1400,7 +1456,6 @@ it('keeps rule and command model digests root-independent and sensitive to conte
   const sharedRule = '---\ndescription: Shared guidance\n---\nShared body.\n';
   const targetedCommand = [
     '---',
-    'description: Cursor-only command',
     'targets:',
     '  - cursor',
     '---',

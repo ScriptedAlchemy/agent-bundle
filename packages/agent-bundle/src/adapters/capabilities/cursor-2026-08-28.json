@@ -334,6 +334,15 @@
       "reason": "Cursor advertises plugin canvases without publishing a schema-backed authoring contract; no canvas component is inferred from marketplace examples, so this compiler emits none.",
       "state": "unavailable"
     },
+    "commandFrontmatter": {
+      "evidence": [
+        "2026-09-01: https://cursor.com/docs documents agent chat commands as plain Markdown prompt files in commands/ named by filename (see provenance.evidence); the Cursor lowering emits the prompt body only.",
+        "2026-09-03: https://cursor.com/docs/agent/chat/commands now resolves to the Skills page, which documents slash commands only as a `/migrate-to-skills` source (Cursor 2.4+) and documents no command frontmatter field, so no authored field has a Cursor command equivalent."
+      ],
+      "fields": ["allowedTools", "argumentHint", "description", "disableModelInvocation", "model"],
+      "reason": "The pinned Cursor commands surface is frontmatter-free Markdown: the lowering emits the prompt body only, so authored command frontmatter fields do not reach Cursor.",
+      "state": "unavailable"
+    },
     "commands": true,
     "componentDiscovery": {
       "defaults": {
@@ -452,6 +461,28 @@
       ],
       "reason": "The pinned Cursor Plugin contract publishes no plugin-shipped editor extension component; editor extensions are outside the plugin manifest at this pin, so a plugin cannot vendor or register one.",
       "state": "unavailable"
+    },
+    "ruleFrontmatter": {
+      "evidence": [
+        "retrieved 2026-09-03: https://cursor.com/docs/context/rules documents project rules as .mdc files whose frontmatter fields description, globs, and alwaysApply control when a rule is included (alwaysApply true: always; globs: auto-attached on matching files; description: agent decides; none: manual @-mention), and states a plain .md file is ignored because it lacks that frontmatter."
+      ],
+      "fields": ["alwaysApply", "description", "globs"],
+      "state": "supported"
+    },
+    "skillFeatures": {
+      "hostFrontmatter": {
+        "evidence": [
+          "2026-09-03: the Skill IR lowers the typed Cursor extension (color, disable-model-invocation, globs, icon, paths) into SKILL.md frontmatter validated against the sha-pinned schemas/skill-hosts/cursor-skill-frontmatter.schema.json (#108); unknown fields fail closed with AB3006 and schema violations with AB3010."
+        ],
+        "state": "supported"
+      },
+      "markdownTokens": {
+        "evidence": [
+          "2026-09-03: skills/tokens.ts classifies every canonical token as `none` for Cursor Skill Markdown because https://prod.cursor.com/docs/skills documents no interpolation placeholders inside SKILL.md; lowering fails closed with AB3008 instead of emitting an unresolved token."
+        ],
+        "reason": "The pinned Cursor skills contract (2026-08-28) documents no Skill Markdown interpolation placeholders; a skill body token has no Cursor equivalent and fails closed (AB3008).",
+        "state": "unavailable"
+      }
     },
     "localInstall": {
       "method": "copy",

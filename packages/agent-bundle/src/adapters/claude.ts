@@ -22,6 +22,8 @@ import {
   capabilityFromTableRow,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  featureCapabilitiesFrom,
+  frontmatterFeatureCapabilitiesFrom,
   supportedEventRouteNamesFrom,
   cliBinCapability,
   supportedCapability,
@@ -428,7 +430,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.23.0',
+  adapterRevision: '1.24.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -3259,6 +3261,12 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     ...agentCapabilities,
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // Component feature sets (#100): the host features each kind may use,
+    // one row per feature, enforced at build time (AB4927/AB4928 commands)
+    // and reported by inspect as omitted features.
+    ...frontmatterFeatureCapabilitiesFrom('commands', capabilityTable.plugin.commandFrontmatter, evidence),
+    ...featureCapabilitiesFrom('hooks', capabilityTable.hooks.features, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     bin: capabilityStateFromSupport(
       capabilityTable.plugin.bin.directory === 'bin' &&
         capabilityTable.plugin.bin.bashPath &&

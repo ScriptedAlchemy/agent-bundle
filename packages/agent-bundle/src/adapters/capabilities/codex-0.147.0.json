@@ -226,6 +226,20 @@
         "state": "unavailable"
       }
     },
+    "features": {
+      "timeout": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/codex/hooks.schema.json declares an integer `timeout` (minimum 1) on hook entries; hooks.contract.timeoutRules records the per-event default and maximum seconds the host enforces."
+        ],
+        "state": "supported"
+      },
+      "toolMatchers": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/codex/hooks.schema.json declares a string `matcher` per hook group, and hooks.matchers above pins the canonical selectors (file.write, mcp, shell) to Codex tool-name regexes; file.read has no Codex mapping and fails the plan (codex.hook.tool.file-read), and hooks.contract.matcherSemantics records the events that ignore matchers."
+        ],
+        "state": "supported"
+      }
+    },
     "matchers": {
       "file.write": "^(?:apply_patch|Edit|Write)$",
       "mcp": "^mcp__",
@@ -627,6 +641,21 @@
           "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `enabled_tools = [\"search\"]` and a `[plugins.\"my-plugin\".mcp_servers.docs.tools.search]` policy table in the user's Codex configuration."
         ],
         "reason": "Plugin MCP tool selection is host-owned user configuration under `plugins.<plugin>.mcp_servers.<server>`; the compiler emits plugin artifacts and does not write the user's config.toml.",
+        "state": "unavailable"
+      }
+    },
+    "skillFeatures": {
+      "hostFrontmatter": {
+        "evidence": [
+          "2026-09-03: the Skill IR lowers the typed Codex extension (interface, policy, dependencies) into the agents/openai.yaml sidecar validated against the sha-pinned schemas/skill-hosts/codex-openai-yaml.schema.json (#108), while SKILL.md keeps only the portable Agent Skills fields; the #242 host-install proof observed the byte-identical sidecar in the installed Codex cache."
+        ],
+        "state": "supported"
+      },
+      "markdownTokens": {
+        "evidence": [
+          "2026-09-03: skills/tokens.ts classifies every canonical token as `none` for Codex Skill Markdown because https://learn.chatgpt.com/docs/build-skills documents no interpolation placeholders inside SKILL.md; lowering fails closed with AB3008 instead of emitting an unresolved token."
+        ],
+        "reason": "The pinned Codex skills contract (0.147.0) documents no Skill Markdown interpolation placeholders; a skill body token has no Codex equivalent and fails closed (AB3008).",
         "state": "unavailable"
       }
     },
