@@ -1,0 +1,85 @@
+---
+description: 'Install agent-bundle from the pkg.pr.new preview channel, and what changes once the first npm release exists.'
+---
+
+# Installation
+
+## Requirements
+
+- **Node.js 22.19 or later** to run the compiler and the developer Workbench.
+- **A package manager** — npm, pnpm, yarn, and bun all work; the examples below use npm.
+
+Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }`
+raises that floor (it can never be lowered), and the selected floor is recorded as `runtime.node`
+in the artifact manifest.
+
+## Install from the preview channel
+
+Nothing is published to npm yet. This is deliberate: the current package names are
+placeholders, and the `agent-bundle` name on npm currently belongs to an unrelated project.
+Until the first release, install the preview tarballs CI publishes for every commit and pull
+request:
+
+```sh
+npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
+```
+
+Use a PR number or the SHA of a commit whose package-preview run succeeded — every green `main`
+commit has one. Short SHAs work, and a SHA is the right form for lockfiles and reproducible
+setups; a PR number tracks that pull request's most recent build.
+
+### Pair the runtime package from the same commit
+
+Projects with route modules also need `@agent-bundle/runtime`, published to the same channel:
+
+```sh
+npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@5685521
+npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685521
+```
+
+Install both from **one** SHA or PR number. The publish rewrites the `agent-bundle` peer range
+inside the runtime preview tarball to that exact preview version, so a matched pair installs
+with stock npm. Mixing two different SHAs fails with `ERESOLVE` by design.
+
+pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
+
+Preview versions are spelled `0.0.0-preview-<sha>`. They are built from the same output the
+release gates verify, but they are not npm releases. See
+[Preview packages](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/preview-packages.md)
+for pinning details and where previews come from.
+
+## Optional dependencies
+
+These are installed only when a project uses the surface that needs them:
+
+| Package | Needed for |
+| --- | --- |
+| `@agent-bundle/runtime` | Route modules, rendered Skills, and rendered CLI commands or scripts. Generated entries import it the same way your code does. |
+| `@rstest/core` | Running the framework test harness. It is an optional peer dependency, so a project that never tests routes never installs it. |
+| `react` | Rendering route modules and asserting on them. Also an optional peer dependency. |
+| `typescript` | `lib.dts` declaration generation, which resolves `typescript` from the project. |
+
+## Once npm releases exist
+
+The commands below are the **future** installation path. They do not work yet, because no npm
+release has been cut:
+
+```sh
+npm install --save-dev agent-bundle
+npm create agent-bundle@latest my-plugin
+```
+
+The first npm release will use npm package provenance. Until the release owner picks the final
+package name and license, pkg.pr.new previews are the release channel.
+
+## Verify the install
+
+```sh
+npx agent-bundle --help
+npx agent-bundle validate --root .
+```
+
+`validate` checks project source. Once you have built something, `validate --artifact <dir>`
+checks the built artifact instead, with no project sources required.
+
+Next: [Quick start](./quick-start.mdx).

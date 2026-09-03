@@ -1,0 +1,168 @@
+---
+description: 'Declare agent-bundle lifecycle hooks: the canonical events, tool selectors, the handler result contract, and hook simulation.'
+---
+
+# Hooks
+
+A hook is a handler module the compiler wraps and registers in each host's native hook document.
+You declare it once, keyed by a canonical event, and the adapters translate the event name, the
+matcher, and the result shape into whatever the selected host expects.
+
+## Declaring a hook
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    sessionStart: { handler: './src/hooks/session-start.ts' },
+  },
+  plugin: { description: 'Release preparation helpers.', name: 'hooks-and-scripts' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+Each event accepts a bare handler path, an entry object, or an array of either when one event
+needs several handlers:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    beforeTool: [
+      './src/hooks/audit.ts',
+      {
+        handler: './src/hooks/guard-writes.ts',
+        targets: ['claude'],
+        timeout: 10,
+        tools: ['file.write', 'shell'],
+      },
+    ],
+  },
+  plugin: { description: 'Guarded tooling.', name: 'guarded' },
+  targets: ['portable', 'claude'],
+});
+```
+
+| Field | Meaning |
+| --- | --- |
+| `handler` | The handler module, or a `prebuilt` marker naming an already-built file inside a declared payload. |
+| `targets` | Restrict the hook to specific targets. Defaults to every selected target that supports hooks. |
+| `timeout` | Native hook timeout **in seconds**. Omit it to use the selected host's default. |
+| `tools` | Tool selectors that scope when the hook fires. |
+| `args` | Extra command arguments. Only prebuilt handlers accept arguments, and only shell-safe strings. |
+
+## Canonical events
+
+| Event | Fires when |
+| --- | --- |
+| `sessionStart` | A session begins. |
+| `beforeTool` | Before a tool call is dispatched. |
+| `afterTool` | After a tool call returns. |
+| `stop` | The agent is about to stop. |
+| `agentStart` | A subordinate agent starts. |
+| `agentStop` | A subordinate agent stops. |
+| `workspaceOpen` | A workspace is opened. |
+
+A host that does not implement an event simply does not receive that hook; the emitted document
+stays honest rather than inventing an equivalent.
+
+## Tool selectors
+
+`tools` accepts the canonical selectors — `shell`, `file.read`, `file.write`, `mcp`, `agent` —
+which every adapter knows how to translate. It also accepts explicit host-native selectors
+spelled `<target>:<native-name>`, such as `claude:WebSearch` or `codex:view_image`, which
+contribute only to that host's native matcher.
+
+A hook that selects tools must leave every selected target with at least one applicable
+selector. A hook restricted to `claude:WebSearch` while also targeting `codex` fails the build
+rather than emitting a Codex document with an empty matcher that would never fire.
+
+## The handler contract
+
+A handler module default-exports a function that receives the event payload and returns the
+outcome. Returning nothing is the same as continuing:
+
+```ts
+// src/hooks/session-start.ts
+interface SessionStartEvent {
+  readonly cwd?: string;
+  readonly sessionId?: string;
+  readonly source?: string;
+  readonly transcriptPath?: string;
+}
+
+export default (event: SessionStartEvent) => ({
+  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  outcome: 'continue' as const,
+});
+```
+
+The generated wrapper validates the result before projecting it into host-native output. Exactly
+four keys are accepted, and each one is checked:
+
+| Key | Contract |
+| --- | --- |
+| `outcome` | `continue`, `deny`, or `stop`. |
+| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook. Denying one of those without a reason fails. |
+| `additionalContext` | A string appended to the agent's context. |
+| `updatedInput` | Replacement input for the pending call. |
+
+Per-event restrictions are enforced, not documented-and-hoped:
+
+- `sessionStart` and `afterTool` cannot deny, stop, or replace input.
+- `beforeTool` cannot stop, and cannot replace input while denying.
+- `stop` accepts only `continue`, or `deny` with a reason.
+
+An unknown key, a wrong type, or a violation of any rule above fails the hook with a clear
+message instead of being projected into a host document that would misbehave silently.
+
+## Prebuilt handlers
+
+A project that owns its own compilation can point a hook at an already-built file inside a
+declared payload:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    afterTool: [{
+      args: ['--host', 'claude'],
+      handler: { prebuilt: './dist/runtime/hook/index.js' },
+      targets: ['claude'],
+      tools: ['file.write'],
+    }],
+  },
+  payload: { runtime: { source: './dist/runtime', targets: ['claude'] } },
+  plugin: { description: 'Self-compiled runtime.', name: 'prebuilt-plugin' },
+  targets: ['claude'],
+});
+```
+
+A prebuilt hook emits its native command as `node "<root>/<payload path>" <args…>` — one config
+declaration replacing a hand-rolled `hooks/hooks.json` per host. Prebuilt hooks are packaged like
+native hook documents: they do not compile wrappers and do not appear in the simulatable hook
+index.
+
+## Inspect and simulate
+
+Hooks are the surface where "it built" is least convincing, so the emitted wrapper is runnable
+directly:
+
+```sh
+npx agent-bundle inspect --root . --hooks
+npx agent-bundle hooks list --artifact dist --target claude
+npx agent-bundle hooks simulate --artifact dist --target claude \
+  --hook session-start --input '{"sessionId":"local"}'
+```
+
+`hooks simulate` runs the real emitted wrapper — the same file the host will execute — so the
+result you see is the result the host would get. The developer Workbench exposes the same
+playground with the raw stdout, stderr, and outcome for each run.
+
+## Next
+
+- [MCP servers and Apps](./mcp.mdx) — the other executable surface.
+- [Scripts and assets](./scripts-assets.mdx) — code a hook or Skill can call.

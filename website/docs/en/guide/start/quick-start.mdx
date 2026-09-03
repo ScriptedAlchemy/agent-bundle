@@ -1,0 +1,126 @@
+---
+description: 'Scaffold an agent-bundle project or write agent-bundle.config.ts by hand, then build and run the developer Workbench.'
+---
+
+# Quick start
+
+There are two ways in. The scaffolder emits a project that already passes its own `check`; the
+manual path is four lines of config in an existing repository.
+
+## Scaffold a project
+
+The fastest start is `create-agent-bundle`. It prompts for a name, a template, and the host
+targets:
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+```
+
+Once npm releases exist, this becomes `npm create agent-bundle`. Until then, use a commit SHA or
+PR number from the [preview channel](./installation.mdx).
+
+A run that names both a directory and a template is treated as scripted and asks nothing — the
+remaining values fall back to their defaults:
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin \
+  --template mcp-server \
+  --targets portable,codex,claude
+```
+
+### Templates
+
+| Template | What you get |
+| --- | --- |
+| `minimal` | A Skills-only plugin: one `src/skills/<name>/SKILL.md` directory and nothing else. |
+| `mcp-server` | A stdio MCP server from one `src/mcp/<server>/tools/<name>.tsx` route module plus one artifact script, with the framework test harness wired up. |
+| `cli-tool` | An installable CLI through the `src/cli.ts` bin convention, plus a `src/index.ts` library export with declarations. |
+
+Every template ships a `check` script (validate, build, typecheck, tests) and validates with
+zero diagnostics — including the `AB473x` migration nudges, because the templates are written
+against the entry conventions from the start. The `mcp-server` template also starts with the
+consumer test harness, each pool labeled with the proof level it carries.
+
+Scaffolded projects pin `agent-bundle` to an exact preview tarball from the same commit the
+scaffolder came from, so the scaffolder and the framework it pins never disagree. See the
+[create-agent-bundle README](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/packages/create-agent-bundle/README.md)
+for every flag.
+
+## Or write the config by hand
+
+Describe the plugin in `agent-bundle.config.ts` at the project root:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'What it does.' },
+  targets: ['plugin'],
+  skills: ['src/skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+Most projects need even less than that, because the `src/` conventions fill the config in when
+it is silent:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+The release version comes from `package.json`. A `plugin.version` field still works as a
+deprecated compatibility axis, but a value that disagrees with `package.json` reports the
+`AB4008` warning.
+
+## Build, or work interactively
+
+```sh
+npx agent-bundle build --root . --output dist   # write installable artifacts
+npx agent-bundle dev --root .                   # local workbench with live rebuilds
+```
+
+`build` validates the project and writes the artifact, plus the `bin`/`lib` package build when
+declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
+overview and diagnostics, Skill documents, the artifact tree with provenance and epoch
+comparison, an artifact-bound MCP playground with the raw protocol trace, a hook playground that
+runs the emitted wrapper, and eval runs.
+
+## Inspect what the compiler decided
+
+```sh
+npx agent-bundle inspect --root .            # normalized config and per-target plans
+npx agent-bundle inspect --root . --skills   # add the skill focus
+npx agent-bundle validate --root .           # check project source
+```
+
+`inspect` reads source configuration and shows the normalized model — which is where you confirm
+that a convention was actually picked up.
+
+## Install the result
+
+Every built target directory contains a generated `INSTALL.md` with commands that use the
+bundle's real plugin and marketplace names:
+
+```sh
+npx agent-bundle install claude --from dist/claude --scope user
+npx agent-bundle install codex --from dist/codex
+npx agent-bundle install cursor --from dist/cursor
+```
+
+For an install-free development loop against Claude Code:
+
+```sh
+claude --plugin-dir dist/claude plugin list --json
+```
+
+## Next steps
+
+- [Project structure](./project-structure.mdx) — what each `src/` root means and where output lands.
+- [Configuration model](../authoring/index.mdx) — every config field and what owns it.
+- [Skills](../authoring/skills.mdx) — the first surface most plugins author.

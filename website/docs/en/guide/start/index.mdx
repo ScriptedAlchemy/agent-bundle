@@ -1,0 +1,93 @@
+---
+description: 'agent-bundle compiles one typed config into installable Claude Code, Codex, Cursor, and portable agent plugin artifacts.'
+---
+
+# Introduction
+
+agent-bundle compiles an agent plugin — Skills, hooks, MCP servers, and scripts, described
+by one typed config — into installable artifacts for Claude Code, Codex, and Cursor, plus a
+portable layout. You write the plugin once; the compiler emits each host's manifests and
+wrappers.
+
+Node.js 22.19 or later is required.
+
+## The problem it solves
+
+Every agent host wants the same plugin expressed in its own layout: its own manifest
+filenames, its own placeholder spellings for the plugin install root, its own hook document
+shape, its own MCP server declaration. Writing that by hand means maintaining the same plugin
+several times and discovering the disagreements after installation.
+
+agent-bundle inverts that. Host-specific layout is the compiler's job, so it stays out of your
+source tree:
+
+```sh
+npx agent-bundle build --root . --output dist
+```
+
+With `targets: ['plugin']`, that single command emits one multi-host bundle at `dist/plugin/`:
+`.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`,
+`hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to
+install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`,
+and `portable` targets.
+
+## What the config owns
+
+One `agent-bundle.config.ts` at the project root describes the whole plugin:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
+  targets: ['plugin'],
+  skills: ['src/skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+The same config also owns the npm package build — no second bundler config, no bin shims, no
+hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`,
+`src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a
+library output alongside the host artifacts. An MCP entry that default-exports a server factory
+runs under a framework-owned stdio lifecycle. `tools.rsbuild` / `tools.rspack` is the one
+bundler escape hatch.
+
+## The authoring model
+
+agent-bundle has one newcomer model, and it fits on four lines:
+
+1. **Authored source lives under `src/`.** Skills, commands, rules, scripts, MCP routes, state,
+   and providers all have conventional `src/` roots. A path is an identity: a module at
+   `src/mcp/curator/tools/status.tsx` *is* the `status` tool of the `curator` server.
+2. **One small flat config.** `agent-bundle.config.ts` holds project identity, targets, and the
+   policy that no route file can own.
+3. **JSX means rendering.** An executable route is one async default Server Component that does
+   the work and returns `Agent.*` nodes. There is no public `execute`/`render` split.
+4. **Opt in to context.** Call `await agent()` inside that component only when you need host,
+   session, actor, workspace, capability, or state context.
+
+Everything above that line is power-tier reference: custom and remote MCP server modes,
+prebuilt payloads, request-context providers, and the bundler escape hatch.
+
+## Evidence, not vibes
+
+A plugin that builds is not a plugin that works. agent-bundle ships separate proof levels —
+route-unit, in-memory MCP, CLI dispatch, packed stdio, packed with source deleted, and
+host-install — and each helper stamps the level it carried into its provenance. A pass at one
+level is never reported as a receipt for another, and an assertion that needs stronger evidence
+than the harness produced is `inconclusive` rather than silently passing.
+
+## Where to go next
+
+- [Installation](./installation.mdx) — install the preview tarballs that CI publishes today.
+- [Quick start](./quick-start.mdx) — scaffold a project, or write the config by hand.
+- [Project structure](./project-structure.mdx) — the conventional `src/` roots and the output layout.
+- [Authoring](../authoring/index.mdx) — the configuration model and every authorable surface.
+
+The repository documents the same contracts in more depth:
+[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md)
+is the whole authoring model on one screen, and
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)
+is the full package-build contract.

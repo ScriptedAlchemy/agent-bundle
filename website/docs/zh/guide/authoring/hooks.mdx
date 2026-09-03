@@ -1,0 +1,158 @@
+---
+description: '声明 agent-bundle 生命周期钩子：规范事件、工具选择器、处理器结果契约，以及钩子模拟。'
+---
+
+# 钩子
+
+钩子是一个处理器模块，编译器会把它包装起来并注册到每个宿主原生的钩子文档中。你只需按规范事件分键
+声明一次，适配器就会把事件名、匹配器与结果形状翻译成所选宿主期望的样子。
+
+## 声明一个钩子
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    sessionStart: { handler: './src/hooks/session-start.ts' },
+  },
+  plugin: { description: 'Release preparation helpers.', name: 'hooks-and-scripts' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+每个事件都接受一个裸的处理器路径、一个条目对象，或者当同一事件需要多个处理器时，接受由两者组成的
+数组：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    beforeTool: [
+      './src/hooks/audit.ts',
+      {
+        handler: './src/hooks/guard-writes.ts',
+        targets: ['claude'],
+        timeout: 10,
+        tools: ['file.write', 'shell'],
+      },
+    ],
+  },
+  plugin: { description: 'Guarded tooling.', name: 'guarded' },
+  targets: ['portable', 'claude'],
+});
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `handler` | 处理器模块，或一个 `prebuilt` 标记，指向已声明 payload 中某个已构建好的文件。 |
+| `targets` | 把钩子限制到特定 target。默认是所有支持钩子的所选 target。 |
+| `timeout` | 原生钩子超时，**单位为秒**。省略则使用所选宿主的默认值。 |
+| `tools` | 决定钩子何时触发的工具选择器。 |
+| `args` | 额外的命令参数。只有预构建处理器接受参数，且只接受 shell 安全的字符串。 |
+
+## 规范事件
+
+| 事件 | 触发时机 |
+| --- | --- |
+| `sessionStart` | 会话开始时。 |
+| `beforeTool` | 工具调用派发之前。 |
+| `afterTool` | 工具调用返回之后。 |
+| `stop` | 智能体即将停止时。 |
+| `agentStart` | 子智能体启动时。 |
+| `agentStop` | 子智能体停止时。 |
+| `workspaceOpen` | 工作区被打开时。 |
+
+不实现某个事件的宿主，就不会收到对应的钩子；输出的文档保持诚实，而不是发明一个等价物。
+
+## 工具选择器
+
+`tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——每个适配器都知道如何
+翻译它们。它同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
+`codex:view_image`，这类选择器只会贡献给该宿主的原生匹配器。
+
+选择了工具的钩子必须让每个所选 target 都至少留下一个可用的选择器。一个只限定 `claude:WebSearch`
+却同时以 `codex` 为 target 的钩子会导致构建失败，而不是输出一份匹配器为空、永远不会触发的 Codex 文档。
+
+## 处理器契约
+
+处理器模块默认导出一个函数，它接收事件负载并返回结果。不返回任何内容等同于继续：
+
+```ts
+// src/hooks/session-start.ts
+interface SessionStartEvent {
+  readonly cwd?: string;
+  readonly sessionId?: string;
+  readonly source?: string;
+  readonly transcriptPath?: string;
+}
+
+export default (event: SessionStartEvent) => ({
+  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  outcome: 'continue' as const,
+});
+```
+
+生成的包装层会在把结果投影为宿主原生输出之前先校验它。只接受四个键，并且每一个都会被检查：
+
+| 键 | 契约 |
+| --- | --- |
+| `outcome` | `continue`、`deny` 或 `stop`。 |
+| `reason` | 非空字符串，仅在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
+| `additionalContext` | 追加到智能体上下文的字符串。 |
+| `updatedInput` | 用于替换待执行调用的输入。 |
+
+逐事件的限制是被强制执行的，而不是「写在文档里、希望有人遵守」：
+
+- `sessionStart` 与 `afterTool` 不能拒绝、停止或替换输入。
+- `beforeTool` 不能停止，也不能在拒绝的同时替换输入。
+- `stop` 只接受 `continue`，或带原因的 `deny`。
+
+未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
+异常却毫无声响的宿主文档。
+
+## 预构建处理器
+
+自行掌控编译的项目可以把钩子指向已声明 payload 中某个已构建好的文件：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    afterTool: [{
+      args: ['--host', 'claude'],
+      handler: { prebuilt: './dist/runtime/hook/index.js' },
+      targets: ['claude'],
+      tools: ['file.write'],
+    }],
+  },
+  payload: { runtime: { source: './dist/runtime', targets: ['claude'] } },
+  plugin: { description: 'Self-compiled runtime.', name: 'prebuilt-plugin' },
+  targets: ['claude'],
+});
+```
+
+预构建钩子输出的原生命令形如 `node "<root>/<payload path>" <args…>`——一条配置声明取代了逐宿主手工
+维护的 `hooks/hooks.json`。预构建钩子按原生钩子文档的方式打包：它们不编译包装层，也不会出现在可模拟
+的钩子索引中。
+
+## 检查与模拟
+
+钩子是「构建通过」最没有说服力的表面，因此输出的包装层可以被直接运行：
+
+```sh
+npx agent-bundle inspect --root . --hooks
+npx agent-bundle hooks list --artifact dist --target claude
+npx agent-bundle hooks simulate --artifact dist --target claude \
+  --hook session-start --input '{"sessionId":"local"}'
+```
+
+`hooks simulate` 运行的是真实输出的包装层——正是宿主将要执行的那个文件——所以你看到的结果就是宿主
+会得到的结果。开发者 Workbench 提供同样的 playground，并展示每次运行的原始 stdout、stderr 与结果。
+
+## 下一步
+
+- [MCP 服务器与 MCP App](./mcp.mdx) —— 另一种可执行表面。
+- [脚本与资源](./scripts-assets.mdx) —— 钩子或 Skill 可以调用的代码。

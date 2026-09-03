@@ -1,0 +1,212 @@
+---
+description: '框架自有的 npm 包构建：bin 与 lib 条目、可执行封套、路由式 CLI、agent-bundle/meta，以及唯一的打包器逃生舱。'
+---
+
+# CLI 与库包入口
+
+agent-bundle 之于智能体插件，正如 Rslib 之于库：一份 `agent-bundle.config.ts`、一个 CLI、由框架拥有
+的入口生命周期，以及一个被祝福的、通往打包器的逃生舱。输出宿主产物的同一份配置，也负责 npm 包构建，
+因此同时作为 CLI 或库发布的插件不需要第二份打包器配置。
+
+## `bin` 与 `lib`
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  bin: { 'my-plugin': './src/cli.ts' },
+  lib: { dts: true, entry: './src/index.ts' },
+  output: { distPath: 'artifact' },
+  plugin: { description: 'A CLI plus a plugin.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+| 配置 | 输出 | 说明 |
+| --- | --- | --- |
+| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | 自执行的 ESM 包，带 `#!/usr/bin/env node` shebang 与可执行位。 |
+| `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` 以及 `dist/**/*.d.ts` | 单入口 ESM profile，node target，es2022 语法。 |
+
+配置沉默时，`src/cli.ts` 与 `src/index.ts` 这两个约定会补齐它们。配置总是胜出，而 `bin: false` /
+`lib: false` 则用于退出。
+
+由于包输出位于 `dist/`，带有包入口的项目必须把宿主产物放到别处（`AB4706`）——
+`output: { distPath: 'artifact' }` 无需 CLI 参数即可提供这种隔离。`dist` 是强制忽略的目录：包输出
+永远不会进入项目源码快照，也不会进入 Skill 与资源发现。
+
+输出会被暂存并原子发布，其 provenance——字节数、SHA-256，以及排序后的项目相对源码输入——会像产物文件
+一样在构建结果中报告。
+
+### 声明文件
+
+`lib.dts` 默认为 `true`。声明生成会从项目中解析 `typescript`，因此请把它加为 devDependency。它把 lib
+入口所在的源码目录编译为独立的 program：编译选项通过 `extends` 来自项目的 `tsconfig.json`，`rootDir`
+固定为入口所在目录，并且只纳入该子树——测试文件永远不会让包构建失败，也不会污染它。声明文件平铺落在
+`dist/` 下，每个源码模块一个 `.d.ts`。
+
+`lib` profile 刻意做得很薄。需要多格式矩阵（UMD、多入口、逐格式 tsconfig）的包已经超出这个 profile，
+它真正想要的是 Rslib。那是唯一一种仍然保留第二份打包器配置的情形，而且是主动选择的。
+
+## 可执行封套
+
+一个 `bin` 条目——或一个产物脚本——只要其模块导出了 `main`，或默认导出一个函数，就会获得生成的进程
+封套：
+
+```ts
+// src/cli.ts — the whole CLI entry a consumer writes
+export const main = async (argv: readonly string[]): Promise<number> => {
+  // ...
+  return 0;
+};
+```
+
+封套会 await `main(process.argv.slice(2))`，把数值返回值作为进程退出码，并让逃逸的 rejection 走
+Node 的顶层失败路径（堆栈打到 stderr，退出码 1）。没有 `main` 导出的自执行模块则逐字节直接打包。
+
+## 路由式 CLI
+
+`src/cli/**` 表面会编译成一个由框架生成的可执行文件，取代手写的分发器，也取代该项目的 `src/cli.ts`
+bin 约定。嵌套即身份：`src/cli/library/audit.ts` 以 `<bin> library audit` 运行。
+
+```ts twoslash
+// src/cli/inspect.ts — the whole command a consumer writes
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Inspect a bounded source tree without changing it.',
+  positionals: ['root'],
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({
+  maxFiles: z.number().int().min(1).max(256).optional(),
+  root: z.string().min(1),
+}).strict();
+
+export const resultSchema = z.object({ scanned: z.number().int() }).strict();
+
+export default async function inspect({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  signal.throwIfAborted();
+  return { scanned: input.maxFiles ?? 0 };
+}
+```
+
+编译器把 `inputSchema` 静态投影到 argv 上，生成分层帮助（每一层都有 `--help`，根层有 `--version`），
+并通过与其他 bin 相同的打包器合成流程输出 `dist/bin/<plugin-name>.js`。运行时，外壳解析命令路径、
+解析并强制转换 argv、用模块自身的 schema 校验、在带类型的 Agent 请求上下文中执行默认函数、向 stdout
+写出一行规范 JSON，并确定性地映射退出码：
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功；在 `config.exitCode: 'result'` 下则取结果的 `exitCode`。 |
+| `1` | 执行失败。 |
+| `2` | 用法或输入失败。 |
+| `130` / `143` | SIGINT / SIGTERM，它们同时会抵达路由的 `AbortSignal`。 |
+
+`.tsx` 命令路由把默认函数换成一个具有相同 props 的 async 默认 Server Component，并通过运行时分发器
+针对同级的 `dist/bin/<plugin-name>-flight.mjs` worker 渲染。它由此获得
+[脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
+作为依赖，因为生成的可执行文件通过它装配请求上下文。
+
+退出方式：`bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。
+
+### 把 MCP 工具投影进 CLI
+
+`routes.mcpCommands` 把生成式 MCP 服务器的工具加入同一张命令图与同一个可执行文件，即使项目完全没有
+`src/cli/**` 路由也可以。`true` 选中每个符合条件的工具；对象形式接受匹配 `<server>:<tool>` 身份的
+`include` 与 `exclude` 模式，其中 `*` 是唯一的通配符。
+
+每个被投影的工具以 `<plugin-bin> <server> <tool>` 运行，协议工具名逐字保留。它唯一的输入选项是
+`--input`，接受一个 JSON 对象。只有当工具的静态 MCP annotations 明确设置了 `readOnlyHint: true` 时
+它才是只读的；其余工具都被视为可变更，并在没有 `--yes` 时失败关闭。每个声明的模式都必须至少匹配一个
+符合条件的工具，拼写错误会以 `AB4822` 失败，并列出可用的身份。
+
+## 发布标识
+
+插件代码通过框架读取自身标识，而不是维护一个手写的版本模块：
+
+```ts
+import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
+```
+
+`version` 是解析出的插件版本，`name` 是宿主原生的插件 slug——绝不是 npm 包名——`packageName` 与
+`packageVersion` 则是经过校验的 npm 轴，对未打包的开发期项目为 `undefined`。编译器会在每个被编译的
+表面替换该 specifier：产物脚本、路由式 CLI、MCP 入口、钩子包装层、包构建，以及浏览器 MCP App 包。
+它是保留 specifier，因此 `tools` 逃生舱无法把它外部化，任何输出包也不可能残留对它的未解析导入。
+
+在 agent-bundle 编译之外，已发布的该模块会抛出错误，而不是报告一个伪造的标识；完全没有发布版本号的
+发布构建会被拒绝（`AB4013`）。
+
+## 打包与安装器
+
+当包输出与至少一个 Claude、Codex 或 Cursor 宿主包在同一项目内构建时，框架还会输出一个自包含、相对
+包路径的安装器，位于 `dist/bin/<plugin-name>.js`——若该名称已被占用则为 `<plugin-name>-install.js`，
+两者都被占用时再追加数字后缀。请在 `package.json` 的 `bin` 中声明对应取值。它的语法是
+`install <host> [--scope <scope>] [--json]`，帮助中只列出已构建的宿主；它通过 `import.meta.url` 而
+不是调用者的工作目录来定位随包发布的产物目录，因此无论当前目录在哪里，从 `node_modules` 中都能正常
+工作。没有任何 npm 生命周期会执行安装。
+
+```sh
+npx agent-bundle prepack --root . --output artifact --json
+```
+
+`prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、
+清单哈希、包 bin 目标以及发布版本一致性设卡。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts`
+可防止递归。
+
+## 预构建 payload
+
+有些项目确实自行掌控编译——例如逐入口逃生舱无法表达的、协调多环境的打包器拓扑——但仍希望使用框架
+自有的宿主打包。顶层 `payload` 块声明构建将按字节、按稳定路径打包的已构建目录树，而
+`entry: { prebuilt: './dist/…' }` 或 `handler: { prebuilt: './dist/…' }` 则把生成的宿主清单指向这些
+树中的文件，而不编译它们。
+
+每个 payload 文件都保留其精确的相对路径，因为框架并没有编译这些文件，也就无法改写它们内部的引用。
+完整性依然是内容寻址的：每个 payload 文件都会带着自己的 SHA-256 与 `prebuilt` 文件类别进入产物清单，
+并参与项目 revision 的哈希。请先运行你自己的构建——缺失或为空的 payload 在 `dev` 下只是警告，以便
+干净检出也能工作，但 `agent-bundle build` 会拒绝它。
+
+## 打包器逃生舱
+
+`tools.rsbuild`（一个 Rsbuild 环境配置片段）与 `tools.rspack`（一个 Rspack 配置对象、mutator 函数或
+数组）会**最后**合并进 agent-bundle 合成的每一份打包器配置：产物脚本、MCP 入口、钩子包装层、MCP App
+视图与包构建。这正是消费者永远不需要第二份打包器配置文件的原因。
+
+这个逃生舱是有边界的。框架的 invariant 钩子在你的 `tools.rspack` *之后*运行，解析后的配置断言也仍在
+合并之后运行。破坏产物契约的取值——异步 chunk、输出根目录、自包含性——会以硬诊断让构建失败，而不是
+悄悄覆盖契约。保留的模块 specifier 也以同样方式受到保护：把 `agent-bundle/mcp-entry`、
+`agent-bundle/meta` 或 `agent-bundle/mcp-apps` 外部化的逃生舱会让构建失败——对静态可见的 `externals`
+在配置检查阶段失败，对函数形式的则通过构建后扫描失败。逃生舱定制的是*代码如何编译*，绝不是*产物承诺
+了什么*。
+
+有一个双引擎注意事项：产物脚本、MCP 入口、钩子包装层与包构建通过 Rslib 编译，运行在 `@rslib/core`
+内嵌的打包器版本之下；而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。因此，从单独安装的
+`@rspack/core` 导入的类，与实际执行配置的那个引擎的类身份并不相同。切勿针对导入的 `@rspack/core`
+构造插件或执行 `instanceof` 检查——请改用传给 mutator 函数的 utils 参数：
+
+```ts
+tools: {
+  rspack: (config, { rspack }) => {
+    // `rspack` is always the executing engine's own object.
+    return config;
+  },
+},
+```
+
+想确切看到逃生舱产生了什么：
+
+```sh
+npx agent-bundle inspect --bundler --root .
+npx agent-bundle inspect --bundler --root . --target claude --json
+```
+
+它会把构建所组合的每个输出的合成配置，按构建实际降级的样子原样导出；由于用的就是构建所用的同一批
+函数，这份导出不可能与真实编译结果发生漂移。被框架包装的入口还会附带生成的包装模块源码。
+
+本页所有内容的完整契约见
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)。
+
+## 下一步
+
+- [配置模型](./index.mdx) —— 其余的配置表面。
+- [项目结构](../start/project-structure.mdx) —— 这些入口各自的位置。

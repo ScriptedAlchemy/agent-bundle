@@ -1,0 +1,238 @@
+---
+description: 'The framework-owned npm package build: bin and lib entries, the executable envelope, the routed CLI, agent-bundle/meta, and the single bundler escape hatch.'
+---
+
+# CLI and library package entries
+
+agent-bundle is the build product for agent plugins the way Rslib is for libraries: one
+`agent-bundle.config.ts`, one CLI, framework-owned entry lifecycles, and a single blessed escape
+hatch into the bundler. The same config that emits host artifacts also owns the npm package
+build, so a plugin that also ships as a CLI or a library needs no second bundler config.
+
+## `bin` and `lib`
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  bin: { 'my-plugin': './src/cli.ts' },
+  lib: { dts: true, entry: './src/index.ts' },
+  output: { distPath: 'artifact' },
+  plugin: { description: 'A CLI plus a plugin.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+| Config | Output | Notes |
+| --- | --- | --- |
+| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
+| `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` plus `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
+
+The conventions `src/cli.ts` and `src/index.ts` fill these in when the config is silent. Config
+always wins, and `bin: false` / `lib: false` opt out.
+
+Because package outputs live in `dist/`, a project with package entries must keep host artifacts
+somewhere else (`AB4706`) — `output: { distPath: 'artifact' }` provides that separation without a
+CLI flag. `dist` is a mandatory-ignored directory: package outputs never enter project source
+snapshots or Skill and asset discovery.
+
+Outputs are staged and published atomically, and their provenance — bytes, SHA-256, and sorted
+project-relative source inputs — is reported on the build result exactly like artifact files.
+
+### Declarations
+
+`lib.dts` defaults to `true`. Declaration generation resolves `typescript` from the project, so
+add it as a devDependency. It compiles the lib entry's source directory as its own program:
+compiler options come from the project `tsconfig.json` via `extends`, `rootDir` is pinned to the
+entry's directory, and only that subtree is included — test files never fail or pollute the
+package build. Declarations land flat under `dist/`, one `.d.ts` per source module.
+
+The `lib` profile is deliberately thin. A package that needs a multi-format matrix (UMD, multiple
+entries, per-format tsconfig) has outgrown the profile and genuinely wants Rslib. That is the one
+case where a second bundler config remains, by choice.
+
+## The executable envelope
+
+A `bin` entry — or an artifact script — whose module exports `main`, or default-exports a
+function, receives the generated process envelope:
+
+```ts
+// src/cli.ts — the whole CLI entry a consumer writes
+export const main = async (argv: readonly string[]): Promise<number> => {
+  // ...
+  return 0;
+};
+```
+
+The envelope awaits `main(process.argv.slice(2))`, adopts a numeric return as the process exit
+code, and lets an escaped rejection surface through Node's top-level failure path (stack to
+stderr, exit code 1). Self-executing modules with no `main` export bundle directly, byte for
+byte.
+
+## The routed CLI
+
+A `src/cli/**` surface compiles into one framework-generated executable instead of a
+hand-written dispatcher, superseding the `src/cli.ts` bin convention for the project. Nesting is
+identity: `src/cli/library/audit.ts` runs as `<bin> library audit`.
+
+```ts twoslash
+// src/cli/inspect.ts — the whole command a consumer writes
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Inspect a bounded source tree without changing it.',
+  positionals: ['root'],
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({
+  maxFiles: z.number().int().min(1).max(256).optional(),
+  root: z.string().min(1),
+}).strict();
+
+export const resultSchema = z.object({ scanned: z.number().int() }).strict();
+
+export default async function inspect({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  signal.throwIfAborted();
+  return { scanned: input.maxFiles ?? 0 };
+}
+```
+
+The compiler statically projects `inputSchema` onto argv, generates nested help (`--help` at
+every level, `--version` at the root), and emits `dist/bin/<plugin-name>.js` through the same
+bundler synthesis as every other bin. At run time the shell resolves the command path, parses and
+coerces argv, validates through the module's own schemas, executes the default function inside
+the typed Agent request context, writes one canonical JSON line to stdout, and maps exit codes
+deterministically:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success, or the result's `exitCode` under `config.exitCode: 'result'`. |
+| `1` | Execution failure. |
+| `2` | Usage or input failure. |
+| `130` / `143` | SIGINT / SIGTERM, which also reach the route's `AbortSignal`. |
+
+A `.tsx` command route swaps the default function for an async default Server Component with the
+same props and renders through the runtime dispatcher against a sibling
+`dist/bin/<plugin-name>-flight.mjs` worker. It gains the four output modes described in
+[Scripts and assets](./scripts-assets.mdx). Routed CLI projects need `@agent-bundle/runtime` as a
+dependency, because the generated executable installs the request context through it.
+
+Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
+
+### Projecting MCP tools into the CLI
+
+`routes.mcpCommands` adds tools from generated MCP servers to the same command graph and
+executable, including in projects with no `src/cli/**` routes at all. `true` selects every
+eligible tool; the object form takes `include` and `exclude` patterns matching the
+`<server>:<tool>` identity, with `*` as the only wildcard.
+
+Each projected tool runs as `<plugin-bin> <server> <tool>` with the protocol tool name preserved
+verbatim. Its only input option is `--input` taking one JSON object. A tool is read-only only
+when its static MCP annotations explicitly set `readOnlyHint: true`; every other tool is
+mutation-capable and fails closed unless `--yes` is present. Every declared pattern must match at
+least one eligible tool, and a misspelling fails with `AB4822` listing the available identities.
+
+## Release identity
+
+Plugin code reads its own identity from the framework instead of maintaining a hand-written
+version module:
+
+```ts
+import meta, { name, packageName, packageVersion, version } from 'agent-bundle/meta';
+```
+
+`version` is the resolved plugin version, `name` is the host-native plugin slug — never the npm
+package name — and `packageName` / `packageVersion` are the validated npm axes, `undefined` for
+an unpackaged development project. The compiler replaces the specifier in every compiled surface:
+artifact scripts, the routed CLI, MCP entries, hook wrappers, the package build, and browser MCP
+App bundles. It is a reserved specifier, so the `tools` hatch cannot externalize it and no
+emitted bundle can carry an unresolved import of it.
+
+Outside an agent-bundle compilation the published module throws rather than reporting a
+fabricated identity, and a release build refuses a project with no release version at all
+(`AB4013`).
+
+## Packaging and installers
+
+When package outputs and at least one Claude, Codex, or Cursor host pack are built inside the
+project, the framework also emits one self-contained package-relative installer at
+`dist/bin/<plugin-name>.js` — or `<plugin-name>-install.js` when that name is taken, with a
+numeric suffix if both are. Declare the matching `package.json` `bin` value. Its grammar is
+`install <host> [--scope <scope>] [--json]`, help lists only built hosts, and it resolves the
+shipped artifact directory from `import.meta.url` rather than the caller's working directory, so
+it works from `node_modules` regardless of the current directory. No npm lifecycle performs an
+installation.
+
+```sh
+npx agent-bundle prepack --root . --output artifact --json
+```
+
+`prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
+exact package and artifact inventory, manifest hashes, package bin targets, and release-version
+agreement. Use it as an npm `prepack` script; `--ignore-scripts` prevents recursion.
+
+## Prebuilt payloads
+
+Some projects legitimately own their compilation — a coordinated multi-environment bundler
+topology the per-entry hatch cannot express — but still want framework-owned host packaging. The
+top-level `payload` block names already-built directory trees the build packages byte-for-byte at
+stable paths, and `entry: { prebuilt: './dist/…' }` or `handler: { prebuilt: './dist/…' }` points
+the generated host manifests at files inside them without compiling them.
+
+Every payload file keeps its exact relative path, because the framework did not compile these
+files and cannot rewrite the references inside them. Integrity stays content-addressed anyway:
+each payload file lands in the artifact manifest with its SHA-256 and the `prebuilt` file kind,
+and hashes into the project revision. Run your own build first — a missing or empty payload is a
+warning under `dev` so a clean checkout works, but `agent-bundle build` refuses it.
+
+## The bundler escape hatch
+
+`tools.rsbuild` (an Rsbuild environment-config fragment) and `tools.rspack` (an Rspack config
+object, mutator function, or array) merge **last** into every bundler config agent-bundle
+synthesizes: artifact scripts, MCP entries, hook wrappers, MCP App views, and the package build.
+This is why a consumer never needs a second bundler config file.
+
+The hatch is bounded. The framework invariant hook runs *after* your `tools.rspack`, and the
+resolved-config assertions still run after the merge. A value that breaks an artifact contract —
+async chunks, output roots, self-containment — fails the build with a hard diagnostic instead of
+silently overriding the contract. Reserved module specifiers are protected the same way: a hatch
+that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
+the build, at config inspection for statically visible `externals` and through a post-build scan
+for function-form ones. The hatch customizes *how code compiles*, never *what the artifact
+promises*.
+
+One dual-engine caveat: artifact scripts, MCP entries, hook wrappers, and the package build
+compile through Rslib and run under the bundler versions nested inside `@rslib/core`, while MCP
+App views compile through the workspace-pinned `@rsbuild/core`. A class imported from a
+separately installed `@rspack/core` therefore has a different identity than whichever engine
+executes the config. Never construct plugins or run `instanceof` checks against an imported
+`@rspack/core` — use the utils argument passed to mutator functions instead:
+
+```ts
+tools: {
+  rspack: (config, { rspack }) => {
+    // `rspack` is always the executing engine's own object.
+    return config;
+  },
+},
+```
+
+To see exactly what the hatch produced:
+
+```sh
+npx agent-bundle inspect --bundler --root .
+npx agent-bundle inspect --bundler --root . --target claude --json
+```
+
+That dumps the synthesized configuration for every output the build composes, exactly as the
+build lowers it, using the same functions the build uses — so the dump cannot drift from what
+compiles. Entries the framework wraps also carry the generated wrapper module source.
+
+The full contract for everything on this page is in
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md).
+
+## Next
+
+- [Configuration model](./index.mdx) — the rest of the config surface.
+- [Project structure](../start/project-structure.mdx) — where each of these entries lives.
