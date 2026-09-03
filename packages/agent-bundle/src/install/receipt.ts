@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import {
   cp,
   lstat,
@@ -15,7 +16,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
+import { exists, sameFile } from '../core/paths.ts';
 
 /**
  * Host-agnostic install ownership core shared by `agent-bundle install`,
@@ -123,11 +124,37 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
 };
 
 /**
+ * Every directory on the way to a listed path must be a real directory: a
+ * symlinked ancestor would let a leaf-only check read, hash, delete, or write
+ * outside the plugin root (development installs point top-level directories
+ * at generation folders, for example). Missing ancestors are fine.
+ */
+const assertRealAncestors = async (root: string, files: readonly string[]): Promise<void> => {
+  const checked = new Set<string>();
+  for (const file of files) {
+    let directory = dirname(file);
+    while (directory !== '.' && directory !== '') {
+      if (!checked.has(directory)) {
+        checked.add(directory);
+        try {
+          const metadata = await lstat(join(root, directory));
+          if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw unsupportedEntry(directory);
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        }
+      }
+      directory = dirname(directory);
+    }
+  }
+};
+
+/**
  * Hashes exactly the listed files (in list order) as they exist under root.
  * A missing owned file contributes nothing, so the digest differs from the
  * artifact digest whenever an owned file was removed or rewritten.
  */
 export const hashOwnedFiles = async (root: string, files: readonly string[]): Promise<string> => {
+  await assertRealAncestors(root, files);
   const hash = createHash('sha256');
   for (const relativePath of files) {
     const path = join(root, relativePath);
@@ -387,10 +414,31 @@ export const replaceInstalledTree = async (options: {
   }
   const incoming = new Set(options.staged.inventory.files);
   const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison);
+  await assertRealAncestors(options.destination, [...previouslyOwned, ...options.staged.inventory.files]);
   const owned = new Set(previouslyOwned);
+  // On case-insensitive filesystems a case-only rename of an owned path resolves to the same
+  // inode, so ownership is decided by file identity, not by name alone.
+  let ownedIdentities: readonly Stats[] | undefined;
+  const isOwnedIdentity = async (path: string): Promise<boolean> => {
+    const candidate = await lstat(path);
+    if (ownedIdentities === undefined) {
+      const identities: Stats[] = [];
+      for (const file of previouslyOwned) {
+        try {
+          identities.push(await lstat(join(options.destination, file)));
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        }
+      }
+      ownedIdentities = identities;
+    }
+    return ownedIdentities.some((metadata) => sameFile(metadata, candidate));
+  };
   const collisions: string[] = [];
   for (const file of options.staged.inventory.files) {
-    if (!owned.has(file) && await exists(join(options.destination, file))) collisions.push(file);
+    if (owned.has(file)) continue;
+    const target = join(options.destination, file);
+    if (await exists(target) && !await isOwnedIdentity(target)) collisions.push(file);
   }
   if (collisions.length > 0) {
     throw new Error(

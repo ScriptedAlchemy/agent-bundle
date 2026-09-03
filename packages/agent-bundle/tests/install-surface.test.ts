@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -259,6 +259,31 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
       contentHash: (await treeInventory(bundle)).hash,
       plugin: 'install-fixture',
     });
+
+    // A receipt missing a field reads as absent, exactly like the core reader: the legacy gate applies.
+    const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+    const { host: _host, ...partialReceipt } = receipt;
+    await writeFile(join(destination, installReceiptFile), JSON.stringify(partialReceipt));
+    await writeFile(join(bundle, 'payload.txt'), 'rebuilt again\n');
+    const partial = await run(installer, [], home);
+    expect(partial.code).toBe(1);
+    expect(partial.stderr).toContain('Refusing content collision');
+    expect(partial.stderr).toContain('predates install receipts');
+    await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+
+    // An unowned symlinked directory beneath which the artifact starts writing: refused before any change.
+    await writeFile(join(destination, installReceiptFile), JSON.stringify(receipt));
+    const elsewhere = join(root, 'elsewhere');
+    await mkdir(elsewhere);
+    await symlink(elsewhere, join(destination, 'skills'));
+    await mkdir(join(bundle, 'skills', 'new'), { recursive: true });
+    await writeFile(join(bundle, 'skills', 'new', 'SKILL.md'), '# new\n');
+    const symlinked = await run(installer, [], home);
+    expect(symlinked.code).toBe(1);
+    expect(symlinked.stderr).toContain('Refusing unsupported filesystem entry "skills"');
+    expect(await readdir(elsewhere)).toEqual([]);
+    await rm(join(destination, 'skills'));
+    await rm(join(bundle, 'skills'), { recursive: true });
 
     // Legacy pre-receipt copy with drift: refused with a hash comparison until --replace adopts it.
     await rm(join(destination, installReceiptFile));

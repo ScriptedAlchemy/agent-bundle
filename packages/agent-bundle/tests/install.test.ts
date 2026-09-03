@@ -479,6 +479,47 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
   }
 });
 
+it('refuses to hash or write through a symlinked directory inside a receipt-managed Cursor install', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  const elsewhere = await mkdtemp(join(tmpdir(), 'agent-bundle-elsewhere-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+
+    // An unowned symlinked directory that a rebuilt artifact starts writing beneath: refused before any change.
+    await symlink(elsewhere, join(destination, 'skills'));
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    const incoming = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(incoming).toBeInstanceOf(DiagnosticError);
+    expect((incoming as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'cursor' });
+    expect((incoming as DiagnosticError).diagnostics[0]?.message).toContain('Refusing unsupported filesystem entry "skills"');
+    expect(await readdir(elsewhere)).toEqual([]);
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
+
+    // An owned path whose ancestor became a symlink (development installs re-point top-level directories).
+    await rm(join(destination, 'skills'));
+    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    await cp(join(destination, '.cursor-plugin'), join(destination, '.real-manifest'), { recursive: true });
+    await rm(join(destination, '.cursor-plugin'), { recursive: true });
+    await symlink(join(destination, '.real-manifest'), join(destination, '.cursor-plugin'));
+    const owned = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(owned).toBeInstanceOf(DiagnosticError);
+    expect((owned as DiagnosticError).diagnostics[0]?.message).toContain('Refusing unsupported filesystem entry ".cursor-plugin"');
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+      rm(elsewhere, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('ignores receipts whose file list could escape the plugin root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-receipt-'));
   try {
@@ -494,7 +535,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       });
       expect(await readInstallReceipt(root), JSON.stringify(files)).toBeUndefined();
     }
-    await writeJson(join(root, installReceiptFile), {
+    const complete = {
       contentHash: 'abc',
       files: ['skills/probe/SKILL.md', 'plugin.json'],
       format: 'agent-bundle-install-receipt/1',
@@ -502,7 +543,13 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       installedAt: '2026-09-03T00:00:00.000Z',
       plugin: 'install-fixture',
       version: '1.2.3',
-    });
+    };
+    for (const missing of ['host', 'installedAt', 'contentHash', 'version', 'plugin', 'format'] as const) {
+      const { [missing]: _omitted, ...partial } = complete;
+      await writeJson(join(root, installReceiptFile), partial);
+      expect(await readInstallReceipt(root), missing).toBeUndefined();
+    }
+    await writeJson(join(root, installReceiptFile), complete);
     expect(await readInstallReceipt(root)).toMatchObject({ files: ['skills/probe/SKILL.md', 'plugin.json'] });
   } finally {
     await rm(root, { force: true, recursive: true });
