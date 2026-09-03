@@ -1058,6 +1058,18 @@ it('runs the embedded Codex and Claude native codecs through their published wra
         cwd: '/workspace', hook_event_name: 'Stop', last_assistant_message: 'done', session_id: 'session-1', stop_hook_active: false, transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
     }
+
+    // The pinned rust-v0.147.0 post-tool-use input schema types tool_response
+    // (and tool_input) as any JSON value, so scalar payloads reach the handler.
+    for (const toolResponse of ['observed', 42, false, null]) {
+      await expect(runNativeHook(join(outputRoot, 'codex', 'hooks', 'after-tool-record-87785f02.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PostToolUse', model: 'gpt-5-codex', permission_mode: 'default', session_id: 'session-1', tool_input: 'raw', tool_name: 'Write', tool_response: toolResponse, tool_use_id: 'use-2', transcript_path: null, turn_id: 'turn-1',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: `{"hookSpecificOutput":{"additionalContext":"${String(toolResponse)}","hookEventName":"PostToolUse"}}`,
+      });
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1243,18 +1255,24 @@ it('rejects malformed event-specific native input before calling generated Codex
         stderr: 'Agent Bundle hook error: native source must be a string\n',
         stdout: '',
       });
+      // Codex pins tool_input/tool_response as any JSON value (presence only);
+      // Claude documents both as objects.
+      const toolInputError = target === 'codex' ? 'tool_input is required' : 'tool_input must be an object';
+      const toolResponseError = target === 'codex' ? 'tool_response is required' : 'tool_response must be an object';
       await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
-        ...common, hook_event_name: 'PreToolUse', tool_input: [], tool_name: 'Bash', tool_use_id: 'use-1',
+        ...common, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'use-1',
+        ...(target === 'codex' ? {} : { tool_input: [] }),
       })).resolves.toEqual({
         code: 1,
-        stderr: 'Agent Bundle hook error: native PreToolUse tool_input must be an object\n',
+        stderr: `Agent Bundle hook error: native PreToolUse ${toolInputError}\n`,
         stdout: '',
       });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
-        ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: 'observed', tool_use_id: 'use-2',
+        ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_use_id: 'use-2',
+        ...(target === 'codex' ? {} : { tool_response: 'observed' }),
       })).resolves.toEqual({
         code: 1,
-        stderr: 'Agent Bundle hook error: native PostToolUse tool_response must be an object\n',
+        stderr: `Agent Bundle hook error: native PostToolUse ${toolResponseError}\n`,
         stdout: '',
       });
       await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {

@@ -1156,9 +1156,16 @@ export const nativeHookWrapperSource = (
     '  if (canonicalEvent === "sessionStart") { requireString(input, "source"); return; }',
     '  if (canonicalEvent === "beforeTool" || canonicalEvent === "afterTool") {',
     '    requireString(input, "tool_name");',
-    '    if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
+    // The pinned rust-v0.147.0 pre-tool-use/post-tool-use input schemas declare
+    // `"tool_input": true` and `"tool_response": true` (any JSON value), so Codex
+    // only guarantees presence; Claude documents both as objects.
+    '    if (target === "codex") { if (input.tool_input === undefined) fail(`native ${nativeEvent} tool_input is required`); }',
+    '    else if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
     '    requireString(input, "tool_use_id");',
-    '    if (canonicalEvent === "afterTool" && !isRecord(input.tool_response)) fail("native PostToolUse tool_response must be an object");',
+    '    if (canonicalEvent === "afterTool") {',
+    '      if (target === "codex") { if (input.tool_response === undefined) fail("native PostToolUse tool_response is required"); }',
+    '      else if (!isRecord(input.tool_response)) fail("native PostToolUse tool_response must be an object");',
+    '    }',
     '    return;',
     '  }',
     '  if (canonicalEvent === "agentStart" || canonicalEvent === "agentStop") {',
