@@ -21,8 +21,8 @@ export const devLogKinds = Object.freeze({
   build: Object.freeze(['artifact.available', 'build.failed', 'build.started'] as const),
   diagnostic: Object.freeze([
     'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
-    'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic',
-    'source.status.diagnostic',
+    'dev.contract.status.diagnostic', 'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'runtime.event.diagnostic',
+    'source.changed.diagnostic', 'source.status.diagnostic',
   ] as const),
   eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started'] as const),
   hook: Object.freeze([
@@ -36,7 +36,7 @@ export const devLogKinds = Object.freeze({
   mcp: Object.freeze(['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded'] as const),
   playground: Object.freeze(['playground.event.appended'] as const),
   project: Object.freeze([
-    'artifact.status', 'dev.host.sync', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation',
+    'artifact.status', 'dev.contract.status', 'dev.host.sync', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation',
     'project.events.replay-gap', 'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event',
     'source.changed', 'source.status',
   ] as const),

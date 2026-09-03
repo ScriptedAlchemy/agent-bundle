@@ -218,6 +218,36 @@ epoch automatically. Use **Restart MCP session** to respawn that generated serve
 epoch; open a new session to use a newly published epoch. Compatible MCP Apps preview through the
 same bound session.
 
+### Development contract matrix
+
+Projects can opt host-facing rebuild adoption into the generated contract matrix by pointing
+`dev.contracts.fixtures` at a project-local module:
+
+```ts
+// agent-bundle.config.ts
+export default {
+  dev: {
+    contracts: {
+      fixtures: './contract-fixtures.ts',
+      server: 'tools', // optional when the project has exactly one MCP server
+    },
+  },
+};
+```
+
+The module default-exports the same `Record<routeId, ContractRouteFixture>` consumed by
+`runContractMatrix`. Agent Bundle reloads and validates it for every prepared epoch. An invalid
+module does not fail compilation: it fails that epoch's contract run with a diagnostic instead.
+Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available` adoption.
+
+For an enabled project, each published epoch is exercised through an already-open, epoch-pinned
+generated stdio session. Passing epochs atomically replace the server behind existing live host MCP
+connections and refresh opted-in development host installs. Failing or timed-out epochs remain
+inactive on those host-facing surfaces, leaving the last passing epoch connected and installed.
+The Workbench project stream emits `dev.contract.status`; the Logs page includes its diagnostics and
+the exact failed check names grouped by route. A later passing rebuild is adopted normally.
+Workbench playground sessions remain independently epoch-pinned and are not gated by this matrix.
+
 ### Live host MCP proxy
 
 During development, a host can keep one stdio MCP process connected while `agent-bundle dev`

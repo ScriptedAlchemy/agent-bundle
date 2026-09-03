@@ -7,6 +7,8 @@ import type { InstallHost } from '../install/install.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
+import { runDevEpochContracts } from './dev-contract-runner.ts';
+import { EpochAdoptionPolicy } from './epoch-adoption-policy.ts';
 import { DevLogService } from './logs/dev-log-service.ts';
 import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './logs/dev-log-producers.ts';
 import { EpochStore } from './epoch-store.ts';
@@ -84,7 +86,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'host-installs' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'epoch-adoption' | 'host-installs' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -427,6 +429,7 @@ export interface DevServerRuntimeLifecycleResources {
 export interface DevServerLifecycleOptions {
   readonly coordinator: Closeable;
   readonly detachProjectLogs?: () => void;
+  readonly epochAdoption?: Closeable;
   readonly hostInstalls?: Closeable;
   readonly logs?: DevLogService;
   readonly mcpApps?: Closeable;
@@ -440,6 +443,7 @@ export interface DevServerLifecycleOptions {
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  epochAdoption,
   hostInstalls,
   inspector,
   logs,
@@ -464,6 +468,7 @@ export const closeDevServerLifecycle = async ({
     ['mcp-apps', mcpApps],
     ['runtime-client-surfaces', runtimeResources?.clientSurfaces],
     ['runtime', runtimeResources?.runtime],
+    ['epoch-adoption', epochAdoption],
     ['mcp-sessions', mcpSessions],
     ['host-installs', hostInstalls],
     ['coordinator', coordinator],
@@ -500,6 +505,7 @@ const withMcpSessionLifecycle = (
   logs: DevLogService,
   detachProjectLogs: () => void,
   inspector: Closeable,
+  epochAdoption: EpochAdoptionPolicy,
   hostInstalls?: DevHostInstallManager,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
@@ -507,6 +513,7 @@ const withMcpSessionLifecycle = (
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      epochAdoption,
       hostInstalls,
       inspector,
       logs,
@@ -521,11 +528,8 @@ const withMcpSessionLifecycle = (
   start: async () => {
     hostInstalls?.start();
     await coordinator.start();
-    const artifact = coordinator.status().artifact;
-    if (hostInstalls !== undefined && (artifact.state === 'active' || artifact.state === 'stale')) {
-      hostInstalls.sync(artifact.activeEpoch.id);
-      await hostInstalls.settled();
-    }
+    await epochAdoption.settled();
+    await hostInstalls?.settled();
     await runtime?.start();
   },
   status,
@@ -717,14 +721,6 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     projectService,
     root,
   });
-  const hostInstalls = options.installHosts === undefined || options.installHosts.length === 0
-    ? undefined
-    : new DevHostInstallManager({
-        epochStore,
-        eventHub,
-        hosts: options.installHosts,
-        projectRoot: root,
-      });
   status = () => Object.freeze({
     ...coordinator.status(),
     ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
@@ -735,7 +731,27 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     registry,
     traceSink: createMcpDevLogTraceSink(logs),
   });
-  const hostMcp = new HostMcpRoutes({ epochStore, eventHub, mcpSessions });
+  const epochAdoption = new EpochAdoptionPolicy({
+    contracts: () => latestValidPreparedProject?.devContracts,
+    eventHub,
+    run: (epochId, contracts) => {
+      const prepared = latestValidPreparedProject;
+      if (prepared === undefined || prepared.devContracts !== contracts) {
+        throw new Error('Development contract preparation was superseded before its epoch run started.');
+      }
+      return runDevEpochContracts({ contracts, epochId, mcpSessions, prepared });
+    },
+  });
+  const hostInstalls = options.installHosts === undefined || options.installHosts.length === 0
+    ? undefined
+    : new DevHostInstallManager({
+        adoption: epochAdoption,
+        epochStore,
+        eventHub,
+        hosts: options.installHosts,
+        projectRoot: root,
+      });
+  const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
   const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
   const preparedBundle = () => {
     const prepared = latestValidPreparedProject;
@@ -846,6 +862,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       logs,
       detachProjectLogs,
       inspector,
+      epochAdoption,
       hostInstalls,
     ),
     evals,

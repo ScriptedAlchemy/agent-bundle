@@ -273,7 +273,16 @@ export interface AgentBundleDevRuntimeConfig {
   readonly provider: string;
 }
 
+/** Development-only generated-server contract checks run before host adoption. */
+export interface AgentBundleDevContractsConfig {
+  /** Project-relative module default-exporting route-id keyed contract fixtures. */
+  readonly fixtures: string;
+  /** MCP server to check; optional only when the project compiles exactly one server. */
+  readonly server?: string;
+}
+
 export interface AgentBundleDevConfig {
+  readonly contracts?: AgentBundleDevContractsConfig;
   readonly runtime?: AgentBundleDevRuntimeConfig;
 }
 

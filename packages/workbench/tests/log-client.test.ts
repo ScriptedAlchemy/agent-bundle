@@ -63,6 +63,38 @@ it('accepts development host sync project and diagnostic log kinds', async () =>
   })).replay()).resolves.toMatchObject({ records });
 });
 
+it('accepts development contract status project and diagnostic log kinds', async () => {
+  const records = [
+    {
+      ...record,
+      context: { epochId: 'epoch-1' },
+      details: {
+        diagnostics: [],
+        epochId: 'epoch-1',
+        failures: [],
+        state: 'passed',
+        summary: 'Development contract matrix passed.',
+      },
+      kind: 'dev.contract.status',
+      producer: 'project',
+      summary: 'Development contract matrix settled.',
+    },
+    {
+      ...record,
+      context: { diagnosticCode: 'AB7006' },
+      details: { code: 'AB7006', message: 'Contract matrix failed.', severity: 'error' },
+      kind: 'dev.contract.status.diagnostic',
+      level: 'error',
+      producer: 'diagnostic',
+      sequence: 2,
+      summary: 'Project diagnostic was recorded.',
+    },
+  ];
+  await expect(clientFor(json({
+    replay: { cursor: { afterSequence: 2 }, records },
+  })).replay()).resolves.toMatchObject({ records });
+});
+
 it('rejects malformed or noncontiguous replay envelopes before exposing them to the page', async () => {
   await expect(clientFor(new Response('{')).replay()).rejects.toBeInstanceOf(LogClientError);
 
