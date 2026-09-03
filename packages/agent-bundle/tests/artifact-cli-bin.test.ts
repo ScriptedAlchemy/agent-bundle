@@ -290,6 +290,11 @@ it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)',
   // CLI owns: the compiler never chooses between them silently.
   await writeProjectFile(root, `host-bin/${pluginName}.mjs`, "console.log('host bin');\n");
   await chmod(join(root, 'host-bin', `${pluginName}.mjs`), 0o755);
+  // A second entry differing only by case is the same file on macOS and
+  // Windows, so it is a collision too and is named beside the owned path.
+  const caseVariant = `${pluginName.toUpperCase()}-flight.mjs`;
+  await writeProjectFile(root, `host-bin/${caseVariant}`, "console.log('host worker');\n");
+  await chmod(join(root, 'host-bin', caseVariant), 0o755);
   await writeProjectFile(root, 'agent-bundle.config.ts', [
     "import { defineConfig } from 'agent-bundle/config';",
     'export default defineConfig({',
@@ -300,8 +305,12 @@ it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)',
     '',
   ].join('\n'));
 
-  await expect(build({ output: 'artifact', root })).rejects.toThrow(
+  const failure = build({ output: 'artifact', root });
+  await expect(failure).rejects.toThrow(
     new RegExp(`\\[AB4766\\] Target "claude" already emits "bin/${pluginName}\\.mjs"`, 'u'),
+  );
+  await expect(failure).rejects.toThrow(
+    new RegExp(`\\[AB4766\\] Target "claude" already emits "bin/${caseVariant}", which differs only by case from "bin/${pluginName}-flight\\.mjs"`, 'u'),
   );
   await expect(stat(join(root, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
 });

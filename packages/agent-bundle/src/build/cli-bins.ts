@@ -203,22 +203,34 @@ export const compileCliBins = async (
  * AB4766: the routed CLI bin's artifact paths are framework-owned. A target
  * plan that already places a file there (for example a Claude `claude.bin`
  * directory shipping `<plugin-name>.mjs`) cannot be merged silently, so the
- * build refuses with the colliding paths named.
+ * build refuses with the colliding paths named. Paths are compared
+ * case-folded: on the case-insensitive filesystems most plugins are developed
+ * and installed on, `bin/MyPlugin.mjs` and `bin/myplugin.mjs` are one file,
+ * and a name that differs only by case is a hazard everywhere else.
  */
 export const cliBinCollisionDiagnostics = (
   model: NormalizedPlugin,
   target: string,
   entries: readonly TargetArtifactEntry[],
 ): readonly Diagnostic[] => {
-  const planned = new Set(entries.map((entry) => entry.relativePath));
+  const planned = new Map<string, string>();
+  for (const entry of entries) {
+    const folded = entry.relativePath.toLowerCase();
+    if (!planned.has(folded)) planned.set(folded, entry.relativePath);
+  }
   return Object.freeze(routedCliBins(model).flatMap((bin) => {
     const rendered = generatedCli(bin).commands.some((command) => command.rendered);
     return [cliBinArtifactPath(bin.name), ...(rendered ? [cliBinWorkerArtifactPath(bin.name)] : [])]
-      .filter((path) => planned.has(path))
-      .map((path): Diagnostic => ({
+      .flatMap((owned) => {
+        const emitted = planned.get(owned.toLowerCase());
+        return emitted === undefined ? [] : [{ emitted, owned }];
+      })
+      .map(({ emitted, owned }): Diagnostic => ({
         code: 'AB4766',
-        message: `Target ${JSON.stringify(target)} already emits ${JSON.stringify(path)}, which the routed CLI bin ${JSON.stringify(bin.name)} owns; the compiler never chooses silently.`,
-        recovery: `Rename or remove the host-emitted ${JSON.stringify(path)} (for example the file in the configured claude.bin directory), or set bin: false to keep the host file and drop the routed CLI executable.`,
+        message: emitted === owned
+          ? `Target ${JSON.stringify(target)} already emits ${JSON.stringify(emitted)}, which the routed CLI bin ${JSON.stringify(bin.name)} owns; the compiler never chooses silently.`
+          : `Target ${JSON.stringify(target)} already emits ${JSON.stringify(emitted)}, which differs only by case from ${JSON.stringify(owned)} owned by the routed CLI bin ${JSON.stringify(bin.name)}; on a case-insensitive filesystem they are one file, so the compiler never chooses silently.`,
+        recovery: `Rename or remove the host-emitted ${JSON.stringify(emitted)} (for example the file in the configured claude.bin directory), or set bin: false to keep the host file and drop the routed CLI executable.`,
         severity: 'error',
         sourcePath: bin.provenance.sourcePath,
         target,
