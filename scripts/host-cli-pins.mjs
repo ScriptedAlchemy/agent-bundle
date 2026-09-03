@@ -13,6 +13,7 @@
  *                      is not the pin — one diagnostic line per host
  */
 import { execFile as executeFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFile, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -129,14 +130,23 @@ export const verifyHostCliPins = async (pins, probe) => {
 };
 
 /**
- * Cache-key identity of the pins: package name and version per host, so a
- * deliberate re-pin of either misses a cache populated for the old package.
- * Characters outside actions/cache's safe set collapse to `-`.
+ * Cache-key identity of the pins: a readable `host-package-version` prefix per
+ * host (characters outside actions/cache's safe set collapse to `-`) plus a
+ * short SHA-256 of the exact, unsanitised `package@version` pairs, so a
+ * deliberate re-pin misses the cache even when two package names normalise to
+ * the same readable text (`@foo/bar` vs `foo-bar`).
  */
-export const pinsCacheKey = (pins) => hostCliHosts
-  .flatMap((host) => [host, pins[host].package, pins[host].version])
-  .map((part) => part.replaceAll(/[^A-Za-z0-9._-]+/gu, '-').replaceAll(/^-+|-+$/gu, ''))
-  .join('-');
+export const pinsCacheKey = (pins) => {
+  const readable = hostCliHosts
+    .flatMap((host) => [host, pins[host].package, pins[host].version])
+    .map((part) => part.replaceAll(/[^A-Za-z0-9._-]+/gu, '-').replaceAll(/^-+|-+$/gu, ''))
+    .join('-');
+  const exact = createHash('sha256')
+    .update(hostCliHosts.map((host) => `${host}=${pins[host].package}@${pins[host].version}`).join('\n'))
+    .digest('hex')
+    .slice(0, 16);
+  return `${readable}-${exact}`;
+};
 
 /**
  * Where npm places global executables for a prefix: `<prefix>/bin` on POSIX,

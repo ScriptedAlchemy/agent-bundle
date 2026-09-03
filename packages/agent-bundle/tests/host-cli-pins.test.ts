@@ -150,12 +150,22 @@ it('installs exact pinned packages globally into the requested prefix', () => {
 });
 
 it('keys the CLI cache on package names as well as versions', () => {
-  expect(pinsCacheKey(pins)).toBe('claude-anthropic-ai-claude-code-2.1.250-codex-openai-codex-0.147.0');
+  expect(pinsCacheKey(pins)).toMatch(
+    /^claude-anthropic-ai-claude-code-2\.1\.250-codex-openai-codex-0\.147\.0-[0-9a-f]{16}$/u,
+  );
+  expect(pinsCacheKey(pins)).toBe(pinsCacheKey({ ...pins }));
   expect(pinsCacheKey({
     ...pins,
     claude: { ...pins.claude, package: '@anthropic-ai/claude-code-preview' },
   })).not.toBe(pinsCacheKey(pins));
-  expect(pinsCacheKey(pins)).toMatch(/^[A-Za-z0-9._-]+$/u);
+});
+
+it('distinguishes package names that sanitise to the same readable text', () => {
+  const scoped = { ...pins, codex: { ...pins.codex, package: '@foo/bar' } };
+  const flat = { ...pins, codex: { ...pins.codex, package: 'foo-bar' } };
+  expect(pinsCacheKey(scoped).replace(/-[0-9a-f]{16}$/u, ''))
+    .toBe(pinsCacheKey(flat).replace(/-[0-9a-f]{16}$/u, ''));
+  expect(pinsCacheKey(scoped)).not.toBe(pinsCacheKey(flat));
 });
 
 it('locates npm global executables in <prefix>/bin on POSIX and in the prefix itself on Windows', () => {
