@@ -603,7 +603,10 @@ export class McpProbeService {
   ): Promise<T> {
     const remaining = Math.max(0, this.#timeoutMs - (this.#clock() - startedAt));
     if (remaining === 0) {
-      await onTimeout().catch(() => undefined);
+      // Same contract as the timer path below: the transport's own close
+      // (TERM/KILL for stdio) keeps running, but a stalled close never holds
+      // the timed-out report — #execute's bounded teardown owns that wait.
+      void onTimeout().catch(() => undefined);
       throw new McpProbeTimeoutError(kind);
     }
     let timer: NodeJS.Timeout | undefined;

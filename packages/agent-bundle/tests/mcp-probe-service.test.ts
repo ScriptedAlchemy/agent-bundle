@@ -330,6 +330,46 @@ it('returns a timed-out report without awaiting stalled teardown', async () => {
   }
 });
 
+it('returns a timed-out report without awaiting stalled teardown when the budget is spent before connecting', async () => {
+  const root = await createBundle();
+  let transportCloses = 0;
+  let guard: NodeJS.Timeout | undefined;
+  let ticks = 0;
+  try {
+    const service = serviceFor(root, {
+      // The clock reads 0 at probe start and the whole budget later at every
+      // subsequent read, so the connect step finds no time remaining.
+      clock: () => (ticks++ === 0 ? 0 : 10_000),
+      createClient: () => client({
+        close: async () => new Promise((resolvePromise) => setTimeout(resolvePromise, 250)),
+        connect: () => new Promise(() => undefined),
+      }),
+      createStdioTransport: () => transport(async () => {
+        transportCloses += 1;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+      }),
+      timeoutMs: 10,
+    });
+
+    const report = await Promise.race([
+      service.probe({ host: 'claude', serverName: 'timeline' }),
+      new Promise<never>((_resolve, reject) => {
+        guard = setTimeout(
+          () => reject(new Error('The budget-exhausted probe remained blocked on teardown.')),
+          150,
+        );
+      }),
+    ]);
+
+    expect(report.status).toBe('timed-out');
+    expect(report.failure?.kind).toBe('connect');
+    expect(transportCloses).toBeGreaterThan(0);
+  } finally {
+    if (guard !== undefined) clearTimeout(guard);
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('coalesces only identical in-flight probes and clears them after settlement', async () => {
   const root = await createBundle();
   const connectStarted = Promise.withResolvers<void>();
