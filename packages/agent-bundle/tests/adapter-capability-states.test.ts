@@ -1022,3 +1022,33 @@ it('reports evidence-backed installation support only for real host targets', ()
     expect(registry.supports(target, 'install')).toBe(false);
   }
 });
+
+it('pins dated deferral rows for every explicitly deferred native callback from #258', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const tables = {
+    claude: JSON.parse(await readFile(new URL('../src/adapters/capabilities/claude-2.1.250.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+    codex: JSON.parse(await readFile(new URL('../src/adapters/capabilities/codex-0.147.0.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+    cursor: JSON.parse(await readFile(new URL('../src/adapters/capabilities/cursor-2026-08-28.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+  };
+  const expected = {
+    claude: [
+      'ConfigChange-policy_settings', 'CwdChanged', 'DirectoryAdded', 'Elicitation', 'ElicitationResult',
+      'InstructionsLoaded', 'MessageDisplay', 'Notification', 'PostModelSwitch', 'PostToolBatch',
+      'PreModelSwitch', 'Setup', 'UserPromptExpansion', 'WorktreeCreate', 'WorktreeRemove',
+    ],
+    codex: ['Interrupt'],
+    cursor: [
+      'afterAgentResponse', 'afterAgentThought', 'afterFileEdit', 'afterMCPExecution', 'afterShellExecution',
+      'afterTabFileEdit', 'beforeMCPExecution', 'beforeReadFile', 'beforeShellExecution',
+      'beforeSubmitPrompt-cloud', 'beforeTabFileRead',
+    ],
+  } as const;
+  for (const [host, names] of Object.entries(expected)) {
+    const deferred = tables[host as keyof typeof tables].deferredNativeEvents as Record<string, { reason: string; state: string }>;
+    expect(Object.keys(deferred).sort()).toEqual([...names].sort());
+    for (const name of names) {
+      expect(deferred[name]!.state).toMatch(/^(unavailable|prohibited)$/u);
+      expect(deferred[name]!.reason).toMatch(/2026-09-02/u);
+    }
+  }
+});

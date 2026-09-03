@@ -12,6 +12,12 @@
     "source": "https://developers.openai.com/codex/cli/reference",
     "state": "supported"
   },
+  "deferredNativeEvents": {
+    "Interrupt": {
+      "reason": "retrieved 2026-09-02: generated Interrupt schema exists in the codex repository, but release documentation and a pinned CLI revision do not yet agree on its contract (#258 defer list).",
+      "state": "unavailable"
+    }
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {

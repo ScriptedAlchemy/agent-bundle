@@ -12,6 +12,52 @@
     "source": "https://cursor.com/docs/plugins",
     "state": "supported"
   },
+  "deferredNativeEvents": {
+    "afterAgentResponse": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "afterAgentThought": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "afterFileEdit": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: agent-edit variant overlapping canonical tool/after per the #258 selector rule; a dedicated family requires fixture evidence that the generic tool route loses information.",
+      "state": "unavailable"
+    },
+    "afterMCPExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with mcp selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "afterShellExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with shell selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "afterTabFileEdit": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "beforeMCPExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with mcp selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeReadFile": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with file.read selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeShellExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with shell selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeSubmitPrompt-cloud": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: cloud/desktop availability differences are capability dimensions; cloud rows stay scoped per surface rather than universal-support claims (#258 defer list).",
+      "state": "unavailable"
+    },
+    "beforeTabFileRead": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    }
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
