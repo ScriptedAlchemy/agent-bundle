@@ -31,6 +31,8 @@ export const OpenToolCallSchema = z.object({
   openedAt: timestamp,
   toolCallId: id,
   toolName: id,
+  /** A sibling of this spawn was already claimed blind, so no later start can be matched to it with certainty. */
+  uncertain: z.boolean().optional(),
 }).strict();
 
 export const LineageStateSchema = z.object({
@@ -56,8 +58,10 @@ export const lineageEventSchemas = {
   childBound: z.object({ conversation: id, subagentId: id }).strict(),
   nodeStarted: LineageNodeSchema,
   nodeStopped: z.object({ id, stoppedAt: timestamp }).strict(),
-  /** A subagent start consumed the spawn call that produced it. */
-  spawnClaimed: z.object({ toolCallId: id }).strict(),
+  /** A finished session releases its correlation windows and pending spawns. */
+  sessionRetired: z.object({ root: id }).strict(),
+  /** A subagent start consumed the spawn call that produced it; `siblingsUncertain` marks the cohort it was picked from. */
+  spawnClaimed: z.object({ siblingsUncertain: z.boolean().optional(), toolCallId: id }).strict(),
   toolCallClosed: z.object({ conversation: id, toolCallId: id }).strict(),
   toolCallOpened: OpenToolCallSchema.extend({ spawn: z.boolean().optional() }).strict(),
 } as const;
@@ -147,8 +151,28 @@ export const reduceLineage = (
       return { ...state, openCalls: state.openCalls.filter((open) => open.toolCallId !== toolCallId) };
     }
     case 'spawnClaimed': {
-      const { toolCallId } = event.payload as { toolCallId: string };
-      return { ...state, pendingSpawns: state.pendingSpawns.filter((open) => open.toolCallId !== toolCallId) };
+      const { siblingsUncertain, toolCallId } = event.payload as { siblingsUncertain?: boolean; toolCallId: string };
+      const claimed = state.pendingSpawns.find((open) => open.toolCallId === toolCallId);
+      return {
+        ...state,
+        pendingSpawns: state.pendingSpawns
+          .filter((open) => open.toolCallId !== toolCallId)
+          .map((open) => siblingsUncertain === true && claimed !== undefined && open.conversation === claimed.conversation
+            ? { ...open, uncertain: true }
+            : open),
+      };
+    }
+    case 'sessionRetired': {
+      const { root } = event.payload as { root: string };
+      const retired = new Set(
+        Object.values(state.nodes).filter((node) => node.root === root).map((node) => node.id).concat(root),
+      );
+      return {
+        ...state,
+        openCalls: state.openCalls.filter((open) => !retired.has(open.conversation)),
+        pendingChildren: state.pendingChildren.filter((pending) => !retired.has(pending)),
+        pendingSpawns: state.pendingSpawns.filter((open) => !retired.has(open.conversation)),
+      };
     }
     default: {
       const unreachable: never = event.name;

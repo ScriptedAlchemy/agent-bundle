@@ -214,8 +214,11 @@ export const createAgentLineageRegistry = (
     // start payload carries nothing to pick between them, so no guess.
     if (new Set(candidates.map((call) => call.conversation)).size > 1) return { kind: 'ambiguous' };
     const call = candidates[candidates.length - 1]!;
-    await dispatch('spawnClaimed', { toolCallId: call.toolCallId }, keys);
-    return { call, kind: 'claimed', toolCallIdCertain: candidates.length === 1 };
+    // One of several same-parent spawns is picked blind; the whole cohort,
+    // including the last one left, then stays uncertain.
+    const cohort = candidates.length > 1;
+    await dispatch('spawnClaimed', { ...(cohort ? { siblingsUncertain: true } : {}), toolCallId: call.toolCallId }, keys);
+    return { call, kind: 'claimed', toolCallIdCertain: !cohort && call.uncertain !== true };
   };
 
   /**
@@ -340,6 +343,7 @@ export const createAgentLineageRegistry = (
     for (const node of live) {
       await dispatch('nodeStopped', { id: node.id, stoppedAt: observedAt }, keys);
     }
+    await dispatch('sessionRetired', { root }, keys);
   };
 
   const registry: AgentLineageRegistry = {
@@ -365,7 +369,9 @@ export const createAgentLineageRegistry = (
       // Claude and Codex name the root on every payload; Cursor never repeats
       // it, so only root-shaped Cursor events may establish a root, and a
       // fresh child conversation binds to the single pending start.
-      if (carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
+      // A session that ends before this registry saw it start leaves no node
+      // behind: establishing one after retirement would never be pruned.
+      if (event !== 'session/end' && carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
         const rootLike = host === 'cursor'
           ? CURSOR_ROOT_EVENTS.has(event)
           : carrier.conversation === carrier.root;

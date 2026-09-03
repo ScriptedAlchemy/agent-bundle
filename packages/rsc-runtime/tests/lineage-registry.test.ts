@@ -453,3 +453,43 @@ describe('lineage registry ambiguity refusals (review round 4)', () => {
     expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
   });
 });
+
+describe('lineage registry retirement and cohorts (review round 5)', () => {
+  const claude = (registry: ReturnType<typeof createAgentLineageRegistry>) =>
+    (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+
+  it('keeps the whole sibling cohort uncertain, including the last spawn left', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp1' });
+    await observe('tool/before', 'sp2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp2' });
+    const first = await observe('agent/start', 'a', { agent_id: 'a', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    const second = await observe('agent/start', 'b', { agent_id: 'b', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    expect(value(first).subagent?.toolCallId).toBeUndefined();
+    expect(value(second).subagent?.toolCallId).toBeUndefined();
+    expect(value(second)).toMatchObject({ depth: 1, parent: 'root' });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+  });
+
+  it('does not create a root for a session/end the registry never saw start', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    const ended = await observe('session/end', 'e', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'ghost' });
+    expect(ended).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().nodes).toEqual({});
+  });
+
+  it('releases the retired root\'s correlation windows and pending spawns', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp' });
+    await observe('tool/before', 'mcp', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_x_y__dump', tool_use_id: 'm' });
+    await observe('session/end', 'e', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'root' });
+    expect(registry.snapshot().openCalls).toEqual([]);
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+    expect(registry.resolveToolCall({ host: 'claude', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+  });
+});
