@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -435,12 +435,18 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const normalizedRelative = (root: string, path: string): string =>
   relative(root, path).split(sep).join('/');
 
+/**
+ * Isolates a scenario's home. `os.homedir()` follows `HOME` on POSIX but
+ * `USERPROFILE` on Windows, so an isolated `HOME` alone would leave a Windows
+ * developer's real `~/.cursor/plugins/local` as the install destination.
+ */
 const isolatedEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
   values: Readonly<NodeJS.ProcessEnv>,
 ): NodeJS.ProcessEnv => ({
   ...packedNativeEnvironment(environment),
   ...values,
+  ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
 });
 
 const stringEnvironment = (
@@ -1701,6 +1707,10 @@ export const runClaudeLiveDevSessionProof = async (
   options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
 ): Promise<ClaudeLiveDevSessionReport> => {
   const sessionId = randomUUID();
+  // Captured before runLiveHostScenario swaps process.env.HOME for the isolated
+  // scenario home: the spawned claude turn runs against the developer's real
+  // home, so the unchanged-state guard must digest that same home.
+  const normalHome = homedir();
   const normalEnvironment = { ...packedNativeEnvironment(options.environment) };
   delete normalEnvironment.CLAUDE_CONFIG_DIR;
   const toolOutputs: string[] = [];
@@ -1736,6 +1746,7 @@ export const runClaudeLiveDevSessionProof = async (
             timeout: 300_000,
           });
         },
+        { homeDirectory: normalHome },
       );
       assertProof(result !== undefined, `Claude ${liveVersion} inline live development turn did not run.`);
       const rawOutput = result.stdout.trim();

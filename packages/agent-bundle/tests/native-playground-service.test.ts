@@ -1473,7 +1473,7 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
   }
 });
 
-it('adopts a linked winner while its staging link is still present instead of rejecting the doubly linked sidecar', async () => {
+it('waits for a linked winner to release its staging link, then adopts it instead of rejecting the doubly linked sidecar', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-linked-winner-'));
   const catalogDirectory = join(root, 'catalog');
   const reference = epoch('epoch-linked-winner', join(root, 'artifact'));
@@ -1513,18 +1513,374 @@ it('adopts a linked winner while its staging link is still present instead of re
     const winning = winner.catalog(reference);
     await linked;
     // The winner has linked its staging file into place but has not released
-    // it yet: the published sidecar is legitimately doubly linked here.
+    // it yet: the published sidecar is legitimately doubly linked here, and a
+    // reader must treat it as a publication still in progress.
     expect((await stat(sidecar)).nlink).toBe(2);
 
-    const losing = await loser.catalog(reference);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
     expect((await stat(sidecar)).nlink).toBe(2);
     releaseWinnerCleanup();
-    expect(await winning).toEqual(losing);
+    expect(await winning).toEqual(await losing);
     expect((await stat(sidecar)).nlink).toBe(1);
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
     await Promise.all([winner.close(), loser.close()]);
   } finally {
     releaseWinnerCleanup();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('never adopts a staged sidecar that its publisher rolls back, and republishes its own instead', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-withdrawn-winner-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-withdrawn-winner', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const cleanupFailure = new Error('winner stage cleanup failed');
+  let winnerStaging: string | undefined;
+  let signalLinked!: () => void;
+  const linked = new Promise<void>((resolvePromise) => { signalLinked = resolvePromise; });
+  let releaseWinnerCleanup!: () => void;
+  const winnerCleanup = new Promise<void>((resolvePromise) => { releaseWinnerCleanup = resolvePromise; });
+  const winnerStorage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      winnerStaging = String(source);
+      signalLinked();
+    },
+    mkdir,
+    open,
+    remove: async (path, options) => {
+      if (String(path) === winnerStaging) {
+        // The winner's staging cleanup stalls, then fails: the sidecar stays
+        // doubly linked the whole time and is rolled back afterwards.
+        await winnerCleanup;
+        throw cleanupFailure;
+      }
+      await rm(path, options);
+    },
+  };
+  const serviceFor = (storage?: NativePlaygroundCatalogStorage): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    ...(storage === undefined ? {} : { catalogStorage: storage }),
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const winner = serviceFor(winnerStorage);
+  const loser = serviceFor();
+  try {
+    const winning = winner.catalog(reference);
+    await linked;
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
+    releaseWinnerCleanup();
+    await expect(winning).rejects.toMatchObject({ errors: [cleanupFailure] });
+    // The reader saw the publication withdrawn rather than adopting the rolled
+    // back inode, so it discovered and persisted a singly linked sidecar itself.
+    const adopted = await losing;
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect(await loser.catalog(reference)).toEqual(adopted);
+    await Promise.all([winner.close(), loser.close()]);
+  } finally {
+    releaseWinnerCleanup();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('withdraws a sidecar whose directory fsync fails before releasing its staging link, so a waiting reader never adopts it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-fsync-withdrawn-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-fsync-withdrawn', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directoryFailure = new Error('directory sync failed');
+  let signalLinked!: () => void;
+  const linked = new Promise<void>((resolvePromise) => { signalLinked = resolvePromise; });
+  let releaseDirectorySync!: () => void;
+  const directorySync = new Promise<void>((resolvePromise) => { releaseDirectorySync = resolvePromise; });
+  const winnerStorage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      signalLinked();
+    },
+    mkdir,
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => {
+              // The publisher stalls on its directory fsync after the link, then fails it.
+              await directorySync;
+              throw directoryFailure;
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: rm,
+  } as NativePlaygroundCatalogStorage;
+  const serviceFor = (storage?: NativePlaygroundCatalogStorage): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    ...(storage === undefined ? {} : { catalogStorage: storage }),
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const winner = serviceFor(winnerStorage);
+  const loser = serviceFor();
+  try {
+    const winning = winner.catalog(reference);
+    await linked;
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const losing = loser.catalog(reference);
+    await expect(Promise.race([
+      losing.then(() => 'adopted' as const),
+      new Promise<'pending'>((resolvePromise) => { setTimeout(() => resolvePromise('pending'), 150); }),
+    ])).resolves.toBe('pending');
+    releaseDirectorySync();
+    // The rollback's own directory fsync fails the same way, so both are retained.
+    await expect(winning).rejects.toMatchObject({ errors: [directoryFailure, directoryFailure] });
+    const adopted = await losing;
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    expect(await loser.catalog(reference)).toEqual(adopted);
+    await Promise.all([winner.close(), loser.close()]);
+  } finally {
+    releaseDirectorySync();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps the staging link when a failed publication cannot roll its sidecar back, so readers never see it as settled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-rollback-failed-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-rollback-failed', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directoryFailure = new Error('directory sync failed');
+  const moveFailure = Object.assign(new Error('rename busy'), { code: 'EBUSY' });
+  const storage: NativePlaygroundCatalogStorage = {
+    link,
+    mkdir,
+    move: async () => { throw moveFailure; },
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => { throw directoryFailure; };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: rm,
+  } as NativePlaygroundCatalogStorage;
+  const serviceFor = (
+    discover: () => Promise<readonly DiscoveredEvalSuite[]>,
+    catalogStorage?: NativePlaygroundCatalogStorage,
+  ): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    catalogStagingSettleDeadlineMs: 50,
+    ...(catalogStorage === undefined ? {} : { catalogStorage }),
+    discover,
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    const winner = serviceFor(async () => suite(), storage);
+    await expect(winner.catalog(reference)).rejects.toMatchObject({
+      errors: [directoryFailure, moveFailure],
+    });
+    await winner.close();
+    // The sidecar survived its failed rollback, so its staging link survives with
+    // it: the publication still reads as in progress, never as settled.
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toHaveLength(1);
+    const reader = serviceFor(async () => { throw new Error('An unsettled catalog must not fall back to discovery.'); });
+    await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await reader.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+const exitedPid = (): number => {
+  for (let pid = 4_194_000; pid > 1_000; pid -= 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+    }
+  }
+  throw new Error('No exited pid was available for the abandoned-staging fixture.');
+};
+
+it('recovers a staging link abandoned by an exited publisher after the settle deadline, but never one whose publisher is alive', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-abandoned-staging-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-abandoned-staging', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directorySyncs: string[] = [];
+  // Fault injection for the recovery fallback chain. Directory fsync failures
+  // are counted down so that the recovery fsync fails while the fsync that
+  // makes the compensating guard durable succeeds.
+  let directorySyncFailuresLeft = 0;
+  const directorySyncFailure = Object.assign(new Error('directory sync failed'), { code: 'EIO' });
+  let relinkFailure: Error | undefined;
+  let concurrentRestorer = false;
+  let sidecarRemoveFailure: Error | undefined;
+  const storage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      if (String(destination).endsWith('-orphan')) {
+        if (relinkFailure !== undefined) throw relinkFailure;
+        if (concurrentRestorer) {
+          // Another reader restored the same alias a moment earlier.
+          await link(source, destination);
+          throw Object.assign(new Error('link exists'), { code: 'EEXIST' });
+        }
+      }
+      await link(source, destination);
+    },
+    mkdir,
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => {
+              directorySyncs.push(String(path));
+              if (directorySyncFailuresLeft > 0) {
+                directorySyncFailuresLeft -= 1;
+                throw directorySyncFailure;
+              }
+              await target.sync();
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: async (path, options) => {
+      if (sidecarRemoveFailure !== undefined && String(path) === sidecar) throw sidecarRemoveFailure;
+      await rm(path, options);
+    },
+  } as NativePlaygroundCatalogStorage;
+  const serviceFor = (discover: () => Promise<readonly DiscoveredEvalSuite[]>): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    catalogStagingSettleDeadlineMs: 50,
+    catalogStorage: storage,
+    discover,
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const rejectsUnsettled = async (label: string): Promise<void> => {
+    const reader = serviceFor(async () => { throw new Error(`${label} must not fall back to discovery.`); });
+    await expect(reader.catalog(reference)).rejects.toThrow();
+    await reader.close();
+  };
+  try {
+    const writer = serviceFor(async () => suite());
+    const published = await writer.catalog(reference);
+    await writer.close();
+
+    // A publisher that is still running owns its staging link: the reader waits out the deadline and rejects.
+    const live = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(process.pid)}-live`);
+    await link(sidecar, live);
+    await rejectsUnsettled('A blocked catalog');
+    expect((await stat(sidecar)).nlink).toBe(2);
+    await rm(live);
+
+    // A recovery whose directory fsync fails has not made the orphan's removal
+    // durable: the staging guard is restored, fsynced, and the sidecar stays unsettled.
+    const orphan = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`);
+    await link(sidecar, orphan);
+    directorySyncFailuresLeft = 1;
+    directorySyncs.length = 0;
+    await rejectsUnsettled('An unsynced recovery');
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+    expect(directorySyncs).toEqual([catalogDirectory, catalogDirectory]);
+
+    // A concurrent recoverer restored the same alias first: EEXIST on an entry
+    // that already aliases the sidecar counts as a restored guard.
+    directorySyncFailuresLeft = 1;
+    concurrentRestorer = true;
+    await rejectsUnsettled('A racing recovery');
+    concurrentRestorer = false;
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+
+    // When the guard cannot be re-linked and the sidecar cannot be unlinked
+    // either, a fresh fsynced guard under this process's pid keeps it doubly linked.
+    directorySyncFailuresLeft = 1;
+    relinkFailure = Object.assign(new Error('relink denied'), { code: 'EPERM' });
+    sidecarRemoveFailure = Object.assign(new Error('sidecar busy'), { code: 'EBUSY' });
+    await rejectsUnsettled('A guarded recovery');
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const guards = (await readdir(catalogDirectory)).filter((name) => name.includes(`.stage-${String(process.pid)}-guard-`));
+    expect(guards).toHaveLength(1);
+    expect((await stat(join(catalogDirectory, guards[0]!))).ino).toBe((await stat(sidecar)).ino);
+    // A live-pid guard is honoured by the next reader until this process exits.
+    await rejectsUnsettled('A guarded catalog');
+    await rm(join(catalogDirectory, guards[0]!));
+    await link(sidecar, orphan);
+    relinkFailure = undefined;
+    sidecarRemoveFailure = undefined;
+
+    // When every fsync keeps failing, the sidecar is withdrawn rather than left
+    // singly linked: the guard chain never trusts an unsynced step.
+    directorySyncFailuresLeft = Number.POSITIVE_INFINITY;
+    await rejectsUnsettled('A withdrawn recovery');
+    directorySyncFailuresLeft = 0;
+    await expect(stat(sidecar)).rejects.toMatchObject({ code: 'ENOENT' });
+    const republisher = serviceFor(async () => suite());
+    expect(await republisher.catalog(reference)).toEqual(published);
+    await republisher.close();
+    // The restored orphan name still aliases the withdrawn inode; a fresh
+    // sidecar is singly linked and unaffected by it.
+    expect((await stat(sidecar)).nlink).toBe(1);
+    await rm(orphan);
+    await link(sidecar, orphan);
+
+    // A publisher that exited after link() but before cleanup left a complete,
+    // fsynced sidecar behind: the reader withdraws the orphan and adopts it.
+    directorySyncs.length = 0;
+    const reader = serviceFor(async () => { throw new Error('A recovered catalog must not fall back to discovery.'); });
+    expect(await reader.catalog(reference)).toEqual(published);
+    await reader.close();
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    // The exited publisher may never have flushed the directory after link(); recovery does.
+    expect(directorySyncs).toEqual([catalogDirectory]);
+  } finally {
     await rm(root, { force: true, recursive: true });
   }
 });

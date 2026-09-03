@@ -37,7 +37,8 @@ assets against this anchor rather than the process working directory: Claude Cod
 launches stdio servers from the host's own working directory and ignores stdio `cwd` at runtime,
 and its placeholder-substitution table excludes `cwd`, so the Claude adapter emits no `cwd` for a
 plugin-root working directory (the absolute `${CLAUDE_PLUGIN_ROOT}/mcp/...` entry path plus this
-env anchor carry the guarantee) and rejects token-bearing `cwd` values outright. A server's own
+env anchor carry the guarantee). That canonical plugin-root `cwd` is the one accepted token-bearing
+value on Claude; any other `cwd` that carries a path token is rejected. A server's own
 `env` entries win over the injected value, so declaring
 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The `pluginRootEnvAnchor` export
 names the variable for consumer code.
