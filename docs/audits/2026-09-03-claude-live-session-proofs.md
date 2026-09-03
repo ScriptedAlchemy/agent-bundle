@@ -8,21 +8,24 @@ the isolated home was authenticated, exactly what each proof asserted, and
 what failed. Raw logs stayed under `/tmp/claude-recapture/`; nothing from them
 is reproduced here beyond counts, codes, and field names.
 
-## Authentication: isolated home, sign-in seeded by hand
+## Authentication: isolated home, sign-in seeded outside the harness
 
 - The real `~/.claude` was opened **read-only**. Its `.credentials.json`
   (interactive OAuth session) had expired and could not be refreshed:
   `claude auth status` on the real home reported `loggedIn: false`, and a
   turn in an isolated home seeded with the harness's byte-for-byte copy failed
   with `Failed to authenticate: OAuth session expired and could not be
-  refreshed`. The same turn with the operator's normal configuration failed
-  the same way, so the documented fallback (normal configuration, temporary
-  project directory) was not available either.
+  refreshed`. Because `claude auth status` against the operator's normal
+  configuration already reported `loggedIn: false`, the documented fallback
+  (normal configuration, temporary project directory) was not available
+  either; no turn was run against the real home.
 - The operator's long-lived `claude setup-token` token was still valid. The
-  isolated home's `.claude/.credentials.json` was therefore re-seeded **by
-  hand, outside the checked-in harness**, with that token; no code that reads
-  or copies sign-in state was added to `examples/host-test` or to the test
-  support, which still only copy `.credentials.json` byte-for-byte.
+  isolated home's `.claude/.credentials.json` was therefore re-seeded with
+  that token by a **one-off local step outside the checked-in harness** (an
+  uncommitted local edit of `probe:install` that wrote the token into the
+  isolated file and never logged its value; discarded afterwards). No code
+  that reads or copies sign-in state was added to `examples/host-test` or to
+  the test support, which still only copy `.credentials.json` byte-for-byte.
   `claude auth status` in that home: `loggedIn: true`, `authMethod:
   claude.ai`, `apiProvider: firstParty`, `subscriptionType: max`.
 - The proofs below ran with `HOME=/tmp/claude-recapture/proof-home`, a
