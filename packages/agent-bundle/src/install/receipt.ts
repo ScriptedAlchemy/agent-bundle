@@ -136,6 +136,9 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
       if ((await lstat(join(root, name))).isSymbolicLink()) throw unsupportedEntry(name);
       continue;
     }
+    // Runtime-owned roots (`state/`) are never plugin content: not hashed, not installed, not owned,
+    // whether they sit in an installed copy or in an artifact that was run in place.
+    if (preservedRuntimeEntries.includes(name)) continue;
     await visit(name);
   }
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
@@ -444,6 +447,9 @@ export const stageArtifact = async (options: {
       verbatimSymlinks: true,
     });
     await rm(join(root, installReceiptFile), { force: true });
+    for (const entry of preservedRuntimeEntries) {
+      await rm(join(root, entry), { force: true, recursive: true });
+    }
     const inventory = await treeInventory(root);
     await writeFile(
       join(root, installReceiptFile),
@@ -490,7 +496,6 @@ const previouslyOwnedFiles = async (
   const inventory = await treeInventory(destination);
   const owned: string[] = [];
   for (const file of inventory.files) {
-    if (preservedRuntimeEntries.includes(file.split('/')[0] ?? '')) continue;
     // Exact match, or a case alias of an incoming path on case-insensitive filesystems.
     if (await isOwnedEntry(destination, incoming, file)) owned.push(file);
   }

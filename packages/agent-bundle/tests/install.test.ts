@@ -561,6 +561,21 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
 
+    // An artifact that was run in place may carry state/: it is never installed, hashed, or owned.
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await mkdir(join(fixture.bundleRoot, 'state'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'state', 'plugin.sqlite'), 'artifact-side state\n');
+    const withState = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(withState).toMatchObject({ state: 'already-installed' });
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt with state beside\n');
+    const replacedBesideState = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(replacedBesideState).toMatchObject({ state: 'replaced' });
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
+    await rm(join(fixture.bundleRoot, 'state'), { recursive: true });
+
     // Flipping only the executable bit is a content change: the installed copy must receive it.
     await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
     const executable = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
