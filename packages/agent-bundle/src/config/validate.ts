@@ -1210,6 +1210,77 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
   }
 };
 
+/** The `_meta.ui.resourceUri` a route's static config advertises, when it is a string. */
+const advertisedUiResourceUri = (config: Readonly<Record<string, unknown>>): string | undefined => {
+  const meta = config['_meta'];
+  if (!isRecord(meta) || !isRecord(meta.ui)) return undefined;
+  const resourceUri = meta.ui.resourceUri;
+  return typeof resourceUri === 'string' ? resourceUri : undefined;
+};
+
+/**
+ * A generated route that advertises `_meta.ui.resourceUri` of one of its
+ * server's Apps must reach every target the server ships to with that App
+ * built: an App restricted through `config.targets` (or a config-declared
+ * App's `targets`) is skipped by the other targets' builds, and the route
+ * would point hosts at a resource the server never registers there. The
+ * check covers both `appResourceUri()` references (already resolved to the
+ * literal by the graph compiler) and hand-written literals.
+ */
+const validateRouteAppTargets = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const selectedTargets = selectedTargetNamesFor(loaded, registry);
+  const configured = isRecord(loaded.config.mcp) && isRecord(loaded.config.mcp.servers)
+    ? loaded.config.mcp.servers as Readonly<Record<string, unknown>>
+    : {};
+  const diagnostics: Diagnostic[] = [];
+  for (const server of discovered.routeGraph?.servers ?? []) {
+    if (server.mode !== 'generated' || server.routes.length === 0) continue;
+    const declaration = isRecord(configured[server.name]) ? configured[server.name] as Readonly<Record<string, unknown>> : {};
+    const serverTargets = declaredTargetsOr(declaration.targets, selectedTargets);
+    // Every App this server registers, by resourceUri, with the targets it is built for.
+    const appTargets = new Map<string, { readonly name: string; readonly targets: readonly string[] }>();
+    for (const route of server.routes) {
+      if (route.kind !== 'app') continue;
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri !== 'string') continue;
+      appTargets.set(resourceUri, {
+        name: route.provenance.relativePath,
+        targets: declaredTargetsOr(route.config['targets'], serverTargets),
+      });
+    }
+    if (isRecord(declaration.apps)) {
+      for (const [appName, app] of Object.entries(declaration.apps)) {
+        if (!isRecord(app) || typeof app.resourceUri !== 'string') continue;
+        appTargets.set(app.resourceUri, {
+          name: `config App ${JSON.stringify(appName)}`,
+          targets: declaredTargetsOr(app.targets, serverTargets),
+        });
+      }
+    }
+    for (const route of server.routes) {
+      if (route.kind === 'app') continue;
+      const resourceUri = advertisedUiResourceUri(route.config);
+      if (resourceUri === undefined) continue;
+      const app = appTargets.get(resourceUri);
+      if (app === undefined) continue;
+      const missing = serverTargets.filter((target) => !app.targets.includes(target));
+      if (missing.length === 0) continue;
+      diagnostics.push({
+        code: 'AB4828',
+        message: `Route ${route.provenance.relativePath} advertises _meta.ui.resourceUri ${JSON.stringify(resourceUri)} of ${app.name}, which is not built for ${missing.map((target) => JSON.stringify(target)).join(', ')} although the ${JSON.stringify(server.name)} server ships there.`,
+        recovery: `Widen the App's targets to cover ${missing.join(', ')}, or restrict mcp.servers.${server.name}.targets to the App's targets, then inspect again.`,
+        severity: 'error',
+        sourcePath: route.source,
+      });
+    }
+  }
+  return diagnostics;
+};
+
 const validateEventRoutes = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1955,6 +2026,7 @@ export const validateSource = (
   // they are project-source errors, so they gate inspect and build here.
   diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
   diagnostics.push(...(discovered.state?.diagnostics ?? []));
+  diagnostics.push(...validateRouteAppTargets(loaded, discovered, registry));
   diagnostics.push(...validateEventRoutes(loaded, discovered, registry));
   // The stage-1 gate for conventional script routes rides beside the graph's
   // own collisions: rendered, nested, and config-conflicting script routes

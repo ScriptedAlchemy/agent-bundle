@@ -5,7 +5,21 @@ import {
   resolveRouteConfigAppReferences,
   type RouteConfigExtractionOptions,
 } from '../src/routes/config-extract.ts';
+import { appResourceUri, type AppRouteConfig, type ToolConfig } from '../src/routes/public.ts';
 import { emptyRouteConfig } from '../src/routes/types.ts';
+
+it('types _meta.ui.resourceUri while keeping the MCP Apps ui block open, and returns the reference at run time', () => {
+  const tool = {
+    _meta: {
+      'openai/outputTemplate': 'ui://notes/dashboard.html',
+      ui: { csp: { connectDomains: [] }, prefersBorder: true, resourceUri: appResourceUri('dashboard') },
+    },
+    description: 'Open the dashboard.',
+  } satisfies ToolConfig;
+  const app = { resourceUri: 'ui://notes/dashboard.html', template: './dashboard.html' } satisfies AppRouteConfig;
+  expect(tool._meta.ui.resourceUri).toBe('dashboard');
+  expect(app.template).toBe('./dashboard.html');
+});
 
 const extract = (
   text: string,

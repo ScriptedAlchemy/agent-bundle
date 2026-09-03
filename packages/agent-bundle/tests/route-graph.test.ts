@@ -891,6 +891,62 @@ it('resolves an App route template relative to the route module, accepting the l
   expect((await compileRouteGraph(twin, fixtureConfig())).digest).toBe(routeRelativeGraph.digest);
 });
 
+it('rejects a route that advertises an App the server does not build for every target with AB4828', async () => {
+  const tool = (resourceUri: string): string => [
+    `export const config = { _meta: { ui: { resourceUri: ${resourceUri} } } };`,
+    moduleSource,
+  ].join('\n');
+  const restrictedApp = "export const config = { resourceUri: 'ui://curator/dashboard.html', targets: ['codex'] };\ndocument.body.textContent = 'dashboard';\n";
+  const configWith = (lines: readonly string[]): string => [
+    'export default {',
+    ...lines,
+    "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+    "  targets: ['portable', 'codex'],",
+    '};',
+    '',
+  ].join('\n');
+
+  // The App ships to codex only; the server (and its tool) ship to portable too.
+  const referenced = await createInspectProject({
+    'agent-bundle.config.ts': configWith([]),
+    'src/mcp/curator/apps/dashboard.tsx': restrictedApp,
+    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')").replace('export const config', "import { appResourceUri } from 'agent-bundle/routes';\nexport const config"),
+  });
+  const referencedErrors = (await validate({ root: referenced })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(referencedErrors)).toEqual(['AB4828']);
+  expect(referencedErrors[0]).toMatchObject({ sourcePath: join(referenced, 'src/mcp/curator/tools/open.ts') });
+  expect(referencedErrors[0]!.message).toContain('is not built for "portable"');
+  expect(referencedErrors[0]!.recovery).toContain('mcp.servers.curator.targets');
+
+  // A hand-written literal is held to the same rule.
+  const literal = await createInspectProject({
+    'agent-bundle.config.ts': configWith([]),
+    'src/mcp/curator/apps/dashboard.tsx': restrictedApp,
+    'src/mcp/curator/tools/open.ts': tool("'ui://curator/dashboard.html'"),
+  });
+  expect(codesOf((await validate({ root: literal })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error'))).toEqual(['AB4828']);
+
+  // Restricting the server to the App's targets makes the reference sound.
+  const restrictedServer = await createInspectProject({
+    'agent-bundle.config.ts': configWith(["  mcp: { servers: { curator: { targets: ['codex'] } } },"]),
+    'src/mcp/curator/apps/dashboard.tsx': restrictedApp,
+    'src/mcp/curator/tools/open.ts': tool("appResourceUri('dashboard')").replace('export const config', "import { appResourceUri } from 'agent-bundle/routes';\nexport const config"),
+  });
+  expect((await validate({ root: restrictedServer })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+
+  // A config-declared App of the same server is covered too.
+  const configApp = await createInspectProject({
+    'agent-bundle.config.ts': configWith([
+      "  mcp: { servers: { curator: { apps: { panel: { entry: './views/panel.ts', resourceUri: 'ui://curator/panel.html', targets: ['codex'] } } } } },",
+    ]),
+    'src/mcp/curator/tools/open.ts': tool("'ui://curator/panel.html'"),
+    'views/panel.ts': "document.body.textContent = 'panel';\n",
+  });
+  const configAppErrors = (await validate({ root: configApp })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(configAppErrors)).toEqual(['AB4828']);
+  expect(configAppErrors[0]!.message).toContain('config App "panel"');
+});
+
 it('normalizes the App route template to its resolved path for the build', async () => {
   const html = '<!doctype html><html><body></body></html>\n';
   const routeRelative = await createInspectProject({

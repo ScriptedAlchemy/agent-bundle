@@ -132,9 +132,12 @@ export interface ToolRouteProps<InputSchema extends RouteSchema> {
  * listing so hosts open the referenced App beside the result. Set
  * `resourceUri` to {@link appResourceUri} of the App route instead of
  * repeating the App's `ui://` literal: the compiler resolves the reference
- * to the App's static `config.resourceUri`, so the two can never drift.
+ * to the App's static `config.resourceUri`, so the two can never drift. The
+ * block stays open for the rest of the MCP Apps `ui` vocabulary
+ * (`prefersBorder`, `csp`, `permissions`, …).
  */
 export interface RouteUiMeta {
+  readonly [key: string]: unknown;
   readonly resourceUri?: string;
 }
 

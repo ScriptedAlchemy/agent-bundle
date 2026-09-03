@@ -380,7 +380,9 @@ in every tool that opens it:
   string literal or a const identifier of the first form. An unknown
   reference — or a reference to an App whose own `resourceUri` is not a
   static string, or whose server is not generated — is `AB4826`, and the
-  route compiles with the empty config beside it. At run time the helper returns the reference unchanged: generated
+  route compiles with the empty config beside it. Whether referenced or
+  written as a literal, an advertised `_meta.ui.resourceUri` must name an App
+  the server builds for every target it ships to (`AB4828` otherwise). At run time the helper returns the reference unchanged: generated
   servers read the compiled config, never the module's evaluated `config`, so
   use the const form when the URI is also needed inside the component.
 
@@ -517,6 +519,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4825` | error | An event route's `config.targets` is not a nonempty array of nonempty target names. |
 | `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of a generated server with a static `config.resourceUri` (Apps of servers packaged as `custom`/`command`/`remote`, or left in an `AB4800` conflict, are never built, so they are not targets). The message lists the known App route ids; reference the App as `'<app>'` (same server), `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
 | `AB4827` | error | An MCP App route's `config.template` is ambiguous or missing: both the route-relative and the project-root-relative interpretation name different existing files, or neither exists. The message names both candidate paths; templates resolve relative to the route module, so rewrite the path as `'./<file>.html'` beside the route. |
+| `AB4828` | error | A generated MCP route advertises `_meta.ui.resourceUri` of an App on its server (through `appResourceUri()` or a literal) that is not built for every target the server ships to, because the App's `config.targets` (or a config-declared App's `targets`) is narrower. Widen the App's targets or restrict `mcp.servers.<server>.targets`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |
