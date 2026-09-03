@@ -90,6 +90,10 @@ export default defineConfig({
       'mcp-entry': './src/mcp-entry.ts',
       meta: './src/meta.ts',
       'mcp-server-runtime': './src/mcp-server-runtime.ts',
+      // The route authoring surface: types plus the compile-time helpers a
+      // route module may import at run time without pulling the compiler
+      // into its generated bundle.
+      routes: './src/routes/public.ts',
       rstest: './src/rstest/index.ts',
       test: './src/test/index.ts',
       'test/browser': './src/test/browser.ts',

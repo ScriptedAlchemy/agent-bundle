@@ -1,6 +1,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { dirname, posix, resolve } from 'node:path';
 
+import { portableAdapter } from '../adapters/portable.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type {
   TargetArtifactDocumentIssue,
@@ -9,6 +10,7 @@ import type {
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { validatePortablePluginFiles } from '../host-contracts/portable-plugin-validation.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   artifactDiagnostic as diagnostic,
@@ -433,6 +435,44 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
+/**
+ * Agent Plugins 1.0.0 bytes-at-rest lane (AB6035–AB6037) over every tree
+ * emitted by the built-in portable adapter, so a standard-invalid `mcp.json`
+ * or layout fails ordinary `build` and `validate --artifact` rather than only
+ * `--host-validation`. The lane keys on the registered adapter identity, not
+ * the name: an advanced registry may bind `portable` to its own adapter and
+ * contract, and that output is validated by its own `artifactValidation`.
+ * A tree that already holds a symlink or other unsupported entry (AB6013) is
+ * skipped: the byte lane follows `plugin.json`/`mcp.json`/`skills` with
+ * `stat`/`readFile`/`readdir`, so it must not touch paths whose containment
+ * the filesystem inspection has already refused.
+ */
+const validatePortableTargets = async (options: {
+  readonly artifactRoot: string;
+  readonly filesystem: ArtifactFilesystemSnapshot;
+  readonly manifest: ArtifactManifest;
+  readonly registry: TargetRegistry;
+}): Promise<readonly Diagnostic[]> => {
+  const diagnostics: Diagnostic[] = [];
+  for (const target of options.manifest.targets) {
+    if (!options.registry.has(target.name) || options.registry.get(target.name) !== portableAdapter) continue;
+    const prefix = `${target.name}/`;
+    if (!options.filesystem.files.some((file) => file.path.startsWith(prefix))) continue;
+    const unsupported = options.filesystem.entries.some((entry) =>
+      (entry.path === target.name || entry.path.startsWith(prefix)) &&
+      entry.kind !== 'directory' &&
+      entry.kind !== 'file');
+    if (unsupported) continue;
+    for (const entry of await validatePortablePluginFiles({
+      pluginDirectory: resolve(options.artifactRoot, target.name),
+      target: target.name,
+    })) {
+      diagnostics.push(Object.freeze({ ...entry, message: `Target ${JSON.stringify(target.name)}: ${entry.message}` }));
+    }
+  }
+  return Object.freeze(diagnostics);
+};
+
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
 const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
@@ -729,6 +769,7 @@ export const validateArtifactWithSnapshot = async (
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
     targetContractDiagnostics,
+    portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
     emittedSkillDiagnostics,
@@ -737,6 +778,12 @@ export const validateArtifactWithSnapshot = async (
     validateTargetContracts({
       artifactRoot,
       files: inspection.files,
+      manifest,
+      registry,
+    }),
+    validatePortableTargets({
+      artifactRoot,
+      filesystem: inspection.filesystem,
       manifest,
       registry,
     }),
@@ -768,6 +815,7 @@ export const validateArtifactWithSnapshot = async (
   ]);
   diagnostics.push(
     ...targetContractDiagnostics,
+    ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
     ...hookCoherenceDiagnostics,
     ...emittedSkillDiagnostics,

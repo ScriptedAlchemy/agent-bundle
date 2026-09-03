@@ -68,7 +68,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.7.0',
+    adapterRevision: '1.9.0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -84,7 +84,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'marketplace',
         revision: '0.147.0',
-        sha256: '1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8',
+        sha256: 'fbccce3ade39e1b077fcb440e60260de6e811e8c2d222b2ae0fe8fe47706b470',
       },
       {
         name: 'mcp',
@@ -94,7 +94,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: '986bcafa6ef46f9dc4558f05781f53400b3d75533a075068184ba8d43670d4ec',
+        sha256: '074c6c71966a3e6560ccbceb8d82ec6a40cb1eccee2f2d863fb4ef1e2276a814',
       },
     ],
   });
@@ -170,7 +170,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.22.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.24.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {

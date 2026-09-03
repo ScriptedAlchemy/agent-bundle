@@ -21,6 +21,14 @@ import {
   unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
+import {
+  portableCommandIssues,
+  portableCwdIssues,
+  portableEnvKeyIssues,
+  portableHeaderIssues,
+  portableRemoteUrlIssues,
+  type PortableMcpRuleIssue,
+} from './portable-mcp-rules.ts';
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
@@ -141,6 +149,19 @@ const unsupportedTokenDiagnostic = (
 };
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableName, 'Portable');
+
+/**
+ * Agent Plugins 1.0.0 normative MCP rules the schema cannot express, applied
+ * to the values as they will be written so ordinary `build` and `validate`
+ * fail closed instead of deferring to `--host-validation`.
+ */
+const normativeRuleDiagnostics = (
+  server: NormalizedMcpServer,
+  issues: readonly PortableMcpRuleIssue[],
+): readonly Diagnostic[] => issues.map((issue) => errorDiagnostic(
+  `portable.mcp.${issue.field.split('/')[0] ?? issue.field}.standard`,
+  `Portable MCP server "${server.name}" ${issue.field} ${issue.message}.`,
+));
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
@@ -424,6 +445,15 @@ const planMcpServer = (
       return { diagnostics };
     }
 
+    diagnostics.push(
+      ...normativeRuleDiagnostics(server, portableCommandIssues(server.command)),
+      ...normativeRuleDiagnostics(server, portableCwdIssues(cwd)),
+      ...normativeRuleDiagnostics(server, portableEnvKeyIssues(declaredEnv)),
+    );
+    if (diagnostics.length > 0) {
+      return { diagnostics };
+    }
+
     return {
       diagnostics,
       value: {
@@ -455,6 +485,14 @@ const planMcpServer = (
   }
 
   if (diagnostics.length > 0 || server.url === undefined) {
+    return { diagnostics };
+  }
+
+  diagnostics.push(
+    ...normativeRuleDiagnostics(server, portableRemoteUrlIssues(server.url)),
+    ...normativeRuleDiagnostics(server, portableHeaderIssues(server.headers)),
+  );
+  if (diagnostics.length > 0) {
     return { diagnostics };
   }
 

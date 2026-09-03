@@ -220,7 +220,15 @@ it('serves compiled routes and durable state across packed process restarts', as
         session: firstSession,
       });
       expect(matrixReport.provenance.proofLevel).toBe('packed-deleted-source');
+      // No fixture names the app route: the packed level auto-covers it (#401).
+      expect(matrixReport.routes['app:harness/panel']?.checks.coverage).toEqual({
+        reason: expect.stringContaining('auto-covered'),
+        status: 'passed',
+      });
       expect(matrixReport.routes['app:harness/panel']?.checks['surface-completeness']).toEqual({
+        status: 'passed',
+      });
+      expect(matrixReport.routes['app:harness/panel']?.checks.sweep).toEqual({
         status: 'passed',
       });
       expect(matrixReport.routes['tool:harness/lifecycle']?.checks['restart-durability']).toEqual({

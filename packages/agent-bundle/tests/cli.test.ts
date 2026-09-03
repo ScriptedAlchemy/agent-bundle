@@ -165,6 +165,18 @@ it('parses the nested development proxy command', async () => {
   });
 });
 
+it('describes the operation-specific artifact default in build and prepack help', async () => {
+  // Both CLI commands build with package outputs, so their artifact default is
+  // `artifact/` (the npm package build owns `dist/`); the API-level `dist`
+  // default must not leak into --help (#319 review).
+  for (const command of ['build', 'prepack']) {
+    const result = await runSourceCliWithOutput([command, '--help']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/--output <path>[\s\S]*default artifact/u);
+    expect(result.stdout).not.toContain('default dist');
+  }
+});
+
 it('requires a server name for the nested development proxy command', async () => {
   const result = await runSourceCliWithOutput(['dev', 'proxy', '--root', '/tmp/plugin']);
 

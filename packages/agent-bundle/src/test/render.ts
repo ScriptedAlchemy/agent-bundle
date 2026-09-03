@@ -11,6 +11,7 @@ import type {
   AgentInvocationInput,
   AgentProgressReporter,
   AgentProgressUpdate,
+  AgentProviderValues,
   AgentRenderDispatch,
   AgentRenderEvent,
   AgentRenderInvocation,
@@ -53,10 +54,21 @@ export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress
   readonly progress?: AgentProgressReporter;
 };
 
-export interface RenderRouteOptions {
+/**
+ * The `context` member of every harness call. The harness installs fixture
+ * values instead of executing `src/providers/*`, so once the project's
+ * generated `.agent-bundle/routes.d.ts` augmentation declares required provider
+ * keys, `context` (and its `providers`) becomes mandatory: a test cannot omit
+ * the fixtures while the route's types promise them. Provider-free projects
+ * keep `context` optional.
+ */
+export type RenderRouteContextInit = Record<never, never> extends AgentProviderValues
+  ? { readonly context?: RenderRouteContext }
+  : { readonly context: RenderRouteContext };
+
+export interface RenderRouteOptionsBase {
   /** CLI route arguments; `cli` routes only. */
   readonly args?: readonly string[];
-  readonly context?: RenderRouteContext;
   /** The route's input: tool input, event payload, or script input. */
   readonly input?: unknown;
   /** Overrides the route kind when a module is rendered directly; ignored for manifest routes. */
@@ -68,6 +80,17 @@ export interface RenderRouteOptions {
   readonly routeId?: string;
   readonly signal?: AbortSignal;
 }
+
+export type RenderRouteOptions = RenderRouteOptionsBase & RenderRouteContextInit;
+
+/**
+ * The trailing options parameter of every harness entry point. Provider-free
+ * projects may omit it; once the generated augmentation declares provider
+ * keys it is mandatory, so no harness call can silently skip the fixtures.
+ */
+export type HarnessOptionsArguments<Options> = Record<never, never> extends AgentProviderValues
+  ? readonly [options?: Options]
+  : readonly [options: Options];
 
 export interface RenderedRoute {
   /** The final Agent Document the real renderer produced. */
@@ -769,7 +792,7 @@ const renderFailure = (
  */
 export const renderRoute = async (
   target: RenderRouteTarget,
-  options: RenderRouteOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions>
 ): Promise<RenderedRoute> => {
   const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   try {
@@ -804,7 +827,7 @@ export interface RenderedRouteEvents extends RenderedRoute {
  */
 export const renderRouteEvents = async (
   target: RenderRouteTarget,
-  options: RenderRouteOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<RenderRouteOptions>
 ): Promise<RenderedRouteEvents> => {
   const { close, collected, dispatcher, invocation, resolved, signal } = await prepareRender(target, options);
   const events: AgentRenderEvent[] = [];

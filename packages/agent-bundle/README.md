@@ -60,6 +60,29 @@ a `matcher` on `UserPromptSubmit` or `Stop`, and a `codex:WebSearch`-style hoste
 Hook trust (review by current hash in `/hooks`, plugin hooks skipped until trusted, managed hooks
 immutable) is host-owned and is recorded as unavailable rather than claimed.
 
+The Codex artifact is also its own repo marketplace: `.agents/plugins/marketplace.json` carries one
+local `./` entry whose `category` follows the plugin's interface category and whose
+`policy.installation` / `policy.authentication` default to `AVAILABLE` / `ON_INSTALL`.
+`codex.marketplace` authors the picker `displayName`, the `category`, and the documented policy
+values, except `installation: NOT_AVAILABLE`, which fails the build
+(`codex.marketplace.policy.installation.not-installable`) because live `codex plugin add` refuses
+such entries and that is exactly the command the emitted `INSTALL.md` and `installBundle()` run.
+The pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources for
+validating real-world marketplaces (Git and registry URLs must carry a syntactically valid
+host (DNS, IPv4, or bracketed IPv6), port, and path rather than a bare scheme prefix, and
+npm `version` must be a semver version, range, or dist-tag, and Git `ref` must satisfy
+`git check-ref-format`), but the adapter never emits them. Personal and legacy
+`.claude-plugin/marketplace.json` discovery, the `~/.codex/plugins/cache` layout, `config.toml`
+enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
+managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or
+admin-owned and are recorded in `codex-0.147.0.json` (`distribution`) with dated evidence instead of
+being claimed. The overview-level plugin parts get the same treatment (`plugin.overviewSurfaces`):
+optional MCP UI is `degraded` (the compiled MCP server serves `ui://` resources per the open MCP
+Apps standard that ChatGPT renders, while Codex CLI renders no components and every tool stays
+usable without UI), and browser extensions and scheduled task templates are `unavailable`
+because no package or manifest contract publishes an authoring field for them, so nothing is
+inferred.
+
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
 optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the
@@ -352,6 +375,15 @@ their own Rstest run, because rendering a route requires Node's `react-server`
 condition for the whole worker process. Keep them out of the project's ordinary
 `rstest` run.
 
+The same configuration aliases `agent-bundle/meta` to a generated module
+carrying the project identity the compiler pass reported (`name`,
+`packageName`, `packageVersion`, `version`, exactly what a build stamps), so
+source that imports it loads under the pool without a build. A pool that is
+not built from `agentBundleRstest()` (or `agentBundleBrowserRstest()`) has no
+such alias, and importing that source raises `AB4760`; build the pool that
+reaches it from the preset too — `agentBundleRstest({ include: ['tests/unit/**/*.test.ts'] })`
+— or add the alias the diagnostic names.
+
 `agent-bundle/test` holds the helpers. `renderRoute` executes a route — by
 compiled route id, or by importing the module directly — through the real
 renderer and the real request store, and resolves to the final Agent Document:
@@ -466,8 +498,9 @@ the current schema, rejection of negative inputs derived from the advertised
 `listTools` input JSON Schema, and mid-flight cancellation hygiene. In-memory
 transport may pass structured values without serialization; the matrix closes
 that gap with an explicit `JSON.parse(JSON.stringify(...))` round-trip before
-validation. MCP Apps are reported as not-applicable for surface registration
-because the in-memory level does not register them.
+validation. MCP Apps are not registered at this level: every app route reports
+`surface-completeness` as `not-applicable` and receives no coverage or sweep
+check, and app fixture entries are accepted and ignored.
 
 **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
 against an already-open packed session (the single packed journey owns session
@@ -480,6 +513,24 @@ version-skew (including their per-lifecycle-phase variants) are reported
 `not-applicable` with an honest reason. The packed
 server validates every tool result through its bundled `resultSchema` before
 returning; a successful sweep invocation is that evidence.
+
+**MCP App coverage per level.** Fixtures must cover every compiled tool, prompt,
+and resource route on the server. App routes are covered at every boundary that
+registers app resources — `packed-stdio`, `packed-deleted-source`,
+`host-install`, and `dev-epoch` — where `surface-completeness` requires the
+compiled `ui://` URI in `listResources` and `sweep` reads that resource. With
+the default `apps: 'auto'` an app route needs no fixture entry: `coverage`
+passes with a reason naming the auto-covered sweep. An explicit
+`{ kind: 'resource' }` (or legacy `{}`) entry is always accepted, and
+`apps: 'explicit'` makes a missing app entry a `coverage` failure again. At
+`mcp-in-memory` apps are never registered, so `apps` has no effect there.
+
+The `cancellation` fixture aborts the invocation after `abortAfterMs`
+(default 50ms) and requires it to settle rejected. Its input must stay in
+flight past that point: when the invocation settles before the abort fires
+the check is `not-applicable` ("invocation completed before abort; use an
+input that stays in flight"), and it only `fails` when the abort was delivered
+mid-flight and the call still settled without rejecting.
 
 Lifecycle fixtures replay
 `unknown → queued → running → first-progress → repeated-progress → terminal`
@@ -539,11 +590,12 @@ await runContractMatrix({
 });
 
 // Packed: pass an already-open session and a manifest compiled before source removal.
+// App routes are auto-covered here; `{ kind: 'resource' }` names one explicitly.
 await runPackedContractMatrix({
   eventRuntime: { endpointId: packedEventRuntimeEndpointId },
   session: packedSession,
   manifest: compiledManifest,
-  fixtures: { /* same shape */ },
+  fixtures: { /* same shape, optionally 'app:library/dashboard': { kind: 'resource' } */ },
 });
 
 await using installedSession = await openInstalledHostMcpServer({

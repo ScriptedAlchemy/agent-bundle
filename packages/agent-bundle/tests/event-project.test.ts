@@ -338,6 +338,33 @@ it('validates permission and stop-failure envelopes against the pinned host cont
     target: 'codex',
   })).toThrow(/turn_id/u);
 
+  // Only the pinned Codex input schema declares `tool_input: true`: Codex
+  // admits every JSON shape while Claude's envelope stays object-shaped
+  // (#364 review).
+  for (const toolInput of [null, [], 'apply_patch', 7, false]) {
+    const shaped = { ...codexRequest, tool_input: toolInput };
+    expect(validateNativeEventEnvelope(shaped, {
+      canonicalEvent: 'permission/request',
+      nativeEvent: 'PermissionRequest',
+      target: 'codex',
+    })).toBe(shaped);
+    expect(() => validateNativeEventEnvelope({ ...claudeRequest, tool_input: toolInput }, {
+      canonicalEvent: 'permission/request',
+      nativeEvent: 'PermissionRequest',
+      target: 'claude',
+    })).toThrow(/native tool_input must be an object/u);
+  }
+  expect(() => validateNativeEventEnvelope({ ...codexRequest, tool_input: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toThrow(/native tool_input is required/u);
+  expect(() => validateNativeEventEnvelope({ ...claudeRequest, tool_input: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toThrow(/native tool_input must be an object/u);
+
   const claudeDenied = {
     cwd: '/workspace',
     hook_event_name: 'PermissionDenied',

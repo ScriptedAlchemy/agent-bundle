@@ -27,6 +27,7 @@ describe('agentBundleBrowserRstest', () => {
         viewport: { height: 900, width: 1440 },
       },
       include: ['tests/browser-app/**/*.test.{ts,tsx}'],
+      resolve: { alias: { 'agent-bundle/meta$': resolve(fixtureRoot, '.agent-bundle/test/meta.mjs') } },
       setupFiles: [
         resolve(fixtureRoot, '.agent-bundle/test/browser-app-setup.mjs'),
         './tests/setup.ts',
@@ -50,6 +51,13 @@ describe('agentBundleBrowserRstest', () => {
     expect(setup).toContain('"html":"<!DOCTYPE html>');
     expect(setup).toContain('"proofLevel":"browser-app"');
     expect(setup).toContain('"output":');
+
+    // The same compiler pass stamps the identity module `agent-bundle/meta`
+    // resolves to inside the browser pool (#386).
+    const metaModule = await readFile(config.resolve.alias['agent-bundle/meta$']!, 'utf8');
+    expect(metaModule).toContain('export const name = "route-harness";');
+    expect(metaModule).toContain('export const version = "1.0.0";');
+    expect(metaModule).toContain('export const packageName = undefined;');
   });
 
   it('rejects a browser pool whose compiled manifest declares no apps', async () => {

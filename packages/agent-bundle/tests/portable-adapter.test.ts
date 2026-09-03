@@ -440,6 +440,90 @@ it('reports unsupported portable token locations instead of silently preserving 
   ]);
 });
 
+it('fails closed at plan time on Agent Plugins 1.0.0 normative MCP rules the schema cannot express', () => {
+  const provenance = { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' };
+  const plan = createDefaultRegistry().get('portable').plan({
+    ...plugin(),
+    mcpServers: [
+      { command: 'bin/server', id: 'mcp:path', name: 'path-command', provenance, targets: ['portable'], transport: 'stdio' },
+      { command: 'bun run', id: 'mcp:space', name: 'spaced-command', provenance, targets: ['portable'], transport: 'stdio' },
+      {
+        command: 'node',
+        cwd: 'agent-bundle:path:plugin-root/../elsewhere',
+        id: 'mcp:cwd',
+        name: 'escaping-cwd',
+        provenance,
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+      {
+        command: 'node',
+        cwd: './safe\\..\\..\\outside',
+        id: 'mcp:cwd-backslash',
+        name: 'backslash-cwd',
+        provenance,
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+      { command: './bin\\..\\..\\outside', id: 'mcp:cmd-backslash', name: 'backslash-command', provenance, targets: ['portable'], transport: 'stdio' },
+      { command: './../anchor/server', id: 'mcp:anchor', name: 'anchor-collision', provenance, targets: ['portable'], transport: 'stdio' },
+      {
+        command: 'node',
+        cwd: 'agent-bundle:path:plugin-root/../anchor',
+        id: 'mcp:anchor-cwd',
+        name: 'anchor-cwd',
+        provenance,
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+      { command: 'C:\\tools\\server.exe', id: 'mcp:win-abs', name: 'windows-absolute', provenance, targets: ['portable'], transport: 'stdio' },
+      { command: 'C:server', id: 'mcp:win-drive', name: 'windows-drive-relative', provenance, targets: ['portable'], transport: 'stdio' },
+      {
+        command: 'node',
+        env: { '${PLUGIN_ROOT}': 'literal' },
+        id: 'mcp:env',
+        name: 'placeholder-env-key',
+        provenance,
+        targets: ['portable'],
+        transport: 'stdio',
+      },
+      { id: 'mcp:http', name: 'plain-http', provenance, targets: ['portable'], transport: 'streamable-http', url: 'http://mcp.example.test/mcp' },
+      {
+        headers: { 'X-Tenant': 'a', 'x-tenant': 'b', 'X-Trace': 'a\u0001b' },
+        id: 'mcp:headers',
+        name: 'bad-headers',
+        provenance,
+        targets: ['portable'],
+        transport: 'streamable-http',
+        url: 'https://mcp.example.test/mcp',
+      },
+      { command: 'node', id: 'mcp:ok', name: 'ok', provenance, targets: ['portable'], transport: 'stdio' },
+    ],
+  });
+
+  expect(plan.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.message])).toEqual([
+    ['portable.mcp.command.standard', 'Portable MCP server "path-command" command "bin/server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "spaced-command" command "bun run" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.cwd.standard', 'Portable MCP server "escaping-cwd" cwd "${PLUGIN_ROOT}/../elsewhere" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.cwd.standard', 'Portable MCP server "backslash-cwd" cwd "./safe\\\\..\\\\..\\\\outside" must use forward-slash separators without backslashes or NUL so every consuming platform resolves it identically (Agent Plugins 1.0.0 §4.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "backslash-command" command "./bin\\\\..\\\\..\\\\outside" escapes the plugin root (Agent Plugins 1.0.0 §4.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "anchor-collision" command "./../anchor/server" escapes the plugin root (Agent Plugins 1.0.0 §4.1).'],
+    ['portable.mcp.cwd.standard', 'Portable MCP server "anchor-cwd" cwd "${PLUGIN_ROOT}/../anchor" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "windows-absolute" command "C:\\\\tools\\\\server.exe" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "windows-drive-relative" command "C:server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.env.standard', 'Portable MCP server "placeholder-env-key" env key "${PLUGIN_ROOT}" contains an Agent Plugins placeholder, but expansion never applies to env keys (Agent Plugins 1.0.0 §9.2).'],
+    ['portable.mcp.url.standard', 'Portable MCP server "plain-http" url uses plain HTTP against non-loopback host "mcp.example.test"; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.headers.standard', 'Portable MCP server "bad-headers" headers/x-tenant repeats header "X-Tenant" under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.headers.standard', 'Portable MCP server "bad-headers" headers/X-Trace is not a valid HTTP header field value: only visible ASCII, space, horizontal tab and obs-text bytes are allowed (Agent Plugins 1.0.0 §7.2.1).'],
+  ]);
+  expect(plan.diagnostics.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+  const mcp = plan.entries.find((entry) => entry.kind === 'write' && entry.relativePath === 'mcp.json');
+  expect(JSON.parse((mcp as Extract<typeof mcp, { readonly kind: 'write' }>).content)).toEqual({
+    $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+    mcpServers: { ok: { command: 'node', env: { AGENT_BUNDLE_PLUGIN_ROOT: '${PLUGIN_ROOT}' }, type: 'stdio' } },
+  });
+});
+
 it('reports tokens forbidden in portable URLs, headers, cwd, and environment values', () => {
   const plan = createDefaultRegistry().get('portable').plan({
     ...plugin(),

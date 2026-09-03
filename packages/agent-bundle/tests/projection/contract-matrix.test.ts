@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
+import type { Client } from '@modelcontextprotocol/client';
 import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 
 import stateDefinition from '../../fixtures/route-harness/src/state.ts';
@@ -12,6 +13,7 @@ import {
   compileTestManifest,
   MCP_IN_MEMORY_PROOF_LEVEL,
   proofLevelLabel,
+  type AgentBundleTestManifest,
 } from '../../src/test/manifest.ts';
 import {
   runContractMatrix,
@@ -56,6 +58,113 @@ const withStatefulMatrix = async <T>(
     return await body(options);
   } finally {
     await restarted?.close();
+    await rm(root, { force: true, recursive: true });
+  }
+};
+
+const PANEL_URI = 'ui://harness/panel';
+const PANEL_MIME = 'text/html;profile=mcp-app';
+
+/**
+ * Stands in for the packed server's inline MCP App registry: the in-memory
+ * level never registers app resources, so a packed-shaped session over it
+ * needs the compiled `ui://` surface added on the client side. Every other
+ * call, and the progress-handler map the lifecycle replay composes, delegates
+ * to the real client.
+ */
+const withAppSurface = (client: Client): Client => appSurface(client, 'serves');
+
+const withRejectingAppSurface = (client: Client): Client => appSurface(client, 'rejects');
+
+const appSurface = (client: Client, read: 'rejects' | 'serves'): Client => {
+  const panelListing = { mimeType: PANEL_MIME, name: 'panel', uri: PANEL_URI };
+  const wrapper = {
+    _notificationHandlers: (client as unknown as { readonly _notificationHandlers: unknown })
+      ._notificationHandlers,
+    callTool: (...arguments_: Parameters<Client['callTool']>) => client.callTool(...arguments_),
+    getPrompt: (...arguments_: Parameters<Client['getPrompt']>) => client.getPrompt(...arguments_),
+    listPrompts: (...arguments_: Parameters<Client['listPrompts']>) => client.listPrompts(...arguments_),
+    listResources: async (...arguments_: Parameters<Client['listResources']>) => {
+      const listed = await client.listResources(...arguments_);
+      return { ...listed, resources: [...listed.resources, panelListing] };
+    },
+    listTools: (...arguments_: Parameters<Client['listTools']>) => client.listTools(...arguments_),
+    readResource: async (...arguments_: Parameters<Client['readResource']>) => {
+      const [params] = arguments_;
+      if (params.uri !== PANEL_URI) return client.readResource(...arguments_);
+      if (read === 'rejects') throw new Error('panel resource handler exploded');
+      return { contents: [{ mimeType: PANEL_MIME, text: '<!doctype html><span>route-harness panel</span>', uri: PANEL_URI }] };
+    },
+  };
+  return wrapper as unknown as Client;
+};
+
+/** Drops the abort signal from `callTool` for one tool so the abort is never delivered to the server. */
+const ignoringAbortFor = (toolName: string) => (client: Client): Client => {
+  const wrapper = {
+    _notificationHandlers: (client as unknown as { readonly _notificationHandlers: unknown })
+      ._notificationHandlers,
+    callTool: (...arguments_: Parameters<Client['callTool']>) => {
+      const [params, options] = arguments_;
+      if (params.name !== toolName || options === undefined) return client.callTool(...arguments_);
+      const withoutSignal = { ...options };
+      delete withoutSignal.signal;
+      return client.callTool(params, withoutSignal);
+    },
+    getPrompt: (...arguments_: Parameters<Client['getPrompt']>) => client.getPrompt(...arguments_),
+    listPrompts: (...arguments_: Parameters<Client['listPrompts']>) => client.listPrompts(...arguments_),
+    listResources: (...arguments_: Parameters<Client['listResources']>) => client.listResources(...arguments_),
+    listTools: (...arguments_: Parameters<Client['listTools']>) => client.listTools(...arguments_),
+    readResource: (...arguments_: Parameters<Client['readResource']>) => client.readResource(...arguments_),
+  };
+  return wrapper as unknown as Client;
+};
+
+/**
+ * Opens the route-harness server in memory and presents it as a packed-stdio
+ * session so the shared matrix runs with `registersAppResources: true`.
+ */
+const withPackedShapedSession = async <T>(
+  options: {
+    readonly decorate?: (client: Client) => Client;
+    readonly entry: string;
+    readonly includeApps: boolean;
+  },
+  body: (session: PackedMcpSession, manifest: AgentBundleTestManifest) => Promise<T>,
+): Promise<T> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-contract-packed-shaped-'));
+  const compiledManifest = await compileTestManifest({ root: fixtureRoot });
+  const manifest = options.includeApps
+    ? compiledManifest
+    : Object.freeze({
+      ...compiledManifest,
+      apps: Object.freeze({}),
+      routes: Object.freeze(Object.fromEntries(
+        Object.entries(compiledManifest.routes).filter(([, route]) => route.kind !== 'app'),
+      )),
+    });
+  const session = await openInMemoryMcpServer({
+    manifest,
+    state: {
+      definition: stateDefinition,
+      driver: createSqliteStateDriver({ root }),
+    },
+  });
+  const packedSession: PackedMcpSession = Object.freeze({
+    client: options.decorate === undefined ? session.client : options.decorate(session.client),
+    close: session.close,
+    provenance: Object.freeze({
+      entry: options.entry,
+      pid: undefined,
+      proofLevel: 'packed-stdio' as const,
+    }),
+    stderr: () => '',
+    [Symbol.asyncDispose]: session[Symbol.asyncDispose],
+  });
+  try {
+    return await body(packedSession, manifest);
+  } finally {
+    await session.close();
     await rm(root, { force: true, recursive: true });
   }
 };
@@ -479,6 +588,164 @@ describe('the generated-plugin contract matrix', () => {
     expect((error as AgentTestError).message).toContain('tool:harness/ticket');
     expect((error as AgentTestError).message).toContain('version-skew');
     expect((error as AgentTestError).message).toContain(proofLabel);
+  }, 30_000);
+
+  it('auto-covers a compiled app route at the packed level without a fixture entry', async () => {
+    const fixtures = routeHarnessContractFixtures();
+    expect(fixtures['app:harness/panel']).toBeUndefined();
+
+    const report = await withPackedShapedSession(
+      { decorate: withAppSurface, entry: 'in-memory app auto-coverage fixture', includeApps: true },
+      (session, manifest) => runPackedContractMatrix({ fixtures, manifest, server: 'harness', session }),
+    );
+
+    expect(report.provenance.proofLevel).toBe('packed-stdio');
+    expect(report.routes['app:harness/panel']?.checks).toMatchObject({
+      coverage: { reason: expect.stringContaining('auto-covered'), status: 'passed' },
+      'surface-completeness': { status: 'passed' },
+      sweep: { status: 'passed' },
+    });
+    expect(report.routes['app:harness/panel']?.checks.cancellation).toEqual({
+      reason: 'applies to tool routes only.',
+      status: 'not-applicable',
+    });
+  }, 30_000);
+
+  it('accepts an explicit { kind: "resource" } fixture for app and resource routes at the packed level', async () => {
+    const fixtures = {
+      ...routeHarnessContractFixtures(),
+      'app:harness/panel': { kind: 'resource' as const },
+      'resource:harness/notes': { kind: 'resource' as const },
+    };
+
+    const report = await withPackedShapedSession(
+      { decorate: withAppSurface, entry: 'in-memory explicit resource fixture', includeApps: true },
+      (session, manifest) => runPackedContractMatrix({
+        apps: 'explicit',
+        fixtures,
+        manifest,
+        server: 'harness',
+        session,
+      }),
+    );
+
+    expect(report.routes['app:harness/panel']?.checks).toMatchObject({
+      coverage: { status: 'passed' },
+      'surface-completeness': { status: 'passed' },
+      sweep: { status: 'passed' },
+    });
+    expect(report.routes['resource:harness/notes']?.checks).toMatchObject({
+      coverage: { status: 'passed' },
+      sweep: { status: 'passed' },
+    });
+  }, 30_000);
+
+  it('records a rejected auto-covered app read as a sweep failure inside the aggregated violation', async () => {
+    const error = await withPackedShapedSession(
+      { decorate: withRejectingAppSurface, entry: 'in-memory rejecting app read fixture', includeApps: true },
+      (session, manifest) => runPackedContractMatrix({
+        fixtures: routeHarnessContractFixtures(),
+        manifest,
+        server: 'harness',
+        session,
+      }).catch((thrown: unknown) => thrown),
+    );
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('app:harness/panel / sweep');
+    expect((error as AgentTestError).message).toContain('readResource threw for "ui://harness/panel"');
+    expect((error as AgentTestError).message).toContain('panel resource handler exploded');
+  }, 30_000);
+
+  it('requires an app fixture entry only when apps: "explicit" is requested', async () => {
+    const error = await withPackedShapedSession(
+      { decorate: withAppSurface, entry: 'in-memory explicit app coverage fixture', includeApps: true },
+      (session, manifest) => runPackedContractMatrix({
+        apps: 'explicit',
+        fixtures: routeHarnessContractFixtures(),
+        manifest,
+        server: 'harness',
+        session,
+      }).catch((thrown: unknown) => thrown),
+    );
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('app:harness/panel / coverage');
+    expect((error as AgentTestError).message).toContain('apps: "explicit"');
+    expect((error as AgentTestError).message).toContain(proofLevelLabel('packed-stdio'));
+  }, 30_000);
+
+  it('keeps app routes not-applicable at mcp-in-memory regardless of app fixtures', async () => {
+    const report = await withStatefulMatrix({
+      ...routeHarnessContractFixtures(),
+      'app:harness/panel': { kind: 'resource' as const },
+      'resource:harness/notes': { kind: 'resource' as const },
+    }, (options) => runContractMatrix({ ...options, apps: 'explicit' }));
+
+    expect(report.routes['app:harness/panel']?.checks).toEqual({
+      'surface-completeness': {
+        reason: 'MCP Apps are not registered by the in-memory projection level.',
+        status: 'not-applicable',
+      },
+    });
+    expect(report.routes['resource:harness/notes']?.checks).toMatchObject({
+      coverage: { status: 'passed' },
+      sweep: { status: 'passed' },
+    });
+  }, 30_000);
+
+  it('rejects a { kind: "resource" } fixture declared for a tool route', async () => {
+    const error = await withStatefulMatrix({
+      ...routeHarnessContractFixtures(),
+      'tool:harness/echo': { kind: 'resource' as const },
+    }, (options) => runContractMatrix(options).catch((thrown: unknown) => thrown));
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('tool:harness/echo / coverage');
+    expect((error as AgentTestError).message).toContain('resource fixtures apply to resource and app routes only');
+  }, 30_000);
+
+  it('reports cancellation as not-applicable when the invocation settles before the abort fires', async () => {
+    const report = await withStatefulMatrix({
+      ...routeHarnessContractFixtures(),
+      'tool:harness/wait': {
+        cancellation: { abortAfterMs: 1_500, input: { holdMs: 1 } },
+        input: { holdMs: 1 },
+        resultCompat: 'additive' as const,
+      },
+    }, (options) => runContractMatrix(options));
+
+    expect(report.routes['tool:harness/wait']?.checks.cancellation).toEqual({
+      reason: expect.stringContaining('invocation completed before abort; use an input that stays in flight'),
+      status: 'not-applicable',
+    });
+  }, 30_000);
+
+  it('fails cancellation when the abort is delivered in flight and the call still settles without rejecting', async () => {
+    const error = await withPackedShapedSession(
+      { decorate: ignoringAbortFor('wait'), entry: 'in-memory abort-ignoring fixture', includeApps: false },
+      (session, manifest) => runPackedContractMatrix({
+        fixtures: {
+          ...routeHarnessContractFixtures(),
+          'tool:harness/wait': {
+            cancellation: { abortAfterMs: 50, input: { holdMs: 400 } },
+            input: { holdMs: 1 },
+            resultCompat: 'additive' as const,
+          },
+        },
+        manifest,
+        server: 'harness',
+        session,
+      }).catch((thrown: unknown) => thrown),
+    );
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('tool:harness/wait / cancellation');
+    expect((error as AgentTestError).message).toContain('aborted callTool settled without throwing or rejecting');
   }, 30_000);
 
   it('aggregates missing resultCompat on a tool with the proof-level label', async () => {

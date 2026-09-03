@@ -25,7 +25,7 @@ import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import type { RenderRouteContext } from './render.ts';
+import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
 
 /** Where an in-memory projection result came from and what it proves. */
@@ -57,12 +57,10 @@ export interface McpToolInvocation {
   readonly structuredContent?: unknown;
 }
 
-export interface InMemoryMcpSessionOptions<
+export interface InMemoryMcpSessionOptionsBase<
   TState = unknown,
   TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
 > {
-  /** Request-scoped overrides applied to every route render in this session. */
-  readonly context?: RenderRouteContext;
   readonly manifest?: AgentBundleTestManifest;
   /** MCP server name. Optional when the project compiled exactly one server. */
   readonly server?: string;
@@ -72,6 +70,16 @@ export interface InMemoryMcpSessionOptions<
     readonly driver: AgentStateDriver;
   };
 }
+
+/**
+ * Session options; `context` holds the request-scoped overrides applied to
+ * every route render in this session and is required once the project
+ * declares providers (see {@link RenderRouteContextInit}).
+ */
+export type InMemoryMcpSessionOptions<
+  TState = unknown,
+  TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
+> = InMemoryMcpSessionOptionsBase<TState, TEvents> & RenderRouteContextInit;
 
 export interface InMemoryMcpSession extends AsyncDisposable {
   /** The real MCP SDK client, for protocol calls this module does not wrap. */
@@ -242,7 +250,7 @@ export const openInMemoryMcpServer = async <
   TState = unknown,
   TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
 >(
-  options: InMemoryMcpSessionOptions<TState, TEvents> = {},
+  ...[options = {}]: HarnessOptionsArguments<InMemoryMcpSessionOptions<TState, TEvents>>
 ): Promise<InMemoryMcpSession> => {
   const manifest = options.manifest ?? testManifest();
   const serverName = resolveServerName(manifest, options.server);
@@ -414,7 +422,7 @@ const asContentBlocks = (value: unknown): readonly McpContentBlock[] =>
  */
 export const invokeMcpTool = async (
   tool: string,
-  options: McpInvocationOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions>
 ): Promise<McpToolInvocation> => withSession(options, async (session) => {
   const result = await session.client.callTool({
     arguments: (options.input ?? {}) as Record<string, unknown>,
@@ -437,7 +445,7 @@ export interface McpResourceRead {
 /** Reads one compiled resource route by URI through the real protocol. */
 export const readMcpResource = async (
   uri: string,
-  options: InMemoryMcpSessionOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<InMemoryMcpSessionOptions>
 ): Promise<McpResourceRead> => withSession(options, async (session) => {
   const result = await session.client.readResource({ uri }) as { contents?: unknown };
   return Object.freeze({
@@ -454,7 +462,7 @@ export interface McpPromptResult {
 /** Gets one compiled prompt route through the real protocol. */
 export const getMcpPrompt = async (
   prompt: string,
-  options: McpInvocationOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions>
 ): Promise<McpPromptResult> => withSession(options, async (session) => {
   const result = await session.client.getPrompt({
     arguments: (options.input ?? {}) as Record<string, string>,
@@ -478,7 +486,7 @@ export interface McpSurfaceListing {
  * that a compiled route reached the protocol at all.
  */
 export const listMcpSurface = async (
-  options: InMemoryMcpSessionOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<InMemoryMcpSessionOptions>
 ): Promise<McpSurfaceListing> => withSession(options, async (session) => {
   const [tools, resources, prompts] = await Promise.all([
     session.client.listTools(),

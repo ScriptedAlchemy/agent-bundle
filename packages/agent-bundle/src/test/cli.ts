@@ -25,14 +25,12 @@ import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import { prepareCliRenderHost, type RenderRouteContext } from './render.ts';
+import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
 export type { CliRenderedEvent };
 
-export interface InvokeCliOptions {
-  /** Request-scope overrides for the dispatched command, over the runtime's request contract. */
-  readonly context?: RenderRouteContext;
+export interface InvokeCliOptionsBase {
   readonly manifest?: AgentBundleTestManifest;
   readonly signal?: AbortSignal;
   /**
@@ -41,6 +39,13 @@ export interface InvokeCliOptions {
    */
   readonly tty?: boolean;
 }
+
+/**
+ * Dispatch options; `context` carries the request-scope overrides for the
+ * dispatched command over the runtime's request contract and is required once
+ * the project declares providers (see {@link RenderRouteContextInit}).
+ */
+export type InvokeCliOptions = InvokeCliOptionsBase & RenderRouteContextInit;
 
 export interface CliInvocation {
   /** The argv vector as dispatched, including the command path segments. */
@@ -150,7 +155,7 @@ const moduleFor = async (
  */
 export const invokeCli = async (
   argv: readonly string[],
-  options: InvokeCliOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<InvokeCliOptions>
 ): Promise<CliInvocation> => {
   const manifest = options.manifest ?? testManifest();
   if (manifest.cliCommands.length === 0) throw noCommands(manifest);
