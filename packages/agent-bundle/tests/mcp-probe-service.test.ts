@@ -388,6 +388,54 @@ it('returns a timed-out report without awaiting stalled teardown when the budget
   }
 });
 
+it('chains plugin-data removal to the close a timeout already started, not a duplicate close (#397 review)', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  let ticks = 0;
+  let closeCalls = 0;
+  let releaseClose!: () => void;
+  const closeReleased = new Promise<void>((resolvePromise) => {
+    releaseClose = resolvePromise;
+  });
+  try {
+    const service = serviceFor(root, {
+      clock: () => (ticks++ === 0 ? 0 : 10_000),
+      createClient: () => client({ connect: () => new Promise(() => undefined) }),
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      // A non-reentrant transport: the first close runs the real (slow)
+      // TERM/KILL path, any duplicate close answers immediately.
+      createStdioTransport: () => transport(async () => {
+        closeCalls += 1;
+        if (closeCalls > 1) return;
+        await closeReleased;
+      }),
+      timeoutMs: 10,
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(report.status).toBe('timed-out');
+    expect(closeCalls).toBe(1);
+
+    // The response is back but the first close is still running: the plugin
+    // data must survive until that close — not a duplicate — settles.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).resolves.toBe('present');
+
+    releaseClose();
+    await service.settle();
+    expect(closeCalls).toBe(1);
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    releaseClose();
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('coalesces only identical in-flight probes and clears them after settlement', async () => {
   const root = await createBundle();
   const connectStarted = Promise.withResolvers<void>();

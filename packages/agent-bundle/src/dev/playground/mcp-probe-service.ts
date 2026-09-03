@@ -501,6 +501,14 @@ export class McpProbeService {
       await rm(options.pluginData, { force: true, recursive: true });
       throw error;
     }
+    // One close promise per probe: a timeout starts the transport's TERM/KILL
+    // path early, and the teardown below must follow that same close rather
+    // than a duplicate call a non-reentrant transport answers immediately.
+    let transportClose: Promise<void> | undefined;
+    const closeTransport = (): Promise<void> => {
+      transportClose ??= settledClose(() => transport.close());
+      return transportClose;
+    };
     let report: McpProbeReport;
     try {
       try {
@@ -508,7 +516,7 @@ export class McpProbeService {
           client.connect(transport),
           options.startedAt,
           'connect',
-          () => transport.close(),
+          closeTransport,
         );
       } catch (error) {
         const failure = failureSnapshot(
@@ -540,7 +548,7 @@ export class McpProbeService {
           client.listTools(),
           options.startedAt,
           'protocol',
-          () => transport.close(),
+          closeTransport,
         );
       } catch (error) {
         const protocolError = error instanceof McpProbeTimeoutError
@@ -594,10 +602,11 @@ export class McpProbeService {
       // outlives this wait detaches together with the removal it gates.
       // Each close is invoked in isolation: a synchronously throwing close
       // must neither skip the other close nor abort before the plugin-data
-      // removal below is registered.
+      // removal below is registered. The transport close is the one a
+      // timeout may already have started.
       const teardown = Promise.allSettled([
         settledClose(() => client.close()),
-        settledClose(() => transport.close()),
+        closeTransport(),
       ]);
       const cleanup = this.#removePluginDataAfter(teardown, options.pluginData);
       const teardownWait = new Promise<void>((resolvePromise) => {
