@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 import { defineConfig } from '@rslib/core';
+import { pluginPublint } from 'rsbuild-plugin-publint';
 import packageManifest from './package.json' with { type: 'json' };
 
 export default defineConfig({
@@ -21,6 +22,8 @@ export default defineConfig({
     legalComments: 'linked',
     target: 'node',
   },
+  // Suggestions stay informational; errors and warnings block publishing.
+  plugins: [pluginPublint({ throwOn: 'warning' })],
   root: import.meta.dirname,
   source: {
     tsconfigPath: './tsconfig.build.json',

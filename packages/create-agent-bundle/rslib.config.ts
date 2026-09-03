@@ -1,4 +1,5 @@
 import { defineConfig } from '@rslib/core';
+import { pluginPublint } from 'rsbuild-plugin-publint';
 
 /**
  * Single self-contained ESM bundle: `@clack/prompts` is a devDependency so
@@ -20,6 +21,8 @@ export default defineConfig({
     filenameHash: false,
     target: 'node',
   },
+  // Suggestions stay informational; errors and warnings block publishing.
+  plugins: [pluginPublint({ throwOn: 'warning' })],
   root: import.meta.dirname,
   source: {
     entry: {
