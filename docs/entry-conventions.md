@@ -81,7 +81,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
@@ -141,13 +141,17 @@ with the contract `(context: { invocation, signal }) => value |
 Promise<value>`, where `invocation` is the current route invocation and
 `signal` is its request abort signal.
 
-The generated shared Flight worker executes providers once per request,
-sequentially in deterministic key order, before entering `runAgentRequest`.
-The returned values join the request's provider map. A thrown or rejected
-factory fails the request closed; expected degradation should return an honest
-unavailable-shaped value instead of throwing. `processLifetime` is reserved
-for the framework-owned process identity and hit counter, so provider filenames
-must not derive that key.
+Every generated request scope — the shared Flight worker behind generated MCP
+and event routes, the react-server worker behind rendered routed CLI commands
+and rendered scripts, and the routed-CLI executable itself for plain `.ts`
+commands — executes providers once per request, sequentially in deterministic
+key order, before entering `runAgentRequest`. The returned values join the
+request's provider map. A thrown or rejected factory fails the request closed;
+expected degradation should return an honest unavailable-shaped value instead
+of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
+`script`), so a provider can branch on the entry surface deliberately.
+`processLifetime` is reserved for the framework-owned process identity and hit
+counter, so provider filenames must not derive that key.
 
 ### Handler request context
 
