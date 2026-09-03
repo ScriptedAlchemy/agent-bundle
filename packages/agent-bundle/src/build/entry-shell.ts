@@ -128,6 +128,15 @@ export const generatedInstallBinEntrySource = (options: {
   '',
 ].join('\n');
 
+/**
+ * Where workspace-durable state anchors when the host supplies no
+ * `AGENT_BUNDLE_PLUGIN_ROOT`: `cwd` (the caller's `.agent-bundle/state`, the
+ * npm package bin's contract) or `artifact` (the parent of the executable's
+ * own directory — the target root — which the artifact-hosted routed CLI
+ * shares with the generated MCP worker beside it).
+ */
+export type GeneratedStateFallback = 'artifact' | 'cwd';
+
 export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
@@ -135,11 +144,11 @@ export interface GeneratedCliBinEntryOptions {
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly state?: NormalizedStateDefinition;
+  /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
+  readonly stateFallback?: GeneratedStateFallback;
   /** The sibling react-server worker bundle; required when any command is rendered. */
   readonly workerFile?: string;
 }
-
-type GeneratedStateFallback = 'artifact' | 'cwd';
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
@@ -257,17 +266,18 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   }
   const providers = orderedProviders(options.providers ?? []);
   const plainIndent = options.state === undefined ? '  ' : '    ';
+  const stateFallback = options.stateFallback ?? 'cwd';
   return [
     `import { CliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
-    ...generatedStateImports(options.state, 'cwd'),
+    ...generatedStateImports(options.state, stateFallback),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    ...generatedStateOwner(options.state, 'cwd'),
+    ...generatedStateOwner(options.state, stateFallback),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
     'const routes = Object.freeze({',
@@ -372,6 +382,8 @@ export interface GeneratedRenderedRouteWorkerOptions {
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly state?: NormalizedStateDefinition;
+  /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
+  readonly stateFallback?: GeneratedStateFallback;
 }
 
 /**
@@ -384,16 +396,17 @@ export const generatedRenderedRouteWorkerSource = (
   options: GeneratedRenderedRouteWorkerOptions,
 ): string => {
   const providers = orderedProviders(options.providers ?? []);
+  const stateFallback = options.stateFallback ?? 'cwd';
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...generatedStateImports(options.state, 'cwd'),
+    ...generatedStateImports(options.state, stateFallback),
     ...routeImports(options.routes),
     ...providerImports(providers),
     '',
-    ...generatedStateOwner(options.state, 'cwd'),
+    ...generatedStateOwner(options.state, stateFallback),
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
     "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",

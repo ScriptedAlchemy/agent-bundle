@@ -946,6 +946,29 @@ it('rejects a malformed capability declaration when the adapter registers', () =
   expect(() => new TargetRegistry().register(source)).not.toThrow();
 });
 
+it('publishes the routed CLI bin capability with its bin layout on every built-in target (#387)', () => {
+  const registry = createDefaultRegistry();
+  for (const name of registry.names()) {
+    const adapter = registry.get(name);
+    expect(adapter.capabilities.cli?.state, name).toBe('supported');
+    expect(registry.artifactLayout(name).cliBin, name).toEqual({ allowedSuffixes: ['.mjs'], directory: 'bin' });
+  }
+
+  // A supported `cli` row promises a place for the executable, so an adapter
+  // without the layout cannot register; one that publishes no row stays valid
+  // and simply hosts no bin.
+  const cursor = registry.get('cursor');
+  const { cliBin: _cliBin, ...layoutWithoutBin } = cursor.artifactLayout!;
+  expect(() => new TargetRegistry().register({ ...cursor, artifactLayout: layoutWithoutBin }))
+    .toThrow(/supported cli capability without a routed CLI bin layout/u);
+  const { cli: _cli, ...capabilitiesWithoutCli } = cursor.capabilities;
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    capabilities: capabilitiesWithoutCli,
+  })).not.toThrow();
+});
+
 it('rejects a malformed inspection component capability when the adapter registers', () => {
   const source = createDefaultRegistry().get('cursor');
 

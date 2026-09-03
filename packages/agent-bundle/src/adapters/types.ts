@@ -414,7 +414,14 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFre
  */
 export interface TargetArtifactLayout {
   readonly assets?: string;
+  /** A host-native executable directory copied verbatim (Claude Code's `bin/`). */
   readonly bin?: string;
+  /**
+   * The compiled routed-CLI executable and its Flight worker
+   * (`bin/<plugin-name>.mjs`, `bin/<plugin-name>-flight.mjs`); required
+   * whenever the adapter publishes a supported `cli` capability (#387).
+   */
+  readonly cliBin?: TargetArtifactOutputLayout;
   readonly commands?: TargetArtifactOutputLayout;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
@@ -435,6 +442,7 @@ export interface TargetArtifactLayout {
  */
 export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
   assets: 'assets',
+  cliBin: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'bin' }),
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),

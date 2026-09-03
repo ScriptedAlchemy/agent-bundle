@@ -9,6 +9,7 @@ import {
 } from '../services/mcp-path-tokens.ts';
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
+  cliBinCapability,
   intersectCapabilityStates,
   supportedEventRouteNamesFrom,
   unavailableCapability,
@@ -263,6 +264,7 @@ const mcpRuntime = createTargetMcpRuntime({
 const artifactLayout: TargetArtifactLayout = Object.freeze({
   assets: standardArtifactLayout.assets,
   bin: 'bin',
+  cliBin: standardArtifactLayout.cliBin,
   commands: Object.freeze({ allowedSuffixes: Object.freeze(['.md']), directory: 'commands' }),
   hookWrappers: standardArtifactLayout.hookWrappers,
   mcpApps: standardArtifactLayout.mcpApps,
@@ -280,6 +282,8 @@ const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(pluginNam
 interface AgentsDocumentOptions {
   /** True when the Claude half emitted plugin-root executables. */
   readonly bin: boolean;
+  /** Routed-CLI executables the build compiles into the shared `bin/` (#387). */
+  readonly cliBins: readonly string[];
   /** True when the Claude half emitted conventional command prompts. */
   readonly commands: boolean;
   /** True when the Claude half of this bundle emitted `.lsp.json`. */
@@ -338,6 +342,8 @@ const agentsDocument = (model: NormalizedPlugin, options: AgentsDocumentOptions)
           '- `bin/` — Claude Code executables added to the Bash tool PATH while the plugin is enabled; Codex and Cursor have no declared bin surface.',
         ]
       : []),
+    ...options.cliBins.map((name) =>
+      `- \`bin/${name}.mjs\` — the compiled routed CLI shared by every host; run it as \`node bin/${name}.mjs --help\` from this directory (skills and scripts reach it through the plugin root).`),
     ...(options.workflows
       ? [
           '- `workflows/` — Claude Code workflow scripts. Codex and Cursor have no declared workflows surface.',
@@ -563,6 +569,9 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
   entries.push({
     content: agentsDocument(model, {
       bin: entries.some((entry) => entry.relativePath.startsWith('bin/')),
+      cliBins: (model.packageBuild?.bins ?? [])
+        .filter((bin) => bin.generatedCli !== undefined)
+        .map((bin) => bin.name),
       commands: selectedCommands.length > 0,
       lsp: entries.some((entry) => entry.relativePath === claudeArtifactPaths.lsp),
       outputStyles: entries.some((entry) => entry.relativePath.startsWith('output-styles/')),
@@ -617,7 +626,7 @@ const compositeEventCapabilities = Object.freeze(Object.fromEntries(
 ));
 
 const componentCapabilities = Object.freeze(Object.fromEntries(
-  ['commands', 'hooks', 'mcp', 'rules', 'skills'].map((capability) => [
+  [cliBinCapability, 'commands', 'hooks', 'mcp', 'rules', 'skills'].map((capability) => [
     capability,
     unionCapabilityStates(
       unionCapabilityStates(
@@ -704,6 +713,9 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
     bin: unavailableCapability(
       'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',
     ),
+    // One shared plugin root serves every host, so the routed CLI bin is
+    // hosted exactly like the shared `scripts/` and `mcp/` surfaces (#387).
+    [cliBinCapability]: componentCapabilities[cliBinCapability]!,
     channels: unavailableCapability(
       'The unified bundle emits the Claude-only channels manifest field, but the pinned Codex and Cursor contracts declare no shared message-channel surface.',
     ),

@@ -13,6 +13,7 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
 } from './entry-shell.ts';
+import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
@@ -154,6 +155,28 @@ const scriptEntries = async (
       target,
       ...(tools === undefined ? {} : { tools }),
     });
+  }));
+};
+
+/** The artifact-hosted routed CLI bins of one target (#387), composed by the build's own planner. */
+const cliBinEntries = (
+  model: NormalizedPlugin,
+  target: string,
+  tools: AgentBundleToolsConfig | undefined,
+): readonly BundlerInspectionEntry[] => {
+  const meta = projectMeta(model.metadata);
+  const outputRoot = artifactOutputToken(target);
+  const planned = planCompiledCliBins(model, { outDir: outputRoot, target });
+  return cliBinRslibEntries(planned, model).map((entry) => rslibInspectionEntry({
+    entry,
+    kind: 'bin',
+    meta,
+    name: entry.name.replace(/^bin-/u, ''),
+    outputPath: `${target}/${entry.outputRelativePath}`,
+    outputRoot,
+    source: entry.source,
+    target,
+    ...(tools === undefined ? {} : { tools }),
   }));
 };
 
@@ -335,13 +358,19 @@ const entryOrder = (left: BundlerInspectionEntry, right: BundlerInspectionEntry)
 
 export const composeBundlerInspection = async (options: {
   readonly model: NormalizedPlugin;
-  readonly targets: readonly { readonly hookEntries: readonly TargetHookEntry[]; readonly name: string }[];
+  readonly targets: readonly {
+    /** True when the target hosts the routed CLI bin (its adapter publishes the `cli` capability). */
+    readonly cliBin?: boolean;
+    readonly hookEntries: readonly TargetHookEntry[];
+    readonly name: string;
+  }[];
   readonly tools?: AgentBundleToolsConfig;
 }): Promise<BundlerInspection> => {
   const entries: BundlerInspectionEntry[] = [];
   const meta = projectMeta(options.model.metadata);
   for (const target of options.targets) {
     entries.push(
+      ...(target.cliBin === true ? cliBinEntries(options.model, target.name, options.tools) : []),
       ...(await scriptEntries(options.model, target.name, options.tools)),
       ...(await mcpEntryEntries(options.model, target.name, options.tools)),
       ...hookEntries(target.hookEntries, meta, target.name, options.tools),

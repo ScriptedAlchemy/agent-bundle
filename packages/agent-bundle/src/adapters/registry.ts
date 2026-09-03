@@ -9,7 +9,7 @@ import type {
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
-import { capabilityIsSupported } from './capability-state.ts';
+import { capabilityIsSupported, cliBinCapability } from './capability-state.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
@@ -186,6 +186,7 @@ const snapshotArtifactLayout = (
   const layout = record(declaredLayout);
   if (layout === undefined) throw new Error('Target adapter artifact layout must be a record.');
 
+  const cliBin = layout.cliBin === undefined ? undefined : snapshotOutputLayout(layout.cliBin, 'routed CLI bin');
   const commands = layout.commands === undefined ? undefined : snapshotOutputLayout(layout.commands, 'commands');
   const hookWrappers = layout.hookWrappers === undefined
     ? undefined
@@ -234,9 +235,13 @@ const snapshotArtifactLayout = (
   if (skills !== undefined && !capabilityIsSupported(adapter.capabilities.skills)) {
     throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
   }
+  if (cliBin === undefined && capabilityIsSupported(adapter.capabilities[cliBinCapability])) {
+    throw new Error(`Target adapter "${adapter.name}" declares a supported ${cliBinCapability} capability without a routed CLI bin layout.`);
+  }
   return Object.freeze({
     ...(assets === undefined ? {} : { assets }),
     ...(bin === undefined ? {} : { bin }),
+    ...(cliBin === undefined ? {} : { cliBin }),
     ...(commands === undefined ? {} : { commands }),
     ...(hookWrappers === undefined ? {} : { hookWrappers }),
     ...(mcpApps === undefined ? {} : { mcpApps }),

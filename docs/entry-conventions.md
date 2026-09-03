@@ -79,7 +79,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`); the legacy project-root-relative form is accepted only while unambiguous (`AB4827` otherwise). Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. | Use a custom server or prefix the file with `_` |
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
+| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in every selected host artifact whose target publishes the `cli` capability (all built-in targets). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
 | `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
@@ -150,9 +150,11 @@ for the generated worker or executable process.
 Workspace-durable generated MCP workers store under
 `$AGENT_BUNDLE_PLUGIN_ROOT/state`. If that host-provided anchor is absent,
 the worker derives the artifact root from the parent of its own `mcp/`
-directory. Routed CLI bins and rendered scripts use
+directory. The npm package's routed CLI bin and rendered scripts use
 `$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
-`$PWD/.agent-bundle/state`. Notice authorization is deliberately permissive
+`$PWD/.agent-bundle/state`; the artifact-hosted routed CLI bin
+(`<target>/bin/<name>.mjs`) derives the artifact root from the parent of its
+own `bin/` directory instead, like the MCP worker. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger, while application authorization policy is deferred.
 
@@ -380,6 +382,62 @@ as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr;
 machine output owns stdout. Rendered scripts
 (`src/scripts/<name>.tsx`) share the same shell and output contract with
 `{ argv, signal }` component props and status-derived exit codes.
+
+#### The routed CLI inside host artifacts
+
+The package bin only reaches users who install the npm package. Hooks,
+skills, and script routes ship with the **host artifact**, so the build also
+emits the same compiled command graph into every selected target whose
+adapter publishes the `cli` capability — all built-in targets (`claude`,
+`codex`, `cursor`, `portable`, `plugin`), because the artifact root is
+already a plain directory Node executes `mcp/` and `scripts/` files from:
+
+```text
+artifact/<target>/
+  bin/<plugin-name>.mjs           # the routed CLI: node bin/<plugin-name>.mjs <command> [args]
+  bin/<plugin-name>-flight.mjs    # react-server worker, present when any command renders
+  scripts/<name>.mjs
+  mcp/…
+```
+
+The artifact bin is a self-contained ESM module with no shebang or
+executable bit — invoke it as `node <plugin-root>/bin/<plugin-name>.mjs
+<args>`, exactly like `scripts/*.mjs`. Help, argv parsing, output modes,
+exit codes, and signals are identical to the package bin. One deliberate
+difference: workspace-durable state without a host-supplied
+`AGENT_BUNDLE_PLUGIN_ROOT` anchors on the **artifact root** (the parent of
+`bin/`, the same fallback the generated MCP worker beside it uses) rather
+than `$PWD/.agent-bundle/state`, so a co-installed CLI and server observe
+one store. The npm package bin keeps its `cwd` fallback.
+
+Reaching the bin from the other surfaces:
+
+- **Skills and hooks** use the plugin-root token
+  (`agent-bundle:path:plugin-root`, or a host spelling such as
+  `${CLAUDE_PLUGIN_ROOT}`), lowered per host exactly like MCP entries:
+  `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` in Claude Skill Markdown and
+  hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`
+  in Cursor hooks. Only Claude documents Skill Markdown interpolation, so a
+  skill that spells the token is a Claude-only skill (`AB3008` elsewhere);
+  skills for other hosts describe the path relative to the plugin root
+  instead.
+- **Script routes** use the sibling convention: from the compiled
+  `scripts/<name>.mjs`, the bin is `new URL('../bin/<plugin-name>.mjs',
+  import.meta.url)`, so a plain `src/scripts/<name>.ts` can
+  `spawn(process.execPath, [fileURLToPath(binUrl), ...argv])` and forward
+  stdio. `import.meta.url` is rewritten to the artifact location by the
+  bundle, never left pointing at `src/`.
+
+`inspect` accounts for the bin as one `cli` component per target (selected,
+or skipped with the host's `cli` capability judgment), `inspect --bundler`
+dumps each target's `bin/` composition beside its scripts, and the artifact
+manifest records both files with `bundle` provenance naming every command
+route. Artifact validation admits the `bin/` layout only for adapters that
+declare it (`cliBin`); an adapter that publishes a supported `cli` capability
+without that layout is rejected at registration. A target without the
+capability omits the bin and reports `AB4765`; a host-emitted file at the
+same path (a Claude `claude.bin` directory shipping `<plugin-name>.mjs`) is
+`AB4766`. The package build's `dist/bin/<plugin-name>.js` is unchanged.
 
 #### Project generated MCP tools into the CLI (power tier)
 
