@@ -41,9 +41,13 @@ export const cliBinWorkerArtifactPath = (name: string): string => `${cliBinDirec
 export const routedCliBins = (model: NormalizedPlugin): readonly NormalizedBinEntry[] =>
   Object.freeze((model.packageBuild?.bins ?? []).filter((bin) => bin.generatedCli !== undefined));
 
-/** True when the target's adapter admits the routed CLI bin into its artifact. */
+/**
+ * True when the target's adapter admits the routed CLI bin into its artifact —
+ * by the component judgment (`componentCapabilities ?? capabilities`), so
+ * emission and `inspect` accounting can never disagree.
+ */
 export const targetHostsCliBin = (registry: TargetRegistry, target: string): boolean =>
-  registry.supports(target, cliBinCapability);
+  registry.hostsComponent(target, cliBinCapability);
 
 export interface CompiledCliBin extends CompiledEntry {
   readonly id: string;

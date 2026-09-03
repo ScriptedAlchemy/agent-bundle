@@ -705,6 +705,13 @@ export interface NormalizationTargetRegistry {
     targetNames: readonly string[],
   ): readonly NormalizationHostBinSource[];
   capabilityState?(name: string, capability: string): CapabilityState | undefined;
+  /**
+   * The judgment that decides component emission for one target: the
+   * adapter's `componentCapabilities` override when it publishes one (a key
+   * it omits reads as no row), otherwise its `capabilities`. Emission and
+   * `inspect` accounting must consult the same judgment.
+   */
+  componentCapabilityState?(name: string, capability: string): CapabilityState | undefined;
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;

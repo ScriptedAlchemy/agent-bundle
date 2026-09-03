@@ -185,7 +185,14 @@ const snapshotArtifactLayout = (
   // A supported `cli` capability promises a home for the compiled routed CLI,
   // and the compiler emits it at exactly one place (`bin/<name>.mjs`), so the
   // promise is checked before any early return and against that fixed layout.
-  const cliSupported = capabilityIsSupported(adapter.capabilities[cliBinCapability]);
+  // The judgment is the component one (`componentCapabilities ?? capabilities`)
+  // because that is what decides emission; malformed declarations are
+  // reported by the capability validators, not here.
+  const componentCapabilities = adapter.componentCapabilities === undefined
+    ? undefined
+    : record(adapter.componentCapabilities);
+  const cliJudgment = (componentCapabilities ?? adapter.capabilities)[cliBinCapability];
+  const cliSupported = isCapabilityState(cliJudgment) && capabilityIsSupported(cliJudgment);
   const missingCliBinLayout = (): Error =>
     new Error(`Target adapter "${adapter.name}" declares a supported ${cliBinCapability} capability without a routed CLI bin layout.`);
   const declaredLayout = adapter.artifactLayout;
@@ -673,8 +680,18 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return this.#adapters.get(name)?.capabilities[capability];
   }
 
+  componentCapabilityState(name: string, capability: string): CapabilityState | undefined {
+    const adapter = this.#adapters.get(name);
+    return adapter === undefined ? undefined : (adapter.componentCapabilities ?? adapter.capabilities)[capability];
+  }
+
   supports(name: string, capability: string): boolean {
     return capabilityIsSupported(this.capabilityState(name, capability));
+  }
+
+  /** True when the target emits components needing `capability`, by the same judgment `inspect` reports. */
+  hostsComponent(name: string, capability: string): boolean {
+    return capabilityIsSupported(this.componentCapabilityState(name, capability));
   }
 
   names(): readonly string[] {

@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
-import { cliBinCapability } from '../adapters/capability-state.ts';
+import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -2146,11 +2147,28 @@ const routedCliBinTargetDiagnostics = (
   registry: NormalizationTargetRegistry,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
+  // The judgment must be the one emission and `inspect` use: the adapter's
+  // component override when published, otherwise its plain capabilities. A
+  // registry exposing neither accessor falls back to its boolean view.
+  const judgmentFor = (target: string): { readonly known: true; readonly state: CapabilityState | undefined } | { readonly known: false } => {
+    if (registry.componentCapabilityState !== undefined) {
+      return { known: true, state: registry.componentCapabilityState(target, cliBinCapability) };
+    }
+    if (registry.capabilityState !== undefined) {
+      return { known: true, state: registry.capabilityState(target, cliBinCapability) };
+    }
+    return { known: false };
+  };
   for (const bin of model.packageBuild?.bins ?? []) {
     if (bin.generatedCli === undefined) continue;
     for (const target of model.targets) {
-      if (!registry.has(target.name) || registry.supports(target.name, cliBinCapability)) continue;
-      const capability = registry.capabilityState?.(target.name, cliBinCapability);
+      if (!registry.has(target.name)) continue;
+      const judged = judgmentFor(target.name);
+      const supported = judged.known
+        ? capabilityIsSupported(judged.state)
+        : registry.supports(target.name, cliBinCapability);
+      if (supported) continue;
+      const capability = judged.known ? judged.state : undefined;
       let judgment: string;
       if (capability === undefined) {
         judgment = `the target publishes no ${cliBinCapability} capability row`;

@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Emit the routed CLI (`src/cli/**`) into every host artifact as

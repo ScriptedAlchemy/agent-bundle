@@ -987,6 +987,27 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
     ...cursor,
     artifactLayout: { ...layoutWithoutBin, cliBin: { allowedSuffixes: ['.js', '.mjs'], directory: 'bin' } },
   })).not.toThrow();
+
+  // Emission follows the component judgment `inspect` reports
+  // (`componentCapabilities ?? capabilities`), so an override that withdraws
+  // `cli` hosts no bin (and needs no layout), while an override that grants it
+  // needs the layout even if the top-level row is absent.
+  const withdrawn = new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    componentCapabilities: { ...cursor.componentCapabilities, cli: unavailableCapability('withdrawn for this host') },
+  });
+  expect(withdrawn.supports('cursor', 'cli')).toBe(true);
+  expect(withdrawn.hostsComponent('cursor', 'cli')).toBe(false);
+  expect(withdrawn.componentCapabilityState('cursor', 'cli')).toEqual({ reason: 'withdrawn for this host', state: 'unavailable' });
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: layoutWithoutBin,
+    capabilities: capabilitiesWithoutCli,
+    componentCapabilities: { cli: cursor.capabilities.cli! },
+  })).toThrow(/supported cli capability without a routed CLI bin layout/u);
+  expect(registry.hostsComponent('cursor', 'cli')).toBe(true);
+  expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
 });
 
 it('rejects a malformed inspection component capability when the adapter registers', () => {
