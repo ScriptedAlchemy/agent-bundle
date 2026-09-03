@@ -203,8 +203,8 @@ replaced patterns consumers previously wrote by hand. When `validate`,
 pre-convention patterns, it reports a migration diagnostic. `AB4730`–`AB4735`
 are **informational** nudges and never block anything. `AB4736` and `AB4737`
 are errors: the removed top-level authored-document locations are no longer
-discovered, and a rendered script cannot double as a package bin, so the
-compiler refuses to omit or misbuild them silently. The CLI prints these in
+discovered, and a rendered script without a `main` export cannot double as a
+package bin, so the compiler refuses to omit or misbuild them silently. The CLI prints these in
 human `validate` output and includes them in every `--json` diagnostics array.
 
 Which explicit config keys *claim* a conventional module out of discovery is
@@ -285,22 +285,27 @@ Recover: move the document under `src/skills/`, `src/commands/`, or
 `src/rules/`. Explicit `skills` paths remain valid anywhere. Published
 artifact paths remain `skills/`, `commands/`, and `rules/`.
 
-### `AB4737` — rendered script claimed as a package bin entry
+### `AB4737` — rendered script claimed as a package bin entry without `main`
 
 An explicit `bin` entry references a conventional rendered script
-(`src/scripts/<name>.tsx` or `.jsx`). A plain `src/scripts/<name>.ts` module
-ships happily on both surfaces — the npm bin envelope calls its `main(argv)`
-and the artifact script is the same bundle — but a rendered script's default
-export is an async Server Component the Agent renderer drives with
-`{ argv, signal }` props. The bin envelope would call that component as
-`main(argv)` and produce a bin that renders nothing, so the compiler refuses
-the pair instead of emitting a broken executable beside a working script.
-The message names every `bin` entry referencing the module.
+(`src/scripts/<name>.tsx` or `.jsx`) that exports no named `main`. A plain
+`src/scripts/<name>.ts` module ships happily on both surfaces — the npm bin
+envelope calls its `main(argv)` and the artifact script is the same bundle —
+but a rendered script's default export is an async Server Component the
+Agent renderer drives with `{ argv, signal }` props. The bin envelope prefers
+a named `main` export and only falls back to the default export, so without
+`main` it would call that component as `main(argv)` and produce a bin that
+renders nothing; the compiler refuses the pair instead of emitting a broken
+executable beside a working script. A rendered script that also exports
+`main` serves both surfaces and is not gated. The detection is the same
+static export scan the package build uses, so the gate and the envelope
+always agree. The message names every `bin` entry referencing the module.
 
-Recover: point the `bin` entry at a plain module that exports `main`; rename
-the script to `.ts` so one plain module ships as both the bin and the
-artifact script; or prefix a path segment with `_` (`src/scripts/_name.tsx`)
-to keep the module out of script discovery and bin-only.
+Recover: export a named `main(argv)` from the module for the bin surface;
+point the `bin` entry at a plain module that exports `main`; rename the
+script to `.ts` so one plain module ships as both the bin and the artifact
+script; or prefix a path segment with `_` (`src/scripts/_name.tsx`) to keep
+the module out of script discovery and bin-only.
 
 ## Prebuilt payloads (`AB4740`–`AB4750`)
 

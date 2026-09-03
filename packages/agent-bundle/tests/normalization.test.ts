@@ -1200,12 +1200,13 @@ it('ships a bin-claimed plain conventional script as both surfaces and refuses a
     skills: [],
   };
 
+  // The fixture root has no files, so the export scan finds no main and the gate fires.
   const gate = validateSource(loaded, discovered, registry).filter(({ code }) => code === 'AB4737');
   expect(gate).toEqual([
     {
       code: 'AB4737',
-      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again"; a rendered script\'s default Server Component cannot serve as a package bin entry.',
-      recovery: 'Point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports no main; the bin envelope would call its default Server Component as main(argv).',
+      recovery: 'Export a named main(argv) from the module for the bin surface, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
       severity: 'error',
       sourcePath: `${root}/src/scripts/render-notes.tsx`,
     },

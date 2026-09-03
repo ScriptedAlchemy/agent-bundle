@@ -289,6 +289,42 @@ it('keeps a bin- or lib-claimed src/scripts module in script discovery (#389)', 
   expect(graph.cli).toBeUndefined();
 });
 
+it('gates a bin-claimed rendered script with AB4737 only when it exports no main (#389)', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  bin: { notes: './src/scripts/render-notes.tsx', poster: './src/scripts/render-poster.tsx' },",
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    // Exports the named main the bin envelope selects first, so the module
+    // serves both surfaces: main(argv) for the bin, the component for the script.
+    'src/scripts/render-notes.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/scripts/render-poster.tsx': 'export default async () => undefined;\n',
+  });
+
+  const result = await validate({ root: project });
+  const gate = result.diagnostics.filter(({ code }) => code === 'AB4737');
+  expect(gate).toHaveLength(1);
+  expect(gate[0]).toMatchObject({
+    message: expect.stringContaining('render-poster.tsx is also the entry of bin "poster" but exports no main'),
+    severity: 'error',
+    sourcePath: join(project, 'src/scripts/render-poster.tsx'),
+  });
+  // Both rendered scripts stay discovered beside their bins: the gate names
+  // the conflict instead of dropping a route.
+  const graph = await compileRouteGraph(project, fixtureConfig({
+    bin: { notes: './src/scripts/render-notes.tsx', poster: './src/scripts/render-poster.tsx' },
+  }));
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:render-notes', 'script:render-poster']);
+});
+
 it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
   const root = await createRoot();
   await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });

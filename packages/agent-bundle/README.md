@@ -89,7 +89,8 @@ when the config is silent; config always wins and `bin: false` / `lib: false` op
 `scripts`, `hooks`, or `mcp` entry claims the module it references out of conventional route
 discovery, but a `bin` or `lib` entry does not claim a `src/scripts/<name>.ts` module: the same file
 ships as both `dist/bin/<name>.js` and the artifact `scripts/<name>.mjs` (a rendered `.tsx` script
-referenced by `bin` is `AB4737`; prefix a path segment with `_` for a bin-only module). MCP server
+referenced by `bin` must also export `main`, otherwise `AB4737`; prefix a path segment with `_` for a
+bin-only module). MCP server
 entries that default-export a server factory are wrapped in the framework stdio lifecycle shell
 (console-to-stderr guard with raw stdout restored for protocol frames, SIGINT 130 / SIGTERM 143,
 stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from

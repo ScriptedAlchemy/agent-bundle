@@ -1881,6 +1881,16 @@ const explicitBinNamesBySource = (loaded: LoadedConfig): ReadonlyMap<string, rea
   return names;
 };
 
+/** True when a rendered script also exports the named `main` the bin envelope selects first. */
+const renderedScriptExportsMain = (source: string): boolean => {
+  try {
+    return scanEntryExportsSource(readFileSync(source, 'utf8')).hasMainExport;
+  } catch {
+    // An unreadable module cannot satisfy the bin surface either.
+    return false;
+  }
+};
+
 const validateConventionalScripts = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1900,14 +1910,16 @@ const validateConventionalScripts = (
       // stage 3); AB4807 is retired and never reused.
       case 'rendered': {
         // The rendered-script default export is a Server Component the
-        // renderer drives; the bin envelope would call it as `main(argv)`, so
-        // the two surfaces cannot share one module.
+        // renderer drives. The bin envelope prefers a named `main` export and
+        // only falls back to the default export, so the two surfaces can share
+        // one module exactly when it exports `main`; the detection is the
+        // build's own export scan, so the gate and the envelope always agree.
         const binNames = binNamesBySource.get(route.source);
-        if (binNames !== undefined) {
+        if (binNames !== undefined && !renderedScriptExportsMain(route.source)) {
           diagnostics.push({
             code: 'AB4737',
-            message: `Rendered script ${relativePath} is also the entry of bin ${binNames.map((name) => JSON.stringify(name)).join(', ')}; a rendered script's default Server Component cannot serve as a package bin entry.`,
-            recovery: 'Point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+            message: `Rendered script ${relativePath} is also the entry of bin ${binNames.map((name) => JSON.stringify(name)).join(', ')} but exports no main; the bin envelope would call its default Server Component as main(argv).`,
+            recovery: 'Export a named main(argv) from the module for the bin surface, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
             severity: 'error',
             sourcePath: route.source,
           });
