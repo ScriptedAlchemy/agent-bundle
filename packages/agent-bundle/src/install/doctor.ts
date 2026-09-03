@@ -24,7 +24,20 @@ import type {
 } from '../host-contracts/process.ts';
 import { runBoundedChildProcess } from '../host-contracts/process.ts';
 import { requestEventRuntimeStatus } from '../events/ipc.ts';
-import { treeHash, type InstallHost } from './install.ts';
+import {
+  parsePublicHostInventory,
+  publicHostCacheRoot,
+  type InstallHost,
+  type PublicHostInventory,
+} from './install.ts';
+import {
+  compareInstalledTree,
+  describeContentComparison,
+  treeInventory,
+  type InstalledTreeComparison,
+  type InstalledTreeOwnership,
+  type TreeInventory,
+} from './receipt.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -54,6 +67,8 @@ export type DoctorCommandRunner = (
 export interface DoctorOptions {
   readonly commandRunner?: DoctorCommandRunner;
   readonly endpointDirectory?: string;
+  /** Process environment consulted for host cache roots (`CODEX_HOME`); defaults to `process.env`. */
+  readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly from?: string;
   readonly home?: string;
   readonly hosts?: readonly DoctorHost[];
@@ -112,9 +127,35 @@ export interface DoctorInventory {
   readonly status: DoctorInventoryStatus;
 }
 
+export type DoctorInstallComparisonStatus =
+  | 'current'
+  | 'foreign'
+  | 'not-installed'
+  | 'stale'
+  | 'unknown'
+  | 'version-mismatch';
+
+/**
+ * Installed copy versus the built artifact: `current` (same content),
+ * `stale` (same version, different content), `version-mismatch`, `foreign`
+ * (a directory at the install path that is not an agent-bundle install of
+ * this plugin), `not-installed`, or `unknown` when the host inventory could
+ * not be read.
+ */
+export interface DoctorInstallComparison {
+  readonly artifactContentHash: string;
+  readonly installedContentHash?: string;
+  readonly installedPath?: string;
+  readonly installedVersion?: string;
+  /** Who owns the installed copy: an agent-bundle receipt, a legacy pre-receipt layout, a foreign directory, or the host's own cache. */
+  readonly ownership?: InstalledTreeOwnership | 'host';
+  readonly status: DoctorInstallComparisonStatus;
+}
+
 export interface DoctorHostReport {
   readonly bundle?: DoctorFinding & {
     readonly bundleRoot?: string;
+    readonly comparison?: DoctorInstallComparison;
     readonly marketplace?: string;
   };
   readonly diagnostics: readonly Diagnostic[];
@@ -752,6 +793,165 @@ const malformedBundle = (
   };
 };
 
+const installComparison = (
+  comparison: InstalledTreeComparison,
+  installedPath: string,
+): DoctorInstallComparison => Object.freeze({
+  artifactContentHash: comparison.artifactContentHash,
+  installedContentHash: comparison.installedContentHash,
+  installedPath,
+  ...(comparison.installedVersion === undefined ? {} : { installedVersion: comparison.installedVersion }),
+  ownership: comparison.ownership,
+  status: comparison.status,
+});
+
+/**
+ * The host's own installed-plugin inventory (`plugin list --json`), read
+ * through the same parser `agent-bundle install` uses before replacing.
+ * Doctor looks across scopes, so a Claude row at any scope counts.
+ */
+const readPublicHostInventory = async (
+  host: Exclude<DoctorHost, 'cursor'>,
+  identity: PluginIdentity,
+  run: DoctorCommandRunner,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): Promise<PublicHostInventory> => {
+  let result: DoctorCommandResult;
+  try {
+    result = await run(Object.freeze({
+      args: Object.freeze(['plugin', 'list', '--json']),
+      cwd: identity.bundleRoot,
+      executable: host,
+    }));
+  } catch (error) {
+    return { detail: error instanceof Error ? error.message : String(error), status: 'unavailable' };
+  }
+  if (result.exitCode !== 0 || result.termination !== undefined) {
+    return {
+      detail: result.termination ?? (result.stderr.trim() || `exit code ${result.exitCode ?? 'unknown'}`),
+      status: 'unavailable',
+    };
+  }
+  return parsePublicHostInventory(host, result.stdout, {
+    cacheRoot: publicHostCacheRoot(host, environment, home),
+    marketplace: identity.marketplace ?? '',
+    plugin: identity.name,
+  });
+};
+
+const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>): string => host === 'claude'
+  ? 'Rerun `agent-bundle install claude --from <bundle-dir>`; same-version content drift is replaced through ' +
+    '`claude plugin uninstall --keep-data` + `claude plugin install` because Claude\'s `plugin update` is version-gated.'
+  : 'Rerun `agent-bundle install codex --from <bundle-dir>`; same-version content drift is replaced through ' +
+    '`codex plugin remove` + `codex plugin add`.';
+
+/**
+ * Compares the copy a public host CLI caches for this plugin against the
+ * built artifact. Unusable inventories degrade to `unknown` (Doctor never
+ * guesses a cache path without the host confirming the install).
+ */
+const publicHostInstallComparison = async (
+  host: Exclude<DoctorHost, 'cursor'>,
+  identity: PluginIdentity,
+  artifact: TreeInventory,
+  inventory: PublicHostInventory,
+): Promise<{ readonly comparison: DoctorInstallComparison; readonly diagnostics: readonly Diagnostic[] }> => {
+  if (inventory.status === 'unavailable') {
+    return {
+      comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'unknown' }),
+      diagnostics: Object.freeze([]),
+    };
+  }
+  const entry = inventory.entry;
+  if (entry === undefined) {
+    return {
+      comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' }),
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7307',
+        `${identity.name}@${identity.version} is not installed for ${host}.`,
+        `Run \`agent-bundle install ${host} --from <bundle-dir>\`.`,
+        'info',
+        host,
+      )]),
+    };
+  }
+  let installed: TreeInventory;
+  try {
+    installed = await treeInventory(entry.installPath);
+  } catch (error) {
+    return {
+      comparison: Object.freeze({
+        artifactContentHash: artifact.hash,
+        installedPath: entry.installPath,
+        ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+        ownership: 'host',
+        status: 'unknown',
+      }),
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7310',
+        `${host} installed copy at ${JSON.stringify(entry.installPath)} could not be compared: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        `Reinstall the ${host} plugin with \`agent-bundle install ${host} --from <bundle-dir> --replace\`.`,
+        'error',
+        host,
+      )]),
+    };
+  }
+  const status: 'current' | 'stale' | 'version-mismatch' =
+    installed.hash === artifact.hash && entry.version === identity.version
+      ? 'current'
+      : entry.version !== undefined && entry.version !== identity.version
+        ? 'version-mismatch'
+        : 'stale';
+  const comparison: DoctorInstallComparison = Object.freeze({
+    artifactContentHash: artifact.hash,
+    installedContentHash: installed.hash,
+    installedPath: entry.installPath,
+    ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+    ownership: 'host',
+    status,
+  });
+  const detail = describeContentComparison(identity.name, identity.version, {
+    artifactContentHash: artifact.hash,
+    installedContentHash: installed.hash,
+    installedName: identity.name,
+    ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+    status,
+  });
+  switch (status) {
+    case 'current':
+      return { comparison, diagnostics: Object.freeze([]) };
+    case 'stale':
+      return {
+        comparison,
+        diagnostics: freezeDiagnostics([diagnostic(
+          'AB7308',
+          `${host} plugin ${identity.name}@${identity.version} at ${entry.installPath} is stale ` +
+            `(same version, different content): ${detail}.`,
+          publicHostReplaceRecipe(host),
+          'warning',
+          host,
+        )]),
+      };
+    case 'version-mismatch':
+      return {
+        comparison,
+        diagnostics: freezeDiagnostics([diagnostic(
+          'AB7309',
+          `${host} version collision at ${entry.installPath}: ${detail}.`,
+          `Rerun \`agent-bundle install ${host} --from <bundle-dir> --replace\` to replace the installed version.`,
+          'warning',
+          host,
+        )]),
+      };
+    default: {
+      const exhaustive: never = status;
+      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+    }
+  }
+};
+
 const cursorBundle = async (
   identity: PluginIdentity,
   home: string,
@@ -764,7 +964,7 @@ const cursorBundle = async (
     version: identity.version,
   } as const;
   try {
-    await treeHash(identity.bundleRoot);
+    const artifact = await treeInventory(identity.bundleRoot);
     if (!await exists(destination)) {
       return {
         diagnostics: freezeDiagnostics([diagnostic(
@@ -774,7 +974,11 @@ const cursorBundle = async (
           'info',
           'cursor',
         )]),
-        finding: Object.freeze({ ...base, state: 'missing' }),
+        finding: Object.freeze({
+          ...base,
+          comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' as const }),
+          state: 'missing',
+        }),
       };
     }
     const installed = await readInstalledManifest(destination);
@@ -787,38 +991,77 @@ const cursorBundle = async (
           'error',
           'cursor',
         )]),
-        finding: Object.freeze({ ...base, state: 'corrupt' }),
+        finding: Object.freeze({
+          ...base,
+          comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'unknown' as const }),
+          state: 'corrupt',
+        }),
       };
     }
-    if (installed.version !== undefined && installed.version !== identity.version) {
-      return {
-        diagnostics: freezeDiagnostics([diagnostic(
-          'AB7309',
-          `Cursor version collision at ${destination}: found ${installed.version}, expected ${identity.version}.`,
-          'Choose the intended version, remove the conflicting copy manually, and reinstall.',
-          'warning',
-          'cursor',
-        )]),
-        finding: Object.freeze({ ...base, state: 'conflicted' }),
-      };
+    const comparison = await compareInstalledTree({
+      artifact,
+      destination,
+      installedManifest: {
+        name: installed.name,
+        ...(installed.version === undefined ? {} : { version: installed.version }),
+      },
+      plugin: identity.name,
+      version: identity.version,
+    });
+    const detail = describeContentComparison(identity.name, identity.version, comparison);
+    const withComparison = (state: DoctorFindingState): DoctorHostReport['bundle'] => Object.freeze({
+      ...base,
+      comparison: installComparison(comparison, destination),
+      state,
+    });
+    switch (comparison.status) {
+      case 'current':
+        return { diagnostics: Object.freeze([]), finding: withComparison('installed') };
+      case 'version-mismatch':
+        return {
+          diagnostics: freezeDiagnostics([diagnostic(
+            'AB7309',
+            `Cursor version collision at ${destination}: ${detail}.`,
+            'Choose the intended version; `agent-bundle install cursor --replace` (or `install.mjs --replace`) ' +
+              'replaces this agent-bundle install, or remove the conflicting copy manually.',
+            'warning',
+            'cursor',
+          )]),
+          finding: withComparison('conflicted'),
+        };
+      case 'foreign':
+        return {
+          diagnostics: freezeDiagnostics([diagnostic(
+            'AB7321',
+            `Cursor destination ${destination} is a foreign install: ${detail}; ` +
+              `it is not an agent-bundle install of ${identity.name}.`,
+            'Remove the foreign directory manually before installing; `--replace` refuses foreign installs.',
+            'warning',
+            'cursor',
+          )]),
+          finding: withComparison('conflicted'),
+        };
+      case 'stale':
+        return {
+          diagnostics: freezeDiagnostics([diagnostic(
+            'AB7308',
+            `Cursor plugin ${identity.name}@${identity.version} at ${destination} is stale ` +
+              `(same version, different content): ${detail}.`,
+            comparison.ownership === 'receipt'
+              ? 'Rerun `agent-bundle install cursor --from <bundle-dir>` or `install.mjs`; ' +
+                'same-version content drift of a receipt-managed install is replaced automatically.'
+              : 'This copy predates install receipts; rerun `agent-bundle install cursor --from <bundle-dir> --replace` ' +
+                '(or `install.mjs --replace`) once to adopt it.',
+            'warning',
+            'cursor',
+          )]),
+          finding: withComparison('drifted'),
+        };
+      default: {
+        const exhaustive: never = comparison.status;
+        throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+      }
     }
-    const [sourceHash, installedHash] = await Promise.all([
-      treeHash(identity.bundleRoot),
-      treeHash(destination),
-    ]);
-    if (sourceHash === installedHash) {
-      return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'installed' }) };
-    }
-    return {
-      diagnostics: freezeDiagnostics([diagnostic(
-        'AB7308',
-        `Cursor plugin ${identity.name}@${identity.version} differs from the current bundle.`,
-        'Reinstall the Cursor plugin from the current bundle.',
-        'warning',
-        'cursor',
-      )]),
-      finding: Object.freeze({ ...base, state: 'drifted' }),
-    };
   } catch (error) {
     return {
       diagnostics: freezeDiagnostics([diagnostic(
@@ -833,7 +1076,7 @@ const cursorBundle = async (
   }
 };
 
-const claudeBundle = async (
+const claudeRegistration = async (
   identity: PluginIdentity,
   probe: DoctorHostProbe,
   run: DoctorCommandRunner,
@@ -928,24 +1171,76 @@ const claudeBundle = async (
   return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'registered' }) };
 };
 
-const codexBundle = (
+interface PublicHostContext {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly home: string;
+  readonly run: DoctorCommandRunner;
+}
+
+/** Claude: inline registration proof plus the installed cache copy compared against the artifact. */
+const claudeBundle = async (
   identity: PluginIdentity,
-): { readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] } => ({
-  diagnostics: freezeDiagnostics([diagnostic(
-    'AB7313',
-    'Codex bundle registration is unknown because no read-only inventory verb is pinned.',
-    'Use Codex-owned commands to inspect registration; stage 1 intentionally does not guess.',
-    'info',
-    'codex',
-  )]),
-  finding: Object.freeze({
+  probe: DoctorHostProbe,
+  context: PublicHostContext,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] }> => {
+  const registration = await claudeRegistration(identity, probe, context.run);
+  if (probe.status !== 'available' || registration.finding === undefined) return registration;
+  const artifact = await treeInventory(identity.bundleRoot);
+  const inventory = await readPublicHostInventory('claude', identity, context.run, context.environment, context.home);
+  const compared = await publicHostInstallComparison('claude', identity, artifact, inventory);
+  return {
+    diagnostics: freezeDiagnostics([...registration.diagnostics, ...compared.diagnostics]),
+    finding: Object.freeze({ ...registration.finding, comparison: compared.comparison }),
+  };
+};
+
+/**
+ * Codex: `codex plugin list --json` (pinned at 0.147.0 and by the real-host
+ * install proof) names installed plugins, so the installed cache copy is
+ * compared against the artifact; an unusable inventory stays `unknown`.
+ */
+const codexBundle = async (
+  identity: PluginIdentity,
+  probe: DoctorHostProbe,
+  context: PublicHostContext,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] }> => {
+  const base = {
     bundleRoot: identity.bundleRoot,
     marketplace: identity.marketplace,
     name: identity.name,
-    state: 'unknown',
     version: identity.version,
-  }),
-});
+  } as const;
+  if (probe.status !== 'available') {
+    return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'skipped' }) };
+  }
+  const artifact = await treeInventory(identity.bundleRoot);
+  const inventory = await readPublicHostInventory('codex', identity, context.run, context.environment, context.home);
+  if (inventory.status === 'unavailable') {
+    return {
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7313',
+        `Codex bundle registration is unknown because \`codex plugin list --json\` was unusable: ${inventory.detail}.`,
+        'Use Codex-owned commands to inspect registration; Doctor does not guess a cache path.',
+        'info',
+        'codex',
+      )]),
+      finding: Object.freeze({
+        ...base,
+        comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'unknown' as const }),
+        state: 'unknown',
+      }),
+    };
+  }
+  const compared = await publicHostInstallComparison('codex', identity, artifact, inventory);
+  return {
+    diagnostics: compared.diagnostics,
+    finding: Object.freeze({
+      ...base,
+      comparison: compared.comparison,
+      state: inventory.entry === undefined ? 'missing' : 'installed',
+    }),
+  };
+};
 
 type EndpointProbe = 'live' | 'missing' | 'stale';
 
@@ -1312,11 +1607,12 @@ const doctorHost = async (
         identity.bundleRoot,
         await validateBundleFiles(identity.bundleRoot, host),
       );
+      const context: PublicHostContext = { environment: options.environment ?? process.env, home, run };
       const checked = host === 'cursor'
         ? await cursorBundle(identity, home)
         : host === 'claude'
-          ? await claudeBundle(identity, probed.probe, run)
-          : codexBundle(identity);
+          ? await claudeBundle(identity, probed.probe, context)
+          : await codexBundle(identity, probed.probe, context);
       diagnostics.push(...staticDiagnostics);
       diagnostics.push(...checked.diagnostics);
       if (checked.finding === undefined) {

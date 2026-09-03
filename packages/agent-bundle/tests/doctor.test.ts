@@ -8,6 +8,8 @@ import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
+import { installBundle } from '../src/install/install.ts';
+import { treeInventory } from '../src/install/receipt.ts';
 import {
   doctorEndpointDirectory,
   doctorEndpointProbeConcurrency,
@@ -111,7 +113,13 @@ const createBundle = async (
       }),
     ]);
   } else {
-    await writeJson(join(bundle, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture', version });
+    // Every emitted Cursor-compatible bundle carries the install surface; a receipt-less copy of it
+    // is a legacy agent-bundle install rather than a foreign directory.
+    await Promise.all([
+      writeJson(join(bundle, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture', version }),
+      writeFile(join(bundle, 'INSTALL.md'), '# Install doctor-fixture\n'),
+      writeFile(join(bundle, 'install.mjs'), '// installer\n'),
+    ]);
   }
   return bundle;
 };
@@ -670,8 +678,10 @@ it('validates --from Codex bytes without running the live schema generator', asy
       hosts: ['codex'],
     });
 
+    // Read-only inventory only: the version probe and the pinned `plugin list --json`, never the schema generator.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'codex' }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'codex' }),
     ]);
     expect(hostReport(report, 'codex').bundle?.state).toBe('corrupt');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
@@ -710,12 +720,14 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       hosts: ['claude'],
     });
 
+    // Read-only proofs only: version probe, inline registration proof, installed inventory; never `plugin validate`.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'claude' }),
       expect.objectContaining({
         args: ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
         executable: 'claude',
       }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'claude' }),
     ]);
     expect(hostReport(report, 'claude').bundle?.state).toBe('corrupt');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
@@ -843,6 +855,99 @@ it('classifies Cursor bundle state as installed, missing, drifted, or conflicted
     } finally {
       await fixture.cleanup();
     }
+  }
+});
+
+it('compares the installed Cursor copy against the artifact: current, stale, foreign, not installed', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    const doctor = () => runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const artifactHash = (await treeInventory(bundle)).hash;
+
+    const missing = hostReport(await doctor(), 'cursor');
+    expect(missing.bundle).toMatchObject({
+      comparison: { artifactContentHash: artifactHash, status: 'not-installed' },
+      state: 'missing',
+    });
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7307', severity: 'info' }),
+    ]));
+
+    // Receipt-managed install: current, then stale after a same-version content change.
+    await installBundle({ from: bundle, home: fixture.home, host: 'cursor', scope: 'user' });
+    const current = hostReport(await doctor(), 'cursor');
+    expect(current.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: artifactHash,
+        installedContentHash: artifactHash,
+        installedPath: destination,
+        installedVersion: '1.2.3',
+        ownership: 'receipt',
+        status: 'current',
+      },
+      state: 'installed',
+    });
+    expect(current.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
+
+    await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    const rebuiltHash = (await treeInventory(bundle)).hash;
+    const stale = hostReport(await doctor(), 'cursor');
+    expect(stale.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: rebuiltHash,
+        installedContentHash: artifactHash,
+        ownership: 'receipt',
+        status: 'stale',
+      },
+      state: 'drifted',
+    });
+    const staleDiagnostic = stale.diagnostics.find((entry) => entry.code === 'AB7308');
+    expect(staleDiagnostic).toMatchObject({ severity: 'warning', target: 'cursor' });
+    expect(staleDiagnostic?.message).toContain('stale (same version, different content)');
+    expect(staleDiagnostic?.message).toContain(`content ${artifactHash.slice(0, 12)}`);
+    expect(staleDiagnostic?.message).toContain(`content ${rebuiltHash.slice(0, 12)}`);
+    expect(staleDiagnostic?.recovery).toContain('replaced automatically');
+
+    // Legacy pre-receipt copy with different content: stale, recovery points at --replace.
+    await rm(destination, { force: true, recursive: true });
+    await cp(bundle, destination, { recursive: true });
+    await writeFile(join(destination, 'payload.txt'), 'older\n');
+    const legacy = hostReport(await doctor(), 'cursor');
+    expect(legacy.bundle).toMatchObject({ comparison: { ownership: 'legacy', status: 'stale' }, state: 'drifted' });
+    expect(legacy.diagnostics.find((entry) => entry.code === 'AB7308')?.recovery).toContain('--replace');
+
+    // Foreign directory under the plugin name: no receipt, no install surface.
+    await rm(destination, { force: true, recursive: true });
+    await mkdir(destination, { recursive: true });
+    await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'doctor-fixture', version: '1.2.3' });
+    await writeFile(join(destination, 'payload.txt'), 'someone else\n');
+    const foreignHash = (await treeInventory(destination)).hash;
+    const foreign = hostReport(await doctor(), 'cursor');
+    expect(foreign.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: rebuiltHash,
+        installedContentHash: foreignHash,
+        ownership: 'foreign',
+        status: 'foreign',
+      },
+      state: 'conflicted',
+    });
+    const foreignDiagnostic = foreign.diagnostics.find((entry) => entry.code === 'AB7321');
+    expect(foreignDiagnostic).toMatchObject({ severity: 'warning', target: 'cursor' });
+    expect(foreignDiagnostic?.message).toContain('foreign install');
+    expect(foreignDiagnostic?.message).toContain(`content ${foreignHash.slice(0, 12)}`);
+    expect(foreignDiagnostic?.message).toContain(`content ${rebuiltHash.slice(0, 12)}`);
+    expect(foreignDiagnostic?.message).toContain('same version, different content');
+  } finally {
+    await fixture.cleanup();
   }
 });
 
@@ -1001,9 +1106,138 @@ it('reports Codex bundle registration as unknown', async () => {
       hosts: ['codex'],
     });
     expect(hostReport(report, 'codex').bundle?.state).toBe('unknown');
+    expect(hostReport(report, 'codex').bundle?.comparison).toMatchObject({ status: 'unknown' });
     expect(report.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB7313', severity: 'info' }),
     ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+const isInventoryRequest = (request: Parameters<DoctorCommandRunner>[0]): boolean =>
+  request.args.join(' ') === 'plugin list --json';
+
+it('compares the Claude cache copy reported by plugin list --json against the artifact', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const installed = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    const artifactHash = (await treeInventory(bundle)).hash;
+    let inventory: readonly unknown[] = [];
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.250' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify(inventory) });
+      return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+    };
+    const doctor = () => runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+
+    const missing = hostReport(await doctor(), 'claude');
+    expect(missing.bundle).toMatchObject({ comparison: { status: 'not-installed' }, state: 'registered' });
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7307', severity: 'info', target: 'claude' }),
+    ]));
+
+    inventory = [{ enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.2.3' }];
+    const current = hostReport(await doctor(), 'claude');
+    expect(current.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: artifactHash,
+        installedContentHash: artifactHash,
+        installedPath: installed,
+        installedVersion: '1.2.3',
+        ownership: 'host',
+        status: 'current',
+      },
+      state: 'registered',
+    });
+    expect(current.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
+
+    await writeFile(join(installed, 'payload.txt'), 'stale\n');
+    const staleHash = (await treeInventory(installed)).hash;
+    const stale = hostReport(await doctor(), 'claude');
+    expect(stale.bundle).toMatchObject({
+      comparison: { installedContentHash: staleHash, status: 'stale' },
+      state: 'registered',
+    });
+    const staleDiagnostic = stale.diagnostics.find((entry) => entry.code === 'AB7308');
+    expect(staleDiagnostic).toMatchObject({ severity: 'warning', target: 'claude' });
+    expect(staleDiagnostic?.message).toContain('stale (same version, different content)');
+    expect(staleDiagnostic?.message).toContain(`content ${staleHash.slice(0, 12)}`);
+    expect(staleDiagnostic?.recovery).toContain('version-gated');
+
+    inventory = [{ enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.0.0' }];
+    const mismatch = hostReport(await doctor(), 'claude');
+    expect(mismatch.bundle?.comparison).toMatchObject({ installedVersion: '1.0.0', status: 'version-mismatch' });
+    expect(mismatch.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7309', severity: 'warning', target: 'claude' }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('compares the Codex cache copy against the artifact once plugin list --json names the install', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'codex');
+    const codexHome = join(fixture.root, 'codex-home');
+    const installed = join(codexHome, 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    await writeFile(join(installed, 'payload.txt'), 'stale\n');
+    const artifactHash = (await treeInventory(bundle)).hash;
+    const staleHash = (await treeInventory(installed)).hash;
+    let installedRows: readonly unknown[] = [];
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'codex-cli 0.147.0' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify({ available: [], installed: installedRows }) });
+      return commandResult({ stdout: '' });
+    };
+    const doctor = () => runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CODEX_HOME: codexHome },
+      from: bundle,
+      home: fixture.home,
+      hosts: ['codex'],
+    });
+
+    const missing = hostReport(await doctor(), 'codex');
+    expect(missing.bundle).toMatchObject({ comparison: { status: 'not-installed' }, state: 'missing' });
+    expect(missing.diagnostics.some((entry) => entry.code === 'AB7313')).toBe(false);
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB7307', severity: 'info', target: 'codex' }),
+    ]));
+
+    installedRows = [{
+      enabled: true,
+      installed: true,
+      marketplaceName: 'doctor-fixture-marketplace',
+      name: 'doctor-fixture',
+      pluginId: 'doctor-fixture@doctor-fixture-marketplace',
+      version: '1.2.3',
+    }];
+    const stale = hostReport(await doctor(), 'codex');
+    expect(stale.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: artifactHash,
+        installedContentHash: staleHash,
+        installedPath: installed,
+        ownership: 'host',
+        status: 'stale',
+      },
+      state: 'installed',
+    });
+    const staleDiagnostic = stale.diagnostics.find((entry) => entry.code === 'AB7308');
+    expect(staleDiagnostic).toMatchObject({ severity: 'warning', target: 'codex' });
+    expect(staleDiagnostic?.recovery).toContain('codex plugin remove');
   } finally {
     await fixture.cleanup();
   }

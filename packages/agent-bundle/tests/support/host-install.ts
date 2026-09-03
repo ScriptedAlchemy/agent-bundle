@@ -120,10 +120,12 @@ interface CommandResult {
 
 interface InstallResult {
   readonly bundleRoot?: unknown;
+  readonly contentHash?: unknown;
   readonly destination?: unknown;
   readonly host?: unknown;
   readonly marketplace?: unknown;
   readonly plugin?: unknown;
+  readonly previousContentHash?: unknown;
   readonly state?: unknown;
   readonly version?: unknown;
 }
@@ -192,9 +194,16 @@ interface HostInstallProofOptions {
   readonly installCommand?: HostInstallCommand;
 }
 
+/** The same-version rebuild round trip every host proof performs after its first install. */
+export type SameVersionRebuildProof = 'replaced';
+
 export interface ClaudeHostInstallReport {
   readonly host: 'claude';
-  readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
+  readonly install: {
+    readonly sameVersionRebuild: SameVersionRebuildProof;
+    readonly state: 'installed';
+    readonly version: '1.0.0';
+  };
   readonly inventory: { readonly hooks: 1; readonly mcpServers: 1; readonly skills: 1 };
   readonly proofLevel: string;
   readonly registration: {
@@ -211,7 +220,11 @@ export interface ClaudeHostInstallReport {
 
 export interface CodexHostInstallReport {
   readonly host: 'codex';
-  readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
+  readonly install: {
+    readonly sameVersionRebuild: SameVersionRebuildProof;
+    readonly state: 'installed';
+    readonly version: '1.0.0';
+  };
   readonly manifest: {
     readonly interfaceCapabilities: readonly string[];
     /** Sorted installed `interface` keys; every one is in the adapter's declared `codexInterfaceFields`. */
@@ -246,6 +259,7 @@ export interface CursorHostInstallReport {
   readonly host: 'cursor';
   readonly install: {
     readonly first: 'installed';
+    readonly sameVersionRebuild: SameVersionRebuildProof;
     readonly second: 'already-installed';
     readonly version: '1.0.0';
   };
@@ -276,6 +290,7 @@ export interface PortableHostInstallReport {
   readonly host: 'cursor';
   readonly install: {
     readonly first: 'installed';
+    readonly sameVersionRebuild: SameVersionRebuildProof;
     readonly second: 'already-installed';
     readonly version: '1.0.0';
   };
@@ -452,14 +467,52 @@ const stringEnvironment = (
 const assertInstallResult = (
   document: InstallResult,
   host: 'claude' | 'codex' | 'cursor',
-  state: 'already-installed' | 'installed',
+  state: 'already-installed' | 'installed' | 'replaced',
 ): void => {
   assertProof(document.host === host, `${host} install result did not identify the host.`);
   assertProof(document.plugin === plugin, `${host} install result did not identify ${plugin}.`);
   assertProof(document.version === version, `${host} install result did not identify version ${version}.`);
   assertProof(document.state === state, `${host} install result state was not ${state}.`);
+  assertProof(
+    typeof document.contentHash === 'string' && /^[0-9a-f]{64}$/u.test(document.contentHash),
+    `${host} install result carried no artifact content hash.`,
+  );
   if (host !== 'cursor') {
     assertProof(document.marketplace === marketplace, `${host} install result did not identify ${marketplace}.`);
+  }
+};
+
+const sameVersionRebuildMarker = 'REBUILD-SAME-VERSION.md';
+
+/**
+ * Same-version rebuild against the real host: one file is added to the built
+ * bundle (content changes, `version` does not), the installer runs again and
+ * must report `replaced`, the host's cached copy must carry the new file, and
+ * a third run must be the `already-installed` no-op. The marker is removed
+ * afterwards so the shared built fixture is unchanged for later proofs.
+ */
+const proveSameVersionRebuild = async (options: {
+  readonly bundle: string;
+  readonly host: 'claude' | 'codex' | 'cursor';
+  readonly install: () => Promise<InstallResult>;
+  readonly installedRoot: string;
+}): Promise<SameVersionRebuildProof> => {
+  const marker = join(options.bundle, sameVersionRebuildMarker);
+  await writeFile(marker, '# same-version rebuild\n');
+  try {
+    const replaced = await options.install();
+    assertInstallResult(replaced, options.host, 'replaced');
+    assertProof(
+      typeof replaced.previousContentHash === 'string' && replaced.previousContentHash !== replaced.contentHash,
+      `${options.host} replace did not report the superseded content hash.`,
+    );
+    await access(join(options.installedRoot, sameVersionRebuildMarker)).catch(() =>
+      fail(`${options.host} installed copy was not refreshed by the same-version rebuild.`));
+    const again = await options.install();
+    assertInstallResult(again, options.host, 'already-installed');
+    return 'replaced';
+  } finally {
+    await rm(marker, { force: true });
   }
 };
 
@@ -860,9 +913,19 @@ export const runClaudeHostInstallProof = async (
 
     const skillPath = join(expectedInstallPath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Claude cache did not contain skills/probe/SKILL.md.'));
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.claude,
+      host: 'claude',
+      install: async () => {
+        const result = await runInstallCommand(fixture, 'claude', fixture.bundles.claude, { ...options, environment });
+        assertProof(result.exitCode === 0, `Claude same-version reinstall failed: ${commandDetail(result)}`);
+        return parseJson<InstallResult>(result.stdout, 'Claude reinstall');
+      },
+      installedRoot: expectedInstallPath,
+    });
     return Object.freeze({
       host: 'claude',
-      install: Object.freeze({ state: 'installed', version }),
+      install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
       inventory: Object.freeze({ hooks: 1, mcpServers: 1, skills: 1 }),
       proofLevel,
       registration: Object.freeze({
@@ -976,10 +1039,20 @@ export const runCodexHostInstallProof = async (
         `Codex installed plugin manifest interface did not advertise ${capability}.`,
       );
     }
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.codex,
+      host: 'codex',
+      install: async () => {
+        const result = await runInstallCommand(fixture, 'codex', fixture.bundles.codex, { ...options, environment });
+        assertProof(result.exitCode === 0, `Codex same-version reinstall failed: ${commandDetail(result)}`);
+        return parseJson<InstallResult>(result.stdout, 'Codex reinstall');
+      },
+      installedRoot: cachePath,
+    });
 
     return Object.freeze({
       host: 'codex',
-      install: Object.freeze({ state: 'installed', version }),
+      install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
       manifest: Object.freeze({
         interfaceCapabilities: Object.freeze(interfaceCapabilities),
         interfaceFields: Object.freeze(interfaceFields),
@@ -1108,6 +1181,12 @@ export const runCursorHostInstallProof = async (
     const second = await install();
     assertInstallResult(second, 'cursor', 'already-installed');
     assertProof(second.destination === destination, 'Cursor idempotent install reported a different destination.');
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.cursor,
+      host: 'cursor',
+      install,
+      installedRoot: destination,
+    });
 
     return Object.freeze({
       destination: normalizedRelative(home, destination),
@@ -1119,6 +1198,7 @@ export const runCursorHostInstallProof = async (
       host: 'cursor',
       install: Object.freeze({
         first: 'installed',
+        sameVersionRebuild,
         second: 'already-installed',
         version,
       }),
@@ -1150,7 +1230,7 @@ export const runPortableHostInstallProof = async (
     await mkdir(join(home, '.cursor'), { recursive: true });
     const environment = isolatedEnvironment(options.environment, { HOME: home });
     const installer = join(fixture.portableBundle, 'install.mjs');
-    const install = async (state: 'Already installed' | 'Installed'): Promise<void> => {
+    const install = async (state: 'Already installed' | 'Installed' | 'Replaced'): Promise<void> => {
       const result = await run(process.execPath, [installer], {
         cwd: fixture.portableBundle,
         environment,
@@ -1309,6 +1389,20 @@ export const runPortableHostInstallProof = async (
 
     await install('Already installed');
 
+    // Same-version rebuild through the emitted install.mjs: owned files replaced in place, then a no-op.
+    const marker = join(fixture.portableBundle, sameVersionRebuildMarker);
+    await writeFile(marker, '# same-version rebuild\n');
+    let sameVersionRebuild: SameVersionRebuildProof;
+    try {
+      await install('Replaced');
+      await access(join(destination, sameVersionRebuildMarker)).catch(() =>
+        fail('Portable emitted installer did not refresh the installed copy for the same-version rebuild.'));
+      await install('Already installed');
+      sameVersionRebuild = 'replaced';
+    } finally {
+      await rm(marker, { force: true });
+    }
+
     return Object.freeze({
       contract: 'agent-plugins-1.0.0 byte lane clean (AB6035–AB6037)',
       destination: normalizedRelative(home, destination),
@@ -1320,6 +1414,7 @@ export const runPortableHostInstallProof = async (
       host: 'cursor',
       install: Object.freeze({
         first: 'installed',
+        sameVersionRebuild,
         second: 'already-installed',
         version,
       }),

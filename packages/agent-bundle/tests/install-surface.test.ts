@@ -1,8 +1,17 @@
+import { execFile as executeFile } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
+import { installReceiptFile, readInstallReceipt, treeInventory } from '../src/install/receipt.ts';
+
+const execFile = promisify(executeFile);
 
 const modelFor = (target: string): NormalizedPlugin => ({
   extensions: {},
@@ -104,3 +113,151 @@ it('documents every real host path from the composite profile', () => {
   expect(install).toContain('codex plugin add install-fixture@install-fixture-marketplace');
   expect(install).toContain('node ./install.mjs');
 });
+
+it('documents the same-version reinstall recipe per host, including Claude\'s version-gated update', () => {
+  const claude = writesFor('claude').get('INSTALL.md') ?? '';
+  expect(claude).toContain('Reinstall after a same-version rebuild');
+  expect(claude).toContain('version-gated');
+  expect(claude).toContain('claude plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data');
+  expect(claude).toContain('agent-bundle install claude --from ./');
+  expect(claude).toContain('--replace');
+
+  const codex = writesFor('codex').get('INSTALL.md') ?? '';
+  expect(codex).toContain('Reinstall after a same-version rebuild');
+  expect(codex).toContain('codex plugin remove install-fixture@install-fixture-marketplace');
+  expect(codex).toContain('--replace');
+
+  for (const target of ['cursor', 'portable', 'plugin']) {
+    const install = writesFor(target).get('INSTALL.md') ?? '';
+    expect(install).toContain(installReceiptFile);
+    expect(install).toContain('--replace');
+    expect(install).toContain('`state/`');
+  }
+  expect(writesFor('cursor').get('INSTALL.md')).toContain('node ./install.mjs --replace');
+  expect(writesFor('cursor').get('INSTALL.md')).toContain('content-hash comparison');
+
+  const installer = writesFor('cursor').get('install.mjs') ?? '';
+  expect(installer).toContain("argument === '--replace' || argument === '--force'");
+  expect(installer).toContain(`const receiptFile = ${JSON.stringify(installReceiptFile)};`);
+  expect(installer).toContain('Refusing foreign install');
+  expect(installer).toContain('Refusing content collision');
+  expect(installer).toContain('Refusing version collision');
+});
+
+const run = async (
+  installer: string,
+  args: readonly string[],
+  home: string,
+): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
+  try {
+    const result = await execFile(process.execPath, [installer, ...args], {
+      cwd: dirname(installer),
+      env: { ...process.env, HOME: home },
+    });
+    return { code: 0, stderr: result.stderr, stdout: result.stdout };
+  } catch (error) {
+    const failure = error as { readonly code?: number; readonly stderr?: string; readonly stdout?: string };
+    return { code: typeof failure.code === 'number' ? failure.code : 1, stderr: failure.stderr ?? '', stdout: failure.stdout ?? '' };
+  }
+};
+
+const listFiles = async (root: string): Promise<readonly string[]> =>
+  (await readdir(root, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1))
+    .sort((left, right) => left.localeCompare(right));
+
+it('emitted install.mjs mirrors the core replace policy: no-op, owned-only replace, legacy gate, foreign refusal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-install-mjs-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  try {
+    const writes = writesFor('cursor');
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'removed-later.txt'), 'old\n'),
+    ]);
+
+    const help = await run(installer, ['--help'], home);
+    expect(help).toMatchObject({ code: 0 });
+    expect(help.stdout).toContain('[--replace|--force]');
+    const unknown = await run(installer, ['--bogus'], home);
+    expect(unknown.code).toBe(2);
+    expect(unknown.stderr).toContain('Unknown installer argument "--bogus"');
+
+    const first = await run(installer, [], home);
+    expect(first).toMatchObject({ code: 0, stderr: '' });
+    expect(first.stdout).toContain('Installed install-fixture@1.2.3');
+    const firstArtifact = await treeInventory(bundle);
+    // The emitted receipt is byte-compatible with the core reader.
+    expect(await readInstallReceipt(destination)).toMatchObject({
+      contentHash: firstArtifact.hash,
+      files: firstArtifact.files,
+      host: 'cursor',
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    });
+
+    const again = await run(installer, [], home);
+    expect(again).toMatchObject({ code: 0, stderr: '' });
+    expect(again.stdout).toContain('Already installed install-fixture@1.2.3');
+    const forcedNoop = await run(installer, ['--replace'], home);
+    expect(forcedNoop.stdout).toContain('Already installed install-fixture@1.2.3');
+
+    // Same version, different content: owned files replaced, runtime state and operator files preserved.
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    await rm(join(bundle, 'removed-later.txt'));
+    const replaced = await run(installer, [], home);
+    expect(replaced).toMatchObject({ code: 0, stderr: '' });
+    expect(replaced.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(replaced.stdout).toContain(`-> ${(await treeInventory(bundle)).hash.slice(0, 12)}`);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'INSTALL.md',
+      'install.mjs',
+      'payload.txt',
+      'state/plugin.sqlite',
+    ]);
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+
+    // Legacy pre-receipt copy with drift: refused with a hash comparison until --replace adopts it.
+    await rm(join(destination, installReceiptFile));
+    await writeFile(join(destination, 'payload.txt'), 'legacy\n');
+    const legacyHash = (await treeInventory(destination)).hash;
+    const legacy = await run(installer, [], home);
+    expect(legacy.code).toBe(1);
+    expect(legacy.stderr).toContain('Refusing content collision');
+    expect(legacy.stderr).toContain(`content ${legacyHash.slice(0, 12)}`);
+    expect(legacy.stderr).toContain('same version, different content');
+    expect(legacy.stderr).toContain('--replace');
+    const adopted = await run(installer, ['--force'], home);
+    expect(adopted).toMatchObject({ code: 0, stderr: '' });
+    expect(adopted.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+    expect(await readInstallReceipt(destination)).toMatchObject({ plugin: 'install-fixture' });
+
+    // Foreign directory under the plugin name: refused even with --replace.
+    await rm(destination, { force: true, recursive: true });
+    await mkdir(join(destination, '.cursor-plugin'), { recursive: true });
+    await writeFile(join(destination, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' }));
+    await writeFile(join(destination, 'payload.txt'), 'someone else\n');
+    const foreign = await run(installer, ['--replace'], home);
+    expect(foreign.code).toBe(1);
+    expect(foreign.stderr).toContain('Refusing foreign install');
+    expect(foreign.stderr).toContain('same version, different content');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('someone else\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);

@@ -363,6 +363,14 @@ agent-bundle install cursor --from artifact/cursor
 
 Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
 include a standalone `install.mjs`. Its staged copy is idempotent for identical
-content and refuses version or content collisions. It never invokes sudo or
-changes PATH. Artifact validation rejects a built-in target whose required
-install surface is missing.
+content, records an install receipt (`.agent-bundle-install.json`: plugin,
+version, content hash, owned files), replaces a same-version stale copy of its
+own plugin in place (owned files only; `state/` survives), and accepts
+`--replace` (alias `--force`) to replace a different installed version or adopt
+a pre-receipt copy. Foreign directories are refused with a content-hash
+comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
+[--replace]` applies the same policy for every host, and `agent-bundle doctor
+--from` reports the installed copy versus the artifact as `current`, `stale`,
+`version-mismatch`, `foreign`, or `not-installed` (see the package README's
+"Reinstall after a same-version rebuild"). Artifact validation rejects a
+built-in target whose required install surface is missing.

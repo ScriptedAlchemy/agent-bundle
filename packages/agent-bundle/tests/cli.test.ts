@@ -697,6 +697,7 @@ it('dispatches the install command through the native installer surface', async 
   expect(calls).toEqual([{
     from: '/tmp/example bundle',
     host: 'claude',
+    replace: false,
     scope: 'project',
   }]);
   expect(JSON.parse(stdout.join(''))).toMatchObject({

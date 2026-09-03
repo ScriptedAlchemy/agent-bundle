@@ -1,17 +1,7 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import {
-  cp,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rename,
-  rm,
-} from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { Effect, Predicate } from 'effect';
 
@@ -20,9 +10,20 @@ import { errorMessage, isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
+import {
+  compareInstalledTree,
+  describeContentComparison,
+  replaceInstalledTree,
+  stageArtifact,
+  treeInventory,
+  type InstalledManifestIdentity,
+  type InstalledTreeComparison,
+  type TreeInventory,
+} from './receipt.ts';
 
 export type InstallHost = 'claude' | 'codex' | 'cursor';
 export type InstallScope = 'local' | 'project' | 'user';
+export type InstallResultState = 'already-installed' | 'installed' | 'replaced';
 
 export interface InstallCommandResult {
   readonly code: number;
@@ -40,19 +41,31 @@ export interface InstallCommandRunner {
 
 export interface InstallBundleOptions {
   readonly commandRunner?: InstallCommandRunner;
+  /** Process environment consulted for host cache roots (`CODEX_HOME`); defaults to `process.env`. */
+  readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly from: string;
   readonly home?: string;
   readonly host: InstallHost;
+  /**
+   * Replace an existing agent-bundle install of this plugin even when its
+   * version differs (`--replace` / `--force`). Same-version content drift is
+   * replaced automatically; foreign directories are always refused.
+   */
+  readonly replace?: boolean;
   readonly scope?: InstallScope;
 }
 
 export interface InstallResult {
   readonly bundleRoot: string;
+  /** sha256 over the artifact tree that was installed or found already installed. */
+  readonly contentHash?: string;
   readonly destination?: string;
   readonly host: InstallHost;
   readonly marketplace?: string;
   readonly plugin: string;
-  readonly state: 'already-installed' | 'installed';
+  /** Content hash of the copy a `replaced` install superseded. */
+  readonly previousContentHash?: string;
+  readonly state: InstallResultState;
   readonly version: string;
 }
 
@@ -189,7 +202,8 @@ const runHostCommand = async (
   identity: PluginIdentity,
   host: Exclude<InstallHost, 'cursor'>,
   args: readonly string[],
-): Promise<void> => {
+  operation: 'installation' | 'removal' = 'installation',
+): Promise<InstallCommandResult> => {
   let result: InstallCommandResult;
   try {
     result = await runner.run(host, args, { cwd: identity.bundleRoot });
@@ -201,9 +215,133 @@ const runHostCommand = async (
   }
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
-    throw failure('AB7004', `${host} plugin installation failed: ${detail}`, host);
+    throw failure('AB7004', `${host} plugin ${operation} failed: ${detail}`, host);
   }
+  return result;
 };
+
+/**
+ * Where a public host CLI caches an installed marketplace plugin; pinned by
+ * the real-host install proofs and shared with the development install sync.
+ */
+export const publicHostCacheRoot = (
+  host: Exclude<InstallHost, 'cursor'>,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): string => host === 'claude'
+  ? join(environment['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude'), 'plugins', 'cache')
+  : join(environment['CODEX_HOME'] ?? join(home, '.codex'), 'plugins', 'cache');
+
+export interface PublicHostInstalledEntry {
+  readonly installPath: string;
+  readonly version?: string;
+}
+
+/** The host's own answer to "is this plugin installed, and where": usable, or not, never guessed. */
+export type PublicHostInventory =
+  | { readonly entry?: PublicHostInstalledEntry; readonly status: 'available' }
+  | { readonly detail: string; readonly status: 'unavailable' };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * Parses `<host> plugin list --json` for one plugin. Claude rows carry the
+ * cache path (`installPath`) and scope; Codex rows confirm installation and
+ * version only, so the pinned cache layout supplies the path. Shared by
+ * `install` (before replacing) and `doctor` (when comparing), so both read the
+ * host's inventory identically.
+ */
+export const parsePublicHostInventory = (
+  host: Exclude<InstallHost, 'cursor'>,
+  stdout: string,
+  options: {
+    readonly cacheRoot: string;
+    readonly marketplace: string;
+    readonly plugin: string;
+    /** Claude only: restrict to rows installed at this scope. */
+    readonly scope?: InstallScope;
+  },
+): PublicHostInventory => {
+  const id = `${options.plugin}@${options.marketplace}`;
+  let document: unknown;
+  try {
+    document = JSON.parse(stdout) as unknown;
+  } catch {
+    return { detail: `${host} plugin list --json did not return JSON`, status: 'unavailable' };
+  }
+  if (host === 'claude') {
+    if (!Array.isArray(document)) {
+      return { detail: 'claude plugin list --json did not return an array', status: 'unavailable' };
+    }
+    const row = document.find((candidate) =>
+      isRecord(candidate) &&
+      candidate['id'] === id &&
+      (options.scope === undefined || candidate['scope'] === options.scope));
+    if (row === undefined || !isRecord(row) || typeof row['installPath'] !== 'string') {
+      return { status: 'available' };
+    }
+    return {
+      entry: {
+        installPath: row['installPath'],
+        ...(typeof row['version'] === 'string' ? { version: row['version'] } : {}),
+      },
+      status: 'available',
+    };
+  }
+  if (!isRecord(document) || !Array.isArray(document['installed'])) {
+    return { detail: 'codex plugin list --json did not return an installed array', status: 'unavailable' };
+  }
+  const row = document['installed'].find((candidate) =>
+    isRecord(candidate) && candidate['pluginId'] === id && candidate['installed'] !== false);
+  if (row === undefined || !isRecord(row) || typeof row['version'] !== 'string') {
+    return { status: 'available' };
+  }
+  return {
+    entry: {
+      installPath: join(options.cacheRoot, options.marketplace, options.plugin, row['version']),
+      version: row['version'],
+    },
+    status: 'available',
+  };
+};
+
+/** Runs the host's inventory verb so replacement only uninstalls what the host reports as installed. */
+const readPublicHostInventory = async (
+  runner: InstallCommandRunner,
+  identity: PluginIdentity,
+  host: Exclude<InstallHost, 'cursor'>,
+  scope: InstallScope,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): Promise<PublicHostInventory> => {
+  let result: InstallCommandResult;
+  try {
+    result = await runner.run(host, ['plugin', 'list', '--json'], { cwd: identity.bundleRoot });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) {
+      throw failure('AB7002', `${host} is not installed or is not available on PATH.`, host);
+    }
+    return { detail: errorMessage(error), status: 'unavailable' };
+  }
+  if (result.code !== 0) {
+    return { detail: result.stderr.trim() || `exit code ${result.code}`, status: 'unavailable' };
+  }
+  return parsePublicHostInventory(host, result.stdout, {
+    cacheRoot: publicHostCacheRoot(host, environment, home),
+    marketplace: identity.marketplace ?? '',
+    plugin: identity.plugin,
+    scope,
+  });
+};
+
+const publicHostUninstallArguments = (
+  host: Exclude<InstallHost, 'cursor'>,
+  id: string,
+  scope: InstallScope,
+): readonly string[] => host === 'claude'
+  ? ['plugin', 'uninstall', id, '--scope', scope, '--keep-data']
+  : ['plugin', 'remove', id];
 
 const installPublicCli = async (
   options: InstallBundleOptions,
@@ -219,6 +357,46 @@ const installPublicCli = async (
     throw failure('AB7001', `${host} bundle has no marketplace identity.`, host);
   }
   const runner = options.commandRunner ?? defaultCommandRunner;
+  const environment = options.environment ?? process.env;
+  const home = options.home ?? homedir();
+  const id = `${identity.plugin}@${marketplace}`;
+  const artifact = await treeInventory(identity.bundleRoot);
+  const inventory = await readPublicHostInventory(runner, identity, host, scope, environment, home);
+  if (inventory.status === 'unavailable' && options.replace === true) {
+    throw failure(
+      'AB7004',
+      `Cannot replace the ${host} install of ${id} safely: ${host} plugin list --json was unusable (${inventory.detail}).`,
+      host,
+    );
+  }
+  const base = {
+    bundleRoot: identity.bundleRoot,
+    contentHash: artifact.hash,
+    host,
+    marketplace,
+    plugin: identity.plugin,
+    version: identity.version,
+  } as const;
+  let replaced = false;
+  let previousContentHash: string | undefined;
+  if (inventory.status === 'available' && inventory.entry !== undefined) {
+    let installed: TreeInventory | undefined;
+    try {
+      installed = await treeInventory(inventory.entry.installPath);
+    } catch {
+      installed = undefined;
+    }
+    const sameVersion = inventory.entry.version === identity.version;
+    if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
+      return { ...base, destination: inventory.entry.installPath, state: 'already-installed' };
+    }
+    const contentDrift = installed !== undefined && sameVersion && installed.hash !== artifact.hash;
+    if (options.replace === true || contentDrift) {
+      await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
+      replaced = true;
+      previousContentHash = installed?.hash;
+    }
+  }
   await runHostCommand(runner, identity, host, [
     'plugin',
     'marketplace',
@@ -226,59 +404,59 @@ const installPublicCli = async (
     identity.bundleRoot,
   ]);
   await runHostCommand(runner, identity, host, host === 'claude'
-    ? ['plugin', 'install', `${identity.plugin}@${marketplace}`, '--scope', scope]
-    : ['plugin', 'add', `${identity.plugin}@${marketplace}`]);
+    ? ['plugin', 'install', id, '--scope', scope]
+    : ['plugin', 'add', id]);
   return {
-    bundleRoot: identity.bundleRoot,
-    host,
-    marketplace,
-    plugin: identity.plugin,
-    state: 'installed',
-    version: identity.version,
+    ...base,
+    ...(previousContentHash === undefined ? {} : { previousContentHash }),
+    state: replaced ? 'replaced' : 'installed',
   };
 };
 
-export const treeHash = async (root: string): Promise<string> => {
-  const rootMetadata = await lstat(root);
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
-    throw new Error('Refusing unsupported filesystem entry ".".');
-  }
-  const hash = createHash('sha256');
-  const visit = async (relativePath: string): Promise<void> => {
-    const path = join(root, relativePath);
-    const metadata = await lstat(path);
-    if (metadata.isSymbolicLink() || (!metadata.isDirectory() && !metadata.isFile())) {
-      throw new Error(`Refusing unsupported filesystem entry ${JSON.stringify(relativePath || '.')}.`);
-    }
-    if (metadata.isDirectory()) {
-      for (const name of (await readdir(path)).sort((left, right) => left.localeCompare(right))) {
-        await visit(join(relativePath, name));
-      }
-      return;
-    }
-    hash.update(relativePath.replaceAll('\\', '/'));
-    hash.update('\0');
-    hash.update(await readFile(path));
-    hash.update('\0');
-  };
-  for (const name of (await readdir(root)).sort((left, right) => left.localeCompare(right))) {
-    await visit(name);
-  }
-  return hash.digest('hex');
-};
+/** sha256 over a plugin tree in installer order; the install receipt is never part of it. */
+export const treeHash = async (root: string): Promise<string> => (await treeInventory(root)).hash;
 
-const readInstalledVersion = async (destination: string): Promise<string | undefined> => {
-  for (const manifest of ['.cursor-plugin/plugin.json', 'plugin.json']) {
+const cursorManifestCandidates = Object.freeze(['.cursor-plugin/plugin.json', 'plugin.json']);
+
+const readInstalledManifest = async (destination: string): Promise<InstalledManifestIdentity | undefined> => {
+  for (const manifest of cursorManifestCandidates) {
     try {
       const document = JSON.parse(await readFile(join(destination, manifest), 'utf8')) as unknown;
-      if (Predicate.isObject(document) && typeof document.version === 'string') {
-        return document.version;
+      if (Predicate.isObject(document) && typeof document.name === 'string') {
+        return {
+          name: document.name,
+          ...(typeof document.version === 'string' ? { version: document.version } : {}),
+        };
       }
     } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
+      if (!isErrno(error, 'ENOENT') && !(error instanceof SyntaxError)) throw error;
     }
   }
   return undefined;
+};
+
+const collisionMessage = (
+  destination: string,
+  identity: PluginIdentity,
+  comparison: InstalledTreeComparison,
+): string => {
+  const detail = describeContentComparison(identity.plugin, identity.version, comparison);
+  switch (comparison.status) {
+    case 'foreign':
+      return `Refusing foreign install at ${destination}: ${detail}; the directory is not an agent-bundle install of ` +
+        `${identity.plugin}, so --replace does not apply. Remove it manually if it is stale.`;
+    case 'version-mismatch':
+      return `Refusing version collision at ${destination}: ${detail}. Re-run with --replace to replace this agent-bundle install.`;
+    case 'stale':
+      return `Refusing content collision at ${destination}: ${detail}; this copy predates install receipts. ` +
+        'Re-run with --replace once to adopt it; later same-version rebuilds replace automatically.';
+    case 'current':
+      return `Install at ${destination} is current.`;
+    default: {
+      const exhaustive: never = comparison.status;
+      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+    }
+  }
 };
 
 const installCursor = async (
@@ -304,51 +482,56 @@ const installCursor = async (
   }
   const installRoot = join(cursorRoot, 'plugins', 'local');
   const destination = join(installRoot, identity.plugin);
+  const base = {
+    bundleRoot: identity.bundleRoot,
+    destination,
+    host: 'cursor',
+    plugin: identity.plugin,
+    version: identity.version,
+  } as const;
   try {
-    await treeHash(identity.bundleRoot);
+    const artifact = await treeInventory(identity.bundleRoot);
     await mkdir(installRoot, { recursive: true });
-    if (await exists(destination)) {
-      const currentVersion = await readInstalledVersion(destination);
-      if (currentVersion !== undefined && currentVersion !== identity.version) {
-        throw failure(
-          'AB7005',
-          `Refusing version collision at ${destination}: found ${currentVersion}, requested ${identity.version}.`,
-          'cursor',
-        );
+    const receipt = { host: 'cursor', plugin: identity.plugin, version: identity.version } as const;
+    if (!await exists(destination)) {
+      const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
+      try {
+        await rename(staged.root, destination);
+      } finally {
+        await rm(staged.parent, { force: true, recursive: true });
       }
-      if (await treeHash(identity.bundleRoot) === await treeHash(destination)) {
-        return {
-          bundleRoot: identity.bundleRoot,
-          destination,
-          host: 'cursor',
-          plugin: identity.plugin,
-          state: 'already-installed',
-          version: identity.version,
-        };
-      }
-      throw failure('AB7005', `Refusing content collision at ${destination}.`, 'cursor');
+      return { ...base, contentHash: artifact.hash, state: 'installed' };
     }
-    const stageParent = await mkdtemp(join(installRoot, `.${basename(destination)}.stage-`));
-    const stage = join(stageParent, 'bundle');
+    if (resolve(identity.bundleRoot) === destination) {
+      return { ...base, contentHash: artifact.hash, state: 'already-installed' };
+    }
+    const comparison = await compareInstalledTree({
+      artifact,
+      destination,
+      installedManifest: await readInstalledManifest(destination),
+      plugin: identity.plugin,
+      version: identity.version,
+    });
+    if (comparison.status === 'current') {
+      return { ...base, contentHash: artifact.hash, state: 'already-installed' };
+    }
+    const replaceable = comparison.status === 'stale' && comparison.ownership === 'receipt'
+      ? true
+      : comparison.status !== 'foreign' && options.replace === true;
+    if (!replaceable) {
+      throw failure('AB7005', collisionMessage(destination, identity, comparison), 'cursor');
+    }
+    const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
     try {
-      await cp(identity.bundleRoot, stage, {
-        errorOnExist: true,
-        force: false,
-        recursive: true,
-        verbatimSymlinks: true,
-      });
-      await treeHash(stage);
-      await rename(stage, destination);
+      await replaceInstalledTree({ comparison, destination, staged });
     } finally {
-      await rm(stageParent, { force: true, recursive: true });
+      await rm(staged.parent, { force: true, recursive: true });
     }
     return {
-      bundleRoot: identity.bundleRoot,
-      destination,
-      host: 'cursor',
-      plugin: identity.plugin,
-      state: 'installed',
-      version: identity.version,
+      ...base,
+      contentHash: artifact.hash,
+      previousContentHash: comparison.installedContentHash,
+      state: 'replaced',
     };
   } catch (error) {
     if (error instanceof DiagnosticError) throw error;

@@ -28,11 +28,11 @@ gate a build, a validation, or a dev rebuild.
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
-| `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
+| `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; see below). |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7320` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, and static bytes-at-rest validation. |
+| `AB7300`–`AB7321` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, and foreign-install detection (`AB7321`; see below). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
@@ -671,6 +671,57 @@ host CLI, repair a bundle, or perform a live protocol exchange.
 | --- | --- | --- | --- |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
 | `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, when a root `plugin.json` install that declares an Agent Plugins `$schema` violates the pinned Agent Plugins 1.0.0 contract (`AB6035`–`AB6037`, retained in the message), or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info naming the contract applied to an Agent Plugins install, or stating that a `.claude-plugin/plugin.json` (or schema-less root `plugin.json`) install has no Cursor-side pinned static document contract; loader-recognized entries remain `installed`. | Reinstall an invalid Cursor plugin, rebuild an invalid portable bundle, or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+
+## Install replacement and Doctor install comparison (`AB7005`, `AB7307`–`AB7309`, `AB7321`)
+
+`agent-bundle install <host>` and the emitted standalone `install.mjs` share one
+replace policy, and `agent-bundle doctor --from <bundle-dir>` reports the same
+verdict read-only. Every Cursor copy an agent-bundle installer places carries an
+install receipt, `.agent-bundle-install.json`, beside the plugin manifest:
+
+```json
+{
+  "contentHash": "<sha256 over path\\0bytes\\0 for every owned file>",
+  "files": [".cursor-plugin/plugin.json", "INSTALL.md", "install.mjs", "..."],
+  "format": "agent-bundle-install-receipt/1",
+  "host": "cursor",
+  "installedAt": "2026-09-03T08:00:00.000Z",
+  "plugin": "<plugin name>",
+  "version": "<plugin version>"
+}
+```
+
+The receipt never participates in the content hash. Ownership of an existing
+destination is decided as **receipt** (a receipt naming this plugin), **legacy**
+(no receipt, but the emitted `INSTALL.md` + `install.mjs` and a manifest with
+this plugin's name — a copy installed before receipts existed), or **foreign**
+(anything else). Claude and Codex copies are located through the host's own
+`plugin list --json` inventory; the host owns those copies, so replacement runs
+`claude plugin uninstall --keep-data` + `install` or `codex plugin remove` +
+`add`.
+
+| Installed copy | `install` | `install --replace` (alias `--force`) | Doctor |
+| --- | --- | --- | --- |
+| Identical content | `already-installed` no-op | `already-installed` no-op | `current` |
+| Receipt / host-managed, same version, different content | replaced automatically (`replaced`) | replaced | `stale` — `AB7308` warning |
+| Receipt / host-managed, different version | `AB7005` version collision | replaced | `version-mismatch` — `AB7309` warning |
+| Legacy, different content | `AB7005` content collision | replaced and adopted (receipt written) | `stale` — `AB7308` warning, recovery names `--replace` |
+| Foreign directory | `AB7005` foreign install | `AB7005` foreign install | `foreign` — `AB7321` warning |
+| Nothing installed | installed | installed | `not-installed` — `AB7307` info |
+
+Every `AB7005`, `AB7308`, `AB7309`, and `AB7321` message carries the comparison
+`installed <name>@<version> content <hash> vs artifact <name>@<version> content
+<hash> (same version, different content | different version | same content)`.
+Cursor replacement is in place and touches owned files only: stale owned files
+are removed and their empty directories pruned, staged files are renamed over
+their predecessors, and the receipt lands last. Entries the installer does not
+own — notably workspace-durable `state/` stores — are never removed or
+rewritten.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7005` | error | `install` refused an existing destination: a different installed version without `--replace`, a legacy pre-receipt copy with different content without `--replace`, or a foreign directory (refused even with `--replace`). | Re-run with `--replace` for the first two cases; remove a foreign directory manually. |
+| `AB7321` | warning | Doctor found a directory at the Cursor install path that is not an agent-bundle install of this plugin: no receipt naming it and no emitted install surface with a matching manifest, or a receipt naming another plugin. The message carries the installed-versus-artifact content-hash comparison. | Remove the foreign directory manually before installing; `--replace` refuses foreign installs by design. |
 
 ## Live development into hosts (`AB7200`–`AB7202`, `AB7210`–`AB7211`, `AB8024`–`AB8025`)
 
