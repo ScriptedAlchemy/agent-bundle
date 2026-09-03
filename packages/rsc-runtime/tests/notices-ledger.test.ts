@@ -984,6 +984,59 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     })).rejects.toMatchObject({ code: 'reservation-lost' });
     expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
 
+    await driver.close();
+  });
+
+  it('judges a reserved receipt against the exact state it commits over, even when the hold changes hands mid-call', async () => {
+    const { driver, ledger, store } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    // Between holder A's ownership read and its commit, holder B takes the
+    // lapsed slot over. The receipt must not be reported as recorded.
+    const lapsedAt = new Date(Date.parse('2026-09-01T19:04:00.000Z') + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS).toISOString();
+    let interposed = false;
+    const originalRead = store.read.bind(store);
+    const racing = createAgentNoticeLedger(Object.freeze({
+      ...store,
+      read: async (options?: Parameters<typeof store.read>[0]) => {
+        const snapshot = await originalRead(options);
+        if (!interposed) {
+          interposed = true;
+          await ledger.reserveAvailability({
+            at: lapsedAt,
+            idempotencyKey: 'reserve:b-takeover',
+            noticeIds: [id],
+            reservationKey: 'holder-b:1',
+          });
+        }
+        return snapshot;
+      },
+    }) as typeof store, { authorize: () => ({ state: 'authorized' }) });
+    await expect(racing.signalAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'signal:a-late',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    const after = (await ledger.read()).notices[0];
+    expect(after).not.toHaveProperty('availability');
+    expect(after?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    // B's own receipt still lands normally.
+    const signalled = await ledger.signalAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'signal:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(signalled.notices[0]?.availability).toMatchObject({ count: 1 });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+
     for (const invalid of [
       () => ledger.reserveAvailability({ at: 'never', idempotencyKey: 'x', noticeIds: [id], reservationKey: 'k' }),
       () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'y', noticeIds: [], reservationKey: 'k' }),
