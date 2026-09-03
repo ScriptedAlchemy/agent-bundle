@@ -241,6 +241,11 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `permission/denied` | Unavailable | `PermissionDenied` (observe-only) | Unavailable |
 | `stop` | Supported | `Stop` | `Stop` |
 | `stop/failure` | Unavailable | `StopFailure` (observe-only) | Unavailable |
+| `file/change` | Unavailable (agent-edit `afterFileEdit` stays a `tool/after` variant) | `FileChanged` (observe-only) | Unavailable |
+| `config/change` | Unavailable | `ConfigChange` (deny) | Unavailable |
+| `task/create` | Unavailable | `TaskCreated` (deny) | Unavailable |
+| `task/complete` | Unavailable | `TaskCompleted` (observe-only; blocking is exit-code-only) | Unavailable |
+| `agent/idle` | Unavailable | `TeammateIdle` (deny via continue:false) | Unavailable |
 | `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
 | `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
 | `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |

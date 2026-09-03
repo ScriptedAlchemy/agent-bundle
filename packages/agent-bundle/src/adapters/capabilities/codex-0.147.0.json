@@ -23,10 +23,22 @@
       "stop": "Stop"
     },
     "eventRoutes": {
+      "agent/idle": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no teammate-idle event.",
+        "state": "unavailable"
+      },
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
       "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
       "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
+      "config/change": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no config-change event.",
+        "state": "unavailable"
+      },
+      "file/change": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no file-changed event.",
+        "state": "unavailable"
+      },
       "permission/denied": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no permission-denied event.",
         "state": "unavailable"
@@ -38,6 +50,14 @@
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "stop/failure": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no stop-failure event.",
+        "state": "unavailable"
+      },
+      "task/complete": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no task-completed event.",
+        "state": "unavailable"
+      },
+      "task/create": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no task-created event.",
         "state": "unavailable"
       },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },

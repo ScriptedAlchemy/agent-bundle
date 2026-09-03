@@ -23,6 +23,10 @@
       "stop": "stop"
     },
     "eventRoutes": {
+      "agent/idle": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no teammate-idle event.",
+        "state": "unavailable"
+      },
       "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "subagentStop", "state": "supported" },
       "compact/after": {
@@ -30,6 +34,14 @@
         "state": "unavailable"
       },
       "compact/before": { "nativeEvent": "preCompact", "state": "supported" },
+      "config/change": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no configChange event.",
+        "state": "unavailable"
+      },
+      "file/change": {
+        "reason": "retrieved 2026-09-02: Cursor documents afterFileEdit as an agent-edit tool variant that overlaps canonical tool/after per the #258 selector rule, not a disk-watch FileChanged equivalent; no dedicated family is inferred without fixture evidence of loss.",
+        "state": "unavailable"
+      },
       "permission/denied": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no permission-denied event.",
         "state": "unavailable"
@@ -54,6 +66,14 @@
       "stop": { "nativeEvent": "stop", "state": "supported" },
       "stop/failure": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no stop-failure event.",
+        "state": "unavailable"
+      },
+      "task/complete": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no taskCompleted event.",
+        "state": "unavailable"
+      },
+      "task/create": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no taskCreated event.",
         "state": "unavailable"
       },
       "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },

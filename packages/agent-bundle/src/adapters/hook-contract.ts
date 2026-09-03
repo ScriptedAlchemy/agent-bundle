@@ -255,6 +255,30 @@ export const createNativeEventStarter = (
         last_assistant_message: null,
         stop_hook_active: false,
       });
+    case 'file/change':
+      return deepFreeze({ ...base, file_path: '/tmp/lifecycle-replay-watched.txt' });
+    case 'config/change':
+      return deepFreeze({ ...base, file_path: '/tmp/lifecycle-replay-settings.json', source: 'project_settings' });
+    case 'task/create':
+      return deepFreeze({
+        ...base,
+        task_id: 'lifecycle-replay-task',
+        task_subject: 'Lifecycle replay task.',
+      });
+    case 'task/complete':
+      return deepFreeze({
+        ...base,
+        permission_mode: 'default',
+        task_id: 'lifecycle-replay-task',
+        task_subject: 'Lifecycle replay task.',
+      });
+    case 'agent/idle':
+      return deepFreeze({
+        ...base,
+        permission_mode: 'default',
+        team_name: 'lifecycle-replay-team',
+        teammate_name: 'lifecycle-replay-teammate',
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {

@@ -10,6 +10,10 @@
     "state": "unavailable"
   },
   "eventRoutes": {
+    "agent/idle": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native TeammateIdle equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "agent/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "agent/stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "compact/after": {
@@ -18,6 +22,14 @@
     },
     "compact/before": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PreCompact/preCompact equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "config/change": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native ConfigChange equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "file/change": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native FileChanged equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
     },
     "permission/denied": {
@@ -40,6 +52,14 @@
     "stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "stop/failure": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native StopFailure equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "task/complete": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native TaskCompleted equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "task/create": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native TaskCreated equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
     },
     "tool/after": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },

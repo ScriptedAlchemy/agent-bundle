@@ -246,6 +246,24 @@ export const validateNativeEventEnvelope = (
       return nativeEventError('native stop_hook_active must be a boolean');
     }
   }
+  if (canonicalEvent === 'file/change') requireNativeString(native, 'file_path');
+  if (canonicalEvent === 'config/change') {
+    if (!['user_settings', 'project_settings', 'local_settings', 'policy_settings', 'skills'].includes(String(native.source))) {
+      return nativeEventError('native source is invalid');
+    }
+    if (Object.hasOwn(native, 'file_path')) requireNativeString(native, 'file_path');
+  }
+  if (canonicalEvent === 'task/create' || canonicalEvent === 'task/complete') {
+    requireNativeString(native, 'task_id');
+    requireNativeString(native, 'task_subject');
+    for (const field of ['task_description', 'teammate_name', 'team_name']) {
+      if (Object.hasOwn(native, field)) requireNativeString(native, field);
+    }
+  }
+  if (canonicalEvent === 'agent/idle') {
+    requireNativeString(native, 'teammate_name');
+    requireNativeString(native, 'team_name');
+  }
   if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
     requireCompactTrigger(native);
     if (target === 'codex') {
@@ -573,6 +591,60 @@ export const projectEventDocument = (
       throw new TypeError('stop/failure has no documented context/output channel.');
     }
     return undefined;
+  }
+  if (event === 'file/change') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('file/change has no decision control on Claude FileChanged; it is side-effect-only.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('file/change has no documented context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'config/change' || event === 'task/create') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError(`${event} cannot replace native input.`);
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError(`${event} has no documented additional-context channel.`);
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError(`${event} reason is only valid when outcome is deny.`);
+    }
+    return parsedValue?.outcome === 'deny'
+      ? Object.freeze({ decision: 'block', reason: requireDenyReason() })
+      : undefined;
+  }
+  if (event === 'task/complete') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('task/complete blocking is exit-code-only on Claude TaskCompleted (JSON continue:false redirects to teammate stop and is ignored for TaskUpdate); it is not projected.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('task/complete has no documented context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'agent/idle') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('agent/idle cannot replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('agent/idle has no documented additional-context channel.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('agent/idle reason is only valid when outcome is deny.');
+    }
+    return parsedValue?.outcome === 'deny'
+      ? Object.freeze({ continue: false, stopReason: requireDenyReason() })
+      : undefined;
   }
   if (event === 'tool/before') {
     if (target === 'cursor') {

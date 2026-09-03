@@ -23,10 +23,13 @@
       "stop": "Stop"
     },
     "eventRoutes": {
+      "agent/idle": { "nativeEvent": "TeammateIdle", "state": "supported" },
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
       "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
       "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
+      "config/change": { "nativeEvent": "ConfigChange", "state": "supported" },
+      "file/change": { "nativeEvent": "FileChanged", "state": "supported" },
       "permission/denied": { "nativeEvent": "PermissionDenied", "state": "supported" },
       "permission/request": { "nativeEvent": "PermissionRequest", "state": "supported" },
       "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
@@ -34,6 +37,8 @@
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "stop/failure": { "nativeEvent": "StopFailure", "state": "supported" },
+      "task/complete": { "nativeEvent": "TaskCompleted", "state": "supported" },
+      "task/create": { "nativeEvent": "TaskCreated", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
       "tool/failure": { "nativeEvent": "PostToolUseFailure", "state": "supported" },
