@@ -235,7 +235,7 @@ root, and the parent-of-subagent chain — is the only identity-adjacent surface
 | No parent id on `SubagentStart`; child events carry no parent | Claude, Codex | §1, §2 | Inferred from the newest unclaimed spawn call under the same root; refused when two parents have unclaimed spawns; filed as #422 / #423 |
 | Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Bound by elimination in the registry (single pending start per workspace); refused while ambiguous for parallel workers; filed as #424 |
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
-| `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 ask 4); lineage never depends on it to establish a root |
+| `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 gap 4); lineage never depends on it to establish a root |
 | Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (`beforeSubmitPrompt`, `stop`, `sessionEnd`, `preCompact`) |
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
@@ -299,7 +299,7 @@ Consequences for lineage:
 
 - `workspaceOpen` and `sessionEnd` are confirmed plugin-scoped deliveries on
   the desktop; the §1 run missed them because the Xvfb CLI session never
-  closed a window. Only `sessionStart` remains a host gap (#424 ask 4).
+  closed a window. Only `sessionStart` remains a host gap (#424 gap 4).
 - Only 7 of the 35 conversations ever produced `beforeSubmitPrompt`; 28 were
   first seen on `postToolUse`/`preToolUse`/`afterShellExecution` (the log
   starts mid-conversation after a Cursor restart, or the plugin loaded
