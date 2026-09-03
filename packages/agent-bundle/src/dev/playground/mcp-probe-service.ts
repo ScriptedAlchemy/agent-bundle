@@ -87,6 +87,8 @@ export interface McpProbeServiceOptions {
     options: RemoteTransportOptions,
   ) => McpProbeTransport;
   readonly now?: () => Date;
+  /** Testing seam for the detached teardown cap; production keeps the named constant. */
+  readonly pluginDataTeardownCapMs?: number;
   readonly prepared: () => Readonly<{ readonly bundleSource: string }> | undefined;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
@@ -256,6 +258,9 @@ const positiveTimeout = (value: number): number => {
  * become one settled promise; teardown chains must never depend on a close
  * being well behaved.
  */
+const removePluginData = (pluginData: string): Promise<void> =>
+  rm(pluginData, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 });
+
 const settledClose = (close: () => Promise<void>): Promise<void> => {
   try {
     return Promise.resolve(close()).then(() => undefined, () => undefined);
@@ -273,6 +278,7 @@ export class McpProbeService {
   readonly #inFlight = new Map<string, Promise<McpProbeReport>>();
   readonly #now: () => Date;
   readonly #pendingTeardowns = new Set<Promise<void>>();
+  readonly #pluginDataTeardownCapMs: number;
   readonly #prepared: McpProbeServiceOptions['prepared'];
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
@@ -296,6 +302,9 @@ export class McpProbeService {
           : { headers: transportOptions.headers },
       }));
     this.#now = options.now ?? (() => new Date());
+    this.#pluginDataTeardownCapMs = positiveTimeout(
+      options.pluginDataTeardownCapMs ?? mcpProbePluginDataTeardownCapMs,
+    );
     this.#prepared = options.prepared;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
@@ -397,24 +406,40 @@ export class McpProbeService {
    * reject outright and turn an honest timed-out report into a generic
    * failure, elsewhere the directory can vanish under the exiting child.
    * Removal failures stay on this detached path; they never reach the report.
+   *
+   * When the cap wins the race and the removal then fails — the transport is
+   * still alive and holds the directory, which on Windows is an `EPERM` — one
+   * more removal is chained to the teardown's eventual settlement instead of
+   * swallowing the failure for good; `settle()` fences that retry too.
    */
   #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
     let cap: NodeJS.Timeout | undefined;
+    let capWon = false;
     // The cap stays referenced on purpose: it is the only handle guaranteeing
     // the removal runs when a stalled teardown outlives Workbench shutdown,
     // and it is cleared the moment the teardown settles.
     const capped = new Promise<void>((resolvePromise) => {
-      cap = setTimeout(resolvePromise, mcpProbePluginDataTeardownCapMs);
+      cap = setTimeout(() => {
+        capWon = true;
+        resolvePromise();
+      }, this.#pluginDataTeardownCapMs);
     });
     const pending = Promise.race([teardown, capped])
       .then(() => {
         if (cap !== undefined) clearTimeout(cap);
-        return rm(pluginData, { force: true, recursive: true });
+        return removePluginData(pluginData);
       })
-      .then(() => undefined, () => undefined);
+      .then(() => undefined, () => {
+        if (!capWon) return;
+        this.#track(teardown.then(() => removePluginData(pluginData)).then(() => undefined, () => undefined));
+      });
+    this.#track(pending);
+    return pending;
+  }
+
+  #track(pending: Promise<void>): void {
     this.#pendingTeardowns.add(pending);
     void pending.then(() => this.#pendingTeardowns.delete(pending));
-    return pending;
   }
 
   #runtime(host: McpProbeHost): TargetMcpRuntimeContract {

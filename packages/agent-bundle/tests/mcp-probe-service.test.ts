@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -613,6 +613,60 @@ it('reports a timeout even when the timeout teardown throws synchronously', asyn
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retries plugin-data removal once a capped teardown finally settles (#397 review)', async () => {
+  const root = await createBundle();
+  // The plugin-data directory lives under a parent made read-only while the
+  // transport is "alive": that stands in for the Windows EPERM a still-running
+  // child produces when the capped removal races it.
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-held-'));
+  const pluginData = join(parent, 'plugin-data');
+  let releaseClose!: () => void;
+  const closeReleased = new Promise<void>((resolvePromise) => {
+    releaseClose = resolvePromise;
+  });
+  const events: string[] = [];
+  try {
+    const service = serviceFor(root, {
+      createPluginData: async () => {
+        await mkdir(pluginData);
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        await chmod(parent, 0o555);
+        return pluginData;
+      },
+      createStdioTransport: () => transport(async () => {
+        await closeReleased;
+        events.push('transport-closed');
+      }),
+      pluginDataTeardownCapMs: 100,
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(report.status).toBe('ok');
+    // The cap fires and the first removal fails against the held directory.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).resolves.toBe('present');
+
+    let settled = false;
+    const settle = service.settle().then(() => { settled = true; });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    // A capped-and-failed removal is not "done": shutdown still waits on the retry.
+    expect(settled).toBe(false);
+
+    // The transport finishes closing and releases the directory; the chained
+    // retry removes it and only then does the fence resolve.
+    await chmod(parent, 0o755);
+    releaseClose();
+    await settle;
+    events.push('settled');
+    expect(events).toEqual(['transport-closed', 'settled']);
+    await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await chmod(parent, 0o755).catch(() => undefined);
+    await rm(parent, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }
 });
