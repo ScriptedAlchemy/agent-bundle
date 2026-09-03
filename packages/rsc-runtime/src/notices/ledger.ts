@@ -399,9 +399,24 @@ const publishProgram = Effect.fnUntraced(function*(
   if (persisted === undefined) {
     return yield* Effect.die(new Error('Notice publish committed without a persisted notice'));
   }
+  // A publish deduplicated onto another author's notice returns that notice's
+  // identity, state, and receipts — what coordination needs — but not its
+  // content: a predictable dedupe key must never read a secret someone else
+  // wrote. Only the caller's own notice (a fresh publish or an idempotent
+  // replay of it) comes back with content, and that content is the caller's.
+  const notice = persisted.id === prepared.id
+    ? persisted
+    : Object.freeze({
+      ...persisted,
+      content: Object.freeze({
+        root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
+        status: persisted.content.status,
+        version: persisted.content.version,
+      }),
+    });
   return Object.freeze({
     deduped: committed.replayed || persisted.id !== prepared.id,
-    notice: persisted,
+    notice,
     replayed: committed.replayed,
     revision: committed.revision,
   });
@@ -465,6 +480,10 @@ const inboxProgram = Effect.fnUntraced(function*(
     .filter(({ decision }) => decision.state === 'authorized')
     .map(({ id }) => id);
   if (noticeIds.length === 0 && withheld.length === 0) return Object.freeze([]);
+  // One exposure per invocation, like admission: a retry whose recomputed
+  // decision differs (the inbox ceiling changed in between) replays the
+  // committed exposure instead of failing `idempotency-conflict`; the list
+  // returned is still judged against the current ceiling.
   const committed = yield* storeEffect(() => store.dispatch(
     'exposed',
     {
@@ -478,7 +497,10 @@ const inboxProgram = Effect.fnUntraced(function*(
       idempotencyKey: `agent-notices:expose:${request.invocation.id}`,
       signal: request.signal,
     },
-  ));
+  )).pipe(Effect.catch((error) =>
+    error instanceof AgentStateError && error.code === 'idempotency-conflict'
+      ? storeEffect(() => store.read({ signal: request.signal }))
+      : Effect.fail(error)));
   const returnedIds = new Set(noticeIds);
   const disclosures = new Map(disclosed.map(({ disclosure, notice }) => [notice.id, disclosure]));
   return Object.freeze(committed.state.notices

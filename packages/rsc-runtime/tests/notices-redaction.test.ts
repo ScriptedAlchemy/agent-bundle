@@ -105,6 +105,16 @@ describe('secret-pattern redaction', () => {
     expect(redactSecretText(redacted)).toBe(redacted);
     // Quotes are preserved around the mask so JSON-shaped text stays parseable.
     expect(redactSecretText('{"api_key": "xyz", "note": "keep"}')).toBe(`{"api_key": "${NOTICE_REDACTION_MARK}", "note": "keep"}`);
+    // JSON member names are prose too: a token used as a key is masked, and a
+    // credential-shaped key masks its whole subtree, names included.
+    expect(redactNoticeDocument({
+      root: { kind: 'json', value: { 'sk-proj-abcdefghijklmnopqrstuvwxyz': true, ok: 1, secret: { inner: 'v', 'sk-proj-abcdefghijklmnopqrstuvwxyz': 'w' } } },
+      status: 'success',
+      version: 1,
+    }).root).toEqual({
+      kind: 'json',
+      value: { [NOTICE_REDACTION_MARK]: true, ok: 1, secret: { [NOTICE_REDACTION_MARK]: NOTICE_REDACTION_MARK } },
+    });
   });
 
   it('redacts every prose field of a document and nothing else', () => {
@@ -339,6 +349,60 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     expect(replayed.map((delivery) => [delivery.disclosure.redacted, delivery.notice.id, delivery.notice.content]))
       .toEqual([[true, secret.notice.id, { root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 }]]);
     expect((await lowered.read()).notices[0]?.attempts).toHaveLength(1);
+    await driver.close();
+  });
+
+  it('returns another author\'s content as the mark when a publish deduplicates onto their notice', async () => {
+    const { driver, ledger } = await openLedger();
+    const original = await publish(ledger, { id: 'shared', sensitivity: 'secret' });
+    expect((original.notice.content.root as { text: string }).text).toBe(SECRET_TEXT);
+    // A second publisher guessing the dedupe key for the same recipient gets
+    // the identity, state, and receipts — never the other author's text.
+    const guessed = await run(ledger, {
+      actorId: 'another-publisher',
+      id: 'publish-guess',
+      kind: 'tool',
+      startedAt: '2026-09-03T10:01:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('probe'),
+      dedupeKey: 'shared',
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:guess' }));
+    expect(guessed.deduped).toBe(true);
+    expect(guessed.notice.id).toBe(original.notice.id);
+    expect(guessed.notice.content).toEqual({ root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 });
+    // The original author's idempotent replay still sees their own content.
+    const replayed = await publish(ledger, { id: 'shared', sensitivity: 'secret' });
+    expect(replayed.replayed).toBe(true);
+    expect((replayed.notice.content.root as { text: string }).text).toBe(SECRET_TEXT);
+    await driver.close();
+  });
+
+  it('replays a prior inbox exposure when the same invocation is retried under a changed ceiling', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentNoticeStateDefinition('process'));
+    const closed = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'mcp-inbox': 'internal' }),
+    });
+    const raised = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'mcp-inbox': 'secret' }),
+    });
+    const secret = await publish(closed, { id: 'secret', sensitivity: 'secret' });
+    const read = { actorId: 'recipient', id: 'read-retry', kind: 'tool' as const, startedAt: '2026-09-03T10:05:00.000Z' };
+    expect(await run(closed, read, async () => (await agent()).notices!.inbox())).toEqual([]);
+    const afterFirst = await closed.read();
+    expect(afterFirst.notices[0]).toMatchObject({ withheld: { 'mcp-inbox': { count: 1 } } });
+    // The retry recomputes an exposure the committed one did not record; it
+    // replays instead of conflicting, and the returned list follows the
+    // current ceiling while the store keeps only the committed exposure.
+    const retried = await run(raised, read, async () => (await agent()).notices!.inbox());
+    expect(retried.map((notice) => [notice.id, (notice.content.root as { text: string }).text])).toEqual([[secret.notice.id, SECRET_TEXT]]);
+    const afterRetry = await raised.read();
+    expect(afterRetry.revision).toBe(afterFirst.revision);
+    expect(afterRetry.notices[0]?.exposure).toBeUndefined();
     await driver.close();
   });
 

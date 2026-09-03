@@ -128,9 +128,15 @@ const redactJson = (value: JsonValue, underSecretKey = false): JsonValue => {
   if (typeof value === 'string') return underSecretKey ? NOTICE_REDACTION_MARK : redactSecretText(value);
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return Object.freeze(value.map((entry) => redactJson(entry as JsonValue, underSecretKey)));
+  // Member names are prose too: a token used as a key (`{ "sk-…": true }`)
+  // is masked like any other string. Two names that mask to the same text
+  // collapse onto one member; the mark carries no information to lose.
   return Object.freeze(Object.fromEntries(
     Object.entries(value as Readonly<Record<string, JsonValue>>)
-      .map(([key, entry]) => [key, redactJson(entry, underSecretKey || isSecretKey(key))]),
+      .map(([key, entry]) => [
+        underSecretKey ? NOTICE_REDACTION_MARK : redactSecretText(key),
+        redactJson(entry, underSecretKey || isSecretKey(key)),
+      ]),
   ));
 };
 

@@ -208,6 +208,12 @@ export interface AgentNoticePublishOptions {
 
 export interface AgentNoticePublishResult {
   readonly deduped: boolean;
+  /**
+   * The persisted notice. When the publish deduplicated onto a notice another
+   * publish created (a shared `dedupeKey` for the same recipient), `content`
+   * is the `[REDACTED]` mark, never the other author's text; a fresh publish
+   * or an idempotent replay of the caller's own publish carries its content.
+   */
   readonly notice: AgentNotice;
   readonly replayed: boolean;
   readonly revision: number;
