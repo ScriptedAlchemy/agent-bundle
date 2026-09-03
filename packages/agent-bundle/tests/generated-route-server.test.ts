@@ -607,6 +607,14 @@ it('emits notifications/resources/updated for the durable notice inbox to the su
   const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   };
+  // The inbox observation is detached from the render that triggered it.
+  const signalled = async (count: number): Promise<void> => {
+    for (let i = 0; i < 500 && updates.length < count; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // The availability receipt commits right after the wire write resolves.
+    await settle();
+  };
   const readInbox = async (): Promise<readonly Readonly<Record<string, unknown>>[]> => {
     const read = await session.client.readResource({ uri: inboxUri });
     const content = read.contents[0];
@@ -627,7 +635,7 @@ it('emits notifications/resources/updated for the durable notice inbox to the su
     await settle();
     expect(updates).toEqual([]);
     await session.client.callTool({ arguments: { host: 'generated-route-test', message: 'for this client' }, name: 'notify' }, { signal: AbortSignal.timeout(10_000) });
-    await settle();
+    await signalled(1);
     expect(updates).toEqual([inboxUri]);
 
     const inbox = await readInbox();

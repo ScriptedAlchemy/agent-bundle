@@ -45,7 +45,7 @@ import type {
   Observed,
   WarmFlightHost,
 } from '@agent-bundle/runtime';
-import type { AgentNoticeInboxSignaller } from '@agent-bundle/runtime/notices';
+import type { AgentNoticeInboxSignaller, AgentNoticeInboxSignalOutcome } from '@agent-bundle/runtime/notices';
 
 /** One route the generated server hosts, as the generated module records it. */
 export interface GeneratedRouteRecord {
@@ -238,7 +238,8 @@ export const advertisedOutputSchema = (schema: unknown): unknown => {
 /**
  * Runs after every render the server completes, successful or not: a route
  * that published a notice and then failed still advanced the ledger. The hook
- * never throws into the request path.
+ * never throws into the request path and resolves as soon as the follow-up
+ * work is scheduled, never waiting on another connection's wire.
  */
 export type GeneratedRenderSettled = () => Promise<void>;
 
@@ -587,8 +588,7 @@ const installNoticeInboxSubscriptions = (
   const send = async (): Promise<void> => {
     await protocol.sendResourceUpdated({ uri: notices.inboxUri });
   };
-  return async (): Promise<void> => {
-    const outcome = await notices.observe(send);
+  const report = (outcome: AgentNoticeInboxSignalOutcome): void => {
     switch (outcome.kind) {
       case 'idle':
       case 'signalled':
@@ -601,6 +601,14 @@ const installNoticeInboxSubscriptions = (
         throw new TypeError(`Unhandled notice inbox signal outcome ${String(unreachable)}.`);
       }
     }
+  };
+  // Detached from the render that triggered it. The signaller serializes its
+  // observations and never rejects, and a notification write to a slow or
+  // wedged connection — renewed for as long as it takes — must not hold the
+  // completed render's response, or unrelated event handling, hostage.
+  return (): Promise<void> => {
+    void notices.observe(send).then(report);
+    return Promise.resolve();
   };
 };
 

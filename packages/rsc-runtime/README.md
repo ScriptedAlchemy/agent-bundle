@@ -262,7 +262,8 @@ itself: one long-lived MCP connection's subscription to the reserved inbox
 resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
 own handle on the workspace-durable store its Flight worker mounts
 (`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
-after every completed render `observe(send)` reads the ledger, reserves the
+after every completed render `observe(send)` — detached from that render's
+response, so a slow subscriber's wire never delays a tool result — reads the ledger, reserves the
 budget slot of the subscriber's newly eligible pending notices as one
 compare-and-swap against the revision it read (`reserveAvailability()` with
 `expectedRevision`), sends at most one `notifications/resources/updated`, and

@@ -378,9 +378,16 @@ describe('the in-memory MCP projection level', () => {
       state: { definition: stateDefinition, driver: createSqliteStateDriver({ root }) },
     });
     const settle = async (): Promise<void> => {
-      // Notifications ride the transport ahead of the request result; one turn
-      // of the event loop lets the linked in-memory pair deliver them.
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // The inbox observation is detached from the render that triggered it;
+      // a few turns of the event loop let it reserve, send, and record.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+    const signalled = async (session: 's1' | 's2', count: number): Promise<void> => {
+      for (let i = 0; i < 200 && updates[session].length < count; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // The availability receipt commits right after the wire write resolves.
+      await settle();
     };
     const readInbox = async (client: (typeof subscribed)['client']) => {
       const read = await client.readResource({ uri: inboxUri });
@@ -405,7 +412,7 @@ describe('the in-memory MCP projection level', () => {
 
       // s1 publishes to itself: the subscribed session gets exactly one signal.
       await subscribed.client.callTool({ arguments: { message: 'for s1', recipientSession: 's1' }, name: 'publish-notice' });
-      await settle();
+      await signalled('s1', 1);
       expect(updates).toEqual({ s1: [inboxUri], s2: [] });
 
       // Availability is a receipt on the pending notice, not a state change;
