@@ -939,15 +939,24 @@ export const prepareScriptRenderHost = async (
           return mount(renderer, hostSignal);
         })
         .then((state) => { mounted = state; return state; });
+      // The generated worker composes the project's root layout around a
+      // rendered script (a script belongs to no server, so no server layout
+      // applies); the layout modules are user code and load with the script's.
+      const layoutRoute: LayoutChainTarget = { id: options.provenance.routeId, kind: 'script' };
       const pending = Promise.all([rendering, mounting]).then(async ([renderer, state]) => {
         signal.throwIfAborted();
-        const module = await options.loadModule();
+        const [module, layouts] = await Promise.all([
+          options.loadModule(),
+          loadLayoutChain(options.manifest, layoutRoute, options.provenance),
+        ]);
         signal.throwIfAborted();
         return createFlightDispatcher({
           collected,
           component: componentOf(module, options.provenance),
           componentProps: (request) => ({ argv, signal: request.signal }),
           contextProgress: context.progress,
+          layoutRoute,
+          layouts,
           renderer,
           requestInit: async (request) => {
             const root = process.cwd();

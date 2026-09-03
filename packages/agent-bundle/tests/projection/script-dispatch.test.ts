@@ -163,6 +163,21 @@ describe('rendered scripts at the script dispatch level', () => {
     expect(run.stdout.trim().split('\n')).toHaveLength(events.length);
   });
 
+  it('composes only the project\'s root layout around a rendered script, inside the script request scope', async () => {
+    // A script belongs to no server, so the server layout never applies; the
+    // root layout observes the `script` invocation the worker opened.
+    const run = await runScript('summary', ['alpha', '--ndjson']);
+    const complete = scriptNdjson(run).at(-1);
+
+    expect(complete?.type).toBe('complete');
+    const root = complete?.type === 'complete' ? complete.document.root : undefined;
+    expect(root?.kind === 'result' ? root.metadata : undefined).toEqual({
+      invocation: 'script',
+      shell: 'route-harness',
+      wrapped: 'script',
+    });
+  });
+
   it('exits 1 for a represented error document and projects the error node to Markdown', async () => {
     const run = await runScript('summary', ['--fail']);
 

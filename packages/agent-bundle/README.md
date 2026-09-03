@@ -554,7 +554,8 @@ script imports with the bundler's SWC — the same lowering the generated
 executable was built with — and serves `agent-bundle/meta` as the identity the build stamps from the
 manifest's `plugin`. Explicit `scripts:` configuration entries are bundled
 entries rather than routes and stay with the packed level. A rendered script
-mounts the project's conventional providers with the `script` invocation the
+composes the project's root layout (a script belongs to no server, so no
+server layout applies) and mounts the project's conventional providers with the `script` invocation the
 generated executable passes (`context.providers` substitutes a fixture map, as
 everywhere); a plain script opens no request scope, so it accepts no `context`
 at all. `stdin` pipes input to a plain script (omitted,
