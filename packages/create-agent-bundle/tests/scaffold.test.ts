@@ -230,6 +230,22 @@ describe('scaffold', () => {
     }
   });
 
+  for (const template of ['minimal', 'mcp-server', 'cli-tool'] as const) {
+    it(`declares the ${template} release version only in package.json`, async () => {
+      const { root } = await scaffoldTemplate(template);
+      try {
+        const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+          readonly version?: string;
+        };
+        expect(manifest.version).toBe('0.1.0');
+        const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');
+        expect(config).not.toMatch(/\bversion:/u);
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    });
+  }
+
   it('writes the selected targets into the config', async () => {
     const { root } = await scaffoldTemplate('minimal', { targets: ['portable', 'cursor'] });
     try {

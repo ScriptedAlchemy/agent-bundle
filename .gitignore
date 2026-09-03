@@ -6,6 +6,7 @@ coverage/
 artifacts/
 *.log
 examples/audiobook-curator/artifact/
+examples/worktree-proximity/artifact/
 
 # Aborted runtime-playground fixture workspaces
 .runtime-playground-*/
