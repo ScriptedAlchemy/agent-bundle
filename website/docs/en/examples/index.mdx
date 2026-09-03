@@ -45,7 +45,9 @@ pnpm examples:check
 ```
 
 Each example package also exposes the same public commands directly, once the repository-level
-`pnpm build` has built the local `agent-bundle` workspace dependency:
+`pnpm build` has built the local `agent-bundle` workspace dependency. Every example has `validate`,
+`build`, and `check`; the four walkthrough examples and Worktree Proximity also have `dev`, while the
+RSC Agent Runtime demo is driven through its tests and `eval:hosts` instead:
 
 ```sh
 cd examples/skills-starter

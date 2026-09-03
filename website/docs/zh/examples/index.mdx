@@ -40,7 +40,9 @@ pnpm example:skills
 pnpm examples:check
 ```
 
-在仓库级 `pnpm build` 构建过本地 `agent-bundle` 工作区依赖之后，每个示例包也直接暴露同样的公开命令：
+在仓库级 `pnpm build` 构建过本地 `agent-bundle` 工作区依赖之后，每个示例包也直接暴露同样的公开命令。每个示例都有
+`validate`、`build` 与 `check`；四个导览示例与 Worktree Proximity 还有 `dev`，而 RSC Agent Runtime 演示则通过其测试与
+`eval:hosts` 驱动：
 
 ```sh
 cd examples/skills-starter
