@@ -1052,3 +1052,36 @@ it('pins dated deferral rows for every explicitly deferred native callback from 
     }
   }
 });
+
+it('advertises notice delivery routes per host with dated unavailability (#99 stage 4)', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const routes = ['current-response', 'directed-push', 'host-toast', 'mcp-inbox', 'mcp-resource-updated', 'next-event'];
+  const files = {
+    claude: 'claude-2.1.250.json',
+    codex: 'codex-0.147.0.json',
+    cursor: 'cursor-2026-08-28.json',
+    portable: 'portable-1.0.0.json',
+  };
+  for (const [host, file] of Object.entries(files)) {
+    const table = JSON.parse(await readFile(new URL(`../src/adapters/capabilities/${file}`, import.meta.url), 'utf8')) as Record<string, unknown>;
+    const advertisement = table.noticeDelivery as Record<string, { reason?: string; state: string }>;
+    expect(Object.keys(advertisement).sort()).toEqual(routes);
+    for (const route of routes) {
+      const entry = advertisement[route]!;
+      expect(['supported', 'unavailable']).toContain(entry.state);
+      if (entry.state === 'unavailable') expect(entry.reason).toMatch(/2026-09-02/u);
+    }
+    // No pinned host has a directed cross-actor push or toast surface (#99 survey).
+    expect(advertisement['directed-push']!.state).toBe('unavailable');
+    expect(advertisement['host-toast']!.state).toBe('unavailable');
+    // The generated MCP inbox surface exists on every target.
+    expect(advertisement['mcp-inbox']!.state).toBe('supported');
+    // Hookless portable honestly loses the hook-borne routes.
+    if (host === 'portable') {
+      expect(advertisement['next-event']!.state).toBe('unavailable');
+      expect(advertisement['current-response']!.state).toBe('unavailable');
+    } else {
+      expect(advertisement['next-event']!.state).toBe('supported');
+    }
+  }
+});
