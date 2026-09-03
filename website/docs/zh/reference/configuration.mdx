@@ -43,6 +43,23 @@ export default defineConfig({
 `AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
 留在各自的适配器中，而不进入编译器核心。
 
+### 生成的类型定义
+
+配置是一份 TypeScript 契约，而不是运行时 schema：`defineConfig` 接受一个 `AgentBundleConfig`（或返回
+它的工厂函数），`validateSource` 则用结构化诊断强制执行本页的规则。下面这些精确形态在每次文档构建时由
+TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
+
+| 字段 | 类型定义 |
+| --- | --- |
+| 整个配置 | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
+| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| 宿主扩展 | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
+| 校验 | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+
 ## plugin
 
 | 字段 | 规则 |
@@ -60,7 +77,8 @@ export default defineConfig({
 
 键是七个标准事件：`sessionStart`、`beforeTool`、`afterTool`、`stop`、`agentStart`、`agentStop`、
 `workspaceOpen`。值是一个条目或条目数组，每个条目要么是模块路径，要么是
-`{ entry, tools?, targets? }`。
+`{ handler, tools?, targets?, timeout?, args? }`。每个规范事件与工具选择器如何降级为宿主原生事件与
+匹配器，见生成的[事件与钩子矩阵](./events.md)。
 
 **钩子结果**契约完整地记录在[钩子](../guide/authoring/hooks.mdx)中。有一个字段值得在此重复，因为它很
 容易搞错：`reason` 是一个非空字符串，**仅**在拒绝 `beforeTool` 或 `stop` 钩子时有效，而拒绝这两者之一

@@ -146,6 +146,93 @@ declaration replacing a hand-rolled `hooks/hooks.json` per host. Prebuilt hooks 
 native hook documents: they do not compile wrappers and do not appear in the simulatable hook
 index.
 
+## Event routes
+
+Config-declared hooks are the compact form. The second authoring shape is an **event route**: a
+file under `src/events/` whose path is the canonical event family it handles
+(`src/events/tool/before.tsx`, `src/events/stop.tsx`). It is one async default Server Component,
+like an MCP tool route, plus a statically extracted `config` export:
+
+```tsx
+// src/events/tool/after.tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
+
+export const config = {
+  runtime: 'standalone', // 'shared' renders inside the generated MCP server process
+  targets: ['claude', 'codex'],
+  timeoutMs: 30_000, // budget inside the host's own native deadline
+  tools: ['file.write'], // canonical selector -> per-host native matcher
+} satisfies AgentEventRouteConfig;
+
+export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps) {
+  // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
+  return (
+    <Agent.Result>
+      <Agent.Context>{`Recorded an edit reported by ${canonical.provenance.host}.`}</Agent.Context>
+    </Agent.Result>
+  );
+}
+```
+
+`canonical` is the cross-host identity the framework derives — `event`, an `idempotencyKey`
+hashed from the event, target, and native payload, `observedAt`, a `sequence`, and the
+`provenance` naming the host and the native event that fired. `native` is a frozen snapshot of
+the validated host envelope. Nothing in `canonical` is fabricated: a host that does not report an
+axis leaves it unavailable.
+
+The route answers through its rendered document. `Agent.Context` text becomes the host's
+additional-context channel, and `Agent.Result`'s `value` may carry
+`{ outcome: 'continue' | 'deny', reason?, updatedInput? }`. The projection is per event and per
+host, and illegal combinations throw before anything reaches the host: `session/end`,
+`compact/after`, `tool/failure`, and `workspace/open` are observation-only everywhere; a denied
+`tool/before` becomes `hookSpecificOutput.permissionDecision` on Claude and Codex but
+`{ permission: 'deny', … }` on Cursor; a denied `stop` becomes `{ decision: 'block', reason }` or
+Cursor's `followup_message`. Which families each host supports is the generated
+[Event and hook matrix](../../reference/events.md).
+
+Event routes reach the twenty canonical families (`session/end`, `prompt/submit`,
+`compact/before`, `permission/request`, …); config-declared `hooks` cover only the seven
+listed above.
+
+### What is on the wire
+
+Both shapes share the emitted `hooks/hooks.json` wiring, and both compile into a wrapper the host
+invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). A
+config-declared handler runs in-process inside that wrapper. An event route with
+`runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
+process, so hooks share state with tools:
+
+1. **Host → wrapper (stdin).** The host writes one JSON envelope. The wrapper streams stdin with a
+   hard 1 MiB cap, parses exactly one value, and validates it per host and per event
+   (`session_id`, `transcript_path`, `cwd`, tool fields, …). Any mismatch exits nonzero.
+2. **Wrapper → runtime (IPC).** One newline-delimited request — `protocolVersion`,
+   `artifactEpoch`, `event`, `hostContractRevision`, `target`, and the validated `native`
+   envelope — over a per-user Unix socket (a named pipe on Windows). The socket directory is
+   `0700`, the socket `0600`, and the endpoint hash binds the artifact epoch, the target, and
+   the artifact's install directory, so two installs never share a runtime. The request is
+   raced against `timeoutMs` (default 5000 ms).
+3. **Runtime renders.** The server rejects epoch mismatches and malformed messages, builds the
+   `canonical` props, and renders the route component through the react-server worker inside
+   the request context.
+4. **Runtime → wrapper.** One JSON reply: `{ status: 'ok', output }`, or
+   `{ status: 'error', code }` where `code` is `epoch-mismatch`, `invalid-message`, or
+   `runtime-failed`.
+5. **Wrapper → host (stdout).** The host-native response. On `tool/before` the wrapper always
+   answers with an explicit allow-or-deny decision in the host's own field names (`allow` unless
+   the route denied) even when the route renders no decision; silence is reserved for
+   observation-only families.
+
+Failure is closed by default. The only fallback is `fallback: 'standalone'` on a route that
+also compiled its standalone form, and it fires **only** for `runtime-unavailable` (no live
+socket). `runtime-timeout`, `epoch-mismatch`, `invalid-message`, and `runtime-failed` exit
+nonzero — stale code never answers, and a fabricated response is never emitted.
+
+A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
+canonical identity, the same projection, no shared process state. `AB4817` refuses a route
+that requires the shared runtime on a target where no generated MCP entry hosts it and no
+standalone fallback exists.
+
 ## Inspect and simulate
 
 Hooks are the surface where "it built" is least convincing, so the emitted wrapper is runnable

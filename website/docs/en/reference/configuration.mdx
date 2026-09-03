@@ -44,6 +44,24 @@ through declaration merging on `AgentBundleConfigExtensions`. Extension values m
 finite JSON (`AB4500`), and host-specific values stay in their adapter rather than in compiler
 core.
 
+### Generated type definitions
+
+The config is a TypeScript contract, not a runtime schema: `defineConfig` accepts an
+`AgentBundleConfig` (or a factory returning one), and `validateSource` enforces the rules on this
+page with structured diagnostics. The exact shapes below are generated from the package source
+by TypeDoc on every documentation build, so they cannot drift from the published types.
+
+| Field | Type definition |
+| --- | --- |
+| whole config | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
+| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| host extensions | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
+| validation | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+
 ## plugin
 
 | Field | Rule |
@@ -63,7 +81,9 @@ will be removed under the normal breaking-change policy.
 
 Keys are the seven canonical events: `sessionStart`, `beforeTool`, `afterTool`, `stop`,
 `agentStart`, `agentStop`, `workspaceOpen`. A value is one entry, or an array of entries, each
-either a module path or `{ entry, tools?, targets? }`.
+either a module path or `{ handler, tools?, targets?, timeout?, args? }`. How each canonical
+event and tool selector lowers to a host-native event and matcher is the generated
+[Event and hook matrix](./events.md).
 
 The **hook result** contract is documented in full in [Hooks](../guide/authoring/hooks.mdx). One
 field is worth repeating because it is easy to get wrong: `reason` is a non-empty string that is
