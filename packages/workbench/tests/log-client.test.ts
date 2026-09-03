@@ -37,6 +37,32 @@ const clientFor = (response: Response): LogClient => new LogClient({
   foreground: foreground(async (input) => String(input).includes('/api/project/session') ? session() : response),
 });
 
+it('accepts development host sync project and diagnostic log kinds', async () => {
+  const records = [
+    {
+      ...record,
+      context: { epochId: 'epoch-1' },
+      details: { epochId: 'epoch-1', host: 'cursor', state: 'succeeded' },
+      kind: 'dev.host.sync',
+      producer: 'project',
+      summary: 'Development host install was synchronized.',
+    },
+    {
+      ...record,
+      context: { diagnosticCode: 'AB7202' },
+      details: { code: 'AB7202', message: 'Host sync failed.', severity: 'error' },
+      kind: 'dev.host.sync.diagnostic',
+      level: 'error',
+      producer: 'diagnostic',
+      sequence: 2,
+      summary: 'Project diagnostic was recorded.',
+    },
+  ];
+  await expect(clientFor(json({
+    replay: { cursor: { afterSequence: 2 }, records },
+  })).replay()).resolves.toMatchObject({ records });
+});
+
 it('rejects malformed or noncontiguous replay envelopes before exposing them to the page', async () => {
   await expect(clientFor(new Response('{')).replay()).rejects.toBeInstanceOf(LogClientError);
 
