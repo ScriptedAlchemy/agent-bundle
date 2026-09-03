@@ -225,14 +225,26 @@ workspace-durable SQLite driver and passes the resulting ledger as
 subpath and ship no state or notice implementation.
 
 Inside an authorized request, `(await agent()).notices` is a request-bound
-handle with `publish()` and `read()`. Recipients use only observed
-host/session/actor/workspace axes. Publish authorization runs before
-persistence, and delivery authorization runs again when a matching event is
-admitted. `read()` exposes notices selected for that event while the ledger
-records a receipt containing the invocation id and state `attempted`.
+handle with `publish()`, `read()`, `inbox()`, and `acknowledge()`. Recipients
+use only observed host/session/actor/workspace axes. Publish authorization
+runs before persistence, and delivery authorization runs again when a
+matching event is admitted. `read()` exposes notices selected for that event
+while the ledger records a receipt containing the invocation id and state
+`attempted`. `acknowledge()` is recipient-matched and authorization-gated and
+produces the terminal `acknowledged` state — the strongest evidenced outcome.
 
-V1 deliberately exposes only `pending | attempted | expired | unavailable |
-withdrawn`. It does not claim `delivered`, `read`, or `acknowledged`: observing
-the recipient process is not evidence that the agent saw the content. There
-is no router, MCP inbox, timer, retry worker, or autonomous work between
-invocations in this subpath.
+`publish()` accepts optional `retryBudget` (default one attempt) and
+`nextAttemptAt`; both are evaluated only when a matching event is admitted —
+no timer or retry worker is implied, and a retriable notice past `expiresAt`
+expires instead of retaining unused attempts. Wire-level
+`notifications/resources/updated` signals are recorded through the ledger's
+`signalAvailability()` as availability receipts, and MCP inbox reads record
+exposure receipts; neither is a delivery claim.
+
+States are `pending | attempted | expired | unavailable | withdrawn |
+acknowledged`. The ledger still does not claim `delivered` or `read` as
+states: observing the recipient process is not evidence the agent saw the
+content, and the `available`/`read` taxonomy rows from #99 map onto the
+availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
+cross-request routes from a per-host advertisement and returns a typed
+unavailable outcome when none is supported; it never fabricates a channel.

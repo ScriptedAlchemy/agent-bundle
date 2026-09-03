@@ -180,6 +180,12 @@ const transitionExpiry = (notice: AgentNotice, at: string): AgentNotice => {
         ? expiredNotice(notice, at)
         : notice;
     case 'attempted':
+      // A retriable notice past its deadline must not linger with unused
+      // retries; a fully-attempted notice keeps its terminal attempt record.
+      return notice.attempts.length < (notice.retryBudget ?? 1)
+        && notice.expiresAt !== undefined && Date.parse(notice.expiresAt) <= Date.parse(at)
+        ? expiredNotice(notice, at)
+        : notice;
     case 'expired':
     case 'unavailable':
     case 'withdrawn':

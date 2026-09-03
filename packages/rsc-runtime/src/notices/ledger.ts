@@ -331,7 +331,8 @@ export const createAgentNoticeLedger = (
         let admitted = before.state;
         const admissionTime = Date.parse(request.invocation.startedAt);
         const expiring = before.state.notices.filter((notice) =>
-          notice.state === 'pending'
+          (notice.state === 'pending'
+            || notice.state === 'attempted' && notice.attempts.length < (notice.retryBudget ?? 1))
           && notice.expiresAt !== undefined
           && Date.parse(notice.expiresAt) <= admissionTime);
         const candidates = before.state.notices.filter((notice) =>
@@ -391,6 +392,15 @@ export const createAgentNoticeLedger = (
               return yield* Effect.fail(new AgentNoticeError(
                 'unauthorized',
                 'Only the notice recipient may acknowledge it',
+              ));
+            }
+            // Same eligibility boundary as inbox/event admission: a request
+            // that started before the notice existed cannot produce a durable
+            // acknowledgement receipt predating createdAt.
+            if (Date.parse(target.createdAt) > Date.parse(request.invocation.startedAt)) {
+              return yield* Effect.fail(new AgentNoticeError(
+                'invalid-input',
+                `Notice ${noticeId} was created after this invocation started`,
               ));
             }
             const authorization = yield* authorizeEffect(options.authorize, {

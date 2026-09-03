@@ -870,3 +870,56 @@ describe('notice delivery route selection', () => {
     }))).toThrow(/requires a dated reason/u);
   });
 });
+
+describe('stage-4 review findings regressions', () => {
+  it('expires a retriable attempted notice past its deadline instead of retaining retries', async () => {
+    const { driver, ledger } = await openLedger();
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-exp',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('deadline'),
+      expiresAt: '2026-09-01T19:10:00.000Z',
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+      retryBudget: 3,
+    }, { idempotencyKey: 'publish:expiry' }));
+    const admit = (id: string, startedAt: string) => run(ledger, {
+      actorId: 'recipient',
+      id,
+      kind: 'event',
+      startedAt,
+    }, async () => (await agent()).notices!.read());
+    expect(await admit('event-1', '2026-09-01T19:05:00.000Z')).toHaveLength(1);
+    expect(await admit('event-2', '2026-09-01T19:11:00.000Z')).toHaveLength(0);
+    expect((await ledger.read()).notices[0]).toMatchObject({
+      expiredAt: '2026-09-01T19:11:00.000Z',
+      state: 'expired',
+    });
+    await driver.close();
+  });
+
+  it('rejects acknowledgements from invocations that started before the notice existed', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-late',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('late'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:late' }));
+    await expect(run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-early',
+      kind: 'event',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id)))
+      .rejects.toMatchObject({ code: 'invalid-input' });
+    await driver.close();
+  });
+});
