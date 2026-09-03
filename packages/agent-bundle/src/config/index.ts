@@ -40,6 +40,7 @@ export type AgentBundleConfig = CoreAgentBundleConfig
 export type {
   AgentBundleConfigExtensions,
   AgentBundleDevConfig,
+  AgentBundleDevContractsConfig,
   AgentBundleDevRuntimeConfig,
   AgentBundleHostConfig,
   AgentBundlePayloadConfig,

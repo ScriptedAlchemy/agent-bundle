@@ -1,7 +1,7 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Seven Node proof levels ship here, and the browser-safe eighth level ships
+ * Eight Node proof levels ship here, and the browser-safe ninth level ships
  * from `agent-bundle/test/browser`. The repository's real-host install proof
  * uses the same level convention. Each helper names the level it supplies,
  * stamps it into its provenance, and prints it in every failure:
@@ -10,6 +10,7 @@
  * | --- | --- | --- |
  * | `route-unit` | `renderRoute`, `renderRouteEvents`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer; explicit target-capability projection through the real MCP projector, without transport or host proof |
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
+ * | `dev-epoch` | `runDevEpochContractMatrix` | an epoch-pinned generated stdio process opened through the Workbench session service |
  * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
  * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
@@ -24,6 +25,7 @@
 export {
   BROWSER_APP_PROOF_LEVEL,
   CLI_DISPATCH_PROOF_LEVEL,
+  DEV_EPOCH_PROOF_LEVEL,
   HOST_INSTALL_PROOF_LEVEL,
   MCP_IN_MEMORY_PROOF_LEVEL,
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
@@ -84,8 +86,10 @@ export {
   readMcpResource,
 } from './mcp.ts';
 export {
+  ContractMatrixViolationError,
   negativeInputsFromJsonSchema,
   runContractMatrix,
+  runDevEpochContractMatrix,
   runInstalledHostContractMatrix,
   runPackedContractMatrix,
 } from './contract.ts';
@@ -96,10 +100,15 @@ export type {
   ContractLifecycleFixture,
   ContractLifecyclePhase,
   ContractLifecycleTransition,
+  ContractMatrixClient,
   ContractMatrixOptions,
+  ContractMatrixFailure,
   ContractMatrixProvenance,
   ContractMatrixReport,
   ContractMatrixRestartSession,
+  DevEpochContractMatrixOptions,
+  DevEpochContractMatrixSession,
+  DevEpochMcpProvenance,
   ContractRouteFixture,
   ContractRouteReport,
   InstalledHostContractMatrixOptions,

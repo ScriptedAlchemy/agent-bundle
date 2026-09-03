@@ -222,6 +222,7 @@ export { startDevServer } from './dev/workbench-server.ts';
 export type { DevServerSession, StartDevServerOptions } from './dev/workbench-server.ts';
 export type {
   AgentBundleDevConfig,
+  AgentBundleDevContractsConfig,
   AgentBundleDevRuntimeConfig,
 } from './core/types.ts';
 export type {

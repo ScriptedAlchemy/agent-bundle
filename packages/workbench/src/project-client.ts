@@ -8,6 +8,8 @@ import {
   type ArtifactStatus,
   type BuildAttempt,
   type BuildStatus,
+  type DevContractStatusEvent,
+  type HostAdoptionStatus,
   type Invalidation,
   type ProjectEvent,
   type ProjectEventOf,
@@ -79,6 +81,7 @@ const projectEventTypes = [
   'artifact.status',
   'build.failed',
   'build.started',
+  'dev.contract.status',
   'invalidation',
   'replay.gap',
   'runtime.event',
@@ -200,9 +203,27 @@ const artifactStatusSchema: z.ZodType<ArtifactStatus> = z.discriminatedUnion('st
   }),
 ]);
 
+const devContractStatusSchema: z.ZodType<DevContractStatusEvent> = z.strictObject({
+  diagnostics: z.array(diagnosticSchema),
+  epochId: z.string(),
+  failures: z.array(z.strictObject({
+    checks: z.array(z.string()),
+    routeId: z.string(),
+  })),
+  state: z.enum(['failed', 'passed']),
+  summary: z.string(),
+});
+
+const hostAdoptionStatusSchema: z.ZodType<HostAdoptionStatus> = z.strictObject({
+  adoptedEpochId: z.string().optional(),
+  contracts: devContractStatusSchema.optional(),
+  mode: z.enum(['direct', 'gated']),
+});
+
 const projectStatusSchema: z.ZodType<ProjectStatus> = z.strictObject({
   artifact: artifactStatusSchema,
   build: buildStatusSchema,
+  hostAdoption: hostAdoptionStatusSchema.optional(),
   runtime: z.strictObject({ state: z.literal('configured') }).optional(),
   source: sourceStatusSchema,
 });

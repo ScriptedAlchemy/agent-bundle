@@ -54,15 +54,15 @@ const devLogKinds = deepFreeze({
   build: ['artifact.available', 'build.failed', 'build.started'],
   diagnostic: [
     'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
-    'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'runtime.event.diagnostic', 'source.changed.diagnostic',
-    'source.status.diagnostic',
+    'dev.contract.status.diagnostic', 'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'runtime.event.diagnostic',
+    'source.changed.diagnostic', 'source.status.diagnostic',
   ],
   eval: ['eval.run.completed', 'eval.run.failed', 'eval.run.started'],
   hook: ['hook.simulate.completed', 'hook.simulate.failed', 'hook.simulate.started'],
   mcp: ['mcp.logging', 'mcp.stderr', 'mcp.operation.failed', 'mcp.operation.started', 'mcp.operation.succeeded'],
   playground: ['playground.event.appended'],
   project: [
-    'artifact.status', 'dev.host.sync', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation',
+    'artifact.status', 'dev.contract.status', 'dev.host.sync', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation',
     'project.events.replay-gap', 'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event',
     'source.changed', 'source.status',
   ],

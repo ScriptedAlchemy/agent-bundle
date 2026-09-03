@@ -244,9 +244,24 @@ export interface ProjectRuntimeTopology {
   readonly state: 'configured';
 }
 
+/**
+ * What live host MCP connections and opted-in development installs currently
+ * serve. Present only on a foreground that owns host-facing surfaces; absent
+ * from coordinator-only status.
+ */
+export interface HostAdoptionStatus {
+  /** The epoch host-facing surfaces serve; absent until one has been adopted. */
+  readonly adoptedEpochId?: string;
+  /** The latest contract-matrix evaluation, present only when `dev.contracts` gates adoption. */
+  readonly contracts?: DevContractStatusEvent;
+  /** `gated` when `dev.contracts` is declared; `direct` when hosts follow `artifact.available`. */
+  readonly mode: 'direct' | 'gated';
+}
+
 export interface ProjectStatus {
   readonly artifact: ArtifactStatus;
   readonly build: BuildStatus;
+  readonly hostAdoption?: HostAdoptionStatus;
   readonly runtime?: ProjectRuntimeTopology;
   readonly source: SourceStatus;
 }
@@ -279,11 +294,25 @@ export interface DevHostSyncEvent {
   readonly state: 'failed' | 'succeeded';
 }
 
+export interface DevContractFailure {
+  readonly checks: readonly string[];
+  readonly routeId: string;
+}
+
+export interface DevContractStatusEvent {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly epochId: string;
+  readonly failures: readonly DevContractFailure[];
+  readonly state: 'failed' | 'passed';
+  readonly summary: string;
+}
+
 export interface ProjectEventPayloadMap {
   readonly 'artifact.available': ActiveArtifactStatus;
   readonly 'artifact.status': ArtifactStatus;
   readonly 'build.failed': FailedBuildAttempt;
   readonly 'build.started': RunningBuildAttempt;
+  readonly 'dev.contract.status': DevContractStatusEvent;
   readonly 'dev.host.sync': DevHostSyncEvent;
   readonly invalidation: Invalidation;
   readonly 'runtime.event': RuntimeEvent;
@@ -292,7 +321,7 @@ export interface ProjectEventPayloadMap {
 }
 
 export type ProjectEventType = keyof ProjectEventPayloadMap;
-type EpochScopedProjectEventType = 'artifact.available' | 'dev.host.sync';
+type EpochScopedProjectEventType = 'artifact.available' | 'dev.contract.status' | 'dev.host.sync';
 
 type ProjectEventFor<TType extends ProjectEventType> = TType extends ProjectEventType
   ? Readonly<{

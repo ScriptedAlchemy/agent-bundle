@@ -218,6 +218,46 @@ epoch automatically. Use **Restart MCP session** to respawn that generated serve
 epoch; open a new session to use a newly published epoch. Compatible MCP Apps preview through the
 same bound session.
 
+### Development contract matrix
+
+Projects can opt host-facing rebuild adoption into the generated contract matrix by pointing
+`dev.contracts.fixtures` at a project-local module:
+
+```ts
+// agent-bundle.config.ts
+export default {
+  dev: {
+    contracts: {
+      fixtures: './contract-fixtures.ts',
+      server: 'tools', // optional when the project has exactly one MCP server
+    },
+  },
+};
+```
+
+The module default-exports the same `Record<routeId, ContractRouteFixture>` consumed by
+`runContractMatrix`. Agent Bundle reloads and validates it for every prepared epoch. An invalid
+module does not fail compilation: it fails that epoch's contract run with an `AB7210` diagnostic
+instead. Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available`
+adoption.
+
+For an enabled project, each published epoch is exercised through an already-open, epoch-pinned
+generated stdio session at the `dev-epoch` proof level. Passing epochs atomically replace the server
+behind existing live host MCP connections and refresh opted-in development host installs. Failing or
+timed-out epochs remain inactive on those host-facing surfaces (`AB7211`), leaving the last passing
+epoch connected and installed. On a cold start whose initial build fails, the last-good epoch the
+epoch store restored is seeded through the same gate before hosts serve it; when the project no
+longer prepares at all, the `dev.contracts` declaration cannot be read and the restored epoch is
+adopted directly, exactly as an undeclared project would be.
+
+The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
+carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
+and the latest `contracts` evaluation. The Overview page renders it as **Host adoption**: a failed
+gate names the published build, the build hosts kept, and the failed check names grouped by route,
+and folds the gate diagnostics into the Diagnostics table; the Logs page carries the same records.
+A later passing rebuild is adopted normally. Workbench playground sessions remain independently
+epoch-pinned and are not gated by this matrix.
+
 ### Live host MCP proxy
 
 During development, a host can keep one stdio MCP process connected while `agent-bundle dev`

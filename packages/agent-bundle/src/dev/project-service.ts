@@ -3,6 +3,10 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import {
+  loadDevContractMatrix,
+  type PreparedDevContractMatrix,
+} from '../config/dev-contracts.ts';
 import { configuredPayloadRoots, discoverProject } from '../config/discover.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from '../config/ignore.ts';
 import { loadConfig } from '../config/load.ts';
@@ -63,6 +67,8 @@ export interface PreparedProject {
   readonly configPath: string;
   /** The validated development-only Agent API flag from the prepared configuration. */
   readonly devAgentApiEnabled?: boolean;
+  /** Dev-only fixture module result; its diagnostics gate host adoption, never compilation. */
+  readonly devContracts?: PreparedDevContractMatrix;
   readonly diagnostics: readonly Diagnostic[];
   readonly devRuntime?: DevRuntimePreparedProject;
   readonly devRuntimeDiagnostic?: Diagnostic;
@@ -592,10 +598,12 @@ const preparedProject = (
   devAgentApiEnabled?: boolean,
   tools?: AgentBundleToolsConfig,
   routeGraph?: CompiledRouteGraph,
+  devContracts?: PreparedDevContractMatrix,
 ): PreparedProject => Object.freeze({
   artifactDistPath,
   configPath,
   ...(devAgentApiEnabled === true ? { devAgentApiEnabled } : {}),
+  ...(devContracts === undefined ? {} : { devContracts }),
   diagnostics,
   ...(model === undefined ? {} : { model }),
   ...(devRuntime === undefined ? {} : { devRuntime }),
@@ -783,6 +791,9 @@ export class ProjectService {
       const snapshot = await snapshotForLoadFailure(root, configPath, outputRoots);
       return failedPreparation('AB7000', 'Unable to load project source.', configPath, 'project.invalid-source', snapshot);
     }
+    const devContracts = command === 'dev'
+      ? await loadDevContractMatrix(loaded.config, loaded.configPath, root)
+      : undefined;
 
     const targetNames = loaded.context.selectedTargets.length > 0
       ? loaded.context.selectedTargets
@@ -990,6 +1001,7 @@ export class ProjectService {
       devAgentApiEnabled,
       tools,
       discovered.routeGraph,
+      devContracts,
     );
   }
 }

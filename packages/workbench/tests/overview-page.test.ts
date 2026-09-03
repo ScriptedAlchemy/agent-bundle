@@ -3,8 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import { BundleWorkflow } from '../src/overview-page.tsx';
+import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
+import { BundleWorkflow, Overview } from '../src/overview-page.tsx';
+import type { ProjectClient } from '../src/project-client.ts';
 import type { WorkbenchCapabilities } from '../src/workbench-capabilities.ts';
+import type { WorkbenchPage } from '../src/workbench-screen.tsx';
 
 const capabilities: Pick<WorkbenchCapabilities, 'counts' | 'pages'> = {
   counts: { evalSuites: 1, hooks: 0, mcpServers: 0, scripts: 0, skills: 1, targets: 3 },
@@ -31,4 +34,61 @@ it('offers only unique actions supported by the current bundle', () => {
   expect(markup).not.toContain('MCP');
   expect(markup).not.toContain('<ol');
   expect(markup).not.toContain('<button');
+});
+
+const activeStatus: ProjectStatus = {
+  artifact: {
+    activeEpoch: {
+      configDigest: 'config',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      diagnostics: { errors: 0, infos: 0, warnings: 0 },
+      id: 'epoch-2',
+      manifestPath: 'agent-bundle.manifest.json',
+      modelDigest: 'model',
+      projectRevision: 'revision-2',
+      targetDigests: { portable: 'portable-digest' },
+    },
+    currentSourceRevision: 'revision-2',
+    state: 'active',
+  },
+  build: { state: 'idle' },
+  source: { diagnostics: [], revision: 'revision-2', state: 'ready' },
+};
+
+const renderOverview = (status: ProjectStatus): string => renderToStaticMarkup(createElement(Overview, {
+  changedFiles: [],
+  client: {} as unknown as ProjectClient,
+  onNavigate: () => undefined,
+  onStatus: () => undefined,
+  pages: new Set<WorkbenchPage>(['overview']),
+  status,
+}));
+
+it('renders a failed host-adoption gate with its violations instead of silently applying the build', () => {
+  const markup = renderOverview({
+    ...activeStatus,
+    hostAdoption: {
+      adoptedEpochId: 'epoch-1',
+      contracts: {
+        diagnostics: [{ code: 'AB7211', message: 'Contract matrix reported 1 violation(s).', severity: 'error', target: 'epoch-2' }],
+        epochId: 'epoch-2',
+        failures: [{ checks: ['coverage'], routeId: 'tool:fixture/unknown' }],
+        state: 'failed',
+        summary: 'Development contract matrix reported 1 violation(s).',
+      },
+      mode: 'gated',
+    },
+  });
+
+  expect(markup).toContain('Host adoption');
+  expect(markup).toContain('data-state="failed"');
+  expect(markup).toContain('Contract matrix failed for build epoch-2 with 1 violation; hosts keep build epoch-1');
+  expect(markup).toContain('tool:fixture/unknown');
+  expect(markup).toContain('coverage');
+  expect(markup).toContain('AB7211');
+  expect(markup).toContain('Diagnostics (1)');
+});
+
+it('omits the host-adoption section when the foreground reports no host-facing surfaces', () => {
+  expect(renderOverview(activeStatus)).not.toContain('Host adoption');
 });
