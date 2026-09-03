@@ -59,6 +59,37 @@ const asObject = (value: JsonValue | undefined): JsonObject => (isObject(value) 
 const asString = (value: JsonValue | undefined): string | undefined =>
   typeof value === 'string' ? value : undefined;
 
+/**
+ * Which MCP fields accept path tokens, per host. Cursor and portable record
+ * this directly as `mcp.pathTokens`; Claude records the same fact as the
+ * `mcpStdio` and `mcpRemote` groups of its plugin path-substitution table,
+ * so the reference derives the row from there rather than rendering `—`.
+ */
+const mcpPathTokenFields = (host: JsonObject): JsonObject => {
+  const explicit = asObject(asObject(host.mcp).pathTokens);
+  if (Object.keys(explicit).length > 0) {
+    return explicit;
+  }
+  const substitution = asObject(asObject(asObject(host.plugin).packageLifecycle).pluginPathSubstitution);
+  const tokens = substitution.tokens;
+  if (!Array.isArray(tokens)) {
+    return {};
+  }
+  const groups = asObject(substitution.fields);
+  const derived: JsonObject = {};
+  for (const group of ['mcpStdio', 'mcpRemote']) {
+    const fields = groups[group];
+    if (Array.isArray(fields)) {
+      for (const field of fields) {
+        if (typeof field === 'string') {
+          derived[field] = tokens;
+        }
+      }
+    }
+  }
+  return derived;
+};
+
 const escapeProse = (text: string): string =>
   text
     .replaceAll('|', '\\|')
@@ -418,8 +449,7 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
       [m.headers.host, m.headers.stdio, m.headers.streamableHttp, m.headers.tokenFields],
       hosts.map(host => {
         const mcp = asObject(host.data.mcp);
-        const pathTokens = asObject(mcp.pathTokens);
-        const fields = Object.entries(pathTokens)
+        const fields = Object.entries(mcpPathTokenFields(host.data))
           .map(([field, tokens]) => `${code(field)}: ${Array.isArray(tokens) ? codeList(tokens) : m.notApplicable}`)
           .join('<br />');
         return [

@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
 | `marketplace` | `boolean` | Adapter-selected. |
-| `dev` | `{ agentApi?, runtime? }` | None. |
+| `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
 
@@ -58,7 +58,7 @@ by TypeDoc on every documentation build, so they cannot drift from the published
 | `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
 | `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
 | `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
-| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
 | host extensions | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
 | validation | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
 
@@ -145,6 +145,8 @@ Development-only settings that never become part of a built artifact.
 | Field | Meaning |
 | --- | --- |
 | `dev.agentApi` | Exposes the authenticated, loopback-only Agent API from `agent-bundle dev`. The `--agent-api` / `--no-agent-api` flags override it. |
+| `dev.contracts.fixtures` | **Required when `dev.contracts` is set.** Project-relative module whose default export maps route ids to contract fixtures. Declaring `dev.contracts` switches `agent-bundle dev` from adopting every epoch directly to gating host-facing adoption on the development contract matrix: an epoch whose checks fail still publishes to the Workbench playground, but live host connections and development installs keep the last passing epoch (`AB7211`). A malformed block, a fixtures module that escapes the project root, cannot load, or exports the wrong shape is `AB7210`. |
+| `dev.contracts.server` | The MCP server the matrix checks. Optional only when the project compiles exactly one server. |
 | `dev.runtime.provider` | The development runtime provider module. |
 
 ## tools

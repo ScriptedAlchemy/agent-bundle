@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
 | `marketplace` | `boolean` | 由适配器选择。 |
-| `dev` | `{ agentApi?, runtime? }` | 无。 |
+| `dev` | `{ agentApi?, contracts?, runtime? }` | 无。 |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
 
@@ -56,7 +56,7 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 | `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
 | `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
 | `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
-| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
 | 宿主扩展 | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
 | 校验 | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
 
@@ -134,6 +134,8 @@ export default defineConfig({
 | 字段 | 含义 |
 | --- | --- |
 | `dev.agentApi` | 从 `agent-bundle dev` 暴露那个经过认证、仅 loopback 的 Agent API。`--agent-api` / `--no-agent-api` 标志会覆盖它。 |
+| `dev.contracts.fixtures` | **设置了 `dev.contracts` 时必填。** 项目相对路径的模块，其默认导出把路由 id 映射到契约夹具。声明 `dev.contracts` 会让 `agent-bundle dev` 从直接采用每个 epoch，改为以开发契约矩阵门控面向宿主的采用：检查失败的 epoch 仍会发布到 Workbench playground，但活跃的宿主连接与开发安装会保留最后一个通过的 epoch（`AB7211`）。块本身格式错误、夹具模块逃出项目根、无法加载或导出了错误的形状，则是 `AB7210`。 |
+| `dev.contracts.server` | 矩阵要检查的 MCP 服务器。仅当项目恰好编译一个服务器时可省略。 |
 | `dev.runtime.provider` | 开发期运行时 provider 模块。 |
 
 ## tools

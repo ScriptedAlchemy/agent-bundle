@@ -103,6 +103,7 @@ One directory per selected target under the artifact root (`dist` by default):
 
 ```text
 dist/
+├── agent-bundle.manifest.json # every emitted file with its SHA-256
 └── plugin/                    # targets: ['plugin'] — one multi-host bundle
     ├── .claude-plugin/
     ├── .codex-plugin/
@@ -113,13 +114,12 @@ dist/
     ├── scripts/
     ├── assets/
     ├── AGENTS.md
-    ├── INSTALL.md
-    └── agent-bundle.manifest.json
+    └── INSTALL.md
 ```
 
 Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
-`agent-bundle.manifest.json` records every emitted file with its SHA-256, so artifact validation
-is content-addressed rather than a guess.
+`agent-bundle.manifest.json` sits at the output root beside the target directories and records
+every emitted file with its SHA-256, so artifact validation is content-addressed rather than a guess.
 
 `output.distPath` moves the artifact root; it never changes the framework-owned layout inside
 each target. Precedence is the CLI `--output`, then `output.distPath`, then `dist`. Values must
