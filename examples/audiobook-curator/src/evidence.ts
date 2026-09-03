@@ -147,9 +147,8 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
     const result = await process(python, ['-c', script, source, sample, String(options.chunkSeconds), options.verbose ? '1' : '0'], { signal: options.signal });
     const line = result.stdout.split(/\r?\n/u).findLast((candidate) => candidate.startsWith(resultMarker));
     if (line === undefined) throw new CuratorError('Audiolocate emitted no structured result.');
-    const parsed = JSON.parse(line.slice(resultMarker.length)) as JsonObject;
-    asRecord(parsed);
-    return Object.freeze(parsed);
+    const parsed = JSON.parse(line.slice(resultMarker.length)) as JsonValue;
+    return Object.freeze(asRecord(parsed)) as JsonObject;
   } catch (error) {
     throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${errorMessage(error, '')}`.trim());
   }
