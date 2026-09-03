@@ -1131,10 +1131,23 @@ export class NativePlaygroundService {
    */
   async #restoreStagingGuard(path: string, staging: readonly string[]): Promise<void> {
     const restored = await Promise.allSettled(staging.map((entry) => this.#restoreStagingLink(path, entry)));
-    if (restored.every((outcome) => outcome.status === 'fulfilled')) return;
-    try { await this.#catalogStorage.remove(path, { force: true }); }
-    catch {
-      // Nothing further can make this publication unsettled; the caller rejects it.
+    const failures = restored.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason] : []));
+    if (failures.length === 0) return;
+    try {
+      await this.#catalogStorage.remove(path, { force: true });
+      return;
+    } catch (error) {
+      failures.push(error);
+    }
+    // Last resort: a fresh guard under this process's pid keeps the sidecar
+    // doubly linked (and recoverable once this process exits) rather than
+    // leaving a singly linked file that the next reader would adopt.
+    const guard = join(dirname(path), `.${basename(path, '.json')}.stage-${process.pid}-guard-${Math.random().toString(16).slice(2)}`);
+    try {
+      await this.#catalogStorage.link(path, guard);
+    } catch (error) {
+      failures.push(error);
+      throw new AggregateError(failures, 'Native Playground catalog recovery could not keep the sidecar guarded.', { cause: error });
     }
   }
 

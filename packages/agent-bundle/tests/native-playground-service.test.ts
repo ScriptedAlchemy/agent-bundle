@@ -1745,8 +1745,15 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
   const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
   const directorySyncs: string[] = [];
   let directorySyncFailure: Error | undefined;
+  // Fault injection for the recovery fallback chain: fail re-linking the
+  // removed staging names and unlinking the sidecar, but let a fresh guard link.
+  let relinkFailure: Error | undefined;
+  let sidecarRemoveFailure: Error | undefined;
   const storage: NativePlaygroundCatalogStorage = {
-    link,
+    link: async (source, destination) => {
+      if (relinkFailure !== undefined && String(destination).endsWith('-orphan')) throw relinkFailure;
+      await link(source, destination);
+    },
     mkdir,
     open: async (path, flags, mode) => {
       const handle = await open(path, flags, mode);
@@ -1764,7 +1771,10 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
         },
       });
     },
-    remove: rm,
+    remove: async (path, options) => {
+      if (sidecarRemoveFailure !== undefined && String(path) === sidecar) throw sidecarRemoveFailure;
+      await rm(path, options);
+    },
   } as NativePlaygroundCatalogStorage;
   const serviceFor = (discover: () => Promise<readonly DiscoveredEvalSuite[]>): NativePlaygroundService => new NativePlaygroundService({
     catalogDirectory,
@@ -1815,6 +1825,26 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     await Promise.all([firstRacer.close(), secondRacer.close()]);
     expect((await stat(sidecar)).nlink).toBe(2);
     expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+
+    // When the guard cannot be re-linked and the sidecar cannot be unlinked
+    // either, a fresh guard under this process's pid keeps it doubly linked.
+    relinkFailure = Object.assign(new Error('relink denied'), { code: 'EPERM' });
+    sidecarRemoveFailure = Object.assign(new Error('sidecar busy'), { code: 'EBUSY' });
+    const guarded = serviceFor(async () => { throw new Error('A guarded recovery must not fall back to discovery.'); });
+    await expect(guarded.catalog(reference)).rejects.toThrow();
+    await guarded.close();
+    expect((await stat(sidecar)).nlink).toBe(2);
+    const guards = (await readdir(catalogDirectory)).filter((name) => name.includes(`.stage-${String(process.pid)}-guard-`));
+    expect(guards).toHaveLength(1);
+    expect((await stat(join(catalogDirectory, guards[0]!))).ino).toBe((await stat(sidecar)).ino);
+    // A live-pid guard is honoured by the next reader until this process exits.
+    const held = serviceFor(async () => { throw new Error('A guarded catalog must not fall back to discovery.'); });
+    await expect(held.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await held.close();
+    await rm(join(catalogDirectory, guards[0]!));
+    await link(sidecar, orphan);
+    relinkFailure = undefined;
+    sidecarRemoveFailure = undefined;
     directorySyncFailure = undefined;
 
     // A publisher that exited after link() but before cleanup left a complete,
