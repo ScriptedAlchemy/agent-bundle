@@ -132,11 +132,21 @@ manifests at files inside those payloads without compiling them. Payload files c
 
 ### Validate Claude bundles with Claude Code
 
-Artifact validation runs `claude plugin validate <bundle-dir> --strict` for emitted `claude`
-and unified `plugin` targets when Claude Code is on `PATH`. Host errors become Agent Bundle
-errors; host warnings remain warnings unless `agent-bundle validate --strict` is set. A missing
-binary is reported as an explicit informational skip, never as fabricated success. Use
-`--no-host-validation` when a deterministic schema-only check is required.
+When Claude Code is on `PATH`, artifact validation runs its validator for emitted `claude` and
+unified `plugin` targets. Claude Code treats a directory that holds both `.claude-plugin/plugin.json`
+and `.claude-plugin/marketplace.json` as a marketplace and then never opens the plugin's hook,
+skill, agent, or command files, so Agent Bundle names each manifest:
+
+```sh
+claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+```
+
+On Claude Code 2.1.259 or later both runs use `--json`; older releases are parsed from the text
+report. Host errors become Agent Bundle errors (`AB6021`); host warnings remain warnings
+(`AB6020`) unless `agent-bundle validate --strict` is set, and every finding names the validated
+file. A missing binary is reported as an explicit informational skip (`AB6019`), never as
+fabricated success. Use `--no-host-validation` when a deterministic schema-only check is required.
 
 CI should use strict validation:
 
