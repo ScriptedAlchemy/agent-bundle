@@ -36,6 +36,14 @@ export const OpenToolCallSchema = z.object({
   conversation: id,
   /** The carrier's turn-shaped id when the window opened (Cursor `generation_id`, Codex `turn_id`, Claude `prompt_id`). */
   generation: id.optional(),
+  /**
+   * Digest of the pre-tool hook's `tool_input`. Every host delivers the MCP
+   * call's arguments there (observed 2026-09-03: Cursor `MCP:probe`
+   * `{"note":"subagent"}` arrived at the server as `note: "subagent"`), so a
+   * call whose `_meta` names no conversation can still be told apart from a
+   * concurrent call to the same tool with different arguments.
+   */
+  inputDigest: id.optional(),
   openedAt: timestamp,
   /** The root the conversation belonged to when the window opened, so retirement finds it even after its node is pruned. */
   root: id.optional(),

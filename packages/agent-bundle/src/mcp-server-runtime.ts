@@ -112,19 +112,22 @@ interface GeneratedRouteIdentity {
 /**
  * Lineage for one MCP tool call: Codex names it in `_meta`, Claude names the
  * pre-tool hook's `tool_use_id` in `_meta`, Cursor names nothing — so the
- * registry falls back to the open `MCP:<tool>` pre-tool hook. Without a
- * registry (a project with no event routes, or the in-memory proof level) the
- * axis is honestly absent.
+ * registry falls back to the open `MCP:<tool>` pre-tool hook, told apart from
+ * a concurrent call in another conversation by the arguments the hook
+ * recorded. Without a registry (a project with no event routes, or the
+ * in-memory proof level) the axis is honestly absent.
  */
 const toolCallLineage = async (
   registry: AgentLineageRegistry | undefined,
   context: GeneratedRouteRequestContext,
   toolName: string,
+  input: unknown,
   clientName: string | undefined,
   fallbackHost: LineageHost | undefined,
 ): Promise<Observed<AgentLineage>> => {
   if (registry === undefined) return unavailable<AgentLineage>('not-provided');
   return registry.resolveToolCall({
+    arguments: input,
     host: lineageHostFromClient(clientName) ?? fallbackHost,
     meta: context.mcpReq._meta,
     toolName,
@@ -314,7 +317,7 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, clientName, options.lineageHost) },
+            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, input, clientName, options.lineageHost) },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);
