@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { npmCliInvocation } from './npm-cli.mjs';
+import { packOutputFromJson as sharedPackOutputFromJson } from './npm-pack-json.mjs';
 
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,21 +30,11 @@ const asString = (value, message) => {
 };
 
 const packOutputFromJson = (stdout) => {
-  const parsed = JSON.parse(stdout);
-  const entries = Array.isArray(parsed)
-    ? parsed
-    : parsed !== null && typeof parsed === 'object'
-      ? Object.values(parsed)
-      : undefined;
-  if (entries === undefined) fail('npm pack --json returned neither an array nor a package-keyed object');
-  if (entries.length !== 1) {
-    fail(`npm pack --json returned ${String(entries.length)} entries; expected exactly one`);
+  try {
+    return sharedPackOutputFromJson(stdout);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
-  const [entry] = entries;
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-    fail('npm pack --json returned an invalid pack entry; expected one object');
-  }
-  return entry;
 };
 
 /** Every name -> Set(version) reachable under the consumer's own node_modules tree. */

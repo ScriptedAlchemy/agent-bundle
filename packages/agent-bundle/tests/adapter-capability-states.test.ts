@@ -10,6 +10,8 @@ import {
   unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
+import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -85,6 +87,98 @@ it('records an honest four-state rules row on every adapter', () => {
     ),
     registry.get('cursor').capabilities.rules!,
   ));
+});
+
+const codexParityCapabilityRows = {
+  interface: {
+    assets: 'interfaceAssets',
+    brandColor: 'interfaceBrandColor',
+    categoryCapabilities: 'interfaceCategoryCapabilities',
+    descriptions: 'interfaceDescriptions',
+    identity: 'interfaceIdentity',
+    starterPrompts: 'interfaceStarterPrompts',
+    urls: 'interfaceUrls',
+  },
+  apps: {
+    registeredMcpMappings: 'registeredMcpApps',
+  },
+  mcpServerPolicy: {
+    approvalModes: 'pluginMcpPolicyApprovalModes',
+    enabled: 'pluginMcpPolicyEnabled',
+    tools: 'pluginMcpPolicyTools',
+  },
+  hookEnvironment: {
+    claudePluginData: 'claudePluginDataEnvironment',
+    claudePluginRoot: 'claudePluginRootEnvironment',
+    pluginData: 'pluginDataEnvironment',
+    pluginRoot: 'pluginRootEnvironment',
+  },
+} as const;
+
+it('records dated Codex interface, apps, policy, and hook-environment capability rows', () => {
+  const registry = createDefaultRegistry();
+  const codex = registry.get('codex');
+  const unified = registry.get('plugin');
+  const expectedStates = {
+    apps: { registeredMcpMappings: 'supported' },
+    hookEnvironment: {
+      claudePluginData: 'supported',
+      claudePluginRoot: 'supported',
+      pluginData: 'supported',
+      pluginRoot: 'supported',
+    },
+    interface: {
+      assets: 'supported',
+      brandColor: 'supported',
+      categoryCapabilities: 'supported',
+      descriptions: 'supported',
+      identity: 'supported',
+      starterPrompts: 'supported',
+      urls: 'supported',
+    },
+    mcpServerPolicy: {
+      approvalModes: 'unavailable',
+      enabled: 'unavailable',
+      tools: 'unavailable',
+    },
+  } as const;
+
+  for (const [blockName, rows] of Object.entries(codexParityCapabilityRows)) {
+    const tableBlock = codexCapabilityTable.plugin[
+      blockName as keyof typeof codexParityCapabilityRows
+    ] as Readonly<Record<string, {
+      readonly evidence: readonly string[];
+      readonly reason?: string;
+      readonly state: string;
+    }>>;
+    expect(Object.keys(tableBlock).sort()).toEqual(Object.keys(rows).sort());
+    for (const [rowName, capability] of Object.entries(rows)) {
+      const row = tableBlock[rowName]!;
+      const expectedState = expectedStates[
+        blockName as keyof typeof expectedStates
+      ][rowName as never];
+      expect(row.state).toBe(expectedState);
+      expect(row.evidence.length).toBeGreaterThan(0);
+      expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+      expect(codex.capabilities[capability]).toMatchObject({
+        ...(row.state === 'unavailable' ? { reason: row.reason } : {
+          evidence: { observedVersion: '0.147.0', target: 'codex' },
+        }),
+        state: expectedState,
+      });
+      // The unified bundle intersects every Codex-only surface with an
+      // honest unavailable row for the hosts that lack it.
+      expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
+      expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
+      expect(registry.supports('plugin', capability)).toBe(false);
+    }
+  }
+
+  expect(codexCapabilityTable.tokens).toEqual({
+    pluginData: false,
+    pluginRoot: 'relative-with-plugin-root-cwd',
+    workspaceRoot: false,
+  });
 });
 
 it('reports Claude LSP support and honest unavailable composite coverage', () => {
@@ -178,6 +272,68 @@ it('reports Claude plugin settings support and honest unavailable composite cove
   }
   expect(registry.supports('claude', 'settings')).toBe(true);
   expect(registry.supports('plugin', 'settings')).toBe(false);
+});
+
+const claudeAgentCapabilityRows = {
+  background: 'agents.background',
+  component: 'agents',
+  description: 'agents.description',
+  disallowedTools: 'agents.disallowedTools',
+  effort: 'agents.effort',
+  hooks: 'agents.hooks',
+  isolationWorktree: 'agents.isolationWorktree',
+  maxTurns: 'agents.maxTurns',
+  mcpServers: 'agents.mcpServers',
+  memory: 'agents.memory',
+  model: 'agents.model',
+  name: 'agents.name',
+  permissionMode: 'agents.permissionMode',
+  skills: 'agents.skills',
+  tools: 'agents.tools',
+} as const;
+
+it('records dated unavailable Claude agent rows and mirrors them through the unified adapter', () => {
+  const registry = createDefaultRegistry();
+  const agents = (
+    claudeCapabilityTable.plugin as unknown as {
+      readonly agents?: Readonly<Record<
+        keyof typeof claudeAgentCapabilityRows,
+        {
+          readonly evidence: readonly string[];
+          readonly reason: string;
+          readonly state: string;
+        }
+      >>;
+    }
+  ).agents;
+
+  expect(agents).toBeDefined();
+  if (agents === undefined) return;
+  expect(Object.keys(agents).sort()).toEqual(Object.keys(claudeAgentCapabilityRows).sort());
+
+  for (const [rowName, capability] of Object.entries(claudeAgentCapabilityRows)) {
+    const row = agents[rowName as keyof typeof claudeAgentCapabilityRows];
+    expect(row).toMatchObject({
+      reason: expect.stringMatching(/#100 stage-2 G5|#100 stage 2 G5/u),
+      state: 'unavailable',
+    });
+    expect(row.reason).toContain('PR #220');
+    expect(row.reason).toContain('#107 revision 3');
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+    expect(registry.get('claude').capabilities[capability]).toEqual({
+      reason: row.reason,
+      state: 'unavailable',
+    });
+    expect(registry.get('plugin').capabilities[capability]).toEqual(intersectCapabilityStates(
+      registry.get('claude').capabilities[capability]!,
+      unavailableCapability(
+        'The pinned Codex and Cursor plugin contracts publish no shared plugin agents component or agent-frontmatter surface.',
+      ),
+    ));
+    expect(registry.supports('claude', capability)).toBe(false);
+    expect(registry.supports('plugin', capability)).toBe(false);
+  }
 });
 
 it('reports Claude userConfig support and honest unavailable composite coverage', () => {
@@ -290,6 +446,22 @@ const claudeDistributionPolicyCapabilities = [
   'marketplaceCliLifecycle',
 ] as const;
 
+it('reports Claude plugin install scopes from the scoped installer implementation', () => {
+  const row = claudeCapabilityTable.plugin.distributionPolicy.pluginInstallScopes;
+  const capability = createDefaultRegistry().get('claude').capabilities.pluginInstallScopes;
+
+  expect(row).toMatchObject({
+    evidence: expect.arrayContaining([
+      expect.stringContaining('src/install/install.ts'),
+    ]),
+    state: 'supported',
+  });
+  expect(capability).toMatchObject({
+    evidence: { observedVersion: '2.1.250', target: 'claude' },
+    state: 'supported',
+  });
+});
+
 it('records dated unavailable Claude distribution and policy capability rows', () => {
   const registry = createDefaultRegistry();
   const distributionPolicy = (
@@ -311,14 +483,21 @@ it('records dated unavailable Claude distribution and policy capability rows', (
   expect(Object.keys(distributionPolicy).sort()).toEqual([...claudeDistributionPolicyCapabilities].sort());
   for (const capability of claudeDistributionPolicyCapabilities) {
     const row = distributionPolicy[capability];
-    expect(row.state).toBe('unavailable');
-    expect(row.reason.length).toBeGreaterThan(0);
+    expect(row.state).toBe(capability === 'pluginInstallScopes' ? 'supported' : 'unavailable');
+    if (capability !== 'pluginInstallScopes') expect(row.reason.length).toBeGreaterThan(0);
     expect(row.evidence.length).toBeGreaterThan(0);
     expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
-    expect(registry.get('claude').capabilities[capability]).toEqual({
-      reason: row.reason,
-      state: 'unavailable',
-    });
+    if (capability === 'pluginInstallScopes') {
+      expect(registry.get('claude').capabilities[capability]).toMatchObject({
+        evidence: { observedVersion: '2.1.250', target: 'claude' },
+        state: 'supported',
+      });
+    } else {
+      expect(registry.get('claude').capabilities[capability]).toEqual({
+        reason: row.reason,
+        state: 'unavailable',
+      });
+    }
     expect(registry.get('plugin').capabilities[capability]).toMatchObject({
       state: 'unavailable',
     });
@@ -342,6 +521,76 @@ it('records dated unavailable Claude distribution and policy capability rows', (
     'remove',
     'update',
   ]);
+});
+
+const claudePackageLifecycleCapabilities = [
+  'nodeDependencyInstall',
+  'yarnPnpmInstallAlternative',
+  'pluginCacheLifecycle',
+  'pluginPathSubstitution',
+  'pluginDataLifecycle',
+] as const;
+
+it('records dated Claude package, cache, and data lifecycle capability rows', () => {
+  const registry = createDefaultRegistry();
+  const packageLifecycle = (
+    claudeCapabilityTable.plugin as unknown as {
+      readonly packageLifecycle?: Readonly<Record<
+        (typeof claudePackageLifecycleCapabilities)[number],
+        {
+          readonly evidence: readonly string[];
+          readonly reason: string;
+          readonly state: string;
+        }
+      >>;
+    }
+  ).packageLifecycle;
+
+  expect(packageLifecycle).toBeDefined();
+  if (packageLifecycle === undefined) return;
+  expect(Object.keys(packageLifecycle).sort()).toEqual([...claudePackageLifecycleCapabilities].sort());
+  for (const capability of claudePackageLifecycleCapabilities) {
+    const row = packageLifecycle[capability];
+    expect(row.state).toBe(capability === 'pluginPathSubstitution' ? 'degraded' : 'unavailable');
+    expect(row.reason.length).toBeGreaterThan(0);
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
+    expect(registry.get('claude').capabilities[capability]).toMatchObject({
+      reason: row.reason,
+      state: row.state,
+    });
+    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+      state: 'unavailable',
+    });
+  }
+});
+
+it('pins the documented Claude dependency precedence and substitution field table', () => {
+  const lifecycle = claudeCapabilityTable.plugin.packageLifecycle;
+
+  expect(lifecycle.nodeDependencyInstall).toMatchObject({
+    commands: {
+      'bun.lock': 'bun install --frozen-lockfile --ignore-scripts',
+      'bun.lockb': 'bun install --frozen-lockfile --ignore-scripts',
+      'npm-shrinkwrap.json': 'npm ci --ignore-scripts',
+      'package-lock.json': 'npm ci --ignore-scripts',
+    },
+    lockfilePrecedence: ['bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'package-lock.json'],
+    manifest: 'package.json',
+    timeoutSeconds: 60,
+  });
+  expect(lifecycle.yarnPnpmInstallAlternative).toMatchObject({
+    persistentDataToken: '${CLAUDE_PLUGIN_DATA}',
+    skippedLockfiles: ['yarn.lock', 'pnpm-lock.yaml'],
+  });
+  expect(lifecycle.pluginPathSubstitution.fields).toEqual({
+    hookCommands: ['command', 'args'],
+    lsp: ['command', 'args', 'env', 'workspaceFolder'],
+    mcpRemote: ['url', 'headers', 'headersHelper'],
+    mcpStdio: ['command', 'args', 'env'],
+    monitorCommands: ['command'],
+    skillAndAgentContent: ['anywhere'],
+  });
 });
 
 it.each([
@@ -401,12 +650,108 @@ it.each([
     reason: expect.stringContaining(reason),
     state: 'unavailable',
   });
-  for (const target of ['codex', 'cursor', 'portable'] as const) {
+  for (const target of ['cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
     expect(registry.supports(target, capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
   expect(registry.supports('plugin', capability)).toBe(false);
+});
+
+const codexManifestPackageCapabilities = [
+  'manifestMetadata',
+  'manifestPaths',
+  'optionalAssets',
+  'submissionPolicy',
+] as const;
+
+it('records dated Codex manifest and package capability rows', () => {
+  const registry = createDefaultRegistry();
+  const manifestPackage = codexCapabilityTable.plugin.manifestPackage;
+
+  expect(Object.keys(manifestPackage).sort()).toEqual([...codexManifestPackageCapabilities].sort());
+  for (const capability of codexManifestPackageCapabilities) {
+    const row = manifestPackage[capability];
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+    const state = registry.get('codex').capabilities[capability];
+    expect(state?.state).toBe(row.state);
+    if ('reason' in row) {
+      expect(state).toMatchObject({ reason: row.reason });
+    } else {
+      expect(state).toMatchObject({ evidence: { target: 'codex' } });
+    }
+  }
+
+  expect(manifestPackage.manifestMetadata.fields).toEqual([
+    'author.name',
+    'author.email',
+    'author.url',
+    'homepage',
+    'repository',
+    'license',
+    'keywords',
+  ]);
+  expect(manifestPackage.manifestPaths).toMatchObject({
+    admitted: {
+      hooks: ['path', 'path-array', 'inline-object', 'inline-object-array'],
+      mcpServers: ['path', 'inline-object'],
+      skills: ['path'],
+    },
+    emitted: {
+      hooks: './hooks/hooks.json',
+      mcpServers: './.mcp.json',
+      skills: './skills/',
+    },
+    state: 'degraded',
+  });
+  expect(manifestPackage.optionalAssets.assets).toEqual([
+    'interface.composerIcon',
+    'interface.logo',
+    'interface.logoDark',
+    'interface.screenshots',
+  ]);
+  expect(manifestPackage.submissionPolicy.constraints).toEqual([
+    'Apps Management write access',
+    'verified developer or business identity',
+    'listing and policy URLs',
+    'production MCP review materials',
+    'five positive and three negative test cases',
+    'country or region availability',
+    'release notes and policy attestations',
+  ]);
+});
+
+it('mirrors Codex manifest metadata and path states through the unified adapter', () => {
+  const registry = createDefaultRegistry();
+
+  expect(registry.get('codex').capabilities.manifestMetadata).toMatchObject({
+    evidence: { target: 'codex' },
+    state: 'supported',
+  });
+  expect(registry.get('codex').capabilities.manifestPaths).toMatchObject({
+    evidence: { target: 'codex' },
+    reason: expect.stringContaining('canonical'),
+    state: 'degraded',
+  });
+  expect(registry.get('plugin').capabilities.manifestMetadata).toEqual(intersectCapabilityStates(
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.manifestMetadata!,
+      registry.get('codex').capabilities.manifestMetadata!,
+    ),
+    unavailableCapability(
+      'The pinned Cursor plugin contract does not share the authored Codex and Claude manifest metadata fields.',
+    ),
+  ));
+  expect(registry.get('plugin').capabilities.manifestPaths).toEqual(intersectCapabilityStates(
+    intersectCapabilityStates(
+      registry.get('claude').capabilities.manifestPaths!,
+      registry.get('codex').capabilities.manifestPaths!,
+    ),
+    unavailableCapability(
+      'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
+    ),
+  ));
 });
 
 it('intersects supported composite capabilities and merges both evidence records', () => {
@@ -569,16 +914,19 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
 
 it('reports the evidence-backed G10 event family matrix without inferred support', () => {
   const registry = createDefaultRegistry();
-  const allNativeHosts = [
+  const sharedNativeHosts = [
     'event:agent/start',
     'event:agent/stop',
+    'event:compact/before',
+    'event:prompt/submit',
+    'event:session/end',
     'event:session/start',
     'event:stop',
     'event:tool/after',
     'event:tool/before',
   ];
 
-  for (const capability of allNativeHosts) {
+  for (const capability of [...sharedNativeHosts, 'event:tool/failure']) {
     expect(registry.get('cursor').capabilities[capability]).toMatchObject({
       evidence: { observedVersion: '2026-08-28', target: 'cursor' },
       state: 'supported',
@@ -588,8 +936,35 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     evidence: { observedVersion: '2026-08-28', target: 'cursor' },
     state: 'supported',
   });
+  expect(cursorCapabilityTable.hooks.eventRoutes['session/end'].availability).toEqual({
+    cloud: {
+      reason: expect.stringContaining('https://cursor.com/docs/hooks'),
+      state: 'unavailable',
+    },
+    desktop: { state: 'supported' },
+  });
+  expect(registry.get('cursor').capabilities['event:compact/after']).toMatchObject({
+    reason: expect.stringContaining('no postCompact'),
+    state: 'unavailable',
+  });
+  for (const capability of [...sharedNativeHosts, 'event:compact/after', 'event:tool/failure']) {
+    expect(registry.get('claude').capabilities[capability]).toMatchObject({
+      evidence: { target: 'claude' },
+      state: 'supported',
+    });
+  }
+  for (const capability of [...sharedNativeHosts, 'event:compact/after']) {
+    expect(registry.get('codex').capabilities[capability]).toMatchObject({
+      evidence: { target: 'codex' },
+      state: 'supported',
+    });
+  }
+  expect(registry.get('codex').capabilities['event:tool/failure']).toMatchObject({
+    reason: expect.stringContaining('no tool-failure'),
+    state: 'unavailable',
+  });
   for (const target of ['claude', 'codex'] as const) {
-    for (const capability of allNativeHosts) {
+    for (const capability of sharedNativeHosts) {
       expect(registry.get(target).capabilities[capability]).toMatchObject({
         evidence: { target },
         state: 'supported',
@@ -600,22 +975,33 @@ it('reports the evidence-backed G10 event family matrix without inferred support
       state: 'unavailable',
     });
   }
-  for (const capability of ['event:agent/start', 'event:agent/stop']) {
+  for (const capability of [
+    'event:agent/start',
+    'event:agent/stop',
+    'event:compact/before',
+    'event:prompt/submit',
+    'event:session/end',
+  ]) {
     expect(registry.get('plugin').capabilities[capability]).toMatchObject({
       evidence: { target: 'claude+codex+cursor' },
       state: 'supported',
     });
   }
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+  expect(registry.get('plugin').capabilities['event:tool/failure']).toMatchObject({
+    reason: expect.stringContaining('no tool-failure'),
+    state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities['event:compact/after']).toMatchObject({
+    reason: expect.stringContaining('no postCompact'),
+    state: 'unavailable',
+  });
+  const workspaceOpen = registry.get('plugin').capabilities['event:workspace/open'];
+  expect(workspaceOpen).toMatchObject({
     reason: expect.not.stringContaining('pluginPaths'),
     state: 'unavailable',
   });
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('Claude Code 2.1.250'),
-  });
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('Codex 0.147.0'),
-  });
+  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Claude Code 2.1.250') });
+  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Codex 0.147.0') });
 });
 
 it('reports evidence-backed installation support only for real host targets', () => {
@@ -634,5 +1020,68 @@ it('reports evidence-backed installation support only for real host targets', ()
       state: 'unavailable',
     });
     expect(registry.supports(target, 'install')).toBe(false);
+  }
+});
+
+it('pins dated deferral rows for every explicitly deferred native callback from #258', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const tables = {
+    claude: JSON.parse(await readFile(new URL('../src/adapters/capabilities/claude-2.1.250.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+    codex: JSON.parse(await readFile(new URL('../src/adapters/capabilities/codex-0.147.0.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+    cursor: JSON.parse(await readFile(new URL('../src/adapters/capabilities/cursor-2026-08-28.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+  };
+  const expected = {
+    claude: [
+      'ConfigChange-policy_settings', 'CwdChanged', 'DirectoryAdded', 'Elicitation', 'ElicitationResult',
+      'InstructionsLoaded', 'MessageDisplay', 'Notification', 'PostModelSwitch', 'PostToolBatch',
+      'PreModelSwitch', 'Setup', 'UserPromptExpansion', 'WorktreeCreate', 'WorktreeRemove',
+    ],
+    codex: ['Interrupt'],
+    cursor: [
+      'afterAgentResponse', 'afterAgentThought', 'afterFileEdit', 'afterMCPExecution', 'afterShellExecution',
+      'afterTabFileEdit', 'beforeMCPExecution', 'beforeReadFile', 'beforeShellExecution',
+      'beforeSubmitPrompt-cloud', 'beforeTabFileRead',
+    ],
+  } as const;
+  for (const [host, names] of Object.entries(expected)) {
+    const deferred = tables[host as keyof typeof tables].deferredNativeEvents as Record<string, { reason: string; state: string }>;
+    expect(Object.keys(deferred).sort()).toEqual([...names].sort());
+    for (const name of names) {
+      expect(deferred[name]!.state).toMatch(/^(unavailable|prohibited)$/u);
+      expect(deferred[name]!.reason).toMatch(/2026-09-02/u);
+    }
+  }
+});
+
+it('advertises notice delivery routes per host with dated unavailability (#99 stage 4)', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const routes = ['current-response', 'directed-push', 'host-toast', 'mcp-inbox', 'mcp-resource-updated', 'next-event'];
+  const files = {
+    claude: 'claude-2.1.250.json',
+    codex: 'codex-0.147.0.json',
+    cursor: 'cursor-2026-08-28.json',
+    portable: 'portable-1.0.0.json',
+  };
+  for (const [host, file] of Object.entries(files)) {
+    const table = JSON.parse(await readFile(new URL(`../src/adapters/capabilities/${file}`, import.meta.url), 'utf8')) as Record<string, unknown>;
+    const advertisement = table.noticeDelivery as Record<string, { reason?: string; state: string }>;
+    expect(Object.keys(advertisement).sort()).toEqual(routes);
+    for (const route of routes) {
+      const entry = advertisement[route]!;
+      expect(['supported', 'unavailable']).toContain(entry.state);
+      if (entry.state === 'unavailable') expect(entry.reason).toMatch(/2026-09-02/u);
+    }
+    // No pinned host has a directed cross-actor push or toast surface (#99 survey).
+    expect(advertisement['directed-push']!.state).toBe('unavailable');
+    expect(advertisement['host-toast']!.state).toBe('unavailable');
+    // The generated MCP inbox surface exists on every target.
+    expect(advertisement['mcp-inbox']!.state).toBe('supported');
+    // Hookless portable honestly loses the hook-borne routes.
+    if (host === 'portable') {
+      expect(advertisement['next-event']!.state).toBe('unavailable');
+      expect(advertisement['current-response']!.state).toBe('unavailable');
+    } else {
+      expect(advertisement['next-event']!.state).toBe('supported');
+    }
   }
 });

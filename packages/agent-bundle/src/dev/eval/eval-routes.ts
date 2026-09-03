@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { hasOnlyOwnKeys, isRecord as coreIsRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
   EvalConfigError,
   EvalDefinitionError,
@@ -240,11 +240,10 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ kind: 'run', runId: segments[1] ?? pathError() });
 };
 
-const isRecord = (value: unknown): value is JsonObject =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+// Inputs are parsed JSON, so the canonical guard's unknown-record narrowing is retyped to JsonObject.
+const isRecord = coreIsRecord as (value: unknown) => value is JsonObject;
 
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');

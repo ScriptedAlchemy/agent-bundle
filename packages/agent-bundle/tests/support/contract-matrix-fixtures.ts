@@ -27,6 +27,10 @@ const lifecycleFixture = (revisionOffset = 0): ContractRouteFixture => ({
         input: { action: 'exceed-budget', payload: 'x'.repeat(512) },
         revisionPath: ['revision'],
       },
+      catalog: {
+        id: 'route-harness/journal',
+        lifetime: 'workspace-durable',
+      },
       durability: {
         expectedStructuredContent: {
           history: lifecyclePhases.slice(1),

@@ -38,6 +38,47 @@ const requireNativeString = (input: Readonly<Record<string, unknown>>, field: st
   }
 };
 
+const requireNativeStringValue = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'string') {
+    nativeEventError(`native ${field} must be a string`);
+  }
+};
+
+const requireNativeNumber = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'number') {
+    nativeEventError(`native ${field} must be a number`);
+  }
+};
+
+const requireNativeBoolean = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'boolean') {
+    nativeEventError(`native ${field} must be a boolean`);
+  }
+};
+
+const requireCompactTrigger = (native: Readonly<Record<string, unknown>>): void => {
+  if (native.trigger !== 'manual' && native.trigger !== 'auto') {
+    nativeEventError('native trigger must equal manual or auto');
+  }
+};
+
+const requirePermissionMode = (native: Readonly<Record<string, unknown>>): void => {
+  requireNativeString(native, 'permission_mode');
+  if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
+    nativeEventError('native permission_mode is invalid');
+  }
+};
+
+const isCursorPromptAttachment = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const attachment = value as Readonly<Record<string, unknown>>;
+  return (
+    (attachment.type === 'file' || attachment.type === 'rule')
+    && typeof attachment.file_path === 'string'
+    && attachment.file_path.trim() !== ''
+  );
+};
+
 /**
  * Validates the host envelope shared by generated event wrappers and semantic
  * lifecycle replay. The process-edge stdin byte limit remains wrapper-owned.
@@ -76,6 +117,61 @@ export const validateNativeEventEnvelope = (
     if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {
       return nativeEventError('native session_id or conversation_id must be a string');
     }
+    if (canonicalEvent === 'session/end') {
+      if (!['completed', 'aborted', 'error', 'window_close', 'user_close'].includes(String(native.reason))) {
+        return nativeEventError('native reason is invalid');
+      }
+      if (typeof native.duration_ms !== 'number') {
+        return nativeEventError('native duration_ms must be a number');
+      }
+      if (typeof native.is_background_agent !== 'boolean') {
+        return nativeEventError('native is_background_agent must be a boolean');
+      }
+      requireNativeString(native, 'final_status');
+      if (Object.hasOwn(native, 'error_message') && typeof native.error_message !== 'string') {
+        return nativeEventError('native error_message must be a string');
+      }
+      return native;
+    }
+    if (canonicalEvent === 'prompt/submit') {
+      requireNativeStringValue(native, 'prompt');
+      if (
+        !Array.isArray(native.attachments)
+        || !native.attachments.every(isCursorPromptAttachment)
+      ) {
+        return nativeEventError('native attachments must be an array of file/rule objects with nonempty file_path');
+      }
+      return native;
+    }
+    if (canonicalEvent === 'tool/failure') {
+      requireNativeString(native, 'tool_name');
+      if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+        return nativeEventError('native tool_input must be an object');
+      }
+      requireNativeString(native, 'tool_use_id');
+      requireNativeString(native, 'cwd');
+      requireNativeStringValue(native, 'error_message');
+      if (!['timeout', 'error', 'permission_denied'].includes(String(native.failure_type))) {
+        return nativeEventError('native failure_type is invalid');
+      }
+      requireNativeNumber(native, 'duration');
+      requireNativeBoolean(native, 'is_interrupt');
+      return native;
+    }
+    if (canonicalEvent === 'compact/before') {
+      requireCompactTrigger(native);
+      for (const field of [
+        'context_usage_percent',
+        'context_tokens',
+        'context_window_size',
+        'message_count',
+        'messages_to_compact',
+      ]) {
+        requireNativeNumber(native, field);
+      }
+      requireNativeBoolean(native, 'is_first_compaction');
+      return native;
+    }
     if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
       requireNativeString(native, 'tool_name');
       if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
@@ -98,6 +194,91 @@ export const validateNativeEventEnvelope = (
     requireNativeString(native, 'transcript_path');
   }
   requireNativeString(native, 'cwd');
+  if (canonicalEvent === 'session/end') {
+    if (target === 'codex') {
+      if (native.reason !== 'other') return nativeEventError('native reason must equal other');
+    } else if (!['clear', 'resume', 'logout', 'prompt_input_exit', 'other'].includes(String(native.reason))) {
+      return nativeEventError('native reason is invalid');
+    }
+  }
+  if (canonicalEvent === 'prompt/submit') {
+    requireNativeStringValue(native, 'prompt');
+    requirePermissionMode(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    }
+  }
+  if (canonicalEvent === 'tool/failure') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    requireNativeString(native, 'tool_use_id');
+    requireNativeStringValue(native, 'error');
+    if (Object.hasOwn(native, 'is_interrupt')) requireNativeBoolean(native, 'is_interrupt');
+    if (Object.hasOwn(native, 'duration_ms')) requireNativeNumber(native, 'duration_ms');
+  }
+  if (canonicalEvent === 'permission/request') {
+    requireNativeString(native, 'tool_name');
+    // The pinned permission-request input schema declares `"tool_input": true`
+    // (any JSON value), so presence is required but shape is tool-defined.
+    if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
+      return nativeEventError('native tool_input is required');
+    }
+    requirePermissionMode(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    }
+  }
+  if (canonicalEvent === 'permission/denied') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    if (Object.hasOwn(native, 'permission_decision')) requireNativeString(native, 'permission_decision');
+    if (Object.hasOwn(native, 'permission_decision_reason')) {
+      requireNativeStringValue(native, 'permission_decision_reason');
+    }
+  }
+  if (canonicalEvent === 'stop/failure') {
+    requireNativeStringValue(native, 'error');
+    if (Object.hasOwn(native, 'stop_hook_active') && typeof native.stop_hook_active !== 'boolean') {
+      return nativeEventError('native stop_hook_active must be a boolean');
+    }
+  }
+  if (canonicalEvent === 'file/change') requireNativeString(native, 'file_path');
+  if (canonicalEvent === 'config/change') {
+    if (!['user_settings', 'project_settings', 'local_settings', 'policy_settings', 'skills'].includes(String(native.source))) {
+      return nativeEventError('native source is invalid');
+    }
+    if (Object.hasOwn(native, 'file_path')) requireNativeString(native, 'file_path');
+  }
+  if (canonicalEvent === 'task/create' || canonicalEvent === 'task/complete') {
+    requireNativeString(native, 'task_id');
+    requireNativeString(native, 'task_subject');
+    for (const field of ['task_description', 'teammate_name', 'team_name']) {
+      if (Object.hasOwn(native, field)) requireNativeString(native, field);
+    }
+  }
+  if (canonicalEvent === 'agent/idle') {
+    requireNativeString(native, 'teammate_name');
+    requireNativeString(native, 'team_name');
+  }
+  if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
+    requireCompactTrigger(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    } else if (canonicalEvent === 'compact/before') {
+      if (native.custom_instructions !== null && typeof native.custom_instructions !== 'string') {
+        return nativeEventError('native custom_instructions must be a string or null');
+      }
+    } else {
+      requireNativeStringValue(native, 'compact_summary');
+    }
+  }
   if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
   if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
     requireNativeString(native, 'tool_name');
@@ -118,10 +299,7 @@ export const validateNativeEventEnvelope = (
     if (target === 'codex') {
       requireNativeString(native, 'turn_id');
       requireNativeString(native, 'model');
-      requireNativeString(native, 'permission_mode');
-      if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
-        return nativeEventError('native permission_mode is invalid');
-      }
+      requirePermissionMode(native);
     }
     if (canonicalEvent === 'agent/stop') {
       if (typeof native.stop_hook_active !== 'boolean') {
@@ -262,6 +440,213 @@ export const projectEventDocument = (
             hookEventName: nativeEvent,
           },
         });
+  }
+  if (event === 'session/end') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('session/end is observation-only on every supported host and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('session/end is observation-only on every supported host and has no context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'prompt/submit') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('prompt/submit cannot replace native input on any supported host.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('prompt/submit reason is only valid when outcome is deny.');
+    }
+    if (target === 'cursor' && additionalContext !== undefined) {
+      throw new TypeError('Cursor beforeSubmitPrompt has no additional-context channel.');
+    }
+    if (target === 'cursor') {
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ continue: false, user_message: requireDenyReason() })
+        : undefined;
+    }
+    const reason = parsedValue?.outcome === 'deny' ? requireDenyReason() : undefined;
+    if (reason === undefined && additionalContext === undefined) return undefined;
+    return deepFreeze({
+      ...(reason === undefined ? {} : { decision: 'block', reason }),
+      ...(additionalContext === undefined
+        ? {}
+        : {
+            hookSpecificOutput: {
+              additionalContext,
+              hookEventName: nativeEvent,
+            },
+          }),
+    });
+  }
+  if (event === 'tool/failure') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('tool/failure cannot deny or replace native input; the tool has already failed.');
+    }
+    if (target !== 'claude' && additionalContext !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor postToolUseFailure has no context/output channel.'
+          : 'tool/failure additional context is supported only by Claude PostToolUseFailure.',
+      );
+    }
+    if (additionalContext === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
+  }
+  if (event === 'compact/before') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('compact/before cannot replace native input on any supported host.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor preCompact user_message is user-facing and cannot be represented by Agent.Context.'
+          : `${target === 'codex' ? 'Codex PreCompact' : 'Claude PreCompact'} has no additional-context channel.`,
+      );
+    }
+    if (target === 'claude') {
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('compact/before reason is only valid when outcome is deny on Claude.');
+      }
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ decision: 'block', reason: requireDenyReason() })
+        : undefined;
+    }
+    if (parsedValue?.outcome === 'deny' || parsedValue?.reason !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor preCompact is observational and cannot block compaction.'
+          : 'Codex PreCompact common-control runtime semantics are unproven and are not projected.',
+      );
+    }
+    return undefined;
+  }
+  if (event === 'compact/after') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('compact/after is observation-only on every supported host and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('compact/after is observation-only on every supported host and has no context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'permission/request') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('permission/request input rewrite is reserved upstream and fails closed on both supported hosts; it is not projected.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('permission/request has no additional-context channel in the PermissionRequest output contract.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('permission/request reason is only valid when outcome is deny.');
+    }
+    if (parsedValue?.outcome === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        decision: {
+          behavior: parsedValue.outcome === 'deny' ? 'deny' : 'allow',
+          ...(parsedValue.outcome === 'deny' ? { message: requireDenyReason() } : {}),
+        },
+        hookEventName: nativeEvent,
+      },
+    });
+  }
+  if (event === 'permission/denied') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('permission/denied observes an already-denied call and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('permission/denied retry signalling has no canonical vocabulary yet; no context/output channel is projected.');
+    }
+    return undefined;
+  }
+  if (event === 'stop/failure') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('stop/failure observes an API-error turn end and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('stop/failure has no documented context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'file/change') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('file/change has no decision control on Claude FileChanged; it is side-effect-only.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('file/change has no documented context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'config/change' || event === 'task/create') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError(`${event} cannot replace native input.`);
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError(`${event} has no documented additional-context channel.`);
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError(`${event} reason is only valid when outcome is deny.`);
+    }
+    return parsedValue?.outcome === 'deny'
+      ? Object.freeze({ decision: 'block', reason: requireDenyReason() })
+      : undefined;
+  }
+  if (event === 'task/complete') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('task/complete blocking is exit-code-only on Claude TaskCompleted (JSON continue:false redirects to teammate stop and is ignored for TaskUpdate); it is not projected.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('task/complete has no documented context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'agent/idle') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('agent/idle cannot replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('agent/idle has no documented additional-context channel.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('agent/idle reason is only valid when outcome is deny.');
+    }
+    return parsedValue?.outcome === 'deny'
+      ? Object.freeze({ continue: false, stopReason: requireDenyReason() })
+      : undefined;
   }
   if (event === 'tool/before') {
     if (target === 'cursor') {

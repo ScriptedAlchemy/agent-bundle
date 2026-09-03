@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import {
+  canonicalHookEventFor,
   planHooks,
   readStandardNativeHookCommands,
   readTargetNativeHookCommands,
@@ -76,6 +77,44 @@ const runWrapper = async (wrapper: string): Promise<string> =>
       else reject(new Error(stderr));
     });
   });
+
+it('keeps event-route-only hook identities out of config hook parsing', () => {
+  expect(canonicalHookEventFor('sessionStart')).toBe('sessionStart');
+  expect(canonicalHookEventFor('sessionEnd')).toBeUndefined();
+  expect(canonicalHookEventFor('promptSubmit')).toBeUndefined();
+  expect(canonicalHookEventFor('toolFailure')).toBeUndefined();
+  expect(canonicalHookEventFor('compactBefore')).toBeUndefined();
+  expect(canonicalHookEventFor('compactAfter')).toBeUndefined();
+});
+
+it('plans route-only hook identities through event route mappings', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('promptSubmit', []),
+    eventRoute: { event: 'prompt/submit', fallback: 'none', runtime: 'shared' },
+  };
+  const plan = planHooks(planningModel([hook]), 'synthetic', {
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: {},
+    eventRouteNames: { 'prompt/submit': 'SyntheticPromptSubmit' },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    wrapperPath: (candidate) => `hooks/${candidate.name}.mjs`,
+    wrapperSource: () => 'config-hook-only\n',
+  });
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(plan.document).toEqual({
+    hooks: {
+      SyntheticPromptSubmit: [{
+        hooks: [{
+          command: 'node "${SYNTHETIC_PLUGIN_ROOT}/hooks/promptSubmit.mjs"',
+          type: 'command',
+        }],
+      }],
+    },
+  });
+});
 
 it('snapshots target-native hook commands through the contract gateway', () => {
   const contract = {

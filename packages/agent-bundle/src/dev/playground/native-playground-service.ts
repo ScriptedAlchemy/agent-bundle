@@ -3,7 +3,7 @@ import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../../core/digest.ts';
-import { parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
+import { hasExactOwnKeys, isJsonRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { PreparedEvalArtifact } from '../../eval/artifact.ts';
 import { runClaudeTrial } from '../../eval/claude-harness.ts';
@@ -454,8 +454,7 @@ const normalizedTrialEvents = (
 const selectionKey = (selection: NativePlaygroundCatalogSelection): string =>
   `${selection.caseId}\u0000${selection.fixtureId}\u0000${selection.host}\u0000${selection.modelPinId}`;
 
-const isRecord = (value: JsonValue): value is Readonly<Record<string, JsonValue>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+const isRecord = isJsonRecord;
 
 const boundedJson = (value: JsonValue, depth = 0): boolean => {
   if (depth > maximumSnapshotDepth) return false;
@@ -470,11 +469,8 @@ const boundedJson = (value: JsonValue, depth = 0): boolean => {
 const nonemptySnapshotText = (value: JsonValue | undefined): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maximumSnapshotStringLength;
 
-const exactKeys = (value: Readonly<Record<string, JsonValue>>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
+const exactKeys: (value: Readonly<Record<string, JsonValue>>, keys: readonly string[]) => boolean =
+  hasExactOwnKeys;
 
 const withinCatalogSnapshotNodeBudget = (root: unknown): boolean => {
   let remaining = maximumCatalogSnapshotNodes;

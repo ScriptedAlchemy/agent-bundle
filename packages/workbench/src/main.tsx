@@ -62,7 +62,7 @@ import {
 } from './routes/routes-model.ts';
 import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
-import { downloadBlob } from './client-helpers.ts';
+import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
 import { BundleWorkflow } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
@@ -98,7 +98,7 @@ const sourceFor = (diagnostic: Diagnostic): string =>
   diagnostic.sourcePath ?? diagnostic.generatedPath ?? diagnostic.target ?? 'Project';
 
 const errorMessage = (reason: unknown): string =>
-  reason instanceof Error ? reason.message : 'Foreground project state could not be refreshed.';
+  messageFrom(reason, 'Foreground project state could not be refreshed.');
 
 const activeEpochFor = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
@@ -218,16 +218,6 @@ const isRuntimeOperationTrace = (entry: RuntimeAppBridgeTrace): entry is Runtime
     Number.isSafeInteger(vectorRecord.stateVersion) &&
     vectorRecord.stateVersion >= 0;
 };
-
-const traceMatchesAuthority = (trace: RuntimeAppBridgeOperationTrace, authority: RuntimeOperationTraceAuthority): boolean =>
-  trace.bindingId === authority.bindingId &&
-  trace.registryRevision === authority.registryRevision &&
-  trace.sessionId === authority.sessionId &&
-  trace.sessionRevision === authority.sessionRevision &&
-  trace.vector.artifactEpochId === authority.vector.artifactEpochId &&
-  trace.vector.runtimeGenerationId === authority.vector.runtimeGenerationId &&
-  trace.vector.sourceRevision === authority.vector.sourceRevision &&
-  trace.vector.stateVersion === authority.vector.stateVersion;
 
 /** The stable host callback admits only the existing controller's route-free runtime binding. */
 const createWorkbenchRuntimeBridgeFactory = (
@@ -405,7 +395,7 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
     try {
       onStatus(await client.rebuild());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Rebuild request could not be completed.');
+      setError(messageFrom(reason, 'Rebuild request could not be completed.'));
     } finally {
       setRebuilding(false);
     }
@@ -1081,7 +1071,7 @@ const Workbench = () => {
   const onRuntimeBridgeTrace = useCallback((binding: McpAppPreviewAppsSnapshot['binding'], entry: RuntimeAppBridgeTrace): void => {
     const authority = runtimeOperationTraceAuthorities.current.get(binding.id);
     if (authority === undefined || !sameRuntimeOperationTraceAuthority(authority, runtimeOperationTraceAuthority(binding)) ||
-      !isRuntimeOperationTrace(entry) || !traceMatchesAuthority(entry, authority)) return;
+      !isRuntimeOperationTrace(entry) || !sameRuntimeOperationTraceAuthority(entry, authority)) return;
     setRuntimeOperationTraces((current) => Object.freeze([
       ...current.filter((trace) => trace.bindingId !== authority.bindingId).slice(-63),
       entry,

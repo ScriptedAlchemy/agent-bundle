@@ -1,3 +1,4 @@
+import { errorMessage } from '../../core/errors.ts';
 import type {
   PlaygroundCleanupFailure,
   PlaygroundSubscribeOptions,
@@ -13,8 +14,6 @@ export interface PlaygroundSubscriptionEntry {
   readonly onEvent: PlaygroundSubscribeOptions['onEvent'];
   readonly queue: PlaygroundTraceEvent[];
 }
-
-const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 /** Owns bounded subscriber queues and isolates listener failures from durable session state. */
 export class PlaygroundSubscriptionSet {

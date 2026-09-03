@@ -8,14 +8,56 @@ import type { RenderRouteContext } from '../src/test/render.ts';
 const graph = Object.freeze({
   diagnostics: Object.freeze([]),
   digest: 'manifest-a',
-  events: Object.freeze([{
-    config: Object.freeze({}),
-    event: 'tool/after',
-    id: 'event:tool/after',
-    kind: 'event-route',
-    provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
-    source: '/project/src/events/tool/after.tsx',
-  }]),
+  events: Object.freeze([
+    {
+      config: Object.freeze({}),
+      event: 'compact/after',
+      id: 'event:compact/after',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/compact/after.tsx' }),
+      source: '/project/src/events/compact/after.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'compact/before',
+      id: 'event:compact/before',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/compact/before.tsx' }),
+      source: '/project/src/events/compact/before.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'prompt/submit',
+      id: 'event:prompt/submit',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/prompt/submit.tsx' }),
+      source: '/project/src/events/prompt/submit.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'session/end',
+      id: 'event:session/end',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/session/end.tsx' }),
+      source: '/project/src/events/session/end.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'tool/after',
+      id: 'event:tool/after',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
+      source: '/project/src/events/tool/after.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'tool/failure',
+      id: 'event:tool/failure',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/failure.tsx' }),
+      source: '/project/src/events/tool/failure.tsx',
+    },
+  ]),
   providers: Object.freeze([]),
   scripts: Object.freeze([]),
   servers: Object.freeze([]),
@@ -36,8 +78,8 @@ it('projects event routes across concrete hosts and diagnoses excluded targets',
   const listed = service().list();
 
   expect(listed.manifestDigest).toBe('manifest-a');
-  expect(listed.lifecycles).toHaveLength(1);
-  expect(listed.lifecycles[0]).toMatchObject({
+  expect(listed.lifecycles).toHaveLength(6);
+  expect(listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/after')).toMatchObject({
     event: 'tool/after',
     routeId: 'event:tool/after',
     routePath: 'src/events/tool/after.tsx',
@@ -47,8 +89,38 @@ it('projects event routes across concrete hosts and diagnoses excluded targets',
       { nativeEvent: 'postToolUse', target: 'cursor' },
     ],
   });
-  expect(listed.lifecycles[0]?.targets.every((target) => target.target !== 'plugin')).toBe(true);
-  expect(listed.lifecycles[0]?.diagnostics).toContainEqual({
+  for (const event of ['compact/before', 'prompt/submit', 'session/end'] as const) {
+    expect(listed.lifecycles.find((lifecycle) => lifecycle.event === event)?.targets).toEqual([
+      expect.objectContaining({ target: 'claude' }),
+      expect.objectContaining({ target: 'codex' }),
+      expect.objectContaining({ target: 'cursor' }),
+    ]);
+  }
+  expect(listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/failure')?.targets).toEqual([
+    expect.objectContaining({ nativeEvent: 'PostToolUseFailure', target: 'claude' }),
+    expect.objectContaining({ nativeEvent: 'postToolUseFailure', target: 'cursor' }),
+  ]);
+  expect(listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/failure')?.diagnostics)
+    .toContainEqual({
+      code: 'lifecycle.target.unsupported',
+      message: 'Lifecycle replay target "codex" cannot map canonical event "tool/failure".',
+      severity: 'error',
+      target: 'codex',
+    });
+  expect(listed.lifecycles.find((lifecycle) => lifecycle.event === 'compact/after')?.targets).toEqual([
+    expect.objectContaining({ nativeEvent: 'PostCompact', target: 'claude' }),
+    expect.objectContaining({ nativeEvent: 'PostCompact', target: 'codex' }),
+  ]);
+  expect(listed.lifecycles.find((lifecycle) => lifecycle.event === 'compact/after')?.diagnostics)
+    .toContainEqual({
+      code: 'lifecycle.target.unsupported',
+      message: 'Lifecycle replay target "cursor" cannot map canonical event "compact/after".',
+      severity: 'error',
+      target: 'cursor',
+    });
+  const toolAfter = listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/after');
+  expect(toolAfter?.targets.every((target) => target.target !== 'plugin')).toBe(true);
+  expect(toolAfter?.diagnostics).toContainEqual({
     code: 'lifecycle.target.unsupported',
     message: 'Lifecycle replay target "portable" cannot map canonical event "tool/after".',
     severity: 'error',
@@ -142,7 +214,11 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
   expect(renderedContext).toEqual({
     actor: requestContext.actor,
     host: requestContext.host,
-    invocation: { hostContractRevision: '2.1.250' },
+    invocation: {
+      hostContractRevision: '2.1.250',
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
     session: requestContext.session,
     workspace: requestContext.workspace,
   });

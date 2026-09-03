@@ -1,0 +1,17 @@
+{
+  "cwd": "/workspace",
+  "duration_ms": 134,
+  "error": "Exit code 9\nfailure",
+  "hook_event_name": "PostToolUseFailure",
+  "is_interrupt": false,
+  "permission_mode": "bypassPermissions",
+  "prompt_id": "prompt-claude-1",
+  "session_id": "session-claude-1",
+  "tool_input": {
+    "command": "bash -lc 'printf failure >&2; exit 9'",
+    "description": "Print failure to stderr and exit 9"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "tool-claude-1",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

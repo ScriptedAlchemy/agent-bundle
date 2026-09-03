@@ -24,6 +24,9 @@ export class CuratorError extends Error {}
 
 export const utcNow = (): string => new Date().toISOString();
 
+export const errorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
+
 /** Narrows an unknown value to a plain record, or returns an empty one. */
 export const asRecord = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown>

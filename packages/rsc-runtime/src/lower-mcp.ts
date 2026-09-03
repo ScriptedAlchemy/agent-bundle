@@ -3,24 +3,19 @@ import { Buffer } from 'node:buffer';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 
-import { Mcp } from './elements.js';
-
 type McpElement = {
   type: string;
   props: Record<string, unknown>;
 };
 
-const mcpComponents = new Set<unknown>(Object.values(Mcp));
-
-const isMcpComponent = (value: unknown): value is ((props: Record<string, unknown>) => ReactElement) =>
-  mcpComponents.has(value);
-
+// Every Mcp.* export is itself a function component, so a single function
+// check unwraps both framework and user server components.
 const isServerComponent = (value: unknown): value is ((props: Record<string, unknown>) => ReactNode) =>
   typeof value === 'function';
 
 const asMcpElement = (node: ReactNode): McpElement => {
   let element = node;
-  while (isValidElement(element) && (isMcpComponent(element.type) || isServerComponent(element.type))) {
+  while (isValidElement(element) && isServerComponent(element.type)) {
     element = element.type(element.props as Record<string, unknown>);
   }
 
@@ -152,11 +147,8 @@ const jsonRecord = (value: unknown, message: string): JsonObject => {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error('not a plain object');
     }
-    const clone = cloneJsonValue(value, new Set(), '');
-    if (Array.isArray(clone) || clone === null || typeof clone !== 'object') {
-      throw new Error('not a plain object');
-    }
-    return clone as JsonObject;
+    // cloneJsonValue either throws or returns a clone of the guarded plain object.
+    return cloneJsonValue(value, new Set(), '') as JsonObject;
   } catch (error) {
     throw new Error(`${message} (${error instanceof Error ? error.message : String(error)})`, { cause: error });
   }

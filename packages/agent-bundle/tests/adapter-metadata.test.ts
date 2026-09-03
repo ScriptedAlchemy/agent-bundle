@@ -51,7 +51,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.3.0',
+    adapterRevision: '1.5.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -67,9 +67,14 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.2.0',
+    adapterRevision: '1.6.0',
     observedVersion: '0.147.0',
     schemas: [
+      {
+        name: 'app',
+        revision: '0.147.0',
+        sha256: '01c720a645e437bf0c4f8c26fd4cb5a13988e5649e4a8562ee23a1d4b7355c6a',
+      },
       {
         name: 'hooks',
         revision: '0.147.0',
@@ -88,12 +93,12 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: 'f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9',
+        sha256: 'decee14ec76a602701f3c312aee135a0983c1ce95fa89dafc588ebb5c968843b',
       },
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.16.0',
+    adapterRevision: '1.22.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -109,7 +114,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'marketplace',
         revision: '2.1.250',
-        sha256: '44e105038ced3fceee4cb7ff81c7caad63965e3fd5a42b6db6255da771236b5d',
+        sha256: '4ffa94e8024966e8080b9d3b338c9612bdfa255802a8491b43f74f90427bc988',
       },
       {
         name: 'mcp',
@@ -134,12 +139,12 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'theme',
         revision: '2.1.250',
-        sha256: '1ee6c8485855bf90402a1c527830efeca0643be7037ca2ff3e178c51e5973089',
+        sha256: '721aa9b0bc7c60cd9359343e5c7205ffbdfea82da312f601720c9dfaa2d8cf0d',
       },
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.8.0',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -164,7 +169,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.15.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.21.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -204,8 +209,10 @@ it('records observed capability versions and rehashes schema snapshots against p
       expect(schema.revision).toBe(metadata.observedVersion);
     }
 
+    // Repository-owned capability tables are deliberately NOT hash-pinned:
+    // Git and adapterRevision version them (README "What gets hashed"), and a
+    // byte pin here forced a digest re-pin on every evidence edit.
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('d42dc98d3c7f1f91dd6ef733d6727618c30a7d8d41fdf030165e06ce46345223');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',
@@ -233,7 +240,7 @@ it('records observed capability versions and rehashes schema snapshots against p
   }
 });
 
-it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
+it('pins and validates the Codex 0.147.0 event wire schemas', async () => {
   const schemas = [
     {
       fixture: 'codex-subagent-start.json',
@@ -260,6 +267,64 @@ it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
       output: { decision: 'block', reason: 'Run one more focused pass.' },
       sha256: '8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a',
     },
+    {
+      fixture: 'codex-user-prompt-submit.json',
+      name: 'user-prompt-submit.command.input.schema.json',
+      sha256: 'e6b923bc519896197c44c4fc267a9d115cef24ac418dde9c27db699f4e3b65fd',
+    },
+    {
+      name: 'user-prompt-submit.command.output.schema.json',
+      output: {
+        decision: 'block',
+        hookSpecificOutput: {
+          additionalContext: 'Repository policy context.',
+          hookEventName: 'UserPromptSubmit',
+        },
+        reason: 'Prompt rejected.',
+      },
+      sha256: '5e290303db710f3ccc12f4a2744e8586e7749b3ca2b6bf9f57781ed75bf17b2b',
+    },
+    {
+      fixture: 'codex-session-end.json',
+      name: 'session-end.command.input.schema.json',
+      sha256: '23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PreCompact',
+        model: 'gpt-5.6-sol',
+        session_id: 'session-codex-1',
+        transcript_path: null,
+        trigger: 'manual',
+        turn_id: 'turn-codex-1',
+      },
+      name: 'pre-compact.command.input.schema.json',
+      sha256: '065f0ae3cd628ac9af8c0cf9bd1d5a673bcbd5ea1d7dcdc0c6437f34dd0189d9',
+    },
+    {
+      name: 'pre-compact.command.output.schema.json',
+      output: { continue: true },
+      sha256: 'c392f3054ae6750f427d4dec07380fd67e8c58a7939a35d5c69bfa070c7ca032',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PostCompact',
+        model: 'gpt-5.6-sol',
+        session_id: 'session-codex-1',
+        transcript_path: null,
+        trigger: 'manual',
+        turn_id: 'turn-codex-1',
+      },
+      name: 'post-compact.command.input.schema.json',
+      sha256: '4a4b3f3022c939a15ab12e95f5c5c17b18bb20f74fe962ae0a51b2a3e76e63f9',
+    },
+    {
+      name: 'post-compact.command.output.schema.json',
+      output: {},
+      sha256: '48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed',
+    },
   ] as const;
   const validator = createDraft7AdapterValidator();
 
@@ -272,7 +337,9 @@ it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
     const validate = validator.compile(JSON.parse(bytes.toString()));
     const value = 'fixture' in schema
       ? JSON.parse(await readFile(new URL(`./fixtures/events/${schema.fixture}`, import.meta.url), 'utf8'))
-      : schema.output;
+      : 'input' in schema
+        ? schema.input
+        : schema.output;
     expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
   }
 });

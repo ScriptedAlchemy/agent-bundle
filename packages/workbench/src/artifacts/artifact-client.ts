@@ -2,6 +2,7 @@ import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics
 import { snapshotStrictJsonValue } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import { hasAllowedKeys, isRecord } from '../client-helpers.ts';
 
 export interface ArtifactClientOptions {
   readonly foreground: ForegroundRequestAuthority;
@@ -22,9 +23,6 @@ export class ArtifactClientError extends Error {
   }
 }
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const invalidResponse = (): ArtifactClientError =>
   new ArtifactClientError('AB8063', 'Artifact route returned an invalid response.');
 
@@ -38,9 +36,7 @@ const detachedRecord = (value: unknown): Readonly<Record<string, unknown>> => {
   }
 };
 
-const exactRecord = (value: unknown, required: readonly string[], optional: readonly string[] = []): value is Readonly<Record<string, unknown>> =>
-  isRecord(value) && required.every((key) => Object.hasOwn(value, key)) &&
-  Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+const exactRecord = hasAllowedKeys;
 
 const arrayOf = (value: unknown, predicate: (entry: unknown) => boolean): boolean =>
   Array.isArray(value) && value.every(predicate);

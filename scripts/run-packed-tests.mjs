@@ -15,31 +15,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { packOutputFromJson } from './npm-pack-json.mjs';
+
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { NODE_PATH: _nodePath, ...environment } = process.env;
 const releasePool = process.argv.includes('--release');
 const rstestArguments = process.argv.slice(2).filter((argument) => argument !== '--release');
-
-const packOutputFromJson = (stdout) => {
-  const parsed = JSON.parse(stdout);
-  const entries = Array.isArray(parsed)
-    ? parsed
-    : parsed !== null && typeof parsed === 'object'
-      ? Object.values(parsed)
-      : undefined;
-  if (entries === undefined) {
-    throw new TypeError('npm pack --json returned neither an array nor a package-keyed object.');
-  }
-  if (entries.length !== 1) {
-    throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
-  }
-  const [entry] = entries;
-  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-    throw new TypeError('npm pack --json returned an invalid pack entry; expected one object.');
-  }
-  return entry;
-};
 
 const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromise, rejectPromise) => {
   const child = spawn(command, args, {

@@ -1,0 +1,8 @@
+{
+    "cwd": "/workspace",
+    "file_path": "/workspace/.claude/settings.json",
+    "hook_event_name": "ConfigChange",
+    "session_id": "session-claude-1",
+    "source": "project_settings",
+    "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

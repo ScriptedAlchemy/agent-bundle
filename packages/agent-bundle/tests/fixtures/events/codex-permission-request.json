@@ -1,0 +1,13 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-5-codex",
+  "permission_mode": "default",
+  "session_id": "session-codex-1",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Delete File: build/manifest.json\n*** End Patch"
+  },
+  "tool_name": "apply_patch",
+  "transcript_path": null,
+  "turn_id": "turn-codex-1"
+}

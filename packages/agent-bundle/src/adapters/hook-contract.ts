@@ -2,18 +2,20 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
-import type {
-  CanonicalHookEvent,
-  CanonicalHookTool,
-  NormalizedHook,
-  NormalizedNativeHook,
-  NormalizedPlugin,
+import {
+  canonicalHookEvents,
+  type CanonicalHookEvent,
+  type CanonicalHookTool,
+  type NormalizedHook,
+  type NormalizedHookEvent,
+  type NormalizedNativeHook,
+  type NormalizedPlugin,
 } from '../core/types.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
 export interface TargetHookWrapper {
-  readonly event: CanonicalHookEvent;
+  readonly event: NormalizedHookEvent;
   readonly hook: NormalizedHook;
   /** False when this wrapper is a host-document variant of an indexed hook rather than its canonical entry. */
   readonly indexed?: false;
@@ -109,6 +111,76 @@ export const createNativeEventStarter = (
   switch (canonicalEvent) {
     case 'session/start':
       return deepFreeze(target === 'cursor' ? base : { ...base, source: 'startup' });
+    case 'session/end':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            duration_ms: 0,
+            final_status: 'completed',
+            is_background_agent: false,
+            reason: 'completed',
+          }
+        : { ...base, reason: 'other' });
+    case 'prompt/submit':
+      return deepFreeze(target === 'cursor'
+        ? { ...base, attachments: [], prompt: 'Lifecycle replay prompt.' }
+        : {
+            ...base,
+            permission_mode: 'default',
+            prompt: 'Lifecycle replay prompt.',
+            ...(target === 'codex'
+              ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+              : {}),
+          });
+    case 'tool/failure':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            cwd: '/tmp',
+            duration: 0,
+            error_message: 'Lifecycle replay tool failure.',
+            failure_type: 'error',
+            is_interrupt: false,
+            tool_input: toolInput,
+            tool_name: toolName,
+            tool_use_id: 'lifecycle-replay-tool',
+          }
+        : {
+            ...base,
+            duration_ms: 0,
+            error: 'Lifecycle replay tool failure.',
+            is_interrupt: false,
+            tool_input: toolInput,
+            tool_name: toolName,
+            tool_use_id: 'lifecycle-replay-tool',
+          });
+    case 'compact/before':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            context_tokens: 0,
+            context_usage_percent: 0,
+            context_window_size: 1,
+            is_first_compaction: true,
+            message_count: 0,
+            messages_to_compact: 0,
+            trigger: 'manual',
+          }
+        : {
+            ...base,
+            trigger: 'manual',
+            ...(target === 'codex'
+              ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+              : { custom_instructions: null }),
+          });
+    case 'compact/after':
+      return deepFreeze({
+        ...base,
+        trigger: 'manual',
+        ...(target === 'codex'
+          ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+          : { compact_summary: 'Lifecycle replay compact summary.' }),
+      });
     case 'tool/before':
       return deepFreeze({
         ...base,
@@ -153,6 +225,60 @@ export const createNativeEventStarter = (
               : {}),
             stop_hook_active: false,
           });
+    case 'permission/request':
+      return deepFreeze({
+        ...base,
+        tool_input: toolInput,
+        tool_name: toolName,
+        ...(target === 'codex'
+          ? {
+              agent_id: 'lifecycle-replay-agent',
+              agent_type: 'general-purpose',
+              model: 'default',
+              permission_mode: 'default',
+              turn_id: 'lifecycle-replay-turn',
+            }
+          : { permission_mode: 'default' }),
+      });
+    case 'permission/denied':
+      return deepFreeze({
+        ...base,
+        permission_decision: 'deny',
+        permission_decision_reason: 'Lifecycle replay permission denial.',
+        tool_input: toolInput,
+        tool_name: toolName,
+      });
+    case 'stop/failure':
+      return deepFreeze({
+        ...base,
+        error: 'Lifecycle replay API failure.',
+        last_assistant_message: null,
+        stop_hook_active: false,
+      });
+    case 'file/change':
+      return deepFreeze({ ...base, file_path: '/tmp/lifecycle-replay-watched.txt' });
+    case 'config/change':
+      return deepFreeze({ ...base, file_path: '/tmp/lifecycle-replay-settings.json', source: 'project_settings' });
+    case 'task/create':
+      return deepFreeze({
+        ...base,
+        task_id: 'lifecycle-replay-task',
+        task_subject: 'Lifecycle replay task.',
+      });
+    case 'task/complete':
+      return deepFreeze({
+        ...base,
+        permission_mode: 'default',
+        task_id: 'lifecycle-replay-task',
+        task_subject: 'Lifecycle replay task.',
+      });
+    case 'agent/idle':
+      return deepFreeze({
+        ...base,
+        permission_mode: 'default',
+        team_name: 'lifecycle-replay-team',
+        teammate_name: 'lifecycle-replay-teammate',
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {
@@ -289,18 +415,23 @@ const nativeHookInputFields = deepFreeze([
 const defined = (value: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 
-const canonicalEventOrder: readonly CanonicalHookEvent[] = [
+const canonicalEventOrder: readonly NormalizedHookEvent[] = [
   'sessionStart',
+  'promptSubmit',
   'beforeTool',
   'afterTool',
   'stop',
   'agentStart',
   'agentStop',
   'workspaceOpen',
+  'sessionEnd',
+  'toolFailure',
+  'compactBefore',
+  'compactAfter',
 ];
 
 export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>
-  canonicalEventOrder.find((candidate) => candidate === event);
+  canonicalHookEvents.find((candidate) => candidate === event);
 
 export const encodeNativeHookPlaygroundInput = (
   input: Readonly<Record<string, unknown>>,
@@ -826,8 +957,9 @@ export const planHooks = (
   const groups: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
   const hookEntries: TargetHookEntry[] = [];
   for (const hook of selected) {
+    const configEvent = canonicalHookEventFor(hook.event);
     const nativeEvent = hook.eventRoute === undefined
-      ? contract.eventNames[hook.event]
+      ? configEvent === undefined ? undefined : contract.eventNames[configEvent]
       : contract.eventRouteNames?.[hook.eventRoute.event];
     if (typeof nativeEvent !== 'string' || nativeEvent.trim().length === 0) {
       diagnostics.push(error(

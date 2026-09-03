@@ -1,5 +1,6 @@
 import {
   AgentContractError,
+  agentRenderAbortError,
   type AgentDocument,
   type AgentRenderEvent,
   type AgentRenderLimits,
@@ -30,7 +31,7 @@ export interface AgentRenderDispatcherOptions {
   readonly limits?: Partial<AgentRenderLimits>;
 }
 
-const abortError = (): DOMException => new DOMException('Agent render was aborted', 'AbortError');
+const abortError = agentRenderAbortError;
 
 const abortedStream = (): ReadableStream<AgentRenderEvent> =>
   new ReadableStream({

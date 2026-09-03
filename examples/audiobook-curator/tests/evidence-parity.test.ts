@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
 
@@ -59,6 +59,32 @@ describe('optional identity evidence parity', () => {
     expect(receipt).toMatchObject({ exitCode: 0, verifiedRecording: true });
   });
 
+  it('normalizes non-object Audiolocate results to an empty fingerprint record', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-audiolocate-non-object-'));
+    roots.push(root);
+    const file = join(root, 'book.m4b');
+    await writeFile(file, 'book');
+
+    for (const output of ['null', '[1,2]']) {
+      const process: MediaProcess = async () => ({
+        stderr: '',
+        stdout: `__AGENT_BUNDLE_AUDIOLOCATE_RESULT__${output}\n`,
+      });
+      const receipt = await verifyAudibleSample({ asin: 'ASIN', file, sampleUrl: 'https://sample.example/book.mp3' }, {
+        audiolocatePython: 'python-test',
+        http: async () => Buffer.from('sample'),
+        process,
+      });
+
+      expect(receipt).toMatchObject({
+        exitCode: 2,
+        fingerprint: {},
+        verifiedRecording: false,
+      });
+      expect(Array.isArray(receipt.fingerprint)).toBe(false);
+    }
+  });
+
   it('deduplicates ranked ASINs and isolates candidate failures', async () => {
     const root = await mkdtemp(join(tmpdir(), 'curator-identify-'));
     roots.push(root);
@@ -85,6 +111,39 @@ describe('optional identity evidence parity', () => {
     expect(receipt).toMatchObject({ exitCode: 0, identified: { asin: 'MATCH' }, verifiedRecording: true });
   });
 
+  it('stages evidence work directories on regular disk, never under os.tmpdir()', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-evidence-disk-'));
+    roots.push(root);
+    const file = join(root, 'library', 'book.m4b');
+    const receiptPath = join(root, 'receipts', 'acoustic.json');
+    await mkdir(dirname(file), { recursive: true });
+    await mkdir(dirname(receiptPath), { recursive: true });
+    await writeFile(file, 'book');
+    const sampleDirs: string[] = [];
+    const matcher: AcousticMatcher = async (_source, sample) => {
+      sampleDirs.push(dirname(sample));
+      return { found: true };
+    };
+    const http: CuratorHttpClient = async () => Buffer.from('sample');
+
+    await verifyAudibleSample(
+      { asin: 'ASIN', file, receipt: receiptPath, sampleUrl: 'https://sample.example/book.mp3' },
+      { http, matcher },
+    );
+    await verifyAudibleSample(
+      { asin: 'ASIN', file, sampleUrl: 'https://sample.example/book.mp3' },
+      { http, matcher },
+    );
+
+    const [besideReceipt, besideFile] = sampleDirs;
+    expect(besideReceipt!.startsWith(join(dirname(receiptPath), '.audiobook-curator-acoustic-'))).toBe(true);
+    expect(besideFile!.startsWith(join(dirname(file), '.audiobook-curator-acoustic-'))).toBe(true);
+    for (const workDir of sampleDirs) expect(workDir.startsWith(join(tmpdir(), 'audiobook-curator-'))).toBe(false);
+    // Staging is cleaned up even though it lives beside durable outputs.
+    expect((await readdir(dirname(receiptPath))).filter((entry) => entry.startsWith('.audiobook-curator-'))).toEqual([]);
+    expect((await readdir(dirname(file))).filter((entry) => entry.startsWith('.audiobook-curator-'))).toEqual([]);
+  });
+
   it('extracts distributed PCM windows and returns review evidence without internal deadlines', async () => {
     const root = await mkdtemp(join(tmpdir(), 'curator-whisper-'));
     roots.push(root);
@@ -108,5 +167,33 @@ describe('optional identity evidence parity', () => {
     const receipt = await verifyWithWhisper({ file, model }, { process });
     expect(receipt).toMatchObject({ exitCode: 0, operation: 'whisper-identity', status: 'transcript-ready', usableWindows: 5 });
     expect(whisperCalls).toBe(5);
+  });
+
+
+  it('stages acoustic-identify candidate work beside the receipt when one is requested', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-identify-receipt-'));
+    roots.push(root);
+    const file = join(root, 'library', 'book.m4b');
+    const receiptPath = join(root, 'receipts', 'identify.json');
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, 'book');
+    const sampleDirs: string[] = [];
+    const matcher: AcousticMatcher = async (_source, sample) => {
+      sampleDirs.push(dirname(sample));
+      return { found: true };
+    };
+    const http: CuratorHttpClient = async (url, options) => {
+      if (options?.binary === true) return Buffer.from(url);
+      throw new Error('unexpected product request');
+    };
+    await identifyAudibleSample({
+      candidates: [{ asin: 'MATCH', evidence: { score: 90 }, region: 'us', sample_url: 'https://samples/match.mp3' }],
+      candidatesReport: join(root, 'candidates.json'),
+      file,
+      receipt: receiptPath,
+      top: 1,
+    }, { http, matcher });
+    expect(sampleDirs).toHaveLength(1);
+    expect(sampleDirs[0]!.startsWith(join(dirname(receiptPath), '.audiobook-curator-acoustic-'))).toBe(true);
   });
 });

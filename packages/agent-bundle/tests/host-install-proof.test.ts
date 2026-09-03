@@ -127,6 +127,12 @@ it('stages a clean adapter-simulated host and runs the shared matrix from its in
     },
     host: 'claude',
     matrix: {
+      checks: {
+        'runtime-instance-identity': {
+          reason: 'the compiled manifest declares no event routes, so this boundary has no event runtime.',
+          status: 'not-applicable',
+        },
+      },
       provenance: { host: 'claude', proofLevel: 'simulated' },
       routes: {
         'tool:probe/echo': {

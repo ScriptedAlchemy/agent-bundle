@@ -12,6 +12,52 @@
     "source": "https://cursor.com/docs/plugins",
     "state": "supported"
   },
+  "deferredNativeEvents": {
+    "afterAgentResponse": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "afterAgentThought": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "afterFileEdit": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: agent-edit variant overlapping canonical tool/after per the #258 selector rule; a dedicated family requires fixture evidence that the generic tool route loses information.",
+      "state": "unavailable"
+    },
+    "afterMCPExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with mcp selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "afterShellExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with shell selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "afterTabFileEdit": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    },
+    "beforeMCPExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with mcp selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeReadFile": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with file.read selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeShellExecution": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with shell selector per the #258 selector rule.",
+      "state": "unavailable"
+    },
+    "beforeSubmitPrompt-cloud": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: cloud/desktop availability differences are capability dimensions; cloud rows stay scoped per surface rather than universal-support claims (#258 defer list).",
+      "state": "unavailable"
+    },
+    "beforeTabFileRead": {
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "state": "unavailable"
+    }
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
@@ -23,12 +69,62 @@
       "stop": "stop"
     },
     "eventRoutes": {
+      "agent/idle": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no teammate-idle event.",
+        "state": "unavailable"
+      },
       "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "subagentStop", "state": "supported" },
+      "compact/after": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no postCompact event.",
+        "state": "unavailable"
+      },
+      "compact/before": { "nativeEvent": "preCompact", "state": "supported" },
+      "config/change": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no configChange event.",
+        "state": "unavailable"
+      },
+      "file/change": {
+        "reason": "retrieved 2026-09-02: Cursor documents afterFileEdit as an agent-edit tool variant that overlaps canonical tool/after per the #258 selector rule, not a disk-watch FileChanged equivalent; no dedicated family is inferred without fixture evidence of loss.",
+        "state": "unavailable"
+      },
+      "permission/denied": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no permission-denied event.",
+        "state": "unavailable"
+      },
+      "permission/request": {
+        "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks documents no standalone permission-request event; pre-tool permission control is beforeShellExecution/beforeMCPExecution and is not inferred as this family per #258.",
+        "state": "unavailable"
+      },
+      "prompt/submit": { "nativeEvent": "beforeSubmitPrompt", "state": "supported" },
+      "session/end": {
+        "availability": {
+          "cloud": {
+            "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks states cloud agents have no editor-lifetime session boundary, so sessionEnd is unavailable there.",
+            "state": "unavailable"
+          },
+          "desktop": { "state": "supported" }
+        },
+        "nativeEvent": "sessionEnd",
+        "state": "supported"
+      },
       "session/start": { "nativeEvent": "sessionStart", "state": "supported" },
       "stop": { "nativeEvent": "stop", "state": "supported" },
+      "stop/failure": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no stop-failure event.",
+        "state": "unavailable"
+      },
+      "task/complete": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no taskCompleted event.",
+        "state": "unavailable"
+      },
+      "task/create": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no taskCreated event.",
+        "state": "unavailable"
+      },
       "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
+      "tool/failure": { "nativeEvent": "postToolUseFailure", "state": "supported" },
       "workspace/open": { "nativeEvent": "workspaceOpen", "state": "supported" }
     },
     "matchers": {
@@ -60,6 +156,28 @@
     },
     "stdio": true,
     "streamableHttp": true
+  },
+  "noticeDelivery": {
+    "current-response": {
+      "state": "supported"
+    },
+    "directed-push": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-initiated directed cross-actor message API at this pin; the Claude Notification hook observes host-emitted notifications and does not send them.",
+      "state": "unavailable"
+    },
+    "host-toast": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-facing toast/notification send API at this pin.",
+      "state": "unavailable"
+    },
+    "mcp-inbox": {
+      "state": "supported"
+    },
+    "mcp-resource-updated": {
+      "state": "supported"
+    },
+    "next-event": {
+      "state": "supported"
+    }
   },
   "observedCliVersion": "2026-08-28",
   "plugin": {
@@ -93,6 +211,13 @@
       "2026-08-31: cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines the rules component pointer; https://cursor.com/docs/plugins documents the rules component.",
       "2026-09-02: https://cursor.com/docs/hooks#workspaceopen documents workspaceOpen input as sessionless ({ hook_event_name, cursor_version, workspace_roots, user_email }; conversation_id/generation_id/model/session_id/transcript_path omitted) and its output pluginPaths as string[] (optional), so an empty response is legal; the generated event-route wrapper validates that envelope and projects the observation-only canonical workspace/open family to no output — the native pluginPaths return channel is deliberately not modeled and never emitted.",
       "2026-09-02: live native capture on Cursor CLI (cursor-agent 2026.08.31-4057e58, trusted project hooks, non-interactive -p run): workspaceOpen fired on workspace open with exactly the documented sessionless envelope (hook_event_name, cursor_version, workspace_roots, user_email; no conversation_id/generation_id/model/session_id/transcript_path) while the same run's sessionStart carried session and conversation ids; the capture hook exited 0 with no stdout and the workspace open plus agent session proceeded, proving the pluginPaths-omitted empty response is legal on the real binary.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents beforeSubmitPrompt input as prompt plus file/rule attachments, matcher evaluation against the literal UserPromptSubmit, and output as continue plus optional user_message. continue:false blocks submission; no additional-context or prompt-rewrite channel is documented.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents sessionEnd input as session_id, reason, duration_ms, is_background_agent, final_status, and optional error_message. It is fire-and-forget; output is logged but unused. The same source states cloud agents have no sessionEnd because they lack an editor-lifetime session boundary.",
+      "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture was attempted with trusted project hooks, but the binary required Cursor authentication unavailable in the capture environment; the pinned official contract is the evidence source for beforeSubmitPrompt and sessionEnd.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents postToolUseFailure input as tool_name, tool_input, tool_use_id, cwd, error_message, failure_type, duration, and is_interrupt, with no supported output fields. Unlike Claude PostToolUseFailure, failure_type includes permission_denied.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents preCompact as observational and unable to block or modify compaction. Its optional user_message is user-facing rather than agent context, so the canonical Agent.Result and Agent.Context vocabulary exposes no output channel for it.",
+      "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks Agent and cloud event inventories document no postCompact event, so compact/after is unavailable rather than inferred from preCompact.",
+      "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture attempts for postToolUseFailure and preCompact could not dispatch because the binary required unavailable authentication; the pinned official contract is the evidence source.",
       "2026-09-01: https://cursor.com/docs/plugins and https://prod.cursor.com/docs/reference/plugins document agents as a full Cursor Plugin component alongside rules and commands; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
     ]
   }

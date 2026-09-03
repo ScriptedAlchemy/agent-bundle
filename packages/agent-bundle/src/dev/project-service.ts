@@ -13,6 +13,7 @@ import {
   normalizeProject,
 } from '../config/normalize.ts';
 import { validateModel, validateSource } from '../config/validate.ts';
+import { mapConcurrent } from '../core/async.ts';
 import { deduplicateDiagnostics, type Diagnostic, withDiagnosticRecovery } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
 import {
@@ -235,25 +236,29 @@ const resolveOutputRoots = async (
   return Object.freeze([...new Set(roots)].sort((left, right) => left.localeCompare(right)));
 };
 
+/** Bounds concurrent readdir calls so wide trees cannot exhaust file descriptors. */
+const walkConcurrency = 8;
+
 const sourcePaths = async (root: string, outputRoots: readonly string[]): Promise<readonly string[]> => {
   const rules = await readProjectIgnoreRules(root);
   const paths: string[] = [];
-
-  const visit = async (directory: string): Promise<void> => {
-    const entries = await readdir(directory, { withFileTypes: true });
-    for (const entry of entries) {
-      const source = join(directory, entry.name);
-      if (isProjectPathIgnored(rules, root, source)) continue;
-      if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
-      if (entry.isDirectory()) {
-        await visit(source);
-        continue;
+  // Level-by-level walk: each level reads at most walkConcurrency directories
+  // at once, and the final sort restores deterministic output order.
+  let frontier: string[] = [root];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    await mapConcurrent(frontier, walkConcurrency, async (directory) => {
+      const entries = await readdir(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        const source = join(directory, entry.name);
+        if (isProjectPathIgnored(rules, root, source)) continue;
+        if (outputRoots.some((outputRoot) => containedPathComponents(outputRoot, source) !== undefined)) continue;
+        if (entry.isDirectory()) next.push(source);
+        else if (entry.isFile()) paths.push(source);
       }
-      if (entry.isFile()) paths.push(source);
-    }
-  };
-
-  await visit(root);
+    });
+    frontier = next;
+  }
   return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
 };
 
@@ -262,20 +267,7 @@ const payloadSourcePaths = async (
   payloadRoots: readonly string[],
 ): Promise<readonly string[]> => {
   const paths: string[] = [];
-  const visit = async (directory: string): Promise<void> => {
-    let entries;
-    try {
-      entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      // A payload that does not exist yet contributes no source inputs.
-      return;
-    }
-    for (const entry of entries) {
-      const source = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(source);
-      else if (entry.isFile()) paths.push(source);
-    }
-  };
+  const walkRoots: string[] = [];
   for (const payloadRoot of payloadRoots) {
     const requested = resolve(root, payloadRoot);
     if (containedPathComponents(root, requested) === undefined) continue;
@@ -286,8 +278,29 @@ const payloadSourcePaths = async (
       // A payload that does not exist yet contributes no source inputs.
       continue;
     }
+    // Re-check containment after symlink resolution so a payload root
+    // symlinked outside the project never contributes source inputs.
     if (containedPathComponents(root, resolved) === undefined) continue;
-    await visit(resolved);
+    walkRoots.push(resolved);
+  }
+  let frontier = walkRoots;
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    await mapConcurrent(frontier, walkConcurrency, async (directory) => {
+      let entries;
+      try {
+        entries = await readdir(directory, { withFileTypes: true });
+      } catch {
+        // A payload that does not exist yet contributes no source inputs.
+        return;
+      }
+      for (const entry of entries) {
+        const source = join(directory, entry.name);
+        if (entry.isDirectory()) next.push(source);
+        else if (entry.isFile()) paths.push(source);
+      }
+    });
+    frontier = next;
   }
   return Object.freeze(paths.sort((left, right) => left.localeCompare(right)));
 };

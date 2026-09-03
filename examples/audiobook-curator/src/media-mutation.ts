@@ -7,6 +7,7 @@ import {
   asRecord,
   contributorNames,
   escapeFfmetadata,
+  errorMessage,
   readJson,
   sha256File,
   syncDirectory,
@@ -105,8 +106,6 @@ const chaptersFromDetails = (details: MediaDetails): Omit<ChapterRow, 'number'>[
 };
 
 const duration = (details: MediaDetails): number => Number(asRecord(details.format).duration ?? 0);
-
-const errorText = (error: unknown): string => error instanceof Error ? error.message : 'Media mutation failed.';
 
 export const cleanCatalogText = (value: unknown): string => String(value ?? '')
   .replaceAll(/<br\s*\/?>/giu, '\n')
@@ -400,6 +399,6 @@ export const applyAudiobookChapters = async (
     return receipt;
   } catch (error) {
     if (error instanceof CuratorError) throw error;
-    throw new CuratorError(errorText(error));
+    throw new CuratorError(errorMessage(error, 'Media mutation failed.'));
   } finally { await rm(work, { force: true, recursive: true }); }
 };

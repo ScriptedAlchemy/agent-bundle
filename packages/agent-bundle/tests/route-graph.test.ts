@@ -758,17 +758,22 @@ it('rejects provider key collisions and the reserved processLifetime key', async
   });
 });
 
-it('discovers only the seven v1 event families and validates their component contract', async () => {
+it('discovers the canonical event families and validates their component contract', async () => {
   const root = await createRoot();
   const eventSource = 'export default async function EventRoute() { return undefined; }\n';
   await writeTree(root, {
     'src/events/agent/start.tsx': eventSource,
     'src/events/agent/stop.tsx': eventSource,
+    'src/events/compact/after.tsx': eventSource,
+    'src/events/compact/before.tsx': eventSource,
+    'src/events/message/receive.tsx': eventSource,
     'src/events/prompt/submit.tsx': eventSource,
+    'src/events/session/end.tsx': eventSource,
     'src/events/session/start.tsx': eventSource,
     'src/events/stop.tsx': eventSource,
     'src/events/tool/after.tsx': eventSource,
     'src/events/tool/before.tsx': 'export default function BeforeTool() { return undefined; }\n',
+    'src/events/tool/failure.tsx': eventSource,
     'src/events/workspace/open.tsx': eventSource,
   });
 
@@ -777,23 +782,33 @@ it('discovers only the seven v1 event families and validates their component con
   expect(graph.events.map((route) => route.id)).toEqual([
     'event:agent/start',
     'event:agent/stop',
+    'event:compact/after',
+    'event:compact/before',
+    'event:prompt/submit',
+    'event:session/end',
     'event:session/start',
     'event:stop',
     'event:tool/after',
     'event:tool/before',
+    'event:tool/failure',
     'event:workspace/open',
   ]);
   expect(graph.events.map((route) => route.event)).toEqual([
     'agent/start',
     'agent/stop',
+    'compact/after',
+    'compact/before',
+    'prompt/submit',
+    'session/end',
     'session/start',
     'stop',
     'tool/after',
     'tool/before',
+    'tool/failure',
     'workspace/open',
   ]);
   expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4823', 'AB4810']);
-  expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/prompt/submit.tsx'));
+  expect(graph.diagnostics[0]?.sourcePath).toBe(join(root, 'src/events/message/receive.tsx'));
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
 

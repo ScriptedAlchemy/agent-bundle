@@ -1,0 +1,7 @@
+{
+    "cwd": "/workspace",
+    "file_path": "/workspace/.env",
+    "hook_event_name": "FileChanged",
+    "session_id": "session-claude-1",
+    "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

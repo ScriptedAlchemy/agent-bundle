@@ -18,7 +18,7 @@ import type {
   AgentStateSnapshot,
   AgentStateStore,
 } from './contract.js';
-import { AgentStateError, expectIdempotencyKey } from './contract.js';
+import { AgentStateError, expectIdempotencyKey, expectOperable, expectRevisionShape } from './contract.js';
 import type { AgentStateJournalRecord } from './journal.js';
 import {
   canonicalCommitInput,
@@ -89,26 +89,18 @@ interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
   keys: Map<string, CommittedResult<TState>>;
 }
 
+/** Generics-erased entry type for the driver-wide open-store collections. */
+type AnyMemoryStoreEntry = MemoryStoreEntry<unknown, AgentStateEventSchemas>;
+
+const eraseEntry = <TState, TEvents extends AgentStateEventSchemas>(
+  entry: MemoryStoreEntry<TState, TEvents>,
+): AnyMemoryStoreEntry => entry as unknown as AnyMemoryStoreEntry;
+
 interface MemoryStoreEntry<TState, TEvents extends AgentStateEventSchemas> {
   readonly activate: () => Promise<void>;
   readonly internals: MemoryStoreInternals<TState, TEvents>;
   readonly store: AgentStateStore<TState, TEvents>;
 }
-
-const expectRevisionShape = (revision: number | undefined, label: string): void => {
-  if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
-    throw new AgentStateError('invalid-input', `${label} must be an integer >= 0`);
-  }
-};
-
-const expectOperable = (closed: boolean, definitionId: string, signal: AbortSignal | undefined): void => {
-  if (closed) {
-    throw new AgentStateError('store-closed', `State '${definitionId}' store is closed`);
-  }
-  if (signal?.aborted === true) {
-    throw new AgentStateError('aborted', `State '${definitionId}' operation was aborted`, { cause: signal.reason });
-  }
-};
 
 const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
@@ -366,8 +358,8 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
   const now = options.now ?? ((): Date => new Date());
   // Heterogeneously typed per definition; entries are cast back at the one
   // retrieval site below, keyed by the definition id they were created for.
-  const registry = new Map<string, MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
-  const openStores = new Set<MemoryStoreEntry<unknown, AgentStateEventSchemas>>();
+  const registry = new Map<string, AnyMemoryStoreEntry>();
+  const openStores = new Set<AnyMemoryStoreEntry>();
   const pendingOpens = createPendingOpenTracker();
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -410,9 +402,9 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
               switch (lifetime) {
                 case 'request': {
                   const created = createMemoryStore(definition, lifetime, now, () => {
-                    openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    openStores.delete(eraseEntry(created));
                   });
-                  openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                  openStores.add(eraseEntry(created));
                   return created;
                 }
                 case 'process': {
@@ -420,10 +412,10 @@ export const createMemoryStateDriver = (options: MemoryStateDriverOptions = {}):
                   if (existing === undefined) {
                     const created = createMemoryStore(definition, lifetime, now, () => {
                       registry.delete(definition.id);
-                      openStores.delete(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                      openStores.delete(eraseEntry(created));
                     });
-                    registry.set(definition.id, created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
-                    openStores.add(created as unknown as MemoryStoreEntry<unknown, AgentStateEventSchemas>);
+                    registry.set(definition.id, eraseEntry(created));
+                    openStores.add(eraseEntry(created));
                     return created;
                   }
                   if (definition.version !== existing.internals.definition.version) {

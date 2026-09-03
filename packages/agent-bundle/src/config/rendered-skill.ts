@@ -5,6 +5,8 @@ import { createJiti } from 'jiti';
 import { stringify as stringifyYaml } from 'yaml';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { errorMessage } from '../core/errors.ts';
+import { isPlainRecord } from '../core/strict-json.ts';
 import { MarkdownRenderError, renderElementToMarkdown } from './render-markdown.ts';
 
 /**
@@ -50,15 +52,6 @@ const failure = (code: string, message: string, sourcePath: string): RenderedSki
   status: 'failed',
 });
 
-const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
-const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Loads and compiles one rendered skill source to its Markdown document. The
  * module executes through the same jiti pipeline that already runs consumer
@@ -76,7 +69,7 @@ export const compileRenderedSkill = async (source: string): Promise<RenderedSkil
     });
     moduleExports = await jiti.import<Record<string, unknown>>(source);
   } catch (error) {
-    return failure('AB3003', `Rendered Skill module failed to load: ${describeError(error)}`, source);
+    return failure('AB3003', `Rendered Skill module failed to load: ${errorMessage(error)}`, source);
   }
 
   const component = moduleExports.default;
@@ -104,7 +97,7 @@ export const compileRenderedSkill = async (source: string): Promise<RenderedSkil
       'AB3005',
       error instanceof MarkdownRenderError
         ? error.message
-        : `Rendered Skill content failed to render: ${describeError(error)}`,
+        : `Rendered Skill content failed to render: ${errorMessage(error)}`,
       source,
     );
   }
@@ -115,7 +108,7 @@ export const compileRenderedSkill = async (source: string): Promise<RenderedSkil
   } catch (error) {
     return failure(
       'AB3004',
-      `Rendered Skill frontmatter is not serializable YAML: ${describeError(error)}`,
+      `Rendered Skill frontmatter is not serializable YAML: ${errorMessage(error)}`,
       source,
     );
   }

@@ -56,7 +56,13 @@ const replayRequestContext = (
   hostContractRevision: string,
 ): RequestContextProvenance => {
   const sessionId = nativeText(native, 'session_id') ?? nativeText(native, 'conversation_id');
-  const workspaceRoot = nativeText(native, 'cwd');
+  const workspaceRoots = native['workspace_roots'];
+  const firstWorkspaceRoot = Array.isArray(workspaceRoots) &&
+    typeof workspaceRoots[0] === 'string' &&
+    workspaceRoots[0].trim() !== ''
+    ? workspaceRoots[0]
+    : undefined;
+  const workspaceRoot = nativeText(native, 'cwd') ?? firstWorkspaceRoot;
   return deepFreeze({
     actor: { reason: 'not-provided', state: 'unavailable' },
     host: { source: 'receipt', state: 'available', value: { name: target } },
@@ -82,6 +88,12 @@ const renderContext = (requestContext: RequestContextProvenance): RenderRouteCon
     ...(requestContext.invocation.hostContractRevision === undefined
       ? {}
       : { hostContractRevision: requestContext.invocation.hostContractRevision }),
+    ...(requestContext.invocation.operationId === undefined
+      ? {}
+      : { operationId: requestContext.invocation.operationId }),
+    ...(requestContext.invocation.surface === undefined
+      ? {}
+      : { surface: requestContext.invocation.surface }),
   },
   session: requestContext.session,
   workspace: requestContext.workspace,

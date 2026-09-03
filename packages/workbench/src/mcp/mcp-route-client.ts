@@ -9,6 +9,8 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import { exactKeys, isRecord } from '../client-helpers.ts';
+import { hasOnlyOwnKeys } from '../strict-json.ts';
 
 export type McpRouteTarget = McpSessionTarget;
 
@@ -38,6 +40,24 @@ export interface McpRouteRuntimeSession {
   readonly connection: McpRouteConnection;
   readonly state: 'connecting' | 'ready' | 'restarting' | 'failed' | 'closed';
 }
+
+/** The stable identity fields a runtime binding is compared by. */
+export type McpRuntimeBindingIdentity = Pick<
+  DevRuntimeMcpAppRunBinding,
+  | 'definitionDigest'
+  | 'registryRevision'
+  | 'serverDigest'
+  | 'serverName'
+  | 'sessionId'
+  | 'sessionRevision'
+  | 'target'
+  | 'transportDigest'
+>;
+
+export const sameRuntimeBinding = (left: McpRuntimeBindingIdentity, right: McpRuntimeBindingIdentity): boolean =>
+  left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
+  left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
+  left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
 
 export interface McpRouteRuntimeRestart {
   readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
@@ -106,9 +126,6 @@ interface Diagnostic {
   readonly phase?: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const isTarget = isMcpSessionTarget;
 
 const detachedJson = (value: unknown, ancestors = new WeakSet<object>()): unknown => {
@@ -151,9 +168,9 @@ const asArray = (value: unknown): readonly unknown[] => {
   return detachedJson(value) as readonly unknown[];
 };
 
-const hasOnlyKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).every((key) => keys.includes(key));
+const hasOnlyKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = hasOnlyOwnKeys;
 
-const hasExactKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(value).length === keys.length && hasOnlyKeys(value, keys);
+const hasExactKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = exactKeys;
 
 const diagnostic = (value: unknown, status: number): Diagnostic => {
   if (isRecord(value) && isRecord(value.diagnostic) && typeof value.diagnostic.code === 'string' && typeof value.diagnostic.message === 'string') {

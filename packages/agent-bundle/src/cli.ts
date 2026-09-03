@@ -33,6 +33,7 @@ import type {
 } from './install/doctor.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { errorMessage } from './core/errors.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
@@ -128,6 +129,7 @@ interface JsonInputOptions {
 
 interface DevCommandOptions {
   readonly agentApi?: boolean;
+  readonly installHost: readonly InstallHost[];
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;
@@ -159,6 +161,9 @@ const installHost = (value: string): InstallHost => {
   if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
   throw new TypeError('Install host must be claude, codex, or cursor.');
 };
+
+const collectInstallHost = (value: string, previous: readonly InstallHost[]): readonly InstallHost[] =>
+  [...previous, installHost(value)];
 
 const installScope = (value: string): InstallScope => {
   if (value === 'user' || value === 'project' || value === 'local') return value;
@@ -246,7 +251,7 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
   if (error instanceof DiagnosticError) return error.diagnostics;
   return [{
     code: 'AB5000',
-    message: error instanceof Error ? error.message : String(error),
+    message: errorMessage(error),
     severity: 'error',
   }];
 };
@@ -468,12 +473,14 @@ export const runCli = async (
     .option('--port <port>', 'Loopback TCP port', port)
     .option('--agent-api', 'Enable the authenticated Agent API on /mcp')
     .option('--no-agent-api', 'Disable the authenticated Agent API on /mcp')
+    .option('--install-host <host>', 'Install and re-sync a development host (repeatable)', collectInstallHost, [])
     .option('--open', 'Open the workbench after the foreground server starts')
     .option('--no-open', 'Do not open the workbench after the foreground server starts');
   devCommand.action(async (options: DevCommandOptions) => {
     const { startDevServer: start } = await import('./api.ts');
     const session = await (dependencies.startDevServer ?? start)({
       ...(options.agentApi === undefined ? {} : { agentApi: options.agentApi }),
+      installHosts: options.installHost,
       open: options.open === true,
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,

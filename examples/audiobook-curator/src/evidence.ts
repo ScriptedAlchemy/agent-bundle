@@ -1,5 +1,4 @@
-import { lstat, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import type { JsonObject, JsonValue } from '@agent-bundle/runtime';
@@ -10,7 +9,7 @@ import {
   type AudibleRegion,
   type CuratorHttpClient,
 } from './audible.ts';
-import { CuratorError, asRecord, audibleHosts, contributorNames, readJson, utcNow, writeReceipt } from './foundation.ts';
+import { CuratorError, asRecord, audibleHosts, contributorNames, errorMessage, readJson, utcNow, writeReceipt } from './foundation.ts';
 import { probeMediaRecord, type LibraryDependencies } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
@@ -148,12 +147,24 @@ const pythonMatcher = (python: string, process: MediaProcess): AcousticMatcher =
     const result = await process(python, ['-c', script, source, sample, String(options.chunkSeconds), options.verbose ? '1' : '0'], { signal: options.signal });
     const line = result.stdout.split(/\r?\n/u).findLast((candidate) => candidate.startsWith(resultMarker));
     if (line === undefined) throw new CuratorError('Audiolocate emitted no structured result.');
-    const parsed = JSON.parse(line.slice(resultMarker.length)) as JsonObject;
-    asRecord(parsed);
-    return Object.freeze(parsed);
+    const parsed = JSON.parse(line.slice(resultMarker.length)) as JsonValue;
+    return Object.freeze(asRecord(parsed)) as JsonObject;
   } catch (error) {
-    throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${error instanceof Error ? error.message : ''}`.trim());
+    throw new CuratorError(`Audiolocate is optional; install it for ${python}, or inject an acoustic matcher. ${errorMessage(error, '')}`.trim());
   }
+};
+
+// Evidence staging holds decoded audio, and os.tmpdir() is commonly a
+// RAM-backed tmpfs on Linux; media work must stay on regular disk. Stage
+// beside the requested receipt when one exists, otherwise beside the source
+// media, mirroring the sibling modules' same-directory staging convention.
+const evidenceWorkDir = async (
+  input: Readonly<{ file: string; receipt?: string }>,
+  prefix: string,
+): Promise<string> => {
+  const root = dirname(resolve(input.receipt ?? input.file));
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
 };
 
 const productUrl = (region: AudibleRegion, asin: string): string => {
@@ -184,7 +195,7 @@ const sampleMatch = async (
   if (sampleUrl === undefined || sampleUrl === '') throw new CuratorError('Audible candidate has no sample URL');
   const bytes = await requestWithAttempts(http, sampleUrl, attempts, { binary: true, signal: dependencies.signal });
   if (!Buffer.isBuffer(bytes)) throw new CuratorError('Audible sample response is not binary.');
-  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-acoustic-'));
+  const work = await evidenceWorkDir(input, '.audiobook-curator-acoustic-');
   const sample = join(work, 'sample.mp3');
   try {
     await writeFile(sample, bytes, { mode: 0o600 });
@@ -249,11 +260,13 @@ export const identifyAudibleSample = async (
   for (const candidate of selected) {
     const asin = String(candidate.asin ?? '');
     const region = String(candidate.region ?? 'us') as AudibleRegion;
+    const score = asRecord(candidate.evidence).score as JsonValue | undefined;
+    // Receipts are strict JSON; absent fields are omitted, never undefined.
     const base = {
-      asin: asin || undefined,
+      ...(asin === '' ? {} : { asin }),
       region,
-      score: asRecord(candidate.evidence).score as JsonValue | undefined,
-      title: candidate.title,
+      ...(score === undefined ? {} : { score }),
+      ...(candidate.title === undefined ? {} : { title: candidate.title }),
     };
     if (asin === '') {
       attempts.push({ ...base, reason: 'candidate has no ASIN', status: 'skipped' });
@@ -265,24 +278,31 @@ export const identifyAudibleSample = async (
         attempts: input.attempts,
         chunkSeconds: input.chunkSeconds,
         file: input.file,
+        // Staging follows the receipt's disk; without this, identification
+        // would stage beside source media the receipt was chosen to avoid.
+        ...(input.receipt === undefined ? {} : { receipt: input.receipt }),
         region,
         ...(typeof candidate.sample_url === 'string' ? { sampleUrl: candidate.sample_url } : {}),
         verbose: input.verbose,
       }, dependencies);
       const found = outcome.fingerprint.found === true;
+      const attemptTitle = candidate.title ?? outcome.audible.title;
       attempts.push({
         ...base,
         fingerprint: outcome.fingerprint,
-        sampleUrl: outcome.audible.sampleUrl,
+        ...(outcome.audible.sampleUrl === undefined ? {} : { sampleUrl: outcome.audible.sampleUrl }),
         status: found ? 'matched' : 'no-match',
-        title: candidate.title ?? outcome.audible.title,
+        ...(attemptTitle === undefined ? {} : { title: attemptTitle }),
       });
       if (found) {
-        identified ??= { asin, region, title: candidate.title ?? outcome.audible.title };
+        const title = candidate.title ?? outcome.audible.title;
+        // A titleless identification must not place an undefined (non-JSON)
+        // value into the durable receipt.
+        identified ??= { asin, region, ...(title === undefined ? {} : { title }) };
         if (input.all !== true) break;
       }
     } catch (error) {
-      const reason = error instanceof Error ? error.message : 'Acoustic comparison failed.';
+      const reason = errorMessage(error, 'Acoustic comparison failed.');
       attempts.push({ ...base, reason, status: reason.includes('no sample URL') ? 'skipped' : 'error' });
     }
   }
@@ -327,7 +347,7 @@ export const verifyWithWhisper = async (
   const windowSeconds = Math.max(1, input.windowSeconds ?? 35);
   const minimumChars = Math.max(1, input.minimumChars ?? 80);
   const process = dependencies.process ?? runMediaProcess;
-  const work = await mkdtemp(join(tmpdir(), 'audiobook-curator-whisper-'));
+  const work = await evidenceWorkDir(input, '.audiobook-curator-whisper-');
   const windows: WhisperWindow[] = [];
   try {
     for (const [offset, fraction] of whisperSamplingFractions(maximumWindows).entries()) {

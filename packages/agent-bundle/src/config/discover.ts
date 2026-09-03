@@ -3,6 +3,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
+import { isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
@@ -89,7 +90,7 @@ const discoverState = async (
   try {
     moduleText = await readFile(source, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (isErrno(error, 'ENOENT')) return undefined;
     throw error;
   }
   const extracted = extractStateDefinition(moduleText, 'src/state.ts', source);

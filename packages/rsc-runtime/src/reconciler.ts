@@ -5,6 +5,7 @@ import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 import {
   AgentContractError,
   createAgentRenderEventSequence,
+  agentRenderAbortError,
   elapsedTimeExceeded,
   resolveAgentRenderLimits,
   type AgentRenderError,
@@ -67,7 +68,7 @@ type ClassifiedNode =
   | { readonly kind: 'fragment'; readonly value: ReactElement }
   | { readonly kind: 'protocol'; readonly value: ReactElement };
 
-const abortError = (): DOMException => new DOMException('Agent render was aborted', 'AbortError');
+const abortError = agentRenderAbortError;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
@@ -219,7 +220,6 @@ const materializeNode = (node: ReactNode, path: string, ctx: MaterializeContext)
           const status = thenableStatus(childKind.value._payload);
           switch (status) {
             case 'pending':
-              return materializePending(childKind.value._payload, path, fallback, ctx);
             case 'rejected':
               return materializePending(childKind.value._payload, path, fallback, ctx);
             case 'fulfilled':
@@ -279,9 +279,15 @@ const snapshotTree = (root: ReactNode, ids: Map<string, string>): TreeSnapshot =
 const hostError = (signal: AbortSignal, error: unknown): Error =>
   signal.aborted || isAbortError(error) ? abortError() : toRuntimeError(error);
 
+type SettledBoundary = {
+  readonly boundary: PendingBoundary;
+  readonly error?: unknown;
+  readonly ok: boolean;
+};
+
 const waitSettledBoundary = (
   pending: readonly PendingBoundary[],
-): Effect.Effect<{ readonly boundary: PendingBoundary; readonly error?: unknown; readonly ok: boolean }, Error> =>
+): Effect.Effect<SettledBoundary, Error> =>
   Effect.raceAll(
     pending.map((boundary) =>
       Effect.tryPromise({
@@ -293,12 +299,6 @@ const waitSettledBoundary = (
       ),
     ),
   );
-
-type SettledBoundary = {
-  readonly boundary: PendingBoundary;
-  readonly error?: unknown;
-  readonly ok: boolean;
-};
 
 const waitOrDeadline = <A>(
   wait: Effect.Effect<A, Error>,
@@ -313,12 +313,6 @@ const waitOrDeadline = <A>(
     ),
   );
 };
-
-const waitPendingOrDeadline = (
-  pending: readonly PendingBoundary[],
-  sequence: AgentRenderEventSequence,
-): Effect.Effect<SettledBoundary, Error> =>
-  waitOrDeadline(waitSettledBoundary(pending), sequence);
 
 const settledBoundaryInputs = (
   previous: TreeSnapshot,
@@ -389,7 +383,7 @@ const reconcileLoopStream = (
         );
       }
       return Effect.raceFirst(
-        waitPendingOrDeadline(snapshot.pending, sequence).pipe(
+        waitOrDeadline(waitSettledBoundary(snapshot.pending), sequence).pipe(
           Effect.map((winner): LoopWait => ({ kind: 'boundary', winner })),
         ),
         Queue.take(progressInputs).pipe(

@@ -2,12 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { Agent, agent } from '@agent-bundle/runtime';
 import { afterEach, expect, it } from '@rstest/core';
+import { createElement } from 'react';
 
 import type { LifecycleReplay } from '../../src/contracts/lifecycles.ts';
 import { LifecycleReplayService } from '../../src/dev/playground/lifecycle-replay-service.ts';
 import { projectEventDocument } from '../../src/events/project.ts';
 import { compileRouteGraph } from '../../src/routes/graph.ts';
+import type { AgentRouteModule } from '../../src/test/types.ts';
 
 const roots: string[] = [];
 
@@ -27,22 +30,75 @@ const createFixtureProject = async () => {
   await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
   await Promise.all([
     writeProjectFile(root, 'package.json', JSON.stringify({ name: 'lifecycle-replay-fixture', type: 'module' })),
-    writeProjectFile(root, 'src/events/tool/after.tsx', [
+    writeProjectFile(root, 'src/events/compact/after.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
+      'export default async function CompactAfter() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/compact/before.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function CompactBefore() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/prompt/submit.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function PromptSubmit() {',
+      "  return createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Prompt rejected.' } });",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/session/end.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function SessionEnd() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/after.tsx', [
+      "import { Agent, agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
       'export default async function AfterTool({ canonical }) {',
+      '  const context = await agent();',
       '  return createElement(',
       '    Agent.Result,',
       '    null,',
       "    createElement(Agent.Markdown, null, `Observed ${canonical.event} from ${canonical.provenance.host}.`),",
-      "    createElement(Agent.Context, null, 'Lifecycle replay context.'),",
+      '    createElement(Agent.Context, null, `${context.invocation.operationId}|${context.invocation.surface}`),',
+      '  );',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/failure.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['claude'] };",
+      'export default async function ToolFailure() {',
+      '  return createElement(',
+      '    Agent.Result,',
+      '    null,',
+      "    createElement(Agent.Context, null, 'Lifecycle failure context.'),",
       '  );',
       '}',
       '',
     ].join('\n')),
   ]);
   const graph = await compileRouteGraph(root, { targets: ['claude', 'codex'] } as never);
-  expect(graph.events.map((route) => route.id)).toEqual(['event:tool/after']);
+  expect(graph.events.map((route) => route.id)).toEqual([
+    'event:compact/after',
+    'event:compact/before',
+    'event:prompt/submit',
+    'event:session/end',
+    'event:tool/after',
+    'event:tool/failure',
+  ]);
   return { graph, root };
 };
 
@@ -119,10 +175,160 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
     );
     expect(replay.nativeResponse).toEqual({
       hookSpecificOutput: {
-        additionalContext: 'Lifecycle replay context.',
+        additionalContext: 'event:tool/after|tool/after',
         hookEventName: 'PostToolUse',
       },
     });
+  }
+});
+
+it('replays captured prompt/submit and session/end fixtures through native projection', { timeout: 30_000 }, async () => {
+  const { graph } = await createFixtureProject();
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude', 'codex'] }),
+  });
+  for (const target of ['claude', 'codex'] as const) {
+    const promptNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/${target}-user-prompt-submit.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const prompt = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: 'event:prompt/submit',
+        target,
+      },
+      native: promptNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in prompt).toBe(false);
+    expect((prompt as LifecycleReplay).nativeResponse).toEqual({
+      decision: 'block',
+      reason: 'Prompt rejected.',
+    });
+
+    const sessionNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/${target}-session-end.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const sessionEnd = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: 'event:session/end',
+        target,
+      },
+      native: sessionNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in sessionEnd).toBe(false);
+    expect((sessionEnd as LifecycleReplay).nativeResponse).toBeUndefined();
+  }
+});
+
+it('preserves replay invocation provenance for an in-process route observing agent context', async () => {
+  const { graph } = await createFixtureProject();
+  const routeModule = {
+    default: async () => {
+      const context = await agent();
+      return createElement(
+        Agent.Result,
+        null,
+        createElement(
+          Agent.Context,
+          null,
+          `${context.invocation.operationId}|${context.invocation.surface}`,
+        ),
+      );
+    },
+  } satisfies AgentRouteModule;
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude'] }),
+    loadRouteModule: async () => routeModule,
+  });
+  const native = JSON.parse(await readFile(
+    new URL('../../../../examples/rsc-agent-runtime/tests/fixtures/events/claude-post-tool-use.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+
+  const result = await service.replay({
+    binding: {
+      manifestDigest: graph.digest,
+      routeId: 'event:tool/after',
+      target: 'claude',
+    },
+    native,
+    source: 'fixture',
+  });
+  if ('diagnostics' in result) throw new Error('Expected a lifecycle replay.');
+
+  expect(result.requestContext.invocation).toMatchObject({
+    operationId: 'event:tool/after',
+    surface: 'tool/after',
+  });
+  expect(result.nativeResponse).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'event:tool/after|tool/after',
+      hookEventName: 'PostToolUse',
+    },
+  });
+});
+
+it('replays captured failure and compact envelopes through native projection', { timeout: 30_000 }, async () => {
+  const { graph } = await createFixtureProject();
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude', 'codex'] }),
+  });
+  const failureNative = JSON.parse(await readFile(
+    new URL('../fixtures/events/claude-post-tool-use-failure.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+  const failure = await service.replay({
+    binding: {
+      manifestDigest: graph.digest,
+      routeId: 'event:tool/failure',
+      target: 'claude',
+    },
+    native: failureNative,
+    source: 'fixture',
+  });
+  expect('diagnostics' in failure).toBe(false);
+  expect((failure as LifecycleReplay).nativeResponse).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'Lifecycle failure context.',
+      hookEventName: 'PostToolUseFailure',
+    },
+  });
+
+  for (const phase of ['before', 'after'] as const) {
+    const claudeNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/claude-${phase === 'before' ? 'pre' : 'post'}-compact.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const claude = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: `event:compact/${phase}`,
+        target: 'claude',
+      },
+      native: claudeNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in claude).toBe(false);
+    expect((claude as LifecycleReplay).nativeResponse).toBeUndefined();
+
+    const lifecycle = service.list().lifecycles.find((candidate) => candidate.routeId === `event:compact/${phase}`);
+    const codexTarget = lifecycle?.targets.find((candidate) => candidate.target === 'codex');
+    const codex = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: `event:compact/${phase}`,
+        target: 'codex',
+      },
+      native: codexTarget!.fixture!.native,
+      source: 'fixture',
+    });
+    expect('diagnostics' in codex).toBe(false);
+    expect((codex as LifecycleReplay).nativeResponse).toBeUndefined();
   }
 });
 
@@ -170,6 +376,13 @@ it('replays the Cursor workspaceOpen starter as an observation with no native re
       provenance: { host: 'cursor', nativeEvent: 'workspaceOpen' },
     },
     nativeInput: target?.fixture?.native,
+    requestContext: {
+      workspace: {
+        source: 'receipt',
+        state: 'available',
+        value: { root: '/tmp' },
+      },
+    },
   });
   expect((replay as LifecycleReplay).nativeResponse).toBeUndefined();
 });

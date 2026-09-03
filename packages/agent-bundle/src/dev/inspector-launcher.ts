@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { sleep as delay } from '../core/async.ts';
 import { CodedError } from '../core/errors.ts';
 import { taskkill, terminateProcessTree } from '../services/process-tree.ts';
 
@@ -140,10 +141,6 @@ const waitForClose = (child: ChildProcess): Promise<void> => new Promise((resolv
     return;
   }
   child.once('close', () => resolvePromise());
-});
-
-const delay = (ms: number): Promise<void> => new Promise((resolvePromise) => {
-  setTimeout(resolvePromise, ms);
 });
 
 const terminateTree = (child: ChildProcess, signal: NodeJS.Signals): Promise<boolean> =>

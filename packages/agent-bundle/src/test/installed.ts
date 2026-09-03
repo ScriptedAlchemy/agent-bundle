@@ -1,5 +1,5 @@
 import { lstat, readFile } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -8,6 +8,7 @@ import { artifactManifestName } from '../build/emit.ts';
 import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.ts';
 import { parseArtifactManifest } from '../build/manifest.ts';
 import { digest, sha256Hex } from '../core/digest.ts';
+import { eventRuntimeEndpoint } from '../events/ipc.ts';
 import { resolveBundleRoot } from '../install/doctor.ts';
 import type { InstallHost } from '../install/install.ts';
 import { AgentTestError } from './errors.ts';
@@ -71,6 +72,8 @@ export interface InstalledHostMcpProvenance {
 export interface InstalledHostMcpSession extends AsyncDisposable {
   readonly client: Client;
   readonly close: () => Promise<void>;
+  /** Raw read-only status socket for the installed generated event runtime. */
+  readonly eventRuntimeEndpoint?: string;
   readonly observation: InstalledHostObservation;
   readonly provenance: InstalledHostMcpProvenance;
   readonly stderr: () => string;
@@ -260,8 +263,8 @@ const outcomes = (failures: readonly Failure[]): Readonly<Record<InstalledHostCh
  * the artifact/install boundary, then opens a real stdio client session.
  *
  * The running-process version is read only from the live initialize result.
- * Runtime-instance identity beyond initialize remains outside this helper
- * until WarmRuntimeIdentity introspection lands in #269.
+ * The helper also derives the installed generated event-runtime socket so the
+ * shared matrix can read WarmRuntimeIdentity without crossing into source.
  */
 export const openInstalledHostMcpServer = async (
   options: OpenInstalledHostMcpServerOptions,
@@ -406,7 +409,10 @@ export const openInstalledHostMcpServer = async (
   const expandedCommand = expandHostPath(command, options.host, installedRoot);
   const args = rawArgs.map((argument) => expandHostPath(argument, options.host, installedRoot));
   const entryArgument = args.find((argument) => /\.mjs$/u.test(argument));
-  if (entryArgument === undefined || await fileHash(resolvedCommandPath(entryArgument, cwd)) === undefined) {
+  const resolvedEntry = entryArgument === undefined
+    ? undefined
+    : resolvedCommandPath(entryArgument, cwd);
+  if (resolvedEntry === undefined || await fileHash(resolvedEntry) === undefined) {
     failures.push({ check: 'mcp-command', reason: 'installed MCP entry argument did not resolve to an installed file' });
   }
   const declaredEnvironment = record(discovered.server.env);
@@ -421,7 +427,21 @@ export const openInstalledHostMcpServer = async (
     ...expandedDeclaredEnvironment,
   };
 
+  const eventRuntimeEndpointPath = artifactManifest === undefined || resolvedEntry === undefined
+    ? undefined
+    : eventRuntimeEndpoint(
+      `${artifactManifest.project.revision}:${options.host}:${dirname(dirname(resolvedEntry))}`,
+    );
+  if (eventRuntimeEndpointPath === undefined && failures.length === 0) {
+    failures.push({ check: 'mcp-command', reason: 'installed event runtime endpoint could not be derived' });
+  }
   if (failures.length > 0) throw installedFailure(failures, proofLevel);
+  if (eventRuntimeEndpointPath === undefined) {
+    throw installedFailure(
+      [{ check: 'mcp-command', reason: 'installed event runtime endpoint could not be derived' }],
+      proofLevel,
+    );
+  }
   const client = new Client({ name: 'agent-bundle-installed-host-proof', version: '1.0.0' });
   const transport = new StdioClientTransport({
     args: [...args],
@@ -506,6 +526,7 @@ export const openInstalledHostMcpServer = async (
   return Object.freeze({
     client,
     close,
+    eventRuntimeEndpoint: eventRuntimeEndpointPath,
     observation,
     provenance,
     stderr: () => captured,

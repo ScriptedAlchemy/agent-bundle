@@ -81,3 +81,267 @@ it('validates Cursor workspaceOpen without inventing an agent session', () => {
     target: 'cursor',
   })).toThrow(/native session_id or conversation_id must be a string/u);
 });
+
+it('validates prompt/submit and session/end host envelopes fail closed', () => {
+  const promptEnvelopes = [
+    {
+      native: {
+        cwd: '/workspace',
+        hook_event_name: 'UserPromptSubmit',
+        permission_mode: 'default',
+        prompt: 'Review this change.',
+        session_id: 'session-1',
+        transcript_path: '/workspace/transcript.jsonl',
+      },
+      target: 'claude',
+    },
+    {
+      native: {
+        cwd: '/workspace',
+        hook_event_name: 'UserPromptSubmit',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        prompt: 'Review this change.',
+        session_id: 'session-1',
+        transcript_path: null,
+        turn_id: 'turn-1',
+      },
+      target: 'codex',
+    },
+    {
+      native: {
+        attachments: [],
+        conversation_id: 'session-1',
+        hook_event_name: 'beforeSubmitPrompt',
+        prompt: 'Review this change.',
+      },
+      target: 'cursor',
+    },
+  ] as const;
+  for (const { native, target } of promptEnvelopes) {
+    expect(validateNativeEventEnvelope(native, {
+      canonicalEvent: 'prompt/submit',
+      nativeEvent: target === 'cursor' ? 'beforeSubmitPrompt' : 'UserPromptSubmit',
+      target,
+    })).toBe(native);
+  }
+  expect(() => validateNativeEventEnvelope({
+    ...promptEnvelopes[1].native,
+    permission_mode: 'invalid',
+  }, {
+    canonicalEvent: 'prompt/submit',
+    nativeEvent: 'UserPromptSubmit',
+    target: 'codex',
+  })).toThrow(/native permission_mode is invalid/u);
+  expect(() => validateNativeEventEnvelope({
+    ...promptEnvelopes[2].native,
+    attachments: [{ file_path: '', type: 'file' }],
+  }, {
+    canonicalEvent: 'prompt/submit',
+    nativeEvent: 'beforeSubmitPrompt',
+    target: 'cursor',
+  })).toThrow(/native attachments.*file_path/u);
+
+  const sessionEnd = {
+    cwd: '/workspace',
+    hook_event_name: 'SessionEnd',
+    reason: 'other',
+    session_id: 'session-1',
+    transcript_path: null,
+  };
+  expect(validateNativeEventEnvelope(sessionEnd, {
+    canonicalEvent: 'session/end',
+    nativeEvent: 'SessionEnd',
+    target: 'codex',
+  })).toBe(sessionEnd);
+  expect(() => validateNativeEventEnvelope({ ...sessionEnd, reason: 'clear' }, {
+    canonicalEvent: 'session/end',
+    nativeEvent: 'SessionEnd',
+    target: 'codex',
+  })).toThrow(/native reason must equal other/u);
+});
+
+it('validates failure and compaction envelopes without flattening host differences', () => {
+  const claudeFailure = {
+    cwd: '/workspace',
+    duration_ms: 134,
+    error: 'Exit code 9\nfailure',
+    hook_event_name: 'PostToolUseFailure',
+    is_interrupt: false,
+    session_id: 'session-1',
+    tool_input: { command: 'exit 9' },
+    tool_name: 'Bash',
+    tool_use_id: 'tool-1',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeFailure, {
+    canonicalEvent: 'tool/failure',
+    nativeEvent: 'PostToolUseFailure',
+    target: 'claude',
+  })).toBe(claudeFailure);
+
+  const cursorFailure = {
+    conversation_id: 'session-1',
+    cwd: '/workspace',
+    duration: 5,
+    error_message: 'Denied by policy.',
+    failure_type: 'permission_denied',
+    hook_event_name: 'postToolUseFailure',
+    is_interrupt: false,
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Shell',
+    tool_use_id: 'tool-1',
+  };
+  expect(validateNativeEventEnvelope(cursorFailure, {
+    canonicalEvent: 'tool/failure',
+    nativeEvent: 'postToolUseFailure',
+    target: 'cursor',
+  })).toBe(cursorFailure);
+  expect(() => validateNativeEventEnvelope({ ...cursorFailure, failure_type: 'denied' }, {
+    canonicalEvent: 'tool/failure',
+    nativeEvent: 'postToolUseFailure',
+    target: 'cursor',
+  })).toThrow(/native failure_type is invalid/u);
+
+  const claudeBefore = {
+    custom_instructions: null,
+    cwd: '/workspace',
+    hook_event_name: 'PreCompact',
+    session_id: 'session-1',
+    transcript_path: '/workspace/transcript.jsonl',
+    trigger: 'manual',
+  };
+  expect(validateNativeEventEnvelope(claudeBefore, {
+    canonicalEvent: 'compact/before',
+    nativeEvent: 'PreCompact',
+    target: 'claude',
+  })).toBe(claudeBefore);
+
+  const codexAfter = {
+    cwd: '/workspace',
+    hook_event_name: 'PostCompact',
+    model: 'gpt-5.6-sol',
+    session_id: 'session-1',
+    transcript_path: null,
+    trigger: 'auto',
+    turn_id: 'turn-1',
+  };
+  expect(validateNativeEventEnvelope(codexAfter, {
+    canonicalEvent: 'compact/after',
+    nativeEvent: 'PostCompact',
+    target: 'codex',
+  })).toBe(codexAfter);
+
+  const cursorBefore = {
+    context_tokens: 120_000,
+    context_usage_percent: 85,
+    context_window_size: 128_000,
+    conversation_id: 'session-1',
+    hook_event_name: 'preCompact',
+    is_first_compaction: true,
+    message_count: 45,
+    messages_to_compact: 30,
+    trigger: 'auto',
+  };
+  expect(validateNativeEventEnvelope(cursorBefore, {
+    canonicalEvent: 'compact/before',
+    nativeEvent: 'preCompact',
+    target: 'cursor',
+  })).toBe(cursorBefore);
+  expect(() => validateNativeEventEnvelope({ ...cursorBefore, context_tokens: '120000' }, {
+    canonicalEvent: 'compact/before',
+    nativeEvent: 'preCompact',
+    target: 'cursor',
+  })).toThrow(/native context_tokens must be a number/u);
+
+  expect(() => validateNativeEventEnvelope({
+    cwd: '/workspace',
+    hook_event_name: 'PostCompact',
+    session_id: 'session-1',
+    transcript_path: '/workspace/transcript.jsonl',
+    trigger: 'manual',
+  }, {
+    canonicalEvent: 'compact/after',
+    nativeEvent: 'PostCompact',
+    target: 'claude',
+  })).toThrow(/native compact_summary must be a string/u);
+});
+
+it('validates permission and stop-failure envelopes against the pinned host contracts', () => {
+  const claudeRequest = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionRequest',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeRequest, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toBe(claudeRequest);
+  expect(() => validateNativeEventEnvelope({ ...claudeRequest, permission_mode: 'sometimes' }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toThrow(/permission_mode/u);
+
+  const codexRequest = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionRequest',
+    model: 'gpt-5-codex',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_input: { command: 'apply_patch' },
+    tool_name: 'apply_patch',
+    transcript_path: null,
+    turn_id: 'turn-1',
+  };
+  expect(validateNativeEventEnvelope(codexRequest, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toBe(codexRequest);
+  expect(() => validateNativeEventEnvelope({ ...codexRequest, turn_id: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toThrow(/turn_id/u);
+
+  const claudeDenied = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionDenied',
+    permission_decision: 'deny',
+    permission_decision_reason: 'Auto mode denied the command.',
+    session_id: 'session-1',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeDenied, {
+    canonicalEvent: 'permission/denied',
+    nativeEvent: 'PermissionDenied',
+    target: 'claude',
+  })).toBe(claudeDenied);
+
+  const claudeStopFailure = {
+    cwd: '/workspace',
+    error: 'API Error: 529 overloaded',
+    hook_event_name: 'StopFailure',
+    session_id: 'session-1',
+    stop_hook_active: false,
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeStopFailure, {
+    canonicalEvent: 'stop/failure',
+    nativeEvent: 'StopFailure',
+    target: 'claude',
+  })).toBe(claudeStopFailure);
+  expect(() => validateNativeEventEnvelope({ ...claudeStopFailure, error: 42 }, {
+    canonicalEvent: 'stop/failure',
+    nativeEvent: 'StopFailure',
+    target: 'claude',
+  })).toThrow(/error/u);
+});

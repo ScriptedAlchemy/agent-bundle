@@ -4,6 +4,10 @@ import { snapshotJsonValue, type JsonSnapshotBudget, type JsonValue } from './lo
 
 export const AGENT_DOCUMENT_VERSION = 1 as const;
 
+/** Host-visible cancellation error shared by the render pipeline. */
+export const agentRenderAbortError = (): DOMException =>
+  new DOMException('Agent render was aborted', 'AbortError');
+
 export type AgentDocumentStatus = 'success' | 'represented-error' | 'failed';
 
 export interface AgentResultNode {
@@ -196,6 +200,27 @@ export const elapsedTimeExceeded = (maxElapsedMs: number): AgentContractError =>
     `Agent render elapsed time exceeds ${String(maxElapsedMs)}ms`,
   );
 
+/** Single source for the depth-limit contract shared by snapshotting and Flight decode. */
+export const expectDocumentDepth = (depth: number, limits: AgentRenderLimits): void => {
+  if (depth > limits.maxDocumentDepth) {
+    throw new AgentContractError(
+      'document-depth-exceeded',
+      `Agent Document depth exceeds ${String(limits.maxDocumentDepth)}`,
+    );
+  }
+};
+
+/** Single source for the node-count contract shared by snapshotting and Flight decode. */
+export const admitDocumentNode = (state: { readonly limits: AgentRenderLimits; nodes: number }): void => {
+  state.nodes += 1;
+  if (state.nodes > state.limits.maxDocumentNodes) {
+    throw new AgentContractError(
+      'document-node-count-exceeded',
+      `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
+    );
+  }
+};
+
 const jsonBudget = (state: NodeSnapshotState): JsonSnapshotBudget => ({
   addBytes(n) {
     state.bytes += n;
@@ -207,21 +232,10 @@ const jsonBudget = (state: NodeSnapshotState): JsonSnapshotBudget => ({
     }
   },
   addNode() {
-    state.nodes += 1;
-    if (state.nodes > state.limits.maxDocumentNodes) {
-      throw new AgentContractError(
-        'document-node-count-exceeded',
-        `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
-      );
-    }
+    admitDocumentNode(state);
   },
   checkDepth(depth) {
-    if (depth > state.limits.maxDocumentDepth) {
-      throw new AgentContractError(
-        'document-depth-exceeded',
-        `Agent Document depth exceeds ${String(state.limits.maxDocumentDepth)}`,
-      );
-    }
+    expectDocumentDepth(depth, state.limits);
   },
 });
 
@@ -260,19 +274,8 @@ const snapshotNode = (node: AgentDocumentNode, depth: number, state: NodeSnapsho
   if (state.ancestors.has(node)) {
     throw new AgentContractError('invalid-document', 'Agent Document node tree must not be cyclic');
   }
-  if (depth > state.limits.maxDocumentDepth) {
-    throw new AgentContractError(
-      'document-depth-exceeded',
-      `Agent Document depth exceeds ${String(state.limits.maxDocumentDepth)}`,
-    );
-  }
-  state.nodes += 1;
-  if (state.nodes > state.limits.maxDocumentNodes) {
-    throw new AgentContractError(
-      'document-node-count-exceeded',
-      `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
-    );
-  }
+  expectDocumentDepth(depth, state.limits);
+  admitDocumentNode(state);
 
   state.ancestors.add(node);
   try {

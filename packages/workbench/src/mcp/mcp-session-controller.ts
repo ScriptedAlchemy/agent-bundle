@@ -19,7 +19,7 @@ import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts'
 import type { McpAppBoundOperationResult } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppJsonValue } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type { McpAppBindingOperation } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
-import { parseStrictResponseJson } from '../client-helpers.ts';
+import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest, type AgentBundleMcpDispatchResult } from './agent-bundle-remote-transport.ts';
 import {
@@ -35,6 +35,7 @@ import {
 } from './mcp-session-model.ts';
 import {
   McpRouteClientError,
+  sameRuntimeBinding,
   type McpRouteCatalog,
   type McpRouteClient,
   type McpRouteConnection,
@@ -234,9 +235,6 @@ const constructionDrain = (): ConstructionDrain => {
   return { settled, settle };
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const isDataDescriptor = (value: PropertyDescriptor | undefined): value is PropertyDescriptor & { readonly value: unknown } =>
   value !== undefined && Object.hasOwn(value, 'value') && !Object.hasOwn(value, 'get') && !Object.hasOwn(value, 'set');
 
@@ -288,11 +286,6 @@ const isRuntimeConnection = (value: unknown): value is McpRouteConnection => {
 const isRuntimeSession = (value: unknown): value is McpRouteRuntimeSession =>
   isRecord(value) && Object.keys(value).length === 3 && isRuntimeBinding(value.binding) && isRuntimeConnection(value.connection) &&
   (value.state === 'connecting' || value.state === 'ready' || value.state === 'restarting' || value.state === 'failed' || value.state === 'closed');
-
-const sameRuntimeBinding = (left: DevRuntimeMcpAppRunBinding, right: DevRuntimeMcpAppRunBinding): boolean =>
-  left.definitionDigest === right.definitionDigest && left.registryRevision === right.registryRevision &&
-  left.serverDigest === right.serverDigest && left.serverName === right.serverName && left.sessionId === right.sessionId &&
-  left.sessionRevision === right.sessionRevision && left.target === right.target && left.transportDigest === right.transportDigest;
 
 type RuntimeSessionAdoptionLane = 'implementation' | 'restart';
 

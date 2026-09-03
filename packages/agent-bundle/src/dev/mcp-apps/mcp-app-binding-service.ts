@@ -1,3 +1,4 @@
+import { isRecord } from '../../core/strict-json.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from '../mcp-app-profile-descriptors.ts';
 
 export type McpAppJsonValue =
@@ -115,8 +116,6 @@ interface BindingEntry {
 
 const defaultTeardownTimeoutMs = 1_000;
 const maximumTeardownTimeoutMs = 30_000;
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;

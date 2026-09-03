@@ -431,6 +431,77 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
   expect(toolWrapper?.virtualSource).toContain('tool_output');
 });
 
+it('lowers supported route-only families without exposing config hook names', () => {
+  const model = plugin();
+  const plan = cursorAdapter.plan({
+    ...model,
+    hooks: [
+      {
+        event: 'promptSubmit',
+        eventRoute: { event: 'prompt/submit', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:prompt-submit',
+        name: 'event-route-prompt-submit',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/prompt/submit.tsx' },
+        source: '/workspace/src/events/prompt/submit.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
+      {
+        event: 'sessionEnd',
+        eventRoute: { event: 'session/end', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:session-end',
+        name: 'event-route-session-end',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/session/end.tsx' },
+        source: '/workspace/src/events/session/end.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
+      {
+        event: 'toolFailure',
+        eventRoute: { event: 'tool/failure', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:tool-failure',
+        name: 'event-route-tool-failure',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/tool/failure.tsx' },
+        source: '/workspace/src/events/tool/failure.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
+      {
+        event: 'compactBefore',
+        eventRoute: { event: 'compact/before', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:compact-before',
+        name: 'event-route-compact-before',
+        provenance: { kind: 'conventional', sourcePath: '/workspace/src/events/compact/before.tsx' },
+        source: '/workspace/src/events/compact/before.tsx',
+        targets: ['cursor'],
+        tools: [],
+      },
+    ],
+  });
+
+  expect(plan.diagnostics).toEqual([]);
+  const documents = Object.fromEntries(plan.entries
+    .filter((entry): entry is Extract<typeof entry, { readonly kind: 'write' }> => entry.kind === 'write')
+    .map((entry) => [entry.relativePath, entry.content]));
+  expect(JSON.parse(documents['hooks/hooks.json']!)).toEqual({
+    hooks: {
+      beforeSubmitPrompt: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-prompt-submit.mjs"',
+      }],
+      sessionEnd: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-session-end.mjs"',
+      }],
+      postToolUseFailure: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-tool-failure.mjs"',
+      }],
+      preCompact: [{
+        command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-compact-before.mjs"',
+      }],
+    },
+    version: 1,
+  });
+});
+
 it('drops hooks scoped to other targets from the plan', () => {
   const model = plugin();
   const plan = cursorAdapter.plan({

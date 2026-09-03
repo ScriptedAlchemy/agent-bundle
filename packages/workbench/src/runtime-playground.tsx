@@ -9,7 +9,7 @@ import type {
   DevRuntimeSurface,
 } from '../../agent-bundle/src/contracts/runtime.ts';
 import type { ProjectEventMessage, ProjectReplayGap } from '../../agent-bundle/src/contracts/runtime.ts';
-import { downloadBlob } from './client-helpers.ts';
+import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
 import { RuntimeClientError, type RuntimeBootstrap } from './runtime-client.ts';
 import { McpJsonInput, serializeJsonValue, type ImmutableJsonValue } from './mcp/mcp-json-input.tsx';
 import {
@@ -98,9 +98,8 @@ export interface RuntimePlaygroundControllerOptions {
 
 export const runtimePlaygroundLiveMcpPageAdapter: RuntimeLiveMcpPageAdapter = Object.freeze({ kind: 'disabled' });
 
-const errorMessage = (reason: unknown): string => reason instanceof Error
-  ? reason.message
-  : 'Runtime request could not be completed.';
+const errorMessage = (reason: unknown): string =>
+  messageFrom(reason, 'Runtime request could not be completed.');
 
 const isForegroundEffect = (effect: RuntimeModel['activeEffect'] | RuntimeModel['pendingEffect']): boolean =>
   effect?.kind === 'create-run' || effect?.kind === 'replay-run' || effect?.kind === 'reset-state';

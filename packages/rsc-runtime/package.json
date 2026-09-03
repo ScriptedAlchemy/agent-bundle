@@ -79,7 +79,7 @@
     "effect": "4.0.0-rc.112",
     "react-server-dom-rspack": "0.1.0",
     "rsc-markdown-stream": "github:ScriptedAlchemy/rsc-markdown-stream#755c5eea448749ecbf889c090e5a052914fae4e6",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",

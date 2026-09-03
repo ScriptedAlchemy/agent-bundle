@@ -3,6 +3,7 @@ import { describe, expect, it } from '@rstest/core';
 import {
   AGENT_NOTICE_STATES,
   AgentNoticeError,
+  selectNoticeDeliveryRoutes,
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
   type AgentNoticeAuthorizationRequest,
@@ -68,10 +69,13 @@ describe('notice state taxonomy', () => {
       'expired',
       'unavailable',
       'withdrawn',
+      'acknowledged',
     ]);
+    // 'delivered' stays out until a pinned host supplies cross-actor delivery
+    // evidence (2026-09-02 survey on #99); 'read'/'available' remain receipts.
     expect(AGENT_NOTICE_STATES).not.toContain('delivered');
     expect(AGENT_NOTICE_STATES).not.toContain('read');
-    expect(AGENT_NOTICE_STATES).not.toContain('acknowledged');
+    expect(AGENT_NOTICE_STATES).not.toContain('available');
 
     const label = (state: AgentNoticeState): string => {
       switch (state) {
@@ -80,6 +84,7 @@ describe('notice state taxonomy', () => {
         case 'expired':
         case 'unavailable':
         case 'withdrawn':
+        case 'acknowledged':
           return state;
         default: {
           const exhaustive: never = state;
@@ -693,6 +698,228 @@ describe('next-event delivery', () => {
       startedAt: '2026-09-01T19:02:00.000Z',
     }, async () => (await agent()).notices!.read())).toEqual([]);
     expect((await ledger.read()).notices[0]?.state).toBe('pending');
+    await driver.close();
+  });
+});
+
+describe('notice delivery routing receipts (#99 stage 4)', () => {
+  const publishTo = async (
+    ledger: Awaited<ReturnType<typeof openLedger>>['ledger'],
+    extras: Record<string, unknown> = {},
+  ) => run(ledger, {
+    actorId: 'publisher',
+    id: 'publish-1',
+    kind: 'tool',
+    startedAt: '2026-09-01T19:00:00.000Z',
+  }, async () => (await agent()).notices!.publish({
+    content: document('coordinate'),
+    priority: 'high',
+    recipient: { actor: { id: 'recipient' } },
+    ...extras,
+  }, { idempotencyKey: 'publish:stage4' }));
+
+  it('acknowledges a notice only for its recipient and records the invocation', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+
+    await expect(run(ledger, {
+      actorId: 'intruder',
+      id: 'ack-wrong',
+      kind: 'event',
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id)))
+      .rejects.toMatchObject({ code: 'unauthorized' });
+
+    const acknowledged = await run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-1',
+      kind: 'event',
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+    expect(acknowledged.state).toBe('acknowledged');
+    expect(acknowledged.acknowledgement).toEqual({
+      acknowledgedAt: '2026-09-01T19:02:00.000Z',
+      invocationId: 'ack-1',
+    });
+
+    await expect(run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-unknown',
+      kind: 'event',
+      startedAt: '2026-09-01T19:03:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge('notice_missing')))
+      .rejects.toMatchObject({ code: 'invalid-input' });
+    await driver.close();
+  });
+
+  it('re-attempts on later admitted events until the retry budget is exhausted', async () => {
+    const { driver, ledger } = await openLedger();
+    await publishTo(ledger, { retryBudget: 2 });
+
+    const admit = (id: string, startedAt: string) => run(ledger, {
+      actorId: 'recipient',
+      id,
+      kind: 'event',
+      startedAt,
+    }, async () => (await agent()).notices!.read());
+
+    const first = await admit('event-1', '2026-09-01T19:05:00.000Z');
+    expect(first).toHaveLength(1);
+    const second = await admit('event-2', '2026-09-01T19:06:00.000Z');
+    expect(second).toHaveLength(1);
+    const third = await admit('event-3', '2026-09-01T19:07:00.000Z');
+    expect(third).toHaveLength(0);
+
+    const snapshot = await ledger.read();
+    expect(snapshot.notices[0]?.attempts.map((attempt) => attempt.invocationId))
+      .toEqual(['event-1', 'event-2']);
+    expect(snapshot.notices[0]?.state).toBe('attempted');
+    await driver.close();
+  });
+
+  it('defaults to a single attempt when no retry budget is published', async () => {
+    const { driver, ledger } = await openLedger();
+    await publishTo(ledger);
+    const admit = (id: string, startedAt: string) => run(ledger, {
+      actorId: 'recipient',
+      id,
+      kind: 'event',
+      startedAt,
+    }, async () => (await agent()).notices!.read());
+    expect(await admit('event-1', '2026-09-01T19:05:00.000Z')).toHaveLength(1);
+    expect(await admit('event-2', '2026-09-01T19:06:00.000Z')).toHaveLength(0);
+    const persisted = (await ledger.read()).notices[0];
+    expect(persisted?.retryBudget).toBeUndefined();
+    expect(persisted?.attempts).toHaveLength(1);
+    await driver.close();
+  });
+
+  it('holds admission until nextAttemptAt without implying a timer', async () => {
+    const { driver, ledger } = await openLedger();
+    await publishTo(ledger, { nextAttemptAt: '2026-09-01T20:00:00.000Z' });
+    const admit = (id: string, startedAt: string) => run(ledger, {
+      actorId: 'recipient',
+      id,
+      kind: 'event',
+      startedAt,
+    }, async () => (await agent()).notices!.read());
+    expect(await admit('early', '2026-09-01T19:30:00.000Z')).toHaveLength(0);
+    expect((await ledger.read()).notices[0]?.state).toBe('pending');
+    expect(await admit('due', '2026-09-01T20:00:00.000Z')).toHaveLength(1);
+    await driver.close();
+  });
+
+  it('records wire-level availability as a receipt without claiming delivery', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const snapshot = await ledger.signalAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'availability:1',
+      noticeIds: [published.notice.id],
+    });
+    const notice = snapshot.notices[0];
+    expect(notice?.state).toBe('pending');
+    expect(notice?.availability).toEqual({
+      channel: 'mcp-resource-updated',
+      count: 1,
+      firstAt: '2026-09-01T19:04:00.000Z',
+      lastAt: '2026-09-01T19:04:00.000Z',
+    });
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'availability:empty',
+      noticeIds: [],
+    })).rejects.toMatchObject({ code: 'invalid-input' });
+    await driver.close();
+  });
+});
+
+describe('notice delivery route selection', () => {
+  const advertisement = (overrides: Partial<Record<string, { state: 'supported' } | { reason: string; state: 'unavailable' }>> = {}) => ({
+    'current-response': { state: 'supported' as const },
+    'directed-push': { reason: '2026-09-02: no pinned host documents a directed cross-actor push API.', state: 'unavailable' as const },
+    'host-toast': { reason: '2026-09-02: no pinned host documents a plugin-facing toast API.', state: 'unavailable' as const },
+    'mcp-inbox': { state: 'supported' as const },
+    'mcp-resource-updated': { state: 'supported' as const },
+    'next-event': { state: 'supported' as const },
+    ...overrides,
+  });
+
+  it('selects every supported cross-request route in stable preference order', () => {
+    expect(selectNoticeDeliveryRoutes(advertisement())).toEqual({
+      kind: 'selected',
+      routes: ['mcp-resource-updated', 'mcp-inbox', 'next-event'],
+    });
+  });
+
+  it('returns the typed unavailable outcome when no cross-request route is supported', () => {
+    const unavailable = { reason: '2026-09-02: unavailable.', state: 'unavailable' as const };
+    expect(selectNoticeDeliveryRoutes(advertisement({
+      'mcp-inbox': unavailable,
+      'mcp-resource-updated': unavailable,
+      'next-event': unavailable,
+    }))).toEqual({ kind: 'unavailable', reason: 'no-supported-cross-request-route' });
+  });
+
+  it('fails closed on incomplete advertisements and reasonless unavailability', () => {
+    const missing = advertisement();
+    delete (missing as Record<string, unknown>)['host-toast'];
+    expect(() => selectNoticeDeliveryRoutes(missing as never)).toThrow(/missing route host-toast/u);
+    expect(() => selectNoticeDeliveryRoutes(advertisement({
+      'directed-push': { reason: '   ', state: 'unavailable' },
+    }))).toThrow(/requires a dated reason/u);
+  });
+});
+
+describe('stage-4 review findings regressions', () => {
+  it('expires a retriable attempted notice past its deadline instead of retaining retries', async () => {
+    const { driver, ledger } = await openLedger();
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-exp',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('deadline'),
+      expiresAt: '2026-09-01T19:10:00.000Z',
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+      retryBudget: 3,
+    }, { idempotencyKey: 'publish:expiry' }));
+    const admit = (id: string, startedAt: string) => run(ledger, {
+      actorId: 'recipient',
+      id,
+      kind: 'event',
+      startedAt,
+    }, async () => (await agent()).notices!.read());
+    expect(await admit('event-1', '2026-09-01T19:05:00.000Z')).toHaveLength(1);
+    expect(await admit('event-2', '2026-09-01T19:11:00.000Z')).toHaveLength(0);
+    expect((await ledger.read()).notices[0]).toMatchObject({
+      expiredAt: '2026-09-01T19:11:00.000Z',
+      state: 'expired',
+    });
+    await driver.close();
+  });
+
+  it('rejects acknowledgements from invocations that started before the notice existed', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-late',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('late'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:late' }));
+    await expect(run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-early',
+      kind: 'event',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id)))
+      .rejects.toMatchObject({ code: 'invalid-input' });
     await driver.close();
   });
 });

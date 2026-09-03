@@ -146,7 +146,7 @@ artifact-bound MCP playground with the raw protocol trace, a hook playground tha
 wrapper, a durable ordered Playground trace with replay and export, and eval runs and comparisons.
 
 The same session is available programmatically through the public `startDevServer` export, which
-accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`) and resolves to a
+accepts the options the CLI flags map to (`root`, `port`, `open`, `agentApi`, `installHosts`) and resolves to a
 `DevServerSession` exposing the loopback `url`, a `status()` snapshot, and `close()`:
 
 ```ts
@@ -156,6 +156,35 @@ const session = await startDevServer({ root: process.cwd(), port: 3100 });
 console.log(session.url);
 await session.close();
 ```
+
+Pass `--install-host <claude|codex|cursor>` more than once to install development variants into
+the selected hosts:
+
+```sh
+agent-bundle dev --install-host cursor --install-host claude
+```
+
+The first successful epoch uses the ordinary host installer. Claude and Codex therefore register
+the plugin normally and read its files from their host-owned
+`plugins/cache/<marketplace>/<plugin>/<version>` directory; Cursor reads
+`~/.cursor/plugins/local/<plugin>`. The installed root contains
+`.agent-bundle-dev.json` with schema version `1`, the project root, host, and installed epoch.
+Its MCP document always launches
+the framework CLI through the running dev server's Node executable as
+`agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host>`;
+rebuilds never replace that stable command with an epoch path, and host process `PATH` contents do
+not affect whether the project-local framework can be spawned.
+
+Each later `artifact.available` event copies the new target into an immutable installed generation.
+Top-level directories switch by atomic symlink (or Windows junction) rename and top-level files by
+atomic sibling-file rename, so a host sees an old or new complete entry and no synchronized
+directory disappears between generations. A failed publication rolls pointers back to the prior
+generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build emits no
+`artifact.available`, so the last-good install is unchanged. Re-sync writes the host cache directly
+and does not invoke the Claude or Codex CLI again.
+
+Stopping the dev server leaves the marked development install in place. Hooks and Skills remain on
+disk, while the stable proxy command fails closed until that project dev server is running again.
 
 `script.run` is a production-mounted, trusted-local Playground operation. It runs only the selected
 manifest-owned emitted script for the selected target, in a managed workspace, and preserves bounded
@@ -399,7 +428,9 @@ idempotent commit replay, and typed budget rejection. A caller-supplied
 same-store `restart` callback adds durability evidence at that boundary;
 without one the check is honestly `not-applicable`. Packed callers should wire
 that callback into the existing packed journey's restart rather than creating
-a second pack/build/install path.
+a second pack/build/install path. A lifecycle fixture's optional
+`state.catalog` assertion pins its declared id and lifetime to the compiler
+manifest used by that same mounted-state replay.
 
 **`runInstalledHostContractMatrix` (`host-install`)** runs against an
 already-open session from `openInstalledHostMcpServer`. The opener reads the
@@ -411,12 +442,16 @@ running-process versions separately and fails closed when any value is missing
 or differs. Metadata records the host binary version when observed, adapter
 revision, manifest/schema digest, and framework version. Module-backed checks
 remain honestly not-applicable because loading project modules would cross back
-into the source/build tree.
+into the source/build tree. When the compiled manifest contains event routes,
+the packed and installed-host boundaries sample the read-only event-runtime
+status before and throughout sequential matrix events. The
+`runtime-instance-identity` check fails if the warm `instanceId` changes, the
+artifact epoch drifts, or availability degrades to `runtime-restarted` /
+`runtime-unavailable`.
 
-No matrix boundary proves browser App HTML, artifact-rebuild replay,
-state-lifetime catalog identity, or running-process identity beyond what the
-live MCP session reports; deeper runtime-instance introspection depends on
-#269.
+No matrix boundary proves browser App HTML or artifact-rebuild replay.
+In-memory runs and compiled artifacts without event routes report runtime
+identity as honestly `not-applicable`.
 
 When the advertised input schema declares `additionalProperties: false`, plain
 `z.object` tool routes may still strip unknown keys without a protocol failure.
@@ -443,6 +478,7 @@ await runContractMatrix({
 
 // Packed: pass an already-open session and a manifest compiled before source removal.
 await runPackedContractMatrix({
+  eventRuntime: { endpointId: packedEventRuntimeEndpointId },
   session: packedSession,
   manifest: compiledManifest,
   fixtures: { /* same shape */ },

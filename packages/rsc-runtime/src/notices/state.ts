@@ -69,8 +69,22 @@ const exposureSchema = z.object({
   lastInvocationId: z.string().min(1),
 }).strict().readonly();
 
+const availabilitySchema = z.object({
+  channel: z.literal('mcp-resource-updated'),
+  count: z.number().int().positive(),
+  firstAt: z.string().min(1),
+  lastAt: z.string().min(1),
+}).strict().readonly();
+
+const acknowledgementSchema = z.object({
+  acknowledgedAt: z.string().min(1),
+  invocationId: z.string().min(1),
+}).strict().readonly();
+
 const noticeSchema = z.object({
+  acknowledgement: acknowledgementSchema.optional(),
   attempts: z.array(attemptSchema).readonly(),
+  availability: availabilitySchema.optional(),
   content: documentSchema,
   createdAt: z.string().min(1),
   dedupeKey: z.string().min(1).optional(),
@@ -78,9 +92,14 @@ const noticeSchema = z.object({
   expiresAt: z.string().min(1).optional(),
   exposure: exposureSchema.optional(),
   id: z.string().min(1),
+  nextAttemptAt: z.string().min(1).optional(),
   priority: z.enum(['low', 'normal', 'high']),
   recipient: recipientSchema,
-  state: z.enum(['pending', 'attempted', 'expired', 'unavailable', 'withdrawn']),
+  // Optional (not defaulted): parse must never materialize fields absent from
+  // stored heads or the journal head-vs-replay consistency check would diverge
+  // on state persisted before the retry contract. Absent means a budget of 1.
+  retryBudget: z.number().int().min(1).optional(),
+  state: z.enum(['pending', 'attempted', 'expired', 'unavailable', 'withdrawn', 'acknowledged']),
   unavailableAt: z.string().min(1).optional(),
   unavailableReason: z.literal('delivery-authorization-unavailable').optional(),
   withdrawnAt: z.string().min(1).optional(),
@@ -91,12 +110,22 @@ export interface AgentNoticeLedgerState {
 }
 
 export const agentNoticeEventSchemas = {
+  acknowledged: z.object({
+    at: z.string().min(1),
+    id: z.string().min(1),
+    invocationId: z.string().min(1),
+  }).strict(),
   admitted: z.object({
     at: z.string().min(1),
     authorizedIds: z.array(z.string().min(1)),
     invocationId: z.string().min(1),
     principal: principalSchema,
     unavailableIds: z.array(z.string().min(1)),
+  }).strict(),
+  'availability-signalled': z.object({
+    at: z.string().min(1),
+    channel: z.literal('mcp-resource-updated'),
+    noticeIds: z.array(z.string().min(1)),
   }).strict(),
   exposed: z.object({
     at: z.string().min(1),
@@ -151,9 +180,16 @@ const transitionExpiry = (notice: AgentNotice, at: string): AgentNotice => {
         ? expiredNotice(notice, at)
         : notice;
     case 'attempted':
+      // A retriable notice past its deadline must not linger with unused
+      // retries; a fully-attempted notice keeps its terminal attempt record.
+      return notice.attempts.length < (notice.retryBudget ?? 1)
+        && notice.expiresAt !== undefined && Date.parse(notice.expiresAt) <= Date.parse(at)
+        ? expiredNotice(notice, at)
+        : notice;
     case 'expired':
     case 'unavailable':
     case 'withdrawn':
+    case 'acknowledged':
       return notice;
     default: {
       const exhaustive: never = notice.state;
@@ -172,6 +208,64 @@ const transitionWithdrawal = (notice: AgentNotice, id: string, at: string): Agen
     case 'expired':
     case 'unavailable':
     case 'withdrawn':
+    case 'acknowledged':
+      return notice;
+    default: {
+      const exhaustive: never = notice.state;
+      return exhaustive;
+    }
+  }
+};
+
+const transitionAcknowledgement = (
+  notice: AgentNotice,
+  input: { readonly at: string; readonly id: string; readonly invocationId: string },
+): AgentNotice => {
+  if (notice.id !== input.id) return notice;
+  switch (notice.state) {
+    case 'pending':
+    case 'attempted':
+      return Object.freeze({
+        ...notice,
+        acknowledgement: Object.freeze({
+          acknowledgedAt: input.at,
+          invocationId: input.invocationId,
+        }),
+        state: 'acknowledged',
+      });
+    case 'expired':
+    case 'unavailable':
+    case 'withdrawn':
+    case 'acknowledged':
+      return notice;
+    default: {
+      const exhaustive: never = notice.state;
+      return exhaustive;
+    }
+  }
+};
+
+const transitionAvailability = (
+  notice: AgentNotice,
+  input: { readonly at: string; readonly noticeIds: ReadonlySet<string> },
+): AgentNotice => {
+  if (!input.noticeIds.has(notice.id)) return notice;
+  switch (notice.state) {
+    case 'pending':
+    case 'attempted':
+      return Object.freeze({
+        ...notice,
+        availability: Object.freeze({
+          channel: 'mcp-resource-updated' as const,
+          count: (notice.availability?.count ?? 0) + 1,
+          firstAt: notice.availability?.firstAt ?? input.at,
+          lastAt: input.at,
+        }),
+      });
+    case 'expired':
+    case 'unavailable':
+    case 'withdrawn':
+    case 'acknowledged':
       return notice;
     default: {
       const exhaustive: never = notice.state;
@@ -192,17 +286,26 @@ const transitionAdmission = (
 ): AgentNotice => {
   const current = transitionExpiry(notice, input.at);
   switch (current.state) {
-    case 'pending': {
+    case 'pending':
+    case 'attempted': {
       if (!recipientMatchesPrincipal(current.recipient, input.principal)) return current;
+      // Not due yet: only admitted events evaluate this; V1 never implies a timer.
+      if (current.nextAttemptAt !== undefined && Date.parse(input.at) < Date.parse(current.nextAttemptAt)) {
+        return current;
+      }
+      if (current.attempts.length >= (current.retryBudget ?? 1)) return current;
       if (input.unavailableIds.has(current.id)) {
-        return Object.freeze({
-          ...current,
-          state: 'unavailable',
-          unavailableAt: input.at,
-          unavailableReason: 'delivery-authorization-unavailable',
-        });
+        return current.state === 'pending'
+          ? Object.freeze({
+              ...current,
+              state: 'unavailable',
+              unavailableAt: input.at,
+              unavailableReason: 'delivery-authorization-unavailable',
+            })
+          : current;
       }
       if (!input.authorizedIds.has(current.id)) return current;
+      if (current.attempts.some((attempt) => attempt.invocationId === input.invocationId)) return current;
       const receipt = Object.freeze({
         attemptedAt: input.at,
         channel: 'next-event' as const,
@@ -214,10 +317,10 @@ const transitionAdmission = (
         state: 'attempted',
       });
     }
-    case 'attempted':
     case 'expired':
     case 'unavailable':
     case 'withdrawn':
+    case 'acknowledged':
       return current;
     default: {
       const exhaustive: never = current.state;
@@ -252,6 +355,7 @@ const transitionExposure = (
     case 'expired':
     case 'unavailable':
     case 'withdrawn':
+    case 'acknowledged':
       return notice;
     default: {
       const exhaustive: never = notice.state;
@@ -307,6 +411,19 @@ export const agentNoticeStateDefinition = (
             notices: state.notices.map((notice) => transitionExposure(notice, {
               at: event.payload.at,
               invocationId: event.payload.invocationId,
+              noticeIds,
+            })),
+          };
+        }
+        case 'acknowledged':
+          return {
+            notices: state.notices.map((notice) => transitionAcknowledgement(notice, event.payload)),
+          };
+        case 'availability-signalled': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => transitionAvailability(notice, {
+              at: event.payload.at,
               noticeIds,
             })),
           };

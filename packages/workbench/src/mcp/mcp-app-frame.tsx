@@ -6,6 +6,7 @@ import type {
   McpAppRouteClose,
   McpAppRouteMessages,
 } from './mcp-app-client.ts';
+import { isPlainRecord } from '../strict-json.ts';
 import { assertCurrentMcpAppDocumentPolicy, type McpAppRuntimeClient, type McpAppTrustedDocumentPolicy } from './mcp-app-client.ts';
 import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
 import { AppRenderer, type BridgeFactory, type AppRendererProps } from './app-renderer.tsx';
@@ -86,9 +87,7 @@ interface RpcMessage extends Readonly<Record<string, McpAppJsonValue | undefined
   readonly method?: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) &&
-  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const isRecord = isPlainRecord;
 
 const validRequestId = (value: unknown): boolean =>
   value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));

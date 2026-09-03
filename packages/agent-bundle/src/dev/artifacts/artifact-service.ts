@@ -11,6 +11,7 @@ import {
   type ValidateArtifactOptions,
 } from '../../build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from '../../core/diagnostics.ts';
+import { errorMessage } from '../../core/errors.ts';
 import { digest } from '../../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../../core/project-context.ts';
 import type { NormalizedPlugin } from '../../core/types.ts';
@@ -66,9 +67,6 @@ const summarizeDiagnostics = (diagnostics: readonly Diagnostic[]): DiagnosticSum
   infos: diagnostics.filter((diagnostic) => diagnostic.severity === 'info').length,
   warnings: diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').length,
 });
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const failureDiagnostics = (
   error: unknown,

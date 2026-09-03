@@ -246,8 +246,8 @@ it('resolves Claude path tokens outside command when launching a generated artif
             fixture: {
               args: [`${pathTokens.workspaceRoot}/tool`],
               command: `${pathTokens.pluginRoot}/bin/unchanged`,
-              cwd: pathTokens.pluginData,
               env: {
+                DATA: pathTokens.pluginData,
                 ROOT: pathTokens.pluginRoot,
                 WORKSPACE: pathTokens.workspaceRoot,
               },
@@ -295,8 +295,8 @@ it('resolves Claude path tokens outside command when launching a generated artif
     expect(stdio[0]).toMatchObject({
       args: [`${fixture.roots.workspaceRoot}/tool`],
       command: '${CLAUDE_PLUGIN_ROOT}/bin/unchanged',
-      cwd: expect.any(String),
       env: {
+        DATA: expect.any(String),
         ROOT: expect.any(String),
         WORKSPACE: fixture.roots.workspaceRoot,
       },

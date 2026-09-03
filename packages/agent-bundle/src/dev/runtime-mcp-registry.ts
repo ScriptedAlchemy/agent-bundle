@@ -24,6 +24,7 @@ import type {
   DevRuntimeMcpSessionSnapshot,
   RuntimeVector,
 } from './runtime-protocol.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { RuntimeGenerationStore, type RuntimeGeneration } from './runtime-generation-store.ts';
 import type { JsonObject, JsonValue } from './types.ts';
 
@@ -196,9 +197,6 @@ const registryNotFound = (message: string): RuntimeMcpRegistryError =>
   new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_NOT_FOUND', message);
 
 const descriptorKey = (name: string, target: string): string => `${name}\u0000${target}`;
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const finiteJson = (value: unknown, seen = new WeakSet<object>()): JsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;

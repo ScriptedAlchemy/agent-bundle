@@ -16,6 +16,19 @@ export const canonicalAgentEvents = Object.freeze([
   'agent/start',
   'agent/stop',
   'workspace/open',
+  'session/end',
+  'prompt/submit',
+  'tool/failure',
+  'compact/before',
+  'compact/after',
+  'permission/request',
+  'permission/denied',
+  'stop/failure',
+  'file/change',
+  'config/change',
+  'task/create',
+  'task/complete',
+  'agent/idle',
 ] as const);
 
 export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];

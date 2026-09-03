@@ -23,7 +23,7 @@
   "dependencies": {
     "@agent-bundle/runtime": "workspace:*",
     "react": "19.2.8",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@rstest/core": "0.11.10",

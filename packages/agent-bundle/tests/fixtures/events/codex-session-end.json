@@ -1,0 +1,7 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "SessionEnd",
+  "reason": "other",
+  "session_id": "session-codex-1",
+  "transcript_path": null
+}

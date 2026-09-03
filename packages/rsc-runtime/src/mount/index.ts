@@ -70,12 +70,14 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
     openRequest: async () => Object.freeze({
       close: () => undefined,
       handle: Object.freeze({
+        acknowledge: reject,
         inbox: reject,
         publish: reject,
         read: reject,
       }),
     }),
     read: reject,
+    signalAvailability: reject,
     withdraw: reject,
   });
 };
@@ -97,71 +99,57 @@ export const createGeneratedRuntimeState = <
   const noticeDefinition = agentNoticeStateDefinition(definition.lifetime);
   const shared = definition.lifetime !== 'request';
   const liveStores = new Set<ClosableStore>();
-  let projectFailure: AgentStateError | undefined;
-  let noticeFailure: AgentStateError | undefined;
-  let projectOpen: Promise<OpenResult<AgentStateStore<TState, TEvents>>> | undefined;
-  let noticeOpen: Promise<OpenResult<NoticeStore>> | undefined;
   let closing: Promise<void> | undefined;
   let closed = false;
 
-  const open = async <TState, TEvents extends AgentStateEventSchemas>(
-    stateDefinition: AgentStateDefinition<TState, TEvents>,
-    cachedFailure: () => AgentStateError | undefined,
-    rememberFailure: (failure: AgentStateError) => void,
-  ): Promise<OpenResult<AgentStateStore<TState, TEvents>>> => {
-    const failure = cachedFailure();
-    if (failure !== undefined) return { error: failure, kind: 'failed' };
-    if (closed) {
-      const closedFailure = new AgentStateError(
-        'store-closed',
-        `State '${stateDefinition.id}' cannot open on a closed generated runtime`,
-      );
-      rememberFailure(closedFailure);
-      return { error: closedFailure, kind: 'failed' };
-    }
-    try {
-      const store = await driver.open(stateDefinition);
+  /** One lazily-opened store slot owning its cached failure and, when shared, its single open. */
+  const createSlot = <TSlotState, TSlotEvents extends AgentStateEventSchemas>(
+    slotDefinition: AgentStateDefinition<TSlotState, TSlotEvents>,
+  ) => {
+    let failure: AgentStateError | undefined;
+    let pending: Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> | undefined;
+
+    const openOnce = async (): Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> => {
+      if (failure !== undefined) return { error: failure, kind: 'failed' };
       if (closed) {
-        await store.close();
-        const closedFailure = new AgentStateError(
+        failure = new AgentStateError(
           'store-closed',
-          `State '${stateDefinition.id}' opened after its generated runtime closed`,
+          `State '${slotDefinition.id}' cannot open on a closed generated runtime`,
         );
-        rememberFailure(closedFailure);
-        return { error: closedFailure, kind: 'failed' };
+        return { error: failure, kind: 'failed' };
       }
-      liveStores.add(store);
-      return { kind: 'opened', value: store };
-    } catch (error) {
-      const typed = asStateError(error, stateDefinition.id);
-      rememberFailure(typed);
-      return { error: typed, kind: 'failed' };
-    }
+      try {
+        const store = await driver.open(slotDefinition);
+        if (closed) {
+          await store.close();
+          failure = new AgentStateError(
+            'store-closed',
+            `State '${slotDefinition.id}' opened after its generated runtime closed`,
+          );
+          return { error: failure, kind: 'failed' };
+        }
+        liveStores.add(store);
+        return { kind: 'opened', value: store };
+      } catch (error) {
+        failure = asStateError(error, slotDefinition.id);
+        return { error: failure, kind: 'failed' };
+      }
+    };
+
+    return {
+      open(): Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> {
+        if (!shared) return openOnce();
+        pending ??= openOnce();
+        return pending;
+      },
+      get pending() {
+        return pending;
+      },
+    };
   };
 
-  const openProject = (): Promise<OpenResult<AgentStateStore<TState, TEvents>>> => {
-    if (!shared) {
-      return open(definition, () => projectFailure, (failure) => {
-        projectFailure = failure;
-      });
-    }
-    projectOpen ??= open(definition, () => projectFailure, (failure) => {
-      projectFailure = failure;
-    });
-    return projectOpen;
-  };
-
-  const openNotices = (): Promise<OpenResult<NoticeStore>> => {
-    if (!shared) {
-      return open(noticeDefinition, () => noticeFailure, (failure) => {
-        noticeFailure = failure;
-      });
-    }
-    noticeOpen ??= open(noticeDefinition, () => noticeFailure, (failure) => {
-      noticeFailure = failure;
-    });
-    return noticeOpen;
-  };
+  const projectSlot = createSlot(definition);
+  const noticeSlot = createSlot(noticeDefinition);
 
   const closeStore = async (store: ClosableStore): Promise<void> => {
     if (!liveStores.delete(store)) return;
@@ -174,8 +162,8 @@ export const createGeneratedRuntimeState = <
       closed = true;
       closing = (async () => {
         await Promise.allSettled([
-          ...(projectOpen === undefined ? [] : [projectOpen]),
-          ...(noticeOpen === undefined ? [] : [noticeOpen]),
+          ...(projectSlot.pending === undefined ? [] : [projectSlot.pending]),
+          ...(noticeSlot.pending === undefined ? [] : [noticeSlot.pending]),
         ]);
         const storeClosures = await Promise.allSettled([...liveStores].map((store) => closeStore(store)));
         let driverFailure: unknown;
@@ -194,7 +182,7 @@ export const createGeneratedRuntimeState = <
     async requestBindings(
       bindingOptions: { readonly signal?: AbortSignal } = {},
     ): Promise<GeneratedRuntimeRequestBindings<TState, TEvents>> {
-      const [project, notices] = await Promise.all([openProject(), openNotices()]);
+      const [project, notices] = await Promise.all([projectSlot.open(), noticeSlot.open()]);
       const requestStores = shared
         ? []
         : [project, notices]

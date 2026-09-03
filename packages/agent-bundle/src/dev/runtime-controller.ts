@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
+import { isRecord } from '../core/strict-json.ts';
+
 import type { ArtifactStatus, JsonObject, JsonValue, RuntimeEvent } from './types.ts';
 import {
   DevRuntimeUnavailableError,
@@ -78,9 +80,6 @@ const runtimeEvent = (
   providerSessionId: string,
   event: DevRuntimeEventInput,
 ): RuntimeEvent => Object.freeze({ ...event, providerSessionId });
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const snapshotInvalid = (): never => {
   throw new TypeError('Development runtime provider returned an invalid browser snapshot.');

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import type { InstallHost } from '../install/install.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
@@ -13,6 +14,7 @@ import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
+import { DevHostInstallManager } from './host-install-manager.ts';
 import {
   HostDiscoveryService,
   type HostDiscoveryServiceOptions,
@@ -82,7 +84,7 @@ interface Closeable {
 
 export interface DevServerLifecycleCloseFailure {
   readonly error: unknown;
-  readonly resource: 'coordinator' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
+  readonly resource: 'coordinator' | 'host-installs' | 'inspector' | 'logs' | 'mcp-apps' | 'mcp-sessions' | 'playground' | 'runtime' | 'runtime-client-surfaces';
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
@@ -103,6 +105,8 @@ export interface StartDevServerOptions {
   readonly agentApiToken?: string;
   /** Supplied by integration tests; published callers use the packaged assets. */
   readonly assets?: WorkbenchAssetSource;
+  /** Hosts whose installed development variant follows successful artifact epochs. */
+  readonly installHosts?: readonly InstallHost[];
   /** Launch the foreground URL after it has started. Defaults to false. */
   readonly open?: boolean;
   /** Injectable browser launcher for embedding and deterministic tests. */
@@ -423,6 +427,7 @@ export interface DevServerRuntimeLifecycleResources {
 export interface DevServerLifecycleOptions {
   readonly coordinator: Closeable;
   readonly detachProjectLogs?: () => void;
+  readonly hostInstalls?: Closeable;
   readonly logs?: DevLogService;
   readonly mcpApps?: Closeable;
   readonly inspector?: Closeable;
@@ -435,6 +440,7 @@ export interface DevServerLifecycleOptions {
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  hostInstalls,
   inspector,
   logs,
   mcpApps,
@@ -459,6 +465,7 @@ export const closeDevServerLifecycle = async ({
     ['runtime-client-surfaces', runtimeResources?.clientSurfaces],
     ['runtime', runtimeResources?.runtime],
     ['mcp-sessions', mcpSessions],
+    ['host-installs', hostInstalls],
     ['coordinator', coordinator],
   ];
   const failures: DevServerLifecycleCloseFailure[] = [];
@@ -493,12 +500,14 @@ const withMcpSessionLifecycle = (
   logs: DevLogService,
   detachProjectLogs: () => void,
   inspector: Closeable,
+  hostInstalls?: DevHostInstallManager,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
     clientSurfaces.beginClose();
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      hostInstalls,
       inspector,
       logs,
       mcpApps: mcpApps(),
@@ -510,7 +519,13 @@ const withMcpSessionLifecycle = (
   publishServerUrl: (url: string) => coordinator.publishServerUrl(url),
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
+    hostInstalls?.start();
     await coordinator.start();
+    const artifact = coordinator.status().artifact;
+    if (hostInstalls !== undefined && (artifact.state === 'active' || artifact.state === 'stale')) {
+      hostInstalls.sync(artifact.activeEpoch.id);
+      await hostInstalls.settled();
+    }
     await runtime?.start();
   },
   status,
@@ -702,6 +717,14 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     projectService,
     root,
   });
+  const hostInstalls = options.installHosts === undefined || options.installHosts.length === 0
+    ? undefined
+    : new DevHostInstallManager({
+        epochStore,
+        eventHub,
+        hosts: options.installHosts,
+        projectRoot: root,
+      });
   status = () => Object.freeze({
     ...coordinator.status(),
     ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
@@ -823,6 +846,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       logs,
       detachProjectLogs,
       inspector,
+      hostInstalls,
     ),
     evals,
     evalLifecycle: evals,

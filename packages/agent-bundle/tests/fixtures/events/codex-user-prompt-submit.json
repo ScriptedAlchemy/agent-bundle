@@ -1,0 +1,10 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Reply with hi.",
+  "session_id": "session-codex-1",
+  "transcript_path": null,
+  "turn_id": "turn-codex-1"
+}

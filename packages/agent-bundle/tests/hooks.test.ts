@@ -48,6 +48,34 @@ const registry: NormalizationTargetRegistry = {
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
 
+it('maps promoted families only through event-route contracts', () => {
+  const targetRegistry = createDefaultRegistry();
+  for (const target of ['claude', 'codex', 'cursor']) {
+    const contract = targetRegistry.hookContract(target);
+    for (const event of ['promptSubmit', 'sessionEnd', 'toolFailure', 'compactBefore', 'compactAfter']) {
+      expect(contract?.eventNames).not.toHaveProperty(event);
+    }
+    expect(contract?.eventRouteNames?.['prompt/submit']).toBe(
+      target === 'cursor' ? 'beforeSubmitPrompt' : 'UserPromptSubmit',
+    );
+    expect(contract?.eventRouteNames?.['session/end']).toBe(
+      target === 'cursor' ? 'sessionEnd' : 'SessionEnd',
+    );
+    expect(contract?.eventRouteNames?.['tool/failure']).toBe(
+      target === 'codex' ? undefined : target === 'cursor' ? 'postToolUseFailure' : 'PostToolUseFailure',
+    );
+    expect(contract?.eventRouteNames?.['compact/before']).toBe(target === 'cursor' ? 'preCompact' : 'PreCompact');
+    expect(contract?.eventRouteNames?.['compact/after']).toBe(target === 'cursor' ? undefined : 'PostCompact');
+    expect(contract?.nativeEventStarter?.('prompt/submit')).toBeDefined();
+    expect(contract?.nativeEventStarter?.('session/end')).toBeDefined();
+    if (target === 'codex') expect(contract?.nativeEventStarter?.('tool/failure')).toBeUndefined();
+    else expect(contract?.nativeEventStarter?.('tool/failure')).toBeDefined();
+    expect(contract?.nativeEventStarter?.('compact/before')).toBeDefined();
+    if (target === 'cursor') expect(contract?.nativeEventStarter?.('compact/after')).toBeUndefined();
+    else expect(contract?.nativeEventStarter?.('compact/after')).toBeDefined();
+  }
+});
+
 it('keeps the hook simulation cancellation constructor private to the executor', async () => {
   const hookServiceExports: Readonly<Record<string, unknown>> = await import('../src/services/hook-service.ts');
 

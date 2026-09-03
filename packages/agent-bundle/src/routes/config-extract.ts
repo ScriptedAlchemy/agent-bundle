@@ -6,6 +6,7 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { hasExportModifier, positionOf, unwrapExpression } from './input-schema.ts';
 import { emptyRouteConfig } from './types.ts';
 
 /**
@@ -91,21 +92,6 @@ const describeExpression = (node: ts.Node): string => {
   return `a ${ts.SyntaxKind[node.kind] ?? 'dynamic'} expression`;
 };
 
-/** Casts, assertions, and parentheses carry no runtime value; unwrap them. */
-const unwrapExpression = (expression: ts.Expression): ts.Expression => {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isTypeAssertionExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-};
-
 const literalPropertyName = (name: ts.PropertyName): string | undefined => {
   if (ts.isIdentifier(name)) return name.text;
   if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
@@ -180,10 +166,6 @@ const extractExpression = (expression: ts.Expression): Extraction => {
   return dynamic(describeExpression(node), node);
 };
 
-const hasExportModifier = (statement: ts.Statement): boolean =>
-  ts.canHaveModifiers(statement) &&
-  (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-
 /** The named binding this pattern would introduce for `config`, if any. */
 const bindsConfigName = (name: ts.BindingName): boolean => {
   if (ts.isIdentifier(name)) return name.text === 'config';
@@ -233,11 +215,6 @@ const scriptKindOf = (relativePath: string): ts.ScriptKind => {
   if (relativePath.endsWith('.tsx')) return ts.ScriptKind.TSX;
   if (relativePath.endsWith('.jsx')) return ts.ScriptKind.JSX;
   return ts.ScriptKind.TS;
-};
-
-const positionOf = (sourceFile: ts.SourceFile, node: ts.Node): string => {
-  const { character, line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-  return `${line + 1}:${character + 1}`;
 };
 
 /**

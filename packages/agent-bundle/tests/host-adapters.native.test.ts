@@ -1,19 +1,26 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
 import { claudeAdapter } from '../src/adapters/claude.ts';
+import { codexAdapter } from '../src/adapters/codex.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
-import type { NormalizedPlugin } from '../src/core/types.ts';
+import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
 interface ClaudeValidation {
   readonly code: number | null;
   readonly output: string;
+}
+
+interface CodexValidation {
+  readonly code: number | null;
+  readonly stderr: string;
+  readonly stdout: string;
 }
 
 const runClaude = async (
@@ -44,6 +51,31 @@ const runClaude = async (
 
 const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeValidation> =>
   runClaude(cwd, ['plugin', 'validate', '--strict', target]);
+
+const runCodex = async (
+  cwd: string,
+  args: readonly string[],
+  codexHome: string,
+): Promise<CodexValidation> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn('codex', args, {
+      cwd,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
+  });
 
 const model: NormalizedPlugin = {
   extensions: {},
@@ -184,6 +216,158 @@ const writeClaudeArtifact = async (
   return written;
 };
 
+nativeIt('registers an emitted Codex plugin carrying authored package metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-codex-manifest-metadata-'));
+  const pluginRoot = join(root, 'plugin');
+  const codexHome = join(root, 'codex-home');
+  const metadataModel: NormalizedPlugin = {
+    ...model,
+    extensions: {
+      codex: {
+        id: 'extension:codex',
+        key: 'codex',
+        provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+        target: 'codex',
+        value: {
+          author: {
+            email: 'plugins@example.test',
+            name: 'Review Tools Team',
+            url: 'https://example.test/review-tools',
+          },
+          homepage: 'https://example.test/review-tools/docs',
+          keywords: ['review', 'security'],
+          license: 'MIT',
+          repository: 'https://github.com/example/review-tools',
+        },
+      },
+    },
+  };
+
+  try {
+    await Promise.all([
+      mkdir(pluginRoot, { recursive: true }),
+      mkdir(codexHome, { recursive: true }),
+    ]);
+    const plan = codexAdapter.plan(metadataModel);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: pluginRoot });
+
+    const version = await runCodex(root, ['--version'], codexHome);
+    expect(version.code, version.stderr).toBe(0);
+    expect(version.stdout).toContain('0.147.0');
+    const marketplace = await runCodex(
+      root,
+      ['plugin', 'marketplace', 'add', pluginRoot],
+      codexHome,
+    );
+    expect(marketplace.code, marketplace.stderr).toBe(0);
+    const installed = await runCodex(
+      root,
+      ['plugin', 'add', 'review-tools@review-tools-marketplace', '--json'],
+      codexHome,
+    );
+    expect(installed.code, installed.stderr).toBe(0);
+    expect(JSON.parse(installed.stdout)).toMatchObject({ name: 'review-tools' });
+    const listed = await runCodex(root, ['plugin', 'list', '--json'], codexHome);
+    expect(listed.code, listed.stderr).toBe(0);
+    const listedDocument = JSON.parse(listed.stdout) as {
+      readonly installed: readonly Record<string, unknown>[];
+    };
+    expect(listedDocument).toMatchObject({
+      available: [],
+      installed: [{
+        enabled: true,
+        installed: true,
+        marketplaceName: 'review-tools-marketplace',
+        name: 'review-tools',
+        pluginId: 'review-tools@review-tools-marketplace',
+        version: '1.2.3',
+      }],
+    });
+    expect(listedDocument.installed[0]).not.toHaveProperty('author');
+    expect(listedDocument.installed[0]).not.toHaveProperty('homepage');
+    expect(listedDocument.installed[0]).not.toHaveProperty('keywords');
+    expect(listedDocument.installed[0]).not.toHaveProperty('license');
+    expect(listedDocument.installed[0]).not.toHaveProperty('repository');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('installs and lists an emitted Codex plugin carrying the complete interface block', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-codex-interface-'));
+  const pluginRoot = join(root, 'plugin');
+  const codexHome = join(root, 'codex-home');
+  const interfaceModel: NormalizedPlugin = {
+    ...model,
+    extensions: {
+      codex: {
+        id: 'extension:codex',
+        key: 'codex',
+        provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+        target: 'codex',
+        value: {
+          interface: {
+            brandColor: '#10A37F',
+            capabilities: ['Interactive'],
+            category: 'Developer Tools',
+            composerIcon: './assets/icon.png',
+            defaultPrompt: ['Review this repository.'],
+            developerName: 'Agent Bundle',
+            displayName: 'Review Tools',
+            logo: './assets/logo.png',
+            longDescription: 'Review code and explain findings with repository context.',
+            privacyPolicyURL: 'https://example.test/privacy',
+            screenshots: ['./assets/overview.png'],
+            shortDescription: 'Repository-aware code review',
+            termsOfServiceURL: 'https://example.test/terms',
+            websiteURL: 'https://example.test/review-tools',
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    await Promise.all([
+      mkdir(codexHome, { recursive: true }),
+      mkdir(join(pluginRoot, 'assets'), { recursive: true }),
+    ]);
+    const plan = codexAdapter.plan(interfaceModel);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: pluginRoot });
+    await Promise.all([
+      writeFile(join(pluginRoot, 'assets', 'icon.png'), 'native icon proof\n'),
+      writeFile(join(pluginRoot, 'assets', 'logo.png'), 'native logo proof\n'),
+      writeFile(join(pluginRoot, 'assets', 'overview.png'), 'native screenshot proof\n'),
+    ]);
+
+    // The pinned CLI publishes no plugin validate subcommand; install and
+    // list are the honest native acceptance probes for the interface block.
+    const pluginHelp = await runCodex(root, ['plugin', '--help'], codexHome);
+    expect(pluginHelp.code, pluginHelp.stderr).toBe(0);
+    expect(`${pluginHelp.stdout}${pluginHelp.stderr}`).not.toMatch(/\bvalidate\b/u);
+
+    const marketplace = await runCodex(
+      root,
+      ['plugin', 'marketplace', 'add', pluginRoot],
+      codexHome,
+    );
+    expect(marketplace.code, marketplace.stderr).toBe(0);
+    const added = await runCodex(
+      root,
+      ['plugin', 'add', 'review-tools@review-tools-marketplace'],
+      codexHome,
+    );
+    expect(added.code, added.stderr).toBe(0);
+    const listed = await runCodex(root, ['plugin', 'list'], codexHome);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(`${listed.stdout}${listed.stderr}`).toContain('review-tools');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('pins Claude plugin and marketplace lifecycle command help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-lifecycle-help-'));
 
@@ -283,6 +467,69 @@ nativeIt('accepts the emitted Claude marketplace under strict native validation'
     expect(validation.code, validation.output).toBe(0);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict validation accepts package metadata without running the dependency install', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-package-validation-'));
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await Promise.all([
+      writeFile(join(root, 'package.json'), `${JSON.stringify({
+        dependencies: { 'native-validation-proof': '1.0.0' },
+        name: 'native-package-proof',
+        version: '1.0.0',
+      })}\n`),
+      writeFile(join(root, 'package-lock.json'), `${JSON.stringify({
+        lockfileVersion: 3,
+        name: 'native-package-proof',
+        packages: {
+          '': {
+            dependencies: { 'native-validation-proof': '1.0.0' },
+            name: 'native-package-proof',
+            version: '1.0.0',
+          },
+        },
+        requires: true,
+        version: '1.0.0',
+      })}\n`),
+    ]);
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('package.json');
+    expect(validation.output).not.toContain('package-lock.json');
+    await expect(access(join(root, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+nativeIt('records that strict validation does not catch a path-escaping plugin symlink', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-symlink-validation-'));
+  const externalSkill = `${root}-outside-skill`;
+
+  try {
+    await writeClaudeArtifact(root, model);
+    await mkdir(externalSkill, { recursive: true });
+    await writeFile(
+      join(externalSkill, 'SKILL.md'),
+      '---\nname: outside-skill\ndescription: Lives outside the plugin root.\n---\nOutside.\n',
+    );
+    await mkdir(join(root, 'skills'), { recursive: true });
+    await symlink(externalSkill, join(root, 'skills', 'outside-skill'), 'dir');
+    const validation = await runClaudeValidation(root, root);
+
+    expect(validation.code, validation.output).toBe(0);
+    expect(validation.output).toContain('Validation passed');
+    expect(validation.output).not.toContain('outside-skill');
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(externalSkill, { force: true, recursive: true }),
+    ]);
   }
 });
 
@@ -578,13 +825,83 @@ nativeIt('records that strict native validation never inspects plugin settings.j
   }
 });
 
+nativeIt('records strict native validation behavior for documented and security-sensitive plugin agent fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-agents-'));
+  const cases = [
+    {
+      fileName: 'test-agent.md',
+      frontmatter: [
+        'name: test-agent',
+        'description: Exercises every documented plugin-agent field.',
+        'model: inherit',
+        'effort: high',
+        'maxTurns: 3',
+        'tools:',
+        '  - Read',
+        'disallowedTools:',
+        '  - Write',
+        'skills:',
+        '  - review',
+        'memory: project',
+        'background: true',
+        'isolation: worktree',
+      ],
+      label: 'documented fields',
+    },
+    {
+      fileName: 'security-sensitive.md',
+      frontmatter: [
+        'name: security-sensitive',
+        'description: Probes plugin-agent fields that the host security contract ignores.',
+        'hooks: {}',
+        'mcpServers: []',
+        'permissionMode: bypassPermissions',
+      ],
+      label: 'security-sensitive fields',
+    },
+  ] as const;
+
+  try {
+    for (const { fileName, frontmatter, label } of cases) {
+      const caseRoot = join(root, fileName.replace('.md', ''));
+      const configRoot = join(caseRoot, 'config');
+      const pluginRoot = join(caseRoot, 'plugin');
+      await writeClaudeArtifact(pluginRoot, model);
+      await Promise.all([
+        mkdir(join(pluginRoot, 'agents'), { recursive: true }),
+        mkdir(configRoot, { recursive: true }),
+      ]);
+      await writeFile(
+        join(pluginRoot, 'agents', fileName),
+        `---\n${frontmatter.join('\n')}\n---\n\nInspect the repository and report findings.\n`,
+      );
+
+      const validation = await runClaude(
+        pluginRoot,
+        ['plugin', 'validate', '--strict', pluginRoot],
+        configRoot,
+      );
+
+      expect(validation.code, `${label}: ${validation.output}`).toBe(0);
+      expect(validation.output).toContain('Validation passed');
+      if (label === 'security-sensitive fields') {
+        expect(validation.output).not.toContain('hooks');
+        expect(validation.output).not.toContain('mcpServers');
+        expect(validation.output).not.toContain('permissionMode');
+      }
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('accepts emitted Claude experimental themes and monitors under strict native validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-experimental-'));
 
   try {
     const written = await writeClaudeArtifact(root, withClaudeExperimental({
       monitors: [{
-        command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+        command: `node ${pathTokens.pluginRoot}/scripts/watch.mjs`,
         description: 'Watch the review queue.',
         name: 'review-queue',
         when: 'always',
@@ -600,6 +917,9 @@ nativeIt('accepts emitted Claude experimental themes and monitors under strict n
       'monitors/monitors.json',
       'themes/dracula.json',
     ]));
+    expect(JSON.parse(
+      await readFile(join(root, 'monitors', 'monitors.json'), 'utf8'),
+    )[0].command).toBe('node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs');
     const validation = await runClaudeValidation(root, root);
 
     expect(validation.code, validation.output).toBe(0);
@@ -883,8 +1203,8 @@ nativeIt('accepts emitted Claude plugin dependencies under strict native validat
 
   try {
     await writeClaudeArtifact(root, withClaudeDependencies([
-      'audit-logger',
-      { name: 'secrets-vault', version: '~2.1.0' },
+      { marketplace: 'acme-shared', name: 'audit-logger' },
+      { marketplace: 'acme-shared', name: 'secrets-vault', version: '~2.1.0' },
     ]));
     const validation = await runClaudeValidation(root, root);
 

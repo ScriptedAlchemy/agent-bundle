@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -27,6 +27,10 @@ import {
   type InstalledHostContractMatrixReport,
 } from '../../src/test/contract.ts';
 import { openInstalledHostMcpServer } from '../../src/test/installed.ts';
+import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-install-manager.ts';
+import { ProjectEventHub } from '../../src/dev/events.ts';
+import type { ArtifactEpoch } from '../../src/dev/types.ts';
+import { installBundle, type InstallHost } from '../../src/install/install.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -118,6 +122,23 @@ export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
 
 export interface BuiltPortableHostInstallFixture extends BuiltFixtureProject {
   readonly portableBundle: string;
+}
+
+export interface DevHostInstallProofReport {
+  readonly host: InstallHost;
+  readonly hookChanged: true;
+  readonly marker: {
+    readonly epochId: 'epoch-2';
+    readonly host: InstallHost;
+    readonly schemaVersion: 1;
+  };
+  readonly mcpUnchanged: true;
+  readonly skillChanged: true;
+  readonly spawn: {
+    readonly exitCode: 1;
+    readonly unavailableDiagnostic: '[AB8025] Development MCP server is unavailable.';
+  };
+  readonly status: 'passed';
 }
 
 export interface HostInstallCommand {
@@ -504,6 +525,142 @@ export const buildPortableHostInstallFixture = async (options: {
 
 export const disposeHostInstallFixture = async (fixture: BuiltFixtureProject): Promise<void> => {
   await rm(fixture.root, { force: true, recursive: true });
+};
+
+/** Proves initial host-owned installation followed by direct cache re-sync without another host CLI call. */
+export const runDevHostInstallProof = async (
+  fixture: BuiltHostInstallFixture,
+  host: InstallHost,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+): Promise<DevHostInstallProofReport> => {
+  const root = await mkdtemp(join(tmpdir(), `agent-bundle-dev-install-${host}-`));
+  const home = join(root, 'home');
+  const claudeConfig = join(root, 'claude');
+  const codexHome = join(root, 'codex');
+  const epoch2Root = join(root, 'epoch-2');
+  await Promise.all([
+    mkdir(home, { recursive: true }),
+    mkdir(claudeConfig, { recursive: true }),
+    mkdir(codexHome, { recursive: true }),
+    cp(fixture.artifactRoot, epoch2Root, { recursive: true }),
+  ]);
+  if (host === 'cursor') await mkdir(join(home, '.cursor'), { recursive: true });
+  const environment = isolatedEnvironment(options.environment, {
+    CLAUDE_CONFIG_DIR: claudeConfig,
+    CODEX_HOME: codexHome,
+    HOME: home,
+  });
+  const identity = (id: string, epochRoot: string): ArtifactEpoch => Object.freeze({
+    configDigest: `${id}-config`,
+    createdAt: '2026-09-02T12:00:00.000Z',
+    diagnostics: { errors: 0, infos: 0, warnings: 0 },
+    id,
+    manifestPath: join(epochRoot, 'manifest.json'),
+    modelDigest: `${id}-model`,
+    projectRevision: `${id}-source`,
+    targetDigests: { [host]: `${id}-target` },
+  });
+  const roots = new Map([['epoch-1', fixture.artifactRoot], ['epoch-2', epoch2Root]]);
+  const eventHub = new ProjectEventHub();
+  let hostCommandCalls = 0;
+  const manager = new DevHostInstallManager({
+    environment,
+    epochStore: {
+      acquireEpochReference: async (epochId) => {
+        const epochRoot = roots.get(epochId);
+        if (epochRoot === undefined) throw new Error(`Unknown proof epoch ${epochId}.`);
+        return { close: async () => undefined, epoch: identity(epochId, epochRoot), root: epochRoot };
+      },
+    },
+    eventHub,
+    home,
+    hosts: [host],
+    installBundle: async (installOptions) => installBundle({
+      ...installOptions,
+      commandRunner: {
+        run: async (command, args, commandOptions) => {
+          hostCommandCalls += 1;
+          const result = await run(command, args, {
+            cwd: commandOptions.cwd,
+            environment,
+            timeout: 180_000,
+          });
+          return { code: result.exitCode, stderr: result.stderr, stdout: result.stdout };
+        },
+      },
+    }),
+    projectRoot: fixture.root,
+  });
+  const marketplaceRoot = host === 'claude' ? claudeConfig : codexHome;
+  const destination = host === 'cursor'
+    ? join(home, '.cursor', 'plugins', 'local', plugin)
+    : join(marketplaceRoot, 'plugins', 'cache', marketplace, plugin, version);
+  const mcpPath = host === 'cursor' ? 'mcp.json' : '.mcp.json';
+  try {
+    manager.start();
+    const first = identity('epoch-1', fixture.artifactRoot);
+    eventHub.publish({
+      epochId: first.id,
+      payload: { activeEpoch: first, currentSourceRevision: first.projectRevision, state: 'active' },
+      type: 'artifact.available',
+    });
+    await manager.settled();
+    const mcpBefore = await readFile(join(destination, mcpPath), 'utf8');
+    const mcpDocument = record(parseJson<unknown>(mcpBefore, `${host} development MCP document`));
+    const server = record(record(mcpDocument?.mcpServers)?.probe);
+    const command = server?.command;
+    const args = server?.args;
+    assertProof(typeof command === 'string', `${host} development MCP command was not a string.`);
+    assertProof(Array.isArray(args) && args.every((value) => typeof value === 'string'), `${host} development MCP args were not strings.`);
+    const spawned = await run(command, args as readonly string[], {
+      cwd: destination,
+      environment,
+      timeout: 30_000,
+    });
+    assertProof(spawned.exitCode === 1, `${host} development proxy did not fail closed with exit code 1: ${commandDetail(spawned)}`);
+    assertProof(
+      spawned.stderr.includes('[AB8025] Development MCP server is unavailable.'),
+      `${host} development proxy did not report AB8025: ${commandDetail(spawned)}`,
+    );
+    const skillBefore = await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8');
+    const hookName = (await readdir(join(epoch2Root, host, 'hooks'))).find((name) => name.endsWith('.mjs'));
+    assertProof(hookName !== undefined, `${host} proof epoch contained no generated hook module.`);
+    await Promise.all([
+      writeFile(join(epoch2Root, host, 'skills', 'probe', 'SKILL.md'), `${skillBefore}\nDev epoch two.\n`),
+      writeFile(join(epoch2Root, host, 'hooks', hookName), 'export default () => ({ outcome: "continue", additionalContext: "epoch two" });\n'),
+    ]);
+    const callsAfterInstall = hostCommandCalls;
+    const second = identity('epoch-2', epoch2Root);
+    eventHub.publish({
+      epochId: second.id,
+      payload: { activeEpoch: second, currentSourceRevision: second.projectRevision, state: 'active' },
+      type: 'artifact.available',
+    });
+    await manager.settled();
+    assertProof(hostCommandCalls === callsAfterInstall, `${host} re-sync invoked the host CLI.`);
+    assertProof(await readFile(join(destination, mcpPath), 'utf8') === mcpBefore, `${host} re-sync changed its proxy MCP document.`);
+    assertProof((await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).includes('Dev epoch two.'), `${host} skill did not re-sync.`);
+    assertProof((await readFile(join(destination, 'hooks', hookName), 'utf8')).includes('epoch two'), `${host} hook did not re-sync.`);
+    const markerDocument = parseJson<{ readonly epochId: 'epoch-2'; readonly host: InstallHost; readonly schemaVersion: 1 }>(
+      await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8'),
+      `${host} dev marker`,
+    );
+    return Object.freeze({
+      hookChanged: true,
+      host,
+      marker: Object.freeze(markerDocument),
+      mcpUnchanged: true,
+      skillChanged: true,
+      spawn: Object.freeze({
+        exitCode: 1,
+        unavailableDiagnostic: '[AB8025] Development MCP server is unavailable.' as const,
+      }),
+      status: 'passed',
+    });
+  } finally {
+    await manager.close();
+    await rm(root, { force: true, recursive: true });
+  }
 };
 
 /**

@@ -1,9 +1,25 @@
 {
   "observedCliVersion": "0.147.0",
-  "retrievedAt": "2026-09-01",
+  "retrievedAt": "2026-09-02",
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
-  "notes": "The generated/subagent-{start,stop}.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
+  "notes": "plugin.schema.json transcribes the 2026-09-02 documented package manifest rather than a host-exported schema because Codex 0.147.0 publishes no plugin validate command. Skills stays optional so MCP-only plugins admitted by the documented packaging and submission flows validate. The generated subagent-{start,stop}.command.{input,output}.schema.json, user-prompt-submit.command.{input,output}.schema.json, session-end.command.input.schema.json, {pre,post}-compact.command.{input,output}.schema.json, and permission-request.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. That tag has no session-end.command.output.schema.json and no tool-failure, permission-denied, or stop-failure schema. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
+  "schemaTightenings": {
+    "plugin.schema.json": [
+      "Top-level and author objects are closed; author admits only the documented name, email, and url fields.",
+      "Documented URL and email fields use JSON Schema uri and email formats, and authored discovery strings must be nonempty.",
+      "Component paths must begin with ./ and must not contain a parent-directory segment so they remain inside the plugin root.",
+      "Inline mcpServers values must be objects; inline hook documents use the same closed command-hook shape as hooks.schema.json.",
+      "The closed interface object admits every documented install-surface field; brandColor requires a six-digit hexadecimal value, external links require http(s), asset paths must stay inside the plugin root, and screenshots must be ./assets/-relative PNG paths.",
+      "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id.",
+      "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization."
+    ]
+  },
   "schemas": {
+    "app.schema.json": {
+      "bytes": 608,
+      "sha256": "01c720a645e437bf0c4f8c26fd4cb5a13988e5649e4a8562ee23a1d4b7355c6a",
+      "url": "https://developers.openai.com/plugins/build/plugins"
+    },
     "hooks.schema.json": {
       "bytes": 1107,
       "sha256": "e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff",
@@ -20,8 +36,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 1728,
-      "sha256": "f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9",
+      "bytes": 4962,
+      "sha256": "decee14ec76a602701f3c312aee135a0983c1ce95fa89dafc588ebb5c968843b",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

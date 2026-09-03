@@ -697,10 +697,10 @@ const listenServer = (
     });
   });
 
-const openServer = (
+const openServer = Effect.fnUntraced(function*(
   options: CreateEventRuntimeServerOptions,
   testHooks?: EventRuntimeServerTestHooks,
-): Effect.Effect<EventSocketServiceShape, EventRuntimeTransportError> => Effect.gen(function*() {
+): Effect.fn.Return<EventSocketServiceShape, EventRuntimeTransportError> {
   const endpoint = eventRuntimeEndpoint(options.endpointId);
   if (process.platform === 'win32') return yield* listenServer(options, endpoint);
 

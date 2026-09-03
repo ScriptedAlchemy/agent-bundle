@@ -230,9 +230,22 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | Event family | Cursor | Claude Code 2.1.250 | Codex 0.147.0 |
 | --- | --- | --- | --- |
 | `session/start` | Supported | `SessionStart` | `SessionStart` |
+| `session/end` | `sessionEnd` (observe-only; desktop only) | `SessionEnd` (observe-only) | `SessionEnd` (observe-only) |
+| `prompt/submit` | `beforeSubmitPrompt` (deny) | `UserPromptSubmit` (deny + context) | `UserPromptSubmit` (deny + context) |
 | `tool/before` | Supported | `PreToolUse` | `PreToolUse` |
 | `tool/after` | Supported | `PostToolUse` | `PostToolUse` |
+| `tool/failure` | `postToolUseFailure` (observe-only) | `PostToolUseFailure` (context) | Unavailable |
+| `compact/before` | `preCompact` (observe-only; native `user_message` not modeled) | `PreCompact` (deny) | `PreCompact` (observe-only) |
+| `compact/after` | Unavailable | `PostCompact` (observe-only) | `PostCompact` (observe-only; no summary field) |
+| `permission/request` | Unavailable | `PermissionRequest` (allow/deny) | `PermissionRequest` (allow/deny) |
+| `permission/denied` | Unavailable | `PermissionDenied` (observe-only) | Unavailable |
 | `stop` | Supported | `Stop` | `Stop` |
+| `stop/failure` | Unavailable | `StopFailure` (observe-only) | Unavailable |
+| `file/change` | Unavailable (agent-edit `afterFileEdit` stays a `tool/after` variant) | `FileChanged` (observe-only) | Unavailable |
+| `config/change` | Unavailable | `ConfigChange` (deny) | Unavailable |
+| `task/create` | Unavailable | `TaskCreated` (deny) | Unavailable |
+| `task/complete` | Unavailable | `TaskCompleted` (observe-only; blocking is exit-code-only) | Unavailable |
+| `agent/idle` | Unavailable | `TeammateIdle` (deny via continue:false) | Unavailable |
 | `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
 | `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
 | `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |
@@ -248,6 +261,20 @@ with the native `decision: "block"` plus `reason` contract. Codex
 `SubagentStop` exit-0 output is always JSON; its generated 0.147.0 output
 schema has no `additionalContext` field, so the route projection rejects that
 unsupported effect rather than silently fabricating one.
+`session/end` and `prompt/submit` are event-route-only families and do not add
+`config.hooks.sessionEnd` or `config.hooks.promptSubmit` handler keys.
+`session/end` rejects every result effect because each native event is
+observe-only. `prompt/submit` maps canonical deny to each host's blocking
+contract; Claude Code and Codex also accept `Agent.Context`, while Cursor has
+no context or prompt-rewrite channel. Cursor cloud agents do not expose
+`sessionEnd`.
+`tool/failure`, `compact/before`, and `compact/after` are also event-route-only
+families. Claude Code alone maps `tool/failure` context and
+`compact/before` deny; every other result effect fails closed. Cursor's
+`preCompact.user_message` is user-facing rather than agent context, and the
+Codex compact schemas do not pin event-level semantics for their common output
+fields, so neither channel is projected. Codex has no tool-failure event,
+Cursor has no post-compaction event, and Codex `PostCompact` carries no summary.
 
 ## Extension-author guide
 

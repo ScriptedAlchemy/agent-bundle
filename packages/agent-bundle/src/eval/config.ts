@@ -1,6 +1,6 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isContainedRelativePath } from '../core/paths.ts';
-import { isRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
+import { isPlainRecord, snapshotStrictJsonValue } from '../core/strict-json.ts';
 import { findCredentialConfiguration } from './credentials.ts';
 import { EvalConfigError } from './errors.ts';
 
@@ -32,9 +32,6 @@ export const defaultEvalRunsDir = '.agent-bundle/runs';
 
 const configKeys = Object.freeze(['include', 'runsDir', 'semanticGrader']);
 const semanticModel = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
-
-const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
-  isRecord(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
 const configError = (
   code: ConstructorParameters<typeof EvalConfigError>[0],

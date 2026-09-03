@@ -1,0 +1,9 @@
+{
+    "cwd": "/workspace",
+    "hook_event_name": "TeammateIdle",
+    "permission_mode": "default",
+    "session_id": "session-claude-1",
+    "team_name": "session-a1b2c3d4",
+    "teammate_name": "researcher",
+    "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

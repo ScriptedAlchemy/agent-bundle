@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -130,6 +130,47 @@ it('drops delayed source events until the path signature changes', async () => {
 
   expect(invalidations).toHaveLength(4);
   await watcher.close();
+});
+
+it('invalidates a reported file after chmod changes only its executable mode', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-chmod-watcher-'));
+  const source = join(root, 'script.sh');
+  const fake = new FakeWatcher();
+  const invalidations: Invalidation[] = [];
+  await writeFile(source, '#!/bin/sh\nexit 0\n');
+  await chmod(source, 0o644);
+  const watcher = new ProjectWatcher({
+    createWatcher: () => fake,
+    debounceMs: 60_000,
+    onInvalidation: async (invalidation) => {
+      invalidations.push(invalidation);
+    },
+    root,
+  });
+
+  try {
+    fake.emit('add', source);
+    await watcher.flush();
+    const before = await stat(source, { bigint: true });
+
+    await chmod(source, 0o755);
+    const after = await stat(source, { bigint: true });
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(before.mode & 0o111n).toBe(0n);
+    expect(after.mode & 0o111n).not.toBe(0n);
+
+    fake.emit('change', source);
+    await watcher.flush();
+
+    expect(invalidations).toEqual([
+      expect.objectContaining({ paths: ['script.sh'] }),
+      expect.objectContaining({ paths: ['script.sh'] }),
+    ]);
+  } finally {
+    await watcher.close();
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 it('waits for the real watcher root before reporting create, change, and delete source inputs', async () => {

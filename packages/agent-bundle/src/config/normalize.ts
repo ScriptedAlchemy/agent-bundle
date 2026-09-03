@@ -4,6 +4,7 @@ import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from 'node:path';
 
 import { digest } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isInside } from '../core/paths.ts';
 import {
@@ -46,6 +47,7 @@ import type {
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedNativeHook,
+  NormalizedHookEvent,
   NormalizedPackageBuild,
   NormalizedPayload,
   NormalizedPlugin,
@@ -99,13 +101,26 @@ const sortedUnique = (values: readonly string[]): string[] =>
 
 const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
-const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, CanonicalHookEvent>> = Object.freeze({
+const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEvent>> = Object.freeze({
   'agent/start': 'agentStart',
   'agent/stop': 'agentStop',
+  'prompt/submit': 'promptSubmit',
+  'session/end': 'sessionEnd',
   'session/start': 'sessionStart',
   'stop': 'stop',
   'tool/after': 'afterTool',
   'tool/before': 'beforeTool',
+  'tool/failure': 'toolFailure',
+  'compact/before': 'compactBefore',
+  'compact/after': 'compactAfter',
+  'permission/request': 'permissionRequest',
+  'permission/denied': 'permissionDenied',
+  'stop/failure': 'stopFailure',
+  'file/change': 'fileChange',
+  'config/change': 'configChange',
+  'task/create': 'taskCreate',
+  'task/complete': 'taskComplete',
+  'agent/idle': 'agentIdle',
   'workspace/open': 'workspaceOpen',
 });
 
@@ -586,7 +601,7 @@ const normalizeNativeHooks = async (
       });
     } catch (error) {
       nativeHooks.push({
-        issue: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'parse',
+        issue: isErrno(error, 'ENOENT') ? 'missing' : 'parse',
         provenance: { ...provenance },
         source,
         target,

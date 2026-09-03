@@ -18,6 +18,7 @@ import {
   type RscEnvironmentCheckpointStore,
   type RscRuntimeEnvironmentName,
 } from './environment-checkpoint-store.js';
+import { canonicalJson, digestValue } from './canonical-json.js';
 import {
   captureRuntimeGenerationSnapshot,
   materializeRuntimeGeneration,
@@ -507,23 +508,6 @@ const validateAppBinding = (value: unknown): void => {
 
 const clonePrepared = (prepared: DevRuntimePreparedProject): DevRuntimePreparedProject =>
   deepFreeze(structuredClone(prepared));
-
-const canonicalJson = (value: unknown): string => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new TypeError('Runtime metadata contains a non-finite number.');
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value !== 'object') throw new TypeError('Runtime metadata is not JSON serializable.');
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().flatMap((key) => {
-    const item = record[key];
-    return item === undefined ? [] : [`${JSON.stringify(key)}:${canonicalJson(item)}`];
-  }).join(',')}}`;
-};
-
-const digestValue = (value: unknown): string => createHash('sha256').update(canonicalJson(value)).digest('hex');
 
 const transportDigest = (prepared: DevRuntimePreparedProject): string => digestValue({
   provider: prepared.provider,

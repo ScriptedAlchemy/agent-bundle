@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/app.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "apps": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "id": { "minLength": 1, "pattern": "\\S", "type": "string" }
+        },
+        "required": ["id"],
+        "type": "object"
+      },
+      "minProperties": 1,
+      "propertyNames": { "minLength": 1, "pattern": "\\S" },
+      "type": "object"
+    }
+  },
+  "required": ["apps"],
+  "type": "object"
+}

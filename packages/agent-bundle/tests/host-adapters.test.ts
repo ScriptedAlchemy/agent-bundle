@@ -241,6 +241,23 @@ const withClaudeManifestMetadata = (
   },
 });
 
+const withCodexManifestMetadata = (
+  model: NormalizedPlugin,
+  manifestMetadata: Readonly<Record<string, unknown>>,
+  target = 'codex',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    codex: {
+      id: 'extension:codex',
+      key: 'codex',
+      provenance: { kind: 'config', sourcePath: '/workspace/codex-manifest.config.ts' },
+      target,
+      value: manifestMetadata,
+    },
+  },
+});
+
 const withClaudeMarketplace = (
   model: NormalizedPlugin,
   marketplace: unknown,
@@ -253,6 +270,22 @@ const withClaudeMarketplace = (
       provenance: { kind: 'config', sourcePath: '/workspace/marketplace.config.ts' },
       target: 'claude',
       value: { marketplace },
+    },
+  },
+});
+
+const withCodexConfig = (
+  model: NormalizedPlugin,
+  value: Readonly<Record<string, unknown>>,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    codex: {
+      id: 'extension:codex',
+      key: 'codex',
+      provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+      target: 'codex',
+      value,
     },
   },
 });
@@ -643,6 +676,19 @@ it('enriches the generated Claude marketplace with the complete authored catalog
   await validateDocuments('claude', writeContents(model, 'claude'));
 });
 
+it('counts Claude marketplace relevance topics by Unicode code point', () => {
+  const topic = '😀'.repeat(64);
+  const model = withClaudeMarketplace(plugin, {
+    plugin: { relevance: { signals: { cli: ['git'] }, topic } },
+  });
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(JSON.parse(
+    writeContents(model, 'claude')['.claude-plugin/marketplace.json']!,
+  ).plugins[0].relevance.topic).toBe(topic);
+});
+
 it.each([
   ['./plugins/review-tools', undefined],
   ['review-tools', { pluginRoot: './plugins' }],
@@ -666,6 +712,7 @@ it.each([
     url: 'https://artifacts.example.test/review-tools.zip',
     sha256: 'd'.repeat(64),
   }, undefined],
+  [{ source: 'archive', url: 'https://artifacts.example.test' }, undefined],
   [{ source: 'command', command: 'review-tools plugin-path', timeout: 120, mode: 'copy' }, undefined],
   [{ source: 'command', command: 'review-tools plugin-path', mode: 'link' }, undefined],
 ] as const)('emits an authored Claude marketplace plugin source %#', (source, metadata) => {
@@ -678,6 +725,29 @@ it.each([
   expect(JSON.parse(document['.claude-plugin/marketplace.json']!)).toMatchObject({
     plugins: [{ source }],
   });
+});
+
+it.each([
+  {
+    code: 'claude.marketplace.plugin.source.relative.invalid',
+    marketplace: { plugin: { source: './plugin\\..\\outside' } },
+  },
+  {
+    code: 'claude.marketplace.metadata.pluginRoot.invalid',
+    marketplace: {
+      metadata: { pluginRoot: './plugins\\..\\outside' },
+      plugin: { source: 'review-tools' },
+    },
+  },
+])('rejects backslash traversal in Claude marketplace relative paths %#', ({ code, marketplace }) => {
+  const model = withClaudeMarketplace(plugin, marketplace);
+  const plan = createDefaultRegistry().get('claude').plan(model);
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    message: expect.stringMatching(/stays? inside the marketplace/u),
+  }));
+  expect(writeContents(model, 'claude')['.claude-plugin/marketplace.json']).toBeUndefined();
 });
 
 it('accepts archive entry authentication only for an archive source', () => {
@@ -902,6 +972,7 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { source: 'git-subdir', url: 'acme/monorepo', path: 'plugins/review-tools' },
     { source: 'npm', package: '@acme/review-tools', version: '~1.2.3', registry: 'https://npm.example.test' },
     { source: 'archive', url: 'https://artifacts.example.test/review-tools.zip', sha256: 'c'.repeat(64) },
+    { source: 'archive', url: 'https://artifacts.example.test' },
     { source: 'command', command: 'review-tools plugin-path', timeout: 60, mode: 'link' },
   ]) {
     expect(validate({
@@ -915,12 +986,185 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { ...manifest, plugins: [{ ...manifest.plugins[0], unknown: true }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: 'review-tools' }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: './../outside' }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: './plugin\\..\\outside' }] },
+    { ...manifest, metadata: { pluginRoot: './plugins\\..\\outside' } },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://localhost' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://localhost/plugin.zip' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://metadata' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://metadata/plugin.zip' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools', extra: true } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://example.test/plugin.zip', sha256: 'bad' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'command', command: 'plugin-path', mode: 'move' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], relevance: { signals: { unknown: ['value'] } } }] },
   ]) {
     expect(validate(invalid)).toBe(false);
+  }
+});
+
+it('emits validated Codex manifest package metadata with extension provenance', async () => {
+  const model = withCodexManifestMetadata(plugin, {
+    author: {
+      email: 'plugins@example.test',
+      name: 'Review Tools Team',
+      url: 'https://example.test/review-tools',
+    },
+    homepage: 'https://example.test/review-tools/docs',
+    keywords: ['review', 'security'],
+    license: 'MIT',
+    repository: 'https://github.com/example/review-tools',
+  });
+  const plan = createDefaultRegistry().get('codex').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.codex-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({
+    kind: 'write',
+    sourceInputs: [
+      '/workspace/agent-bundle.config.ts',
+      '/workspace/src/skills/review/SKILL.md',
+      '/workspace/codex-manifest.config.ts',
+    ],
+  });
+  if (manifest?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifest.content)).toMatchObject({
+    author: {
+      email: 'plugins@example.test',
+      name: 'Review Tools Team',
+      url: 'https://example.test/review-tools',
+    },
+    homepage: 'https://example.test/review-tools/docs',
+    keywords: ['review', 'security'],
+    license: 'MIT',
+    repository: 'https://github.com/example/review-tools',
+  });
+  await validateDocuments('codex', writeContents(model, 'codex'));
+});
+
+it.each([
+  {
+    code: 'codex.manifest.author.invalid',
+    declaration: { author: null },
+    label: 'a null author',
+  },
+  {
+    code: 'codex.manifest.author.invalid',
+    declaration: { author: { name: 'Review Tools', unknown: true } },
+    label: 'an author with an unknown field',
+  },
+  {
+    code: 'codex.manifest.author.name.invalid',
+    declaration: { author: { email: 'plugins@example.test' } },
+    label: 'an author without a name',
+  },
+  {
+    code: 'codex.manifest.author.name.invalid',
+    declaration: { author: { name: '   ' } },
+    label: 'a whitespace-only author name',
+  },
+  {
+    code: 'codex.manifest.author.email.invalid',
+    declaration: { author: { email: 'not-an-email', name: 'Review Tools' } },
+    label: 'an invalid author email',
+  },
+  {
+    code: 'codex.manifest.author.url.invalid',
+    declaration: { author: { name: 'Review Tools', url: './profile' } },
+    label: 'a relative author URL',
+  },
+  {
+    code: 'codex.manifest.homepage.invalid',
+    declaration: { homepage: './docs' },
+    label: 'a relative homepage',
+  },
+  {
+    code: 'codex.manifest.repository.invalid',
+    declaration: { repository: 7 },
+    label: 'a non-string repository',
+  },
+  {
+    code: 'codex.manifest.license.invalid',
+    declaration: { license: '   ' },
+    label: 'a whitespace-only license',
+  },
+  {
+    code: 'codex.manifest.keywords.invalid',
+    declaration: { keywords: 'review' },
+    label: 'non-array keywords',
+  },
+  {
+    code: 'codex.manifest.keywords.invalid',
+    declaration: { keywords: ['review', '   '] },
+    label: 'keywords with an empty entry',
+  },
+])('rejects $label without emitting authored Codex manifest metadata', ({ code, declaration }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexManifestMetadata(plugin, declaration));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.codex-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+    target: 'codex',
+  }));
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Codex plugin manifest.');
+  const document = JSON.parse(manifest.content) as Record<string, unknown>;
+  expect(document.author).toEqual({ name: 'review-tools' });
+  expect(document).not.toHaveProperty('homepage');
+  expect(document).not.toHaveProperty('repository');
+  expect(document).not.toHaveProperty('license');
+  expect(document).not.toHaveProperty('keywords');
+});
+
+it('admits documented Codex component path and inline manifest forms', async () => {
+  const schema = (await import('../src/adapters/schemas/codex/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Review Tools' },
+    description: 'Codex path-form schema fixture.',
+    interface: {
+      capabilities: ['skills'],
+      category: 'Productivity',
+      defaultPrompt: ['Review this repository.'],
+      developerName: 'Review Tools',
+      displayName: 'Review Tools',
+      longDescription: 'Review this repository with reusable workflows.',
+      shortDescription: 'Repository review workflows.',
+    },
+    name: 'codex-path-fixture',
+    version: '1.0.0',
+  };
+  const hookDocument = {
+    hooks: {
+      SessionStart: [{
+        hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/start.mjs"', type: 'command' }],
+      }],
+    },
+  };
+
+  for (const componentFields of [
+    { mcpServers: './config/mcp.json' },
+    { hooks: './custom/hooks.json', mcpServers: './config/mcp.json', skills: './workflows/' },
+    { hooks: ['./hooks/start.json', './hooks/tools.json'], skills: './skills/' },
+    { hooks: hookDocument, mcpServers: { docs: { type: 'http', url: 'https://example.test/mcp' } }, skills: './skills/' },
+    { hooks: [hookDocument], skills: './skills/' },
+  ]) {
+    expect(validate({ ...manifest, ...componentFields }), JSON.stringify(validate.errors)).toBe(true);
+  }
+  for (const invalid of [
+    { hooks: '../hooks.json', skills: './skills/' },
+    { hooks: ['./hooks.json', '../outside.json'], skills: './skills/' },
+    { hooks: [], skills: './skills/' },
+    { hooks: [{ description: 'missing hooks map' }], skills: './skills/' },
+    { mcpServers: '../.mcp.json', skills: './skills/' },
+    { mcpServers: { docs: 'not-an-object' }, skills: './skills/' },
+    { skills: '../skills/' },
+    { skills: ['./skills/'] },
+  ]) {
+    expect(validate({ ...manifest, ...invalid })).toBe(false);
   }
 });
 
@@ -984,7 +1228,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       relativePath: '.claude-plugin/plugin.json',
     },
     {
-      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","cwd":"${CLAUDE_PLUGIN_ROOT}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
+      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
       kind: 'write',
       relativePath: '.mcp.json',
     },
@@ -1107,7 +1351,7 @@ it('plans a Cursor workspace/open event route without enabling the plain hook vo
   }));
 });
 
-it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd, and the env anchor', () => {
+it('anchors compiled Claude MCP entries with absolute arguments and the env anchor', () => {
   const compiled = {
     ...plugin,
     mcpServers: Object.freeze([Object.freeze({
@@ -1121,14 +1365,13 @@ it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd
   const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
     mcpServers: Record<string, { args?: string[]; cwd?: string; env?: Record<string, string> }>;
   };
-  // The absolute entry path stays as the hedge against Claude Code ignoring
-  // cwd at runtime; cwd is emitted anyway as schema-valid future-proofing,
-  // and the env anchor is the guaranteed working-directory-independent root.
+  // Claude's placeholder table does not substitute MCP cwd. The absolute
+  // entry path and env anchor keep the generated server independent of cwd.
   expect(document.mcpServers.stdio).toMatchObject({
     args: ['${CLAUDE_PLUGIN_ROOT}/mcp/compiled-server.mjs'],
-    cwd: '${CLAUDE_PLUGIN_ROOT}',
     env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}', CACHE_DIR: 'cache' },
   });
+  expect(document.mcpServers.stdio).not.toHaveProperty('cwd');
 });
 
 it('emits Claude LSP configuration and expands only the four documented token fields', () => {
@@ -1146,11 +1389,11 @@ it('emits Claude LSP configuration and expands only the four documented token fi
         ROOT: pathTokens.pluginRoot,
         WORKSPACE: pathTokens.workspaceRoot,
       },
-      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
-      initializationOptions: { token: pathTokens.pluginData },
+      extensionToLanguage: { '.ts': 'typescript' },
+      initializationOptions: { token: 'literal' },
       maxRestarts: 3,
       restartOnCrash: true,
-      settings: { token: pathTokens.workspaceRoot },
+      settings: { token: 'literal' },
       shutdownTimeout: 2_000,
       startupTimeout: 5_000,
       transport: 'socket',
@@ -1175,11 +1418,11 @@ it('emits Claude LSP configuration and expands only the four documented token fi
         ROOT: '${CLAUDE_PLUGIN_ROOT}',
         WORKSPACE: '${CLAUDE_PROJECT_DIR}',
       },
-      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
-      initializationOptions: { token: pathTokens.pluginData },
+      extensionToLanguage: { '.ts': 'typescript' },
+      initializationOptions: { token: 'literal' },
       maxRestarts: 3,
       restartOnCrash: true,
-      settings: { token: pathTokens.workspaceRoot },
+      settings: { token: 'literal' },
       shutdownTimeout: 2_000,
       startupTimeout: 5_000,
       transport: 'socket',
@@ -1187,6 +1430,22 @@ it('emits Claude LSP configuration and expands only the four documented token fi
     },
   });
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+});
+
+it('rejects Claude path substitutions in undocumented LSP fields', () => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeLsp(plugin, {
+    typescript: {
+      command: 'typescript-language-server',
+      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
+      initializationOptions: { data: '${CLAUDE_PLUGIN_DATA}' },
+    },
+  }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.substitution.token.unsupported',
+    'claude.substitution.token.unsupported',
+  ]);
+  expect(plan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
 });
 
 it('emits sorted, allowlisted Claude userConfig declarations with config provenance', () => {
@@ -1454,7 +1713,7 @@ it.each([
       server: 'stdio',
       userConfig: { bot_token: { description: 'Token.', title: 'Token', type: 'secret' } },
     }],
-    code: 'claude.userConfig.type.invalid',
+    code: 'claude.channels[0].userConfig.type.invalid',
     label: 'an invalid per-channel option declaration',
   },
 ])('rejects $label without emitting channels', ({ channels, code }) => {
@@ -1925,7 +2184,7 @@ it('emits no Claude settings document when the host config declares none', () =>
 it('emits validated Claude themes and monitors at their default experimental locations', () => {
   const model = withClaudeExperimental(plugin, {
     monitors: [{
-      command: 'node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs',
+      command: `node ${pathTokens.pluginRoot}/scripts/watch.mjs`,
       description: 'Watch the review queue.',
       name: 'review-queue',
       when: 'on-skill-invoke:review',
@@ -1985,6 +2244,7 @@ it.each([
   { code: 'claude.themes.field.unknown', label: 'an unknown theme field', themes: { dark: { base: 'dark', typo: true } } },
   { code: 'claude.themes.base.required', label: 'a missing theme base', themes: { dark: { name: 'Dark' } } },
   { code: 'claude.themes.base.required', label: 'an empty theme base', themes: { dark: { base: '' } } },
+  { code: 'claude.themes.base.invalid', label: 'an unknown theme base preset', themes: { dark: { base: 'drak' } } },
   { code: 'claude.themes.name.invalid', label: 'an empty theme display name', themes: { dark: { base: 'dark', name: '' } } },
   { code: 'claude.themes.overrides.invalid', label: 'a non-object overrides map', themes: { dark: { base: 'dark', overrides: [] } } },
   { code: 'claude.themes.overrides.value.invalid', label: 'a non-string override', themes: { dark: { base: 'dark', overrides: { error: 7 } } } },
@@ -2030,6 +2290,8 @@ it('pins and registers the closed Claude theme and monitor schemas', async () =>
   const validateMonitors = validator.compile(monitorsModule.default);
 
   expect(validateTheme({ base: 'dark', name: 'Dracula', overrides: { claude: '#bd93f9' } })).toBe(true);
+  expect(validateTheme({ base: 'light', name: 'Paper' })).toBe(true);
+  expect(validateTheme({ base: 'drak', name: 'Typo' })).toBe(false);
   expect(validateTheme({ base: 'dark', typo: true })).toBe(false);
   expect(validateTheme({ name: 'No base' })).toBe(false);
   expect(validateTheme({ base: 'dark', overrides: { error: 7 } })).toBe(false);
@@ -2049,8 +2311,8 @@ it('pins and registers the closed Claude theme and monitor schemas', async () =>
 
 it('emits Claude plugin dependencies in authored order with closed object keys and extension provenance', async () => {
   const model = withClaudeDependencies(plugin, [
-    'audit-logger',
-    { version: '~2.1.0', name: 'secrets-vault' },
+    { marketplace: 'acme-shared', name: 'review-tools', version: '*' },
+    { marketplace: 'acme-shared', version: '~2.1.0', name: 'secrets-vault' },
     { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
   ]);
   const plan = createDefaultRegistry().get('claude').plan(model);
@@ -2060,8 +2322,8 @@ it('emits Claude plugin dependencies in authored order with closed object keys a
   expect(entry?.kind).toBe('write');
   if (entry?.kind !== 'write') throw new Error('Expected an emitted Claude plugin manifest.');
   expect(JSON.parse(entry.content).dependencies).toEqual([
-    'audit-logger',
-    { name: 'secrets-vault', version: '~2.1.0' },
+    { marketplace: 'acme-shared', name: 'review-tools', version: '*' },
+    { marketplace: 'acme-shared', name: 'secrets-vault', version: '~2.1.0' },
     { marketplace: 'acme-shared', name: 'policy-kit', version: '^2.0.0-0' },
   ]);
   expect(entry.sourceInputs).toContain('/workspace/dependencies.config.ts');
@@ -2086,6 +2348,8 @@ it.each([
     label: 'a duplicate cross-marketplace name',
   },
   { dependencies: ['review-tools'], code: 'claude.dependencies.self', label: 'a self dependency' },
+  { dependencies: ['audit-logger'], code: 'claude.dependencies.unresolved', label: 'an unresolvable bare-name dependency' },
+  { dependencies: [{ name: 'audit-logger', version: '^2.0' }], code: 'claude.dependencies.unresolved', label: 'an unresolvable same-marketplace dependency object' },
   { dependencies: [{ name: 'audit-logger', version: 'latest' }], code: 'claude.dependencies.version.invalid', label: 'an invalid version range' },
   { dependencies: [{ marketplace: '', name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'an empty marketplace' },
   { dependencies: [{ marketplace: 7, name: 'audit-logger' }], code: 'claude.dependencies.marketplace.invalid', label: 'a non-string marketplace' },
@@ -2108,6 +2372,9 @@ it.each([
   '^2.0',
   '>=1.4',
   '=2.1.0',
+  '*',
+  'x',
+  'X',
   '2.x',
   '1.2.3 - 2.0.0',
   '>=2.0 <3.0',
@@ -2378,6 +2645,129 @@ it('keeps Codex plugin and marketplace interface validator contracts separate', 
   expect(marketplace.interface).toEqual({ displayName: 'review-tools' });
 });
 
+it('emits every authored Codex interface field without changing marketplace metadata', () => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, {
+    interface: {
+      brandColor: '#10A37F',
+      capabilities: ['Interactive', 'Write'],
+      category: 'Developer Tools',
+      composerIcon: './assets/composer.png',
+      defaultPrompt: ['Review this change.', 'Explain this repository.'],
+      developerName: 'Agent Bundle',
+      displayName: 'Review Tools',
+      logo: './assets/logo.png',
+      logoDark: './assets/logo-dark.png',
+      longDescription: 'Review code and explain findings with repository context.',
+      privacyPolicyURL: 'https://example.test/privacy',
+      screenshots: ['./assets/overview.png', './assets/details.png'],
+      shortDescription: 'Repository-aware code review',
+      termsOfServiceURL: 'http://example.test/terms',
+      websiteURL: 'https://example.test/review-tools',
+    },
+  }));
+  const byPath = Object.fromEntries(plan.entries.map((entry) => [entry.relativePath, entry]));
+  const manifestEntry = byPath['.codex-plugin/plugin.json'];
+  const marketplaceEntry = byPath['.agents/plugins/marketplace.json'];
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifestEntry).toMatchObject({
+    kind: 'write',
+    sourceInputs: expect.arrayContaining([
+      '/workspace/agent-bundle.config.ts',
+      '/workspace/codex.config.ts',
+    ]),
+  });
+  if (manifestEntry?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifestEntry.content).interface).toEqual({
+    brandColor: '#10A37F',
+    capabilities: ['Interactive', 'Write'],
+    category: 'Developer Tools',
+    composerIcon: './assets/composer.png',
+    defaultPrompt: ['Review this change.', 'Explain this repository.'],
+    developerName: 'Agent Bundle',
+    displayName: 'Review Tools',
+    logo: './assets/logo.png',
+    logoDark: './assets/logo-dark.png',
+    longDescription: 'Review code and explain findings with repository context.',
+    privacyPolicyURL: 'https://example.test/privacy',
+    screenshots: ['./assets/overview.png', './assets/details.png'],
+    shortDescription: 'Repository-aware code review',
+    termsOfServiceURL: 'http://example.test/terms',
+    websiteURL: 'https://example.test/review-tools',
+  });
+  expect(marketplaceEntry).toMatchObject({ kind: 'write' });
+  if (marketplaceEntry?.kind !== 'write') throw new Error('Expected an emitted Codex marketplace.');
+  expect(JSON.parse(marketplaceEntry.content).interface).toEqual({ displayName: 'review-tools' });
+});
+
+it.each([
+  { code: 'codex.interface.invalid', value: [] },
+  { code: 'codex.interface.field.unknown', value: { typo: true } },
+  { code: 'codex.interface.display-name.invalid', value: { displayName: '' } },
+  { code: 'codex.interface.display-name.invalid', value: { displayName: '   ' } },
+  { code: 'codex.interface.short-description.invalid', value: { shortDescription: 7 } },
+  { code: 'codex.interface.long-description.invalid', value: { longDescription: '' } },
+  { code: 'codex.interface.developer-name.invalid', value: { developerName: null } },
+  { code: 'codex.interface.category.invalid', value: { category: '' } },
+  { code: 'codex.interface.capabilities.invalid', value: { capabilities: 'Write' } },
+  { code: 'codex.interface.capabilities.item.invalid', value: { capabilities: ['Write', ''] } },
+  { code: 'codex.interface.website-url.invalid', value: { websiteURL: 'file:///tmp/site' } },
+  { code: 'codex.interface.privacy-policy-url.invalid', value: { privacyPolicyURL: '/privacy' } },
+  { code: 'codex.interface.terms-of-service-url.invalid', value: { termsOfServiceURL: 'mailto:legal@example.test' } },
+  { code: 'codex.interface.default-prompt.invalid', value: { defaultPrompt: [] } },
+  { code: 'codex.interface.default-prompt.invalid', value: { defaultPrompt: ['One', 'Two', 'Three', 'Four'] } },
+  { code: 'codex.interface.default-prompt.item.invalid', value: { defaultPrompt: [''] } },
+  { code: 'codex.interface.default-prompt.item.invalid', value: { defaultPrompt: ['x'.repeat(129)] } },
+  { code: 'codex.interface.brand-color.invalid', value: { brandColor: 'green' } },
+  { code: 'codex.interface.composer-icon.invalid', value: { composerIcon: '/tmp/icon.png' } },
+  { code: 'codex.interface.logo.invalid', value: { logo: './../outside.png' } },
+  { code: 'codex.interface.logo-dark.invalid', value: { logoDark: 'https://example.test/logo.png' } },
+  { code: 'codex.interface.screenshots.invalid', value: { screenshots: './assets/screenshot.png' } },
+  { code: 'codex.interface.screenshots.item.invalid', value: { screenshots: ['./assets/screenshot.jpg'] } },
+] as const)('rejects invalid authored Codex interface input with $code', ({ code, value }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, { interface: value }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+});
+
+it('emits registered MCP app mappings as the documented compatibility document', () => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, {
+    apps: {
+      notion: { id: 'plugin_asdk_app_0123456789abcdef' },
+      search: { id: 'connector_search' },
+    },
+  }));
+  const byPath = Object.fromEntries(plan.entries.map((entry) => [entry.relativePath, entry]));
+  const manifestEntry = byPath['.codex-plugin/plugin.json'];
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(byPath['.app.json']).toEqual({
+    content: '{"apps":{"notion":{"id":"plugin_asdk_app_0123456789abcdef"},"search":{"id":"connector_search"}}}\n',
+    kind: 'write',
+    relativePath: '.app.json',
+    sourceInputs: ['/workspace/codex.config.ts'],
+  });
+  if (manifestEntry?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifestEntry.content).apps).toBe('./.app.json');
+  expect(manifestEntry.sourceInputs).toContain('/workspace/codex.config.ts');
+});
+
+it.each([
+  { code: 'codex.apps.invalid', value: [] },
+  { code: 'codex.apps.invalid', value: {} },
+  { code: 'codex.apps.name.invalid', value: { '': { id: 'connector_search' } } },
+  { code: 'codex.apps.name.invalid', value: { '   ': { id: 'connector_search' } } },
+  { code: 'codex.apps.entry.invalid', value: { search: 'connector_search' } },
+  { code: 'codex.apps.entry.invalid', value: { search: { id: 'connector_search', typo: true } } },
+  { code: 'codex.apps.id.invalid', value: { search: { id: '' } } },
+  { code: 'codex.apps.id.invalid', value: { search: { id: '   ' } } },
+] as const)('rejects invalid authored Codex app mappings with $code', ({ code, value }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, { apps: value }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.entries.some((entry) => entry.relativePath === '.app.json')).toBe(false);
+});
+
 it('records every selected component provenance for generated host documents', () => {
   const model = {
     ...plugin,
@@ -2434,7 +2824,7 @@ it('records every selected component provenance for generated host documents', (
   }
 });
 
-it('applies only native path-token semantics and surfaces exact capability diagnostics', () => {
+it('accepts Claude path tokens only in the documented MCP fields and rejects stdio cwd', () => {
   const codex = createDefaultRegistry().get('codex').plan({
     ...plugin,
     mcpServers: [
@@ -2469,10 +2859,19 @@ it('applies only native path-token semantics and surfaces exact capability diagn
       {
         args: [`${pathTokens.workspaceRoot}/tool`],
         command: pathTokens.pluginRoot,
-        cwd: pathTokens.pluginData,
+        cwd: '/workspace',
         env: { WORKSPACE: pathTokens.workspaceRoot },
         id: 'mcp:workspace',
         name: 'workspace',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['claude'],
+        transport: 'stdio',
+      },
+      {
+        command: 'node',
+        cwd: pathTokens.pluginData,
+        id: 'mcp:unsupported-cwd',
+        name: 'unsupported-cwd',
         provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
         targets: ['claude'],
         transport: 'stdio',
@@ -2489,10 +2888,11 @@ it('applies only native path-token semantics and surfaces exact capability diagn
     ],
   });
   expect(claude.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.substitution.token.unsupported',
     'claude.mcp.token.headers.key',
   ]);
   expect(claude.entries.find((entry) => entry.relativePath === '.mcp.json')).toEqual({
-    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"${CLAUDE_PLUGIN_DATA}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
+    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"/workspace","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],

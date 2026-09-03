@@ -12,6 +12,12 @@
     "source": "https://developers.openai.com/codex/cli/reference",
     "state": "supported"
   },
+  "deferredNativeEvents": {
+    "Interrupt": {
+      "reason": "retrieved 2026-09-02: generated Interrupt schema exists in the codex repository, but release documentation and a pinned CLI revision do not yet agree on its contract (#258 defer list).",
+      "state": "unavailable"
+    }
+  },
   "hooks": {
     "config": "hooks/hooks.json",
     "events": {
@@ -23,12 +29,49 @@
       "stop": "Stop"
     },
     "eventRoutes": {
+      "agent/idle": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no teammate-idle event.",
+        "state": "unavailable"
+      },
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
+      "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
+      "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
+      "config/change": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no config-change event.",
+        "state": "unavailable"
+      },
+      "file/change": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no file-changed event.",
+        "state": "unavailable"
+      },
+      "permission/denied": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no permission-denied event.",
+        "state": "unavailable"
+      },
+      "permission/request": { "nativeEvent": "PermissionRequest", "state": "supported" },
+      "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
+      "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
+      "stop/failure": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no stop-failure event.",
+        "state": "unavailable"
+      },
+      "task/complete": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no task-completed event.",
+        "state": "unavailable"
+      },
+      "task/create": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no task-created event.",
+        "state": "unavailable"
+      },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
+      "tool/failure": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and native event inventory contain no tool-failure event.",
+        "state": "unavailable"
+      },
       "workspace/open": {
         "reason": "The pinned Codex 0.147.0 hooks contract has no workspace-open event.",
         "state": "unavailable"
@@ -44,10 +87,202 @@
     "stdio": true,
     "streamableHttp": true
   },
+  "noticeDelivery": {
+    "current-response": {
+      "state": "supported"
+    },
+    "directed-push": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-initiated directed cross-actor message API at this pin; the Claude Notification hook observes host-emitted notifications and does not send them.",
+      "state": "unavailable"
+    },
+    "host-toast": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-facing toast/notification send API at this pin.",
+      "state": "unavailable"
+    },
+    "mcp-inbox": {
+      "state": "supported"
+    },
+    "mcp-resource-updated": {
+      "state": "supported"
+    },
+    "next-event": {
+      "state": "supported"
+    }
+  },
   "observedCliVersion": "0.147.0",
   "plugin": {
+    "apps": {
+      "registeredMcpMappings": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents a root `.app.json` file that maps registered MCP server connections, a manifest `apps` pointer to `./.app.json`, and registration technical IDs beginning with `plugin_asdk_app`."
+        ],
+        "state": "supported"
+      }
+    },
+    "hookEnvironment": {
+      "claudePluginData": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states that Codex exports `CLAUDE_PLUGIN_DATA` to plugin hook commands as a compatibility alias for the plugin writable data directory."
+        ],
+        "state": "supported"
+      },
+      "claudePluginRoot": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states that Codex exports `CLAUDE_PLUGIN_ROOT` to plugin hook commands as a compatibility alias for the installed plugin root."
+        ],
+        "state": "supported"
+      },
+      "pluginData": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states that Codex-specific `PLUGIN_DATA` points to the plugin's writable data directory for plugin hook commands."
+        ],
+        "state": "supported"
+      },
+      "pluginRoot": {
+        "evidence": [
+          "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks states that Codex-specific `PLUGIN_ROOT` points to the installed plugin root for plugin hook commands; the Codex adapter uses `${PLUGIN_ROOT}` for generated hook wrapper commands."
+        ],
+        "state": "supported"
+      }
+    },
+    "interface": {
+      "assets": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `composerIcon`, `logo`, and `screenshots` as interface presentation fields, requires plugin-root-relative paths, and specifies PNG files under `./assets/` for screenshots; the pinned 0.147.0 sample spec also documents `logoDark`."
+        ],
+        "state": "supported"
+      },
+      "brandColor": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `interface.brandColor` as the plugin card theme color and shows a six-digit hexadecimal value."
+        ],
+        "state": "supported"
+      },
+      "categoryCapabilities": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `interface.category` as the category bucket and `interface.capabilities` as the implementation-derived capability list; it does not enumerate category values."
+        ],
+        "state": "supported"
+      },
+      "descriptions": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `interface.shortDescription` for compact views and `interface.longDescription` for details screens."
+        ],
+        "state": "supported"
+      },
+      "identity": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `interface.displayName` as the user-facing plugin title and `interface.developerName` as the human-readable publisher."
+        ],
+        "state": "supported"
+      },
+      "starterPrompts": {
+        "evidence": [
+          "retrieved 2026-09-02: the pinned Codex 0.147.0 plugin JSON sample spec documents `interface.defaultPrompt` as one to three starter strings and caps each prompt at 128 characters."
+        ],
+        "state": "supported"
+      },
+      "urls": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `websiteURL`, `privacyPolicyURL`, and `termsOfServiceURL` as external interface links."
+        ],
+        "state": "supported"
+      }
+    },
     "manifest": ".codex-plugin/plugin.json",
     "marketplace": ".agents/plugins/marketplace.json",
+    "manifestPackage": {
+      "manifestMetadata": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents top-level author (name, email, url), homepage, repository, license, and keywords as publisher and discovery metadata in .codex-plugin/plugin.json.",
+          "retrieved 2026-09-02: the adapter exposes those seven documented values through codex host config, validates them before emission, and retains the extension source as manifest provenance."
+        ],
+        "fields": [
+          "author.name",
+          "author.email",
+          "author.url",
+          "homepage",
+          "repository",
+          "license",
+          "keywords"
+        ],
+        "state": "supported"
+      },
+      "manifestPaths": {
+        "admitted": {
+          "hooks": ["path", "path-array", "inline-object", "inline-object-array"],
+          "mcpServers": ["path", "inline-object"],
+          "skills": ["path"]
+        },
+        "emitted": {
+          "hooks": "./hooks/hooks.json",
+          "mcpServers": "./.mcp.json",
+          "skills": "./skills/"
+        },
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins requires manifest component paths to begin with ./, resolve relative to the plugin root, and stay inside that root.",
+          "retrieved 2026-09-02: the same page documents skills as a path, mcpServers as a path or inline server object, and hooks as a path, path array, inline hooks object, or inline-hooks-object array.",
+          "retrieved 2026-09-02: the adapter emits canonical component paths while the pinned artifact schema admits every documented path and inline form for validating real-world manifests."
+        ],
+        "reason": "The adapter emits canonical component locations and validates all documented forms, but it has no authored config surface for selecting custom component paths or inline component objects.",
+        "state": "degraded"
+      },
+      "optionalAssets": {
+        "assets": [
+          "interface.composerIcon",
+          "interface.logo",
+          "interface.logoDark",
+          "interface.screenshots"
+        ],
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents composerIcon, logo, logoDark, and PNG screenshots under ./assets/ as optional install-surface presentation fields.",
+          "retrieved 2026-09-02: the compiler can copy project assets into assets/ but the Codex adapter exposes no authored mapping to these interface fields and emits none of them."
+        ],
+        "reason": "The Codex adapter copies selected assets but cannot author composerIcon, logo, logoDark, or screenshots references in the manifest.",
+        "state": "unavailable"
+      },
+      "submissionPolicy": {
+        "constraints": [
+          "Apps Management write access",
+          "verified developer or business identity",
+          "listing and policy URLs",
+          "production MCP review materials",
+          "five positive and three negative test cases",
+          "country or region availability",
+          "release notes and policy attestations"
+        ],
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/deploy/submission requires Apps Management write access, verified publisher identity, matching public listing and policy URLs, and release notes plus policy attestations.",
+          "retrieved 2026-09-02: the submission portal requires production MCP review materials when applicable, at least five positive and three negative test cases, and selected country or region availability.",
+          "retrieved 2026-09-02: these are portal-owned distribution checks; the compiler neither submits plugins nor claims to validate reviewer credentials, identity, public services, policy compliance, or regional readiness."
+        ],
+        "reason": "Public submission requirements are portal-owned distribution policy with no compiler-authored or compiler-validation surface.",
+        "state": "unavailable"
+      }
+    },
+    "mcpServerPolicy": {
+      "approvalModes": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `default_tools_approval_mode = \"prompt\"` and per-tool `approval_mode = \"approve\"` under the user's `[plugins.\"my-plugin\".mcp_servers.docs]` configuration."
+        ],
+        "reason": "Plugin MCP approval modes are host-owned user configuration under `plugins.<plugin>.mcp_servers.<server>`; the compiler emits plugin artifacts and does not write the user's config.toml.",
+        "state": "unavailable"
+      },
+      "enabled": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `enabled = true` under `[plugins.\"my-plugin\".mcp_servers.docs]` in the user's Codex configuration."
+        ],
+        "reason": "Plugin MCP enabled state is host-owned user configuration under `plugins.<plugin>.mcp_servers.<server>`; the compiler emits plugin artifacts and does not write the user's config.toml.",
+        "state": "unavailable"
+      },
+      "tools": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents `enabled_tools = [\"search\"]` and a `[plugins.\"my-plugin\".mcp_servers.docs.tools.search]` policy table in the user's Codex configuration."
+        ],
+        "reason": "Plugin MCP tool selection is host-owned user configuration under `plugins.<plugin>.mcp_servers.<server>`; the compiler emits plugin artifacts and does not write the user's config.toml.",
+        "state": "unavailable"
+      }
+    },
     "skills": true
   },
   "validation": {
@@ -85,16 +320,34 @@
       "liveRevision": "codex-cli 0.147.0 app-server protocol",
       "matchingRelativePaths": [],
       "missingPinnedRelativePaths": [
+        "permission-request.command.input.schema.json",
+        "permission-request.command.output.schema.json",
+        "post-compact.command.input.schema.json",
+        "post-compact.command.output.schema.json",
+        "pre-compact.command.input.schema.json",
+        "pre-compact.command.output.schema.json",
+        "session-end.command.input.schema.json",
         "subagent-start.command.input.schema.json",
         "subagent-start.command.output.schema.json",
         "subagent-stop.command.input.schema.json",
-        "subagent-stop.command.output.schema.json"
+        "subagent-stop.command.output.schema.json",
+        "user-prompt-submit.command.input.schema.json",
+        "user-prompt-submit.command.output.schema.json"
       ],
       "pinnedRepositorySha256": {
+        "permission-request.command.input.schema.json": "75c73d7a38cfc0e73ef06bd1fc506a44d25874522069ec4fb85e0bf1e7d6b8fb",
+        "permission-request.command.output.schema.json": "749c73245b4b6d43537c3049f76720ab1c2bd48d7e4752b744b376925b9d57a1",
+        "post-compact.command.input.schema.json": "d5cecd14bd2ca18605ba8209108f76291f886ffe3cb4762d70e712c148836f31",
+        "post-compact.command.output.schema.json": "811b7ae2a4b277cd51c9df989f347e494fa981d01e346bc2a757506e97734882",
+        "pre-compact.command.input.schema.json": "5728b5da4c63e1e07f2d53ac8b2adc18306cd3dc8b01b556fc422e75b32a8734",
+        "pre-compact.command.output.schema.json": "98ba0dbf0848d8283cfe48a85122f4d9122baae1b457f50e239504864900247e",
+        "session-end.command.input.schema.json": "99bf6e75091525b96926dd85a0adf6589dea93fe0d181394027fabda8139402e",
         "subagent-start.command.input.schema.json": "e1cacc5cd92217e96e327cf182038fa93099d194c3107439b4dad4b806d414cc",
         "subagent-start.command.output.schema.json": "531f7a457ad8430de82388319ff2bf030fd3a1dc0e9a0d4078447bc30948448b",
         "subagent-stop.command.input.schema.json": "27842578768e74fb8bcd86b30156b207011829a81dc01b00cfd55340df8b079f",
-        "subagent-stop.command.output.schema.json": "a3987dab22b8684ab108bbb76ec5306471d9e01b1b7cac007b1ed90bc9e055cf"
+        "subagent-stop.command.output.schema.json": "a3987dab22b8684ab108bbb76ec5306471d9e01b1b7cac007b1ed90bc9e055cf",
+        "user-prompt-submit.command.input.schema.json": "31d3d5e094ae9baa9478bc8e3d09f689de5a74228a404d2dffe60fc8fa89e3a0",
+        "user-prompt-submit.command.output.schema.json": "12a741340d3a5acaf139721ad086d79d6dc0d961f752c6d82bd7a315f374e641"
       },
       "pinnedRevision": "rust-v0.147.0 hook command schemas",
       "reason": "The command emits app-server protocol schemas, not the vendored hook command schemas. There are no matching relative paths to hash-compare, so this output is unpinned for plugin conformance.",
@@ -107,7 +360,7 @@
     "workspaceRoot": false
   },
   "provenance": {
-    "observedAt": "2026-09-01",
+    "observedAt": "2026-09-02",
     "source": "https://learn.chatgpt.com/docs/hooks",
     "evidence": [
       "The Codex 0.147.0 hooks reference lists SubagentStart and SubagentStop as lifecycle events whose matcher filters agent_type; subagent hook session_id is the parent session id.",
@@ -118,7 +371,15 @@
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.input.schema.json (sha256 ce7dc9b5ae8826d1e0c59ffcea793e558aebceb7917a2eb9bb2edd8a7ac37aa9).",
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-start.command.output.schema.json (sha256 34e8ec95393d2aa930d7932a34c3fb29a5e5f90c264fdbcc581393c5838b4660).",
       "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.input.schema.json (sha256 94dc8df29f4691195ac2338ae6de876230e5100a10b94ef48df4e732424b5df5).",
-      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.output.schema.json (sha256 8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a)."
+      "Pinned generated schema: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/subagent-stop.command.output.schema.json (sha256 8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.input.schema.json pins UserPromptSubmit input (sha256 e6b923bc519896197c44c4fc267a9d115cef24ac418dde9c27db699f4e3b65fd).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.output.schema.json pins decision:block plus reason and hookSpecificOutput.additionalContext, with no prompt-rewrite field (sha256 5e290303db710f3ccc12f4a2744e8586e7749b3ca2b6bf9f57781ed75bf17b2b).",
+      "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/session-end.command.input.schema.json pins observe-only SessionEnd input with reason const other (sha256 23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c); the same generated directory has no session-end.command.output.schema.json (GitHub contents API returned 404), so no output is projected.",
+      "2026-09-02: live codex-cli 0.147.0 non-interactive capture recorded UserPromptSubmit and SessionEnd; the scrubbed envelopes are tests/fixtures/events/codex-user-prompt-submit.json and tests/fixtures/events/codex-session-end.json.",
+      "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and hooks/src/lib.rs inventory contain no tool-failure event, so tool/failure is unavailable rather than inferred from PostToolUse.",
+      "retrieved 2026-09-02: rust-v0.147.0 pre-compact.command.input.schema.json pins PreCompact trigger, model, turn_id, session, cwd, and nullable transcript input (sha256 065f0ae3cd628ac9af8c0cf9bd1d5a673bcbd5ea1d7dcdc0c6437f34dd0189d9); its output schema accepts only common continue, stopReason, suppressOutput, and systemMessage fields (sha256 c392f3054ae6750f427d4dec07380fd67e8c58a7939a35d5c69bfa070c7ca032).",
+      "retrieved 2026-09-02: rust-v0.147.0 post-compact.command.input.schema.json pins PostCompact with the same input fields and no compact summary field (sha256 4a4b3f3022c939a15ab12e95f5c5c17b18bb20f74fe962ae0a51b2a3e76e63f9); its output schema accepts only the same common fields (sha256 48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed).",
+      "2026-09-02: the generated compact output schemas do not document event-level runtime effects for continue:false or the other common fields, so Agent Bundle exposes no canonical compact result channel until runtime evidence pins those semantics."
     ]
   }
 }

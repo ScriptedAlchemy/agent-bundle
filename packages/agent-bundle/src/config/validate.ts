@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { scanEntryExportsSource } from '../build/entry-exports.ts';
+import { toPosixRelative } from '../core/paths.ts';
+import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
@@ -206,14 +208,6 @@ const validateHooks = (
   return diagnostics;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isPlainRecord = (value: object): value is Record<string, unknown> => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
-
 const isProtocolJsonValue = (value: unknown, ancestors = new Set<object>()): boolean => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
   if (typeof value === 'number') return Number.isFinite(value);
@@ -330,7 +324,8 @@ const bundleScriptExtensions = new Set([
   '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
 ]);
 
-const isSafeScriptName = (name: string): boolean =>
+/** Shared name guard for scripts, package outputs, and payload destinations. */
+const isSafeOutputName = (name: string): boolean =>
   /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
 
 const validateScripts = (
@@ -346,7 +341,7 @@ const validateScripts = (
   const diagnostics: Diagnostic[] = [];
   const outputSources = new Map<string, string>();
   for (const [name, rawDeclaration] of Object.entries(scripts)) {
-    if (!isSafeScriptName(name)) {
+    if (!isSafeOutputName(name)) {
       diagnostics.push(sourceDiagnostic(
         'AB4401',
         `Script name ${JSON.stringify(name)} must be a safe stable output name.`,
@@ -602,8 +597,7 @@ const validateMcpApps = (
   return diagnostics;
 };
 
-const relativePosix = (root: string, path: string): string =>
-  relative(root, path).replaceAll('\\', '/');
+const relativePosix = toPosixRelative;
 
 /**
  * AB4730: a local stdio entry whose module never default-exports a factory
@@ -867,27 +861,21 @@ const validateMcp = (
   });
 };
 
+const portableFrontmatterKeys = [
+  'allowed-tools',
+  'compatibility',
+  'description',
+  'license',
+  'metadata',
+  'name',
+] as const;
+
 const validateSkill = (skill: SkillDocument): Diagnostic[] => {
-  const portableIssues = validateAgentSkillsFrontmatter({
-    ...(Object.hasOwn(skill.frontmatter, 'allowed-tools')
-      ? { 'allowed-tools': skill.frontmatter['allowed-tools'] }
-      : {}),
-    ...(Object.hasOwn(skill.frontmatter, 'compatibility')
-      ? { compatibility: skill.frontmatter.compatibility }
-      : {}),
-    ...(Object.hasOwn(skill.frontmatter, 'description')
-      ? { description: skill.frontmatter.description }
-      : {}),
-    ...(Object.hasOwn(skill.frontmatter, 'license')
-      ? { license: skill.frontmatter.license }
-      : {}),
-    ...(Object.hasOwn(skill.frontmatter, 'metadata')
-      ? { metadata: skill.frontmatter.metadata }
-      : {}),
-    ...(Object.hasOwn(skill.frontmatter, 'name')
-      ? { name: skill.frontmatter.name }
-      : {}),
-  });
+  const portableIssues = validateAgentSkillsFrontmatter(Object.fromEntries(
+    portableFrontmatterKeys
+      .filter((key) => Object.hasOwn(skill.frontmatter, key))
+      .map((key) => [key, skill.frontmatter[key]]),
+  ));
   const ir = parseSkillIr(skill);
   const diagnostics = [...ir.diagnostics];
   const name = ir.portable.name ?? skill.frontmatter.name;
@@ -927,48 +915,65 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
   return diagnostics;
 };
 
-const validateCommands = (
+interface TargetedDocument {
+  readonly authoredTargets?: readonly string[];
+  readonly diagnostics: readonly Diagnostic[];
+  readonly source: string;
+}
+
+interface TargetedDocumentCodes {
+  /** Explicit target whose capability is degraded, prohibited, or unavailable. */
+  readonly capability: string;
+  readonly duplicateName: string;
+  readonly outsideTargets: string;
+}
+
+/** Shared validator for commands and rules, which differ only in label and codes. */
+const validateTargetedDocuments = (
   loaded: LoadedConfig,
-  discovered: DiscoveredProject,
+  documents: readonly TargetedDocument[],
+  label: 'Command' | 'Rule',
+  capabilityName: 'commands' | 'rules',
+  codes: TargetedDocumentCodes,
   registry: NormalizationTargetRegistry,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const selectedTargets = selectedTargetNamesFor(loaded, registry);
   const names = new Map<string, string>();
 
-  for (const command of discovered.commands ?? []) {
-    diagnostics.push(...command.diagnostics);
-    const name = basename(command.source, extname(command.source));
+  for (const document of documents) {
+    diagnostics.push(...document.diagnostics);
+    const name = basename(document.source, extname(document.source));
     const firstSource = names.get(name);
     if (firstSource === undefined) {
-      names.set(name, command.source);
+      names.set(name, document.source);
     } else {
       diagnostics.push(sourceDiagnostic(
-        'AB4926',
-        `Command name ${JSON.stringify(name)} duplicates ${firstSource}.`,
-        command.source,
+        codes.duplicateName,
+        `${label} name ${JSON.stringify(name)} duplicates ${firstSource}.`,
+        document.source,
       ));
     }
 
-    for (const target of command.authoredTargets ?? []) {
+    for (const target of document.authoredTargets ?? []) {
       if (!registry.has(target) || !selectedTargets.includes(target)) {
         diagnostics.push({
-          code: 'AB4924',
-          message: `Command ${JSON.stringify(name)} selects target ${JSON.stringify(target)} outside the selected target names.`,
+          code: codes.outsideTargets,
+          message: `${label} ${JSON.stringify(name)} selects target ${JSON.stringify(target)} outside the selected target names.`,
           severity: 'error',
-          sourcePath: command.source,
+          sourcePath: document.source,
           target,
         });
         continue;
       }
-      const capability = registry.capabilityState?.(target, 'commands');
+      const capability = registry.capabilityState?.(target, capabilityName);
       if (capability === undefined) {
-        if (registry.supports(target, 'commands')) continue;
+        if (registry.supports(target, capabilityName)) continue;
         diagnostics.push({
-          code: 'AB4925',
-          message: `Command ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose commands capability is unavailable: the target declares no supported commands surface.`,
+          code: codes.capability,
+          message: `${label} ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose ${capabilityName} capability is unavailable: the target declares no supported ${capabilityName} surface.`,
           severity: 'error',
-          sourcePath: command.source,
+          sourcePath: document.source,
           target,
         });
         continue;
@@ -980,10 +985,10 @@ const validateCommands = (
         case 'prohibited':
         case 'unavailable':
           diagnostics.push({
-            code: 'AB4925',
-            message: `Command ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose commands capability is ${capability.state}: ${capability.reason}`,
+            code: codes.capability,
+            message: `${label} ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose ${capabilityName} capability is ${capability.state}: ${capability.reason}`,
             severity: 'error',
-            sourcePath: command.source,
+            sourcePath: document.source,
             target,
           });
           break;
@@ -996,79 +1001,28 @@ const validateCommands = (
   }
   return diagnostics;
 };
+
+const validateCommands = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] =>
+  validateTargetedDocuments(loaded, discovered.commands ?? [], 'Command', 'commands', {
+    capability: 'AB4925',
+    duplicateName: 'AB4926',
+    outsideTargets: 'AB4924',
+  }, registry);
 
 const validateRules = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
   registry: NormalizationTargetRegistry,
-): Diagnostic[] => {
-  const diagnostics: Diagnostic[] = [];
-  const selectedTargets = selectedTargetNamesFor(loaded, registry);
-  const names = new Map<string, string>();
-
-  for (const rule of discovered.rules ?? []) {
-    diagnostics.push(...rule.diagnostics);
-    const name = basename(rule.source, extname(rule.source));
-    const firstSource = names.get(name);
-    if (firstSource === undefined) {
-      names.set(name, rule.source);
-    } else {
-      diagnostics.push(sourceDiagnostic(
-        'AB4906',
-        `Rule name ${JSON.stringify(name)} duplicates ${firstSource}.`,
-        rule.source,
-      ));
-    }
-
-    for (const target of rule.authoredTargets ?? []) {
-      if (!registry.has(target) || !selectedTargets.includes(target)) {
-        diagnostics.push({
-          code: 'AB4904',
-          message: `Rule ${JSON.stringify(name)} selects target ${JSON.stringify(target)} outside the selected target names.`,
-          severity: 'error',
-          sourcePath: rule.source,
-          target,
-        });
-        continue;
-      }
-      const capability = registry.capabilityState?.(target, 'rules');
-      if (capability === undefined) {
-        if (registry.supports(target, 'rules')) continue;
-        diagnostics.push({
-          code: 'AB4905',
-          message: `Rule ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose rules capability is unavailable: the target declares no supported rules surface.`,
-          severity: 'error',
-          sourcePath: rule.source,
-          target,
-        });
-        continue;
-      }
-      switch (capability.state) {
-        case 'supported':
-          break;
-        case 'degraded':
-        case 'prohibited':
-        case 'unavailable':
-          diagnostics.push({
-            code: 'AB4905',
-            message: `Rule ${JSON.stringify(name)} explicitly targets ${JSON.stringify(target)}, whose rules capability is ${capability.state}: ${capability.reason}`,
-            severity: 'error',
-            sourcePath: rule.source,
-            target,
-          });
-          break;
-        default: {
-          const exhaustive: never = capability;
-          return exhaustive;
-        }
-      }
-    }
-  }
-  return diagnostics;
-};
-
-const isSafePackageOutputName = (name: string): boolean =>
-  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
+): Diagnostic[] =>
+  validateTargetedDocuments(loaded, discovered.rules ?? [], 'Rule', 'rules', {
+    capability: 'AB4905',
+    duplicateName: 'AB4906',
+    outsideTargets: 'AB4904',
+  }, registry);
 
 const validatePackageEntryPath = (
   label: string,
@@ -1101,7 +1055,7 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
   }
   const diagnostics: Diagnostic[] = [];
   for (const [name, rawDeclaration] of Object.entries(bin)) {
-    if (!isSafePackageOutputName(name)) {
+    if (!isSafeOutputName(name)) {
       diagnostics.push(sourceDiagnostic(
         'AB4701',
         `Bin name ${JSON.stringify(name)} must be a safe stable output name.`,
@@ -1332,9 +1286,6 @@ const warningDiagnostic = (
   recovery: string,
 ): Diagnostic => ({ code, message, recovery, severity: 'warning', sourcePath });
 
-const isSafePayloadName = (name: string): boolean =>
-  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u.test(name);
-
 interface DeclaredPayload {
   readonly name: string;
   /** Absolute source directory. */
@@ -1454,7 +1405,7 @@ const validatePayload = (
   const diagnostics: Diagnostic[] = [];
   const sources: { name: string; source: string }[] = [];
   for (const [name, declaration] of Object.entries(configured)) {
-    if (!isSafePayloadName(name) || reservedPayloadDestinations.has(name)) {
+    if (!isSafeOutputName(name) || reservedPayloadDestinations.has(name)) {
       const diagnostic = sourceDiagnostic(
         'AB4741',
         `Payload destination ${JSON.stringify(name)} must be a safe directory name outside the compiler-owned artifact namespaces.`,
