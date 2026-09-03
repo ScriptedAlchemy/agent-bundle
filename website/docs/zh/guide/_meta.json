@@ -13,5 +13,10 @@
     "type": "dir-section-header",
     "name": "development",
     "label": "开发"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "distribution",
+    "label": "分发"
   }
 ]

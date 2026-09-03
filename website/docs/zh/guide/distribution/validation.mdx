@@ -1,0 +1,113 @@
+---
+description: '校验 agent-bundle 源码与已构建产物，包括严格的 Claude Code 宿主校验、被固定的 Codex 与 Cursor schema 检查，以及 npm prepack 门禁。'
+---
+
+# 产物校验
+
+校验用同一条命令回答两个不同的问题。针对**源码**，它问的是项目是否描述了一个合法的捆绑包；针对
+**产物**，它问的是输出的字节是否就是清单所承诺的字节。
+
+```sh
+npx agent-bundle validate --root .                        # 项目源码
+npx agent-bundle validate --artifact artifact --strict    # 已构建字节，无需源码
+```
+
+`validate --artifact`、`mcp` 与 `hooks` 都能在项目源码已被删除的情况下针对已构建产物工作。这是刻意
+如此：只有在源码树存在时才能通过校验的产物，其实并不算自包含；[测试](../development/testing.mdx)中的
+`packed-deleted-source` 证明级别存在的理由与此相同。
+
+## 内容寻址，而不是路径存在性
+
+`agent-bundle.manifest.json` 为每个输出文件记录一份 SHA-256 摘要，包括被复制的脚本与资源。产物校验
+把真实字节与这些摘要比对，因此被手工改过的生成文件会失败，而不会因为路径还在就通过。被引用的文件同样
+会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。
+
+每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
+`recovery` 提示。只有存在 error 级诊断时命令才以非零退出；warning 与 info 绝不会为构建、校验或 dev
+重建把关。
+
+## Claude Code 严格校验
+
+当 Claude Code 位于 `PATH` 上时，产物校验会为输出的 `claude` target 以及统一的 `plugin` target 运行
+`claude plugin validate <bundle-dir> --strict`：
+
+- 宿主的 **error** 会变成 Agent Bundle 的 error。
+- 宿主的 **warning** 保持为 warning，除非设置了 `agent-bundle validate --strict`。
+- 二进制文件缺失会被报告为一次显式的信息性**跳过**，绝不会伪造成功。
+
+CI 应当使用严格校验：
+
+```sh
+npx agent-bundle validate --artifact dist --strict
+```
+
+当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
+同一道门禁，并得到同样的 schema 结论。
+
+在开发期，你可以在不安装的情况下加载一个已构建 target 并核实注册情况：
+
+```sh
+claude --plugin-dir dist/claude plugin list --json
+```
+
+## Codex 与 Cursor：被固定的 schema
+
+Codex 与 Cursor 目前都没有发布插件校验的开发者动词，因此 Agent Bundle 用自己 vendored 的、被固定的
+schema 校验它们输出的 JSON 文档，并把宿主的 schema 生成器视为一个**漂移信号**，绝不当作替代的插件契约。
+
+| 代码 | 严重级别 | 含义 |
+| --- | --- | --- |
+| `AB6026` | info | 每份 Cursor 报告都会声明 Cursor 未发布 plugin-validate 动词，并指明本地校验所用的 vendored schema 固定版本。 |
+| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。 |
+| `AB6028` | error | 生成的字节违反了被固定的 Cursor 加载器证据：清单候选优先级选中了回退清单、符号链接解析到捆绑包之外，或者 `CURSOR_PLUGIN_ROOT` 出现在加载器替换字段之外。 |
+| `AB6029` | info / warning | Cursor Agent 版本探测不可用（`ENOENT`，info），或未能完成（warning）。本地的固定 schema 校验仍会运行。 |
+| `AB6030` | info | Codex CLI 不可用，或已安装的 Codex 版本未发布插件校验命令。 |
+| `AB6031` | info / warning（`--strict` 下为 error） | Codex 的 app-server schema 生成动词不可用，或其实时输出缺失、与被固定的生成式钩子 schema 不一致。 |
+| `AB6032` | error | 某个必需的 Codex 捆绑包文档缺失、不可读、不是合法 JSON，或未通过其 vendored 固定 schema。 |
+| `AB6033` | error | 一条有界的 Codex 版本或 schema 生成命令无法启动、执行失败、超时、输出超过 1 MiB，或产生了不可读的输出。 |
+
+`AB6031` 是其中最值得注意的一条：当 Codex 生成的 schema 与被固定的版本不一致时，只有在 Codex 发布了
+匹配的契约之后才会更新这个固定版本。自动跟随宿主的实时输出，会把一次上游变更变成这里一次无声的契约变更。
+
+## Agent Skills 规范 lint
+
+`AB6034` 是针对输出字节的 **error**：某份 `SKILL.md` 拥有合法的 YAML frontmatter，但其后没有 Markdown
+指令正文。被固定的 Agent Skills 规范要求 frontmatter 之后必须跟随 Markdown 内容，而这项检查针对的是
+产物实际包含的内容，而不是编写时的源码。
+
+## 哈希固定与仓库自有的表格
+
+哈希固定覆盖那些真实来源位于本仓库之外、且可能漂移的 vendored 外部内容：`src/adapters/schemas/*` 下的
+宿主文档 schema（其上游 URL、commit 与 SHA-256 记录在 `PROVENANCE.json` 中）、清单 `agentSkills` 块中
+由 Agent Skills 规范派生的 schema 固定值，以及为完整性而记录的输出产物文件与源输入。
+
+仓库自有的能力表格与证据**不**做哈希。能力证据记录被观察到的宿主版本（`observedVersion`）与 target，
+适配器则携带一个单调递增的 `adapterRevision`。Git 已经为仓库自有内容做了版本管理；在仓库内部再哈希一遍
+是自我指涉的，并且会让每次编辑表格都产生变动噪声。
+
+## npm prepack 门禁
+
+```sh
+npx agent-bundle prepack --root . --output artifact --json
+```
+
+`prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、清单
+哈希、包 bin 目标以及发布版本一致性把关。`--output` 是相对 `--root` 的产物路径，会覆盖配置中的
+`output.distPath`，默认值为 `dist`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
+而且任何 npm 生命周期都绝不会执行宿主安装。
+
+| 代码 | 含义 |
+| --- | --- |
+| `AB7010` | dry-run 的 npm 清单遗漏了某个包输出、产物清单或文件、安装表面，或 README。请把 `dist` 与产物目录加入包的 `files` 允许列表。 |
+| `AB7011` | 磁盘上的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成的宿主包。 |
+| `AB7012` | 某个 `package.json` bin 指向了打包后的 `dist` 输出之外（包括 `src/`），或指名了一个被 npm 忽略的文件。请把它指向生成的 `dist/bin` 文件。 |
+| `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
+
+发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带
+`0.0.0-dev.<short-revision>` 这个开发期回退值。声明的 `plugin.version` 与 `package.json` 不一致时会
+报告 `AB4008` 警告。
+
+## 下一步
+
+- [宿主安装](./installation.mdx) —— 把已校验的捆绑包注册到宿主。
+- [预览包](./preview-packages.mdx) —— 这些输出目前如何抵达消费者。
