@@ -10,3 +10,7 @@ examples/worktree-proximity/artifact/
 
 # Aborted runtime-playground fixture workspaces
 .runtime-playground-*/
+
+website/doc_build/
+website/docs/en/api/**/*.md
+website/docs/zh/api/**/*.md

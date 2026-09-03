@@ -1,0 +1,31 @@
+{
+  "name": "@agent-bundle/docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "rspress build",
+    "check": "pnpm typecheck && pnpm build && pnpm verify:build",
+    "dev": "rspress dev",
+    "preview": "rspress preview",
+    "typecheck": "tsc --project tsconfig.json",
+    "verify:build": "node scripts/verify-build.mjs"
+  },
+  "devDependencies": {
+    "@rspress/core": "2.0.21",
+    "@rspress/plugin-llms": "2.0.21",
+    "@rspress/plugin-sitemap": "2.0.21",
+    "@rspress/plugin-twoslash": "2.0.21",
+    "@rspress/plugin-typedoc": "2.0.21",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "agent-bundle": "workspace:*",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "6.0.3"
+  }
+}
