@@ -40,8 +40,8 @@ my-plugin/
 | 路径 | 表面 | 如何退出 |
 | --- | --- | --- |
 | `src/skills/<name>/SKILL.md` | 一个 Skill。目录中其余内容都作为它的资源随行。完全不需要任何声明即可随产物发布。 | 删除该目录，或收窄 `skills` 配置中的 glob。 |
-| `src/commands/*.md` | 扁平的宿主命令文档。 | 删除该文件。 |
-| `src/rules/*.mdc` | 扁平的宿主规则文档。 | 删除该文件。 |
+| `src/commands/*.md` | 扁平的宿主命令文档。frontmatter 按宿主逐一判定：Claude Code 记录了 `description`、`argument-hint`、`allowed-tools`、`model` 与 `disable-model-invocation`，而 Cursor 固定的命令表面是无 frontmatter 的 Markdown。显式指向某个无法表达其所用字段的宿主的命令是 `AB4927`；隐式选中的宿主收到去掉该字段的正文，`validate` 给出警告 `AB4928`。`inspect` 以 `omittedFeatures` 列出同样的省略。 | 删除该文件。 |
+| `src/rules/*.mdc` | 扁平的宿主规则文档，由 Cursor 发射，保留 `description`、`globs` 与 `alwaysApply`。同样的按宿主判定适用：显式 target 为 `AB4907`，隐式 target 为警告 `AB4908`。 | 删除该文件。 |
 | `src/mcp/<server-id>.ts` | 某个已声明、但未指定 `entry`、`command` 或 `url` 的 MCP 服务器的 stdio 入口。 | 显式声明 `entry`。 |
 | `src/mcp/<server>/{tools,resources,prompts}/*` | 生成式 MCP 服务器路由。路径提供身份；每个模块提供静态 `config`、schema，以及一个 async 默认 Server Component。 | 把 `routes.servers.<server>` 设为 `custom`、`command` 或 `remote`。 |
 | `src/mcp/<server>/apps/*` | 浏览器 MCP App 入口，编译为自包含 HTML 并注册到生成的服务器上。必须提供静态 `config.resourceUri`。 | 使用自定义服务器，或给文件名加 `_` 前缀。 |

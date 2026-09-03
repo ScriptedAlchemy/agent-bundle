@@ -22,7 +22,7 @@ target 目录。
 | --- | --- | --- |
 | Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。 | `user`、`project`、`local` |
 | Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。 | `user` |
-| Cursor | 把捆绑包复制到 `~/.cursor/plugins/local/<name>`，因为 Cursor 未发布非交互式安装动词。 | `user` |
+| Cursor | 把捆绑包复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都从清单加载插件的 `hooks/hooks.json`，因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
 
 由于 Claude 与 Codex target 始终随行本地市场清单，它们的公开 CLI 可以直接安装输出的目录。当所选宿主
 二进制文件不可用时，安装器会以一条带类型的诊断失败，而不是报告一次它并未完成的成功。宿主安装诊断属于
@@ -91,6 +91,9 @@ Doctor 是只读的。它探测宿主、清点已安装的捆绑包、把它们�
 | `AB7317` | info | 某个活跃的事件运行时实现的是较旧的严格协议，不暴露运行时身份。 |
 | `AB7318` | error | 在有界的只读身份探测过程中，某个活跃的事件运行时变为不可用、超时，或返回了无效的状态响应。 |
 | `AB7319` | error | 由 `doctor --from` 解析出的宿主目录树违反了它被固定的文档 schema 或无进程加载器规则；消息中保留原始的构建校验器代码。 |
+| `AB7322` | info / error | 已安装的 Cursor 插件从清单注册了插件级 hook 且每条命令的脚本都存在于插件根之下时为 info；声明的 hooks 文件缺失或格式错误、或被执行的脚本不存在时为 error。 |
+| `AB7323` | warning | `~/.cursor/hooks.json` 注册了指向某个已安装插件目录的命令，Cursor 会把该 hook 投递两次；仅靠清单注册就已足够。 |
+| `AB7324` | info / warning / error | 由 `install cursor --mode marketplace` 暂存的市场已被导入（`registered`）、仍在等待 Customize 导入步骤（`unregistered`），或不完整（`corrupt`）。 |
 | `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则，或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
 
 ## 下一步

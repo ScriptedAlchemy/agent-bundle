@@ -31,7 +31,7 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 | --- | --- |
 | `minimal` | 一个纯 Skills 插件：一个 `src/skills/<name>/SKILL.md` 目录，此外别无他物。 |
 | `mcp-server` | 由一个 `src/mcp/<server>/tools/<name>.tsx` 路由模块构成的 stdio MCP 服务器，外加一个产物脚本，并已接好框架测试 harness。 |
-| `cli-tool` | 通过 `src/cli.ts` bin 约定提供的可安装 CLI，外加一个带声明文件的 `src/index.ts` 库导出。 |
+| `cli-tool` | 可安装的路由式 CLI（`src/cli/greet.ts`），外加一个约定式脚本（`src/scripts/hello.ts`）与带声明文件的 `src/index.ts` 库导出，并由生成的 projection 测试池在 `cli-dispatch` 与 `script-dispatch` 级别加以证明。 |
 
 每个模板都自带 `check` 脚本（validate、build、typecheck、tests），并且校验时零诊断——包括 `AB473x`
 迁移提示，因为这些模板从一开始就是按照 entry 约定编写的。`mcp-server` 模板还自带消费者测试 harness，
