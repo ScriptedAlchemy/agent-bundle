@@ -207,7 +207,10 @@ class HostMcpConnection {
         if (this.#activeEpochSession !== undefined) return;
         const adoptedEpochId = this.#adoption?.currentEpochId;
         if (this.#adoption !== undefined && adoptedEpochId === undefined) {
-          throw new Error('No contract-approved development epoch is available for this host connection.');
+          throw new Error(
+            '[AB7211] No development epoch has passed the contract matrix yet, so this host connection has nothing to serve; '
+            + 'fix the reported contract violations and rebuild.',
+          );
         }
         const reference = adoptedEpochId === undefined
           ? await this.#epochStore.acquireActiveEpochReference()

@@ -199,6 +199,41 @@ release-identity config rejects absolute paths. The per-invocation CLI
 subject to the same project-root containment check; absolute and external
 output roots are unsupported.
 
+## Live development into hosts
+
+`agent-bundle dev` is the webpack-HMR analog for plugins that are installed
+and in use in a real host. Three pieces make a rebuild reach the host without
+the host ever seeing a disconnect:
+
+1. **A stable host-facing proxy.** `agent-bundle dev proxy --root <project>
+   --server <name> [--target <host>]` is the thin stdio process a host spawns
+   and holds. It forwards the developed plugin's MCP surface from the dev
+   server's `/mcp/host/<serverName>` endpoint. On every adopted epoch the dev
+   server opens and primes a session on the new generated server, promotes it
+   behind the same connection, emits `notifications/tools/list_changed` (and
+   the resources/prompts equivalents the catalog advertises), lets in-flight
+   calls finish against the epoch they started on, then drains the old
+   session. A failed build changes nothing; a vanished epoch or stopped dev
+   server fails closed (`AB8024` / `AB8025`).
+2. **Installed-host re-sync.** `agent-bundle dev --install-host <claude|codex|cursor>`
+   installs a marked development variant through the ordinary installer once,
+   pointing the host's MCP document at the proxy, then re-syncs hooks, Skills,
+   and MCP Apps into the host's own layout on every adopted epoch with atomic
+   generation swaps and rollback (`AB7202`). Hooks are spawned per event, so
+   they pick up the new epoch on their next invocation.
+3. **A contract gate on adoption.** Declaring `dev.contracts` in
+   `agent-bundle.config.ts` runs the generated contract matrix against each
+   published epoch through an epoch-pinned generated stdio session before any
+   host-facing surface adopts it. A failing epoch stays inactive for hosts,
+   is reported on the `dev.contract.status` project event (`AB7210` for an
+   invalid declaration, `AB7211` for violations), and appears in the
+   Workbench Overview's **Host adoption** section beside the published
+   build. Playground sessions stay independently epoch-pinned.
+
+The package README's [Developer workbench](../packages/agent-bundle/README.md#developer-workbench)
+section carries the exact commands, install layouts, and event payloads;
+[Diagnostics](diagnostics.md) lists every code on this path.
+
 ## Distribution
 
 `agent-bundle build` makes each target directory independently distributable.

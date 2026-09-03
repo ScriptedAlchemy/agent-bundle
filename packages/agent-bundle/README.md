@@ -237,16 +237,24 @@ export default {
 
 The module default-exports the same `Record<routeId, ContractRouteFixture>` consumed by
 `runContractMatrix`. Agent Bundle reloads and validates it for every prepared epoch. An invalid
-module does not fail compilation: it fails that epoch's contract run with a diagnostic instead.
-Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available` adoption.
+module does not fail compilation: it fails that epoch's contract run with an `AB7210` diagnostic
+instead. Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available`
+adoption.
 
 For an enabled project, each published epoch is exercised through an already-open, epoch-pinned
-generated stdio session. Passing epochs atomically replace the server behind existing live host MCP
-connections and refresh opted-in development host installs. Failing or timed-out epochs remain
-inactive on those host-facing surfaces, leaving the last passing epoch connected and installed.
-The Workbench project stream emits `dev.contract.status`; the Logs page includes its diagnostics and
-the exact failed check names grouped by route. A later passing rebuild is adopted normally.
-Workbench playground sessions remain independently epoch-pinned and are not gated by this matrix.
+generated stdio session at the `dev-epoch` proof level. Passing epochs atomically replace the server
+behind existing live host MCP connections and refresh opted-in development host installs. Failing or
+timed-out epochs remain inactive on those host-facing surfaces (`AB7211`), leaving the last passing
+epoch connected and installed. On a cold start whose initial build fails, the last-good epoch the
+epoch store restored is run through the same gate before hosts serve it.
+
+The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
+carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
+and the latest `contracts` evaluation. The Overview page renders it as **Host adoption**: a failed
+gate names the published build, the build hosts kept, and the failed check names grouped by route,
+and folds the gate diagnostics into the Diagnostics table; the Logs page carries the same records.
+A later passing rebuild is adopted normally. Workbench playground sessions remain independently
+epoch-pinned and are not gated by this matrix.
 
 ### Live host MCP proxy
 

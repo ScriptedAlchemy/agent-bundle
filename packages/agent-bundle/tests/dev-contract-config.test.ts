@@ -53,7 +53,7 @@ it('retains a buildable prepared project when the fixture module shape is invali
     expect(prepared.model).toBeDefined();
     expect(prepared.devContracts).toMatchObject({
       diagnostics: [{
-        code: 'AB7005',
+        code: 'AB7210',
         severity: 'error',
         sourcePath: expect.stringContaining('contract-fixtures.ts'),
       }],
@@ -61,7 +61,7 @@ it('retains a buildable prepared project when the fixture module shape is invali
       server: 'fixture',
     });
     expect(prepared.diagnostics).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7005' }),
+      expect.objectContaining({ code: 'AB7210' }),
     ]));
   } finally {
     await removeProjectFixture(project.root);

@@ -1,4 +1,3 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { get as httpGet, type IncomingMessage } from 'node:http';
 import { join } from 'node:path';
 
@@ -8,10 +7,16 @@ import { expect, it } from '@rstest/core';
 
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import {
+  DEV_CONTRACT_SERVER,
+  DEV_CONTRACT_TOOL_ROUTE,
+  devContractFixtureSource as contractFixtureSource,
+  devContractToolSource as toolSource,
+  writeDevContractProject,
+} from './support/dev-contract-project.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
 
 const cliEntry = join(import.meta.dirname, '..', 'bin', 'agent-bundle.js');
-const fixtureNodeModules = join(import.meta.dirname, '..', '..', '..', 'examples', 'audiobook-curator', 'node_modules');
 
 const within = async <Value>(
   promise: Promise<Value>,
@@ -24,67 +29,12 @@ const within = async <Value>(
   }),
 ]);
 
-const toolSource = (version: 'v1' | 'v3', projectRoot: string): string => [
-  `// fixture: ${projectRoot}`,
-  "import { createElement } from 'react';",
-  "import { z } from 'zod';",
-  '',
-  "export const config = { description: 'Reports the generated epoch version.' };",
-  'export const inputSchema = z.object({ token: z.string() });',
-  'export const resultSchema = z.object({ version: z.string() });',
-  '',
-  'export default async function Version() {',
-  `  return createElement('agent-result', { value: { version: ${JSON.stringify(version)} } }, createElement('agent-text', null, ${JSON.stringify(version)}));`,
-  '}',
-  '',
-].join('\n');
-
-const contractFixtureSource = (routeId: string): string => [
-  'export default {',
-  `  ${JSON.stringify(routeId)}: { input: { token: 'fixture' }, resultCompat: 'closed' },`,
-  '};',
-  '',
-].join('\n');
-
-const writeProject = async (root: string, contracts: boolean): Promise<string> => {
-  const source = join(root, 'src', 'mcp', 'fixture', 'tools', 'version.tsx');
-  await Promise.all([
-    mkdir(join(root, 'src', 'mcp', 'fixture', 'tools'), { recursive: true }),
-    symlink(fixtureNodeModules, join(root, 'node_modules'), 'dir'),
-  ]);
-  await Promise.all([
-    writeFile(join(root, '.gitignore'), '.dist.stage-*\ndist/\n'),
-    writeFile(join(root, 'package.json'), JSON.stringify({
-      dependencies: {
-        '@agent-bundle/runtime': 'workspace:*',
-        '@modelcontextprotocol/server': '2.0.0',
-        react: '19.2.8',
-        zod: '4.4.3',
-      },
-      name: 'dev-contract-gate',
-      type: 'module',
-      version: '1.0.0',
-    })),
-    writeFile(source, toolSource('v1', root)),
-    writeFile(join(root, 'contract-fixtures.ts'), contractFixtureSource('tool:fixture/version')),
-    writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      ...(contracts
-        ? ["  dev: { contracts: { fixtures: './contract-fixtures.ts', server: 'fixture' } },"]
-        : []),
-      "  plugin: { name: 'dev-contract-gate', version: '1.0.0' },",
-      '  routes: { mcpCommands: true },',
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n')),
-  ]);
-  return source;
-};
+const writeProject = async (root: string, contracts: boolean): Promise<string> =>
+  (await writeDevContractProject(root, { contracts })).toolSource;
 
 const openProxy = async (root: string, url: string): Promise<Client> => {
   const transport = new StdioClientTransport({
-    args: [cliEntry, 'dev', 'proxy', '--root', root, '--server', 'fixture', '--url', url],
+    args: [cliEntry, 'dev', 'proxy', '--root', root, '--server', DEV_CONTRACT_SERVER, '--url', url],
     command: process.execPath,
     stderr: 'pipe',
   });
@@ -191,11 +141,24 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
     expect(failedWire).toContain('"state":"failed"');
     expect(failedWire).toContain('"routeId":"tool:fixture/unknown"');
     expect(failedWire).toContain('"checks":["coverage"]');
-    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
     expect(listChanged).toBe(0);
     expect(await versionOf(client)).toBe('v1');
     lateClient = await openProxy(project.root, server.url);
     expect(await versionOf(lateClient)).toBe('v1');
+    expect(server.status().hostAdoption).toEqual({
+      adoptedEpochId: initialEpoch.activeEpoch.id,
+      contracts: {
+        diagnostics: [expect.objectContaining({ code: 'AB7211', severity: 'error', target: failedEpoch.activeEpoch.id })],
+        epochId: failedEpoch.activeEpoch.id,
+        failures: [
+          { checks: ['coverage'], routeId: 'tool:fixture/unknown' },
+          { checks: ['coverage'], routeId: DEV_CONTRACT_TOOL_ROUTE },
+        ],
+        state: 'failed',
+        summary: 'Development contract matrix reported 2 violation(s).',
+      },
+      mode: 'gated',
+    });
 
     const changed = Promise.withResolvers<void>();
     client.setNotificationHandler('notifications/tools/list_changed', async () => {
@@ -207,7 +170,7 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
       replaceWatchedSource(
         project.root,
         join(project.root, 'contract-fixtures.ts'),
-        contractFixtureSource('tool:fixture/version'),
+        contractFixtureSource(DEV_CONTRACT_TOOL_ROUTE),
       ),
     ]);
     await within(changed.promise, 30_000, 'changed notification');
@@ -221,6 +184,11 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
     );
     expect(passingWire).toContain('"state":"passed"');
     expect(listChanged).toBe(1);
+    expect(server.status().hostAdoption).toMatchObject({
+      adoptedEpochId: passingEpoch.activeEpoch.id,
+      contracts: { epochId: passingEpoch.activeEpoch.id, failures: [], state: 'passed' },
+      mode: 'gated',
+    });
   } finally {
     events?.close();
     await lateClient?.close().catch(() => undefined);
@@ -247,6 +215,9 @@ it('adopts artifact.available directly when development contracts are not declar
     await within(changed.promise);
 
     expect(await versionOf(client)).toBe('v3');
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected the rebuilt artifact to be active.');
+    expect(server.status().hostAdoption).toEqual({ adoptedEpochId: artifact.activeEpoch.id, mode: 'direct' });
   } finally {
     await client?.close().catch(() => undefined);
     await server?.close().catch(() => undefined);

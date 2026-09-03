@@ -7,6 +7,7 @@ import type {
 import type {
   DevContractFailure,
   DevContractStatusEvent,
+  HostAdoptionStatus,
 } from './types.ts';
 
 export type EpochContractEvaluation = DevContractStatusEvent;
@@ -45,7 +46,7 @@ interface PendingEpoch {
 }
 
 const runnerDiagnostic = (epochId: string, error: unknown): Diagnostic => Object.freeze({
-  code: 'AB7006',
+  code: 'AB7211',
   message: `Development contract matrix failed for epoch ${epochId}: ${
     error instanceof Error ? error.message : String(error)
   }`,
@@ -73,6 +74,8 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
   readonly #subscription: ProjectEventSubscription;
   #closed = false;
   #currentEpochId: string | undefined;
+  #latestEvaluation: EpochContractEvaluation | undefined;
+  #observed = false;
   #pending: PendingEpoch | undefined;
   #processing: Promise<void> | undefined;
   #sequence = 0;
@@ -84,27 +87,53 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
     this.#subscription = options.eventHub.subscribe(
       { afterSequence: options.eventHub.latestSequence },
       (event) => {
-        if (event.type !== 'artifact.available' || this.#closed) return;
-        const contracts = this.#contracts();
-        if (contracts === undefined) {
-          this.#adopt(event.epochId);
-          return;
-        }
-        this.#sequence += 1;
-        this.#pending = Object.freeze({
-          contracts,
-          epochId: event.epochId,
-          sequence: this.#sequence,
-        });
-        this.#processing ??= this.#drain().finally(() => {
-          this.#processing = undefined;
-        });
+        if (event.type === 'artifact.available') this.#consider(event.epochId);
       },
     );
   }
 
   get currentEpochId(): string | undefined {
     return this.#currentEpochId;
+  }
+
+  /** The Workbench-facing snapshot of what hosts serve and why. */
+  status(): HostAdoptionStatus {
+    return Object.freeze({
+      ...(this.#currentEpochId === undefined ? {} : { adoptedEpochId: this.#currentEpochId }),
+      ...(this.#latestEvaluation === undefined ? {} : { contracts: this.#latestEvaluation }),
+      mode: this.#contracts() === undefined ? 'direct' : 'gated',
+    });
+  }
+
+  /**
+   * Considers an epoch that was already active before any `artifact.available`
+   * reached this policy — the cold-start last-good case, where a failing
+   * initial build publishes nothing but hosts must still serve the prior epoch.
+   * A no-op once any epoch has been observed.
+   */
+  seed(epochId: string): void {
+    if (this.#closed || this.#observed) return;
+    this.#consider(epochId);
+  }
+
+  #consider(epochId: string): void {
+    if (this.#closed) return;
+    this.#observed = true;
+    const contracts = this.#contracts();
+    if (contracts === undefined) {
+      this.#latestEvaluation = undefined;
+      this.#adopt(epochId);
+      return;
+    }
+    this.#sequence += 1;
+    this.#pending = Object.freeze({
+      contracts,
+      epochId,
+      sequence: this.#sequence,
+    });
+    this.#processing ??= this.#drain().finally(() => {
+      this.#processing = undefined;
+    });
   }
 
   subscribe(listener: EpochAdoptionListener): ProjectEventSubscription {
@@ -139,6 +168,7 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
         evaluation = failedEvaluation(candidate.epochId, error);
       }
       if (this.#closed || candidate.sequence !== this.#sequence) continue;
+      this.#latestEvaluation = evaluation;
       this.#eventHub.publish({
         epochId: candidate.epochId,
         payload: evaluation,

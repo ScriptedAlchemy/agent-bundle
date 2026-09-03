@@ -244,9 +244,24 @@ export interface ProjectRuntimeTopology {
   readonly state: 'configured';
 }
 
+/**
+ * What live host MCP connections and opted-in development installs currently
+ * serve. Present only on a foreground that owns host-facing surfaces; absent
+ * from coordinator-only status.
+ */
+export interface HostAdoptionStatus {
+  /** The epoch host-facing surfaces serve; absent until one has been adopted. */
+  readonly adoptedEpochId?: string;
+  /** The latest contract-matrix evaluation, present only when `dev.contracts` gates adoption. */
+  readonly contracts?: DevContractStatusEvent;
+  /** `gated` when `dev.contracts` is declared; `direct` when hosts follow `artifact.available`. */
+  readonly mode: 'direct' | 'gated';
+}
+
 export interface ProjectStatus {
   readonly artifact: ArtifactStatus;
   readonly build: BuildStatus;
+  readonly hostAdoption?: HostAdoptionStatus;
   readonly runtime?: ProjectRuntimeTopology;
   readonly source: SourceStatus;
 }

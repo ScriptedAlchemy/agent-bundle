@@ -25,7 +25,7 @@ export interface RunDevEpochContractsOptions {
 }
 
 const failureDiagnostic = (epochId: string, message: string): Diagnostic => Object.freeze({
-  code: 'AB7006',
+  code: 'AB7211',
   message,
   recovery: 'Fix the failing route or fixture, then rebuild; host-facing surfaces keep the last passing epoch active.',
   severity: 'error',

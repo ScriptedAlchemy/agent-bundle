@@ -67,6 +67,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/discovery.e2e.test.ts',
   'packages/workbench/tests/evals-real.e2e.test.ts',
   'packages/workbench/tests/examples-real.e2e.test.ts',
+  'packages/workbench/tests/host-adoption.e2e.test.ts',
   'packages/workbench/tests/lifecycles-page.browser.test.tsx',
   'packages/workbench/tests/lifecycles.e2e.test.ts',
   'packages/workbench/tests/logs-real.e2e.test.ts',

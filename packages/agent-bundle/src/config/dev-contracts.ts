@@ -20,7 +20,7 @@ export interface PreparedDevContractMatrix {
 }
 
 const diagnostic = (sourcePath: string, message: string): Diagnostic => Object.freeze({
-  code: 'AB7005',
+  code: 'AB7210',
   message,
   recovery: 'Correct dev.contracts and its fixture module, then rebuild; contract failures do not invalidate the artifact.',
   severity: 'error',

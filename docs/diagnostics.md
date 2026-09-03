@@ -28,6 +28,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
+| `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7320` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, and static bytes-at-rest validation. |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
@@ -35,6 +36,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8233`–`AB8235` | Workbench browser-side strict decoders rejecting a dev-server response: `AB8233` lifecycle replay, `AB8234` host discovery, `AB8235` MCP probe report. |
+| `AB8024`–`AB8025` | Live host MCP proxy: epoch drift behind a host connection and dev-server unavailability (see below). |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
@@ -453,6 +455,28 @@ host CLI, repair a bundle, or perform a live protocol exchange.
 | --- | --- | --- | --- |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
 | `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract; the loader-recognized entry remains `installed`. | Reinstall an invalid Cursor plugin or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+
+## Live development into hosts (`AB7200`–`AB7202`, `AB7210`–`AB7211`, `AB8024`–`AB8025`)
+
+`agent-bundle dev` keeps a host's one stdio MCP process connected while it
+swaps the generated plugin behind it (`dev proxy`), re-syncs opted-in
+development installs (`--install-host`) on every adopted epoch, and — when a
+project declares `dev.contracts` — gates host-facing adoption on the
+development contract matrix. Every failure on that path is a structured
+diagnostic; none of them silently changes what a host serves. A failing gate
+is not a build failure: the epoch publishes to the Workbench playground, and
+the Overview page's **Host adoption** section names both the published and the
+host-facing build together with the failed checks.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7200` | error | A development rebuild could not be admitted: the coordinator is closed, closing, or not yet started. | Restart `agent-bundle dev`; no epoch changed. |
+| `AB7201` | error | The prepare, lint, or artifact phase of a development rebuild threw instead of reporting diagnostics. The message names the phase and the underlying error. | Fix the named failure and save again; the last-good epoch stays active. |
+| `AB7202` | error | Publishing a new epoch into an installed development host (`claude`, `codex`, or `cursor`) failed. Pointers were rolled back to the previous generation and the failure was published on `dev.host.sync`. | Repair the host cache path or permissions named in the message; the next successful epoch re-syncs. |
+| `AB7210` | error | `dev.contracts` is malformed, its `fixtures` module escapes the project root, cannot be loaded, or default-exports something other than route-id keyed `ContractRouteFixture` objects. Reported on `dev.contract.status` for the affected epoch; compilation is unaffected. | Correct `dev.contracts` or the fixture module and rebuild; host surfaces keep the last passing epoch meanwhile. |
+| `AB7211` | error | The development contract matrix failed or could not complete for a published epoch. The message carries the aggregated `contract-violation` detail; `dev.contract.status` lists the failed check names grouped by route. That epoch is never adopted by live host connections or development installs. | Fix the failing route or fixture and rebuild; a passing epoch is adopted normally. |
+| `AB8024` | error (MCP) | The epoch a live host connection was serving vanished from the epoch store mid-session. The connection is invalidated and the typed MCP error carries `{ code, epochId }`. | Reconnect from the host; the proxy binds to the currently adopted epoch. |
+| `AB8025` | error (MCP) | `agent-bundle dev proxy` found no running development server for the project (cold start or shutdown), so the host-facing connection fails closed rather than serving stale bytes. | Start `agent-bundle dev` for that project root; installed hooks and Skills remain in place. |
 
 ## Development package build (`AB7103`)
 

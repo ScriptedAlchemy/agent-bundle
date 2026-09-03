@@ -100,6 +100,77 @@ it('adopts only passing contract epochs and publishes exact route check failures
   await policy.close();
 });
 
+it('seeds a restored last-good epoch only until the first published epoch is observed', async () => {
+  const eventHub = new ProjectEventHub();
+  const adopted: string[] = [];
+  const policy = new EpochAdoptionPolicy({
+    contracts: () => undefined,
+    eventHub,
+    run: async () => { throw new Error('disabled contracts must not run'); },
+  });
+  policy.subscribe((epochId) => adopted.push(epochId));
+
+  expect(policy.status()).toEqual({ mode: 'direct' });
+  policy.seed('epoch-restored');
+  await policy.settled();
+  expect(adopted).toEqual(['epoch-restored']);
+  expect(policy.status()).toEqual({ adoptedEpochId: 'epoch-restored', mode: 'direct' });
+
+  publish(eventHub, 'epoch-1');
+  policy.seed('epoch-ignored');
+  await policy.settled();
+
+  expect(adopted).toEqual(['epoch-restored', 'epoch-1']);
+  expect(policy.currentEpochId).toBe('epoch-1');
+  await policy.close();
+});
+
+it('runs the contract matrix over a seeded epoch and reports it in the status snapshot', async () => {
+  const eventHub = new ProjectEventHub();
+  const runs: string[] = [];
+  const statuses: string[] = [];
+  eventHub.subscribe((event) => {
+    if (event.type === 'dev.contract.status') statuses.push(event.epochId);
+  });
+  const policy = new EpochAdoptionPolicy({
+    contracts: () => ({ diagnostics: [], fixtures: {}, modulePath: '/project/fixtures.ts' }),
+    eventHub,
+    run: async (epochId) => {
+      runs.push(epochId);
+      return epochId === 'epoch-restored'
+        ? Object.freeze({
+            diagnostics: Object.freeze([]),
+            epochId,
+            failures: Object.freeze([Object.freeze({ checks: Object.freeze(['sweep']), routeId: 'tool:fixture/version' })]),
+            state: 'failed' as const,
+            summary: 'Development contract matrix reported 1 violation(s).',
+          })
+        : passed(epochId);
+    },
+  });
+
+  expect(policy.status()).toEqual({ mode: 'gated' });
+  policy.seed('epoch-restored');
+  await policy.settled();
+
+  expect(runs).toEqual(['epoch-restored']);
+  expect(statuses).toEqual(['epoch-restored']);
+  expect(policy.currentEpochId).toBeUndefined();
+  expect(policy.status()).toEqual({
+    contracts: expect.objectContaining({ epochId: 'epoch-restored', state: 'failed' }),
+    mode: 'gated',
+  });
+
+  publish(eventHub, 'epoch-1');
+  await policy.settled();
+  expect(policy.status()).toEqual({
+    adoptedEpochId: 'epoch-1',
+    contracts: passed('epoch-1'),
+    mode: 'gated',
+  });
+  await policy.close();
+});
+
 it('discards a superseded contract result and evaluates only the latest pending epoch', async () => {
   const eventHub = new ProjectEventHub();
   const first = Promise.withResolvers<EpochContractEvaluation>();

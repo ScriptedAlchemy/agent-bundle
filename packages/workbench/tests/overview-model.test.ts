@@ -73,6 +73,92 @@ it('uses only real diagnostics to explain a stale epoch and its next rebuild act
   expect(overview.nextAction).toEqual({ label: 'Rebuild', summary: 'Resolve 1 error, then rebuild' });
 });
 
+const activeStatus = (epochId: string) => ({
+  artifact: {
+    activeEpoch: {
+      configDigest: 'config',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      diagnostics: { errors: 0, infos: 0, warnings: 0 },
+      id: epochId,
+      manifestPath: 'agent-bundle.manifest.json',
+      modelDigest: 'model',
+      projectRevision: 'revision-2',
+      targetDigests: { portable: 'portable-digest' },
+    },
+    currentSourceRevision: 'revision-2',
+    state: 'active' as const,
+  },
+  build: { state: 'idle' as const },
+  source: { diagnostics: [], revision: 'revision-2', state: 'ready' as const },
+});
+
+it('omits host adoption when the foreground reports none', () => {
+  expect(overviewFor(activeStatus('epoch-1')).hostAdoption).toBeUndefined();
+});
+
+it('surfaces a failed contract gate as host-facing diagnostics while the build itself is current', () => {
+  const overview = overviewFor({
+    ...activeStatus('epoch-2'),
+    hostAdoption: {
+      adoptedEpochId: 'epoch-1',
+      contracts: {
+        diagnostics: [{
+          code: 'AB7211',
+          message: 'Contract matrix reported 2 violation(s) at the dev-epoch proof level.',
+          severity: 'error',
+          target: 'epoch-2',
+        }],
+        epochId: 'epoch-2',
+        failures: [{ checks: ['coverage', 'sweep'], routeId: 'tool:fixture/version' }],
+        state: 'failed',
+        summary: 'Development contract matrix reported 2 violation(s).',
+      },
+      mode: 'gated',
+    },
+  });
+
+  expect(overview.epoch).toMatchObject({ id: 'epoch-2', state: 'active', summary: 'Current build' });
+  expect(overview.hostAdoption).toEqual({
+    adoptedEpochId: 'epoch-1',
+    failures: [{ checks: ['coverage', 'sweep'], routeId: 'tool:fixture/version' }],
+    gateSummary: 'Development contract matrix reported 2 violation(s).',
+    mode: 'gated',
+    state: 'failed',
+    summary: 'Contract matrix failed for build epoch-2 with 2 violations; hosts keep build epoch-1',
+  });
+  expect(overview.diagnostics).toEqual([expect.objectContaining({ code: 'AB7211', target: 'epoch-2' })]);
+  expect(overview.nextAction).toEqual({
+    label: 'Rebuild',
+    summary: 'Resolve 1 error, then rebuild; hosts keep the last passing build',
+  });
+});
+
+it('describes passing, pending, and direct host adoption without adding diagnostics', () => {
+  const passed = overviewFor({
+    ...activeStatus('epoch-2'),
+    hostAdoption: {
+      adoptedEpochId: 'epoch-2',
+      contracts: { diagnostics: [], epochId: 'epoch-2', failures: [], state: 'passed', summary: 'Development contract matrix passed.' },
+      mode: 'gated',
+    },
+  });
+  expect(passed.hostAdoption).toMatchObject({ state: 'passed', summary: 'Contract matrix passed; hosts serve the current build' });
+  expect(passed.diagnostics).toEqual([]);
+
+  const pending = overviewFor({ ...activeStatus('epoch-2'), hostAdoption: { mode: 'gated' } });
+  expect(pending.hostAdoption).toMatchObject({ failures: [], state: 'pending' });
+
+  const direct = overviewFor({ ...activeStatus('epoch-2'), hostAdoption: { adoptedEpochId: 'epoch-2', mode: 'direct' } });
+  expect(direct.hostAdoption).toEqual({
+    adoptedEpochId: 'epoch-2',
+    failures: [],
+    mode: 'direct',
+    state: 'direct',
+    summary: 'Hosts serve the published build directly',
+  });
+  expect(direct.nextAction).toEqual({ label: 'Rebuild', summary: 'The current build matches your source' });
+});
+
 it('projects a detached immutable changed-file list and defaults absent browser activity to empty', () => {
   const status = {
     artifact: { state: 'missing' as const },

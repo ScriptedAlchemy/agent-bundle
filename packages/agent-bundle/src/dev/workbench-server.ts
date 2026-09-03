@@ -528,6 +528,10 @@ const withMcpSessionLifecycle = (
   start: async () => {
     hostInstalls?.start();
     await coordinator.start();
+    // A failing initial build publishes no artifact.available; hosts must still
+    // serve the last-good epoch the store restored, so seed it through the gate.
+    const artifact = coordinator.status().artifact;
+    if (artifact.state === 'active' || artifact.state === 'stale') epochAdoption.seed(artifact.activeEpoch.id);
     await epochAdoption.settled();
     await hostInstalls?.settled();
     await runtime?.start();
@@ -721,10 +725,6 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     projectService,
     root,
   });
-  status = () => Object.freeze({
-    ...coordinator.status(),
-    ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
-  });
   const mcpSessions = new McpSessionService({
     epochStore,
     projectRoot: root,
@@ -741,6 +741,11 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       }
       return runDevEpochContracts({ contracts, epochId, mcpSessions, prepared });
     },
+  });
+  status = () => Object.freeze({
+    ...coordinator.status(),
+    hostAdoption: epochAdoption.status(),
+    ...(runtimeTopology === undefined ? {} : { runtime: runtimeTopology }),
   });
   const hostInstalls = options.installHosts === undefined || options.installHosts.length === 0
     ? undefined
@@ -952,7 +957,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   return Object.freeze({
     close: closeForeground,
     openRuntimeClientSurface: (surfaceId: string) => clientSurfaces.open(surfaceId),
-    status: () => coordinator.status(),
+    status,
     url: foreground.url,
   });
 };

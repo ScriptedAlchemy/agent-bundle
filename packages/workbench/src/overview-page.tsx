@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 
-import { bundleSummaryFor, overviewFor } from './overview-model.ts';
+import { bundleSummaryFor, overviewFor, type OverviewHostAdoption } from './overview-model.ts';
 import type { ProjectClient } from './project-client.ts';
 import type { WorkbenchCapabilities } from './workbench-capabilities.ts';
 import { Navigation, Topbar, type WorkbenchPage } from './workbench-screen.tsx';
@@ -38,6 +38,45 @@ const actionFor: Readonly<Partial<Record<WorkbenchPage, Readonly<{ label: string
   playground: { label: 'Run the Playground', summary: 'Execute a supported Hook or script operation.' },
   skills: { label: 'Review authored Skills', summary: 'Inspect authored instructions and generated host output.' },
 });
+
+/**
+ * What live host connections and development installs currently serve. A failed
+ * contract gate must be visible beside the published build, never silently applied.
+ */
+export const HostAdoptionSection = ({ hostAdoption, publishedEpochId }: {
+  readonly hostAdoption: OverviewHostAdoption | undefined;
+  readonly publishedEpochId: string | undefined;
+}) => {
+  if (hostAdoption === undefined) return undefined;
+  return <section aria-labelledby="host-adoption-heading" className="section host-adoption" data-state={hostAdoption.state}>
+    <h2 id="host-adoption-heading">Host adoption</h2>
+    <div className="build-health-state">
+      <StateMark state={hostAdoption.state === 'passed' || hostAdoption.state === 'direct' ? 'active' : hostAdoption.state} />
+      <div>
+        <strong>{hostAdoption.summary}</strong>
+        <p>
+          {hostAdoption.mode === 'gated'
+            ? 'Live host connections and development installs adopt a build only after the development contract matrix passes.'
+            : 'Declare dev.contracts to gate host adoption on the development contract matrix.'}
+        </p>
+      </div>
+    </div>
+    <dl className="definition-row">
+      <div><dt>Host-facing build</dt><dd className="identifier">{hostAdoption.adoptedEpochId ?? 'None adopted'}</dd></div>
+      <div><dt>Published build</dt><dd className="identifier">{publishedEpochId ?? 'None published'}</dd></div>
+      {hostAdoption.gateSummary === undefined ? undefined : <div><dt>Contract matrix</dt><dd>{hostAdoption.gateSummary}</dd></div>}
+    </dl>
+    {hostAdoption.failures.length === 0 ? undefined : (
+      <div className="table-wrap"><table aria-label="Contract violations">
+        <thead><tr><th>Route</th><th>Failed checks</th></tr></thead>
+        <tbody>{hostAdoption.failures.map((failure) => <tr key={failure.routeId}>
+          <td className="identifier">{failure.routeId}</td>
+          <td className="identifier">{failure.checks.join(', ')}</td>
+        </tr>)}</tbody>
+      </table></div>
+    )}
+  </section>;
+};
 
 /** A capability-aware entry point; authoritative build state remains below. */
 export const BundleWorkflow = ({ capabilities, onNavigate }: {
@@ -119,6 +158,8 @@ export const Overview = ({ capabilities, changedFiles, client, connectionError, 
             </button>
           </section>
           {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+
+          <HostAdoptionSection hostAdoption={overview.hostAdoption} publishedEpochId={overview.epoch.id} />
 
           <section aria-labelledby="diagnostics-heading" className="section">
             <h2 id="diagnostics-heading">Diagnostics ({overview.diagnostics.length})</h2>

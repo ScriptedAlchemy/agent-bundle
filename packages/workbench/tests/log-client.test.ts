@@ -81,8 +81,8 @@ it('accepts development contract status project and diagnostic log kinds', async
     },
     {
       ...record,
-      context: { diagnosticCode: 'AB7006' },
-      details: { code: 'AB7006', message: 'Contract matrix failed.', severity: 'error' },
+      context: { diagnosticCode: 'AB7211' },
+      details: { code: 'AB7211', message: 'Contract matrix failed.', severity: 'error' },
       kind: 'dev.contract.status.diagnostic',
       level: 'error',
       producer: 'diagnostic',
