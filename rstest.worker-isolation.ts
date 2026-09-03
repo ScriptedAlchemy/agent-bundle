@@ -11,12 +11,15 @@ export const rstestWorkerRootPath = (
   temporaryRoot: string,
   workerId: string,
   platform: NodeJS.Platform = process.platform,
+  invocationId: string = process.cwd() + '\0' + String(process.pid),
 ): string => {
   if (platform === 'win32') return join(temporaryRoot, 'agent-bundle-rstest-w' + workerId);
   const hash = createHash('sha256')
     .update(temporaryRoot, 'utf8')
     .update('\0', 'utf8')
     .update(workerId, 'utf8')
+    .update('\0', 'utf8')
+    .update(invocationId, 'utf8')
     .digest('hex')
     .slice(0, 16);
   return join('/tmp', `ab-rstest-${hash}`);
