@@ -294,6 +294,80 @@ nativeIt('registers an emitted Codex plugin carrying authored package metadata',
   }
 });
 
+nativeIt('installs and lists an emitted Codex plugin carrying the complete interface block', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-codex-interface-'));
+  const pluginRoot = join(root, 'plugin');
+  const codexHome = join(root, 'codex-home');
+  const interfaceModel: NormalizedPlugin = {
+    ...model,
+    extensions: {
+      codex: {
+        id: 'extension:codex',
+        key: 'codex',
+        provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+        target: 'codex',
+        value: {
+          interface: {
+            brandColor: '#10A37F',
+            capabilities: ['Interactive'],
+            category: 'Developer Tools',
+            composerIcon: './assets/icon.png',
+            defaultPrompt: ['Review this repository.'],
+            developerName: 'Agent Bundle',
+            displayName: 'Review Tools',
+            logo: './assets/logo.png',
+            longDescription: 'Review code and explain findings with repository context.',
+            privacyPolicyURL: 'https://example.test/privacy',
+            screenshots: ['./assets/overview.png'],
+            shortDescription: 'Repository-aware code review',
+            termsOfServiceURL: 'https://example.test/terms',
+            websiteURL: 'https://example.test/review-tools',
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    await Promise.all([
+      mkdir(codexHome, { recursive: true }),
+      mkdir(join(pluginRoot, 'assets'), { recursive: true }),
+    ]);
+    const plan = codexAdapter.plan(interfaceModel);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: pluginRoot });
+    await Promise.all([
+      writeFile(join(pluginRoot, 'assets', 'icon.png'), 'native icon proof\n'),
+      writeFile(join(pluginRoot, 'assets', 'logo.png'), 'native logo proof\n'),
+      writeFile(join(pluginRoot, 'assets', 'overview.png'), 'native screenshot proof\n'),
+    ]);
+
+    // The pinned CLI publishes no plugin validate subcommand; install and
+    // list are the honest native acceptance probes for the interface block.
+    const pluginHelp = await runCodex(root, ['plugin', '--help'], codexHome);
+    expect(pluginHelp.code, pluginHelp.stderr).toBe(0);
+    expect(`${pluginHelp.stdout}${pluginHelp.stderr}`).not.toMatch(/\bvalidate\b/u);
+
+    const marketplace = await runCodex(
+      root,
+      ['plugin', 'marketplace', 'add', pluginRoot],
+      codexHome,
+    );
+    expect(marketplace.code, marketplace.stderr).toBe(0);
+    const added = await runCodex(
+      root,
+      ['plugin', 'add', 'review-tools@review-tools-marketplace'],
+      codexHome,
+    );
+    expect(added.code, added.stderr).toBe(0);
+    const listed = await runCodex(root, ['plugin', 'list'], codexHome);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(`${listed.stdout}${listed.stderr}`).toContain('review-tools');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('pins Claude plugin and marketplace lifecycle command help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-lifecycle-help-'));
 

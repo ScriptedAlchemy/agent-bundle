@@ -5,6 +5,7 @@ import type { ValidateFunction } from 'ajv/dist/2020.js';
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { dataArrayValues } from '../core/strict-json.ts';
 import {
   pathTokens,
   type AgentBundleConfig,
@@ -34,6 +35,7 @@ import {
   validatedNativeHookDocument,
   type TargetHookContract,
 } from './hook-contract.ts';
+import appSchema from './schemas/codex/app.schema.json' with { type: 'json' };
 import schemaProvenance from './schemas/codex/PROVENANCE.json' with { type: 'json' };
 import hooksSchema from './schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from './schemas/codex/marketplace.schema.json' with { type: 'json' };
@@ -43,6 +45,7 @@ import {
   createAdapterValidator,
   hasPathToken,
   schemaDescriptorsFrom,
+  sourceInputs,
   standardArtifactLayout,
   standardPluginArtifactPlan,
   validateJsonSchemaDocument,
@@ -54,9 +57,27 @@ import {
 import { withInstallSurface } from '../install/surface.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
+export interface CodexInterfaceConfig {
+  readonly brandColor?: string;
+  readonly capabilities?: readonly string[];
+  readonly category?: string;
+  readonly composerIcon?: string;
+  readonly defaultPrompt?: readonly string[];
+  readonly developerName?: string;
+  readonly displayName?: string;
+  readonly logo?: string;
+  readonly logoDark?: string;
+  readonly longDescription?: string;
+  readonly privacyPolicyURL?: string;
+  readonly screenshots?: readonly string[];
+  readonly shortDescription?: string;
+  readonly termsOfServiceURL?: string;
+  readonly websiteURL?: string;
+}
 
-export interface CodexConfigExtension {
-  codex?: CodexHostConfig;
+export interface CodexRegisteredAppConfig {
+  /** Exact technical identifier returned by the registered MCP connection workflow. */
+  readonly id: string;
 }
 
 /** Documented publisher identity in `.codex-plugin/plugin.json`. */
@@ -66,13 +87,21 @@ export interface CodexAuthorConfig {
   readonly url?: string;
 }
 
-/** Codex-only authored package metadata layered onto the generated manifest. */
+/** Codex-only authored package metadata and install-surface config layered onto the generated manifest. */
 export interface CodexHostConfig extends AgentBundleHostConfig {
+  /** Registered MCP connection mappings emitted to the root `.app.json` compatibility document. */
+  readonly apps?: Readonly<Record<string, CodexRegisteredAppConfig>>;
   readonly author?: CodexAuthorConfig;
   readonly homepage?: string;
+  /** Install-surface metadata merged over the compiler's generated defaults. */
+  readonly interface?: CodexInterfaceConfig;
   readonly keywords?: readonly string[];
   readonly license?: string;
   readonly repository?: string;
+}
+
+export interface CodexConfigExtension {
+  codex?: CodexHostConfig;
 }
 
 declare module '../core/types.ts' {
@@ -85,12 +114,14 @@ const codexName = 'codex';
 
 /** Codex's conventional artifact document paths, shared with the unified bundle adapter. */
 export const codexArtifactPaths = Object.freeze({
+  apps: '.app.json',
   hooksManifest: 'hooks/hooks.json',
   marketplace: '.agents/plugins/marketplace.json',
   mcp: '.mcp.json',
   plugin: '.codex-plugin/plugin.json',
 });
 const validator = createAdapterValidator();
+const validateApps = validator.compile(appSchema);
 const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
@@ -125,7 +156,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.4.0',
+  adapterRevision: '1.5.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -133,12 +164,14 @@ const evidence = capabilityEvidence(codexName, metadata);
 
 const artifactValidation = deepFreeze({
   documents: [
+    Object.freeze({ path: '.app.json', required: false, schema: 'app' }),
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
     Object.freeze({ path: '.agents/plugins/marketplace.json', required: false, schema: 'marketplace' }),
     Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
     Object.freeze({ path: '.codex-plugin/plugin.json', required: true, schema: 'plugin' }),
   ],
   schemas: [
+    Object.freeze({ name: 'app', validate: validateJsonSchemaDocument(validateApps) }),
     Object.freeze({ name: 'hooks', validate: validateJsonSchemaDocument(validateHooks) }),
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateJsonSchemaDocument(validateMcp) }),
@@ -177,6 +210,25 @@ const isAbsoluteUrl = (value: unknown): value is string => {
     return false;
   }
 };
+
+const codexInterfaceFields = Object.freeze([
+  'brandColor',
+  'capabilities',
+  'category',
+  'composerIcon',
+  'defaultPrompt',
+  'developerName',
+  'displayName',
+  'logo',
+  'logoDark',
+  'longDescription',
+  'privacyPolicyURL',
+  'screenshots',
+  'shortDescription',
+  'termsOfServiceURL',
+  'websiteURL',
+]);
+
 
 const isEmail = (value: unknown): value is string =>
   isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
@@ -321,6 +373,257 @@ const planCodexManifestMetadata = (model: NormalizedPlugin): CodexManifestMetada
       ...(license === undefined ? {} : { license }),
       ...(repository === undefined ? {} : { repository }),
     }),
+    sourceInputs: inputs,
+  };
+};
+
+const pluginInternalPath = (value: unknown): value is string => {
+  if (!isNonemptyString(value) || !value.startsWith('./') || value === './' || value.includes('\\') || value.includes('\0')) {
+    return false;
+  }
+  const pluginRoot = '/agent-bundle-plugin-root';
+  const resolved = posix.resolve(pluginRoot, value.slice(2));
+  return resolved.startsWith(`${pluginRoot}/`);
+};
+
+interface CodexInterfacePlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly sourceInputs: readonly string[];
+  readonly value: Readonly<Record<string, unknown>>;
+}
+
+const planCodexInterface = (
+  model: NormalizedPlugin,
+  generated: Readonly<Record<string, unknown>>,
+): CodexInterfacePlan => {
+  const extension = model.extensions[codexName];
+  const declared = extension !== undefined && isPlainDataRecord(extension.value)
+    ? extension.value['interface']
+    : undefined;
+  if (declared === undefined || extension === undefined) {
+    return { diagnostics: [], sourceInputs: [], value: generated };
+  }
+  if (!isPlainDataRecord(declared)) {
+    return {
+      diagnostics: [errorDiagnostic(
+        'codex.interface.invalid',
+        'Codex interface must be a plain object containing only documented interface fields.',
+      )],
+      sourceInputs: sourceInputs(extension.provenance.sourcePath),
+      value: generated,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  for (const key of Object.keys(declared)) {
+    if (!codexInterfaceFields.includes(key)) {
+      diagnostics.push(errorDiagnostic(
+        'codex.interface.field.unknown',
+        `Codex interface field ${JSON.stringify(key)} is not documented.`,
+      ));
+    }
+  }
+  const value: Record<string, unknown> = { ...generated };
+  const stringFields = [
+    ['displayName', 'display-name'],
+    ['shortDescription', 'short-description'],
+    ['longDescription', 'long-description'],
+    ['developerName', 'developer-name'],
+    ['category', 'category'],
+  ] as const;
+  for (const [field, codeField] of stringFields) {
+    const authored = declared[field];
+    if (authored === undefined) continue;
+    if (!isNonemptyString(authored)) {
+      diagnostics.push(errorDiagnostic(
+        `codex.interface.${codeField}.invalid`,
+        `Codex interface ${field} must be a nonempty string.`,
+      ));
+    } else {
+      value[field] = authored;
+    }
+  }
+
+  const capabilities = declared['capabilities'];
+  if (capabilities !== undefined) {
+    const items = dataArrayValues(capabilities);
+    if (items === undefined) {
+      diagnostics.push(errorDiagnostic(
+        'codex.interface.capabilities.invalid',
+        'Codex interface capabilities must be an array of nonempty strings.',
+      ));
+    } else {
+      let valid = true;
+      for (const [index, item] of items.entries()) {
+        if (isNonemptyString(item)) continue;
+        valid = false;
+        diagnostics.push(errorDiagnostic(
+          'codex.interface.capabilities.item.invalid',
+          `Codex interface capabilities[${index}] must be a nonempty string.`,
+        ));
+      }
+      if (valid) value['capabilities'] = items;
+    }
+  }
+
+  const urlFields = [
+    ['websiteURL', 'website-url'],
+    ['privacyPolicyURL', 'privacy-policy-url'],
+    ['termsOfServiceURL', 'terms-of-service-url'],
+  ] as const;
+  for (const [field, codeField] of urlFields) {
+    const authored = declared[field];
+    if (authored === undefined) continue;
+    if (!isAbsoluteUrl(authored)) {
+      diagnostics.push(errorDiagnostic(
+        `codex.interface.${codeField}.invalid`,
+        `Codex interface ${field} must be an absolute HTTP(S) URL.`,
+      ));
+    } else {
+      value[field] = authored;
+    }
+  }
+
+  const defaultPrompt = declared['defaultPrompt'];
+  if (defaultPrompt !== undefined) {
+    const items = dataArrayValues(defaultPrompt);
+    if (items === undefined || items.length < 1 || items.length > 3) {
+      diagnostics.push(errorDiagnostic(
+        'codex.interface.default-prompt.invalid',
+        'Codex interface defaultPrompt must contain between one and three strings.',
+      ));
+    } else {
+      let valid = true;
+      for (const [index, item] of items.entries()) {
+        if (isNonemptyString(item) && item.length <= 128) continue;
+        valid = false;
+        diagnostics.push(errorDiagnostic(
+          'codex.interface.default-prompt.item.invalid',
+          `Codex interface defaultPrompt[${index}] must be a nonempty string of at most 128 characters.`,
+        ));
+      }
+      if (valid) value['defaultPrompt'] = items;
+    }
+  }
+
+  const brandColor = declared['brandColor'];
+  if (brandColor !== undefined) {
+    if (typeof brandColor !== 'string' || !/^#[0-9A-Fa-f]{6}$/u.test(brandColor)) {
+      diagnostics.push(errorDiagnostic(
+        'codex.interface.brand-color.invalid',
+        'Codex interface brandColor must be a six-digit hexadecimal color such as "#10A37F".',
+      ));
+    } else {
+      value['brandColor'] = brandColor;
+    }
+  }
+
+  const assetFields = [
+    ['composerIcon', 'composer-icon'],
+    ['logo', 'logo'],
+    ['logoDark', 'logo-dark'],
+  ] as const;
+  for (const [field, codeField] of assetFields) {
+    const authored = declared[field];
+    if (authored === undefined) continue;
+    if (!pluginInternalPath(authored)) {
+      diagnostics.push(errorDiagnostic(
+        `codex.interface.${codeField}.invalid`,
+        `Codex interface ${field} must be a ./-prefixed path that stays inside the plugin root.`,
+      ));
+    } else {
+      value[field] = authored;
+    }
+  }
+
+  const screenshots = declared['screenshots'];
+  if (screenshots !== undefined) {
+    const items = dataArrayValues(screenshots);
+    if (items === undefined) {
+      diagnostics.push(errorDiagnostic(
+        'codex.interface.screenshots.invalid',
+        'Codex interface screenshots must be an array of plugin-internal PNG paths.',
+      ));
+    } else {
+      let valid = true;
+      for (const [index, item] of items.entries()) {
+        if (
+          pluginInternalPath(item) &&
+          item.startsWith('./assets/') &&
+          item.endsWith('.png')
+        ) {
+          continue;
+        }
+        valid = false;
+        diagnostics.push(errorDiagnostic(
+          'codex.interface.screenshots.item.invalid',
+          `Codex interface screenshots[${index}] must be a ./assets/-relative PNG path inside the plugin root.`,
+        ));
+      }
+      if (valid) value['screenshots'] = items;
+    }
+  }
+
+  return {
+    diagnostics,
+    sourceInputs: sourceInputs(extension.provenance.sourcePath),
+    value: diagnostics.length === 0 ? value : generated,
+  };
+};
+
+interface CodexAppsPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Record<string, unknown>;
+  readonly sourceInputs: readonly string[];
+}
+
+const planCodexApps = (model: NormalizedPlugin): CodexAppsPlan => {
+  const extension = model.extensions[codexName];
+  const declared = extension !== undefined && isPlainDataRecord(extension.value)
+    ? extension.value['apps']
+    : undefined;
+  if (declared === undefined || extension === undefined) return { diagnostics: [], sourceInputs: [] };
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isPlainDataRecord(declared) || Object.keys(declared).length === 0) {
+    return {
+      diagnostics: [errorDiagnostic(
+        'codex.apps.invalid',
+        'Codex apps must be a nonempty object mapping declaration names to registered MCP IDs.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  const apps: Record<string, { readonly id: string }> = Object.create(null) as Record<string, { readonly id: string }>;
+  for (const [name, entry] of Object.entries(declared)) {
+    if (name.trim().length === 0) {
+      diagnostics.push(errorDiagnostic(
+        'codex.apps.name.invalid',
+        'Codex app declaration names must be nonempty strings.',
+      ));
+      continue;
+    }
+    if (!isPlainDataRecord(entry) || Object.keys(entry).length !== 1 || !Object.hasOwn(entry, 'id')) {
+      diagnostics.push(errorDiagnostic(
+        'codex.apps.entry.invalid',
+        `Codex app ${JSON.stringify(name)} must contain exactly one id field.`,
+      ));
+      continue;
+    }
+    const id = entry['id'];
+    if (!isNonemptyString(id)) {
+      diagnostics.push(errorDiagnostic(
+        'codex.apps.id.invalid',
+        `Codex app ${JSON.stringify(name)} id must be the nonempty technical ID returned by registration.`,
+      ));
+      continue;
+    }
+    apps[name] = { id };
+  }
+  return {
+    diagnostics,
+    ...(diagnostics.length === 0 ? { document: { apps } } : {}),
     sourceInputs: inputs,
   };
 };
@@ -512,9 +815,15 @@ export const planCodexArtifacts = (
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
   const manifestMetadata = planCodexManifestMetadata(model);
   diagnostics.push(...manifestMetadata.diagnostics);
+  const appsPlan = planCodexApps(model);
+  diagnostics.push(...appsPlan.diagnostics);
+  const appsValid = appsPlan.document !== undefined && validateApps(appsPlan.document);
+  if (appsPlan.document !== undefined) {
+    diagnostics.push(...schemaDiagnostics('app', appsValid, validateApps.errors));
+  }
 
   const description = model.metadata.description ?? model.metadata.name;
-  const interfaceMetadata = {
+  const generatedInterface = {
     capabilities: [
       ...(mcp === undefined ? [] : ['mcp']),
       ...(hookDocument === undefined ? [] : ['hooks']),
@@ -522,18 +831,19 @@ export const planCodexArtifacts = (
     ],
     defaultPrompt: [`Help me use ${model.metadata.name}.`],
     developerName: model.metadata.name,
-  };
+    category: 'Productivity',
+    displayName: model.metadata.name,
+    longDescription: description,
+    shortDescription: description,
+  } satisfies Readonly<Record<string, unknown>>;
+  const interfacePlan = planCodexInterface(model, generatedInterface);
+  diagnostics.push(...interfacePlan.diagnostics);
   const plugin = {
     author: { name: model.metadata.name },
     ...manifestMetadata.document,
     description,
-    interface: {
-      ...interfaceMetadata,
-      category: 'Productivity',
-      displayName: model.metadata.name,
-      longDescription: description,
-      shortDescription: description,
-    },
+    interface: interfacePlan.value,
+    ...(appsValid ? { apps: `./${codexArtifactPaths.apps}` } : {}),
     ...(mcp === undefined ? {} : { mcpServers: `./${mcpRelativePath}` }),
     ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
@@ -557,8 +867,19 @@ export const planCodexArtifacts = (
   diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
   return withInstallSurface(standardPluginArtifactPlan({
-    additionalPluginSourceInputs: manifestMetadata.sourceInputs,
+    additionalPluginSourceInputs: sourceInputs(
+      ...manifestMetadata.sourceInputs,
+      ...interfacePlan.sourceInputs,
+      ...appsPlan.sourceInputs,
+    ),
     diagnostics,
+    hostDocuments: appsPlan.document !== undefined && appsValid
+      ? [{
+          document: appsPlan.document,
+          relativePath: codexArtifactPaths.apps,
+          sourceInputs: appsPlan.sourceInputs,
+        }]
+      : [],
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
@@ -586,6 +907,51 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     commands: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no commands component.',
     ),
+    interfaceAssets: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.assets.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface image assets.',
+    ),
+    interfaceBrandColor: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.brandColor.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document an interface brand color.',
+    ),
+    interfaceCategoryCapabilities: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.categoryCapabilities.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface category and capability metadata.',
+    ),
+    interfaceDescriptions: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.descriptions.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface descriptions.',
+    ),
+    interfaceIdentity: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.identity.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface identity fields.',
+    ),
+    interfaceStarterPrompts: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.starterPrompts.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface starter prompts.',
+    ),
+    interfaceUrls: capabilityStateFromSupport(
+      capabilityTable.plugin.interface.urls.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document interface external links.',
+    ),
+    claudePluginDataEnvironment: capabilityStateFromSupport(
+      capabilityTable.plugin.hookEnvironment.claudePluginData.state === 'supported',
+      evidence,
+      'The pinned Codex hook contract does not export CLAUDE_PLUGIN_DATA.',
+    ),
+    claudePluginRootEnvironment: capabilityStateFromSupport(
+      capabilityTable.plugin.hookEnvironment.claudePluginRoot.state === 'supported',
+      evidence,
+      'The pinned Codex hook contract does not export CLAUDE_PLUGIN_ROOT.',
+    ),
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
@@ -599,6 +965,30 @@ export const codexAdapter: TargetAdapter = Object.freeze({
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
       'The pinned Codex contract does not support both required modern MCP transports.',
+    ),
+    pluginDataEnvironment: capabilityStateFromSupport(
+      capabilityTable.plugin.hookEnvironment.pluginData.state === 'supported',
+      evidence,
+      'The pinned Codex hook contract does not export PLUGIN_DATA.',
+    ),
+    pluginMcpPolicyApprovalModes: unavailableCapability(
+      capabilityTable.plugin.mcpServerPolicy.approvalModes.reason,
+    ),
+    pluginMcpPolicyEnabled: unavailableCapability(
+      capabilityTable.plugin.mcpServerPolicy.enabled.reason,
+    ),
+    pluginMcpPolicyTools: unavailableCapability(
+      capabilityTable.plugin.mcpServerPolicy.tools.reason,
+    ),
+    pluginRootEnvironment: capabilityStateFromSupport(
+      capabilityTable.plugin.hookEnvironment.pluginRoot.state === 'supported',
+      evidence,
+      'The pinned Codex hook contract does not export PLUGIN_ROOT.',
+    ),
+    registeredMcpApps: capabilityStateFromSupport(
+      capabilityTable.plugin.apps.registeredMcpMappings.state === 'supported',
+      evidence,
+      'The pinned Codex plugin contract does not document registered MCP app mappings.',
     ),
     rules: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no rules component; Codex guidance remains outside the plugin component surface.',
