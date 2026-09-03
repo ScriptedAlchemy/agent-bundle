@@ -221,8 +221,10 @@ export const validateNativeEventEnvelope = (
   }
   if (canonicalEvent === 'permission/request') {
     requireNativeString(native, 'tool_name');
-    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
-      return nativeEventError('native tool_input must be an object');
+    // The pinned permission-request input schema declares `"tool_input": true`
+    // (any JSON value), so presence is required but shape is tool-defined.
+    if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
+      return nativeEventError('native tool_input is required');
     }
     requirePermissionMode(native);
     if (target === 'codex') {

@@ -426,7 +426,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.21.0',
+  adapterRevision: '1.22.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -1228,7 +1228,8 @@ const isInternalSubdirectory = (value: string): boolean =>
   isNonemptyString(value) &&
   !value.startsWith('/') &&
   !value.startsWith('\\') &&
-  !value.split(/[\\/]/u).some((segment) => segment === '.' || segment === '..');
+  // Only parent traversal escapes the marketplace; no-op '.' segments stay in.
+  !value.split(/[\\/]/u).some((segment) => segment === '..');
 
 const isInternalRelativePath = (value: string): boolean =>
   value === './' ||

@@ -3,7 +3,7 @@
   "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/plugin.schema.json",
   "$defs": {
     "componentPath": {
-      "pattern": "^\\./(?!(?:.*\\/)?\\.\\.(?:\\/|$)).+",
+      "pattern": "^\\./(?!(?:.*[\\/\\\\])?\\.\\.(?:[\\/\\\\]|$))[^\\\\]+$",
       "type": "string"
     },
     "hookDocument": {
@@ -51,13 +51,13 @@
       "properties": {
         "email": { "format": "email", "type": "string" },
         "name": { "minLength": 1, "type": "string" },
-        "url": { "format": "uri", "pattern": "^https?://", "type": "string" }
+        "url": { "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" }
       },
       "required": ["name"],
       "type": "object"
     },
     "description": { "minLength": 1, "type": "string" },
-    "homepage": { "format": "uri", "pattern": "^https?://", "type": "string" },
+    "homepage": { "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
     "hooks": {
       "oneOf": [
         { "$ref": "#/$defs/componentPath" },
@@ -80,18 +80,18 @@
         "brandColor": { "pattern": "^#[0-9A-Fa-f]{6}$", "type": "string" },
         "capabilities": { "items": { "minLength": 1, "pattern": "\\S", "type": "string" }, "type": "array" },
         "category": { "minLength": 1, "pattern": "\\S", "type": "string" },
-        "composerIcon": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
+        "composerIcon": { "pattern": "^\\./(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$))[^\\\\]+$", "type": "string" },
         "defaultPrompt": { "items": { "maxLength": 128, "minLength": 1, "pattern": "\\S", "type": "string" }, "maxItems": 3, "minItems": 1, "type": "array" },
         "developerName": { "minLength": 1, "pattern": "\\S", "type": "string" },
         "displayName": { "minLength": 1, "pattern": "\\S", "type": "string" },
-        "logo": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
-        "logoDark": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
+        "logo": { "pattern": "^\\./(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$))[^\\\\]+$", "type": "string" },
+        "logoDark": { "pattern": "^\\./(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$))[^\\\\]+$", "type": "string" },
         "longDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
-        "privacyPolicyURL": { "pattern": "^https?://", "type": "string" },
+        "privacyPolicyURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
         "screenshots": { "items": { "pattern": "^\\./assets/(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.png$", "type": "string" }, "type": "array" },
         "shortDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
-        "termsOfServiceURL": { "pattern": "^https?://", "type": "string" },
-        "websiteURL": { "pattern": "^https?://", "type": "string" }
+        "termsOfServiceURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
+        "websiteURL": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" }
       },
       "required": ["displayName", "shortDescription", "longDescription", "developerName", "category", "capabilities", "defaultPrompt"],
       "type": "object"
@@ -111,7 +111,7 @@
       ]
     },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
-    "repository": { "format": "uri", "pattern": "^https?://", "type": "string" },
+    "repository": { "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "type": "string" },
     "skills": { "$ref": "#/$defs/componentPath" },
     "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
   },

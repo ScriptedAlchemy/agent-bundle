@@ -67,7 +67,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.6.0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -93,12 +93,12 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: '6d8238718b8d74c59f5519d996c6a4c707ab5ddb02781dfef401333f3ca0b4a5',
+        sha256: 'decee14ec76a602701f3c312aee135a0983c1ce95fa89dafc588ebb5c968843b',
       },
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.21.0',
+    adapterRevision: '1.22.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -144,7 +144,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.7.0',
+    adapterRevision: '1.8.0',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -169,7 +169,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.20.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.21.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -209,11 +209,10 @@ it('records observed capability versions and rehashes schema snapshots against p
       expect(schema.revision).toBe(metadata.observedVersion);
     }
 
-    if (target === 'claude') {
-      expect(sha256Hex(capability)).toBe('ad8913270725c3f4abbfbf12bac888092e271cecc9c64adaa114093c9e2e70de');
-    }
+    // Repository-owned capability tables are deliberately NOT hash-pinned:
+    // Git and adapterRevision version them (README "What gets hashed"), and a
+    // byte pin here forced a digest re-pin on every evidence edit.
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('d056a5575fb98408e12e9236af356227911aec657f226eb720ff9b6a120c5819');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',
