@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { hasOnlyOwnKeys, isPlainRecord } from '../core/strict-json.ts';
+
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import type {
   DevRuntimeMcpAppRunBinding,
@@ -33,10 +35,10 @@ const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Ob
 const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic => typeof value === 'object' && value !== null && typeof (value as Partial<RequestDiagnostic>).status === 'number';
 const responseJson = (response: ServerResponse, body: unknown): void => { response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(body)); };
 const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => { response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } })); };
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const isRecord = isPlainRecord;
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 4_096 && !value.includes('\0');
 const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-const hasOnly = (value: Record<string, unknown>, fields: readonly string[]): boolean => Object.keys(value).every((key) => fields.includes(key));
+const hasOnly: (value: Record<string, unknown>, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const readBody = async (request: IncomingMessage): Promise<Record<string, unknown>> => {
   const contentType = request.headers['content-type'];

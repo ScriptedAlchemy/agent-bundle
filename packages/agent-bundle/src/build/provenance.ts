@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
-import { assertInside } from '../core/paths.ts';
+import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 
 export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
@@ -45,14 +45,14 @@ interface PublicStats {
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
-const toPosixRelative = (root: string, path: string): string =>
-  relative(resolve(root), assertInside(root, path)).replaceAll('\\', '/');
+const containedPosixRelative = (root: string, path: string): string =>
+  toPosixRelative(root, assertInside(root, path));
 
 const sortedUnique = (paths: readonly string[]): readonly string[] =>
   Object.freeze([...new Set(paths)].sort((left, right) => left.localeCompare(right)));
 
 const sourceInputsFor = (projectRoot: string, sourceInputs: readonly string[]): readonly string[] =>
-  sortedUnique(sourceInputs.map((source) => toPosixRelative(projectRoot, source)));
+  sortedUnique(sourceInputs.map((source) => containedPosixRelative(projectRoot, source)));
 
 const asRecord = (value: unknown): JsonRecord | undefined =>
   isRecord(value) ? value as JsonRecord : undefined;
@@ -225,7 +225,7 @@ export const createOutputProvenance = (options: {
     }
     return Object.freeze({
       kind: output.kind,
-      path: toPosixRelative(options.artifactRoot, output.path),
+      path: containedPosixRelative(options.artifactRoot, output.path),
       sourceInputs,
     });
   })

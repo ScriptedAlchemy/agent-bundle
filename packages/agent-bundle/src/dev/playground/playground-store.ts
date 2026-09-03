@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { serialQueue, type SerialQueue } from '../../core/async.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import type { DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -353,15 +353,6 @@ const sensitiveKey = (key: string): boolean => {
     || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const hasExactOwnKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
-
 const hasOptionalOwnKey = (value: Record<string, unknown>, required: readonly string[], optional: string): boolean =>
   hasExactOwnKeys(value, required) || hasExactOwnKeys(value, [...required, optional]);
 
@@ -477,62 +468,57 @@ const json = (value: unknown, label: string, seen = new WeakSet<object>()): Play
   if (typeof value !== 'object') throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
   if (seen.has(value)) throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain cycles.`);
   seen.add(value);
-  if (Array.isArray(value)) {
+  try {
+    if (Array.isArray(value)) {
+      const prototype = Object.getPrototypeOf(value);
+      const names = Object.getOwnPropertyNames(value);
+      const symbols = Object.getOwnPropertySymbols(value);
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+      if (prototype !== Array.prototype
+        || symbols.length !== 0
+        || lengthDescriptor === undefined
+        || !('value' in lengthDescriptor)
+        || !Number.isInteger(lengthDescriptor.value)
+        || lengthDescriptor.value < 0
+        || names.length !== lengthDescriptor.value + 1) {
+        throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+      }
+      const copied = new Array<PlaygroundJsonValue>(lengthDescriptor.value);
+      for (let index = 0; index < lengthDescriptor.value; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !('value' in descriptor)) {
+          throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
+        }
+        if (!descriptor.enumerable) {
+          throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+        }
+        copied[index] = json(descriptor.value, label, seen);
+      }
+      return Object.freeze(copied);
+    }
     const prototype = Object.getPrototypeOf(value);
-    const names = Object.getOwnPropertyNames(value);
-    const symbols = Object.getOwnPropertySymbols(value);
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-    if (prototype !== Array.prototype
-      || symbols.length !== 0
-      || lengthDescriptor === undefined
-      || !('value' in lengthDescriptor)
-      || !Number.isInteger(lengthDescriptor.value)
-      || lengthDescriptor.value < 0
-      || names.length !== lengthDescriptor.value + 1) {
-      seen.delete(value);
+    if (prototype !== Object.prototype && prototype !== null) {
       throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
     }
-    const copied = new Array<PlaygroundJsonValue>(lengthDescriptor.value);
-    for (let index = 0; index < lengthDescriptor.value; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
+    const names = Object.getOwnPropertyNames(value);
+    if (Object.getOwnPropertySymbols(value).length !== 0) {
+      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
+    }
+    for (const key of names.sort()) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !('value' in descriptor)) {
-        seen.delete(value);
         throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
       }
       if (!descriptor.enumerable) {
-        seen.delete(value);
         throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
       }
-      copied[index] = json(descriptor.value, label, seen);
+      copied[key] = json(descriptor.value, label, seen);
     }
-    seen.delete(value);
     return Object.freeze(copied);
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
+  } finally {
     seen.delete(value);
-    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
   }
-  const copied = Object.create(null) as Record<string, PlaygroundJsonValue>;
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0) {
-    seen.delete(value);
-    throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
-  }
-  for (const key of names.sort()) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || !('value' in descriptor)) {
-      seen.delete(value);
-      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must not contain accessors.`);
-    }
-    if (!descriptor.enumerable) {
-      seen.delete(value);
-      throw serviceError('PLAYGROUND_VALUE_INVALID', `${label} must be JSON-compatible.`);
-    }
-    copied[key] = json(descriptor.value, label, seen);
-  }
-  seen.delete(value);
-  return Object.freeze(copied);
 };
 
 const jsonObject = (value: unknown, label: string): PlaygroundJsonObject => {

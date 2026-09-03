@@ -1,7 +1,7 @@
 import { lstat, opendir } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 
-import { audioExtensions, mapWithConcurrency, naturalCompare, normalizedIdentity, utcNow } from './foundation.ts';
+import { audioExtensions, errorMessage, mapWithConcurrency, naturalCompare, normalizedIdentity, utcNow } from './foundation.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
 const maximumEntries = 65_536;
@@ -204,23 +204,21 @@ const discover = async (source: string): Promise<{ readonly files: string[]; rea
   return { files, root: selected };
 };
 
-const errorMessage = (error: unknown): string => error instanceof Error ? error.message : 'Audiobook inspection failed.';
-
 export const createInventory = async (
   input: { readonly source: string; readonly strict?: boolean },
   dependencies: LibraryDependencies = {},
 ): Promise<InventoryReceipt> => {
   const discovered = await discover(input.source);
-  const files: MediaRecord[] = [];
-  const errors: Array<{ error: string; path: string }> = [];
-  for (const path of discovered.files) {
+  const outcomes = await mapWithConcurrency(discovered.files, 2, async (path) => {
     dependencies.signal?.throwIfAborted();
     try {
-      files.push(await probeMediaRecord(path, discovered.root, dependencies));
+      return { ok: true as const, record: await probeMediaRecord(path, discovered.root, dependencies) };
     } catch (error) {
-      errors.push(Object.freeze({ error: errorMessage(error), path }));
+      return { error: errorMessage(error, 'Audiobook inspection failed.'), ok: false as const, path };
     }
-  }
+  });
+  const files = outcomes.flatMap((outcome) => outcome.ok ? [outcome.record] : []);
+  const errors = outcomes.flatMap((outcome) => outcome.ok ? [] : [Object.freeze({ error: outcome.error, path: outcome.path })]);
   return Object.freeze({
     errors: Object.freeze(errors),
     exitCode: input.strict === true && errors.length > 0 ? 1 : 0,
@@ -275,7 +273,7 @@ const auditFile = async (path: string, root: string, dependencies: LibraryDepend
     const metadata = await lstat(path);
     return Object.freeze({
       bytes: metadata.size,
-      error: errorMessage(error),
+      error: errorMessage(error, 'Audiobook inspection failed.'),
       extension: extname(path).toLowerCase(),
       missing: Object.freeze({ album: false, artwork: false, author: false, chapters: false, title: false }),
       path: resolve(path),

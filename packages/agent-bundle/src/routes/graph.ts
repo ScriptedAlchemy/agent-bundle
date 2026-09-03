@@ -364,23 +364,34 @@ const compiledRoute = (
 });
 
 /**
- * Statically extracts one route module's `config` export from disk. A module
- * a racing deletion removed simply has no config; extraction diagnostics
- * (AB4805/AB4806) accumulate beside the discovery diagnostics.
+ * Reads one route module's source text. A racing deletion returns no text so
+ * extract/validate skip the same way a later snapshot would.
+ */
+const readRouteModuleText = async (source: string): Promise<string | undefined> => {
+  try {
+    return await readFile(source, 'utf8');
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Statically extracts one route module's `config` export from already-read
+ * source text. A module a racing deletion removed simply has no config;
+ * extraction diagnostics (AB4805/AB4806) accumulate beside the discovery
+ * diagnostics.
  */
 interface ExtractedModuleMetadata {
   readonly config: Readonly<Record<string, unknown>>;
   readonly inputSchema?: RouteInputSchema;
 }
 
-const extractedModuleMetadata = async (
+const extractedModuleMetadata = (
   module: DiscoveredRouteModule,
+  moduleText: string | undefined,
   diagnostics: Diagnostic[],
-): Promise<ExtractedModuleMetadata> => {
-  let moduleText: string;
-  try {
-    moduleText = await readFile(module.source, 'utf8');
-  } catch {
+): ExtractedModuleMetadata => {
+  if (moduleText === undefined) {
     return { config: emptyRouteConfig };
   }
   const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
@@ -523,6 +534,7 @@ export const compileRouteGraph = async (
   const scripts: CompiledAgentRoute[] = [];
   const cliRoutes: CompiledAgentRoute[] = [];
   const providers: CompiledProvider[] = [];
+  const moduleTextBySource = new Map<string, string>();
   for (const module of modules) {
     if (module.surface === 'provider') {
       providers.push({
@@ -531,29 +543,28 @@ export const compileRouteGraph = async (
         provenance: { kind: 'conventional', relativePath: module.relativePath },
         source: module.source,
       });
-      try {
+      const providerText = await readRouteModuleText(module.source);
+      if (providerText !== undefined) {
         diagnostics.push(...validateProviderModuleContract(
-          await readFile(module.source, 'utf8'),
+          providerText,
           module.relativePath,
           module.source,
         ));
-      } catch {
-        // Racing deletion is handled by the next source snapshot.
       }
       continue;
     }
-    const metadata = await extractedModuleMetadata(module, diagnostics);
+    const moduleText = await readRouteModuleText(module.source);
+    if (moduleText !== undefined) {
+      moduleTextBySource.set(module.source, moduleText);
+    }
+    const metadata = extractedModuleMetadata(module, moduleText, diagnostics);
     const route = compiledRoute(module, metadata.config, metadata.inputSchema);
-    if (route.kind === 'event-route') {
-      try {
-        diagnostics.push(...validateEventRouteModuleContract(
-          await readFile(route.source, 'utf8'),
-          route.provenance.relativePath,
-          route.source,
-        ));
-      } catch {
-        // Racing deletion is handled by the next source snapshot.
-      }
+    if (route.kind === 'event-route' && moduleText !== undefined) {
+      diagnostics.push(...validateEventRouteModuleContract(
+        moduleText,
+        route.provenance.relativePath,
+        route.source,
+      ));
     }
     switch (route.kind) {
       case 'tool':
@@ -619,14 +630,13 @@ export const compileRouteGraph = async (
           }
           continue;
         }
-        try {
+        const moduleText = moduleTextBySource.get(route.source);
+        if (moduleText !== undefined) {
           diagnostics.push(...validateRouteModuleContract(
-            await readFile(route.source, 'utf8'),
+            moduleText,
             route.provenance.relativePath,
             route.source,
           ));
-        } catch {
-          // Racing deletion is handled by the next source snapshot.
         }
       }
     }
@@ -664,14 +674,8 @@ export const compileRouteGraph = async (
       ));
     }
     if (mode === 'generated') {
-      const compiled = await compileCliCommands(cliRoutes, async (route) => {
-        try {
-          return await readFile(route.source, 'utf8');
-        } catch {
-          // Racing deletion is handled by the next source snapshot.
-          return undefined;
-        }
-      }, projected);
+      const compiled = await compileCliCommands(cliRoutes, async (route) =>
+        moduleTextBySource.get(route.source), projected);
       diagnostics.push(...compiled.diagnostics);
       cli = {
         commands: compiled.commands,

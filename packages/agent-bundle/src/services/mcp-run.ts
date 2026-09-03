@@ -1,14 +1,14 @@
 import { loadEnv } from '@rsbuild/core';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
-import { assertInside, joinArtifact } from '../core/paths.ts';
+import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import {
@@ -49,9 +49,6 @@ export interface ResolveMcpStdioLaunchOptions {
   readonly target: string;
   readonly workspaceRoot: string;
 }
-
-const resolveContained = (root: string, path: string): string =>
-  isAbsolute(path) ? path : assertInside(root, resolve(root, path));
 
 const safeStateSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 

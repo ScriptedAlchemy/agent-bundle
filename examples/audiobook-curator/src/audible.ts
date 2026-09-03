@@ -7,6 +7,7 @@ import {
   CuratorError,
   audibleHosts,
   contributorNames,
+  errorMessage,
   normalizedIdentity,
   syncDirectory,
   syncFile,
@@ -199,7 +200,7 @@ export const requestWithAttempts = async (
       failure = error;
     }
   }
-  throw new CuratorError(failure instanceof Error ? failure.message : `Request failed: ${url}`);
+  throw new CuratorError(errorMessage(failure, `Request failed: ${url}`));
 };
 
 export const searchAudible = async (
@@ -232,7 +233,7 @@ export const searchAudible = async (
         region,
       })));
     } catch (error) {
-      errors.push({ error: error instanceof Error ? error.message : 'Audible search failed.', region });
+      errors.push({ error: errorMessage(error, 'Audible search failed.'), region });
     }
   }
   candidates.sort((left, right) => right.evidence.score - left.evidence.score);
@@ -316,7 +317,7 @@ export const cacheAudibleEdition = async (
     chapterPath = join(cache, 'chapters.json');
     await writeReceipt(chapterPath, chapters);
   } catch (error) {
-    chapterError = error instanceof Error ? error.message : 'Audible chapter request failed.';
+    chapterError = errorMessage(error, 'Audible chapter request failed.');
   }
   const images = productRecord.product_images;
   const imageUrl = images !== null && typeof images === 'object' && !Array.isArray(images)

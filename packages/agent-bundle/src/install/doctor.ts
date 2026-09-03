@@ -9,6 +9,7 @@ import {
   type DiagnosticSeverity,
 } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
+import { exists } from '../core/paths.ts';
 import { validateClaudePluginFiles } from '../host-contracts/claude-plugin-validation.ts';
 import { validateCodexPluginFiles } from '../host-contracts/codex-plugin-validation.ts';
 import {
@@ -202,16 +203,6 @@ const marketplacePath = (host: Exclude<DoctorHost, 'cursor'>): string =>
   host === 'claude'
     ? '.claude-plugin/marketplace.json'
     : '.agents/plugins/marketplace.json';
-
-const exists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
-};
 
 const readRecord = async (path: string, kind: string): Promise<Record<string, unknown>> => {
   let value: unknown;

@@ -33,6 +33,7 @@ import type {
 } from './install/doctor.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { errorMessage } from './core/errors.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
@@ -250,7 +251,7 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
   if (error instanceof DiagnosticError) return error.diagnostics;
   return [{
     code: 'AB5000',
-    message: error instanceof Error ? error.message : String(error),
+    message: errorMessage(error),
     severity: 'error',
   }];
 };

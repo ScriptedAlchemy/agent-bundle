@@ -6,6 +6,7 @@ import {
   semanticGraderIdentityPattern,
 } from '../../../agent-bundle/src/contracts/eval.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import { isRecord } from '../client-helpers.ts';
 import {
   nonnegativeIntegerSchema,
   nonnegativeNumberSchema,
@@ -33,9 +34,6 @@ export class ComparisonClientError extends Error {
     this.code = code;
   }
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const invalidResponse = (): ComparisonClientError =>
   new ComparisonClientError('AB8083', 'Eval comparison route returned an invalid response.');

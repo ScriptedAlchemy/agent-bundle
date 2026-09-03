@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInside } from '../core/paths.ts';
-import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { hasExactOwnKeys, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
@@ -155,11 +155,6 @@ const epochReferenceCounts = new Map<string, number>();
  * set of reference counts, so leases survive across store instances.
  */
 const epochLeaseMutexes = new Map<string, Semaphore.Semaphore>();
-
-const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-};
 
 /** Every required key present, every present key either required or optional. */
 const hasRequiredOwnKeys = (

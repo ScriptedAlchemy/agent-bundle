@@ -100,10 +100,11 @@ export class ProjectWatcher {
     this.#ignored = (path) => {
       const source = relativePath(this.#root, path);
       if (source === undefined) return true;
-      const parts = source.split('/');
-      return parts.some((part) => excludedDirectoryNames.has(part)) ||
-        [...this.#outputPaths].some((ignored) => source === ignored || source.startsWith(`${ignored}/`)) ||
-        (source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true);
+      if (source.split('/').some((part) => excludedDirectoryNames.has(part))) return true;
+      for (const ignored of this.#outputPaths) {
+        if (source === ignored || source.startsWith(`${ignored}/`)) return true;
+      }
+      return source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true;
     };
     const ready = Promise.withResolvers<void>();
     this.#ready = ready.promise;

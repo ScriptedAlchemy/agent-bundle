@@ -1,4 +1,5 @@
 import type { TargetHookEntry } from '../adapters/types.ts';
+import { isPlainRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import {
@@ -62,10 +63,7 @@ export const generatedDtsTsconfigToken = '<generated-dts-tsconfig>';
 
 const artifactOutputToken = (target: string): string => `<output>/${target}`;
 
-const isPlainObject = (value: object): boolean => {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-};
+const isPlainObject: (value: object) => boolean = isPlainRecord;
 
 /**
  * Renders a composed bundler config as JSON-safe data without dropping the

@@ -19,7 +19,6 @@ import {
   freezeProjectStatus,
   type ArtifactEpoch,
   type ArtifactStatus,
-  type BuildAttempt,
   type FailedBuildAttempt,
   type Invalidation,
   type ProjectStatus,
@@ -175,9 +174,6 @@ const failedResult = (diagnostics: readonly Diagnostic[]): FailedArtifactEpochRe
     outcome: 'failed',
   });
 };
-
-const lastAttempt = (status: ProjectStatus): Exclude<BuildAttempt, RunningBuildAttempt> | undefined =>
-  status.build.lastAttempt;
 
 const artifactStatusFor = (
   epoch: ArtifactEpoch | undefined,
@@ -434,11 +430,12 @@ export class DevCoordinator {
       sourceRevision: source.revision ?? 'unknown',
       startedAt: this.#now().toISOString(),
     });
+    const previousAttempt = this.#status.build.lastAttempt;
     this.#status = freezeProjectStatus({
       artifact: artifactStatusFor(this.#activeEpoch, source.revision),
       build: {
         activeAttempt: running,
-        ...(lastAttempt(this.#status) === undefined ? {} : { lastAttempt: lastAttempt(this.#status) }),
+        ...(previousAttempt === undefined ? {} : { lastAttempt: previousAttempt }),
         state: 'building',
       },
       source,

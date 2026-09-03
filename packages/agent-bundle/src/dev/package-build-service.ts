@@ -1,5 +1,7 @@
 import { rm, rmdir } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
+
+import { toPosixRelative } from '../core/paths.ts';
 
 import { buildPackageOutputs } from '../build/package-build.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -79,8 +81,7 @@ const toolsIdentity = (value: unknown): unknown => {
   return value;
 };
 
-const relativePosix = (root: string, path: string): string =>
-  relative(root, path).replaceAll('\\', '/');
+const relativePosix = toPosixRelative;
 
 export class DevPackageBuildService implements DevPackageBuilder {
   readonly #buildOutputs: typeof buildPackageOutputs;

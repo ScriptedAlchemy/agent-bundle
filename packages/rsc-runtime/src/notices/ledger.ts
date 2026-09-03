@@ -167,13 +167,13 @@ const assertOpen = (closed: boolean, signal: AbortSignal): void => {
   }
 };
 
-const publishProgram = (
+const publishProgram = Effect.fnUntraced(function*(
   store: NoticeStore,
   authorize: AgentNoticeAuthorizer,
   request: AgentNoticeRequest,
   input: AgentNoticePublishInput,
   options: AgentNoticePublishOptions,
-): Effect.Effect<AgentNoticePublishResult, Error> => Effect.gen(function*() {
+): Effect.fn.Return<AgentNoticePublishResult, Error> {
   const prepared = yield* noticeEffect(() => {
     const target = recipient(input.recipient);
     const createdAt = timestamp(request.invocation.startedAt, 'Notice createdAt');
@@ -248,11 +248,11 @@ const deliveryFor = (
   return receipt === undefined ? undefined : Object.freeze({ notice, receipt });
 };
 
-const inboxProgram = (
+const inboxProgram = Effect.fnUntraced(function*(
   store: NoticeStore,
   authorize: AgentNoticeAuthorizer,
   request: AgentNoticeRequest,
-): Effect.Effect<readonly AgentNotice[], Error> => Effect.gen(function*() {
+): Effect.fn.Return<readonly AgentNotice[], Error> {
   const before = yield* storeEffect(() => store.read({ signal: request.signal }));
   const readTime = Date.parse(request.invocation.startedAt);
   const candidates = before.state.notices.filter((notice) =>

@@ -2,6 +2,7 @@ import { createTargetDiagnostics } from './diagnostics.ts';
 import { hasErrors, type Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { isValidPackageName } from '../core/project-context.ts';
+import { isRecord } from '../core/strict-json.ts';
 import {
   pathTokens,
   type AgentBundleConfig,
@@ -596,8 +597,7 @@ const lspServerFields: ReadonlySet<string> = new Set([
 ]);
 
 /** Normalized config extension values are already strict JSON, so a plain shape test is enough. */
-const isDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+const isDataRecord: (value: unknown) => value is Readonly<Record<string, unknown>> = isRecord;
 
 const claudePathSubstitutionTokens = Object.freeze([
   ...Object.values(pathTokens),

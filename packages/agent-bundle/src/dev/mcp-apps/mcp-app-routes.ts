@@ -10,6 +10,8 @@ import type {
   McpAppBindingOperation,
   McpAppRuntimeRoutePreviewService,
 } from '../mcp-app-runtime-preview-service.ts';
+import { hasOnlyOwnKeys } from '../../core/strict-json.ts';
+import { isMcpAppConsentCapability } from './mcp-app-sandbox.ts';
 import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
 import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
 import { runtimeAppMessageLimits } from '../runtime-app-message-limits.ts';
@@ -252,8 +254,7 @@ const isRuntimeRoute = (value: Route): value is RuntimeRoute => value.kind.start
 const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
-const hasOnly = (value: JsonObject, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
@@ -422,8 +423,8 @@ const runtimeOperation = (value: JsonObject): McpAppBindingOperation => {
 const runtimeConsentRequest = (value: JsonObject): McpAppConsentRequest => {
   if (!hasOnly(value, ['actionFingerprint', 'capability', 'details', 'scope', 'summary']) || !nonemptyString(value.actionFingerprint)
     || !nonemptyString(value.summary) || !isJsonValue(value.details) || (value.scope !== 'action' && value.scope !== 'document')
-    || !['call-tool', 'download-file', 'open-external-link', 'clipboard-write', 'camera', 'microphone', 'geolocation', 'request-display-mode'].includes(value.capability as string)) return invalidShape();
-  return Object.freeze({ actionFingerprint: value.actionFingerprint, capability: value.capability as McpAppConsentRequest['capability'], details: cloneJson(value.details), scope: value.scope, summary: value.summary });
+    || !isMcpAppConsentCapability(value.capability)) return invalidShape();
+  return Object.freeze({ actionFingerprint: value.actionFingerprint, capability: value.capability, details: cloneJson(value.details), scope: value.scope, summary: value.summary });
 };
 
 const runtimeConsentDecision = (value: JsonObject): 'allow-once' | 'deny' => {

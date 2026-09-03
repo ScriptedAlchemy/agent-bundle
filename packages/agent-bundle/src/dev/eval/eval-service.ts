@@ -34,7 +34,7 @@ import {
 } from '../../eval/run-store.ts';
 import type { EvalAssertionKind, EvalCase, EvalInvocation } from '../../eval/types.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
-import { isInsideOrEqual } from '../../core/paths.ts';
+import { isInsideOrEqual, toPosixRelative } from '../../core/paths.ts';
 import { isErrno } from '../../core/errors.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -237,8 +237,7 @@ export class EvalServiceBackgroundFailureRetention {
   }
 }
 
-const projectRelative = (projectRoot: string, path: string): string =>
-  relative(projectRoot, path).replaceAll('\\', '/');
+const projectRelative = toPosixRelative;
 
 /** Persist artifact identity without leaking or trusting an absolute host path. */
 const storedArtifactBinding = (

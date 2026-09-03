@@ -2,6 +2,8 @@ import { posix } from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
 
+import { errorMessage } from '../core/errors.ts';
+
 export type ParsedMarkdownFrontmatter =
   | { readonly body: string; readonly status: 'missing-frontmatter' }
   | { readonly body: string; readonly message: string; readonly status: 'malformed-frontmatter' }
@@ -26,7 +28,7 @@ export const parseMarkdownFrontmatter = (markdown: string): ParsedMarkdownFrontm
   } catch (error) {
     return {
       body,
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
       status: 'malformed-frontmatter',
     };
   }

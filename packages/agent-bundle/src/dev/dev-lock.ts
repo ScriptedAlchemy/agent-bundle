@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import { sleep } from '../core/async.ts';
 import { stableJson } from '../core/digest.ts';
 import { publishFileByLink } from '../core/durable-fs.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
@@ -233,10 +234,6 @@ const removeIfOwned = async (storage: DevLockStorage, path: string, contents: st
 
 const initialRecoveryRetryDelayMs = 25;
 const maximumRecoveryRetryDelayMs = 250;
-
-const sleep = async (delayMs: number): Promise<void> => {
-  await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, delayMs));
-};
 
 const recoveryContentsFor = (owner: DevLockOwner): string => `${stableJson({ owner })}\n`;
 

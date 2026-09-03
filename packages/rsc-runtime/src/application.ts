@@ -13,12 +13,8 @@ export interface RscApplicationOptions {
   readonly version: string;
 }
 
-export interface RscApplication {
-  readonly description?: string;
-  readonly name: string;
-  readonly operations: readonly Readonly<RscOperationDefinition>[];
-  readonly version: string;
-}
+/** Structurally identical to its options: validation freezes but never reshapes. */
+export type RscApplication = RscApplicationOptions;
 
 const canonicalName = /^[a-z][a-z0-9._-]{0,63}$/u;
 

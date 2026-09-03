@@ -152,6 +152,10 @@ export const hasExactOwnKeys = (value: object, keys: readonly string[]): boolean
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 };
 
+/** Every own key is allowed; missing keys are tolerated (subset contract). */
+export const hasOnlyOwnKeys = (value: object, keys: readonly string[]): boolean =>
+  Object.keys(value).every((key) => keys.includes(key));
+
 /** Plain object whose own properties are all string-keyed data properties (no accessors, no symbols). */
 export const isPlainDataRecord = (value: unknown): value is Record<string, unknown> => {
   if (!isRecord(value)) return false;

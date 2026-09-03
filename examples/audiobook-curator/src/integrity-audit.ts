@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { chapterMappingIssues, type ChapterRow } from './conversion.ts';
-import { CuratorError, asRecord, readJson, sha256File, utcNow, writeReceipt } from './foundation.ts';
+import { CuratorError, asRecord, errorMessage, readJson, sha256File, utcNow, writeReceipt } from './foundation.ts';
 import { probeMediaDetails, probeMediaRecord, type LibraryDependencies, type MediaDetails, type MediaRecord } from './library.ts';
 import { runMediaProcess, type MediaProcess } from './media-process.ts';
 
@@ -117,7 +117,7 @@ export const auditAudiobookIntegrity = async (
       fullDecode = 'verified';
     } catch (error) {
       fullDecode = 'failed';
-      issues.push(`full decode failed: ${error instanceof Error ? error.message : 'unknown failure'}`);
+      issues.push(`full decode failed: ${errorMessage(error, 'unknown failure')}`);
     }
   }
   const after = await lstat(file);

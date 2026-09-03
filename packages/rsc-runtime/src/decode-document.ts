@@ -2,7 +2,9 @@ import { Children, isValidElement, type ReactNode } from 'react';
 
 import {
   AgentContractError,
+  admitDocumentNode,
   createAgentDocument,
+  expectDocumentDepth,
   resolveAgentRenderLimits,
   type AgentDocument,
   type AgentDocumentNode,
@@ -61,24 +63,9 @@ interface DecodeState {
   representedError: boolean;
 }
 
-const enterDecodeNode = (depth: number, state: DecodeState): void => {
-  if (depth > state.limits.maxDocumentDepth) {
-    throw new AgentContractError(
-      'document-depth-exceeded',
-      `Agent Document depth exceeds ${String(state.limits.maxDocumentDepth)}`,
-    );
-  }
-  state.nodes += 1;
-  if (state.nodes > state.limits.maxDocumentNodes) {
-    throw new AgentContractError(
-      'document-node-count-exceeded',
-      `Agent Document node count exceeds ${String(state.limits.maxDocumentNodes)}`,
-    );
-  }
-};
-
 const decodeNode = (node: ReactNode, depth: number, state: DecodeState): AgentDocumentNode => {
-  enterDecodeNode(depth, state);
+  expectDocumentDepth(depth, state.limits);
+  admitDocumentNode(state);
   const element = protocolElement(node);
   const { props } = element;
   switch (element.type) {

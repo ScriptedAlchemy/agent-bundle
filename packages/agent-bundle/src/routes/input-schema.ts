@@ -64,7 +64,7 @@ export const unwrapExpression = (expression: ts.Expression): ts.Expression => {
   return current;
 };
 
-const positionOf = (sourceFile: ts.SourceFile, node: ts.Node): string => {
+export const positionOf = (sourceFile: ts.SourceFile, node: ts.Node): string => {
   const { character, line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return `${line + 1}:${character + 1}`;
 };
@@ -300,7 +300,7 @@ const bindsInputSchemaName = (name: ts.BindingName): boolean => {
     !ts.isOmittedExpression(element) && bindsInputSchemaName(element.name));
 };
 
-const hasExportModifier = (statement: ts.Statement): boolean =>
+export const hasExportModifier = (statement: ts.Statement): boolean =>
   ts.canHaveModifiers(statement) &&
   (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
 

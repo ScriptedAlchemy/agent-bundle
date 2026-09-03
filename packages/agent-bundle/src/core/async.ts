@@ -2,6 +2,9 @@ export interface SerialQueue {
   run<T>(operation: () => Promise<T>): Promise<T>;
 }
 
+export const sleep = (delayMs: number): Promise<void> =>
+  new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+
 export const mapConcurrent = async <T>(
   items: readonly T[],
   concurrency: number,

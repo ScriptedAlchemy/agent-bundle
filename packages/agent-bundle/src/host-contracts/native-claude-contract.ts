@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+
+import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { spawn } from 'node:child_process';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -75,9 +78,6 @@ export interface NativeClaudeStreamNormalizationOptions {
   readonly allowedPluginNames?: readonly string[];
   readonly candidateSkillEventName?: string;
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isSafeLabel = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(value);
@@ -313,7 +313,7 @@ const digestClaudeFileTree = async (path: string, includeContents = true): Promi
     digest.update(`other\0${entry.mode}\0`);
     return digest.digest('hex');
   } catch (error) {
-    if (isRecord(error) && error.code === 'ENOENT') return 'absent';
+    if (isErrno(error, 'ENOENT')) return 'absent';
     throw error;
   }
 };
@@ -359,8 +359,7 @@ const normalHomeChangedDiagnostic = Object.freeze({
   message: 'Claude normal config/settings/plugins state changed; inspect local state without retaining its output.',
 });
 
-const isMissingExecutableError = (error: unknown): boolean =>
-  isRecord(error) && error.code === 'ENOENT';
+const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');
 
 const looksUnauthenticated = (output: string): boolean =>
   /(?:not\s+logged\s+in|authentication|authenticate|unauthorized|subscription)/iu.test(output);

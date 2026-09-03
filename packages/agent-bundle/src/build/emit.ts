@@ -12,8 +12,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { sha256Hex, stableJson } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
-import { assertInside } from '../core/paths.ts';
+import { assertInside, exists, toPosixPath } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import {
   artifactHookIndexName,
@@ -56,20 +55,10 @@ export { artifactHookIndexName } from './hook-index.ts';
 export type { ArtifactHook, ArtifactHookIndex } from './hook-index.ts';
 export const artifactManifestName = 'agent-bundle.manifest.json';
 
-const normalizeRelativePath = (path: string): string => path.replaceAll('\\', '/');
+const normalizeRelativePath = toPosixPath;
 
 const executableFileMode = (file: ArtifactFile): number | undefined =>
   (file.mode & 0o111) === 0 ? undefined : file.mode;
-
-const exists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
-};
 
 export const resolveArtifactDestination = (root: string, relativePath: string): string =>
   assertInside(root, resolve(root, relativePath));

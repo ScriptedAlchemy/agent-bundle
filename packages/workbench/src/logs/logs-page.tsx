@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
 import type { DevLogRecord, DevLogReplayGap } from '../../../agent-bundle/src/contracts/dev-logs.ts';
+import { errorMessage as sharedErrorMessage } from '../client-helpers.ts';
 import { LogClient, LogClientError } from './log-client.ts';
 import { logsViewFor, mergeDevLogRecords, type LogsView as LogsViewModel } from './logs-model.ts';
 import './logs-page.css';
@@ -13,10 +14,7 @@ export interface LogsPageProps {
 
 const all = '';
 const filter = (value: string): string | undefined => value === all ? undefined : value;
-const errorMessage = (reason: unknown): string => {
-  try { return reason instanceof Error && typeof reason.message === 'string' ? reason.message : 'Production logs could not be read.'; }
-  catch { return 'Production logs could not be read.'; }
-};
+const errorMessage = (reason: unknown): string => sharedErrorMessage(reason, 'Production logs could not be read.');
 const isCursorAhead = (reason: unknown): boolean => {
   try { return reason instanceof LogClientError && reason.code === 'AB8092'; }
   catch { return false; }
@@ -95,10 +93,13 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
       if (merged.discardedThroughSequence !== undefined) recordLocalGap(merged.discardedThroughSequence);
       return true;
     };
+    let reconnectDelayMs = 250;
     const reconnectLater = (): void => {
       if (!current) return;
       if (reconnect !== undefined) clearTimeout(reconnect);
-      reconnect = setTimeout(() => { void connect(); }, 250);
+      reconnect = setTimeout(() => { void connect(); }, reconnectDelayMs);
+      // Back off while the dev server stays down; a successful replay resets the delay.
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, 5000);
     };
     const connect = async (): Promise<void> => {
       const attempt = generation + 1;
@@ -120,6 +121,7 @@ export const LogsPage = ({ client, records: suppliedRecords }: LogsPageProps) =>
         const replay = await client.replay(latestSequence, generationController.signal);
         if (!current || attempt !== generation) return;
         latestSequence = replay.cursor.afterSequence;
+        reconnectDelayMs = 250;
         setError(undefined);
         if (replay.gap !== undefined) setGap(replay.gap);
         if (!observe(replay.records)) return;

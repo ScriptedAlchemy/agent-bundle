@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { hasOnlyOwnKeys, isPlainRecord } from '../core/strict-json.ts';
+
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
@@ -200,12 +202,9 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return runtimePathError();
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) &&
-  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const isRecord = isPlainRecord;
 
-const hasOnly = (value: Record<string, unknown>, fields: readonly string[]): boolean =>
-  Object.keys(value).every((field) => fields.includes(field));
+const hasOnly: (value: Record<string, unknown>, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
 const nonemptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 4_096 && !value.includes('\0');

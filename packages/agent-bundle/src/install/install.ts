@@ -13,9 +13,11 @@ import {
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
-import { Effect } from 'effect';
+import { Effect, Predicate } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
+import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 
@@ -71,19 +73,6 @@ const failure = (
   severity: 'error',
   target,
 }]);
-
-const isErrno = (error: unknown, code: string): boolean =>
-  error instanceof Error && (error as NodeJS.ErrnoException).code === code;
-
-const exists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
-};
 
 const hostManifestPath = (host: InstallHost): string => {
   switch (host) {
@@ -282,13 +271,8 @@ const readInstalledVersion = async (destination: string): Promise<string | undef
   for (const manifest of ['.cursor-plugin/plugin.json', 'plugin.json']) {
     try {
       const document = JSON.parse(await readFile(join(destination, manifest), 'utf8')) as unknown;
-      if (
-        document !== null &&
-        typeof document === 'object' &&
-        !Array.isArray(document) &&
-        typeof (document as { readonly version?: unknown }).version === 'string'
-      ) {
-        return (document as { readonly version: string }).version;
+      if (Predicate.isObject(document) && typeof document.version === 'string') {
+        return document.version;
       }
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
@@ -370,7 +354,7 @@ const installCursor = async (
     if (error instanceof DiagnosticError) throw error;
     throw failure(
       'AB7004',
-      error instanceof Error ? error.message : String(error),
+      errorMessage(error),
       'cursor',
     );
   }
