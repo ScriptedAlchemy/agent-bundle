@@ -116,13 +116,13 @@ interface GeneratedRouteIdentity {
  * registry (a project with no event routes, or the in-memory proof level) the
  * axis is honestly absent.
  */
-const toolCallLineage = (
+const toolCallLineage = async (
   registry: AgentLineageRegistry | undefined,
   context: GeneratedRouteRequestContext,
   toolName: string,
   clientName: string | undefined,
   fallbackHost: LineageHost | undefined,
-): Observed<AgentLineage> => {
+): Promise<Observed<AgentLineage>> => {
   if (registry === undefined) return unavailable<AgentLineage>('not-provided');
   return registry.resolveToolCall({
     host: lineageHostFromClient(clientName) ?? fallbackHost,
@@ -314,7 +314,7 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName, lineage: toolCallLineage(options.lineage, context, route.name, clientName, options.lineageHost) },
+            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, clientName, options.lineageHost) },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);

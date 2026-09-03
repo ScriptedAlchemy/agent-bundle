@@ -48,8 +48,13 @@ export interface LineageToolCallQuery {
 export interface AgentLineageRegistry {
   /** Feeds the registry with one hook event and resolves the lineage of the conversation that carried it. */
   observe(observation: LineageObservation): Promise<Observed<AgentLineage>>;
-  /** Resolves the lineage of an MCP tool call from `_meta` or from the open pre-tool hook window. */
-  resolveToolCall(query: LineageToolCallQuery): Observed<AgentLineage>;
+  /**
+   * Resolves the lineage of an MCP tool call from `_meta` or from the open
+   * pre-tool hook window. A durable registry re-reads its journal first, so a
+   * generated server that hosts no event routes still sees what the event-host
+   * server recorded.
+   */
+  resolveToolCall(query: LineageToolCallQuery): Promise<Observed<AgentLineage>>;
   /** The current tree, for dumps and the Workbench. */
   snapshot(): LineageState;
 }
@@ -111,6 +116,8 @@ interface JournalKeys {
 }
 
 const RECEIPT_TIMESTAMPS = new Set(['openedAt', 'startedAt', 'stoppedAt']);
+/** Journal keys a storeless registry remembers to suppress redeliveries. */
+const APPLIED_KEY_RETENTION = 4096;
 
 /** Receipt timestamps are regenerated per delivery, so they stay out of the replay identity. */
 const replayIdentity = (payload: unknown): string => canonicalJson(
@@ -140,6 +147,7 @@ export const createAgentLineageRegistry = (
   const { store } = options;
   let state: LineageState = initialLineageState;
   let hydration: Promise<void> | undefined;
+  const applied = new Set<string>();
 
   /** One shared initial read: concurrent observations all wait for it, none mutates the empty state first. */
   const hydrate = (): Promise<void> => {
@@ -169,6 +177,10 @@ export const createAgentLineageRegistry = (
   ): Promise<void> => {
     const idempotencyKey = keys.next(name, payload);
     if (store === undefined) {
+      // No journal: an in-memory ledger of applied keys suppresses redeliveries.
+      if (applied.has(idempotencyKey)) return;
+      applied.add(idempotencyKey);
+      if (applied.size > APPLIED_KEY_RETENTION) applied.delete(applied.values().next().value!);
       state = reduceLineage(state, { name, payload });
       return;
     }
@@ -397,7 +409,17 @@ export const createAgentLineageRegistry = (
       return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
     },
 
-    resolveToolCall(query) {
+    async resolveToolCall(query) {
+      await hydrate();
+      if (store !== undefined) {
+        // Another generated server of the same install may hold the event
+        // routes; its journal is the shared truth.
+        try {
+          state = (await store.read()).state;
+        } catch {
+          // Keep the head already held.
+        }
+      }
       const { host, meta, toolName } = query;
       if (host === undefined) return unavailable('id-not-resolvable');
       if (host === 'codex') {
@@ -435,7 +457,9 @@ export const createAgentLineageRegistry = (
       let call: OpenToolCall | undefined;
       const claudeToolUseId = host === 'claude' ? nativeString(meta ?? {}, 'claudecode/toolUseId') : undefined;
       if (claudeToolUseId !== undefined) {
+        // A native id that matches no open window is a miss, never a licence to guess by name.
         call = state.openCalls.find((open) => open.toolCallId === claudeToolUseId);
+        if (call === undefined) return unavailable('id-not-resolvable');
       }
       if (call === undefined) {
         // The open pre-tool hooks naming this tool: `MCP:<tool>` on Cursor,

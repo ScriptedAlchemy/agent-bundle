@@ -429,7 +429,13 @@ Cursor conversation seen on a tool event binds to the single pending
 registry restart. `session/end` retires the root and every descendant still
 marked live; stopped nodes are pruned past the retention bound as they stop.
 Redelivered payloads replay their journal entries (keys derive from the
-canonical idempotency key and the payload minus receipt timestamps).
+canonical idempotency key and the payload minus receipt timestamps; a
+storeless registry keeps an in-memory ledger of applied keys). A project with
+several generated MCP servers attaches its event routes to one of them; the
+others resolve tool calls by re-reading the shared journal, so their
+`request.lineage` is populated only when the project's state is
+workspace-durable — volatile and stateless multi-server projects report
+`id-not-resolvable` from the servers that host no event routes.
 
 `resolution` says which of those paths produced the answer. When none can,
 the axis is `unavailable` with a typed reason: `no-subagent-events` (the

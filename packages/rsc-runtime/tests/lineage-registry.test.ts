@@ -47,7 +47,7 @@ const replay = async (
       });
       lineages.push({ index: position + 1, kind: record.event.canonical.event, lineage, native: record.event.native });
     } else if (record.kind === 'mcp' && record.observed?.tool !== undefined) {
-      const lineage = registry.resolveToolCall({
+      const lineage = await registry.resolveToolCall({
         host: lineageHostFromClient(record.observed.client?.name) ?? host,
         meta: record.observed.mcpReq?._meta,
         toolName: record.observed.tool,
@@ -252,8 +252,8 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
       native: { agent_id: 'unknown-thread', session_id: 'root-thread', tool_name: 'Bash', tool_use_id: 'x' },
     });
     expect(lineage).toEqual(unavailable('id-not-resolvable'));
-    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
-    expect(registry.resolveToolCall({ host: undefined, toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: undefined, toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
   });
 
   it('standalone hooks state only what the payload proves', () => {
@@ -301,14 +301,14 @@ describe('lineage registry edge cases raised in review', () => {
     expect(value(bound)).toMatchObject({ conversation: 'child-y', depth: 1, parent: 'root', subagent: { id: 'call-b' } });
   });
 
-  it('does not fabricate a Codex depth when neither the thread nor its parent is registered', () => {
+  it('does not fabricate a Codex depth when neither the thread nor its parent is registered', async () => {
     const registry = createAgentLineageRegistry();
     const meta = (thread: string, parent: string | undefined) => ({
       'x-codex-turn-metadata': { session_id: 'root', thread_id: thread, turn_id: 't', ...(parent === undefined ? {} : { parent_thread_id: parent }) },
     });
-    expect(registry.resolveToolCall({ host: 'codex', meta: meta('root', undefined), toolName: 'dump' })).toMatchObject({ value: { depth: 0 } });
-    expect(registry.resolveToolCall({ host: 'codex', meta: meta('child', 'root'), toolName: 'dump' })).toMatchObject({ value: { depth: 1, parent: 'root' } });
-    expect(registry.resolveToolCall({ host: 'codex', meta: meta('grandchild', 'child'), toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'codex', meta: meta('root', undefined), toolName: 'dump' })).toMatchObject({ value: { depth: 0 } });
+    expect(await registry.resolveToolCall({ host: 'codex', meta: meta('child', 'root'), toolName: 'dump' })).toMatchObject({ value: { depth: 1, parent: 'root' } });
+    expect(await registry.resolveToolCall({ host: 'codex', meta: meta('grandchild', 'child'), toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
   });
 });
 
@@ -343,7 +343,7 @@ describe('lineage registry durability and retention (review round 3)', () => {
     await registry.observe({ event: 'tool/after', host: 'cursor', idempotencyKey: 'close', native: { ...before, hook_event_name: 'postToolUse', tool_output: '{}' }, observedAt: '2026-09-03T00:00:01.000Z' });
     await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:02.000Z' });
     expect(registry.snapshot().openCalls).toEqual([]);
-    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
     await store.close();
     await driver.close();
   });
@@ -446,11 +446,11 @@ describe('lineage registry ambiguity refusals (review round 4)', () => {
     await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
     await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
     await observe('tool/before', 'ma', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'ma' });
-    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
     await observe('tool/before', 'mb', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'mb' });
-    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
     await observe('tool/after', 'mb-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_output: '{}', tool_use_id: 'mb' });
-    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
   });
 });
 
@@ -490,6 +490,39 @@ describe('lineage registry retirement and cohorts (review round 5)', () => {
     await observe('session/end', 'e', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'root' });
     expect(registry.snapshot().openCalls).toEqual([]);
     expect(registry.snapshot().pendingSpawns).toEqual([]);
-    expect(registry.resolveToolCall({ host: 'claude', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'claude', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+  });
+});
+
+describe('lineage registry cross-server and storeless behaviour (review round 6)', () => {
+  it('re-reads the shared journal so a second registry over the same store resolves what the event host recorded', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const eventHost = createAgentLineageRegistry({ store });
+    const otherServer = createAgentLineageRegistry({ store });
+    expect(await otherServer.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'm1' }, toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    await eventHost.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    await eventHost.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'm', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_p_other__dump', tool_use_id: 'm1' } });
+    expect(await otherServer.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'm1' }, toolName: 'dump' })).toMatchObject({ value: { conversation: 'root', depth: 0 } });
+    await store.close();
+    await driver.close();
+  });
+
+  it('treats a supplied but unmatched Claude tool-use id as a miss instead of guessing by name', async () => {
+    const registry = createAgentLineageRegistry();
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    await registry.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'm', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_p_s__dump', tool_use_id: 'open-1' } });
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'missing' }, toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'open-1' }, toolName: 'dump' })).toMatchObject({ value: { conversation: 'root' } });
+  });
+
+  it('suppresses redeliveries in a storeless registry through its in-memory key ledger', async () => {
+    const registry = createAgentLineageRegistry();
+    const before = { conversation_id: 'root', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'm1' };
+    await registry.observe({ event: 'prompt/submit', host: 'cursor', idempotencyKey: 'p', native: { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt' } });
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:00.000Z' });
+    await registry.observe({ event: 'tool/after', host: 'cursor', idempotencyKey: 'close', native: { ...before, hook_event_name: 'postToolUse', tool_output: '{}' } });
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:05.000Z' });
+    expect(registry.snapshot().openCalls).toEqual([]);
   });
 });
