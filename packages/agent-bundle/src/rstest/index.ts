@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { compileTestManifest } from '../test/manifest.ts';
+import { metaModuleAlias, writeTestMetaModule } from './meta-module.ts';
 import { writeRouteTestSetup } from './setup-module.ts';
 
 export { agentBundleBrowserRstest } from './browser.ts';
@@ -60,6 +61,8 @@ export interface AgentBundleRstestOptions {
 export interface AgentBundleRstestConfig {
   include: string[];
   pool: { execArgv: string[]; type: 'forks' };
+  /** Routes the reserved `agent-bundle/meta` specifier to the generated identity module. */
+  resolve: { alias: { [specifier: string]: string } };
   setupFiles: string[];
   source?: { tsconfigPath: string };
   testEnvironment: 'node';
@@ -76,6 +79,11 @@ export interface AgentBundleRstestConfig {
  * use, which owns route-graph compilation — and its manifest configures the
  * pool, the test environment, the TypeScript transform, and the generated
  * route registry the helpers in `agent-bundle/test` read. No artifact is built.
+ *
+ * The same pass supplies the project identity, so the configuration aliases
+ * `agent-bundle/meta` to a generated module carrying exactly the
+ * `{ name, packageName, packageVersion, version }` a build would stamp: any
+ * source module importing it loads under the pool instead of raising `AB4760`.
  *
  * ```ts
  * import { defineConfig } from '@rstest/core';
@@ -96,10 +104,12 @@ export const agentBundleRstest = async (
     root,
   });
   const setup = await writeRouteTestSetup(root, manifest);
+  const metaModule = await writeTestMetaModule(root, manifest.plugin);
   const tsconfigPath = resolve(root, 'tsconfig.json');
   return {
     include: [...(options.include ?? [routeUnitInclude])],
     pool: { execArgv: [...reactServerConditions], type: 'forks' },
+    resolve: { alias: metaModuleAlias(metaModule) },
     setupFiles: [setup, ...(options.setupFiles ?? [])],
     ...(existsSync(tsconfigPath) ? { source: { tsconfigPath } } : {}),
     testEnvironment: 'node',

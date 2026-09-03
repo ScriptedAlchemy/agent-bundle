@@ -373,6 +373,15 @@ their own Rstest run, because rendering a route requires Node's `react-server`
 condition for the whole worker process. Keep them out of the project's ordinary
 `rstest` run.
 
+The same configuration aliases `agent-bundle/meta` to a generated module
+carrying the project identity the compiler pass reported (`name`,
+`packageName`, `packageVersion`, `version`, exactly what a build stamps), so
+source that imports it loads under the pool without a build. A pool that is
+not built from `agentBundleRstest()` (or `agentBundleBrowserRstest()`) has no
+such alias, and importing that source raises `AB4760`; build the pool that
+reaches it from the preset too — `agentBundleRstest({ include: ['tests/unit/**/*.test.ts'] })`
+— or add the alias the diagnostic names.
+
 `agent-bundle/test` holds the helpers. `renderRoute` executes a route — by
 compiled route id, or by importing the module directly — through the real
 renderer and the real request store, and resolves to the final Agent Document:

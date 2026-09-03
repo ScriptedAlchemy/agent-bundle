@@ -55,6 +55,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
+  'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
@@ -182,4 +183,15 @@ export const projectionTestFiles: readonly string[] = [
  */
 export const templateTestFiles: readonly string[] = [
   'packages/create-agent-bundle/templates/**',
+];
+
+/**
+ * Fixture projects that carry their own Rstest pools: their test files run
+ * inside the fixture through its own configuration (the spawning repository
+ * test drives them, e.g. rstest-meta-consumer.test.ts over
+ * `fixtures/meta-consumer`), never through the workspace pools, whose include
+ * glob would otherwise collect them without the preset that makes them load.
+ */
+export const fixtureProjectTestFiles: readonly string[] = [
+  'packages/agent-bundle/fixtures/**/tests/**',
 ];

@@ -137,6 +137,30 @@ results and never renders JSX. Routed `src/cli/**` commands and
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
 
+## Release identity in source: `agent-bundle/meta`
+
+Plugin source reads its own identity from the framework instead of
+maintaining a hand-written `src/lib/version.ts`:
+
+```ts
+import { name, version } from 'agent-bundle/meta';
+```
+
+The compiler replaces the specifier in every compiled surface with the exact
+`{ name, packageName, packageVersion, version }` the artifact manifests,
+`inspect`, and dev status report (see
+[Entry conventions](entry-conventions.md#agent-bundlemeta--build-time-release-identity)).
+
+Unit tests need no build to load such a module: `agentBundleRstest()` and
+`agentBundleBrowserRstest()` (`agent-bundle/rstest`) alias `agent-bundle/meta`
+to a generated module carrying the same identity, written from the same
+compiler pass to `.agent-bundle/test/meta.mjs`. Run every pool that reaches
+that source — plain unit tests included — through the preset (pass `include`
+to point it at the pool's files), and `renderRoute`, `invokeCli`, and direct
+imports all observe the package identity. Outside the compiler and outside
+those presets the published module raises `AB4760`, whose recovery names the
+alias a custom runner must add; it never reports a fabricated identity.
+
 ## Skills: convention, override, and rendered documents
 
 `src/skills/<name>/SKILL.md` ships with no declaration. Config wins,

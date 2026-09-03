@@ -1034,9 +1034,10 @@ it('rejects the built identity module with the intended error, not a TDZ Referen
   // `agent-bundle/meta` carries the same dist contract as `agent-bundle/mcp-apps`:
   // a compiled surface resolves it to the generated identity, and anything
   // else must say so rather than report a fabricated identity.
-  await expect(import('../src/meta.ts')).rejects.toThrow(
-    'agent-bundle/meta is available only inside a surface Agent Bundle compiles',
-  );
+  await expect(import('../src/meta.ts')).rejects.toMatchObject({
+    code: 'AB4760',
+    message: expect.stringContaining('agent-bundle/meta is available only inside a surface Agent Bundle compiles'),
+  });
 
   const distEntry = join(agentBundlePackageRoot, 'dist', 'meta.js');
   const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
@@ -1055,7 +1056,11 @@ it('rejects the built identity module with the intended error, not a TDZ Referen
     });
   });
   expect(code).toBe(1);
-  expect(stderr).toContain('agent-bundle/meta is available only inside a surface Agent Bundle compiles');
+  expect(stderr).toContain('[AB4760] agent-bundle/meta is available only inside a surface Agent Bundle compiles');
+  // The recovery rides on the message, so a bare `node` process prints the
+  // exact fix without any diagnostic formatter (#386).
+  expect(stderr).toContain('recovery: Run the test under agentBundleRstest() or agentBundleBrowserRstest()');
+  expect(stderr).toContain("code: 'AB4760'");
   expect(stderr).not.toContain('ReferenceError');
 });
 
