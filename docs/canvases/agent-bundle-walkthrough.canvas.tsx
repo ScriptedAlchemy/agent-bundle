@@ -742,8 +742,8 @@ else try { output = await requestEventRuntime({ ... }); }
             [<Text as="span" style={{ fontFamily: MONO }} size="small">tool/before</Text>, "PreToolUse", "PreToolUse", "preToolUse", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">tool/after</Text>, "PostToolUse", "PostToolUse", "postToolUse", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">stop</Text>, "Stop", "Stop", "stop", "—"],
-            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/start</Text>, "SubagentStart", "SubagentStart (adds turn_id, model, permission_mode)", "subagentStart", "—"],
-            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/stop</Text>, "SubagentStop", "SubagentStop", "subagentStop", "—"],
+            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/start</Text>, "SubagentStart", "SubagentStart (adds turn_id, model, permission_mode)", "subagentStart (subagent_id/subagent_type envelope; permission deny)", "—"],
+            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/stop</Text>, "SubagentStop", "SubagentStop", "subagentStop (status/loop_count envelope; followup_message)", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">workspace/open</Text>, "unavailable: no such event", "unavailable: no such event", "workspaceOpen (observe-only; optional pluginPaths return not modeled)", "unavailable: spec defines no hooks"],
           ]}
         />
@@ -758,8 +758,8 @@ else try { output = await requestEventRuntime({ ... }); }
                 ["tool/before", "yes, reason required", "yes (when not denying)", "Claude + Codex; dropped on Cursor"],
                 ["tool/after", "—", "—", "all hosts"],
                 ["stop", "yes — keeps the agent working (Cursor: followup_message)", "—", "—"],
-                ["agent/start", "no host can block subagent creation", "—", "all hosts"],
-                ["agent/stop", "Claude + Codex (keeps subagent running); Cursor cannot", "—", "Claude + Cursor; Codex schema rejects it"],
+                ["agent/start", "Cursor only (permission: deny + user_message); Claude + Codex cannot", "—", "Claude + Codex; Cursor documents no channel"],
+                ["agent/stop", "Claude + Codex (decision: block keeps subagent running); Cursor (followup_message auto-continue)", "—", "Claude only; Codex schema and Cursor docs reject it"],
                 ["workspace/open", "—", "—", "no channel — observation only (Cursor)"],
               ]}
             />

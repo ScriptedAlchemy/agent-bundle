@@ -1,0 +1,21 @@
+{
+  "agent_transcript_path": "/workspace/subagents/abc-123.txt",
+  "conversation_id": "conv-456",
+  "cursor_version": "1.7.2",
+  "description": "Exploring auth flow",
+  "duration_ms": 45000,
+  "generation_id": "gen-1",
+  "hook_event_name": "subagentStop",
+  "loop_count": 0,
+  "message_count": 12,
+  "model": "claude-sonnet-4-20250514",
+  "modified_files": ["src/auth.ts"],
+  "status": "completed",
+  "subagent_type": "explore",
+  "summary": "Found the login handler.",
+  "task": "Explore the authentication flow",
+  "tool_call_count": 8,
+  "transcript_path": null,
+  "user_email": null,
+  "workspace_roots": ["/workspace"]
+}

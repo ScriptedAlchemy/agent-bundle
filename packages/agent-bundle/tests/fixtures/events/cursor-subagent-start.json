@@ -1,0 +1,18 @@
+{
+  "conversation_id": "conv-456",
+  "cursor_version": "1.7.2",
+  "generation_id": "gen-1",
+  "git_branch": "feature/auth",
+  "hook_event_name": "subagentStart",
+  "is_parallel_worker": false,
+  "model": "claude-sonnet-4-20250514",
+  "parent_conversation_id": "conv-456",
+  "subagent_id": "abc-123",
+  "subagent_model": "claude-sonnet-4-20250514",
+  "subagent_type": "explore",
+  "task": "Explore the authentication flow",
+  "tool_call_id": "tc-789",
+  "transcript_path": null,
+  "user_email": null,
+  "workspace_roots": ["/workspace"]
+}

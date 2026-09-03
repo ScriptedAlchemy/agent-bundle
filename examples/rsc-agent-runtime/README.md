@@ -246,8 +246,8 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `task/create` | Unavailable | `TaskCreated` (deny) | Unavailable |
 | `task/complete` | Unavailable | `TaskCompleted` (observe-only; blocking is exit-code-only) | Unavailable |
 | `agent/idle` | Unavailable | `TeammateIdle` (deny via continue:false) | Unavailable |
-| `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
-| `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
+| `agent/start` | `subagentStart` (deny via `permission: "deny"`; no context channel) | `SubagentStart` (context) | `SubagentStart` (context) |
+| `agent/stop` | `subagentStop` (deny via `followup_message`; no context channel) | `SubagentStop` (deny + context) | `SubagentStop` (deny) |
 | `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |
 
 Cursor's native `workspaceOpen` is sessionless and its optional `pluginPaths`
@@ -260,7 +260,15 @@ block subagent creation. Their `agent/stop` routes can continue the subagent
 with the native `decision: "block"` plus `reason` contract. Codex
 `SubagentStop` exit-0 output is always JSON; its generated 0.147.0 output
 schema has no `additionalContext` field, so the route projection rejects that
-unsupported effect rather than silently fabricating one.
+unsupported effect rather than silently fabricating one. Cursor inverts the
+pair: its `subagentStart` envelope (`subagent_id`, `subagent_type`, `task`,
+`parent_conversation_id`, `tool_call_id`, `subagent_model`,
+`is_parallel_worker`) accepts `permission: "deny"` plus `user_message`, and its
+`subagentStop` envelope (`status`, `loop_count`, `summary`, `modified_files`,
+`agent_transcript_path`) accepts only `followup_message`, which Cursor consumes
+when `status` is `completed` and caps with `loop_limit` (default 5). Neither
+Cursor event documents an additional-context channel, so `Agent.Context` fails
+closed on Cursor for both.
 `session/end` and `prompt/submit` are event-route-only families and do not add
 `config.hooks.sessionEnd` or `config.hooks.promptSubmit` handler keys.
 `session/end` rejects every result effect because each native event is

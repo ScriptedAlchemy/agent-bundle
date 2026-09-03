@@ -12,6 +12,8 @@ import {
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
+import cursorHooksSchema from '../src/adapters/schemas/cursor/hooks.schema.json' with { type: 'json' };
+import { cursorContractCapabilityRows } from '../src/adapters/cursor.ts';
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -325,15 +327,36 @@ it('records dated unavailable Claude agent rows and mirrors them through the uni
       reason: row.reason,
       state: 'unavailable',
     });
-    expect(registry.get('plugin').capabilities[capability]).toEqual(intersectCapabilityStates(
-      registry.get('claude').capabilities[capability]!,
-      unavailableCapability(
-        'The pinned Codex and Cursor plugin contracts publish no shared plugin agents component or agent-frontmatter surface.',
-      ),
-    ));
+    expect(registry.get('plugin').capabilities[capability]).toEqual(rowName === 'component'
+      ? intersectCapabilityStates(
+          intersectCapabilityStates(
+            registry.get('claude').capabilities.agents!,
+            registry.get('cursor').capabilities.agents!,
+          ),
+          unavailableCapability('The pinned Codex plugin contract publishes no plugin agents component.'),
+        )
+      : intersectCapabilityStates(
+          registry.get('claude').capabilities[capability]!,
+          unavailableCapability(
+            'The pinned Codex plugin contract publishes no plugin agents component, and the pinned Cursor agents component documents only name and description frontmatter, so no shared agent-frontmatter surface exists.',
+          ),
+        ));
     expect(registry.supports('claude', capability)).toBe(false);
     expect(registry.supports('plugin', capability)).toBe(false);
   }
+});
+
+it('records the dated G5-gated Cursor agents component row beside the documented Cursor agents format', () => {
+  const registry = createDefaultRegistry();
+  const row = cursorCapabilityTable.plugin.agents.component;
+
+  expect(row.state).toBe('unavailable');
+  expect(row.reason).toContain('PR #220');
+  expect(row.reason).toContain('#107 revision 3');
+  expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+  expect(row.evidence.some((line) => line.includes('https://cursor.com/docs/reference/plugins') && line.includes('agents/'))).toBe(true);
+  expect(registry.get('cursor').capabilities.agents).toEqual({ reason: row.reason, state: 'unavailable' });
+  expect(registry.supports('cursor', 'agents')).toBe(false);
 });
 
 it('reports Claude userConfig support and honest unavailable composite coverage', () => {
@@ -610,9 +633,21 @@ it.each([
     reason: expect.stringContaining(reason),
     state: 'unavailable',
   });
-  for (const target of ['codex', 'cursor', 'portable'] as const) {
+  for (const target of ['codex', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
     expect(registry.supports(target, capability)).toBe(false);
+  }
+  // Cursor publishes its own dated marketplace manifest row (#189); the
+  // cross-marketplace dependency allowlist remains Claude-only.
+  if (capability === 'marketplaceManifest') {
+    expect(registry.get('cursor').capabilities[capability]).toMatchObject({
+      evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+      state: 'supported',
+    });
+    expect(registry.supports('cursor', capability)).toBe(true);
+  } else {
+    expect(registry.get('cursor').capabilities[capability]).toBeUndefined();
+    expect(registry.supports('cursor', capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
   expect(registry.supports('plugin', capability)).toBe(false);
@@ -633,39 +668,55 @@ it('pins the authored Claude marketplace source matrix and version gates', () =>
   });
 });
 
-it.each([
-  ['manifestMetadata', 'manifest metadata fields'],
-  ['manifestPaths', 'custom manifest path rules'],
-] as const)('reports Claude %s support without inventing shared composite coverage', (capability, reason) => {
+it('reports Claude manifestPaths support without inventing shared composite coverage', () => {
   const registry = createDefaultRegistry();
 
-  expect(registry.get('claude').capabilities[capability]).toMatchObject({
+  expect(registry.get('claude').capabilities.manifestPaths).toMatchObject({
     evidence: {
       observedVersion: '2.1.250',
       target: 'claude',
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-    reason: expect.stringContaining(reason),
+  expect(registry.get('plugin').capabilities.manifestPaths).toMatchObject({
+    reason: expect.stringContaining('custom manifest path rules'),
     state: 'unavailable',
   });
-  expect(registry.get('cursor').capabilities[capability]).toBeUndefined();
-  expect(registry.supports('cursor', capability)).toBe(false);
-  // Agent Plugins 1.0.0 §5.4 defines manifest metadata for the portable manifest (#307); it
-  // has no custom manifest path rules, so only that capability is declared there.
-  if (capability === 'manifestMetadata') {
-    expect(registry.get('portable').capabilities[capability]).toMatchObject({
-      evidence: { observedVersion: '1.0.0', target: 'portable' },
+  // Neither the pinned Cursor contract nor Agent Plugins 1.0.0 (#307) defines
+  // custom manifest path rules.
+  for (const target of ['cursor', 'portable'] as const) {
+    expect(registry.get(target).capabilities.manifestPaths).toBeUndefined();
+    expect(registry.supports(target, 'manifestPaths')).toBe(false);
+  }
+  expect(registry.supports('claude', 'manifestPaths')).toBe(true);
+  expect(registry.supports('plugin', 'manifestPaths')).toBe(false);
+});
+
+it('reports manifest metadata support on every native host and the three-host composite', () => {
+  const registry = createDefaultRegistry();
+
+  for (const target of ['claude', 'codex', 'cursor'] as const) {
+    expect(registry.get(target).capabilities.manifestMetadata).toMatchObject({
+      evidence: { target },
       state: 'supported',
     });
-    expect(registry.supports('portable', capability)).toBe(true);
-  } else {
-    expect(registry.get('portable').capabilities[capability]).toBeUndefined();
-    expect(registry.supports('portable', capability)).toBe(false);
+    expect(registry.supports(target, 'manifestMetadata')).toBe(true);
   }
-  expect(registry.supports('claude', capability)).toBe(true);
-  expect(registry.supports('plugin', capability)).toBe(false);
+  expect(registry.get('plugin').capabilities.manifestMetadata).toMatchObject({
+    evidence: { target: 'claude+codex+cursor' },
+    state: 'supported',
+  });
+  // Agent Plugins 1.0.0 §5.4 defines manifest metadata for the portable manifest (#307).
+  expect(registry.get('portable').capabilities.manifestMetadata).toMatchObject({
+    evidence: { observedVersion: '1.0.0', target: 'portable' },
+    state: 'supported',
+  });
+  expect(registry.supports('portable', 'manifestMetadata')).toBe(true);
+  expect(cursorCapabilityTable.plugin.manifestMetadata).toMatchObject({
+    authoredFields: ['author.name', 'author.email', 'homepage', 'repository', 'license', 'keywords', 'publisher', 'category', 'tags', 'minClientVersions'],
+    schemaOnlyFields: ['displayName', 'publisher', 'category', 'tags', 'minClientVersions'],
+    state: 'supported',
+  });
 });
 
 const codexManifestPackageCapabilities = [
@@ -749,9 +800,7 @@ it('mirrors Codex manifest metadata and path states through the unified adapter'
       registry.get('claude').capabilities.manifestMetadata!,
       registry.get('codex').capabilities.manifestMetadata!,
     ),
-    unavailableCapability(
-      'The pinned Cursor plugin contract does not share the authored Codex and Claude manifest metadata fields.',
-    ),
+    registry.get('cursor').capabilities.manifestMetadata!,
   ));
   expect(registry.get('plugin').capabilities.manifestPaths).toEqual(intersectCapabilityStates(
     intersectCapabilityStates(
@@ -1049,8 +1098,7 @@ it('pins dated deferral rows for every explicitly deferred native callback from 
     codex: ['Interrupt'],
     cursor: [
       'afterAgentResponse', 'afterAgentThought', 'afterFileEdit', 'afterMCPExecution', 'afterShellExecution',
-      'afterTabFileEdit', 'beforeMCPExecution', 'beforeReadFile', 'beforeShellExecution',
-      'beforeSubmitPrompt-cloud', 'beforeTabFileRead',
+      'afterTabFileEdit', 'beforeMCPExecution', 'beforeReadFile', 'beforeShellExecution', 'beforeTabFileRead',
     ],
   } as const;
   for (const [host, names] of Object.entries(expected)) {
@@ -1094,4 +1142,152 @@ it('advertises notice delivery routes per host with dated unavailability (#99 st
       expect(advertisement['next-event']!.state).toBe('supported');
     }
   }
+});
+
+/**
+ * The complete hook-event inventory published at https://cursor.com/docs/hooks
+ * and https://cursor.com/docs/reference/plugins (retrieved 2026-09-02):
+ * 18 Agent hooks, 2 Tab hooks, and the workspaceOpen app lifecycle hook.
+ */
+const documentedCursorHookEvents = {
+  agent: [
+    'sessionStart', 'sessionEnd', 'preToolUse', 'postToolUse', 'postToolUseFailure', 'subagentStart', 'subagentStop',
+    'beforeShellExecution', 'afterShellExecution', 'beforeMCPExecution', 'afterMCPExecution', 'beforeReadFile',
+    'afterFileEdit', 'beforeSubmitPrompt', 'preCompact', 'stop', 'afterAgentResponse', 'afterAgentThought',
+  ],
+  app: ['workspaceOpen'],
+  tab: ['beforeTabFileRead', 'afterTabFileEdit'],
+} as const;
+
+/** The per-event cloud availability table published at https://cursor.com/docs/hooks (retrieved 2026-09-02). */
+const documentedCursorCloudUnavailable = [
+  'sessionStart', 'sessionEnd', 'beforeMCPExecution', 'afterMCPExecution', 'beforeTabFileRead', 'afterTabFileEdit', 'workspaceOpen',
+] as const;
+
+it('pins every documented Cursor hook event exactly once across canonical routes and dated deferrals (#189)', () => {
+  const documented = Object.values(documentedCursorHookEvents).flat();
+  const inventory = cursorCapabilityTable.hooks.nativeEvents as Readonly<Record<string, {
+    readonly canonical: string | null;
+    readonly category: string;
+    readonly cloud: string;
+    readonly matcher: string | null;
+    readonly outputFields: readonly string[];
+    readonly row: string;
+  }>>;
+  const schemaEvents = Object.keys(cursorHooksSchema.properties.hooks.properties);
+
+  expect(documented).toHaveLength(21);
+  expect(Object.keys(inventory).sort()).toEqual([...documented].sort());
+  expect([...schemaEvents].sort()).toEqual([...documented].sort());
+
+  const routes = cursorCapabilityTable.hooks.eventRoutes as Readonly<Record<string, {
+    readonly availability?: { readonly cloud: { readonly state: string }; readonly desktop: { readonly state: string } };
+    readonly nativeEvent?: string;
+    readonly state: string;
+  }>>;
+  const deferred = cursorCapabilityTable.deferredNativeEvents as Readonly<Record<string, { readonly reason: string; readonly state: string }>>;
+  const routedNativeEvents = Object.values(routes).flatMap((route) => route.nativeEvent === undefined ? [] : [route.nativeEvent]);
+
+  for (const [category, events] of Object.entries(documentedCursorHookEvents)) {
+    for (const event of events) {
+      const entry = inventory[event]!;
+      expect(entry.category).toBe(category);
+      expect(entry.cloud).toBe((documentedCursorCloudUnavailable as readonly string[]).includes(event) ? 'unavailable' : 'supported');
+      if (entry.canonical === null) {
+        expect(entry.row).toBe(`deferredNativeEvents.${event}`);
+        expect(deferred[event]).toMatchObject({ reason: expect.stringContaining('retrieved 2026-09-02'), state: 'unavailable' });
+        expect(routedNativeEvents).not.toContain(event);
+      } else {
+        expect(entry.row).toBe(`eventRoutes.${entry.canonical}`);
+        const route = routes[entry.canonical]!;
+        expect(route).toMatchObject({ nativeEvent: event, state: 'supported' });
+        expect(route.availability?.desktop.state).toBe('supported');
+        expect(route.availability?.cloud.state).toBe(entry.cloud);
+        expect(deferred[event]).toBeUndefined();
+      }
+    }
+  }
+  // Each documented event maps to at most one canonical family.
+  expect(new Set(routedNativeEvents).size).toBe(routedNativeEvents.length);
+  // Cloud-side plugin delivery is recorded honestly rather than inferred from the per-event table.
+  expect(cursorCapabilityTable.hooks.cloud).toMatchObject({
+    configurationSources: ['project', 'team', 'enterprise'],
+    executionTypes: ['command'],
+    pluginHooks: { reason: expect.stringContaining('retrieved 2026-09-02'), state: 'unavailable' },
+  });
+});
+
+it('records dated Cursor contract rows and mirrors every one through the unified adapter (#189)', () => {
+  const registry = createDefaultRegistry();
+  const cursor = registry.get('cursor');
+  const unified = registry.get('plugin');
+  const expectedStates = {
+    agentPluginFormat: 'unavailable',
+    agents: 'unavailable',
+    canvases: 'unavailable',
+    componentDiscovery: 'supported',
+    cursorPluginFormat: 'supported',
+    hookFailClosed: 'unavailable',
+    hookLoopLimit: 'unavailable',
+    hookMatchers: 'supported',
+    hookTimeout: 'supported',
+    installModes: 'unavailable',
+    localPluginImports: 'unavailable',
+    localSymlinkInstall: 'unavailable',
+    manifestMetadata: 'supported',
+    marketplaceAccess: 'unavailable',
+    marketplaceAutoRefresh: 'unavailable',
+    marketplaceManifest: 'supported',
+    marketplaceReview: 'unavailable',
+    promptHooks: 'unavailable',
+    rootSkill: 'unavailable',
+    teamMarketplaces: 'unavailable',
+    variables: 'supported',
+  } as const;
+
+  expect(Object.keys(cursorContractCapabilityRows).sort()).toEqual(Object.keys(expectedStates).sort());
+  for (const [capability, expectedState] of Object.entries(expectedStates)) {
+    const row = cursorContractCapabilityRows[capability as keyof typeof cursorContractCapabilityRows] as {
+      readonly evidence: readonly string[];
+      readonly reason?: string;
+      readonly state: string;
+    };
+    expect(row.state).toBe(expectedState);
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.some((line) => /2026-09-0[23]/u.test(line))).toBe(true);
+    if (expectedState === 'unavailable') {
+      expect(row.reason?.length ?? 0).toBeGreaterThan(0);
+      expect(cursor.capabilities[capability]).toEqual({ reason: row.reason, state: 'unavailable' });
+    } else {
+      expect(cursor.capabilities[capability]).toEqual({
+        evidence: { observedVersion: '2026-08-28', target: 'cursor' },
+        state: 'supported',
+      });
+    }
+    expect(registry.supports('cursor', capability)).toBe(expectedState === 'supported');
+    expect(unified.capabilities[capability]).toBeDefined();
+    if (capability === 'manifestMetadata') {
+      expect(unified.capabilities[capability]).toMatchObject({ state: 'supported' });
+    } else {
+      expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
+      expect(registry.supports('plugin', capability)).toBe(false);
+    }
+  }
+  expect(cursorCapabilityTable.plugin.marketplaceManifest).toMatchObject({
+    generatedEntryFields: ['name', 'source', 'description'],
+    maxEntries: 500,
+    mergePrecedence: 'plugin-manifest-over-marketplace-entry',
+  });
+  expect(cursorCapabilityTable.plugin.distributionPolicy.installModes.modes).toEqual(['Default Off', 'Default On', 'Required']);
+  expect(cursorCapabilityTable.plugin.formats).toMatchObject({
+    agentPlugin: { manifest: 'plugin.json', state: 'unavailable' },
+    cursorPlugin: { manifest: '.cursor-plugin/plugin.json', state: 'supported' },
+  });
+  expect(cursorCapabilityTable.plugin.componentDiscovery.emitted).toEqual({
+    commands: './commands/',
+    hooks: './hooks/hooks.json',
+    mcpServers: './mcp.json',
+    rules: './rules/',
+    skills: './skills/',
+  });
 });
