@@ -331,7 +331,11 @@ export class McpSession {
       this.#requests.set(requestId, controller);
       return Effect.gen({ self: this }, function* (this: McpSession) {
         const client = yield* liftTry(() => this.#clientFor());
-        const result = yield* liftPromise(() => client.callTool({ arguments: options.arguments, name: options.name }, {
+        const result = yield* liftPromise(() => client.callTool({
+          ...(options._meta === undefined ? {} : { _meta: options._meta }),
+          arguments: options.arguments,
+          name: options.name,
+        }, {
           signal: controller.signal,
           timeout: requestOptions(options, this.#timeoutMs).timeout,
         }));

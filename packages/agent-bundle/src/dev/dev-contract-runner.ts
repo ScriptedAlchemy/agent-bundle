@@ -94,6 +94,9 @@ type MatrixSession = Pick<
 
 export const matrixClient = (session: MatrixSession): ContractMatrixClient => ({
   callTool: async (params, options) => session.callTool({
+    // Lifecycle fixtures pass their progress token here; generated routes only
+    // send progress when the request's `_meta.progressToken` is present.
+    ...(params._meta === undefined ? {} : { _meta: params._meta }),
     arguments: params.arguments ?? {},
     name: params.name,
     signal: requestSignal(session, options),

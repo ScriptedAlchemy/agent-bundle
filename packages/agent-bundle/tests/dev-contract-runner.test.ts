@@ -32,6 +32,7 @@ it('rejects a matrix whose server is emitted for none of the project targets', (
 });
 
 interface RecordedRequest {
+  readonly meta?: unknown;
   readonly signal: AbortSignal | undefined;
   readonly timeoutMs: number | undefined;
 }
@@ -40,11 +41,15 @@ const fakeSession = (timeoutMs: number) => {
   const requests: RecordedRequest[] = [];
   const listeners = new Set<McpSessionTraceListener>();
   let sequence = 0;
-  const record = (options: { readonly signal?: AbortSignal; readonly timeoutMs?: number } | undefined) => {
-    requests.push({ signal: options?.signal, timeoutMs: options?.timeoutMs });
+  const record = (options: { readonly _meta?: unknown; readonly signal?: AbortSignal; readonly timeoutMs?: number } | undefined) => {
+    requests.push({
+      ...(options?._meta === undefined ? {} : { meta: options._meta }),
+      signal: options?.signal,
+      timeoutMs: options?.timeoutMs,
+    });
   };
   const session = {
-    callTool: async (options: { readonly signal?: AbortSignal; readonly timeoutMs?: number }) => {
+    callTool: async (options: { readonly _meta?: unknown; readonly signal?: AbortSignal; readonly timeoutMs?: number }) => {
       record(options);
       return { content: [] };
     },
@@ -102,6 +107,17 @@ it('applies the session timeout per matrix request instead of one deadline for t
   expect(signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
   expect(new Set(signals).size).toBe(3);
   expect(session.requests[2]?.timeoutMs).toBe(250);
+});
+
+it('forwards the lifecycle progress token as the request _meta so generated routes emit progress', async () => {
+  const session = fakeSession(30_000);
+  const client = matrixClient(session as unknown as Parameters<typeof matrixClient>[0]);
+
+  await client.callTool({ _meta: { progressToken: 'lifecycle:route:0' }, arguments: {}, name: 'transition' });
+  await client.callTool({ arguments: {}, name: 'plain' });
+
+  expect(session.requests[0]?.meta).toEqual({ progressToken: 'lifecycle:route:0' });
+  expect(session.requests[1]).not.toHaveProperty('meta');
 });
 
 it('exposes live progress notifications through the session trace for lifecycle fixtures', () => {
