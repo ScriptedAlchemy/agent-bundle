@@ -143,6 +143,8 @@ it.each([
         args: ['plugin', 'install', 'install-fixture@install-fixture-marketplace', '--scope', 'project'],
         command: 'claude',
       },
+      // Post-install load verdict: `plugin install` exits 0 for a plugin Claude Code then refuses (#464).
+      { args: ['plugin', 'list', '--json'], command: 'claude' },
     ],
     host: 'claude' as const,
     scope: 'project' as const,
@@ -219,6 +221,7 @@ it('replaces a stale same-version Claude install through uninstall + install and
       'plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data',
       `plugin marketplace add ${fixture.bundleRoot}`,
       'plugin install install-fixture@install-fixture-marketplace --scope user',
+      'plugin list --json',
     ]);
 
     // A reported copy that cannot be compared never passes as "no drift": fail closed without --replace.
@@ -252,6 +255,69 @@ it('replaces a stale same-version Claude install through uninstall + install and
       expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
       expect(malformed.calls).toHaveLength(1);
     }
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+// Verbatim `claude plugin list --json` row shape (Claude Code 2.1.259) for a plugin Claude Code refused: the
+// row stays `enabled: true`; the load verdict is only in `errors`. Healthy rows omit the key entirely.
+const claudeRefusedInventory = (installPath: string): string => JSON.stringify([{
+  enabled: true,
+  errors: [
+    'Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json resolves to already-loaded file ' +
+    `${installPath}/hooks/hooks.json. The standard hooks/hooks.json is loaded automatically, so manifest.hooks ` +
+    'should only reference additional hook files.',
+  ],
+  id: 'install-fixture@install-fixture-marketplace',
+  installPath,
+  installedAt: '2026-09-03T22:57:19.526Z',
+  lastUpdated: '2026-09-03T22:57:19.526Z',
+  scope: 'user',
+  version: '1.2.3',
+}]);
+
+it('fails a Claude install (AB7006) when plugin list --json reports load errors for the installed copy (#464)', async () => {
+  const fixture = await createHostBundle('claude');
+  const installed = join(fixture.cleanupRoot, 'claude-cache', '1.2.3');
+  try {
+    // Fresh install: `plugin install` exits 0, the follow-up listing says Claude Code refused the copy.
+    let listings = 0;
+    const fresh = recordingRunner((call) => {
+      if (!isInventoryCall(call)) return '';
+      listings += 1;
+      return listings === 1 ? '[]' : claudeRefusedInventory(installed);
+    });
+    const error = await installBundle({ commandRunner: fresh.runner, from: fixture.from, host: 'claude', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    const [diagnostic] = (error as DiagnosticError).diagnostics;
+    expect(diagnostic).toMatchObject({ code: 'AB7006', severity: 'error', target: 'claude' });
+    expect(diagnostic?.message).toContain(`claude refused to load install-fixture@install-fixture-marketplace (version 1.2.3) at ${JSON.stringify(installed)} (scope user) after installation`);
+    expect(diagnostic?.message).toContain('Duplicate hooks file detected');
+    expect(diagnostic?.message).toContain('--replace');
+    expect(fresh.calls.map((call) => call.args.join(' '))).toEqual([
+      'plugin list --json',
+      `plugin marketplace add ${fixture.bundleRoot}`,
+      'plugin install install-fixture@install-fixture-marketplace --scope user',
+      'plugin list --json',
+    ]);
+
+    // A byte-identical copy the host already refuses is never "already installed": reinstalling the same
+    // bytes cannot help, so the defect is reported instead of a success.
+    await cp(fixture.bundleRoot, installed, { recursive: true });
+    const identical = recordingRunner((call) => isInventoryCall(call) ? claudeRefusedInventory(installed) : '');
+    const existing = await installBundle({ commandRunner: identical.runner, from: fixture.from, host: 'claude', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(existing).toBeInstanceOf(DiagnosticError);
+    expect((existing as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7006', target: 'claude' });
+    expect((existing as DiagnosticError).diagnostics[0]?.message).not.toContain('after installation');
+    expect(identical.calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
+
+    // Healthy rows (no `errors` key) keep the install result unchanged.
+    const healthy = recordingRunner((call) => isInventoryCall(call) ? claudeInventory(installed) : '');
+    await expect(installBundle({ commandRunner: healthy.runner, from: fixture.from, host: 'claude', scope: 'user' }))
+      .resolves.toMatchObject({ state: 'already-installed' });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

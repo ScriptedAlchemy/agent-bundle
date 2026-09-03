@@ -83,7 +83,10 @@ npx agent-bundle doctor --from artifact --json
 Doctor 是只读的。它探测宿主、清点已安装的捆绑包、把它们与提供的捆绑包做比对、检查注册证明、采样运行时
 端点的健康状况与身份、清点持久状态，并对已安装的字节重新运行被固定的、无进程的文档与加载器校验器。它
 绝不修复任何东西。带 `--from` 时，它按宿主把已安装副本报告为 `current`、`stale`（`AB7308`）、`version-mismatch`
-（`AB7309`）、`foreign`（`AB7321`）或 `not-installed`（`AB7307`）。
+（`AB7309`）、`foreign`（`AB7321`）、`load-failed`（`AB7325`）或 `not-installed`（`AB7307`）。`load-failed` 表示
+Claude Code 列出了该副本却拒绝加载它——它在 `claude plugin list --json` 中的行带有 `errors` 数组，Doctor 会原样报告
+该数组而不是 `current`，因为被拒绝的副本不会为会话提供任何 hook、MCP 服务器或技能。安装器读取同一数组：当刚安装的
+（或字节完全相同的既有）副本带有 `errors` 时，`agent-bundle install claude` 以 `AB7006` 失败，而不是报告 `installed`。
 
 | 代码 | 严重级别 | 含义 |
 | --- | --- | --- |

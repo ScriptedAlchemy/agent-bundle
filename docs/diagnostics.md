@@ -32,11 +32,11 @@ even when no error diagnostic was reported.
 | `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
-| `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; see below). |
+| `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below). |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7324` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), and Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below). |
+| `AB7300`–`AB7325` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), and host load refusal (`AB7325`; see below). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
@@ -739,6 +739,7 @@ the host owns those copies, so replacement runs `claude plugin uninstall
 | Receipt / host-managed, different version | `AB7005` version collision | replaced | `version-mismatch` — `AB7309` warning |
 | Legacy, different content | `AB7005` content collision | adopted: the artifact's files are rewritten, every other file is left in place and stays unowned, receipt written (`replaced`) | `stale` — `AB7308` warning, recovery names `--replace` |
 | Foreign directory | `AB7005` foreign install | `AB7005` foreign install | `foreign` — `AB7321` warning |
+| Claude copy listed with `errors` (host refused to load it) | identical content: `AB7006`; otherwise replaced, then `AB7006` if the fresh row still carries `errors` | replaced, then `AB7006` if the fresh row still carries `errors` | `load-failed` — `AB7325` error (see below) |
 | Nothing installed | installed | installed | `not-installed` — `AB7307` info |
 
 Every `AB7005`, `AB7308`, `AB7309`, and `AB7321` message carries the comparison
@@ -822,3 +823,31 @@ tree does not hold the staged bundle bytes (the installer disables `text`,
 blob id in `git ls-tree -r HEAD` against the staged files; requires Git ≥ 2.29
 for `git init --object-format=sha1`), and `AB7005` for staged version or
 content collisions (including a working tree that differs from committed HEAD).
+
+## Host load refusal for Claude installs (`AB7006`, `AB7325`)
+
+`claude plugin install` and `claude plugin validate --strict` both accept a
+plugin that Claude Code then refuses at load time; the refusal surfaces only
+as the `errors` array on that plugin's row in `claude plugin list --json`
+(Claude Code 2.1.259 shape: `id`, `version`, `scope`, `enabled`, `installPath`,
+`installedAt`, `lastUpdated`, optional `mcpServers`, and `errors` — a nonempty
+array of strings present only on a refused plugin; healthy rows omit the key,
+and the refused row still reports `enabled: true`). A refused copy is
+installed but contributes no hooks, MCP servers, or skills to a session, so
+`agent-bundle install claude` and `agent-bundle doctor --host claude` read
+that array instead of treating every listed row as a healthy install. The
+observed instance is the manifest `hooks` pointer at the auto-loaded
+`hooks/hooks.json` ("Hook load failed: Duplicate hooks file detected …
+manifest.hooks should only reference additional hook files"), which the
+`claude` and unified `plugin` targets no longer emit (#470) and which the
+pinned Claude `plugin` schema now rejects (`AB6012` at `/hooks`).
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7006` | error | `install claude` found `errors` on the plugin's row: after `claude plugin install` ran (the install itself exited 0, so the result would otherwise have been `installed`/`replaced`), or on a byte-identical existing copy that would otherwise have been reported `already-installed` (reinstalling the same bytes cannot help). The message carries the host's `errors` verbatim, the install path, and the scope. An unusable post-install listing leaves the result unverified rather than failing an install the host accepted. | Fix the artifact until `claude plugin list --json` shows no `errors` for it (the message names the cause), rebuild, and rerun `agent-bundle install claude --from <bundle-dir> --replace`. |
+| `AB7325` | error | Doctor found `errors` on the plugin's row in `claude plugin list --json` (inventory entry `state: 'failed'` with `errors`; `doctor --from` comparison `status: 'load-failed'` with `errors` instead of `current`/`stale`, since the installed bytes never reach a session) or on the `--plugin-dir` registration proof row (`bundle.state: 'failed'` with `errors`, replacing the `registered` verdict). The message carries the host's `errors` verbatim. | Same as `AB7006`: fix the artifact, rebuild, and reinstall with `--replace`. |
+
+The JSON report exposes the same facts: `hosts[].inventory.findings[].errors`,
+`hosts[].bundle.errors`, and `hosts[].bundle.comparison.errors`. The text
+report prints the comparison as `installed copy: load failed (installed
+<version>, refused by the host: <errors>)`.

@@ -94,8 +94,12 @@ Doctor is read-only. It probes hosts, inventories installed bundles, compares th
 supplied bundle, checks registration proof, samples runtime endpoint health and identity,
 inventories durable state, and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
-`current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or
-`not-installed` (`AB7307`).
+`current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed`
+(`AB7325`), or `not-installed` (`AB7307`). `load-failed` means Claude Code lists the copy but refused to
+load it — its `claude plugin list --json` row carries an `errors` array, which Doctor reports verbatim in
+place of `current`, because a refused copy contributes no hooks, MCP servers, or skills to a session. The
+installer reads the same array: `agent-bundle install claude` fails with `AB7006` when the freshly
+installed (or byte-identical existing) copy carries `errors`, instead of reporting `installed`.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |

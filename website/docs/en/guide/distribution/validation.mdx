@@ -57,6 +57,15 @@ During development you can load a built target without installing it and verify 
 claude --plugin-dir artifact/claude plugin list --json
 ```
 
+That listing is the load verdict, and it is stricter than validation: `claude plugin validate --strict`
+accepts a manifest that Claude Code then refuses at load time (for example a `hooks` field naming the
+auto-loaded `hooks/hooks.json`, "Duplicate hooks file detected"). A refused plugin's row carries an
+`errors` array with the host's message; a healthy row has no `errors` key. `agent-bundle doctor --host
+claude --from <bundle-dir>` reads that array on both the `--plugin-dir` registration proof and the installed
+copy and reports it as `AB7325` (`load-failed`), and `agent-bundle install claude` fails with `AB7006` when
+the installed copy carries it. The pinned Claude `plugin` schema also rejects `hooks: "./hooks/hooks.json"`
+up front (`AB6012`), since the manifest field is for *additional* hook files only.
+
 ## Codex and Cursor: pinned schemas
 
 Neither Codex nor Cursor publishes a plugin-validation developer verb today, so Agent Bundle

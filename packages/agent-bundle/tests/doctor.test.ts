@@ -1297,6 +1297,113 @@ it('compares the Claude cache copy reported by plugin list --json against the ar
   }
 });
 
+// Verbatim `claude plugin list --json` row (Claude Code 2.1.259) for a plugin Claude Code refused: the row
+// keeps `enabled: true` and the load verdict lives only in `errors`. Healthy rows omit the key.
+const claudeDuplicateHooksError = (installPath: string): string =>
+  'Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json resolves to already-loaded file ' +
+  `${installPath}/hooks/hooks.json. The standard hooks/hooks.json is loaded automatically, so manifest.hooks ` +
+  'should only reference additional hook files.';
+
+it('reports a Claude copy the host refused to load as load-failed (AB7325) instead of current (#464)', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const installed = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    const artifactHash = (await treeInventory(bundle)).hash;
+    const refusedRow = {
+      enabled: true,
+      errors: [claudeDuplicateHooksError(installed)],
+      id: 'doctor-fixture@doctor-fixture-marketplace',
+      installPath: installed,
+      scope: 'user',
+      version: '1.2.3',
+    };
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.259' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify([refusedRow]) });
+      return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+    };
+    const host = hostReport(await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+
+    // Byte-identical copy, yet nothing of it reaches a session: the comparison must not say `current`.
+    expect(host.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: artifactHash,
+        errors: refusedRow.errors,
+        installedPath: installed,
+        installedVersion: '1.2.3',
+        ownership: 'host',
+        status: 'load-failed',
+      },
+      state: 'registered',
+    });
+    expect(host.bundle?.comparison).not.toHaveProperty('installedContentHash');
+    expect(host.inventory).toEqual({
+      findings: [{
+        entry: 'doctor-fixture@doctor-fixture-marketplace (user)',
+        errors: refusedRow.errors,
+        name: 'doctor-fixture',
+        path: installed,
+        state: 'failed',
+        version: '1.2.3',
+      }],
+      status: 'known',
+    });
+    const refused = host.diagnostics.filter((entry) => entry.code === 'AB7325');
+    expect(refused).toEqual([expect.objectContaining({ severity: 'error', target: 'claude' })]);
+    expect(refused[0]?.message).toContain('claude refused to load doctor-fixture@1.2.3');
+    expect(refused[0]?.message).toContain('Duplicate hooks file detected');
+    expect(refused[0]?.message).toContain('(scope user)');
+    expect(refused[0]?.recovery).toContain('--scope user --replace');
+    expect(host.diagnostics.some((entry) => entry.code === 'AB7308' || entry.code === 'AB7309')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('fails the Claude registration proof when --plugin-dir plugin list --json carries errors for the bundle', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.259' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: '[]' });
+      return commandResult({ stdout: JSON.stringify([{
+        enabled: true,
+        errors: [claudeDuplicateHooksError(bundle)],
+        id: 'doctor-fixture@inline',
+        installPath: bundle,
+        scope: 'user',
+        version: '1.2.3',
+      }]) });
+    };
+    const host = hostReport(await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+    expect(host.bundle).toMatchObject({
+      errors: [expect.stringContaining('Duplicate hooks file detected')],
+      state: 'failed',
+    });
+    const refused = host.diagnostics.filter((entry) => entry.code === 'AB7325');
+    expect(refused).toEqual([expect.objectContaining({ severity: 'error', target: 'claude' })]);
+    expect(refused[0]?.message).toContain(`claude refused to load doctor-fixture@1.2.3 from ${bundle}`);
+    expect(host.diagnostics.some((entry) => entry.code === 'AB7311' || entry.code === 'AB7312')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('compares the Codex cache copy against the artifact once plugin list --json names the install', async () => {
   const fixture = await temporaryDoctor();
   try {
