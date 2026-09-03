@@ -37,9 +37,12 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@5685521
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685521
 ```
 
-Install both from **one** SHA or PR number. The publish rewrites the `agent-bundle` peer range
-inside the runtime preview tarball to that exact preview version, so a matched pair installs
-with stock npm. Mixing two different SHAs fails with `ERESOLVE` by design.
+Install both from **one** SHA or PR number. `agent-bundle` declares `@agent-bundle/runtime` as
+an optional peer (the runtime package declares no `agent-bundle` peer), and the publish
+(`--peerDeps`) rewrites that peer range inside the `agent-bundle` preview tarball to the exact
+preview version of the runtime built from the same commit, so a matched pair installs with
+stock npm. Mixing two different SHAs fails with `ERESOLVE` by design — the range to inspect is
+the one in the installed `agent-bundle` package.
 
 pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
 

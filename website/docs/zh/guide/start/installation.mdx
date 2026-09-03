@@ -34,9 +34,10 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@5685521
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685521
 ```
 
-两者必须来自**同一个** SHA 或 PR 编号。发布过程会把 runtime 预览包内部的 `agent-bundle` peer 范围
-改写为该精确的预览版本，因此配对安装用原生 npm 即可完成。混用两个不同的 SHA 会按设计以 `ERESOLVE`
-失败。
+两者必须来自**同一个** SHA 或 PR 编号。`agent-bundle` 把 `@agent-bundle/runtime` 声明为可选 peer
+依赖（runtime 包本身不声明 `agent-bundle` peer），发布过程（`--peerDeps`）会把 `agent-bundle` 预览包
+内部的这个 peer 范围改写为同一提交构建出的 runtime 精确预览版本，因此配对安装用原生 npm 即可完成。
+混用两个不同的 SHA 会按设计以 `ERESOLVE` 失败——需要检查的范围位于已安装的 `agent-bundle` 包中。
 
 pnpm 与 yarn 接受同样的 URL（`pnpm add <url>`、`yarn add agent-bundle@<url>`）。
 
