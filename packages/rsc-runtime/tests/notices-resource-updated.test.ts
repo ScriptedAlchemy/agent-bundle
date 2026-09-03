@@ -155,12 +155,96 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('honours an unsubscribe that overlaps an observation awaiting the store', async () => {
+    const { driver, ledger } = await openLedger();
+    await publish(ledger, { sessionId: 's1' });
+    // A slow ledger: the first read parks until the test releases it, standing
+    // in for a contended durable store.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let parkNextRead = false;
+    const slowLedger: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      read: async () => {
+        if (parkNextRead) {
+          parkNextRead = false;
+          await gate;
+        }
+        return ledger.read();
+      },
+    });
+    const signaller = signallerOver(slowLedger);
+    const { send, sends } = sender();
+    await signaller.subscribe(principal('s1'));
+
+    const events: string[] = [];
+    parkNextRead = true;
+    const observing = signaller.observe(async () => {
+      events.push('send');
+      await send();
+    });
+    // `resources/unsubscribe` arrives while the observation is parked on the read.
+    const unsubscribing = signaller.unsubscribe().then(() => {
+      events.push('unsubscribed');
+    });
+    release!();
+    await expect(observing).resolves.toEqual({ kind: 'idle', reason: 'no-subscription', revision: undefined });
+    await unsubscribing;
+    expect(events).toEqual(['unsubscribed']);
+    expect(sends).toEqual([]);
+    expect(signaller.subscribed).toBe(false);
+    // Nothing was claimed on the client's behalf: the durable budget is intact,
+    // so a later subscriber still receives the signal.
+    expect((await ledger.read()).notices[0]?.availability).toBeUndefined();
+    await signaller.subscribe(principal('s1'));
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
+    expect(sends).toHaveLength(1);
+    await driver.close();
+  });
+
+  it('acknowledges unsubscribe only after an in-flight send has settled', async () => {
+    const { driver, ledger } = await openLedger();
+    await publish(ledger, { sessionId: 's1' });
+    const signaller = signallerOver(ledger);
+    await signaller.subscribe(principal('s1'));
+    let releaseSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const events: string[] = [];
+    const observing = signaller.observe(async () => {
+      await sendGate;
+      events.push('send');
+    });
+    // Let the observation pass its eligibility read and claim before the
+    // unsubscribe arrives mid-send.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    const unsubscribing = signaller.unsubscribe().then(() => {
+      events.push('unsubscribed');
+    });
+    releaseSend!();
+    await expect(observing).resolves.toMatchObject({ kind: 'signalled' });
+    await unsubscribing;
+    // The wire write that was already committed completes first; the client is
+    // told it is unsubscribed only afterwards, never the other way round.
+    expect(events).toEqual(['send', 'unsubscribed']);
+    await expect(signaller.observe(async () => {
+      events.push('late');
+    })).resolves.toMatchObject({ kind: 'idle', reason: 'no-subscription' });
+    expect(events).toEqual(['send', 'unsubscribed']);
+    await driver.close();
+  });
+
   it('stops signalling once unsubscribed and resets tracking on re-subscribe', async () => {
     const { driver, ledger } = await openLedger();
     const signaller = signallerOver(ledger);
     const { send, sends } = sender();
     await signaller.subscribe(principal('s1'));
-    signaller.unsubscribe();
+    await signaller.unsubscribe();
     expect(signaller.subscribed).toBe(false);
 
     await publish(ledger, { retryBudget: 2, sessionId: 's1' });

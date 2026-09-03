@@ -73,7 +73,13 @@ export interface AgentNoticeInboxSignaller {
    * subscription that could never be honoured.
    */
   subscribe(principal: AgentNoticePrincipal): Promise<void>;
-  unsubscribe(): void;
+  /**
+   * Ends the subscription. Resolves only after every observation already in
+   * flight has settled, so once it resolves no further signal is sent or
+   * budget spent for the connection — a `resources/unsubscribe` acknowledged
+   * to the client is honoured even while the store is slow.
+   */
+  unsubscribe(): Promise<void>;
 }
 
 interface InboxSubscription {
@@ -115,9 +121,21 @@ export const createNoticeInboxSignaller = (
   const now = options.now ?? ((): Date => new Date());
   let subscription: InboxSubscription | undefined;
   let signalSequence = 0;
-  // Observations serialize so two renders completing together cannot both
-  // select the same notice and send two signals for one revision.
+  // Observations and subscription changes serialize on one queue: two renders
+  // completing together cannot both select the same notice and send two
+  // signals for one revision, and an unsubscribe (or re-subscribe) that
+  // overlaps an observation awaiting the store takes effect only after that
+  // observation settles, never between its eligibility read and its send.
   let queue: Promise<unknown> = Promise.resolve();
+  // Unsubscribes requested while an observation awaits the store are counted
+  // synchronously so that observation yields before spending any budget: the
+  // client asked to stop, so nothing is claimed or sent on its behalf.
+  let pendingUnsubscribes = 0;
+  const serialized = <T>(step: () => Promise<T>): Promise<T> => {
+    const run = queue.then(step);
+    queue = run.catch(() => undefined);
+    return run;
+  };
 
   /**
    * Claims the budget for every newly eligible notice as one compare-and-swap
@@ -133,6 +151,7 @@ export const createNoticeInboxSignaller = (
   ): Promise<
     | { readonly at: string; readonly kind: 'claimed'; readonly noticeIds: readonly string[]; readonly revision: number }
     | { readonly kind: 'nothing-eligible'; readonly revision: number }
+    | { readonly kind: 'unsubscribed' }
     | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' }
   > => {
     for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
@@ -142,6 +161,7 @@ export const createNoticeInboxSignaller = (
       } catch (error) {
         return { error, kind: 'failed', stage: 'read' };
       }
+      if (pendingUnsubscribes > 0 || subscription !== current) return { kind: 'unsubscribed' };
       const at = now().toISOString();
       const nowMs = Date.parse(at);
       const noticeIds = Object.freeze(snapshot.notices
@@ -183,12 +203,17 @@ export const createNoticeInboxSignaller = (
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'read' as const });
     }
+    if (pendingUnsubscribes > 0) {
+      return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
+    }
     const claimed = await claim(ledger, current);
     switch (claimed.kind) {
       case 'failed':
         return Object.freeze({ error: claimed.error, kind: 'failed' as const, stage: claimed.stage });
       case 'nothing-eligible':
         return Object.freeze({ kind: 'idle', reason: 'nothing-eligible', revision: claimed.revision });
+      case 'unsubscribed':
+        return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
       case 'claimed':
         break;
       default: {
@@ -219,21 +244,25 @@ export const createNoticeInboxSignaller = (
       return options.store.close();
     },
     observe(send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> {
-      const run = queue.then(() => observeOnce(send));
-      queue = run.catch(() => undefined);
-      return run;
+      return serialized(() => observeOnce(send));
     },
-    async subscribe(principal: AgentNoticePrincipal): Promise<void> {
-      const ledger = await options.store.noticeLedger();
-      await ledger.read();
-      subscription = Object.freeze({
-        id: randomUUID(),
-        principal,
-        signalled: new Set<string>(),
+    subscribe(principal: AgentNoticePrincipal): Promise<void> {
+      return serialized(async () => {
+        const ledger = await options.store.noticeLedger();
+        await ledger.read();
+        subscription = Object.freeze({
+          id: randomUUID(),
+          principal,
+          signalled: new Set<string>(),
+        });
       });
     },
-    unsubscribe(): void {
-      subscription = undefined;
+    unsubscribe(): Promise<void> {
+      pendingUnsubscribes += 1;
+      return serialized(async () => {
+        pendingUnsubscribes -= 1;
+        subscription = undefined;
+      });
     },
   });
 };

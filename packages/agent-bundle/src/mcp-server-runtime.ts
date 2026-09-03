@@ -577,9 +577,11 @@ const installNoticeInboxSubscriptions = (
     }
     return {};
   }) as never);
-  protocol.setRequestHandler('resources/unsubscribe', ((request: ResourceSubscriptionRequest) => {
+  protocol.setRequestHandler('resources/unsubscribe', (async (request: ResourceSubscriptionRequest) => {
     assertInboxUri(request.params.uri);
-    notices.unsubscribe();
+    // Acknowledged only once in-flight observations have settled, so the
+    // client never receives a signal after its unsubscribe succeeded.
+    await notices.unsubscribe();
     return {};
   }) as never);
   const send = async (): Promise<void> => {
