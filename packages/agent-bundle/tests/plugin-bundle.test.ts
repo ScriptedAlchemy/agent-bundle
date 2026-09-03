@@ -808,7 +808,8 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
   try {
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     const bundleRoot = join(outputRoot, 'plugin');
-    await expect(readFile(join(bundleRoot, '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('"hooks": "./hooks/hooks.json"');
+    const claudePlugin = JSON.parse(await readFile(join(bundleRoot, '.claude-plugin', 'plugin.json'), 'utf8')) as Record<string, unknown>;
+    expect(claudePlugin).toMatchObject({ hooks: './hooks/hooks.json', name: 'bundle-example' });
     await expect(readFile(join(bundleRoot, '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('./skills/');
     await expect(readFile(join(bundleRoot, 'AGENTS.md'), 'utf8')).resolves.toContain('multi-host agent plugin bundle');
     await expect(readFile(join(bundleRoot, 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);
