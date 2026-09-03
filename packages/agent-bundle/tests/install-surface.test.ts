@@ -196,9 +196,13 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(unknown.code).toBe(2);
     expect(unknown.stderr).toContain('Unknown installer argument "--bogus"');
 
+    // Empty directories are not plugin content: never hashed, installed, or owned.
+    await mkdir(join(bundle, 'empty', 'nested'), { recursive: true });
     const first = await run(installer, [], home);
     expect(first).toMatchObject({ code: 0, stderr: '' });
     expect(first.stdout).toContain('Installed install-fixture@1.2.3');
+    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, '.cursor-plugin', 'INSTALL.md', 'install.mjs', 'payload.txt', 'removed-later.txt']);
+    await rm(join(bundle, 'empty'), { recursive: true });
     const firstArtifact = await treeInventory(bundle);
     // The emitted receipt is byte-compatible with the core reader.
     expect(await readInstallReceipt(destination)).toMatchObject({

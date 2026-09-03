@@ -692,7 +692,10 @@ install receipt, `.agent-bundle-install.json`, beside the plugin manifest:
 }
 ```
 
-The receipt never participates in the content hash. Ownership of an existing
+The receipt never participates in the content hash, and neither do empty
+directories or runtime roots (`state/`): only regular files are plugin content,
+so the artifact hash, the installed tree, and the receipt always describe the
+same entries. Ownership of an existing
 destination is decided as **receipt** (a receipt naming this plugin), **legacy**
 (no receipt, but the emitted `INSTALL.md` + `install.mjs` and a manifest with
 this plugin's name — a copy installed before receipts existed), or **foreign**

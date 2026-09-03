@@ -14,7 +14,7 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -139,6 +139,8 @@ const hashEntry = (
  * Walks a plugin tree the way the installers copy it: symlinks and special
  * files are refused, directories recurse in locale order, and the receipt at
  * the root is skipped so an installed copy hashes like the artifact it came from.
+ * Only regular files are content: an empty directory is neither hashed nor
+ * installed, so adding one to an artifact changes nothing.
  */
 export const treeInventory = async (root: string): Promise<TreeInventory> => {
   const rootMetadata = await lstat(root);
@@ -481,16 +483,18 @@ export const stageArtifact = async (options: {
   const parent = await mkdtemp(join(options.stageRoot, `.${basename(options.destination)}.stage-`));
   const root = join(parent, 'bundle');
   try {
-    // Runtime roots and a stray receipt in the artifact are never copied at all (a run-in-place
-    // artifact may hold a large live database).
+    // Exactly the inventoried content is copied: runtime roots and a stray receipt never are (a
+    // run-in-place artifact may hold a large live database), and neither are empty directories —
+    // they carry no plugin content, so they are not hashed, not installed, and not owned, and the
+    // installed tree, its receipt, and the artifact hash all describe the same set of entries.
     const artifactRoot = resolve(options.artifactRoot);
+    const source = await treeInventory(artifactRoot);
+    const content = new Set([...source.files, ...directoriesOf(source.files)]);
     await cp(artifactRoot, root, {
       errorOnExist: true,
-      filter: (source) => {
-        const relativePath = relative(artifactRoot, source);
-        if (relativePath === '') return true;
-        const top = relativePath.split(sep)[0] ?? '';
-        return top !== installReceiptFile && !isPreservedRuntimeRoot(top);
+      filter: (entry) => {
+        const relativePath = relative(artifactRoot, entry);
+        return relativePath === '' || content.has(toPosix(relativePath));
       },
       force: false,
       recursive: true,

@@ -363,13 +363,17 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
   await mkdir(join(home, '.cursor'));
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
+    // Empty directories are not plugin content: never hashed, installed, or owned.
+    await mkdir(join(fixture.bundleRoot, 'empty', 'nested'), { recursive: true });
     const first = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    await mkdir(join(fixture.bundleRoot, 'another-empty'));
     const second = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
 
     const artifact = await treeInventory(fixture.bundleRoot);
     expect(first).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'installed' });
     expect(second).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'already-installed' });
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
+    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, '.cursor-plugin', 'payload.txt']);
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
       // A fresh install created every directory, so it owns them all.
