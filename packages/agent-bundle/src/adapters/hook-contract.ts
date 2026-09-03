@@ -132,6 +132,55 @@ export const createNativeEventStarter = (
               ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
               : {}),
           });
+    case 'tool/failure':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            cwd: '/tmp',
+            duration: 0,
+            error_message: 'Lifecycle replay tool failure.',
+            failure_type: 'error',
+            is_interrupt: false,
+            tool_input: toolInput,
+            tool_name: toolName,
+            tool_use_id: 'lifecycle-replay-tool',
+          }
+        : {
+            ...base,
+            duration_ms: 0,
+            error: 'Lifecycle replay tool failure.',
+            is_interrupt: false,
+            tool_input: toolInput,
+            tool_name: toolName,
+            tool_use_id: 'lifecycle-replay-tool',
+          });
+    case 'compact/before':
+      return deepFreeze(target === 'cursor'
+        ? {
+            ...base,
+            context_tokens: 0,
+            context_usage_percent: 0,
+            context_window_size: 1,
+            is_first_compaction: true,
+            message_count: 0,
+            messages_to_compact: 0,
+            trigger: 'manual',
+          }
+        : {
+            ...base,
+            trigger: 'manual',
+            ...(target === 'codex'
+              ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+              : { custom_instructions: null }),
+          });
+    case 'compact/after':
+      return deepFreeze({
+        ...base,
+        trigger: 'manual',
+        ...(target === 'codex'
+          ? { model: 'default', turn_id: 'lifecycle-replay-turn' }
+          : { compact_summary: 'Lifecycle replay compact summary.' }),
+      });
     case 'tool/before':
       return deepFreeze({
         ...base,
@@ -322,6 +371,9 @@ const canonicalEventOrder: readonly NormalizedHookEvent[] = [
   'agentStop',
   'workspaceOpen',
   'sessionEnd',
+  'toolFailure',
+  'compactBefore',
+  'compactAfter',
 ];
 
 export const canonicalHookEventFor = (event: string): CanonicalHookEvent | undefined =>

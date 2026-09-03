@@ -110,6 +110,9 @@ const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEven
   'stop': 'stop',
   'tool/after': 'afterTool',
   'tool/before': 'beforeTool',
+  'tool/failure': 'toolFailure',
+  'compact/before': 'compactBefore',
+  'compact/after': 'compactAfter',
   'workspace/open': 'workspaceOpen',
 });
 

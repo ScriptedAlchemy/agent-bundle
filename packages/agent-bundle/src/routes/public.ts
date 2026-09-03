@@ -18,6 +18,9 @@ export const canonicalAgentEvents = Object.freeze([
   'workspace/open',
   'session/end',
   'prompt/submit',
+  'tool/failure',
+  'compact/before',
+  'compact/after',
 ] as const);
 
 export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];

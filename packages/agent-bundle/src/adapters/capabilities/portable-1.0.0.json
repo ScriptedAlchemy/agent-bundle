@@ -12,6 +12,14 @@
   "eventRoutes": {
     "agent/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "agent/stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "compact/after": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PostCompact equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "compact/before": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PreCompact/preCompact equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "prompt/submit": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native UserPromptSubmit/beforeSubmitPrompt equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
@@ -24,6 +32,10 @@
     "stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "tool/after": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "tool/before": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "tool/failure": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PostToolUseFailure/postToolUseFailure equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "workspace/open": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" }
   },
   "host": "portable",

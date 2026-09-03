@@ -43,6 +43,9 @@ export type CanonicalHookEvent = (typeof canonicalHookEvents)[number];
 export const eventRouteOnlyHookEvents = Object.freeze([
   'sessionEnd',
   'promptSubmit',
+  'toolFailure',
+  'compactBefore',
+  'compactAfter',
 ] as const);
 
 export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];
