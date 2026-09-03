@@ -38,6 +38,29 @@ const requireNativeString = (input: Readonly<Record<string, unknown>>, field: st
   }
 };
 
+const requireNativeStringValue = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'string') {
+    nativeEventError(`native ${field} must be a string`);
+  }
+};
+
+const requirePermissionMode = (native: Readonly<Record<string, unknown>>): void => {
+  requireNativeString(native, 'permission_mode');
+  if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
+    nativeEventError('native permission_mode is invalid');
+  }
+};
+
+const isCursorPromptAttachment = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const attachment = value as Readonly<Record<string, unknown>>;
+  return (
+    (attachment.type === 'file' || attachment.type === 'rule')
+    && typeof attachment.file_path === 'string'
+    && attachment.file_path.trim() !== ''
+  );
+};
+
 /**
  * Validates the host envelope shared by generated event wrappers and semantic
  * lifecycle replay. The process-edge stdin byte limit remains wrapper-owned.
@@ -76,6 +99,32 @@ export const validateNativeEventEnvelope = (
     if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {
       return nativeEventError('native session_id or conversation_id must be a string');
     }
+    if (canonicalEvent === 'session/end') {
+      if (!['completed', 'aborted', 'error', 'window_close', 'user_close'].includes(String(native.reason))) {
+        return nativeEventError('native reason is invalid');
+      }
+      if (typeof native.duration_ms !== 'number') {
+        return nativeEventError('native duration_ms must be a number');
+      }
+      if (typeof native.is_background_agent !== 'boolean') {
+        return nativeEventError('native is_background_agent must be a boolean');
+      }
+      requireNativeString(native, 'final_status');
+      if (Object.hasOwn(native, 'error_message') && typeof native.error_message !== 'string') {
+        return nativeEventError('native error_message must be a string');
+      }
+      return native;
+    }
+    if (canonicalEvent === 'prompt/submit') {
+      requireNativeStringValue(native, 'prompt');
+      if (
+        !Array.isArray(native.attachments)
+        || !native.attachments.every(isCursorPromptAttachment)
+      ) {
+        return nativeEventError('native attachments must be an array of file/rule objects with nonempty file_path');
+      }
+      return native;
+    }
     if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
       requireNativeString(native, 'tool_name');
       if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
@@ -98,6 +147,21 @@ export const validateNativeEventEnvelope = (
     requireNativeString(native, 'transcript_path');
   }
   requireNativeString(native, 'cwd');
+  if (canonicalEvent === 'session/end') {
+    if (target === 'codex') {
+      if (native.reason !== 'other') return nativeEventError('native reason must equal other');
+    } else if (!['clear', 'resume', 'logout', 'prompt_input_exit', 'other'].includes(String(native.reason))) {
+      return nativeEventError('native reason is invalid');
+    }
+  }
+  if (canonicalEvent === 'prompt/submit') {
+    requireNativeStringValue(native, 'prompt');
+    requirePermissionMode(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    }
+  }
   if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
   if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
     requireNativeString(native, 'tool_name');
@@ -118,10 +182,7 @@ export const validateNativeEventEnvelope = (
     if (target === 'codex') {
       requireNativeString(native, 'turn_id');
       requireNativeString(native, 'model');
-      requireNativeString(native, 'permission_mode');
-      if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
-        return nativeEventError('native permission_mode is invalid');
-      }
+      requirePermissionMode(native);
     }
     if (canonicalEvent === 'agent/stop') {
       if (typeof native.stop_hook_active !== 'boolean') {
@@ -262,6 +323,48 @@ export const projectEventDocument = (
             hookEventName: nativeEvent,
           },
         });
+  }
+  if (event === 'session/end') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('session/end is observation-only on every supported host and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('session/end is observation-only on every supported host and has no context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'prompt/submit') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('prompt/submit cannot replace native input on any supported host.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('prompt/submit reason is only valid when outcome is deny.');
+    }
+    if (target === 'cursor' && additionalContext !== undefined) {
+      throw new TypeError('Cursor beforeSubmitPrompt has no additional-context channel.');
+    }
+    if (target === 'cursor') {
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ continue: false, user_message: requireDenyReason() })
+        : undefined;
+    }
+    const reason = parsedValue?.outcome === 'deny' ? requireDenyReason() : undefined;
+    if (reason === undefined && additionalContext === undefined) return undefined;
+    return deepFreeze({
+      ...(reason === undefined ? {} : { decision: 'block', reason }),
+      ...(additionalContext === undefined
+        ? {}
+        : {
+            hookSpecificOutput: {
+              additionalContext,
+              hookEventName: nativeEvent,
+            },
+          }),
+    });
   }
   if (event === 'tool/before') {
     if (target === 'cursor') {

@@ -47,6 +47,7 @@ import type {
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedNativeHook,
+  NormalizedHookEvent,
   NormalizedPackageBuild,
   NormalizedPayload,
   NormalizedPlugin,
@@ -100,9 +101,11 @@ const sortedUnique = (values: readonly string[]): string[] =>
 
 const hookEvents: readonly CanonicalHookEvent[] = canonicalHookEvents;
 
-const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, CanonicalHookEvent>> = Object.freeze({
+const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEvent>> = Object.freeze({
   'agent/start': 'agentStart',
   'agent/stop': 'agentStop',
+  'prompt/submit': 'promptSubmit',
+  'session/end': 'sessionEnd',
   'session/start': 'sessionStart',
   'stop': 'stop',
   'tool/after': 'afterTool',
