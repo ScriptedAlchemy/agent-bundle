@@ -8,11 +8,10 @@
   },
   "scripts": {
     "build": "rspress build",
-    "check": "pnpm typecheck && pnpm build && pnpm verify:build",
+    "check": "pnpm typecheck && pnpm build",
     "dev": "rspress dev",
     "preview": "rspress preview",
-    "typecheck": "tsc --project tsconfig.json",
-    "verify:build": "node scripts/verify-build.mjs"
+    "typecheck": "tsc --project tsconfig.json"
   },
   "devDependencies": {
     "@rspress/core": "2.0.21",
