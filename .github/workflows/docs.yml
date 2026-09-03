@@ -1,7 +1,8 @@
 name: Docs
 
 # Validates the Rspress documentation site (website/) on every pull request
-# and push to main, and deploys website/doc_build to GitHub Pages from main.
+# and push to main, and deploys website/doc_build to GitHub Pages from main
+# (on push, or on a manual dispatch of the main branch).
 #
 # No `paths:` filter on purpose: package-source changes can break TypeDoc
 # generation and the generated reference pages without touching website/**,
@@ -40,13 +41,15 @@ jobs:
           install: false
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
+      # Website-only PRs skip every ci.yml job that lints, so lint here too.
+      - run: pnpm lint
       # Typecheck the site config and build it. Rspress's own dead-link,
       # dead-anchor, dead-image, and language-parity checks fail the build if
       # TypeDoc or the generated reference pages are missing, since the
       # authored pages link to them.
       - run: pnpm docs:site:build
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-pages-artifact@v5
         with:
           path: website/doc_build
@@ -54,7 +57,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
