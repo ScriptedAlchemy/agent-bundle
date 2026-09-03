@@ -383,6 +383,10 @@ it('bakes the concrete Cursor target only into the plugin Cursor event wrapper',
   const shared = hookEntries.find((entry) => !entry.relativePath.endsWith('.cursor.mjs'));
   const cursor = hookEntries.find((entry) => entry.relativePath.endsWith('.cursor.mjs'));
 
+  expect(shared?.nativeEvent).toBe('PostToolUse');
+  expect(cursor?.nativeEvent).toBe('postToolUse');
+  expect(shared?.virtualSource).toContain('const nativeEvent = "PostToolUse"');
+  expect(cursor?.virtualSource).toContain('const nativeEvent = "postToolUse"');
   expect(shared?.virtualSource).toContain('const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;');
   expect(shared?.virtualSource).toContain('process.env.PLUGIN_ROOT === undefined ? "claude" : "codex"');
   expect(shared?.virtualSource).toContain('requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs })');
