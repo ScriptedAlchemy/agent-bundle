@@ -993,7 +993,7 @@ it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => 
   }
 });
 
-it('reports a Cursor destination without a valid manifest as corrupt', async () => {
+it('reports a Cursor destination without a valid manifest as a foreign install', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
@@ -1006,10 +1006,14 @@ it('reports a Cursor destination without a valid manifest as corrupt', async () 
       home: fixture.home,
       hosts: ['cursor'],
     });
-    expect(hostReport(report, 'cursor').bundle?.state).toBe('corrupt');
+    expect(hostReport(report, 'cursor').bundle).toMatchObject({
+      comparison: { ownership: 'foreign', status: 'foreign' },
+      state: 'conflicted',
+    });
     expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7310', severity: 'error' }),
+      expect.objectContaining({ code: 'AB7321', severity: 'warning' }),
     ]));
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7310')).toBe(false);
   } finally {
     await fixture.cleanup();
   }

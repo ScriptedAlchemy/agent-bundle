@@ -468,8 +468,13 @@ const previouslyOwnedFiles = async (
 ): Promise<readonly string[]> => {
   if (comparison.ownership === 'receipt' && comparison.receipt !== undefined) return comparison.receipt.files;
   const inventory = await treeInventory(destination);
-  return inventory.files.filter((file) =>
-    incoming.has(file) && !preservedRuntimeEntries.includes(file.split('/')[0] ?? ''));
+  const owned: string[] = [];
+  for (const file of inventory.files) {
+    if (preservedRuntimeEntries.includes(file.split('/')[0] ?? '')) continue;
+    // Exact match, or a case alias of an incoming path on case-insensitive filesystems.
+    if (await isOwnedEntry(destination, incoming, file)) owned.push(file);
+  }
+  return owned;
 };
 
 /**

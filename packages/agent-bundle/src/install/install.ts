@@ -400,7 +400,16 @@ const installPublicCli = async (
     let installed: TreeInventory | undefined;
     try {
       installed = await treeInventory(entry.installPath);
-    } catch {
+    } catch (error) {
+      // The host says a copy is installed but it cannot be compared: never let that pass as "no drift".
+      if (options.replace !== true) {
+        throw failure(
+          'AB7004',
+          `${host} installed copy of ${id} at ${JSON.stringify(entry.installPath)} could not be compared: ` +
+            `${errorMessage(error)}. Re-run with --replace to reinstall it.`,
+          host,
+        );
+      }
       installed = undefined;
     }
     const sameVersion = entry.version === identity.version;

@@ -184,6 +184,20 @@ it('replaces a stale same-version Claude install through uninstall + install and
       'plugin install install-fixture@install-fixture-marketplace --scope user',
     ]);
 
+    // A reported copy that cannot be compared never passes as "no drift": fail closed without --replace.
+    const missingCache = recordingRunner((call) => isInventoryCall(call)
+      ? claudeInventory(join(fixture.cleanupRoot, 'claude-cache', 'missing'))
+      : '');
+    const uncomparable = await installBundle({ commandRunner: missingCache.runner, from: fixture.from, host: 'claude', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(uncomparable).toBeInstanceOf(DiagnosticError);
+    expect((uncomparable as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'claude' });
+    expect((uncomparable as DiagnosticError).diagnostics[0]?.message).toContain('could not be compared');
+    expect(missingCache.calls).toHaveLength(1);
+    const reinstalled = await installBundle({ commandRunner: missingCache.runner, from: fixture.from, host: 'claude', replace: true, scope: 'user' });
+    expect(reinstalled).toMatchObject({ state: 'replaced' });
+    expect(reinstalled.previousContentHash).toBeUndefined();
+
     // A matching row without a readable scope is an unusable inventory, not "not installed".
     const scopeless = recordingRunner((call) => isInventoryCall(call)
       ? JSON.stringify([{ id: 'install-fixture@install-fixture-marketplace', installPath: installed, version: '1.2.3' }])

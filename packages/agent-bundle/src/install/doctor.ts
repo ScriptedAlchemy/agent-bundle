@@ -993,30 +993,20 @@ const cursorBundle = async (
         }),
       };
     }
+    // A destination without a loader manifest is not corrupt-but-ours: ownership decides (a receipt
+    // naming this plugin still owns it; anything else is foreign).
     const installed = await readInstalledManifest(destination);
-    if (installed === undefined) {
-      return {
-        diagnostics: freezeDiagnostics([diagnostic(
-          'AB7310',
-          `Cursor destination ${JSON.stringify(destination)} has no valid loader manifest.`,
-          'Remove the corrupt copy manually and reinstall the Cursor plugin.',
-          'error',
-          'cursor',
-        )]),
-        finding: Object.freeze({
-          ...base,
-          comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'unknown' as const }),
-          state: 'corrupt',
-        }),
-      };
-    }
     const comparison = await compareInstalledTree({
       artifact,
       destination,
-      installedManifest: {
-        name: installed.name,
-        ...(installed.version === undefined ? {} : { version: installed.version }),
-      },
+      ...(installed === undefined
+        ? {}
+        : {
+          installedManifest: {
+            name: installed.name,
+            ...(installed.version === undefined ? {} : { version: installed.version }),
+          },
+        }),
       plugin: identity.name,
       version: identity.version,
     });
