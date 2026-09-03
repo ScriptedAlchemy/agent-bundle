@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "type": "dir-section-header",
+    "name": "start",
+    "label": "开始"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "authoring",
+    "label": "编写"
+  }
+]
