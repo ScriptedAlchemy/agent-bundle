@@ -1,11 +1,103 @@
-import { dirname, resolve } from 'node:path';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 
-import { expect, it } from '@rstest/core';
+import { afterEach, expect, it } from '@rstest/core';
 
 import {
   validateClaudePlugin,
+  validateClaudePluginFiles,
   type ClaudePluginCommandRunner,
 } from '../src/host-contracts/claude-plugin-validation.ts';
+
+const fixtureRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(fixtureRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+});
+
+const pluginWithNumberOption = async (
+  option: Readonly<Record<string, unknown>>,
+  location: 'channel' | 'plugin' = 'plugin',
+): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-validation-'));
+  fixtureRoots.push(root);
+  const pluginDirectory = join(root, '.claude-plugin');
+  await mkdir(pluginDirectory, { recursive: true });
+  const userConfig = {
+    count: {
+      description: 'Number of items.',
+      title: 'Count',
+      type: 'number',
+      ...option,
+    },
+  };
+  await writeFile(join(pluginDirectory, 'plugin.json'), `${JSON.stringify({
+    author: { name: 'Fixture' },
+    description: 'Fixture plugin.',
+    name: 'fixture-plugin',
+    version: '1.0.0',
+    ...(location === 'plugin'
+      ? { userConfig }
+      : { channels: [{ server: 'fixture', userConfig }] }),
+  }, null, 2)}\n`);
+  return root;
+};
+
+it('rejects a numeric userConfig minimum greater than its maximum', async () => {
+  const pluginDirectory = await pluginWithNumberOption({ max: 5, min: 10 });
+
+  await expect(validateClaudePluginFiles({
+    pluginDirectory,
+    target: 'claude',
+  })).resolves.toEqual([expect.objectContaining({
+    code: 'AB6012',
+    message: expect.stringContaining('minimum must be less than or equal to its maximum'),
+  })]);
+});
+
+it('rejects a numeric userConfig default below its minimum', async () => {
+  const pluginDirectory = await pluginWithNumberOption({ default: 4, min: 5 });
+
+  await expect(validateClaudePluginFiles({
+    pluginDirectory,
+    target: 'claude',
+  })).resolves.toEqual([expect.objectContaining({
+    code: 'AB6012',
+    message: expect.stringContaining('default must be greater than or equal to its minimum'),
+  })]);
+});
+
+it('rejects a numeric channel userConfig default above its maximum', async () => {
+  const pluginDirectory = await pluginWithNumberOption({ default: 11, max: 10 }, 'channel');
+
+  await expect(validateClaudePluginFiles({
+    pluginDirectory,
+    target: 'claude',
+  })).resolves.toEqual([expect.objectContaining({
+    code: 'AB6012',
+    message: expect.stringContaining('default must be less than or equal to its maximum'),
+  })]);
+});
+
+it('accepts numeric userConfig defaults within declared bounds', async () => {
+  const pluginDirectory = await pluginWithNumberOption({ default: 7, max: 10, min: 5 });
+
+  await expect(validateClaudePluginFiles({
+    pluginDirectory,
+    target: 'claude',
+  })).resolves.toEqual([]);
+});
+
+it('handles numeric userConfig declarations with only one bound', async () => {
+  const minimumOnly = await pluginWithNumberOption({ default: 5, min: 5 });
+  const maximumOnly = await pluginWithNumberOption({ default: 10, max: 10 });
+
+  await expect(Promise.all([
+    validateClaudePluginFiles({ pluginDirectory: minimumOnly, target: 'claude' }),
+    validateClaudePluginFiles({ pluginDirectory: maximumOnly, target: 'claude' }),
+  ])).resolves.toEqual([[], []]);
+});
 
 const runWith = (
   validation: Readonly<{ exitCode: number; stderr?: string; stdout: string }>,

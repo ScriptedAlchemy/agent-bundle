@@ -61,6 +61,8 @@ import {
   type StandardPluginHostDocument,
   type TargetAdapter,
   type TargetArtifactCopy,
+  type TargetArtifactDocumentIssue,
+  type TargetArtifactDocumentValidator,
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
@@ -438,6 +440,55 @@ const agentCapabilities = Object.freeze(Object.fromEntries(
 ));
 const packageLifecycle = capabilityTable.plugin.packageLifecycle;
 
+const validateClaudePluginSchema = validateJsonSchemaDocument(validatePlugin);
+
+const numericUserConfigIssues = (
+  userConfig: unknown,
+  instancePath: string,
+): readonly TargetArtifactDocumentIssue[] => {
+  if (!isDataRecord(userConfig)) return Object.freeze([]);
+  const issues: TargetArtifactDocumentIssue[] = [];
+  for (const [key, value] of Object.entries(userConfig)) {
+    if (!isDataRecord(value) || value.type !== 'number') continue;
+    const min = value.min;
+    const max = value.max;
+    const defaultValue = value.default;
+    if (typeof min === 'number' && typeof max === 'number' && min > max) {
+      issues.push(Object.freeze({
+        instancePath: `${instancePath}/${key}`,
+        message: 'numeric option minimum must be less than or equal to its maximum',
+      }));
+    }
+    if (typeof defaultValue !== 'number') continue;
+    if (typeof min === 'number' && defaultValue < min) {
+      issues.push(Object.freeze({
+        instancePath: `${instancePath}/${key}/default`,
+        message: 'numeric option default must be greater than or equal to its minimum',
+      }));
+    }
+    if (typeof max === 'number' && defaultValue > max) {
+      issues.push(Object.freeze({
+        instancePath: `${instancePath}/${key}/default`,
+        message: 'numeric option default must be less than or equal to its maximum',
+      }));
+    }
+  }
+  return Object.freeze(issues);
+};
+
+const validateClaudePluginDocument: TargetArtifactDocumentValidator = (document) => {
+  const schemaIssues = validateClaudePluginSchema(document);
+  if (schemaIssues.length > 0 || !isDataRecord(document)) return schemaIssues;
+  const issues = [...numericUserConfigIssues(document.userConfig, '/userConfig')];
+  if (Array.isArray(document.channels)) {
+    for (const [index, channel] of document.channels.entries()) {
+      if (!isDataRecord(channel)) continue;
+      issues.push(...numericUserConfigIssues(channel.userConfig, `/channels/${String(index)}/userConfig`));
+    }
+  }
+  return Object.freeze(issues);
+};
+
 export const claudeArtifactValidation = deepFreeze({
   documents: [
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
@@ -455,7 +506,7 @@ export const claudeArtifactValidation = deepFreeze({
     Object.freeze({ name: 'marketplace', validate: validateJsonSchemaDocument(validateMarketplace) }),
     Object.freeze({ name: 'mcp', validate: validateModernMcpDocument(validateJsonSchemaDocument(validateMcp)) }),
     Object.freeze({ name: 'monitors', validate: validateJsonSchemaDocument(validateMonitors) }),
-    Object.freeze({ name: 'plugin', validate: validateJsonSchemaDocument(validatePlugin) }),
+    Object.freeze({ name: 'plugin', validate: validateClaudePluginDocument }),
     Object.freeze({ name: 'settings', validate: validateJsonSchemaDocument(validateSettings) }),
     Object.freeze({ name: 'theme', validate: validateJsonSchemaDocument(validateTheme) }),
   ],
