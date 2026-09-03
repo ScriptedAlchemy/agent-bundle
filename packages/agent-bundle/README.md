@@ -87,7 +87,13 @@ agent-bundle also owns the npm-facing package build: `bin` entries become self-e
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
 optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the
 project). The `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts` conventions fill these in
-when the config is silent; config always wins and `bin: false` / `lib: false` opt out. MCP server
+when the config is silent; config always wins and `bin: false` / `lib: false` opt out. An explicit
+`scripts`, `hooks`, `lib`, or `mcp` entry claims the module it references out of conventional route
+discovery, but a `bin` entry does not claim a `src/scripts/<name>.ts` module: the same file
+ships as both `dist/bin/<name>.js` and the artifact `scripts/<name>.mjs` (the module must export
+`main` or be self-executing: a `default`-only plain script is `AB4738`, and a rendered `.tsx` script
+must export both its default component and `main` or it is `AB4737`; prefix a path segment with `_`
+for a bin-only module). MCP server
 entries that default-export a server factory are wrapped in the framework stdio lifecycle shell
 (console-to-stderr guard with raw stdout restored for protocol frames, SIGINT 130 / SIGTERM 143,
 stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from
