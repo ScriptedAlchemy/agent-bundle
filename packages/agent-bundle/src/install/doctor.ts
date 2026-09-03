@@ -27,6 +27,7 @@ import { requestEventRuntimeStatus } from '../events/ipc.ts';
 import {
   parsePublicHostInventory,
   publicHostCacheRoot,
+  treeHash,
   type InstallHost,
   type PublicHostInventory,
 } from './install.ts';
@@ -38,6 +39,13 @@ import {
   type InstalledTreeOwnership,
   type TreeInventory,
 } from './receipt.ts';
+import {
+  type CursorHooksRegistration,
+  type CursorStagingGit,
+  inspectCursorMarketplaceStaging,
+  inspectCursorPluginHooks,
+} from './cursor-hooks-registration.ts';
+import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -82,8 +90,13 @@ export interface DoctorHostProbe {
 }
 
 export interface DoctorFinding {
+  /** Git commit of a staged Cursor marketplace repository. */
+  readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
   readonly entry?: string;
+  /** Cursor plugin hook registration proof (`.cursor-plugin/plugin.json` installs only). */
+  readonly hooks?: CursorHooksRegistration;
+  readonly marketplace?: string;
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
@@ -619,9 +632,25 @@ const readInstalledManifest = async (
   return undefined;
 };
 
+/**
+ * Read-only git verification for staged marketplaces through the Doctor command runner;
+ * `undefined` when git is not installed so the inspection degrades to ref-text checks.
+ */
+const stagingGit = (run: DoctorCommandRunner): CursorStagingGit => async (args, cwd) => {
+  try {
+    const result = await run(Object.freeze({ args: Object.freeze([...args]), cwd, executable: 'git' }));
+    return { exitCode: result.termination === undefined ? result.exitCode : null, stdout: result.stdout };
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw error;
+  }
+};
+
 const cursorInventory = async (
   home: string,
   available: boolean,
+  git: CursorStagingGit,
+  platform: NodeJS.Platform,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly inventory: DoctorInventory }> => {
   if (!available) return { diagnostics: Object.freeze([]), inventory: freezeInventory('skipped') };
   const installRoot = join(home, '.cursor', 'plugins', 'local');
@@ -630,18 +659,19 @@ const cursorInventory = async (
     entries = (await readdir(installRoot)).sort((left, right) => left.localeCompare(right));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) {
-      return { diagnostics: Object.freeze([]), inventory: freezeInventory('known') };
+      entries = Object.freeze([]);
+    } else {
+      return {
+        diagnostics: freezeDiagnostics([diagnostic(
+          'AB7304',
+          `Cursor local plugins at ${JSON.stringify(installRoot)} could not be read.`,
+          'Repair permissions for the Cursor local plugin directory or reinstall the affected plugin.',
+          'error',
+          'cursor',
+        )]),
+        inventory: freezeInventory('unknown'),
+      };
     }
-    return {
-      diagnostics: freezeDiagnostics([diagnostic(
-        'AB7304',
-        `Cursor local plugins at ${JSON.stringify(installRoot)} could not be read.`,
-        'Repair permissions for the Cursor local plugin directory or reinstall the affected plugin.',
-        'error',
-        'cursor',
-      )]),
-      inventory: freezeInventory('unknown'),
-    };
   }
   const findings: DoctorFinding[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -742,14 +772,33 @@ const cursorInventory = async (
     diagnostics.push(...staticDiagnostics);
     const durableState = await inspectDurableState(path, 'cursor');
     if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+    const hooks = manifest.manifest === cursorManifestCandidates[0]
+      ? await inspectCursorPluginHooks(path, home, { caseInsensitivePaths: platform === 'win32' })
+      : undefined;
+    if (hooks !== undefined) diagnostics.push(...hooks.diagnostics);
     findings.push({
       ...(durableState === undefined ? {} : { durableState }),
       entry,
+      ...(hooks === undefined ? {} : { hooks: hooks.registration }),
       manifest: manifest.manifest,
       name: manifest.name,
       path,
       state: staticDiagnostics.some((entry) => entry.severity === 'error') ? 'corrupt' : 'installed',
       ...(manifest.version === undefined ? {} : { version: manifest.version }),
+    });
+  }
+  const staging = await inspectCursorMarketplaceStaging(home, git);
+  diagnostics.push(...staging.diagnostics);
+  for (const staged of staging.findings) {
+    findings.push({
+      ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+      entry: staged.entry,
+      manifest: '.cursor-plugin/marketplace.json',
+      ...(staged.marketplace === undefined ? {} : { marketplace: staged.marketplace }),
+      name: staged.name,
+      path: staged.path,
+      state: staged.state,
+      ...(staged.version === undefined ? {} : { version: staged.version }),
     });
   }
   return {
@@ -1039,9 +1088,69 @@ const publicHostInstallComparison = async (
   return { comparison: worst, diagnostics: freezeDiagnostics(diagnostics) };
 };
 
+/**
+ * A bundle delivered with `install cursor --mode marketplace` lives in the
+ * staged marketplace repository rather than `plugins/local`; report whether
+ * Cursor has imported it (matching copy under `plugins/cache`) or the UI step
+ * is still pending.
+ */
+const cursorStagedBundle = async (
+  identity: PluginIdentity,
+  home: string,
+  base: { readonly bundleRoot: string; readonly name: string; readonly path: string; readonly version: string },
+  git: CursorStagingGit,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] } | undefined> => {
+  const repoRoot = join(cursorMarketplaceRoot(join(home, '.cursor')), identity.name);
+  const pluginDirectory = cursorMarketplacePluginPath(repoRoot, identity.name);
+  if (!await exists(repoRoot)) return undefined;
+  if (!await exists(pluginDirectory)) {
+    // The staged repository is present but its plugin copy is gone: surface the staging inventory's
+    // corrupt finding (and its repair step) instead of AB7307 "not installed".
+    const staging = await inspectCursorMarketplaceStaging(home, git);
+    const entry = staging.findings.find((candidate) => candidate.name === identity.name);
+    return {
+      diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot))),
+      finding: Object.freeze({
+        ...base,
+        ...(entry?.marketplace === undefined ? {} : { marketplace: entry.marketplace }),
+        path: repoRoot,
+        state: 'corrupt',
+      }),
+    };
+  }
+  const [sourceHash, stagedHash] = await Promise.all([treeHash(identity.bundleRoot), treeHash(pluginDirectory)]);
+  if (sourceHash !== stagedHash) {
+    return {
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7308',
+        `Staged Cursor marketplace copy of ${identity.name}@${identity.version} at ${repoRoot} differs from the current bundle.`,
+        'Remove the staged marketplace directory and rerun `agent-bundle install cursor --mode marketplace`.',
+        'warning',
+        'cursor',
+      )]),
+      finding: Object.freeze({ ...base, path: repoRoot, state: 'drifted' }),
+    };
+  }
+  // The staging inspection also proves the working tree equals committed HEAD, so a source-matching but
+  // uncommitted tree cannot be reported as imported.
+  const staging = await inspectCursorMarketplaceStaging(home, git);
+  const entry = staging.findings.find((candidate) => candidate.name === identity.name);
+  return {
+    diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot) || candidate.message.includes(`${identity.name}@`))),
+    finding: Object.freeze({
+      ...base,
+      ...(entry?.commit === undefined ? {} : { commit: entry.commit }),
+      ...(entry?.marketplace === undefined ? {} : { marketplace: entry.marketplace }),
+      path: repoRoot,
+      state: entry === undefined ? 'unregistered' : entry.state,
+    }),
+  };
+};
+
 const cursorBundle = async (
   identity: PluginIdentity,
   home: string,
+  git: CursorStagingGit,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] }> => {
   const destination = join(home, '.cursor', 'plugins', 'local', identity.name);
   const base = {
@@ -1053,6 +1162,8 @@ const cursorBundle = async (
   try {
     const artifact = await treeInventory(identity.bundleRoot);
     if (!await exists(destination)) {
+      const staged = await cursorStagedBundle(identity, home, base, git);
+      if (staged !== undefined) return staged;
       return {
         diagnostics: freezeDiagnostics([diagnostic(
           'AB7307',
@@ -1673,11 +1784,12 @@ const doctorHost = async (
     ? await probeCursor(home)
     : await probeBinary(host, home, run);
   const environment = options.environment ?? process.env;
+  const git = stagingGit(run);
   const listing: PublicHostListing = host === 'cursor' || probed.probe.status !== 'available'
     ? { detail: `${host} is not available`, status: 'unavailable' }
     : await readPublicHostListing(host, run, options.from === undefined ? home : resolve(options.from));
   const inventoried = host === 'cursor'
-    ? await cursorInventory(home, probed.probe.status === 'available')
+    ? await cursorInventory(home, probed.probe.status === 'available', git, options.platform ?? process.platform)
     : probed.probe.status !== 'available'
       ? { diagnostics: Object.freeze([]), inventory: freezeInventory('skipped') }
       : publicHostInventory(host, listing, environment, home);
@@ -1694,7 +1806,7 @@ const doctorHost = async (
       );
       const context: PublicHostContext = { environment, home, listing, run };
       const checked = host === 'cursor'
-        ? await cursorBundle(identity, home)
+        ? await cursorBundle(identity, home, git)
         : host === 'claude'
           ? await claudeBundle(identity, probed.probe, context)
           : await codexBundle(identity, probed.probe, context);

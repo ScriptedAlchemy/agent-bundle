@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import { Ajv, type ErrorObject } from 'ajv/dist/ajv.js';
@@ -224,6 +224,8 @@ const readDocuments = async (
     const file = join(pluginDirectory, contract.path);
     let source: string;
     try {
+      // `stat` first: `readFile` on a FIFO or device would block until a writer appears.
+      if (!(await stat(file)).isFile()) throw new Error(`${contract.path} is not a regular file`);
       source = await readFile(file, 'utf8');
     } catch (error) {
       if (isErrno(error, 'ENOENT')) {

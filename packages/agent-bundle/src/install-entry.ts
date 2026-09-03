@@ -3,9 +3,11 @@ import { fileURLToPath } from 'node:url';
 
 import { stableJson } from './core/digest.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
+import { formatInstallResult } from './install/format.ts';
 import {
   installBundle,
   type InstallHost,
+  type InstallMode,
   type InstallResult,
   type InstallScope,
 } from './install/install.ts';
@@ -17,7 +19,7 @@ export interface GeneratedInstallProcessOptions {
 }
 
 const usage = (options: GeneratedInstallProcessOptions): string => [
-  `Usage: ${options.name} install <host> [--scope <scope>] [--replace|--force] [--json]`,
+  `Usage: ${options.name} install <host> [--scope <scope>] [--mode local|marketplace] [--replace|--force] [--json]`,
   '',
   `Built hosts: ${options.hosts.join(', ')}`,
   '',
@@ -36,33 +38,8 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] =>
       severity: 'error' as const,
     })]);
 
-const stateLabel = (state: InstallResult['state']): string => {
-  switch (state) {
-    case 'adopted':
-      return 'Adopted';
-    case 'already-installed':
-      return 'Already installed';
-    case 'installed':
-      return 'Installed';
-    case 'replaced':
-      return 'Replaced';
-    default: {
-      const exhaustive: never = state;
-      throw new TypeError(`Unknown install state ${String(exhaustive)}.`);
-    }
-  }
-};
-
 const writeHuman = (result: InstallResult): void => {
-  const destination = result.destination ?? result.bundleRoot;
-  const content = result.previousContentHash !== undefined && result.contentHash !== undefined
-    ? ` (content ${result.previousContentHash.slice(0, 12)} -> ${result.contentHash.slice(0, 12)})`
-    : result.contentHash === undefined
-      ? ''
-      : ` (content ${result.contentHash.slice(0, 12)})`;
-  process.stdout.write(
-    `${stateLabel(result.state)} ${result.plugin}@${result.version} for ${result.host} at ${destination}${content}\n`,
-  );
+  process.stdout.write(formatInstallResult(result));
 };
 
 const isHost = (value: string): value is InstallHost =>
@@ -71,10 +48,14 @@ const isHost = (value: string): value is InstallHost =>
 const isScope = (value: string): value is InstallScope =>
   value === 'local' || value === 'project' || value === 'user';
 
+const isMode = (value: string): value is InstallMode =>
+  value === 'local' || value === 'marketplace';
+
 interface ParsedInstallArguments {
   readonly host: InstallHost;
   readonly json: boolean;
   readonly replace: boolean;
+  readonly mode?: InstallMode;
   readonly scope: InstallScope;
 }
 
@@ -94,6 +75,7 @@ const parseArguments = (
   let json = false;
   let replace = false;
   let scope: InstallScope = 'user';
+  let mode: InstallMode | undefined;
   for (let index = 2; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--json') {
@@ -102,6 +84,15 @@ const parseArguments = (
     }
     if (argument === '--replace' || argument === '--force') {
       replace = true;
+      continue;
+    }
+    if (argument === '--mode') {
+      const value = argv[index + 1];
+      if (value === undefined || !isMode(value)) {
+        throw new TypeError('Install mode must be local or marketplace.');
+      }
+      mode = value;
+      index += 1;
       continue;
     }
     if (argument === '--scope') {
@@ -115,7 +106,7 @@ const parseArguments = (
     }
     throw new TypeError(`Unknown installer argument ${JSON.stringify(argument)}.`);
   }
-  return Object.freeze({ host: candidate, json, replace, scope });
+  return Object.freeze({ host: candidate, json, ...(mode === undefined ? {} : { mode }), replace, scope });
 };
 
 export const runGeneratedInstallProcess = async (
@@ -143,6 +134,7 @@ export const runGeneratedInstallProcess = async (
       from: artifactRoot,
       host: parsed.host,
       replace: parsed.replace,
+      ...(parsed.mode === undefined ? {} : { mode: parsed.mode }),
       scope: parsed.scope,
     });
     if (parsed.json) process.stdout.write(`${stableJson(result)}\n`);

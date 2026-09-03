@@ -89,10 +89,36 @@ it('emits a standalone safe-copy installer only for Cursor-compatible fallback p
     expect(writes.get('install.mjs')).toContain('install-fixture');
     expect(writes.get('install.mjs')).toContain('1.2.3');
     expect(writes.get('install.mjs')).not.toContain('sudo');
+    expect(writes.get('install.mjs')).toContain("if (mode === 'marketplace') {");
+    expect(writes.get('install.mjs')).toContain("join(cursorRoot, 'agent-bundle', 'marketplaces')");
+    expect(writes.get('install.mjs')).toContain('Add Plugins from Local Repository');
+    expect(writes.get('install.mjs')).toContain("await git(stage, ['init', '-q', '--object-format=sha1']);");
+    // Bytes must survive the commit unchanged: attributes disabled, autocrlf off, blob ids proven against HEAD.
+    expect(writes.get('install.mjs')).toContain("'* -text -eol -filter -ident -working-tree-encoding -export-ignore -export-subst\\n'");
+    expect(writes.get('install.mjs')).toContain("['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', 'add', '--all', '--force']");
+    expect(writes.get('install.mjs')).toContain("await git(stage, ['ls-tree', '-r', '-z', 'HEAD'])");
+    expect(writes.get('install.mjs')).toContain('the committed tree differs from the staged bundle bytes');
+    // Owner/description are read from the emitted .cursor-plugin/plugin.json at run time, not baked in.
+    expect(writes.get('install.mjs')).toContain("typeof manifest?.author?.name === 'string' ? manifest.author.name : pluginName");
+    expect(writes.get('install.mjs')).not.toContain('const pluginDescription');
+    expect(writes.get('install.mjs')).toContain("await findNestedGit(source)");
   }
   for (const target of ['claude', 'codex']) {
     expect(writesFor(target).has('install.mjs')).toBe(false);
   }
+});
+
+it('documents both Cursor delivery modes without user-level hooks registration', () => {
+  const install = writesFor('cursor').get('INSTALL.md');
+
+  expect(install).toContain('### Local plugin (default)');
+  expect(install).toContain('`~/.cursor/plugins/local/install-fixture`');
+  expect(install).toContain('need no `~/.cursor/hooks.json` entry');
+  expect(install).toContain('### Marketplace plugin');
+  expect(install).toContain('node ./install.mjs --mode marketplace');
+  expect(install).toContain('`~/.cursor/agent-bundle/marketplaces/install-fixture`');
+  expect(install).toContain('"Add Plugins from Local Repository"');
+  expect(install).toContain('`agent-bundle doctor --host cursor`');
 });
 
 it('documents native Agent Plugins clients for the portable profile', () => {
