@@ -23,6 +23,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
+| `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
@@ -288,6 +289,38 @@ simply not been built yet is a validation **warning** that only
 | `AB4748` | error (build) | `agent-bundle build` refuses a prebuilt entry file absent from its payload. |
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
+
+## Build-time identity outside the compiler (`AB4760`)
+
+`agent-bundle/meta` (see `docs/entry-conventions.md`) is a reserved specifier
+the compiler replaces in every compiled surface with the project's exact
+`{ name, packageName, packageVersion, version }`. The published
+`dist/meta.js` module behind that specifier therefore never carries an
+identity of its own: every binding — `name`, `version`, `packageName`,
+`packageVersion`, `meta`, and the default export — throws this diagnostic at
+module evaluation, so a module that reaches it fails on import rather than
+observing a fabricated identity. The thrown value is an `Error` named
+`AgentBundleMetaUnavailableError` whose `code`, `recovery`, and structured
+`diagnostic` fields carry the same data the message prints, so a bare `node`
+process and a test runner both show the fix. The importing module is not
+observable from a module evaluated through ESM linking, so the message names
+the situation, not a file; the runner's own "failed to load" line names the
+file.
+
+Unit tests are the common way to reach it (issue #386): a plain Rstest pool
+imports a source module that imports `agent-bundle/meta`, no compiled surface
+replaced the specifier, and every test that touches that module fails at
+import. `agentBundleRstest()` and `agentBundleBrowserRstest()` prevent this by
+aliasing the specifier to `.agent-bundle/test/meta.mjs`, generated from the
+same compiler pass. When that pass produced no plugin model (the configuration
+could not be loaded or normalized) there is no identity to stamp, so the
+aliased module throws the same `AB4760` naming the compiler diagnostics and
+the recovery "fix them, then rerun Rstest" — the manifest's placeholder
+identity is never served as a real one.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |
 
 ## Config beside a route-generated MCP server (`AB4340`)
 

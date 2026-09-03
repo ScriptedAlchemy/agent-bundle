@@ -1,7 +1,6 @@
 import { join } from 'node:path';
 
 import type { AgentBundleMeta } from '../meta.ts';
-import type { NormalizedMetadata } from '../core/types.ts';
 
 /**
  * The reserved namespace (under each build's output root) whose paths
@@ -33,8 +32,20 @@ export const metaModuleSpecifier = 'agent-bundle/meta';
 export const generatedMetaModulePath = (outputRoot: string): string =>
   join(outputRoot, generatedModulesDirname, 'meta.mjs');
 
+/**
+ * The identity axes {@link projectMeta} reads. Normalized project metadata
+ * satisfies it directly, and so does the test manifest's plugin identity, so
+ * the build and the Rstest presets stamp one identity through one function.
+ */
+export interface ProjectMetaSource {
+  readonly name: string;
+  readonly packageName?: string | undefined;
+  readonly packageVersion?: string | undefined;
+  readonly version: string;
+}
+
 /** The exact identity a build stamps into every compiled surface. */
-export const projectMeta = (metadata: NormalizedMetadata): AgentBundleMeta => Object.freeze({
+export const projectMeta = (metadata: ProjectMetaSource): AgentBundleMeta => Object.freeze({
   name: metadata.name,
   packageName: metadata.packageName,
   packageVersion: metadata.packageVersion,

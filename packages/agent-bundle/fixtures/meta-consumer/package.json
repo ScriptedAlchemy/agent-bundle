@@ -1,0 +1,7 @@
+{
+  "name": "meta-consumer-fixture",
+  "version": "3.4.5",
+  "private": true,
+  "type": "module",
+  "description": "Fixture project whose source imports agent-bundle/meta; its release identity comes from this file (issue #386)."
+}

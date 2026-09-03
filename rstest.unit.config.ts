@@ -1,6 +1,7 @@
 import { defineConfig } from '@rstest/core';
 
 import {
+  fixtureProjectTestFiles,
   integrationTestFiles,
   mcpConformanceTestFiles,
   nightlyEvidenceTestFiles,
@@ -19,6 +20,7 @@ export default defineConfig({
     'packages/**/tests/**/*.test.ts',
   ],
   exclude: [
+    ...fixtureProjectTestFiles,
     ...integrationTestFiles,
     ...mcpConformanceTestFiles,
     ...nightlyEvidenceTestFiles,
