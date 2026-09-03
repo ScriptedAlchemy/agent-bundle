@@ -10,6 +10,16 @@
     "activeMatch": "/zh/reference/"
   },
   {
+    "text": "示例",
+    "link": "/examples/",
+    "activeMatch": "/zh/examples/"
+  },
+  {
+    "text": "贡献",
+    "link": "/contributing/",
+    "activeMatch": "/zh/contributing/"
+  },
+  {
     "text": "类型 API",
     "link": "/api/",
     "activeMatch": "/zh/api/"
