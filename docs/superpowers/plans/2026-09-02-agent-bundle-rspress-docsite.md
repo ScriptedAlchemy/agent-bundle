@@ -144,6 +144,15 @@ when conversion fails, so a broken TypeDoc run otherwise produces a green
 build with no API reference. Task 2 extends this script with one generated
 module page per public package export.
 
+> **Deviation (Task 7):** the verifier was removed in favor of checks Rspress
+> already runs. A TypeDoc run that produces no output fails `rspress build`
+> during sidebar resolution, because the hand-authored
+> `website/docs/{en,zh}/api/_meta.json` name the generated directories; a
+> partial run fails the dead-link check, because the Reference pages link to
+> specific generated module and interface pages, and the Reference overview
+> links every generated reference page. Both were verified by breaking the
+> TypeDoc entry points and building.
+
 - [ ] **Step 3: Create the private website package**
 
 Create `website/package.json` with:
