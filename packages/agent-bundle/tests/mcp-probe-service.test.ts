@@ -482,6 +482,59 @@ it('removes plugin data only after a slow transport teardown settles (#316 revie
   }
 });
 
+it('settle() fences in-flight probes, not only already-registered teardowns (#397 review)', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  const events: string[] = [];
+  let releaseConnect!: () => void;
+  const connectReleased = new Promise<void>((resolvePromise) => {
+    releaseConnect = resolvePromise;
+  });
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        connect: async () => {
+          // A probe that is still connecting when shutdown begins: its
+          // teardown is not registered yet, so a fence over teardowns alone
+          // would resolve immediately.
+          await connectReleased;
+        },
+      }),
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      createStdioTransport: () => transport(async () => {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 120));
+        events.push('transport-closed');
+      }),
+    });
+
+    const probe = service.probe({ host: 'claude', serverName: 'timeline' });
+    void probe.then(() => { events.push('report-returned'); });
+    // Let the probe reach its (blocked) connect before shutdown starts.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).resolves.toBe('present');
+
+    let settled = false;
+    const settle = service.settle().then(() => { settled = true; });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    expect(settled).toBe(false);
+
+    releaseConnect();
+    await settle;
+    events.push('settled');
+    const report = await probe;
+    expect(report.status).toBe('ok');
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events).toEqual(['report-returned', 'transport-closed', 'settled']);
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('removes the fresh plugin data directory after every probe', async () => {
   const root = await createBundle();
   let pluginData: string | undefined;

@@ -298,13 +298,17 @@ export class McpProbeService {
   }
 
   /**
-   * Resolve once every detached teardown — a transport close that outlived
-   * its probe's response boundary, followed by that probe's plugin-data
-   * removal — has settled. Probe responses never wait on this.
+   * Resolve once every in-flight probe has answered and every detached
+   * teardown — a transport close that outlived its probe's response boundary,
+   * followed by that probe's plugin-data removal — has settled. In-flight
+   * probes are part of the fence because a probe registers its teardown only
+   * when it reaches its response boundary; a fence over teardowns alone would
+   * let shutdown finish while a still-connecting probe holds a transport and a
+   * plugin-data directory. Probe responses never wait on this.
    */
   async settle(): Promise<void> {
-    while (this.#pendingTeardowns.size > 0) {
-      await Promise.allSettled([...this.#pendingTeardowns]);
+    while (this.#inFlight.size > 0 || this.#pendingTeardowns.size > 0) {
+      await Promise.allSettled([...this.#inFlight.values(), ...this.#pendingTeardowns]);
     }
   }
 
