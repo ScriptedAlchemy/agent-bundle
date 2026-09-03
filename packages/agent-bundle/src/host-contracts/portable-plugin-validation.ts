@@ -1,7 +1,16 @@
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 import capabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
+import {
+  containedPortableRelativePath,
+  portableCommandIssues,
+  portableCwdIssues,
+  portableEnvKeyIssues,
+  portableHeaderIssues,
+  portableRemoteUrlIssues,
+  type PortableMcpRuleIssue,
+} from '../adapters/portable-mcp-rules.ts';
 import schemaProvenance from '../adapters/schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from '../adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from '../adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
@@ -71,9 +80,6 @@ const pinnedDocumentContracts = Object.freeze<PinnedDocumentContract[]>([
   }),
 ]);
 
-const placeholderPattern = /\$\{PLUGIN_(?:ROOT|DATA)\}/u;
-const headerNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
-const loopbackIpv4Pattern = /^127(?:\.\d{1,3}){3}$/u;
 const schemaVersionPattern = /^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\//u;
 
 const recoveryFor = (code: PortableDiagnosticCode): string => {
@@ -127,14 +133,14 @@ const fileKind = async (path: string): Promise<'directory' | 'file' | 'missing' 
 };
 
 /**
- * §4.1 plugin-relative path: begins with `./`, resolves against the plugin
- * root, and stays inside it after lexical normalization. Filesystem symlink
- * containment is the separate §4.1 symlink lane.
+ * §4.1 plugin-relative path: begins with `./` and stays inside the plugin root
+ * after platform-independent lexical normalization (shared with the planner).
+ * Filesystem symlink containment is the separate §4.1 symlink lane.
  */
 const pluginRelativeTarget = (pluginDirectory: string, value: string): string | undefined => {
-  if (!value.startsWith('./') || value.includes('\\') || value.includes('\0')) return undefined;
-  const candidate = resolve(pluginDirectory, normalize(value));
-  return isInsideOrEqual(pluginDirectory, candidate) ? candidate : undefined;
+  if (!value.startsWith('./')) return undefined;
+  const contained = containedPortableRelativePath(value);
+  return contained === undefined ? undefined : join(pluginDirectory, contained);
 };
 
 const readDocuments = async (
@@ -226,123 +232,28 @@ const versionAgreementDiagnostics = (
   )]);
 };
 
-const isLoopbackHost = (hostname: string): boolean =>
-  hostname === 'localhost' ||
-  hostname === '[::1]' ||
-  hostname === '::1' ||
-  loopbackIpv4Pattern.test(hostname);
+const ruleDiagnostics = (
+  serverName: string,
+  issues: readonly PortableMcpRuleIssue[],
+  target: string,
+): readonly Diagnostic[] => freezeDiagnostics(issues.map((entry) => diagnostic(
+  'AB6036',
+  `mcp.json/mcpServers/${serverName}/${entry.field} ${entry.message}.`,
+  'error',
+  target,
+)));
 
 const remoteUrlDiagnostics = (
   serverName: string,
   url: unknown,
   target: string,
-): readonly Diagnostic[] => {
-  if (typeof url !== 'string') return Object.freeze([]);
-  const location = `mcp.json/mcpServers/${serverName}/url`;
-  if (placeholderPattern.test(url)) {
-    return freezeDiagnostics([diagnostic(
-      'AB6036',
-      `${location} contains an Agent Plugins placeholder, but clients never expand placeholders in url (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    )]);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return freezeDiagnostics([diagnostic(
-      'AB6036',
-      `${location} must be an absolute HTTP or HTTPS URL (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    )]);
-  }
-  const diagnostics: Diagnostic[] = [];
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must use the http or https scheme (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (parsed.username.length > 0 || parsed.password.length > 0) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must not contain user information (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (url.includes('#')) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must not contain a fragment (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} uses plain HTTP against non-loopback host ${JSON.stringify(parsed.hostname)}; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  return freezeDiagnostics(diagnostics);
-};
+): readonly Diagnostic[] => ruleDiagnostics(serverName, portableRemoteUrlIssues(url), target);
 
 const headerDiagnostics = (
   serverName: string,
   headers: unknown,
   target: string,
-): readonly Diagnostic[] => {
-  if (!isRecord(headers)) return Object.freeze([]);
-  const diagnostics: Diagnostic[] = [];
-  const seen = new Map<string, string>();
-  for (const [name, value] of Object.entries(headers)) {
-    const location = `mcp.json/mcpServers/${serverName}/headers/${name}`;
-    if (!headerNamePattern.test(name)) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} is not a valid HTTP header field name (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    if (typeof value === 'string' && /[\r\n\0]/u.test(value)) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} is not a valid HTTP header field value (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    if (placeholderPattern.test(name) || (typeof value === 'string' && placeholderPattern.test(value))) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} contains an Agent Plugins placeholder, but clients never expand placeholders in headers (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    const folded = name.toLowerCase();
-    const previous = seen.get(folded);
-    if (previous !== undefined) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} repeats header ${JSON.stringify(previous)} under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    } else {
-      seen.set(folded, name);
-    }
-  }
-  return freezeDiagnostics(diagnostics);
-};
+): readonly Diagnostic[] => ruleDiagnostics(serverName, portableHeaderIssues(headers), target);
 
 const stdioDiagnostics = async (
   pluginDirectory: string,
@@ -350,77 +261,26 @@ const stdioDiagnostics = async (
   server: Readonly<Record<string, unknown>>,
   target: string,
 ): Promise<readonly Diagnostic[]> => {
-  const diagnostics: Diagnostic[] = [];
   const command = server['command'];
-  const location = `mcp.json/mcpServers/${serverName}`;
-  if (typeof command === 'string') {
-    if (placeholderPattern.test(command)) {
+  const diagnostics: Diagnostic[] = [
+    ...ruleDiagnostics(serverName, portableCommandIssues(command), target),
+  ];
+  // Only the byte lane can prove a plugin-relative command is a bundled regular file.
+  if (typeof command === 'string' && command.startsWith('./') && diagnostics.length === 0) {
+    const resolved = pluginRelativeTarget(pluginDirectory, command);
+    if (resolved !== undefined && (await fileKind(resolved)) !== 'file') {
       diagnostics.push(diagnostic(
         'AB6036',
-        `${location}/command contains an Agent Plugins placeholder, but clients never expand placeholders in command (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    } else if (command.startsWith('./')) {
-      const resolved = pluginRelativeTarget(pluginDirectory, command);
-      if (resolved === undefined) {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/command ${JSON.stringify(command)} escapes the plugin root (Agent Plugins 1.0.0 §4.1).`,
-          'error',
-          target,
-        ));
-      } else if ((await fileKind(resolved)) !== 'file') {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/command ${JSON.stringify(command)} does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).`,
-          'error',
-          target,
-        ));
-      }
-    } else if (/[\s/\\]/u.test(command) || isAbsolute(command) || command.startsWith('.')) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location}/command ${JSON.stringify(command)} is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).`,
+        `mcp.json/mcpServers/${serverName}/command ${JSON.stringify(command)} does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).`,
         'error',
         target,
       ));
     }
   }
-  const cwd = server['cwd'];
-  if (typeof cwd === 'string') {
-    const relativePart = cwd.startsWith('./')
-      ? cwd
-      : cwd.startsWith('${PLUGIN_ROOT}')
-        ? `.${cwd.slice('${PLUGIN_ROOT}'.length)}`
-        : cwd.startsWith('${PLUGIN_DATA}')
-          ? `.${cwd.slice('${PLUGIN_DATA}'.length)}`
-          : undefined;
-    if (relativePart !== undefined) {
-      const anchor = join(pluginDirectory, 'anchor');
-      const candidate = resolve(anchor, normalize(relativePart === '.' ? './' : relativePart));
-      if (!isInsideOrEqual(anchor, candidate)) {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/cwd ${JSON.stringify(cwd)} escapes its ${cwd.startsWith('${PLUGIN_DATA}') ? 'plugin data directory' : 'plugin root'} after resolution (Agent Plugins 1.0.0 §7.2.1).`,
-          'error',
-          target,
-        ));
-      }
-    }
-  }
-  const env = server['env'];
-  if (isRecord(env)) {
-    for (const key of Object.keys(env)) {
-      if (!placeholderPattern.test(key)) continue;
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location}/env key ${JSON.stringify(key)} contains an Agent Plugins placeholder, but expansion never applies to env keys (Agent Plugins 1.0.0 §9.2).`,
-        'error',
-        target,
-      ));
-    }
-  }
+  diagnostics.push(
+    ...ruleDiagnostics(serverName, portableCwdIssues(server['cwd']), target),
+    ...ruleDiagnostics(serverName, portableEnvKeyIssues(server['env']), target),
+  );
   return freezeDiagnostics(diagnostics);
 };
 

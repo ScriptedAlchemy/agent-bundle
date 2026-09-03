@@ -93,14 +93,23 @@ Validation happens at three moments, all fail-closed:
 1. **Plan time** (`agent-bundle build`/`validate`): the emitted `plugin.json`
    and `mcp.json` are validated against the pinned schemas before they are
    written (`portable.schema.plugin`, `portable.schema.mcp`), authored manifest
-   metadata is checked field by field (`portable.manifest.<field>.invalid`), and
+   metadata is checked field by field (`portable.manifest.<field>.invalid`),
    MCP path tokens are refused where the standard forbids them
-   (`portable.mcp.token.*`). These target-scoped codes are errors.
+   (`portable.mcp.token.*`), and the normative MCP rules the schemas cannot
+   express are applied to each server as it will be written
+   (`portable.mcp.{command,cwd,env,url,headers}.standard`: command form, cwd
+   containment, env-key placeholders, URL form, header names/values/casing).
+   These target-scoped codes are errors, so a standard-invalid server never
+   reaches an artifact.
 2. **Artifact time** (`agent-bundle build`, `validate --artifact`): the generic
    target-contract pass reports a missing required document as `AB6011` and a
-   pinned-schema rejection as `AB6012`; `validate --artifact --host-validation`
-   additionally runs the byte lane below and returns a `portable` host
-   validation report.
+   pinned-schema rejection as `AB6012`, and the Agent Plugins byte lane below
+   (`AB6035`–`AB6037`) runs over every tree emitted by the built-in portable
+   adapter, so a standard-invalid layout fails the ordinary build before
+   publication (a tree already carrying a symlink or other unsupported entry
+   is reported as `AB6013` and never read by this lane).
+   `validate --artifact --host-validation` additionally returns the same lane
+   as a `portable` host validation report with the `AB6038` provenance note.
 3. **Installed bytes** (`agent-bundle doctor`): a Cursor local plugin whose root
    `plugin.json` declares an Agent Plugins `$schema` is validated with the same
    byte lane and reported under `AB7320` (an error marks the entry `corrupt`).
@@ -108,7 +117,7 @@ Validation happens at three moments, all fail-closed:
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB6035` | error | The root `plugin.json` is missing, or a present `plugin.json`/`mcp.json` is unreadable, not valid JSON, or rejected by its pinned Agent Plugins 1.0.0 schema (closed manifest fields, plugin name constraints, reserved `PLUGIN_ROOT`/`PLUGIN_DATA` env keys, closed server variants). | Repair the generated Agent Plugins document so it satisfies the pinned 1.0.0 schema, then rebuild. |
-| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders (§7.2.1); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
+| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders, or a header value contains anything other than visible ASCII, space, horizontal tab, or obs-text bytes (§7.2.1, RFC 9110 §5.5); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
 | `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
 | `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
 
