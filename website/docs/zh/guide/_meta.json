@@ -8,5 +8,10 @@
     "type": "dir-section-header",
     "name": "authoring",
     "label": "编写"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "development",
+    "label": "开发"
   }
 ]

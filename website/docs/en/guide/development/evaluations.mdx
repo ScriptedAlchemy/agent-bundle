@@ -1,0 +1,154 @@
+---
+description: 'Run agent-bundle eval suites: pass/fail/inconclusive semantics, minimum evidence, smoke versus reliability, comparison alignment, and the authenticated native harnesses.'
+---
+
+# Evaluations
+
+Tests prove that a route renders and that a generated server honours its wire contract. Evals ask
+a different question: given a prompt, does the agent actually reach your plugin, and is the
+outcome the one you claimed? That answer is probabilistic, so the eval runner is built to report
+honestly rather than to look green.
+
+## Suites are typed modules
+
+Eval suites are discovered by convention from `evals/**/*.eval.ts`, and each one default-exports
+`defineEvalSuite`:
+
+```ts twoslash
+import { defineEvalSuite, expectOutcome, expectSkillActivation } from 'agent-bundle/eval';
+
+export default defineEvalSuite({
+  cases: [{
+    assertions: [
+      expectSkillActivation({ skill: 'service-readiness' }),
+      expectOutcome({ script: './graders/status-result.ts' }),
+    ],
+    fixture: './fixtures/status',
+    hosts: { portable: { model: 'deterministic' } },
+    id: 'status-is-healthy',
+    invocation: { mode: 'explicit', skill: 'service-readiness' },
+    prompt: 'Use service-readiness to verify the checked-in compiler service fixture.',
+    trials: 1,
+  }],
+  name: 'mcp-app-status',
+});
+```
+
+A case names its `id`, `prompt`, `fixture`, `hosts` (with a pinned model per host), `invocation`
+mode — `automatic`, `explicit`, or `none` — its `assertions`, and how many `trials` to run. Case
+ids must be unique within a suite. Suite discovery, the runs directory, and the optional semantic
+grader are configured under the top-level `evals` config block: `include` defaults to
+`evals/**/*.eval.ts` and `runsDir` defaults to `.agent-bundle/runs`.
+
+```sh
+npx agent-bundle eval --root . --suite mcp-app-status --trials 3
+npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
+```
+
+## Three outcomes, not two
+
+Every assertion resolves to `pass`, `fail`, or **`inconclusive`**, and declares the minimum
+evidence it accepts. An assertion that needs stronger evidence than the harness produced is
+inconclusive — never silently passed.
+
+| Evidence | Meaning |
+| --- | --- |
+| `observed` | The harness saw the thing happen in the host's own output. |
+| `inferred` | The harness derived it from surrounding evidence rather than observing it. |
+| `unavailable` | No evidence at all. Never a valid declared minimum, because it would accept absence. |
+
+Assertion helpers default their `minimumEvidence` to the strongest bar their evidence can
+support: `expectExitCode`, `expectMcpCall`, `expectNoMcpCall`, and `expectOutcome` default to
+`observed`, while `expectSkillActivation` and `expectNoSkillActivation` default to `inferred`
+because not every host publishes an activation event. Raise a default with
+`minimumEvidence: 'observed'` when you want the weaker evidence to read as inconclusive instead
+of as a pass.
+
+Because an inconclusive trial produced no evidence, it cannot report success either:
+`agent-bundle eval` exits nonzero when a run has any failing **or** any inconclusive trial.
+
+## Smoke evidence versus a reliability number
+
+Fewer than **three** trials is reported as smoke evidence rather than a reliability number. One
+green trial is a signal that the path exists; it is not a rate.
+
+Comparison rows are only aligned when every one of these facets matches: case, fixture, semantic
+grader identity, harness, host CLI version, invocation, and model. The artifact target digest is
+deliberately *not* an alignment facet — it is the thing under comparison. Facets a run did not
+record are labeled unverified rather than assumed aligned, and an unmatched facet makes the row
+non-comparable instead of producing a delta nobody should trust.
+
+## The optional semantic grader
+
+A semantic grader is configured with exactly one pinned Claude model:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  evals: {
+    semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+  },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+It runs only with `agent-bundle eval --harness claude`, and only for Claude-pinned cases. After
+the primary trace is usable and the deterministic graders finish, Agent Bundle makes **one**
+server-owned, plugin-free Claude grading call. Its fixed result id is `claude-semantic`, and its
+request, raw stream, stderr, and canonical provenance are retained with the trial artifacts. A
+malformed or failed semantic grader leaves the trial inconclusive rather than becoming plugin
+evidence — a grader that broke is not a plugin that misbehaved.
+
+Semantic grading requires a native Claude harness and a signed-in Claude Code session.
+Deterministic and Codex selections are refused when it is configured.
+
+## The Eval page
+
+The Workbench Eval page admits a selected run, reports live progress, and can cancel it through
+the run lifecycle. Each trial exposes its persisted raw evidence when present, plus recorded CLI,
+invocation, grader, and usage provenance.
+
+Comparison cells show recorded provenance and usage and only include aligned case, fixture,
+harness, invocation, host and model, CLI, and grader facets; unmatched facets are labeled
+non-comparable or unverified. Trial duration is persisted; provider token usage is shown only
+when the native stream reported it.
+
+Playground can promote selected durable outcome and assertion evidence from a trace into a draft
+eval case — see [Developer Workbench](./workbench.mdx).
+
+## Native harnesses
+
+The deterministic harness needs nothing installed. The native Claude and Codex harnesses run the
+real host CLI, and the rules there are strict:
+
+- This package never accepts, requests, injects, or persists a model-provider API key.
+- Native harnesses use an **already installed, signed-in** CLI, after provider-key environment
+  variables are removed.
+- A missing, incompatible, or unauthenticated CLI is reported as a *harness* failure, distinct
+  from a plugin failure.
+- Native smokes are opt-in and are not part of an ordinary test run.
+- Codex exposes no authoritative Skill-activation event, so Codex activation evidence is
+  `inferred` and is never reported as `observed`.
+
+For a manual authenticated local smoke, complete each CLI's normal interactive sign-in first,
+then verify a supported non-prerelease CLI. Claude Code must be at least `2.1.232`; Codex must be
+at least `0.147.0`:
+
+```sh
+claude --version
+npx agent-bundle eval --harness claude --trials 1
+
+codex --version
+npx agent-bundle eval --harness codex --trials 1
+```
+
+Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
+`auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not
+used as trial state and are left unchanged.
+
+## Next
+
+- [Developer Workbench](./workbench.mdx) — the Eval page, Playground evidence, and run comparison.
+- [Testing](./testing.mdx) — the deterministic proof levels underneath an eval run.

@@ -1,0 +1,137 @@
+---
+description: '运行 agent-bundle eval 套件：pass/fail/inconclusive 语义、最低证据、smoke 与可靠性之别、对比对齐，以及需要认证的原生 harness。'
+---
+
+# 评测
+
+测试证明路由能渲染、生成式服务器遵守线上契约。Eval 追问的是另一个问题：给定一段提示词，智能体真的
+抵达了你的插件吗？其结果是否就是你所声称的那个？这个答案是概率性的，因此 eval 运行器的设计目标是诚实
+报告，而不是看起来一片绿。
+
+## 套件是带类型的模块
+
+Eval 套件按约定从 `evals/**/*.eval.ts` 中发现，每个套件默认导出 `defineEvalSuite`：
+
+```ts twoslash
+import { defineEvalSuite, expectOutcome, expectSkillActivation } from 'agent-bundle/eval';
+
+export default defineEvalSuite({
+  cases: [{
+    assertions: [
+      expectSkillActivation({ skill: 'service-readiness' }),
+      expectOutcome({ script: './graders/status-result.ts' }),
+    ],
+    fixture: './fixtures/status',
+    hosts: { portable: { model: 'deterministic' } },
+    id: 'status-is-healthy',
+    invocation: { mode: 'explicit', skill: 'service-readiness' },
+    prompt: 'Use service-readiness to verify the checked-in compiler service fixture.',
+    trials: 1,
+  }],
+  name: 'mcp-app-status',
+});
+```
+
+一个 case 声明它的 `id`、`prompt`、`fixture`、`hosts`（逐宿主固定模型）、`invocation` 模式——
+`automatic`、`explicit` 或 `none`——它的 `assertions`，以及要运行多少次 `trials`。同一套件内的 case id
+必须唯一。套件发现、运行记录目录与可选的语义 grader 都配置在顶层 `evals` 配置块中：`include` 默认为
+`evals/**/*.eval.ts`，`runsDir` 默认为 `.agent-bundle/runs`。
+
+```sh
+npx agent-bundle eval --root . --suite mcp-app-status --trials 3
+npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
+```
+
+## 三种结果，而不是两种
+
+每个断言都解析为 `pass`、`fail` 或 **`inconclusive`**，并声明它所接受的最低证据。当断言所需的证据强于
+harness 实际产生的证据时，它是 inconclusive ——绝不会被悄悄判为通过。
+
+| 证据 | 含义 |
+| --- | --- |
+| `observed` | harness 在宿主自己的输出中看到了这件事发生。 |
+| `inferred` | harness 由周边证据推导得出，而不是直接观察到。 |
+| `unavailable` | 完全没有证据。它绝不是合法的声明最低值，因为那等于接受证据缺失。 |
+
+断言辅助函数会把 `minimumEvidence` 默认设为它们的证据所能支撑的最强门槛：`expectExitCode`、
+`expectMcpCall`、`expectNoMcpCall` 与 `expectOutcome` 默认 `observed`，而 `expectSkillActivation` 与
+`expectNoSkillActivation` 默认 `inferred`，因为并非每个宿主都会公布激活事件。当你希望较弱的证据读作
+inconclusive 而不是通过时，用 `minimumEvidence: 'observed'` 抬高默认值。
+
+由于 inconclusive 的试验没有产生任何证据，它同样无法报告成功：只要一次运行中存在失败**或**
+inconclusive 的试验，`agent-bundle eval` 就以非零退出。
+
+## smoke 证据与可靠性数字
+
+少于**三**次试验会被报告为 smoke 证据，而不是一个可靠性数字。一次通过的试验说明这条路径存在，但它不是
+一个比率。
+
+只有当以下每个 facet 都匹配时，对比行才算对齐：case、fixture、语义 grader 身份、harness、宿主 CLI
+版本、invocation 与 model。产物 target 摘要刻意*不是*对齐 facet ——它正是被对比的那个对象。运行中未
+记录的 facet 会被标注为未核实（unverified），而不是被假定为对齐；某个 facet 不匹配会让该行变为
+non-comparable，而不是产出一个没人该信的差值。
+
+## 可选的语义 grader
+
+语义 grader 用恰好一个被固定的 Claude 模型来配置：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  evals: {
+    semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+  },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+它只在 `agent-bundle eval --harness claude` 下运行，且只针对固定到 Claude 的 case。在主轨迹可用且确定性
+grader 完成之后，Agent Bundle 会发起**一次**服务端自有、不含插件的 Claude 评分调用。它的固定结果 id 是
+`claude-semantic`，其请求、原始流、stderr 与规范 provenance 会与试验产物一并保留。格式错误或失败的语义
+grader 会让该次试验保持 inconclusive，而不是变成插件证据——坏掉的 grader 不等于插件行为异常。
+
+语义评分需要原生 Claude harness 与一个已登录的 Claude Code 会话。配置了它之后，确定性与 Codex 选择会
+被拒绝。
+
+## Eval 页面
+
+Workbench 的 Eval 页面会受理一次选定的运行、报告实时进度，并可通过运行生命周期取消它。每次试验都会在
+存在时暴露其持久化的原始证据，以及记录下来的 CLI、invocation、grader 与用量 provenance。
+
+对比单元格会展示记录下来的 provenance 与用量，并且只纳入已对齐的 case、fixture、harness、invocation、
+宿主与 model、CLI 以及 grader facet；未匹配的 facet 会被标注为 non-comparable 或未核实。试验时长会被
+持久化；供应商 token 用量只在原生流上报了它时才展示。
+
+Playground 可以把一条轨迹中选定的持久 outcome 与断言证据提升为一份草稿 eval case ——见
+[开发者 Workbench](./workbench.mdx)。
+
+## 原生 harness
+
+确定性 harness 不需要安装任何东西。原生 Claude 与 Codex harness 运行真实的宿主 CLI，而那里的规则很严格：
+
+- 本包绝不接受、索取、注入或持久化任何模型供应商 API key。
+- 原生 harness 使用**已安装且已登录**的 CLI，并且是在移除供应商 key 环境变量之后运行。
+- 缺失、不兼容或未认证的 CLI 会被报告为 *harness* 失败，与插件失败明确区分。
+- 原生 smoke 是选择加入的，不属于普通测试运行的一部分。
+- Codex 不公布权威的 Skill 激活事件，因此 Codex 的激活证据是 `inferred`，绝不会被报告为 `observed`。
+
+若要做一次手动的、已认证的本地 smoke，请先完成每个 CLI 各自的常规交互式登录，然后核实 CLI 是受支持的
+非预发布版本。Claude Code 至少需要 `2.1.232`；Codex 至少需要 `0.147.0`：
+
+```sh
+claude --version
+npx agent-bundle eval --harness claude --trials 1
+
+codex --version
+npx agent-bundle eval --harness codex --trials 1
+```
+
+每次 Codex 试验都会设置一个临时的 `CODEX_HOME`，并只把已安装 CLI 的不透明 `auth.json` 复制进去。你
+常用的 Codex home、配置与已安装插件状态不会被用作试验状态，也不会被改动。
+
+## 下一步
+
+- [开发者 Workbench](./workbench.mdx) —— Eval 页面、Playground 证据与运行对比。
+- [测试](./testing.mdx) —— 一次 eval 运行底下的那些确定性证明级别。

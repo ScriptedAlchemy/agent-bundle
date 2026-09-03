@@ -1,0 +1,59 @@
+---
+description: 'The agent-bundle development loop: the dev server, rebuild epochs, and the three surfaces that turn a build into evidence.'
+---
+
+# Development
+
+Development has one entry point and three evidence surfaces. The entry point is
+`agent-bundle dev` — a foreground, loopback-only server that rebuilds the artifact as inputs
+change. The surfaces are the developer Workbench, the test harness, and the eval runner.
+
+```sh
+npx agent-bundle dev --root .
+```
+
+## The rebuild loop
+
+`dev` prepares project source, builds an artifact, and publishes it as an **epoch**: an immutable
+generation identified by an `epochId`. Every surface that reads a built artifact — the Workbench
+artifact tree, an MCP session, a hook simulation, a development host install — names the epoch it
+is reading, so a rebuild mid-session can never silently change what a result was evidence about.
+
+Rebuilds are debounced and serialized. A successful build publishes an `artifact.available`
+event; a **failed** build publishes nothing, so the previously published epoch stays exactly as
+it was. There is no partially published generation.
+
+The same serialized pass also rebuilds the `dist/` package build when the project declares
+`bin`/`lib` entries. That build has its own provenance-based incremental boundary: after a
+success, the sorted source inputs of every emitted file are kept, and the next rebuild is skipped
+unless one of those inputs was invalidated, the configuration file, `package.json`, or
+`tsconfig.json` changed, the normalized `bin`/`lib` declaration or the `tools` hatch changed, the
+invalidation was manual or initial, or the previous package build failed. A brand-new file that
+changes module resolution without touching a tracked input is picked up on the next tracked
+change rather than instantly.
+
+A package build failure never invalidates the artifact epoch that already committed. It surfaces
+as one `AB7103` **warning** on the succeeded build attempt and retries on the next invalidation.
+
+Development also publishes generated route declarations at `.agent-bundle/routes.d.ts` from the
+same compiled graph. Each write goes to a sibling temporary file and is renamed over the prior
+complete declaration atomically, so invalid source keeps the last-good file, and a successful
+route-free preparation removes it.
+
+## The three surfaces
+
+| Surface | What it is | What it proves |
+| --- | --- | --- |
+| [Developer Workbench](./workbench.mdx) | The loopback UI `dev` serves: diagnostics, Skills, artifact provenance, MCP and hook playgrounds, Playground traces, eval runs. | Nothing by itself — it is where you *look at* and *exercise* real generated output. |
+| [Testing](./testing.mdx) | `agent-bundle/rstest` and `agent-bundle/test`, plus the framework-owned contract matrix. | Recorded proof levels, from a route module rendering to a bundle spawned from an installed host layout. |
+| [Evaluations](./evaluations.mdx) | Typed eval suites run through deterministic, Claude, or Codex harnesses. | Whether an agent actually reaches your plugin, with `pass` / `fail` / `inconclusive` and a declared minimum evidence bar. |
+
+A plugin that builds is not a plugin that works, and each of these answers a different question.
+None of them substitutes for another.
+
+## Where this section stops
+
+Authoring surfaces — what a Skill, hook, MCP route, script, or package entry *is* — are in
+[Authoring](../authoring/index.mdx). Turning a validated artifact into something a host can
+install is in Distribution. Exact flags, config field semantics, and runtime contracts are in the
+Reference section.
