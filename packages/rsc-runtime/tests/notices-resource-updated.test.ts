@@ -891,6 +891,53 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('closes without waiting on a renewal the ledger never answers, so shutdown is never wedged by the store', async () => {
+    const { driver, ledger } = await openLedger();
+    let renewals = 0;
+    // Renewals reach a ledger that has stopped answering, while the initial
+    // claim (with expectedRevision) still landed.
+    const stuckRenewals: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      reserveAvailability: (input) => {
+        if (input.expectedRevision === undefined) {
+          renewals += 1;
+          return new Promise(() => undefined);
+        }
+        return ledger.reserveAvailability(input);
+      },
+    });
+    let storeClosed = 0;
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(T1),
+      reservationRenewalIntervalMs: 5,
+      store: {
+        close: async () => {
+          storeClosed += 1;
+        },
+        noticeLedger: async () => stuckRenewals,
+      },
+    });
+    await signaller.subscribe(principal('s1'));
+    await publish(ledger, { sessionId: 's1' });
+    const observing = signaller.observe(() => new Promise(() => undefined));
+    for (let i = 0; i < 200 && renewals === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(renewals).toBe(1);
+
+    let closed = false;
+    const closing = signaller.close().then(() => {
+      closed = true;
+    });
+    await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+    expect(closed).toBe(true);
+    expect(storeClosed).toBe(1);
+    await expect(observing).resolves.toMatchObject({ kind: 'failed', stage: 'send' });
+    // The hold was already being left to lapse; the unanswered renewal changes nothing.
+    expect((await ledger.read()).notices[0]?.availabilityReservation).toMatchObject({ at: T1 });
+    await driver.close();
+  });
+
   it('treats a reservation as held until its TTL elapses, then as abandoned', async () => {
     const { driver, ledger } = await openLedger();
     const published = await publish(ledger, { sessionId: 's1' });

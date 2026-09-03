@@ -329,6 +329,9 @@ export const createNoticeInboxSignaller = (
    * renewal still awaiting the ledger when the send settles is awaited before
    * the caller releases or finalizes the hold: a renewal landing afterwards
    * would re-create a hold nobody owns and block the slot for a whole TTL.
+   * That wait ends with shutdown, though — `close()` never blocks on a ledger
+   * write that has not answered — and a renewal that lands after an abandoned
+   * send only moves the lapse of a hold that was already being left to lapse.
    */
   const renewWhile = async <T>(
     ledger: AgentNoticeLedger,
@@ -360,7 +363,7 @@ export const createNoticeInboxSignaller = (
     } finally {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
-      await renewing;
+      if (renewing !== undefined) await Promise.race([renewing, closing]);
     }
   };
 
