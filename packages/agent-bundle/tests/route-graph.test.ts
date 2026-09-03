@@ -1348,9 +1348,14 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(first).toContain('type ContractResult<Contract> =');
   expect(first).toContain('export type RouteInput<Id extends RouteId> = ContractInput<AgentBundleRoutes[Id]>;');
   expect(first).toContain('export type RouteResult<Id extends RouteId> = ContractResult<AgentBundleRoutes[Id]>;');
-  // A provider-free graph declares no provider surface and never augments the runtime.
+  // The registered map is the harness contract: an event route registers its `{ canonical, native }` payload and no result.
+  expect(first).toContain("type HarnessInput<Contract> =\n  Contract extends { readonly input: infer Input } ? Input\n    : Contract extends { readonly component: infer Component } ? Omit<ComponentInput<Component>, 'signal'>\n      : never;");
+  expect(first).toContain('type HarnessResult<Contract> =\n  Contract extends { readonly result: infer Result } ? Result\n    : Contract extends { readonly component: unknown } ? undefined\n      : never;');
+  expect(first).toContain('export type AgentBundleRouteContracts = {\n  readonly [Id in RouteId]: Readonly<{ input: HarnessInput<AgentBundleRoutes[Id]>; result: HarnessResult<AgentBundleRoutes[Id]> }>;\n};');
+  // A provider-free graph declares no provider surface; the runtime augmentation carries only the route registration.
   expect(first).not.toContain('AgentBundleProviders');
-  expect(first).not.toContain("declare module '@agent-bundle/runtime'");
+  expect(first).not.toContain('AgentProviderValues');
+  expect(first).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n}");
 });
 
 it('generates provider declarations and the runtime augmentation in execution order', () => {
@@ -1399,7 +1404,9 @@ it('generates provider declarations and the runtime augmentation in execution or
   expect(first).toContain('  readonly "zeta": ProviderValueOf<typeof provider1.default>;');
   expect(first).toContain('export type ProviderKey = keyof AgentBundleProviders;');
   expect(first).toContain('export type ProviderValue<Key extends ProviderKey> = AgentBundleProviders[Key];');
-  expect(first).toContain("declare module '@agent-bundle/runtime' {\n  interface AgentProviderValues {\n    readonly \"projectAuth\": ProviderValueOf<typeof provider0.default>;\n    readonly \"zeta\": ProviderValueOf<typeof provider1.default>;\n  }\n}");
+  // One augmentation block registers routes and declares providers together.
+  expect(first).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n  interface AgentProviderValues {\n    readonly \"projectAuth\": ProviderValueOf<typeof provider0.default>;\n    readonly \"zeta\": ProviderValueOf<typeof provider1.default>;\n  }\n}");
+  expect(first.match(/declare module '@agent-bundle\/runtime'/g)).toHaveLength(1);
   expect(first.indexOf('AgentBundleRoutes')).toBeLessThan(first.indexOf('AgentBundleProviders'));
 });
 
@@ -1433,7 +1440,10 @@ it('resolves generated helper types for schema and event route contracts', async
   expect(graph.diagnostics).toEqual([]);
   await writeTree(root, {
     '.agent-bundle/routes.d.ts': routesModule.generateRouteTypes(graph),
+    // A stand-in for the runtime's empty `Register`, so the augmentation has a declaration to merge into.
+    'runtime-stub.d.ts': 'export interface Register {}\n',
     'assertions.ts': [
+      "import type { Register } from '@agent-bundle/runtime';",
       "import type { RouteId, RouteInput, RouteResult } from './.agent-bundle/routes.js';",
       "import type { WorkspaceOpenInput, WorkspaceOpenResult } from './src/events/workspace/open.js';",
       "import type { InspectInput, InspectResult } from './src/mcp/curator/tools/inspect.js';",
@@ -1449,6 +1459,12 @@ it('resolves generated helper types for schema and event route contracts', async
       "export type EventResult = Assert<Equal<RouteResult<'event:workspace/open'>, WorkspaceOpenResult>>;",
       'export type AllInputs = Assert<Equal<RouteInput<RouteId>, InspectInput | WorkspaceOpenInput>>;',
       'export type AllResults = Assert<Equal<RouteResult<RouteId>, InspectResult | WorkspaceOpenResult>>;',
+      '// The augmentation registers the same contracts on the runtime, keyed by route id.',
+      "export type RegisteredIds = Assert<Equal<keyof Register['routes'], RouteId>>;",
+      "export type RegisteredInspect = Assert<Equal<Register['routes']['tool:curator/inspect'], Readonly<{ input: InspectInput; result: InspectResult }>>>;",
+      '// An event route registers the harness payload (props without the signal the harness injects) and no result.',
+      "export type RegisteredEvent = Assert<Equal<Register['routes']['event:workspace/open'], Readonly<{ input: Omit<WorkspaceOpenInput, 'signal'>; result: undefined }>>>;",
+      "export type RegisteredEventInput = Assert<Equal<keyof Register['routes']['event:workspace/open']['input'], 'canonical' | 'native'>>;",
       '',
     ].join('\n'),
   });
@@ -1457,6 +1473,7 @@ it('resolves generated helper types for schema and event route contracts', async
     module: ts.ModuleKind.NodeNext,
     moduleResolution: ts.ModuleResolutionKind.NodeNext,
     noEmit: true,
+    paths: { '@agent-bundle/runtime': [join(root, 'runtime-stub.d.ts')] },
     skipLibCheck: false,
     strict: true,
     target: ts.ScriptTarget.ES2022,
