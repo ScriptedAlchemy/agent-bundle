@@ -187,6 +187,41 @@ write for a second epoch. Those edits now go through
 one atomic replacement, then a wait on the coordinator's published build
 attempt, so one edit is exactly one build.
 
+## Infrastructure failures and their retry policy
+
+Two failure shapes in the hosted Release gates are registry or runner
+infrastructure, not the tree under test. Neither gets a code-level retry,
+and neither is a reason to weaken the gate; the policy is to re-run the job
+once the cause has cleared, then treat a repeat as a real signal.
+
+- **`npm audit signatures` → `EATTESTATIONVERIFY`** (from
+  `scripts/audit-packed-release.mjs`, reached through `pnpm audit:release`).
+  Example (CI run 33584654855, 2026-09-02, Release gates on Node 22.19):
+  `@modelcontextprotocol/server@2.0.0 failed to verify attestation:
+  Unexpected end of JSON input`. npm fetched a truncated attestation bundle
+  from `registry.npmjs.org` for a dependency this repository does not
+  publish; the same pinned version and integrity verify on every later run
+  of the same gate without any lockfile change. The audit deliberately
+  installs against live registry metadata (no `--prefer-offline`), so a
+  registry-side transient reaches it unfiltered. Policy: read the JSON in the
+  step log first; if the `invalid` entry names a third-party package with an
+  unchanged pinned version and a parse-shaped message (`Unexpected end of
+  JSON input`, `Unexpected token`, a 5xx), re-run the failed job (`gh run
+  rerun <id> --failed`). If the same package fails twice in a row, or the
+  message is a genuine signature mismatch (`EATTESTATIONSIGNATURE`,
+  `EINTEGRITY`), stop and investigate the dependency before merging: that is
+  the supply-chain check doing its job. Do not add retries around the audit
+  command and do not relax `--json` parsing to tolerate the error.
+- **Runner network stalls during `npm install`** in the packed pool. The
+  pool's consumer installs are cache-backed per worker
+  (`rstest.worker-isolation.ts`): each worker pays for one cold download of
+  the packed dependency tree (about 180 MB), and `public-api-packed` warms
+  that cache in a `beforeAll` with its own budget so no per-test budget spans
+  a cold network. A remaining timeout inside that `beforeAll` on a hosted
+  runner is a registry or runner-network stall; re-run the job. A timeout in
+  a test body after the warm-up is not: read the failure text, it names the
+  step (install, `tsc`, CLI) that overran.
+
 ## What is deliberately not covered
 
 - **dependency-review** runs as a GitHub-side action against the GitHub

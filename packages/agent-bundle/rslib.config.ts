@@ -32,6 +32,18 @@ const esmNodeGlobalsPlugin = (rspack: typeof RspackInstance): Rspack.RspackPlugi
   },
 });
 
+/**
+ * Rslib enables Rspack's persistent build cache by default and keys its
+ * directory by this config's root (`node_modules/.cache/rspack`), never by
+ * `--dist-path`. Two builds of this config running at once — the packed pool's
+ * packed-consumer and dev-workbench-packaging suites each rebuild it into an
+ * isolated dist from parallel workers — would then contend for a single cache
+ * lock ("Transaction already in progress by process … in directory …"). Test
+ * harnesses hand every spawned build its own directory through this variable
+ * (rstest.worker-isolation.ts); `pnpm build` keeps the default warm cache.
+ */
+const buildCacheDirectory = process.env['AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY'];
+
 export default defineConfig({
   lib: [
     {
@@ -50,6 +62,9 @@ export default defineConfig({
     legalComments: 'linked',
     target: 'node',
   },
+  ...(buildCacheDirectory === undefined || buildCacheDirectory.length === 0
+    ? {}
+    : { performance: { buildCache: { cacheDirectory: buildCacheDirectory } } }),
   // Suggestions stay informational; errors and warnings block publishing.
   plugins: [pluginPublint({ throwOn: 'warning' })],
   root: import.meta.dirname,
