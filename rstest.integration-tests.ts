@@ -51,6 +51,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
   'packages/agent-bundle/tests/plugin-bundle.test.ts',
   'packages/agent-bundle/tests/prepack.test.ts',
+  'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',

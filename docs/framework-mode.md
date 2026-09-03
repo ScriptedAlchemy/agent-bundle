@@ -60,6 +60,52 @@ Flight dispatcher and lowers the final Agent Document to legal MCP output.
 Flight is an implementation transport inside the generated runtime, never a
 public host wire protocol.
 
+## Request context and providers
+
+Every generated request scope — MCP tools, resources, and prompts, event
+routes, plain and rendered routed CLI commands, rendered scripts, and Workbench
+replay — installs the same typed `AgentRequestContext`. `await agent()`
+returns the invocation plus `Observed` `host`, `session`, `actor`, and
+`workspace` axes (an `available` value with its provenance, or a typed
+`unavailable` reason — never a fabricated string), request capabilities,
+progress, the request signal, and the `state`, `notices`, and `providers`
+slots. The handle is request-scoped: it survives `await`, two concurrent
+requests never observe each other, and reading a captured handle after the
+request closes throws a typed `AgentRequestError`.
+
+A **context provider** contributes one request-scoped value without touching
+the compiler. Each `src/providers/<name>.{ts,tsx}` module default-exports a
+factory receiving the public `AgentProviderContext` (`{ invocation, signal }`
+from `agent-bundle`) and its value mounts at
+`(await agent()).providers.<camelCaseName>`:
+
+```ts
+// src/providers/library.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export interface LibraryContext { readonly stages: readonly string[]; readonly surface: string }
+
+export default async function library({ invocation }: AgentProviderContext): Promise<LibraryContext> {
+  return { stages: ['discover', 'curate'], surface: invocation.kind };
+}
+```
+
+Providers run once per request in deterministic key order before the request
+scope opens; a thrown factory fails that request closed, so return an honest
+unavailable-shaped value for expected degradation. The compiler validates the
+default export (`AB4940`), unique keys (`AB4941`), and the reserved
+framework-owned `processLifetime` key (`AB4942`).
+
+The generated `.agent-bundle/routes.d.ts` declares `AgentBundleProviders`
+(`ProviderKey`, `ProviderValue<Key>`) from each factory's resolved return type
+and augments `@agent-bundle/runtime`'s `AgentProviderValues`, so
+`(await agent()).providers.library` is a `LibraryContext` with no cast once
+the file is part of the project's TypeScript program (add
+`".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
+stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
+`renderRoute(id, { context: { providers: { library } } })`; the harness never
+executes provider modules on a test's behalf.
+
 Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in
