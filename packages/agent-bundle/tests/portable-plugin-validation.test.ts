@@ -88,7 +88,7 @@ it('passes a conformant Agent Plugins 1.0.0 bundle and reports the pinned proven
     severity: 'info',
     target: 'portable',
   })]);
-  expect(report.diagnostics[0]?.message).toContain('re-verified 2026-09-02');
+  expect(report.diagnostics[0]?.message).toContain('re-verified 2026-09-03');
 });
 
 it('requires the root plugin.json and rejects documents the pinned schemas refuse', async () => {
