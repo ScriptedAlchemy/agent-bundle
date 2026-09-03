@@ -18,6 +18,7 @@ export {
   agentLineageStateDefinition,
   LINEAGE_OPEN_CALL_RETENTION,
   LINEAGE_PENDING_SPAWN_RETENTION,
+  LINEAGE_SEEN_START_RETENTION,
   LINEAGE_STOPPED_RETENTION,
   LineageNodeSchema,
   LineageStateSchema,

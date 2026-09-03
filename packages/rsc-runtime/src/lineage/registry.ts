@@ -305,8 +305,8 @@ export const createAgentLineageRegistry = (
       const subagentId = nativeString(native, 'subagent_id') ?? nativeString(native, 'tool_call_id');
       const parentId = nativeString(native, 'parent_conversation_id') ?? carrier.conversation;
       if (subagentId === undefined || parentId === undefined) return;
-      // A replayed start already registered (or bound) this child.
-      if (state.nodes[subagentId] !== undefined || Object.values(state.nodes).some((node) => node.subagentId === subagentId)) return;
+      // A replayed start already registered (or bound) this child, even if its node was pruned since.
+      if (state.seenStarts.includes(subagentId) || state.nodes[subagentId] !== undefined || Object.values(state.nodes).some((node) => node.subagentId === subagentId)) return;
       const parent = await ensureRoot(host, parentId, undefined, observedAt, keys, false);
       if (parent === undefined) return;
       await dispatch('nodeStarted', {
@@ -325,8 +325,9 @@ export const createAgentLineageRegistry = (
     const agentId = nativeString(native, 'agent_id');
     const root = carrier.root;
     if (agentId === undefined || root === undefined) return;
-    // A replayed start must not claim a second spawn or rewrite the node.
-    if (state.nodes[agentId] !== undefined) return;
+    // A replayed start must not claim a second spawn or rewrite the node — even
+    // after retention pruned the node, the start identity is remembered.
+    if (state.seenStarts.includes(agentId) || state.nodes[agentId] !== undefined) return;
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true);
     if (rootNodeValue === undefined) return;
     const claim = await claimSpawn(host, rootNodeValue.root, keys);
@@ -429,6 +430,7 @@ export const createAgentLineageRegistry = (
       if (event === 'tool/before') {
         await dispatch('toolCallOpened', {
           conversation: carrier.conversation,
+          ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
           openedAt: observedAt,
           root: carrierNode.root,
           ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
@@ -527,7 +529,7 @@ export const createAgentLineageRegistry = (
       const node = nodeFor(call.conversation);
       if (node === undefined) return unavailable('id-not-resolvable');
       const resolution: AgentLineageResolution = claudeToolUseId !== undefined ? 'registry' : 'inferred';
-      return available(lineageOf(node, undefined, resolution), 'derived');
+      return available(lineageOf(node, call.generation, resolution), 'derived');
     },
 
     snapshot() {

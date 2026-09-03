@@ -642,3 +642,34 @@ describe('lineage registry spawn evidence (review round 9)', () => {
     expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['sp']);
   });
 });
+
+describe('lineage registry generation and replay memory (review round 10)', () => {
+  it('carries the pre-tool hook generation onto the correlated MCP call', async () => {
+    const registry = createAgentLineageRegistry();
+    await registry.observe({ event: 'prompt/submit', host: 'cursor', idempotencyKey: 'p', native: { conversation_id: 'root', generation_id: 'gen-1', hook_event_name: 'beforeSubmitPrompt' } });
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'm', native: { conversation_id: 'root', generation_id: 'gen-2', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'm' } });
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root', generation: 'gen-2' } });
+  });
+
+  it('recognizes a redelivered start after its node was pruned', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>, observedAt: string) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' }, '2026-09-03T00:00:00.000Z');
+    const spawnAndStart = async (index: number) => {
+      await observe('tool/before', `spawn-${String(index)}`, { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: `spawn-${String(index)}` }, '2026-09-03T00:00:00.000Z');
+      await observe('agent/start', `start-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, '2026-09-03T00:00:01.000Z');
+      await observe('tool/after', `spawned-${String(index)}`, { hook_event_name: 'PostToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_response: {}, tool_use_id: `spawn-${String(index)}` }, '2026-09-03T00:00:01.000Z');
+      await observe('agent/stop', `stop-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStop', session_id: 'root', stop_hook_active: false }, `2026-09-03T01:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`);
+    };
+    for (let index = 0; index < LINEAGE_STOPPED_RETENTION + 5; index += 1) await spawnAndStart(index);
+    expect(registry.snapshot().nodes['agent-0']).toBeUndefined();
+    // A fresh spawn is pending for a new child when agent-0's start is redelivered late.
+    await observe('tool/before', 'spawn-new', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'spawn-new' }, '2026-09-03T02:00:00.000Z');
+    const replayed = await observe('agent/start', 'start-0', { agent_id: 'agent-0', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, '2026-09-03T00:00:01.000Z');
+    expect(replayed).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-new']);
+    const fresh = await observe('agent/start', 'start-new', { agent_id: 'agent-new', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, '2026-09-03T02:00:01.000Z');
+    expect(value(fresh)).toMatchObject({ depth: 1, subagent: { toolCallId: 'spawn-new' } });
+  });
+});

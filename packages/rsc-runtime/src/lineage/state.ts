@@ -28,6 +28,8 @@ export const LineageNodeSchema = z.object({
 /** A pre-tool hook whose post-tool hook has not fired: the correlation window for MCP calls and spawns. */
 export const OpenToolCallSchema = z.object({
   conversation: id,
+  /** The carrier's turn-shaped id when the window opened (Cursor `generation_id`, Codex `turn_id`, Claude `prompt_id`). */
+  generation: id.optional(),
   openedAt: timestamp,
   /** The root the conversation belonged to when the window opened, so retirement finds it even after its node is pruned. */
   root: id.optional(),
@@ -43,6 +45,12 @@ export const LineageStateSchema = z.object({
   openCalls: z.array(OpenToolCallSchema),
   /** Cursor subagent ids whose child conversation has not been observed yet, oldest first. */
   pendingChildren: z.array(id),
+  /**
+   * Every start identity ever registered (agent ids, Cursor subagent ids and
+   * bound conversations), newest last and bounded, so a redelivered start is
+   * recognized even after its node was pruned.
+   */
+  seenStarts: z.array(id),
   /**
    * Spawn tool calls (Claude `Agent`/`Task`, Codex `spawn_agent`) not yet
    * claimed by a subagent start. Kept apart from `openCalls` because Codex
@@ -78,6 +86,8 @@ export const LINEAGE_STOPPED_RETENTION = 256;
 export const LINEAGE_OPEN_CALL_RETENTION = 512;
 /** Spawn calls no subagent start ever claimed are dropped past this count, oldest first. */
 export const LINEAGE_PENDING_SPAWN_RETENTION = 64;
+/** Start identities remembered for replay detection after their nodes are pruned. */
+export const LINEAGE_SEEN_START_RETENTION = 4096;
 
 export const AGENT_LINEAGE_STATE_ID = '@agent-bundle/runtime/agent-lineage/v1';
 
@@ -95,7 +105,13 @@ export const initialLineageState: LineageState = Object.freeze({
   openCalls: [],
   pendingChildren: [],
   pendingSpawns: [],
+  seenStarts: [],
 });
+
+const remember = (seen: readonly string[], ids: readonly string[]): string[] => {
+  const next = [...seen.filter((known) => !ids.includes(known)), ...ids];
+  return next.length > LINEAGE_SEEN_START_RETENTION ? next.slice(next.length - LINEAGE_SEEN_START_RETENTION) : next;
+};
 
 export const reduceLineage = (
   state: LineageState,
@@ -111,6 +127,7 @@ export const reduceLineage = (
         pendingChildren: node.subagentId !== undefined && node.subagentId === node.id
           ? [...state.pendingChildren.filter((pending) => pending !== node.id), node.id]
           : state.pendingChildren,
+        seenStarts: node.depth === 0 ? state.seenStarts : remember(state.seenStarts, [node.id]),
       };
     }
     case 'nodeStopped': {
@@ -132,6 +149,7 @@ export const reduceLineage = (
         ...state,
         nodes: { ...rest, [conversation]: { ...pending, id: conversation } },
         pendingChildren: state.pendingChildren.filter((candidate) => candidate !== subagentId),
+        seenStarts: remember(state.seenStarts, [conversation]),
       };
     }
     case 'toolCallOpened': {
