@@ -1,0 +1,55 @@
+/*
+ * agent-bundle brand tokens.
+ *
+ * Rspress declares its own tokens through `:where(...)` (zero specificity), so
+ * plain `:root` selectors here win regardless of stylesheet order.
+ */
+
+:root:not(.rp-dark) {
+  --rp-c-brand: #0d8f80;
+  --rp-c-brand-light: #14b8a6;
+  --rp-c-brand-lighter: #99f6e4;
+  --rp-c-brand-dark: #0f766e;
+  --rp-c-brand-darker: #115e59;
+  --rp-c-brand-tint: #14b8a629;
+
+  --rp-home-hero-secondary-color: #5b5bd6;
+}
+
+:root.rp-dark {
+  --rp-c-brand: #2dd4bf;
+  --rp-c-brand-light: #5eead4;
+  --rp-c-brand-lighter: #99f6e4;
+  --rp-c-brand-dark: #14b8a6;
+  --rp-c-brand-darker: #0d9488;
+  --rp-c-brand-tint: #2dd4bf29;
+
+  --rp-home-hero-secondary-color: #a5b4fc;
+}
+
+/*
+ * The hero title inherits `--rp-home-hero-title-bg` from the default theme,
+ * which references the brand tokens above, so only the gradient endpoint is
+ * restated to keep the second stop inside the agent-bundle palette.
+ */
+:root {
+  --rp-home-hero-title-bg: linear-gradient(
+    90deg,
+    var(--rp-c-brand-dark) 0%,
+    var(--rp-c-brand-dark) 32%,
+    var(--rp-home-hero-secondary-color) 100%
+  );
+}
+
+/*
+ * Bounded homepage accent. The default theme already brand-colors the feature
+ * card border on hover, so this only tints the icon chip and adds a small lift.
+ */
+.rp-home-feature__icon {
+  border-color: var(--rp-c-brand-tint);
+  background-color: var(--rp-c-bg-soft);
+}
+
+.rp-home-feature__card:hover {
+  transform: translateY(-2px);
+}

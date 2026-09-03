@@ -1,0 +1,33 @@
+[
+  "index",
+  {
+    "type": "dir",
+    "name": "modules",
+    "label": "模块"
+  },
+  {
+    "type": "dir",
+    "name": "functions",
+    "label": "函数"
+  },
+  {
+    "type": "dir",
+    "name": "classes",
+    "label": "类"
+  },
+  {
+    "type": "dir",
+    "name": "interfaces",
+    "label": "接口"
+  },
+  {
+    "type": "dir",
+    "name": "types",
+    "label": "类型别名"
+  },
+  {
+    "type": "dir",
+    "name": "variables",
+    "label": "变量"
+  }
+]

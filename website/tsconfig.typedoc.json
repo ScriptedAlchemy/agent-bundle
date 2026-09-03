@@ -1,0 +1,30 @@
+{
+  // TypeDoc consumes the package's own build settings, but the documentation
+  // build must not depend on `pnpm build`: `packages/agent-bundle/src` imports
+  // `@agent-bundle/runtime`, whose declarations only exist after that package
+  // is compiled. Resolving those specifiers to `packages/rsc-runtime/src`
+  // keeps `docs:check` self-sufficient, mirroring the source-mapped `paths`
+  // the Twoslash plugin uses for the same reason.
+  "extends": "../packages/agent-bundle/tsconfig.build.json",
+  "compilerOptions": {
+    // Widened from the package's `src` so the resolved runtime sources are
+    // allowed in the program. TypeDoc never emits, so this only affects checks.
+    "rootDir": "../packages",
+    "paths": {
+      "@agent-bundle/runtime": ["../packages/rsc-runtime/src/index.ts"],
+      "@agent-bundle/runtime/plugin": ["../packages/rsc-runtime/src/plugin.ts"],
+      "@agent-bundle/runtime/flight/server": ["../packages/rsc-runtime/src/flight/server.ts"],
+      "@agent-bundle/runtime/mount": ["../packages/rsc-runtime/src/mount/index.ts"],
+      "@agent-bundle/runtime/notices": ["../packages/rsc-runtime/src/notices/index.ts"],
+      "@agent-bundle/runtime/notices/inbox-route": ["../packages/rsc-runtime/src/notices/inbox-route.ts"],
+      "@agent-bundle/runtime/state": ["../packages/rsc-runtime/src/state/index.ts"],
+      "@agent-bundle/runtime/state/sqlite": ["../packages/rsc-runtime/src/state/sqlite.ts"]
+    }
+  },
+  "include": [
+    "../packages/agent-bundle/src/**/*.ts",
+    // Ambient declarations for `react-server-dom-rspack`, which the runtime
+    // sources rely on and which an import graph alone will not pull in.
+    "../packages/rsc-runtime/src/react-server-dom-rspack.d.ts"
+  ]
+}
