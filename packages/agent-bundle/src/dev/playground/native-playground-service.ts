@@ -1130,13 +1130,23 @@ export class NativePlaygroundService {
    * staging links it removed, and if even that fails, withdraw the sidecar.
    */
   async #restoreStagingGuard(path: string, staging: readonly string[]): Promise<void> {
-    const restored = await Promise.allSettled(
-      staging.map((entry) => this.#catalogStorage.link(path, join(dirname(path), entry))),
-    );
+    const restored = await Promise.allSettled(staging.map((entry) => this.#restoreStagingLink(path, entry)));
     if (restored.every((outcome) => outcome.status === 'fulfilled')) return;
     try { await this.#catalogStorage.remove(path, { force: true }); }
     catch {
       // Nothing further can make this publication unsettled; the caller rejects it.
+    }
+  }
+
+  /** Re-links one staging entry; a concurrent recoverer that already restored the same alias counts as success. */
+  async #restoreStagingLink(path: string, entry: string): Promise<void> {
+    const stagingPath = join(dirname(path), entry);
+    try {
+      await this.#catalogStorage.link(path, stagingPath);
+    } catch (error) {
+      if (!isErrno(error, 'EEXIST')) throw error;
+      const [existing, sidecar] = await Promise.all([lstat(stagingPath), lstat(path)]);
+      if (!existing.isFile() || !sameFile(existing, sidecar)) throw error;
     }
   }
 

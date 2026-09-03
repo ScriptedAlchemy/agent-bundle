@@ -1802,6 +1802,19 @@ it('recovers a staging link abandoned by an exited publisher after the settle de
     await unsynced.close();
     expect((await stat(sidecar)).nlink).toBe(2);
     expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
+
+    // Two readers recovering the same orphan while fsync fails: the second one's
+    // guard re-link meets EEXIST from the first, which is the same alias, so the
+    // sidecar is kept rather than withdrawn.
+    const [firstRacer, secondRacer] = [
+      serviceFor(async () => { throw new Error('A racing recovery must not fall back to discovery.'); }),
+      serviceFor(async () => { throw new Error('A racing recovery must not fall back to discovery.'); }),
+    ];
+    const raced = await Promise.allSettled([firstRacer.catalog(reference), secondRacer.catalog(reference)]);
+    expect(raced.map((outcome) => outcome.status)).toEqual(['rejected', 'rejected']);
+    await Promise.all([firstRacer.close(), secondRacer.close()]);
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await stat(orphan)).ino).toBe((await stat(sidecar)).ino);
     directorySyncFailure = undefined;
 
     // A publisher that exited after link() but before cleanup left a complete,
