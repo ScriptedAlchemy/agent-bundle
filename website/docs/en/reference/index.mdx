@@ -29,11 +29,11 @@ only the contract.
 
 Every command reports structured diagnostics rather than prose errors. One diagnostic is a stable
 `AB` code, a severity, a message, and usually a `sourcePath` and a `recovery` hint. For the
-diagnostic-gated commands — `build`, `validate`, `dev`, `inspect`, and `doctor` — only an
-**error** severity makes the command exit nonzero; warnings and infos never gate a build,
-a validation, or a dev rebuild. `eval` is the exception: it exits `1` whenever a trial fails or
-is inconclusive, with or without an error diagnostic, as the [CLI reference](./cli.mdx#eval)
-explains.
+diagnostic-gated commands — `build`, `prepack`, `validate`, `doctor`, `install`, and `dev` — only
+an **error** severity makes the command exit nonzero; warnings and infos never gate a build, a
+validation, or a dev rebuild. `eval` and `inspect` have an extra, non-diagnostic reason to exit
+`1`: a failing or inconclusive trial, or an invalid model — see the
+[CLI exit codes](./cli.mdx#exit-codes).
 
 The full code catalog is the [Diagnostics reference](./diagnostics.md), rendered at build time
 from the repository's

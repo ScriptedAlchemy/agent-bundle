@@ -27,10 +27,10 @@ description: 'agent-bundle 参考资料：命令行表面、配置字段、targe
 ## 如何读诊断
 
 每条命令报告的都是结构化诊断，而不是散文式错误。一条诊断包含稳定的 `AB` 代码、一个严重级别、一条消息，
-通常还有 `sourcePath` 与一条 `recovery` 提示。对于由诊断把关的命令——`build`、`validate`、`dev`、`inspect`
-与 `doctor`——只有 **error** 级别才会让命令以非零退出；warning 与 info 绝不会为构建、校验或 dev 重建把关。
-`eval` 是例外：只要有任一 trial 失败或结论不明，它就以 `1` 退出，无论是否存在 error 诊断，详见
-[CLI 参考](./cli.mdx#eval)。
+通常还有 `sourcePath` 与一条 `recovery` 提示。对于由诊断把关的命令——`build`、`prepack`、`validate`、
+`doctor`、`install` 与 `dev`——只有 **error** 级别才会让命令以非零退出；warning 与 info
+绝不会为构建、校验或 dev 重建把关。`eval` 与 `inspect` 还有一个与诊断无关的以 `1` 退出的理由：
+失败或无定论的试验，或者无效的模型——见[命令行退出码](./cli.mdx#退出码)。
 
 完整的代码目录见[诊断参考](./diagnostics.md)，它在构建时由仓库中的
 [`docs/diagnostics.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md)
