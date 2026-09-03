@@ -611,7 +611,9 @@ const installNoticeInboxSubscriptions = (
     context: GeneratedRouteRequestContext,
   ) => {
     assertInboxUri(request.params.uri);
-    const identity = requestIdentity(context, protocol.getClientVersion()?.name);
+    // Subscriptions are not tool calls: no pre-tool hook precedes them, so
+    // there is no correlation window to resolve lineage through.
+    const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'));
     try {
       await notices.subscribe({
         actor: identity.actor ?? unavailable(),
@@ -676,6 +678,7 @@ const installNoticeInboxSubscriptions = (
     else owed = true;
     return Promise.resolve();
   };
+};
 
 const lineageHostFor = (target: string): LineageHost | undefined =>
   target === 'claude' || target === 'codex' || target === 'cursor' ? target : undefined;
