@@ -14,7 +14,7 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -157,7 +157,14 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
       for (const name of sortNames(await readdir(path))) await visit(join(relativePath, name));
       return;
     }
-    files.push(toPosix(relativePath));
+    // Every inventoried path must round-trip through a receipt unchanged: a POSIX name holding a
+    // backslash would be rewritten into a separator, and a name the receipt reader rejects
+    // (reserved characters, trailing dot or space, ...) could never be owned. Refuse them up front.
+    const posixPath = toPosix(relativePath);
+    if ((sep === '/' && relativePath.includes('\\')) || !isReceiptPath(posixPath)) {
+      throw unsupportedEntry(sep === '/' ? relativePath : posixPath);
+    }
+    files.push(posixPath);
     hashEntry(hash, relativePath, metadata, await readFile(path));
   };
   for (const name of sortNames(await readdir(root))) {

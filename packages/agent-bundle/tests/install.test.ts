@@ -794,6 +794,39 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
   }
 });
 
+it('refuses artifact paths that could not round-trip through a receipt', async () => {
+  if (process.platform === 'win32') return;
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    for (const name of ['back\\slash.txt', 'notes.md:stream', 'trailing.', 'trailing ', 'bad<name']) {
+      await writeFile(join(fixture.bundleRoot, name), 'odd\n');
+      await expect(treeInventory(fixture.bundleRoot), name).rejects.toThrow(
+        `Refusing unsupported filesystem entry ${JSON.stringify(name)}`,
+      );
+      const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+        .catch((failure: unknown) => failure);
+      expect(refused, name).toBeInstanceOf(DiagnosticError);
+      expect((refused as DiagnosticError).diagnostics[0], name).toMatchObject({ code: 'AB7004', target: 'cursor' });
+      await expect(access(destination), name).rejects.toMatchObject({ code: 'ENOENT' });
+      await rm(join(fixture.bundleRoot, name));
+    }
+    // Nested odd names are refused too, before anything is staged.
+    await mkdir(join(fixture.bundleRoot, 'skills', 'odd.'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'skills', 'odd.', 'SKILL.md'), '# odd\n');
+    await expect(treeInventory(fixture.bundleRoot)).rejects.toThrow('Refusing unsupported filesystem entry "skills/odd./SKILL.md"');
+    await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })).toMatchObject({ state: 'installed' });
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('never lets a receipt claim runtime state: a receipt owning state/ reads as legacy and the store survives', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));

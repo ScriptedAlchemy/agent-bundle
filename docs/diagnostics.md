@@ -731,7 +731,10 @@ are validated as strict POSIX-relative paths (no backslashes, no
 `..`/`.`/empty segments, no drive letters, nothing under a runtime root such as
 `state/`) before they can drive a deletion; a receipt that fails validation
 reads as absent, and a receipt that is not a regular file (a symbolic link, a
-FIFO) is refused outright (`AB7004`) before it is read.
+FIFO) is refused outright (`AB7004`) before it is read. The same rules apply to
+the artifact itself: a file whose path could not round-trip through a receipt
+(a backslash in a POSIX name, reserved characters, a trailing dot or space) is
+refused (`AB7004`) before anything is staged.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

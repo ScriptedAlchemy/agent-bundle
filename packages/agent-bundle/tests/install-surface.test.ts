@@ -196,6 +196,16 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(unknown.code).toBe(2);
     expect(unknown.stderr).toContain('Unknown installer argument "--bogus"');
 
+    // An artifact path that could not round-trip through a receipt is refused before anything is staged.
+    if (process.platform !== 'win32') {
+      await writeFile(join(bundle, 'back\\slash.txt'), 'odd\n');
+      const odd = await run(installer, [], home);
+      expect(odd.code).toBe(1);
+      expect(odd.stderr).toContain('Refusing unsupported filesystem entry "back\\\\slash.txt"');
+      await expect(readdir(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+      await rm(join(bundle, 'back\\slash.txt'));
+    }
+
     // Empty directories are not plugin content: never hashed, installed, or owned.
     await mkdir(join(bundle, 'empty', 'nested'), { recursive: true });
     const first = await run(installer, [], home);
