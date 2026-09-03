@@ -21,7 +21,7 @@ hero:
 features:
   - icon: 🧩
     title: One typed configuration
-    details: A single agent-bundle.config.ts describes the whole plugin. The compiler emits each host's manifests and wrappers, so host-specific layouts stay out of your source.
+    details: A single agent-bundle.config.ts describes the whole plugin, and the src/ conventions fill in what it leaves silent. The compiler emits each host's manifests and wrappers, so host-specific layouts stay out of your source.
     link: /guide/authoring/
     span: 6
   - icon: 🛠️
@@ -31,22 +31,22 @@ features:
     span: 6
   - icon: 🖥️
     title: Local Workbench development
-    details: Run the developer Workbench to inspect the compiled bundle, exercise routes, and see how each host will load your plugin before you ship it.
+    details: Run the developer Workbench to inspect the compiled bundle, exercise the emitted wrappers, and see how each host will load your plugin before you ship it.
     link: /guide/development/workbench
     span: 6
   - icon: 🔬
     title: Evidence-driven testing
-    details: Route, protocol, CLI, package, and host-install proofs turn "it builds" into recorded evidence that the artifacts actually work.
+    details: Route, protocol, CLI, package, and host-install proofs turn "it builds" into recorded evidence that the artifacts actually work — and a pass at one level is never reported as a receipt for another.
     link: /guide/development/testing
     span: 6
-  - icon: 🧭
-    title: Host capability matrices
-    details: Pinned per-host tables for Claude Code, Codex, Cursor, and the portable standard, rendered from the compiler's own capability evidence on every build.
-    link: /reference/hosts
+  - icon: 📦
+    title: Every target ships on its own
+    details: A built target directory is the unit you copy, publish, or hand to a host CLI. It carries a generated INSTALL.md with the bundle's real names and a manifest that records every emitted file with its SHA-256.
+    link: /guide/distribution/
     span: 6
-  - icon: 📚
-    title: Generated type API
-    details: Every public package export documented from source with TypeDoc, mirrored across both locales, with Twoslash type hovers in the guide's examples.
-    link: /api/
+  - icon: 🧭
+    title: Four runnable examples
+    details: A Skills starter, hook and script traces, an interactive MCP App, and a complete media-management plugin — real products you can build, run, and read, with no API key required.
+    link: /examples/
     span: 6
 ---
