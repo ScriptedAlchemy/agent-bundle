@@ -27,9 +27,16 @@ export interface McpRequestOptions {
   readonly timeout: number;
 }
 
+/**
+ * Request metadata carried on the wire as `params._meta`. `progressToken` is
+ * the MCP-defined key generated routes consult before sending progress; any
+ * other key travels untouched.
+ */
+export type McpRequestMeta = Readonly<{ readonly progressToken?: string | number } & Record<string, unknown>>;
+
 export interface McpClient {
   callTool(
-    params: { readonly arguments: Record<string, unknown>; readonly name: string },
+    params: { readonly _meta?: McpRequestMeta; readonly arguments: Record<string, unknown>; readonly name: string },
     options?: McpRequestOptions,
   ): Promise<CallToolResult>;
   close(): Promise<void>;
@@ -80,6 +87,8 @@ export interface McpSessionRequestOptions {
 }
 
 export interface McpSessionToolCallOptions extends McpSessionRequestOptions {
+  /** Forwarded verbatim as the request's `params._meta` (for example a `progressToken`). */
+  readonly _meta?: McpRequestMeta;
   readonly arguments: Record<string, unknown>;
   readonly name: string;
   /** A caller-chosen identifier used to cancel an in-flight tool call. */

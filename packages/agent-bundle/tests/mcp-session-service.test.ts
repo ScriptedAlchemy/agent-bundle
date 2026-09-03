@@ -285,6 +285,7 @@ it('keeps one generated server and plugin-data directory bound to the selected e
 it('uses the admitted session timeout for initialization, catalog, operations, and restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-timeout-'));
   const observed: Array<readonly [string, number | undefined]> = [];
+  const callToolParams: unknown[] = [];
   const capture = (operation: string, options: { readonly timeout?: number } | undefined): void => {
     observed.push([operation, options?.timeout]);
   };
@@ -293,7 +294,8 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     const epochStore = await publishFixtureEpoch(root, 'epoch-timeout');
     service = new McpSessionService({
       createClient: () => ({
-        callTool: async (_params, options) => {
+        callTool: async (params, options) => {
+          callToolParams.push(params);
           capture('callTool', options);
           return { content: [] };
         },
@@ -347,6 +349,7 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     await session.getPrompt({ name: 'fixture' });
     await session.readResource({ uri: 'ui://fixture/resource.txt' });
     await session.callTool({ arguments: {}, name: 'fixture' });
+    await session.callTool({ _meta: { progressToken: 'lifecycle:fixture:0' }, arguments: {}, name: 'fixture' });
     await session.listTools({ timeoutMs: 321 });
     await session.restart();
     await expect(session.listTools({ timeoutMs: Number.NaN })).rejects.toThrow(
@@ -364,8 +367,14 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
       ['getPrompt', 12_345],
       ['readResource', 12_345],
       ['callTool', 12_345],
+      ['callTool', 12_345],
       ['listTools', 321],
       ['connect', 12_345],
+    ]);
+    // `_meta` reaches the wire request only when the caller supplies it.
+    expect(callToolParams).toEqual([
+      { arguments: {}, name: 'fixture' },
+      { _meta: { progressToken: 'lifecycle:fixture:0' }, arguments: {}, name: 'fixture' },
     ]);
     await session.close();
   } finally {

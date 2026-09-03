@@ -186,10 +186,24 @@ export interface ContractRouteFixture {
  */
 export type ContractAppCoverage = 'auto' | 'explicit';
 
+/** The shape of one `notifications/progress` delivery a lifecycle fixture counts. */
+export interface ContractProgressNotification {
+  readonly params?: { readonly progressToken?: string | number };
+}
+
+/**
+ * The explicit progress path a non-SDK client exposes to lifecycle fixtures.
+ * Returns the unsubscribe; an SDK `Client` needs none because its handler map
+ * is observed directly.
+ */
+export interface ContractMatrixProgressSource {
+  readonly observeProgress: (listener: (notification: ContractProgressNotification) => void) => () => void;
+}
+
 export type ContractMatrixClient = Pick<
   Client,
   'callTool' | 'getPrompt' | 'listPrompts' | 'listResources' | 'listTools' | 'readResource'
->;
+> & Partial<ContractMatrixProgressSource>;
 
 export interface ContractMatrixRestartSession {
   readonly client: Client;
@@ -1183,6 +1197,43 @@ type ClientNotificationHandler = (
   ...arguments_: readonly unknown[]
 ) => void | Promise<void>;
 
+const progressMethod = 'notifications/progress';
+
+const sdkProgressObserver = (
+  notificationHandlers: Map<string, ClientNotificationHandler>,
+): ContractMatrixProgressSource['observeProgress'] => (listener) => {
+  const callerHandler = notificationHandlers.get(progressMethod);
+  notificationHandlers.set(progressMethod, async (...arguments_) => {
+    listener(arguments_[0] as ContractProgressNotification);
+    await callerHandler?.(...arguments_);
+  });
+  return () => {
+    if (callerHandler === undefined) {
+      notificationHandlers.delete(progressMethod);
+    } else {
+      notificationHandlers.set(progressMethod, callerHandler);
+    }
+  };
+};
+
+/**
+ * Resolves how lifecycle fixtures observe live progress: an explicit
+ * `observeProgress` seam wins, an SDK `Client` exposes its handler map, and
+ * anything else cannot gate a lifecycle fixture and says so instead of
+ * failing on a missing private field.
+ */
+export const contractProgressObserver = (
+  client: ContractMatrixClient,
+): ContractMatrixProgressSource['observeProgress'] => {
+  const { observeProgress } = client;
+  if (typeof observeProgress === 'function') return (listener) => observeProgress.call(client, listener);
+  const handlers = (client as { readonly _notificationHandlers?: unknown })._notificationHandlers;
+  if (handlers instanceof Map) return sdkProgressObserver(handlers as Map<string, ClientNotificationHandler>);
+  throw new Error(
+    'Contract matrix client exposes no progress notification path; lifecycle fixtures need an SDK Client or observeProgress.',
+  );
+};
+
 const executeLifecycleTransitions = async (
   client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
@@ -1210,27 +1261,25 @@ const executeLifecycleTransitions = async (
   }
 
   const byPhase = new Map<ContractLifecyclePhase, LifecyclePhaseEvidence>();
-  const progressMethod = 'notifications/progress';
-  const notificationHandlers = (
-    client as unknown as {
-      readonly _notificationHandlers: Map<string, ClientNotificationHandler>;
-    }
-  )._notificationHandlers;
-  const callerHandler = notificationHandlers.get(progressMethod);
+  let observeProgress: ContractMatrixProgressSource['observeProgress'];
+  try {
+    observeProgress = contractProgressObserver(client);
+  } catch (error) {
+    return {
+      byPhase: new Map(),
+      orderFailure: error instanceof Error ? error.message : captured(error),
+    };
+  }
   let activeProgressToken: string | undefined;
   let settled = true;
   let liveProgress = 0;
-  notificationHandlers.set(progressMethod, async (...arguments_) => {
-    const notification = arguments_[0] as {
-      readonly params?: { readonly progressToken?: string | number };
-    };
+  const stopObserving = observeProgress((notification) => {
     if (
       notification.params?.progressToken === activeProgressToken
       && !settled
     ) {
       liveProgress += 1;
     }
-    await callerHandler?.(...arguments_);
   });
   try {
     for (const [index, transition] of transitions.entries()) {
@@ -1248,11 +1297,7 @@ const executeLifecycleTransitions = async (
       await runtimeIdentity.observe(`${descriptor.id}/${transition.phase}`);
     }
   } finally {
-    if (callerHandler === undefined) {
-      notificationHandlers.delete(progressMethod);
-    } else {
-      notificationHandlers.set(progressMethod, callerHandler);
-    }
+    stopObserving();
   }
   return { byPhase };
 };
