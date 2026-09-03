@@ -955,17 +955,37 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   }
 
   // A supported `cli` row promises a place for the executable, so an adapter
-  // without the layout cannot register; one that publishes no row stays valid
-  // and simply hosts no bin.
+  // without the layout — or with no artifact layout at all — cannot register;
+  // one that publishes no row stays valid and simply hosts no bin.
   const cursor = registry.get('cursor');
   const { cliBin: _cliBin, ...layoutWithoutBin } = cursor.artifactLayout!;
   expect(() => new TargetRegistry().register({ ...cursor, artifactLayout: layoutWithoutBin }))
+    .toThrow(/supported cli capability without a routed CLI bin layout/u);
+  const { artifactLayout: _layout, ...cursorWithoutLayout } = cursor;
+  expect(() => new TargetRegistry().register(cursorWithoutLayout))
     .toThrow(/supported cli capability without a routed CLI bin layout/u);
   const { cli: _cli, ...capabilitiesWithoutCli } = cursor.capabilities;
   expect(() => new TargetRegistry().register({
     ...cursor,
     artifactLayout: layoutWithoutBin,
     capabilities: capabilitiesWithoutCli,
+  })).not.toThrow();
+
+  // The compiler emits the routed CLI at exactly `bin/<name>.mjs`, so a
+  // `cliBin` layout naming any other directory or omitting `.mjs` is rejected
+  // instead of producing files artifact validation would reject.
+  for (const cliBin of [
+    { allowedSuffixes: ['.mjs'], directory: 'cli' },
+    { allowedSuffixes: ['.js'], directory: 'bin' },
+  ]) {
+    expect(() => new TargetRegistry().register({
+      ...cursor,
+      artifactLayout: { ...layoutWithoutBin, cliBin },
+    })).toThrow(/routed CLI bin layout must use directory "bin" and admit "\.mjs"/u);
+  }
+  expect(() => new TargetRegistry().register({
+    ...cursor,
+    artifactLayout: { ...layoutWithoutBin, cliBin: { allowedSuffixes: ['.js', '.mjs'], directory: 'bin' } },
   })).not.toThrow();
 });
 

@@ -16,16 +16,17 @@ import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
 import { pluginAdapter } from './plugin.ts';
-import type {
-  TargetAdapter,
-  TargetArtifactDocumentContract,
-  TargetArtifactDocumentValidator,
-  TargetArtifactLayout,
-  TargetArtifactOutputLayout,
-  TargetArtifactSchemaContract,
-  TargetArtifactValidationContract,
-  TargetAdapterMetadata,
-  TargetSchemaDescriptor,
+import {
+  routedCliBinLayout,
+  type TargetAdapter,
+  type TargetArtifactDocumentContract,
+  type TargetArtifactDocumentValidator,
+  type TargetArtifactLayout,
+  type TargetArtifactOutputLayout,
+  type TargetArtifactSchemaContract,
+  type TargetArtifactValidationContract,
+  type TargetAdapterMetadata,
+  type TargetSchemaDescriptor,
 } from './types.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -181,12 +182,31 @@ const snapshotArtifactLayout = (
   hookContract: TargetHookContract | undefined,
   mcpRuntime: TargetMcpRuntimeContract | undefined,
 ): TargetArtifactLayout => {
+  // A supported `cli` capability promises a home for the compiled routed CLI,
+  // and the compiler emits it at exactly one place (`bin/<name>.mjs`), so the
+  // promise is checked before any early return and against that fixed layout.
+  const cliSupported = capabilityIsSupported(adapter.capabilities[cliBinCapability]);
+  const missingCliBinLayout = (): Error =>
+    new Error(`Target adapter "${adapter.name}" declares a supported ${cliBinCapability} capability without a routed CLI bin layout.`);
   const declaredLayout = adapter.artifactLayout;
-  if (declaredLayout === undefined) return emptyArtifactLayout;
+  if (declaredLayout === undefined) {
+    if (cliSupported) throw missingCliBinLayout();
+    return emptyArtifactLayout;
+  }
   const layout = record(declaredLayout);
   if (layout === undefined) throw new Error('Target adapter artifact layout must be a record.');
 
   const cliBin = layout.cliBin === undefined ? undefined : snapshotOutputLayout(layout.cliBin, 'routed CLI bin');
+  if (cliBin === undefined && cliSupported) throw missingCliBinLayout();
+  if (
+    cliBin !== undefined &&
+    (cliBin.directory !== routedCliBinLayout.directory ||
+      !routedCliBinLayout.allowedSuffixes.every((suffix) => cliBin.allowedSuffixes.includes(suffix)))
+  ) {
+    throw new Error(
+      `Target adapter "${adapter.name}" routed CLI bin layout must use directory ${JSON.stringify(routedCliBinLayout.directory)} and admit ${routedCliBinLayout.allowedSuffixes.map((suffix) => JSON.stringify(suffix)).join(', ')}; the compiler emits the routed CLI only there.`,
+    );
+  }
   const commands = layout.commands === undefined ? undefined : snapshotOutputLayout(layout.commands, 'commands');
   const hookWrappers = layout.hookWrappers === undefined
     ? undefined
@@ -234,9 +254,6 @@ const snapshotArtifactLayout = (
   }
   if (skills !== undefined && !capabilityIsSupported(adapter.capabilities.skills)) {
     throw new Error(`Target adapter "${adapter.name}" declares Skill layout without skills capability.`);
-  }
-  if (cliBin === undefined && capabilityIsSupported(adapter.capabilities[cliBinCapability])) {
-    throw new Error(`Target adapter "${adapter.name}" declares a supported ${cliBinCapability} capability without a routed CLI bin layout.`);
   }
   return Object.freeze({
     ...(assets === undefined ? {} : { assets }),

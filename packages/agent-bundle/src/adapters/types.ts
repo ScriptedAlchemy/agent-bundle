@@ -436,13 +436,26 @@ export interface TargetArtifactLayout {
 }
 
 /**
+ * The one layout the compiler emits the routed CLI into (#387):
+ * `bin/<plugin-name>.mjs` plus `bin/<plugin-name>-flight.mjs`. Every adapter
+ * that publishes a supported `cli` capability must declare a `cliBin` layout
+ * naming this directory and admitting this suffix; the registry rejects any
+ * other spelling because the compiler would otherwise emit files its own
+ * artifact validation rejects.
+ */
+export const routedCliBinLayout: TargetArtifactOutputLayout = Object.freeze({
+  allowedSuffixes: Object.freeze(['.mjs']),
+  directory: 'bin',
+});
+
+/**
  * Direct-file artifact layout shared by every plugin-shaped target adapter
  * (Claude, Codex): hook wrappers, MCP apps/entries, scripts, and skills all
  * land in the same target-agnostic directories with the same suffix policy.
  */
 export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
   assets: 'assets',
-  cliBin: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'bin' }),
+  cliBin: routedCliBinLayout,
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),

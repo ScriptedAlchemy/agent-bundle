@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import { cliBinCapability } from '../adapters/capability-state.ts';
 import type { TargetRegistry } from '../adapters/registry.ts';
-import type { TargetArtifactEntry } from '../adapters/types.ts';
+import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { AgentBundleToolsConfig, NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -28,7 +28,8 @@ import { buildWithRslib, type RslibEntry } from './rslib.ts';
  * separate npm install. The package build's own bin emission is untouched.
  */
 
-export const cliBinDirectory = 'bin';
+/** The one directory the compiler emits the routed CLI into; the registry pins every `cliBin` layout to it. */
+export const cliBinDirectory: string = routedCliBinLayout.directory;
 
 /** The artifact-relative executable path for one routed-CLI bin. */
 export const cliBinArtifactPath = (name: string): string => `${cliBinDirectory}/${name}.mjs`;

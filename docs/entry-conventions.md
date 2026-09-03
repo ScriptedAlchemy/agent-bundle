@@ -433,8 +433,10 @@ or skipped with the host's `cli` capability judgment), `inspect --bundler`
 dumps each target's `bin/` composition beside its scripts, and the artifact
 manifest records both files with `bundle` provenance naming every command
 route. Artifact validation admits the `bin/` layout only for adapters that
-declare it (`cliBin`); an adapter that publishes a supported `cli` capability
-without that layout is rejected at registration. A target without the
+declare it (`cliBin`); because the compiler emits the CLI at exactly
+`bin/<plugin-name>.mjs`, an adapter that publishes a supported `cli`
+capability without that layout, or with a `cliBin` layout naming another
+directory or omitting `.mjs`, is rejected at registration. A target without the
 capability omits the bin and reports `AB4765`; a host-emitted file at the
 same path (a Claude `claude.bin` directory shipping `<plugin-name>.mjs`) is
 `AB4766`. The package build's `dist/bin/<plugin-name>.js` is unchanged.

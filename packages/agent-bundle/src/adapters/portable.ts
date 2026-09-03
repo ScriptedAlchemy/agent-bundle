@@ -37,6 +37,7 @@ import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'j
 import {
   createAdapterValidator,
   payloadCopyEntries,
+  routedCliBinLayout,
   schemaDescriptorsFrom,
   sourceInputs,
   validateJsonSchemaDocument,
@@ -610,7 +611,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
     assets: 'assets',
-    cliBin: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'bin' }),
+    cliBin: routedCliBinLayout,
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     rootDocuments: Object.freeze(['INSTALL.md', 'install.mjs']),
