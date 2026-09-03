@@ -54,15 +54,30 @@ const paths = {
 };
 const realHome = homedir();
 
-/** Ambient credentials never reach a host that runs with permission bypasses; the hosts authenticate from the copied sign-in files. */
-const SECRET_SHAPED_NAME = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL|PRIVATE_KEY|ACCESS_KEY|SESSION_KEY|AUTH)/iu;
-const scrubbedEnvironment = (base) => Object.fromEntries(
-  Object.entries(base).filter(([name]) => !SECRET_SHAPED_NAME.test(name)),
+/**
+ * Ambient credentials never reach a host that runs with permission bypasses;
+ * the hosts authenticate from the copied sign-in files. The host environment
+ * is therefore built from an allowlist of process/locale/display plumbing, and
+ * even allowlisted values are dropped when they carry a credential (a proxy URL
+ * with userinfo, a bearer token, a key=value assignment with a secret name).
+ */
+const HOST_ENVIRONMENT_ALLOWLIST = new Set([
+  'PATH', 'SHELL', 'USER', 'LOGNAME', 'TERM', 'COLORTERM', 'TZ', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES',
+  'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE', 'XDG_DATA_DIRS', 'XDG_CONFIG_DIRS', 'DBUS_SESSION_BUS_ADDRESS',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'NODE_OPTIONS',
+  'CI', 'NO_COLOR', 'FORCE_COLOR', 'HOST_TEST_ROOT',
+]);
+const CREDENTIAL_BEARING_VALUE = /(?:\/\/[^/\s:@]+:[^/\s@]+@|\b(?:bearer|basic)\s+[\w\-.=+/]{8,}|(?:^|[;&\s])(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key)=[^;&\s]+|\bsk-[\w-]{16,}|\bghp_[\w]{20,}|\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})/iu;
+const allowlistedEnvironment = (base) => Object.fromEntries(
+  Object.entries(base).filter(([name, value]) =>
+    HOST_ENVIRONMENT_ALLOWLIST.has(name) && typeof value === 'string' && !CREDENTIAL_BEARING_VALUE.test(value)),
 );
 
-/** The isolated environment every host command runs with. HOME moves; auth is copied opaquely; ambient secrets are dropped. */
+/** The isolated environment every host command runs with. HOME moves; auth is copied opaquely; nothing else from the shell survives. */
 const isolatedEnvironment = () => {
-  const environment = { ...scrubbedEnvironment(process.env), HOME: paths.home, HOST_TEST_LOG_DIR: paths.logDir };
+  const environment = { ...allowlistedEnvironment(process.env), HOME: paths.home, HOST_TEST_LOG_DIR: paths.logDir };
   switch (host) {
     case 'claude':
       environment.CLAUDE_CONFIG_DIR = join(paths.home, '.claude');
@@ -292,6 +307,10 @@ const capture = () => {
   if (!existsSync(paths.home)) throw new Error(`isolated home ${paths.home} missing; run probe:install ${host} first`);
   mkdirSync(paths.captures, { recursive: true });
   const stamp = new Date().toISOString().replaceAll(/[:.]/gu, '-');
+  // Only records appended by THIS run count as evidence: remember where the
+  // live log ends before the host starts.
+  const logFile = join(paths.logDir, 'captures.ndjson');
+  const startOffset = existsSync(logFile) ? statSync(logFile).size : 0;
   let result;
   switch (host) {
     case 'claude': result = captureClaude(); break;
@@ -302,23 +321,29 @@ const capture = () => {
   writeFileSync(join(paths.captures, `session-${stamp}.stdout.txt`), result.stdout ?? '');
   writeFileSync(join(paths.captures, `session-${stamp}.stderr.txt`), result.stderr ?? '');
   log(`host exit ${result.status}; transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
-  const logFile = join(paths.logDir, 'captures.ndjson');
-  if (existsSync(logFile)) {
+  const appended = existsSync(logFile) ? readFileSync(logFile).subarray(startOffset).toString('utf8') : '';
+  const records = appended.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const kinds = new Set(records.map((record) => record.kind));
+  if (records.length > 0) {
     const copy = join(paths.captures, `captures-${stamp}.ndjson`);
-    copyFileSync(logFile, copy);
-    const lines = readFileSync(copy, 'utf8').split('\n').filter(Boolean).length;
-    log(`copied ${lines} capture record(s) to ${copy}`);
+    writeFileSync(copy, appended.endsWith('\n') ? appended : `${appended}\n`);
+    log(`copied ${String(records.length)} capture record(s) from this run to ${copy}${startOffset > 0 ? ` (${String(startOffset)} bytes of earlier runs left behind)` : ''}`);
     const dump = run(process.execPath, [join(exampleRoot, 'dist', 'bin', 'host-test.js'), 'dump', '--log', copy], { env: process.env });
     process.stdout.write(dump.stdout);
     process.stderr.write(dump.stderr);
   } else {
-    log(`no capture log was written at ${logFile}: the host dispatched no hook and no MCP call reached the probe`);
+    log(`no capture record was appended to ${logFile} by this run: the host dispatched no hook and no MCP call reached the probe`);
   }
-  // The artifacts above are kept for inspection, but a failed host session is
-  // not evidence: automation must see the failure.
+  // The artifacts above are kept for inspection, but neither a failed host
+  // session nor a session that produced no hook AND no MCP evidence is a
+  // capture: automation must see the failure.
+  const missing = ['event', 'mcp'].filter((kind) => !kinds.has(kind));
   if (result.status !== 0) {
     log(`host session failed with exit ${String(result.status)}; captures above are partial evidence at best`);
     process.exitCode = result.status ?? 1;
+  } else if (missing.length > 0) {
+    log(`host session exited 0 but produced no ${missing.join(' and no ')} record; the scenario requires both`);
+    process.exitCode = 1;
   }
 };
 

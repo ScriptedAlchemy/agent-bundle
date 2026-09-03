@@ -73,8 +73,15 @@ pnpm --filter @agent-bundle-example/host-test probe:uninstall claude
 - `probe:capture` runs the scenario prompt through `claude -p`, `codex exec`, or
   `cursor-agent -p`: a shell command, a file edit, `dump`, `probe`, one subagent
   that repeats those and tries a nested subagent, then `HOST_TEST_DONE`. The
-  session transcript and a copy of `captures.ndjson` land in
-  `/tmp/host-test/<host>/`, followed by a rendered `host-test dump`.
+  session transcript and the records this run appended to `captures.ndjson`
+  land in `/tmp/host-test/<host>/`, followed by a rendered `host-test dump`.
+  Earlier runs' records are never re-copied, and the command exits non-zero
+  when the host fails or when the run produced no hook record or no MCP record.
+- Host processes get an allowlisted environment (PATH, locale, display, proxy,
+  TLS plumbing) plus the isolated `HOME`; nothing else from your shell is
+  inherited, and even allowlisted values are dropped when they carry a
+  credential (proxy URLs with userinfo, bearer tokens). Hosts authenticate only
+  from the copied sign-in files.
 - `probe:uninstall` runs the host's own uninstall (`claude plugin uninstall`,
   `codex plugin remove`, or removing `~/.cursor/plugins/local/host-test`) and
   deletes the isolated home. Captures under `/tmp/host-test/<host>/` survive.
