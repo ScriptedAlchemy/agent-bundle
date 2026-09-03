@@ -1,0 +1,74 @@
+---
+description: 'Four runnable agent-bundle examples: a Skills starter, hook and script traces, an interactive MCP App, and a complete media-management plugin.'
+---
+
+# Examples
+
+The repository ships four examples, and they are products rather than fixtures. Each one uses
+only public `agent-bundle` exports and `workspace:*` dependencies, each one builds and validates
+through the same public CLI you would use, and none of them needs an API key or a signed-in host
+to reach a useful state.
+
+| Example | What it proves | Run |
+| --- | --- | --- |
+| [Skills Starter](./skills-starter.mdx) | Skills discovered by convention, with deterministic eval evidence. | `pnpm example:skills` |
+| [Hooks and Scripts](./hooks-and-scripts.mdx) | The generated hook wrapper and script process envelope, including a blocking exit code. | `pnpm example:hooks` |
+| [MCP App](./mcp-app.mdx) | A generated stdio MCP server plus an interactive MCP App resource. | `pnpm example:mcp-app` |
+| [Audiobook Curator](./audiobook-curator.mdx) | A complete route-tree application: MCP, projected CLI, providers, durable state. | `pnpm example:audiobook` |
+
+## Running them
+
+Run the `pnpm example:*` scripts from the repository root. Each one builds the workspace first,
+then starts that example's foreground `agent-bundle dev` server and opens the developer
+[Workbench](../guide/development/workbench.mdx):
+
+```sh
+pnpm install
+pnpm example:skills
+```
+
+For the noninteractive path, `pnpm examples:check` validates and builds every example package in
+the workspace — no dev server, no browser:
+
+```sh
+pnpm examples:check
+```
+
+Each example package also exposes the same public commands directly, once the repository-level
+`pnpm build` has built the local `agent-bundle` workspace dependency:
+
+```sh
+cd examples/skills-starter
+pnpm validate   # agent-bundle validate
+pnpm build      # agent-bundle build
+pnpm check      # validate and build, without opening the Workbench
+pnpm dev        # agent-bundle dev
+```
+
+## Reading an example
+
+Every example page below records the same four things: what the example proves, the public
+packages it depends on, its root run command, and a link to its source. Read the source next to
+the page — the configuration files are short on purpose, because the `src/` conventions carry
+most of the structure.
+
+Two habits make the Workbench trustworthy while you explore:
+
+- **Wait for a completed state.** A rebuild is finished when it reports Idle or Failed. A
+  Building state is still in progress, and judging it is how a healthy project looks broken.
+- **Treat a failed rebuild as last-good behavior.** A failed build publishes no epoch, so the
+  Workbench keeps serving the previously published artifact alongside the new diagnostic. Restore
+  the checked-in source and rebuild; the new active epoch is the repair evidence.
+
+Three of the four examples ship a reversible diagnostic walkthrough for exactly that reason.
+
+## Where the concepts live
+
+| Example surface | Guide page |
+| --- | --- |
+| Skill documents and their `references/` and `assets/` | [Skills](../guide/authoring/skills.mdx) |
+| Lifecycle hooks | [Hooks](../guide/authoring/hooks.mdx) |
+| Scripts and asset copying | [Scripts and assets](../guide/authoring/scripts-assets.mdx) |
+| MCP servers and MCP Apps | [MCP servers and MCP Apps](../guide/authoring/mcp.mdx) |
+| The `bin`/`lib` package build | [CLI and library package entries](../guide/authoring/package-entries.mdx) |
+| Eval suites, cases, and harnesses | [Evaluations](../guide/development/evaluations.mdx) |

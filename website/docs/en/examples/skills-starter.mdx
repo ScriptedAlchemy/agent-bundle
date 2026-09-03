@@ -1,0 +1,73 @@
+---
+description: 'The Skills Starter example: three engineering-operations Skills discovered by convention, with deterministic eval evidence and no credentials.'
+---
+
+# Skills Starter
+
+A Skills-only plugin. It proves that a bundle worth installing can be authored without declaring
+anything but its identity and its targets — and that Skill quality can still be backed by
+recorded evidence rather than a claim.
+
+- **Run from the repository root:** `pnpm example:skills`
+- **Package:** `@agent-bundle-example/skills-starter`
+- **Public dependencies:** `agent-bundle` (`workspace:*`)
+- **Targets:** `portable`, `codex`, `claude`
+- **Credentials:** none — both eval suites are deterministic and read checked-in fixtures
+- **Source:** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
+
+## What it proves
+
+- **Convention discovery.** `agent-bundle.config.ts` declares the plugin and its three targets
+  and nothing else. Every `src/skills/*/SKILL.md` directory is found by convention, so the config
+  never lists a Skill. That is the authoring model described in
+  [Skills](../guide/authoring/skills.mdx).
+- **One source, three host layouts.** The same authored documents are lowered into the portable,
+  Codex, and Claude trees. The Workbench's Source and Generated views show whether a target
+  copied a document or adapted it.
+- **Deterministic eval evidence.** The eval suites run through the deterministic harness against
+  checked-in fixtures, so a Skill's coverage is a recorded run rather than an assertion. Coverage
+  is labeled *indirect* because a deterministic harness cannot observe host Skill activation.
+
+## What is authored
+
+| Path | What it is |
+| --- | --- |
+| `src/skills/incident-triage/` | A production incident from first signal through containment, evidence collection, and a handoff-ready update. |
+| `src/skills/dependency-upgrade/` | Dependency upgrade planning with API, runtime, rollout, and rollback checks. |
+| `src/skills/release-review/` | The evidence, severity, workflow, and final-report requirements for an explicit release review. |
+| `evals/release-readiness.eval.ts` | The `release-readiness` suite and its deterministic `release-artifact-is-ready` case. |
+| `evals/engineering-operations.eval.ts` | The `engineering-operations` suite: `incident-handoff-is-actionable` and `upgrade-plan-has-rollback`. |
+
+Each Skill links its own `references/` checklist or runbook and a reusable `assets/` handoff or
+planning template, so the Skill body stays short and the long-form material is loaded only when
+it is needed.
+
+## Working in the Workbench
+
+1. **Overview** opens on the Bundle dashboard: the three Skills, the generated targets, build
+   health, and the next useful actions.
+2. **Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`. Browse their
+   linked checklists and report templates, and switch between Source and Generated per target.
+3. **Artifacts** defaults to the Claude target. Change the target to compare the portable, Codex,
+   and Claude output trees and their provenance.
+4. **Evals** defaults to the `release-readiness` suite. Run `release-artifact-is-ready` and
+   inspect the passing trial; it consumes only the checked-in evidence fixture.
+5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
+   for a Failed or Idle result rather than a Building state. Restore the checked-in policy and
+   rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness` to
+   record current, repaired evidence.
+
+## Noninteractive checks
+
+After the repository-level `pnpm build`:
+
+```sh
+cd examples/skills-starter
+pnpm validate
+pnpm build
+pnpm exec agent-bundle eval --case release-artifact-is-ready --trials 1
+```
+
+`pnpm check` is the validation-and-build pair without the Workbench. Generated output lands in
+`dist/`, and its root contract is `dist/agent-bundle.manifest.json`. The `.agent-bundle/`
+directory holds development state and is not source material.

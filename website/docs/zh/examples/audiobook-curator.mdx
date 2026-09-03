@@ -1,0 +1,96 @@
+---
+description: '有声书策展器示例：一个由路由模块、请求上下文提供者、持久状态、MCP 到 CLI 投影与框架自有包构建组成的完整 agent-bundle 应用。'
+---
+
+# 有声书策展器
+
+这不是对某一个表面的演示，而是一个完整的插件：一个真实的媒体管理应用，由 React Server Component 路由
+模块、请求上下文、持久状态、MCP 路由与 CLI 路由组装而成。一次构建产出一个生成的 stdio MCP 服务器、
+一个可安装的 CLI、一个 Skill，以及原生的 Claude Code 与 Codex 插件产物。它是框架自有包构建的参考
+消费者。
+
+- **在仓库根目录运行：** `pnpm example:audiobook`
+- **包名：** `@agent-bundle-example/audiobook-curator`
+- **公开依赖：** `agent-bundle`（`workspace:*`）、`@agent-bundle/runtime`（`workspace:*`）、
+  `@modelcontextprotocol/server`、`react`、`zod`
+- **Target：** `claude`、`codex`，且 `marketplace: true`
+- **需要：** Node.js 22.19 或更高版本，以及 `PATH` 上的 `ffprobe` 与 `ffmpeg`
+- **源码：** [`examples/audiobook-curator`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/audiobook-curator)
+
+可选功能会调用为其提供证据的外部工具：Audiobook Forge、位于所选 Python 环境中的 Audiolocate，以及带
+指定模型的 `whisper-cli`。跳过它们只会失去那些功能，而不影响构建。这个示例没有钩子。
+
+## 它证明什么
+
+- **路由树就是应用。** `agent-bundle.config.ts` 声明标识、Node 运行时、两个 target 与 MCP 到 CLI 的
+  投影。其余由文件约定发现：`src/mcp/curator/` 下的 16 个工具路由、1 个目录资源与 1 个策展提示词。
+  这里没有操作注册表，没有手写的 `src/mcp/curator.ts`，也没有逐操作的服务器选择器。
+- **一份编写好的表面，两种协议。** `routes.mcpCommands` 把全部 16 个 MCP 工具投影为
+  `audiobook-curator curator <tool>`，因此编译后的图共有 32 条 CLI 命令：`src/cli/` 下 16 条编写好的，
+  加上 16 条投影出来的。被投影的工具接受一个可选的 `--input '<JSON object>'`；只读工具直接运行，
+  而可能产生变更的工具需要 `--yes`。
+- **表现层是共享的，不是复制的。** `src/components/` 是一份报告组件库，MCP 路由与渲染式 CLI 路由都
+  组合它，因此一个 MCP 工具和它的 CLI 对应命令不可能漂移成两套表现层。
+- **请求上下文是观察出来的，不是假定的。** 约定式的 `src/providers/library.ts` 在每个请求中探测
+  `ffmpeg -version` 与 `ffprobe -version`，并连同探测时间一起发布工具可用性。目录资源通过
+  `await agent()` 读取它，并渲染实时上下文或一个显式的不可用状态。
+- **持久状态有被挂载的身份。** `src/state.ts` 挂载工作区级持久状态 `audiobook-curator/shelf` 与三个
+  事件。如果状态未挂载，那个只读 MCP 工具与渲染式 `shelf` CLI 命令都会返回一个空的结构化书架和一条
+  显式的不可用提示，而不是失败。
+- **Suspense 变成 MCP 进度。** `audit_library` 先通过请求的 `context.progress` 报告进度，然后把它的
+  异步分析放到 React `Suspense` 之后，回退内容是一个 `Agent.Progress` 节点。生成的投影器会流式传输
+  进度状态，再用完成后的分析替换它，而最终的结构化收据不变。
+- **包构建归框架所有。** 配置没有声明 `bin`，也没有声明 `scripts`。`src/cli/` 下的路由命令编译为
+  `dist/bin/audiobook-curator.js` 以服务 `package.json` 的 `bin`，而 `dist/index.js` 加声明文件服务
+  `exports`。见 [CLI 与库包入口](../guide/authoring/package-entries.mdx)。
+- **`package.json` 是唯一的版本来源。** 配置没有声明 `plugin.version`；解析出的版本会流入项目上下文、
+  产物清单、`inspect` 输出、dev 状态，以及这个插件导入的 `agent-bundle/meta` 常量。
+
+## 渲染式与普通 CLI 路由
+
+七条编写好的 `.tsx` 命令渲染 Agent Document——`inventory`、`select`、`audible-search`、`convert`、
+`audit`、`library-audit` 与 `shelf`。交互式终端会就地更新它们报告的进度；管道输出则是一份最终的
+Markdown 文档。另外九条兼容性命令仍是普通的 `.ts` 路由。
+
+两类命令都支持用 `--json` 选择机器输出，并输出一个经结果 schema 校验的 JSON 值加一个换行。对于渲染式
+命令，这个值是最终的规范 `Agent.Result` 值——绝不是 Markdown 表现，也绝不是中间的 Suspense 回退——
+因此某条命令改为渲染式时，收据的消费方不需要改动。
+
+## 在工作区中开发
+
+```sh
+pnpm --filter @agent-bundle-example/audiobook-curator build
+pnpm --filter @agent-bundle-example/audiobook-curator test
+pnpm --filter @agent-bundle-example/audiobook-curator test:routes
+pnpm --filter @agent-bundle-example/audiobook-curator typecheck
+```
+
+包内的 `pnpm check` 会运行 validate、build、typecheck 与两个测试池。一次
+`agent-bundle build --output artifact` 产出全部内容：`artifact/` 下完整的 Claude 与 Codex 输出——各宿主
+的插件元数据、Skill、打包后的 CLI 脚本与被生命周期包装的 MCP 服务器——以及 `dist/` 下的 npm 包。
+
+想在不打包 tarball 的情况下试用构建好的 CLI，可以从任意已在 `PATH` 上的可写目录链接构建产物中的 bin：
+
+```sh
+cd examples/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+audiobook-curator --help
+```
+
+## 在 stdio 上运行服务器
+
+```sh
+cd examples/audiobook-curator
+pnpm exec agent-bundle mcp run --server curator --target claude
+```
+
+该命令会从 Claude target 的 MCP 清单解析出生成的入口，并先构建一份临时产物；传入
+`--artifact artifact` 可改为复用 `pnpm build` 的输出。关闭 stdin 以 0 退出，Ctrl-C 以 130 退出，
+每个服务器的状态持久化在 `.agent-bundle/mcp-run/claude/curator` 下。
+
+## 安全边界
+
+源文件不可变，规划阶段绝不改动媒体。转换会发布到独立的目标位置；元数据与章节替换必须显式 apply，
+先写入同目录的暂存文件，校验暂存结果，然后原子重命名。JSON 收据拒绝音频后缀，也拒绝与媒体或证据输入
+发生冲突。网络响应体、进程输出、目录遍历与并发都是有界的，网络工作使用有界重试加调用方的取消信号，
+而不是隐藏的超时。本地媒体进程没有挂钟期限；调用方取消与有界的 stdout、stderr 依旧强制生效。

@@ -1,0 +1,115 @@
+---
+description: 'The Audiobook Curator example: a complete agent-bundle application built from route modules, request-context providers, durable state, MCP-to-CLI projection, and the framework-owned package build.'
+---
+
+# Audiobook Curator
+
+A complete plugin rather than a demonstration of one surface: a real media-management application
+assembled from React Server Component route modules, request context, durable state, MCP routes,
+and CLI routes. One build produces a generated stdio MCP server, an installable CLI, one Skill,
+and native Claude Code and Codex plugin artifacts. It is the reference consumer of the
+framework-owned package build.
+
+- **Run from the repository root:** `pnpm example:audiobook`
+- **Package:** `@agent-bundle-example/audiobook-curator`
+- **Public dependencies:** `agent-bundle` (`workspace:*`), `@agent-bundle/runtime`
+  (`workspace:*`), `@modelcontextprotocol/server`, `react`, `zod`
+- **Targets:** `claude`, `codex`, with `marketplace: true`
+- **Requires:** Node.js 22.19 or later, plus `ffprobe` and `ffmpeg` on `PATH`
+- **Source:** [`examples/audiobook-curator`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/audiobook-curator)
+
+Optional features call the foreign tools that supply their evidence: Audiobook Forge, Audiolocate
+in a selected Python environment, and `whisper-cli` with a selected model. Skipping them costs
+those features, not the build. This example has no hooks.
+
+## What it proves
+
+- **The route tree is the application.** `agent-bundle.config.ts` declares identity, the Node
+  runtime, the two targets, and the MCP-to-CLI projection. File conventions discover the rest:
+  16 tool routes, one catalog resource, and one curation prompt under `src/mcp/curator/`. There
+  is no operation registry, no handwritten `src/mcp/curator.ts`, and no per-operation server
+  selector.
+- **One authored surface, two protocols.** `routes.mcpCommands` projects all 16 MCP tools as
+  `audiobook-curator curator <tool>`, so the compiled graph carries 32 CLI commands: the 16
+  authored ones under `src/cli/` plus the 16 projections. Projected tools take one optional
+  `--input '<JSON object>'`; read-only tools run directly while mutation-capable tools require
+  `--yes`.
+- **Presentation is shared, not duplicated.** `src/components/` is one report library composed by
+  both the MCP routes and the rendered CLI routes, so an MCP tool and its CLI counterpart cannot
+  drift into two presenters.
+- **Request context is observed, not assumed.** The conventional `src/providers/library.ts`
+  probes `ffmpeg -version` and `ffprobe -version` per request and publishes tool availability
+  with the probe time. The catalog resource reads it through `await agent()` and renders either
+  the live context or an explicit unavailable state.
+- **Durable state has a mounted identity.** `src/state.ts` mounts the workspace-durable
+  `audiobook-curator/shelf` state with three events. If state is not mounted, the read-only MCP
+  tool and the rendered `shelf` CLI command both return an empty structured shelf and an explicit
+  unavailable notice instead of failing.
+- **Suspense becomes MCP progress.** `audit_library` reports progress through the request's
+  `context.progress`, then places its asynchronous analysis behind React `Suspense` with an
+  `Agent.Progress` fallback. The generated projector streams the progress state and replaces it
+  with the completed analysis without changing the final structured receipt.
+- **The framework owns the package build.** No `bin` or `scripts` field is declared. The routed
+  `src/cli/` commands compile into `dist/bin/audiobook-curator.js` for `package.json` `bin`, and
+  `dist/index.js` plus declarations serve `exports`. See
+  [CLI and library package entries](../guide/authoring/package-entries.mdx).
+- **`package.json` is the single version source.** The config declares no `plugin.version`; the
+  resolved version flows into project context, artifact manifests, `inspect` output, dev status,
+  and the `agent-bundle/meta` constant this plugin imports.
+
+## Rendered and plain CLI routes
+
+Seven authored `.tsx` commands render Agent Documents — `inventory`, `select`, `audible-search`,
+`convert`, `audit`, `library-audit`, and `shelf`. An interactive terminal updates their reported
+progress in place; piped output is one final Markdown document. Nine compatibility commands
+remain plain `.ts` routes.
+
+Across both kinds, `--json` selects machine output and emits one result-schema-validated JSON
+value followed by a newline. For a rendered command that value is the canonical final
+`Agent.Result` value — never the Markdown presentation and never an intermediate Suspense
+fallback — so a receipt consumer does not change when a command becomes rendered.
+
+## Working in the workspace
+
+```sh
+pnpm --filter @agent-bundle-example/audiobook-curator build
+pnpm --filter @agent-bundle-example/audiobook-curator test
+pnpm --filter @agent-bundle-example/audiobook-curator test:routes
+pnpm --filter @agent-bundle-example/audiobook-curator typecheck
+```
+
+`pnpm check` inside the package runs validate, build, typecheck, and both test pools. One
+`agent-bundle build --output artifact` produces everything: complete Claude and Codex outputs
+beneath `artifact/` — each host's plugin metadata, Skill, bundled CLI script, and
+lifecycle-wrapped MCP server — plus the npm package beneath `dist/`.
+
+To exercise the built CLI without packing a tarball, link the built bin from any writable
+directory already on `PATH`:
+
+```sh
+cd examples/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+audiobook-curator --help
+```
+
+## Running the server on stdio
+
+```sh
+cd examples/audiobook-curator
+pnpm exec agent-bundle mcp run --server curator --target claude
+```
+
+The command resolves the generated entry from the Claude target's MCP manifest, building a
+temporary artifact first; pass `--artifact artifact` to reuse the `pnpm build` output instead.
+Closing stdin exits 0 and Ctrl-C exits 130, and per-server state persists under
+`.agent-bundle/mcp-run/claude/curator`.
+
+## Safety boundaries
+
+Sources are immutable and planning never mutates media. Conversion publishes to a separate
+destination; metadata and chapter replacement require an explicit apply, stage into a
+same-directory file, verify the staged result, and then rename atomically. JSON receipts refuse
+audio suffixes and collisions with media or evidence inputs. Network bodies, process output,
+traversal, and concurrency are bounded, and network work uses bounded attempts plus the caller's
+cancellation signal rather than hidden deadlines. Local media processes have no wall-clock
+deadline; caller cancellation and bounded stdout and stderr stay enforced.
