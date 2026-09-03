@@ -487,8 +487,9 @@ the current schema, rejection of negative inputs derived from the advertised
 `listTools` input JSON Schema, and mid-flight cancellation hygiene. In-memory
 transport may pass structured values without serialization; the matrix closes
 that gap with an explicit `JSON.parse(JSON.stringify(...))` round-trip before
-validation. MCP Apps are reported as not-applicable for surface registration
-because the in-memory level does not register them.
+validation. MCP Apps are not registered at this level: every app route reports
+`surface-completeness` as `not-applicable` and receives no coverage or sweep
+check, and app fixture entries are accepted and ignored.
 
 **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
 against an already-open packed session (the single packed journey owns session
@@ -501,6 +502,24 @@ version-skew (including their per-lifecycle-phase variants) are reported
 `not-applicable` with an honest reason. The packed
 server validates every tool result through its bundled `resultSchema` before
 returning; a successful sweep invocation is that evidence.
+
+**MCP App coverage per level.** Fixtures must cover every compiled tool, prompt,
+and resource route on the server. App routes are covered at every boundary that
+registers app resources — `packed-stdio`, `packed-deleted-source`,
+`host-install`, and `dev-epoch` — where `surface-completeness` requires the
+compiled `ui://` URI in `listResources` and `sweep` reads that resource. With
+the default `apps: 'auto'` an app route needs no fixture entry: `coverage`
+passes with a reason naming the auto-covered sweep. An explicit
+`{ kind: 'resource' }` (or legacy `{}`) entry is always accepted, and
+`apps: 'explicit'` makes a missing app entry a `coverage` failure again. At
+`mcp-in-memory` apps are never registered, so `apps` has no effect there.
+
+The `cancellation` fixture aborts the invocation after `abortAfterMs`
+(default 50ms) and requires it to settle rejected. Its input must stay in
+flight past that point: when the invocation settles before the abort fires
+the check is `not-applicable` ("invocation completed before abort; use an
+input that stays in flight"), and it only `fails` when the abort was delivered
+mid-flight and the call still settled without rejecting.
 
 Lifecycle fixtures replay
 `unknown → queued → running → first-progress → repeated-progress → terminal`
@@ -560,11 +579,12 @@ await runContractMatrix({
 });
 
 // Packed: pass an already-open session and a manifest compiled before source removal.
+// App routes are auto-covered here; `{ kind: 'resource' }` names one explicitly.
 await runPackedContractMatrix({
   eventRuntime: { endpointId: packedEventRuntimeEndpointId },
   session: packedSession,
   manifest: compiledManifest,
-  fixtures: { /* same shape */ },
+  fixtures: { /* same shape, optionally 'app:library/dashboard': { kind: 'resource' } */ },
 });
 
 await using installedSession = await openInstalledHostMcpServer({
