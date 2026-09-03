@@ -734,16 +734,21 @@ export const createGeneratedRouteMcpServer = async (
   registerGeneratedMcpApps(server, options.apps ?? []);
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
-    await events?.close();
     // The signaller drains any receipt still owed for a send that reached the
     // wire, so it must close while the ledger it commits to is still open:
-    // the host owns (or shares) that store and closes after it.
+    // the host owns (or shares) that store and closes after it. Whatever
+    // fails on the way, the protocol and its transport are always closed;
+    // the teardown error surfaces once they are.
     try {
-      await options.notices?.close();
+      await events?.close();
+      try {
+        await options.notices?.close();
+      } finally {
+        await options.host.close();
+      }
     } finally {
-      await options.host.close();
+      await close();
     }
-    await close();
   };
   return server;
 };

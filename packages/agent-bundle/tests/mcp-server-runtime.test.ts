@@ -139,7 +139,7 @@ describe('generated server teardown', () => {
     expect(order).toEqual(['notices', 'host']);
   });
 
-  it('still closes the host when the signaller close fails', async () => {
+  it('still closes the host and the protocol transport when the signaller close fails', async () => {
     const { host, notices, order } = stubs({
       noticesClose: async () => {
         throw new Error('drain failed');
@@ -152,7 +152,21 @@ describe('generated server teardown', () => {
       plugin: { name: 'teardown', version: '0.0.0' },
       routes: {},
     });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'teardown-test', version: '0.0.0' });
+    let clientSawClose = false;
+    client.onclose = () => {
+      clientSawClose = true;
+    };
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     await expect(server.close()).rejects.toThrow('drain failed');
     expect(order).toEqual(['notices', 'host']);
+    // The failed drain did not leave the transport open: the linked client
+    // observed the server side close.
+    for (let i = 0; i < 100 && !clientSawClose; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(clientSawClose).toBe(true);
+    await client.close();
   });
 });
