@@ -93,6 +93,13 @@ export interface NoticeDeliveryCapabilityTableEntry {
 }
 
 /**
+ * An `unavailable` notice route must say when the host was surveyed: the
+ * reason carries an ISO calendar date (`YYYY-MM-DD`), as every pinned table
+ * does, so the advertisement's evidence can be re-checked against a later pin.
+ */
+const DATED_REASON = /(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/u;
+
+/**
  * Converts one pinned table row into the shared capability-state namespace.
  * `supported` and `degraded` carry the adapter's pinned evidence identity;
  * `unavailable` and `prohibited` carry the table's dated reason.
@@ -166,9 +173,9 @@ export const noticeDeliveryAdvertisementFrom = (
       case 'supported':
         return [route, Object.freeze({ state: 'supported' })];
       case 'unavailable':
-        if (typeof row.reason !== 'string' || row.reason.trim() === '') {
+        if (typeof row.reason !== 'string' || !DATED_REASON.test(row.reason)) {
           throw new CapabilityStateError(
-            `The pinned ${target} table marks notice delivery route ${route} unavailable without a dated reason.`,
+            `The pinned ${target} table marks notice delivery route ${route} unavailable without a dated reason (an ISO date such as 2026-09-02 naming when the host was surveyed).`,
           );
         }
         return [route, Object.freeze({ reason: row.reason, state: 'unavailable' })];

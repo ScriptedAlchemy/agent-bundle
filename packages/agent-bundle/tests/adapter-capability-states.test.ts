@@ -1590,6 +1590,13 @@ it('fails closed on a notice delivery table row it cannot describe honestly', ()
     .toThrow(/host-toast unavailable without a dated reason/u);
   expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: '  ', state: 'unavailable' } }))
     .toThrow(CapabilityStateError);
+  // A reason without a survey date is not dated evidence, however long it is.
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: 'unsupported', state: 'unavailable' } }))
+    .toThrow(/host-toast unavailable without a dated reason/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: 'build 20260902 lacks it', state: 'unavailable' } }))
+    .toThrow(/host-toast unavailable without a dated reason/u);
+  expect(noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: '2026-09-02: no toast API.', state: 'unavailable' } }))
+    .toMatchObject({ 'host-toast': { reason: '2026-09-02: no toast API.', state: 'unavailable' } });
   const { 'directed-push': _omitted, ...missing } = rows;
   expect(() => noticeDeliveryAdvertisementFrom('fixture', missing))
     .toThrow(/advertises no notice delivery route directed-push/u);
@@ -1612,6 +1619,11 @@ it('re-validates a JavaScript adapter advertisement at the registry boundary', (
   })).toThrow(/notice delivery route "mcp-inbox" must declare a state/u);
   expect(() => new TargetRegistry().register({ ...source, noticeDelivery: asAdvertisement('supported') }))
     .toThrow(/must declare notice delivery advertisements as a record/u);
+  // The registry never exposes an undated reason as dated evidence.
+  expect(() => new TargetRegistry().register({
+    ...source,
+    noticeDelivery: asAdvertisement({ ...source.noticeDelivery, 'host-toast': { reason: 'unsupported', state: 'unavailable' } }),
+  })).toThrow(/host-toast unavailable without a dated reason/u);
   const { noticeDelivery: _declared, ...undeclared } = source;
   const registry = new TargetRegistry().register(undeclared);
   // An adapter that declares no advertisement honestly has no cross-request route.
