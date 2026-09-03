@@ -54,9 +54,15 @@ const paths = {
 };
 const realHome = homedir();
 
-/** The isolated environment every host command runs with. HOME moves; auth is copied opaquely. */
+/** Ambient credentials never reach a host that runs with permission bypasses; the hosts authenticate from the copied sign-in files. */
+const SECRET_SHAPED_NAME = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL|PRIVATE_KEY|ACCESS_KEY|SESSION_KEY|AUTH)/iu;
+const scrubbedEnvironment = (base) => Object.fromEntries(
+  Object.entries(base).filter(([name]) => !SECRET_SHAPED_NAME.test(name)),
+);
+
+/** The isolated environment every host command runs with. HOME moves; auth is copied opaquely; ambient secrets are dropped. */
 const isolatedEnvironment = () => {
-  const environment = { ...process.env, HOME: paths.home, HOST_TEST_LOG_DIR: paths.logDir };
+  const environment = { ...scrubbedEnvironment(process.env), HOME: paths.home, HOST_TEST_LOG_DIR: paths.logDir };
   switch (host) {
     case 'claude':
       environment.CLAUDE_CONFIG_DIR = join(paths.home, '.claude');
@@ -71,8 +77,6 @@ const isolatedEnvironment = () => {
     default:
       throw new Error(`unreachable host ${host}`);
   }
-  // Nothing from the real host homes leaks through inherited variables.
-  delete environment.ANTHROPIC_API_KEY;
   return environment;
 };
 

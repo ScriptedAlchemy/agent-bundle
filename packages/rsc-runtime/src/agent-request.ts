@@ -8,7 +8,9 @@ import type {
 } from './notices/contract.js';
 import type { AgentStateHandle } from './state/contract.js';
 
-export const AGENT_REQUEST_STORE_VERSION = 2;
+// Bumped to 3 when `lineage` joined the handle shape: a realm that already
+// holds an older store must fail closed rather than hand out handles without it.
+export const AGENT_REQUEST_STORE_VERSION = 3;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 

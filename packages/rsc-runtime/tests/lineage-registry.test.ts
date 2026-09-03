@@ -273,9 +273,12 @@ describe('lineage registry edge cases raised in review', () => {
     await observe('tool/before', 'spawn-2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'spawn-2' });
     const start = { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' };
     const first = await observe('agent/start', 'child-start', start);
-    expect(value(first).subagent?.toolCallId).toBe('spawn-2');
+    // Two sibling spawns from the same parent: the parent is certain, the exact tool call is not.
+    expect(value(first)).toMatchObject({ depth: 1, parent: 'root' });
+    expect(value(first).subagent?.toolCallId).toBeUndefined();
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-1']);
     const replayed = await observe('agent/start', 'child-start', start);
-    expect(value(replayed).subagent?.toolCallId).toBe('spawn-2');
+    expect(value(replayed)).toMatchObject({ depth: 1, parent: 'root' });
     expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-1']);
   });
 
@@ -391,5 +394,62 @@ describe('lineage registry durability and retention (review round 3)', () => {
     }
     const stopped = Object.values(registry.snapshot().nodes).filter((node) => node.stoppedAt !== undefined);
     expect(stopped.length).toBe(LINEAGE_STOPPED_RETENTION);
+  });
+});
+
+describe('lineage registry ambiguity refusals (review round 4)', () => {
+  it('keeps a root-shaped Cursor conversation a root even while another root has a pending child', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('agent/start', 'a-spawn', {
+      conversation_id: 'root-a', hook_event_name: 'subagentStart', parent_conversation_id: 'root-a', subagent_id: 'call-a', tool_call_id: 'call-a',
+    });
+    const other = await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
+    expect(value(other)).toMatchObject({ conversation: 'root-b', depth: 0, root: 'root-b' });
+    // The pending child is still waiting for A's real child conversation.
+    const child = await observe('tool/before', 'c', { conversation_id: 'child-a', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'Shell', tool_use_id: 'c' });
+    expect(value(child)).toMatchObject({ conversation: 'child-a', depth: 1, parent: 'root-a', root: 'root-a' });
+  });
+
+  it('refuses a spawn claim when two different parents under one root have unclaimed spawns', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp1' });
+    await observe('agent/start', 'p', { agent_id: 'parent-agent', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    await observe('tool/before', 'sp2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp2' });
+    await observe('tool/before', 'sp3', { agent_id: 'parent-agent', hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp3' });
+    const ambiguous = await observe('agent/start', 'n', { agent_id: 'new-agent', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    expect(ambiguous).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId).sort()).toEqual(['sp2', 'sp3']);
+  });
+
+  it('claims siblings from one parent but marks the tool call uncertain', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp1' });
+    await observe('tool/before', 'sp2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp2' });
+    const sibling = await observe('agent/start', 'n', { agent_id: 'sibling', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
+    expect(value(sibling)).toMatchObject({ depth: 1, parent: 'root' });
+    expect(value(sibling).subagent?.toolCallId).toBeUndefined();
+  });
+
+  it('refuses to correlate an MCP call when open windows for the tool span several conversations', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('tool/before', 'ma', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'ma' });
+    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
+    await observe('tool/before', 'mb', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'mb' });
+    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    await observe('tool/after', 'mb-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_output: '{}', tool_use_id: 'mb' });
+    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
   });
 });

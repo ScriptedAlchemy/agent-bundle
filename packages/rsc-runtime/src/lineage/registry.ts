@@ -200,16 +200,22 @@ export const createAgentLineageRegistry = (
    * across `SubagentStart`; Codex closes it first, so the claim window is
    * independent of `openCalls`.
    */
-  const claimSpawn = async (host: LineageHost, root: string, keys: JournalKeys): Promise<OpenToolCall | undefined> => {
+  type SpawnClaim =
+    | { readonly kind: 'ambiguous' }
+    | { readonly kind: 'claimed'; readonly call: OpenToolCall; readonly toolCallIdCertain: boolean }
+    | { readonly kind: 'none' };
+
+  const claimSpawn = async (host: LineageHost, root: string, keys: JournalKeys): Promise<SpawnClaim> => {
     const spawn = SPAWN_TOOLS[host];
-    for (let index = state.pendingSpawns.length - 1; index >= 0; index -= 1) {
-      const call = state.pendingSpawns[index]!;
-      if (!spawn(call.toolName)) continue;
-      if ((nodeFor(call.conversation)?.root ?? call.conversation) !== root) continue;
-      await dispatch('spawnClaimed', { toolCallId: call.toolCallId }, keys);
-      return call;
-    }
-    return undefined;
+    const candidates = state.pendingSpawns.filter((call) =>
+      spawn(call.toolName) && (nodeFor(call.conversation)?.root ?? call.conversation) === root);
+    if (candidates.length === 0) return { kind: 'none' };
+    // Several unclaimed spawns from different parents under one root: the
+    // start payload carries nothing to pick between them, so no guess.
+    if (new Set(candidates.map((call) => call.conversation)).size > 1) return { kind: 'ambiguous' };
+    const call = candidates[candidates.length - 1]!;
+    await dispatch('spawnClaimed', { toolCallId: call.toolCallId }, keys);
+    return { call, kind: 'claimed', toolCallIdCertain: candidates.length === 1 };
   };
 
   /**
@@ -229,19 +235,21 @@ export const createAgentLineageRegistry = (
   ): Promise<LineageNode | undefined> => {
     const existing = state.nodes[conversation];
     if (existing !== undefined) return existing;
-    if (host === 'cursor' && state.pendingChildren.length > 0) {
-      if (state.pendingChildren.length > 1) return undefined;
+    // A root-shaped event is a root: it never binds to a pending child, so an
+    // unrelated conversation starting beside a pending spawn stays its own root.
+    if (allowRoot) {
+      const node = rootNode(conversation, generation, observedAt);
+      await dispatch('nodeStarted', node, keys);
+      return node;
+    }
+    if (host === 'cursor' && state.pendingChildren.length === 1) {
       const subagentId = state.pendingChildren[0]!;
       await dispatch('childBound', { conversation, subagentId }, keys);
       return state.nodes[conversation];
     }
-    // An unknown conversation with no pending start is a root only when the
-    // event itself is root-shaped; a Cursor child's tool event after a registry
-    // restart carries nothing that distinguishes it from a root.
-    if (!allowRoot) return undefined;
-    const node = rootNode(conversation, generation, observedAt);
-    await dispatch('nodeStarted', node, keys);
-    return node;
+    // No single pending start and not root-shaped: a Cursor child's tool event
+    // after a registry restart carries nothing that distinguishes it from a root.
+    return undefined;
   };
 
   const resolve = (
@@ -290,8 +298,9 @@ export const createAgentLineageRegistry = (
     if (state.nodes[agentId] !== undefined) return;
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true);
     if (rootNodeValue === undefined) return;
-    const spawn = await claimSpawn(host, rootNodeValue.root, keys);
-    const parent = (spawn === undefined ? undefined : nodeFor(spawn.conversation)) ?? rootNodeValue;
+    const claim = await claimSpawn(host, rootNodeValue.root, keys);
+    if (claim.kind === 'ambiguous') return;
+    const parent = (claim.kind === 'claimed' ? nodeFor(claim.call.conversation) : undefined) ?? rootNodeValue;
     await dispatch('nodeStarted', {
       depth: parent.depth + 1,
       ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
@@ -299,7 +308,7 @@ export const createAgentLineageRegistry = (
       parent: parent.id,
       root: rootNodeValue.root,
       startedAt: observedAt,
-      ...(spawn === undefined ? {} : { toolCallId: spawn.toolCallId }),
+      ...(claim.kind === 'claimed' && claim.toolCallIdCertain ? { toolCallId: claim.call.toolCallId } : {}),
       ...(nativeString(native, 'agent_type') === undefined ? {} : { type: nativeString(native, 'agent_type')! }),
     }, keys);
   };
@@ -423,19 +432,16 @@ export const createAgentLineageRegistry = (
         call = state.openCalls.find((open) => open.toolCallId === claudeToolUseId);
       }
       if (call === undefined) {
-        // The most recent open pre-tool hook naming this tool: `MCP:<tool>` on
-        // Cursor, `mcp__<server>__<tool>` on Codex, `mcp__plugin_<p>_<s>__<tool>` on Claude.
-        for (let index = state.openCalls.length - 1; index >= 0; index -= 1) {
-          const candidate = state.openCalls[index]!;
-          if (
-            candidate.toolName === `MCP:${toolName}`
-            || candidate.toolName.endsWith(`__${toolName}`)
-            || candidate.toolName === toolName
-          ) {
-            call = candidate;
-            break;
-          }
-        }
+        // The open pre-tool hooks naming this tool: `MCP:<tool>` on Cursor,
+        // `mcp__<server>__<tool>` on Codex, `mcp__plugin_<p>_<s>__<tool>` on
+        // Claude. Several from one conversation share a lineage; several from
+        // different conversations cannot be told apart without `_meta`.
+        const matches = state.openCalls.filter((candidate) =>
+          candidate.toolName === `MCP:${toolName}`
+          || candidate.toolName.endsWith(`__${toolName}`)
+          || candidate.toolName === toolName);
+        if (new Set(matches.map((candidate) => candidate.conversation)).size > 1) return unavailable('id-not-resolvable');
+        call = matches[matches.length - 1];
       }
       if (call === undefined) return unavailable('id-not-resolvable');
       const node = nodeFor(call.conversation);
