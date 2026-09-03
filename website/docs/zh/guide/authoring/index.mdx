@@ -73,9 +73,22 @@ export default defineConfig({
 宿主作用域的扩展键——`claude`、`codex`、`portable`——由各个 target 适配器通过声明合并贡献，因此
 宿主专属取值留在自己的适配器中，而不会泄漏进编译器核心。普通项目完全不需要任何扩展键。
 
-## Claude Code 宿主作用域声明
+## 宿主作用域声明
 
-有两个 Claude Code 表面没有跨宿主对应物，因此位于 `claude` 之下：
+每个宿主键都是可选的，其中的每个字段也都是可选的。`claude` 与 `codex` 扩展自共享的
+`AgentBundleHostConfig`，它唯一的字段 `nativeHooks` 指向一份由项目编写、target 原生的钩子文档
+（`hooks.json`），适配器会校验它并与编译出的钩子合并。各适配器拥有的字段如下：
+
+| 键 | 字段 | 落点 |
+| --- | --- | --- |
+| `claude`（`ClaudeHostConfig`） | `bin`、`channels`、`defaultEnabled`、`dependencies`、`displayName`、`lspServers`、`marketplace`、`metadata`、`monitors`、`outputStyles`、`settings`、`themes`、`userConfig`、`workflows` | `bin`、`outputStyles` 与 `workflows` 是被复制到插件根同名约定目录的项目目录；`channels`、`dependencies`、`defaultEnabled`、`displayName`、`metadata` 与 `userConfig` 经校验后写入 `.claude-plugin/plugin.json`（`channels` 必须指向输出的 `.mcp.json` 中的服务器）；`marketplace` 丰富生成的 marketplace 条目；`monitors` 与 `themes` 属于实验特性，分别输出 `monitors/monitors.json` 与每个键一份的 `themes/<key>.json`；`lspServers` 与 `settings` 见下文。 |
+| `codex`（`CodexHostConfig`） | `apps`、`author`、`homepage`、`interface`、`keywords`、`license`、`repository` | `author`、`homepage`、`keywords`、`license` 与 `repository` 是 `.codex-plugin/plugin.json` 中的发布者元数据；`interface`（品牌色、分类、能力、composer 图标、默认提示、开发者名称……）会合并覆盖编译器生成的安装表面默认值；`apps` 把已注册的 MCP 连接 id 映射进根目录的 `.app.json` 兼容文档。 |
+| `portable`（[`PortableManifestConfig`](../../api/interfaces/index.PortableManifestConfig.md)） | `author`、`extensions`、`homepage`、`keywords`、`license`、`repository` | 叠加到输出的根 `plugin.json` 上的 Agent Plugins 1.0.0 §5.4 元数据；`extensions` 把反向域名的客户端命名空间映射为不透明对象载荷（§8）。省略的字段不会出现在清单中。 |
+
+Cursor 没有扩展键：其适配器完全从跨宿主模型推导。[宿主参考](../../reference/hosts.md)中的宿主能力表
+记录了每个被固定的宿主版本实际认可其中哪些表面。
+
+有两个 Claude Code 表面值得细看，因为它们的契约比名字所暗示的更窄：
 
 - **`claude.lspServers`** —— 由 `claude` target 以及 `plugin` 的 Claude 那一半输出为插件根目录的
   `.lsp.json`。路径 token 只在 `command`、`args`、`env` 与 `workspaceFolder` 中展开。agent-bundle
