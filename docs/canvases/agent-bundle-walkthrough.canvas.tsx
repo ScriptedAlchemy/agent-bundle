@@ -277,7 +277,7 @@ const WIRE_IPC_REQUEST = `{
   "event": "tool/before",
   "hostContractRevision": "2.1.250",
   "target": "claude",
-  "native": { ...the stdin envelope, byte-for-byte... }
+  "native": { ...the validated stdin envelope, value-preserving (re-serialized JSON, not raw bytes)... }
 }
 // socket: /tmp/agent-bundle-<uid>/event-<sha256(endpointId)[0..32]>.sock   (mode 0600)
 // endpointId = "<artifactEpoch>:<target>:<artifact root dir>" - two installs never share a runtime`;
@@ -396,12 +396,15 @@ export default function AgentBundleWalkthrough() {
         <H2>1 · Authoring model: files are the app</H2>
         <Text tone="secondary" style={{ maxWidth: 860 }}>
           One flat config owns identity and policy; everything executable is a
-          conventional file whose path is its identity. A route module is one
-          async default Server Component plus statically extractable
+          conventional file whose path is its identity. A generated MCP tool,
+          resource, or prompt route module is one async default Server Component
+          plus statically extractable
           <Text as="span" weight="semibold"> config</Text>,
           <Text as="span" weight="semibold"> inputSchema</Text>, and
           <Text as="span" weight="semibold"> resultSchema</Text> exports — there is no
-          execute/render split (exporting either is the AB4811 error).
+          execute/render split (exporting either is the AB4811 error). Other
+          route kinds (events, CLI commands, skills) carry their own export
+          contracts.
         </Text>
         <Grid columns="1fr 1fr" gap={12} align="start">
           <Card>
@@ -565,7 +568,7 @@ export default function AgentBundleWalkthrough() {
             <Text size="small" tone="secondary">
               agent-bundle.manifest.json records, per emitted file, its sha256 and the exact
               source inputs that produced it, plus the project revision (the artifact epoch),
-              each target's adapter revision, capability-table hash, and the sha256 of every
+              each target's adapter revision, and the sha256 of every
               pinned host schema it was validated against. agent-bundle.hooks.json is the
               canonical hook index across targets.
             </Text>
@@ -640,7 +643,7 @@ export default function AgentBundleWalkthrough() {
             n={5}
             title="Thin client prints the host-native response and exits 0"
             channel="wrapper → Claude · stdout"
-            note="Claude blocks the Write and surfaces the reason to the model. If the route had allowed it, the wrapper would print nothing (or updatedInput / additionalContext) instead."
+            note="Claude blocks the Write and surfaces the reason to the model. If the route had decided to allow it, the wrapper prints an explicit hookSpecificOutput.permissionDecision: 'allow' (optionally with updatedInput / additionalContext); a route that renders no decision prints nothing."
             payload={WIRE_STDOUT}
             last
           />
