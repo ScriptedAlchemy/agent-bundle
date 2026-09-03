@@ -19,10 +19,14 @@ description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
 | Cursor | `${CURSOR_PLUGIN_ROOT}` | — （拒绝：没有文档化的宿主等价物） |
-| Codex | `${PLUGIN_ROOT}` 仅限 hook 命令；MCP 的 `command`、`args` 与 `env` 拒绝任何路径令牌，生成的 MCP 条目改用相对插件根 `cwd` 解析的 `./` 路径 | — （拒绝：没有文档化的宿主等价物） |
+| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | — （拒绝：没有文档化的宿主等价物） |
 | portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
-替换是**按位置的，而不是全局的**。Claude Code 只在 Skill 与 agent 内容、钩子与 monitor 命令、MCP 服务器
+替换是**按位置的，而不是全局的**。Codex 的 `${PLUGIN_ROOT}` 只是其生成的钩子命令的命令根，别无他用：
+Codex 的 MCP 运行时不插值任何路径 token，因此 MCP `command`、`args` 或 `env` 取值中的插件根 token
+只有在位于取值开头、且该服务器的 `cwd` 就是插件根时才被接受，此时编译器会把它改写为 `cwd: "./"`
+之下的 `./` 相对路径；嵌在中间的 token、缺少该 `cwd` 的 token，以及任何插件数据或工作区根 token
+都是构建错误。Claude Code 只在 Skill 与 agent 内容、钩子与 monitor 命令、MCP 服务器
 以及 LSP 服务器中替换 `${CLAUDE_PLUGIN_ROOT}` 及其同类——绝不在 `settings.json` 中替换，这正是
 `claude.settings` 直接拒绝路径 token 的原因。Cursor 被固定的加载器有自己的可替换字段表，位于该表之外的
 token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
