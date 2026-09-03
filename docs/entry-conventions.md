@@ -383,6 +383,13 @@ name).
 Self-connecting entries — modules that construct and connect a transport at
 top level without a default export — keep today's behavior byte for byte.
 
+Every served tool call is one ordinary `tools/call`: optional
+`notifications/progress` while the caller's progress token is live, then one
+final `CallToolResult`. The shell advertises no `tasks` capability and
+processes a task-augmented request as an ordinary one; task-augmented calls
+are deferred until the MCP SDK ships a task runtime (see
+[MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)).
+
 The same lifecycle is public API for hand-rolled entries:
 
 ```ts
