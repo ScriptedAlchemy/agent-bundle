@@ -269,6 +269,24 @@ export type AgentBundleHookInput =
 /** False disables the conventional src/state.ts module. */
 export type AgentBundleStateConfig = false;
 
+/**
+ * Retention policy of the notice ledger a stateful project co-mounts beside
+ * `src/state.ts` (#99). Omitted fields keep the runtime defaults: seven days,
+ * 500 terminal notices, a 16 MiB journal.
+ */
+export interface AgentBundleNoticeRetentionConfig {
+  /** Retained journal bytes above which the ledger compacts its store onto the head. */
+  readonly maxJournalBytes?: number;
+  /** Most terminal notices kept regardless of age. */
+  readonly maxTerminal?: number;
+  /** How long a terminal notice is kept after it settled: milliseconds, or a duration such as `'7d'`, `'12h'`, `'30m'`, `'90s'`. */
+  readonly terminalTtl?: number | string;
+}
+
+export interface AgentBundleNoticesConfig {
+  readonly retention?: AgentBundleNoticeRetentionConfig;
+}
+
 export interface AgentBundleDevRuntimeConfig {
   readonly provider: string;
 }
@@ -295,6 +313,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   lib?: AgentBundleLibConfig;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
+  notices?: AgentBundleNoticesConfig;
   output?: AgentBundleOutputConfig;
   payload?: AgentBundlePayloadConfig;
   plugin: AgentBundlePluginConfig;
@@ -626,6 +645,29 @@ export interface NormalizedStateDefinition {
   readonly source: string;
 }
 
+/** Resolved notice retention policy in the runtime's units (milliseconds, counts, bytes). */
+export interface NormalizedNoticeRetentionPolicy {
+  readonly maxJournalBytes: number;
+  readonly maxTerminal: number;
+  readonly terminalTtlMs: number;
+}
+
+/**
+ * The project's notice retention policy: the fields `notices.retention`
+ * declared (already converted to runtime units) and the fully resolved
+ * policy the generated runtime mounts. Present only when the config declares
+ * `notices.retention`; the runtime defaults apply otherwise.
+ */
+export interface NormalizedNoticeRetention {
+  readonly declared: Partial<NormalizedNoticeRetentionPolicy>;
+  readonly provenance: SourceProvenance;
+  readonly resolved: NormalizedNoticeRetentionPolicy;
+}
+
+export interface NormalizedNotices {
+  readonly retention: NormalizedNoticeRetention;
+}
+
 export interface NormalizedPlugin {
   /**
    * Project-level copied assets. Normalizers always provide this collection;
@@ -661,6 +703,8 @@ export interface NormalizedPlugin {
    */
   readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
+  /** Notice ledger policy declared by `notices` config; absent means runtime defaults. */
+  readonly notices?: NormalizedNotices;
   /**
    * The framework-owned npm package build (bin + lib outputs). Present only
    * when configured or discovered by convention; optional so hand-constructed

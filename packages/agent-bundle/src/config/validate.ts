@@ -46,6 +46,7 @@ import {
 } from './normalize.ts';
 import { type DiscoveredProject, payloadDeclarationEntry, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import { normalizeNoticeRetention } from './notice-retention.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
@@ -2200,6 +2201,12 @@ export const validateSource = (
       loaded.configPath,
     ));
   }
+  // `notices.retention` (AB4829) needs the co-mounted ledger a state module brings.
+  diagnostics.push(...normalizeNoticeRetention(
+    loaded.config,
+    loaded.configPath,
+    discovered.state?.definition !== undefined,
+  ).diagnostics);
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
   diagnostics.push(...legacyConventionalDocumentErrors(loaded, discovered));

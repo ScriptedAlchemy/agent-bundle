@@ -595,6 +595,12 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(state).toContainText('workspace-durable', { timeout: browserTimeout });
     await expect(state).toContainText('sqlite', { timeout: browserTimeout });
     await expect(state).toContainText('src/state.ts', { timeout: browserTimeout });
+    // The co-mounted notice ledger's retention policy (#99 item 7): the
+    // curator declares none, so the runtime defaults are shown as such.
+    await expect(state).toContainText('Notice retention', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('defaults');
+    await expect(state.locator('.route-state-retention')).toContainText('7d (604800000ms)');
+    await expect(state.locator('.route-state-retention')).toContainText('500');
     await expect(state.locator('button, input, select, textarea')).toHaveCount(0);
 
     // One generated server owns every MCP kind the curator declares, so each

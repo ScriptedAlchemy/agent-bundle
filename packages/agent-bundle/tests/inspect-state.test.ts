@@ -82,7 +82,15 @@ it('inspects volatile and workspace-durable state without inventing runtime path
           driver: 'memory',
           id: 'fixture/process-state',
           lifetime: 'process',
-          notices: [expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1')],
+          // Retention is static policy: the runtime defaults until `notices.retention` says otherwise.
+          noticeRetention: {
+            resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 604_800_000 },
+            source: 'defaults',
+          },
+          notices: [
+            expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1'),
+            expect.stringContaining('AgentNoticeLedger.inspect()'),
+          ],
           provenance: { kind: 'conventional', sourcePath: stateSource },
           source: stateSource,
         },
@@ -90,6 +98,41 @@ it('inspects volatile and workspace-durable state without inventing runtime path
       state: 'ready',
     });
     expect(JSON.parse(volatile.stdout).selected.state).not.toHaveProperty('durableLocation');
+
+    // A declared `notices.retention` resolves over the defaults and is reported as declared.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { maxTerminal: 12, terminalTtl: '2d' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const retaining = await inspectCli(root, ['--state', '--json']);
+    expect(retaining).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(retaining.stdout).selected.state.noticeRetention).toEqual({
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 12, terminalTtlMs: 172_800_000 },
+      source: 'declared',
+    });
+    // A malformed policy is an AB4829 source error, never a silently defaulted one.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { terminalTtl: 'soon' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const malformed = await inspectCli(root, ['--state', '--json']);
+    expect(malformed.code).not.toBe(0);
+    expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4829');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
 
     await writeFile(stateSource, [
       'export default defineState({',

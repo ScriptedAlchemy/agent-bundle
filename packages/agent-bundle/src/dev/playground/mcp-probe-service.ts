@@ -22,7 +22,7 @@ import type {
   McpProbeSnapshot,
   McpProbeTool,
 } from '../../contracts/mcp-probe.ts';
-import { redactCredentialText } from '../../core/credentials.ts';
+import { redactCredentialText, urlUserinfoPattern } from '../../core/credentials.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { resolveBundleRoot } from '../../install/doctor.ts';
 import {
@@ -191,29 +191,15 @@ const hasAbsolutePath = (value: string): boolean =>
   /(?:file:|(?:^|[\s"'([{=,]|:(?!\/\/))\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
 
 /**
- * URL userinfo (`scheme://user:secret@host`) is a credential that the generic
- * credential redaction does not recognize; because URLs are exempt from the
- * absolute-path fail-closed rule, the userinfo is stripped before that check.
- * The authority runs until one of the terminators every WHATWG scheme shares
- * (`/`, `?`, `#`); within it the match is greedy through the *final* `@`, the
- * delimiter URL parsers honour, so a raw `@`, quote, backslash, or whitespace
- * inside a password (parsers percent-encode spaces and strip embedded tabs and
- * newlines) cannot leave part of the credential behind. Nothing short of those
- * three terminators ends the run on purpose — `\` is userinfo for non-special
- * schemes and whitespace is encoded rather than rejected — so a path-less URL
- * followed on the same text by an `@` before any `/`, `?`, or `#` is masked
- * as well: for a browser-facing report that over-redaction is the safe side.
- * Like the local-URI rule, the scheme is anchored to the start of its own
- * character run rather than to a word boundary, so a URL glued to a preceding
- * identifier (`_https://user:secret@…`) is masked too.
- */
-const urlUserinfoPattern = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/giu;
-
-/**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
  * read-only service to log retention: credential text is removed first, URL
- * userinfo is masked, bundle paths become a label, and every other absolute
- * path fails closed.
+ * userinfo (`scheme://user:secret@host`, a credential the assignment pass
+ * does not recognize; because URLs are exempt from the absolute-path
+ * fail-closed rule it is stripped before that check — the shared
+ * `urlUserinfoPattern` documents its greedy-through-the-final-`@` rule and
+ * the deliberate over-redaction of a path-less URL followed by an `@`) is
+ * masked, bundle paths become a label, and every other absolute path fails
+ * closed.
  */
 const redactProbeText = (value: string, bundleRoot: string, maximum: number): string => {
   const redacted = redactCredentialText(value).replace(urlUserinfoPattern, '$1[REDACTED]@').replace(

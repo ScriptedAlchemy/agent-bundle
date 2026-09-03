@@ -18,8 +18,28 @@ export const NOTICE_DELIVERY_ROUTES = Object.freeze([
 
 export type NoticeDeliveryRoute = (typeof NOTICE_DELIVERY_ROUTES)[number];
 
+/**
+ * Author-declared disclosure classes of a notice, mirroring the runtime's
+ * `AgentNoticeSensitivity`: `public` is delivered as authored, `internal`
+ * (the default) after the secret-pattern pass, `secret` only over a route
+ * whose row admits it.
+ */
+export const NOTICE_SENSITIVITIES = Object.freeze(['public', 'internal', 'secret'] as const);
+
+export type NoticeSensitivity = (typeof NOTICE_SENSITIVITIES)[number];
+
+/**
+ * A supported route may name the most sensitive notice it carries in full
+ * (`sensitivity`) together with the dated evidence for that ceiling. Absent
+ * means `internal`: the pre-sensitivity contract, under which default
+ * notices flowed and `secret` never leaves the store through that route.
+ */
 export type NoticeDeliveryRouteState =
-  | { readonly state: 'supported' }
+  | {
+    readonly sensitivity?: NoticeSensitivity;
+    readonly sensitivityEvidence?: string;
+    readonly state: 'supported';
+  }
   | { readonly reason: string; readonly state: 'unavailable' };
 
 /** A host's honest, dated advertisement of which notice delivery routes it can carry. */

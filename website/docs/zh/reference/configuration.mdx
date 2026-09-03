@@ -34,6 +34,7 @@ export default defineConfig({
 | `runtime` | `{ node }` | Node 22.12。 |
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
+| `notices` | `{ retention?: { terminalTtl?, maxTerminal?, maxJournalBytes? } }` | 运行时默认值（`7d`、`500`、`16777216`）。 |
 | `marketplace` | `boolean` | 由适配器选择。 |
 | `dev` | `{ agentApi?, contracts?, runtime? }` | 无。 |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
@@ -57,6 +58,7 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 | `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
 | `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
 | `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `notices` | [`AgentBundleNoticesConfig`](../api/interfaces/index.AgentBundleNoticesConfig.md) · [`AgentBundleNoticeRetentionConfig`](../api/interfaces/index.AgentBundleNoticeRetentionConfig.md) |
 | `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
 | 宿主扩展 | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
 | 校验 | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
@@ -96,6 +98,24 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 `runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
 绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在
 [配置模型](../guide/authoring/index.mdx)中介绍。
+
+## notices
+
+`notices.retention` 设置有状态项目在 `src/state.ts` 旁共同挂载的通知账本的保留策略。终态通知——
+`expired`、`unavailable`、`withdrawn`、`acknowledged`，以及重试预算已耗尽的 `attempted`——在结算满
+`terminalTtl` 后会从账本中清理；当终态通知超过 `maxTerminal` 条时，最早结算的会先被清理；存储的日志
+超过 `maxJournalBytes` 时会被压实到当前头部。清理只在被接纳的事件和显式的 `retain()` 调用时运行；
+不隐含任何定时器。
+
+| 字段 | 默认值 | 规则 |
+| --- | --- | --- |
+| `terminalTtl` | `'7d'` | 正整数毫秒，或形如 `<整数><ms\|s\|m\|h\|d>` 的时长，例如 `'7d'`、`'12h'`、`'30m'`。 |
+| `maxTerminal` | `500` | 正整数。 |
+| `maxJournalBytes` | `16777216` | 正整数字节数。 |
+
+其他任何情况——未知键、非正数或小数、语法之外的时长写法，或在没有状态模块的项目中声明策略——都是
+`AB4829`。`inspect --state` 与 Workbench 的 State 面板会显示解析后的策略以及它是声明的还是默认的；
+实时计数与最近一次压实属于每个已安装的存储（`AgentNoticeLedger.inspect()`）。
 
 ## payload
 

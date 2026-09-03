@@ -24,6 +24,7 @@ import {
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
+  type StateNoticeRetentionProjection,
   type StateProjectionBudgets,
   type StateProjectionDriver,
 } from './core/state-inspection.ts';
@@ -372,6 +373,8 @@ export type StateInspectionDriver = StateProjectionDriver;
 
 export type StateInspectionBudgets = StateProjectionBudgets;
 
+export type { StateNoticeRetentionProjection };
+
 export type StateInspection =
   | {
     readonly declared: false;
@@ -390,6 +393,7 @@ export type StateInspection =
     readonly durableLocation?: string;
     readonly id: string;
     readonly lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'];
+    readonly noticeRetention?: StateNoticeRetentionProjection;
     readonly notices: readonly string[];
     readonly provenance: NonNullable<NormalizedPlugin['state']>['provenance'];
     readonly source: string;
@@ -885,7 +889,7 @@ const accountComponentsFor = (
 const inspectState = (model: NormalizedPlugin): StateInspection => {
   const definition = model.state;
   if (definition === undefined) return Object.freeze({ declared: false });
-  const projection = stateDefinitionProjection(definition);
+  const projection = stateDefinitionProjection(definition, definition.source, model.notices);
   return deepFreeze({
     declared: true,
     ...projection,

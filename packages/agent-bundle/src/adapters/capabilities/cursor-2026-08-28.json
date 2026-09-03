@@ -295,6 +295,8 @@
   },
   "noticeDelivery": {
     "current-response": {
+      "sensitivity": "secret",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): the hook response is returned to the same Cursor process that ran the recipient's hook (hooks reference retrieved 2026-08-28), the trust boundary the recipient already holds; no third party observes it, so a secret notice may travel in full.",
       "state": "supported"
     },
     "directed-push": {
@@ -306,12 +308,18 @@
       "state": "unavailable"
     },
     "mcp-inbox": {
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): inbox identity is derived from the MCP transport only (authInfo clientId / transport sessionId), which this pinned host does not authenticate to the plugin, and a bare stdio inbox is honestly empty; secret content is withheld and internal content is secret-passed before the resource is served.",
       "state": "supported"
     },
     "mcp-resource-updated": {
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): notifications/resources/updated carries only the inbox URI (MCP 2025-11-25 server/resources, retrieved 2026-09-02) and is sent only for notices the inbox route may itself disclose, so it can never leak content above the inbox ceiling.",
       "state": "supported"
     },
     "next-event": {
+      "sensitivity": "secret",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): the hook response is returned to the same Cursor process that ran the recipient's hook (hooks reference retrieved 2026-08-28), the trust boundary the recipient already holds; no third party observes it, so a secret notice may travel in full.",
       "state": "supported"
     }
   },

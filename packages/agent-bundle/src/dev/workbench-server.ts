@@ -832,6 +832,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         prepared.routeGraph ?? emptyCompiledRouteGraph,
         prepared.source.revision,
         prepared.model.state,
+        prepared.model.notices,
       );
     },
   };

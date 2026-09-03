@@ -1,4 +1,12 @@
 import { AgentNoticeError } from './contract.js';
+import {
+  AGENT_NOTICE_DEFAULT_SENSITIVITY,
+  compareNoticeSensitivity,
+  isNoticeSensitivity,
+  type AgentNoticeDisclosure,
+  type AgentNoticeDisclosureShape,
+  type AgentNoticeSensitivity,
+} from './redaction.js';
 
 /**
  * Delivery routes from the #99 taxonomy. `current-response` is the only
@@ -17,13 +25,39 @@ export const AGENT_NOTICE_DELIVERY_ROUTES = Object.freeze([
 
 export type AgentNoticeDeliveryRoute = (typeof AGENT_NOTICE_DELIVERY_ROUTES)[number];
 
+/**
+ * A supported route may name the most sensitive notice it carries in full.
+ * Absent means `internal`: the pre-sensitivity contract, under which default
+ * notices flowed and nothing was classified `secret`. A `secret` notice is
+ * therefore withheld from every route until a host row says otherwise.
+ */
 export type AgentNoticeDeliveryRouteState =
-  | { readonly state: 'supported' }
+  | {
+    readonly sensitivity?: AgentNoticeSensitivity;
+    /** Dated evidence for the ceiling, as the host's capability table records it. */
+    readonly sensitivityEvidence?: string;
+    readonly state: 'supported';
+  }
   | { readonly reason: string; readonly state: 'unavailable' };
 
 export type AgentNoticeDeliveryAdvertisement = Readonly<
   Record<AgentNoticeDeliveryRoute, AgentNoticeDeliveryRouteState>
 >;
+
+/**
+ * What each route structurally carries. The inbox and the hook-response
+ * routes return the recipient's document; a toast has room for one line; a
+ * `resources/updated` notification names the inbox URI and nothing else.
+ */
+export const AGENT_NOTICE_ROUTE_SHAPES: Readonly<Record<AgentNoticeDeliveryRoute, AgentNoticeDisclosureShape>> =
+  Object.freeze({
+    'current-response': 'body',
+    'directed-push': 'body',
+    'host-toast': 'title',
+    'mcp-inbox': 'body',
+    'mcp-resource-updated': 'signal',
+    'next-event': 'body',
+  });
 
 /** Stable preference order for cross-request routes; all supported routes run. */
 const crossRequestPreference = Object.freeze([
@@ -49,6 +83,12 @@ const validateAdvertisement = (
     if (entry.state === 'unavailable' && entry.reason.trim() === '') {
       throw new AgentNoticeError('invalid-input', `Unavailable route ${route} requires a dated reason`);
     }
+    if (entry.state === 'supported' && entry.sensitivity !== undefined && !isNoticeSensitivity(entry.sensitivity)) {
+      throw new AgentNoticeError(
+        'invalid-input',
+        `Supported route ${route} names an unknown sensitivity ${JSON.stringify(entry.sensitivity)}`,
+      );
+    }
   }
 };
 
@@ -67,4 +107,44 @@ export const selectNoticeDeliveryRoutes = (
   return routes.length === 0
     ? Object.freeze({ kind: 'unavailable', reason: 'no-supported-cross-request-route' })
     : Object.freeze({ kind: 'selected', routes: Object.freeze(routes) });
+};
+
+/** The sensitivity ceiling a route row admits; absent rows admit `internal`. */
+export const routeSensitivityCeiling = (
+  entry: AgentNoticeDeliveryRouteState,
+): AgentNoticeSensitivity | undefined =>
+  entry.state === 'supported' ? entry.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY : undefined;
+
+/**
+ * Decides what one route may disclose of a notice, from the notice's declared
+ * sensitivity and the host's capability row for that route. Fails closed: an
+ * unsupported route, or a notice more sensitive than the row's ceiling,
+ * withholds the notice entirely; nothing about it leaves the store that way.
+ * Within the ceiling the route carries its structural shape, and `internal`
+ * content is secret-passed on every route so an unclassified credential never
+ * crosses into another actor's context. An absent advertisement (an embedder
+ * that wired no host) is the pre-sensitivity contract: every route admits
+ * `internal`.
+ */
+export const resolveNoticeDisclosure = (
+  route: AgentNoticeDeliveryRoute,
+  sensitivity: AgentNoticeSensitivity,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
+): AgentNoticeDisclosure => {
+  const entry: AgentNoticeDeliveryRouteState | undefined = advertisement === undefined
+    ? { state: 'supported' }
+    : advertisement[route];
+  // A row the advertisement does not spell is not a supported route.
+  const ceiling = entry === undefined ? undefined : routeSensitivityCeiling(entry);
+  if (ceiling === undefined) {
+    return Object.freeze({ kind: 'withheld', reason: 'route-unavailable' });
+  }
+  if (compareNoticeSensitivity(sensitivity, ceiling) > 0) {
+    return Object.freeze({ kind: 'withheld', reason: 'sensitivity-exceeds-route' });
+  }
+  return Object.freeze({
+    kind: 'disclosed',
+    redacted: sensitivity === 'internal',
+    shape: AGENT_NOTICE_ROUTE_SHAPES[route],
+  });
 };

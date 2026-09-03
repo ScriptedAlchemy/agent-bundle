@@ -31,6 +31,14 @@ export type AgentStateJournalRecord =
   | {
       readonly committedAt: string;
       readonly idempotencyKey: string;
+      readonly kind: 'compact';
+      readonly revision: number;
+      /** The head state materialized as the retained baseline. */
+      readonly state: unknown;
+    }
+  | {
+      readonly committedAt: string;
+      readonly idempotencyKey: string;
       readonly kind: 'migrate';
       readonly revision: number;
       /** Migrated state validated against the current schema. */
@@ -55,6 +63,8 @@ export const canonicalCommitInput = (record: AgentStateJournalRecord): string =>
       return canonicalJson({ kind: 'reset', state: record.state });
     case 'migrate':
       return canonicalJson({ kind: 'migrate', toVersion: record.toVersion });
+    case 'compact':
+      return canonicalJson({ kind: 'compact' });
     default: {
       const unreachable: never = record;
       throw new AgentStateError('corrupt', `Unknown journal record kind ${String(unreachable)}`);
@@ -64,6 +74,71 @@ export const canonicalCommitInput = (record: AgentStateJournalRecord): string =>
 
 export const migrationIdempotencyKey = (toVersion: number): string =>
   `${AGENT_STATE_RESERVED_KEY_PREFIX}migrate:${String(toVersion)}`;
+
+const COMPACTION_KEY_PREFIX = `${AGENT_STATE_RESERVED_KEY_PREFIX}compact:`;
+
+/** Kernel-owned key of the compaction baseline committed at `revision`. */
+export const compactionIdempotencyKey = (revision: number): string =>
+  `${COMPACTION_KEY_PREFIX}${String(revision)}`;
+
+/** True for keys minted by {@link compactionIdempotencyKey}. */
+export const isCompactionIdempotencyKey = (key: string): boolean => key.startsWith(COMPACTION_KEY_PREFIX);
+
+/** A journal record that carries a full state and starts replay. */
+export const isBaselineRecord = (
+  record: AgentStateJournalRecord,
+): record is Extract<AgentStateJournalRecord, { kind: 'compact' | 'migrate' | 'reset' }> => {
+  switch (record.kind) {
+    case 'compact':
+    case 'migrate':
+    case 'reset':
+      return true;
+    case 'event':
+      return false;
+    default: {
+      const unreachable: never = record;
+      throw new AgentStateError('corrupt', `Unknown journal record kind ${String(unreachable)}`);
+    }
+  }
+};
+
+/**
+ * Whether compaction has anything to do: a journal that is empty or holds a
+ * single baseline is already compact. Any event, and any baseline with
+ * history behind it, is worth folding onto the head.
+ */
+export const journalIsCompactable = (records: readonly AgentStateJournalRecord[]): boolean =>
+  records.length > 1 || (records.length === 1 && !isBaselineRecord(records[0] as AgentStateJournalRecord));
+
+/**
+ * Storage-neutral view of a retained journal for
+ * {@link AgentStateJournalInspection}: the first retained record fixes the
+ * baseline, and it is the last compaction exactly when it is a `compact`
+ * record (compaction deletes everything before its baseline, so only the
+ * latest one can ever be retained).
+ */
+export const inspectJournalRecords = (
+  records: readonly AgentStateJournalRecord[],
+  headRevision: number,
+  journalBytes: number,
+): {
+  readonly baselineRevision: number;
+  readonly headRevision: number;
+  readonly journalBytes: number;
+  readonly lastCompaction?: { readonly at: string; readonly revision: number };
+  readonly records: number;
+} => {
+  const first = records[0];
+  return Object.freeze({
+    baselineRevision: first === undefined || first.revision === 1 ? 0 : first.revision,
+    headRevision,
+    journalBytes,
+    ...(first?.kind === 'compact'
+      ? { lastCompaction: Object.freeze({ at: first.committedAt, revision: first.revision }) }
+      : {}),
+    records: records.length,
+  });
+};
 
 /**
  * Validates one event payload against its declared schema without running
@@ -239,7 +314,7 @@ export const resolveResetState = <TState, TEvents extends AgentStateEventSchemas
 
 const parseBaselineState = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
-  record: Extract<AgentStateJournalRecord, { kind: 'migrate' | 'reset' }>,
+  record: Extract<AgentStateJournalRecord, { kind: 'compact' | 'migrate' | 'reset' }>,
 ): TState => {
   const parsed = definition.schema.safeParse(record.state);
   if (!parsed.success) {
@@ -255,7 +330,9 @@ const parseBaselineState = <TState, TEvents extends AgentStateEventSchemas>(
  * Reconstructs the exact state at `targetRevision` from ordered journal
  * records. Revisions below the latest migration are `revision-unavailable`:
  * migration rebases history because older records were written under an
- * earlier definition version. Replay failures are `corrupt` (fail closed).
+ * earlier definition version. Revisions below a compaction baseline are
+ * `revision-unavailable` too: compaction deleted the records that produced
+ * them. Replay failures are `corrupt` (fail closed).
  */
 export const replayJournal = <TState, TEvents extends AgentStateEventSchemas>(
   definition: AgentStateDefinition<TState, TEvents>,
@@ -269,11 +346,18 @@ export const replayJournal = <TState, TEvents extends AgentStateEventSchemas>(
       `State '${definition.id}' revision ${String(targetRevision)} predates the migration at revision ${String(latestMigration.revision)}`,
     );
   }
+  const first = records[0];
+  if (first !== undefined && first.kind === 'compact' && targetRevision < first.revision) {
+    throw new AgentStateError(
+      'revision-unavailable',
+      `State '${definition.id}' revision ${String(targetRevision)} predates the compaction at revision ${String(first.revision)}`,
+    );
+  }
   let state = definition.initial;
   let baselineRevision = 0;
   for (const record of records) {
     if (record.revision > targetRevision) break;
-    if (record.kind === 'reset' || record.kind === 'migrate') {
+    if (isBaselineRecord(record)) {
       state = parseBaselineState(definition, record);
       baselineRevision = record.revision;
     }
@@ -300,17 +384,24 @@ export const replayJournal = <TState, TEvents extends AgentStateEventSchemas>(
   return state;
 };
 
-/** Asserts revisions run 1..n without gaps and idempotency keys never repeat. */
+/**
+ * Asserts revisions run contiguously and idempotency keys never repeat. The
+ * journal starts at revision 1 unless compaction truncated it, in which case
+ * its first record is the retained `compact` baseline; a journal that starts
+ * anywhere else lost records it should still have.
+ */
 export const expectConsistentJournal = (
   definitionId: string,
   records: readonly AgentStateJournalRecord[],
 ): void => {
   const keys = new Set<string>();
+  const first = records[0];
+  const start = first === undefined || first.kind !== 'compact' ? 1 : first.revision;
   for (const [index, record] of records.entries()) {
-    if (record.revision !== index + 1) {
+    if (record.revision !== start + index) {
       throw new AgentStateError(
         'corrupt',
-        `State '${definitionId}' journal expected revision ${String(index + 1)} but found ${String(record.revision)}`,
+        `State '${definitionId}' journal expected revision ${String(start + index)} but found ${String(record.revision)}`,
       );
     }
     if (keys.has(record.idempotencyKey)) {
@@ -386,6 +477,8 @@ export const changeFromJournalRecord = (record: AgentStateJournalRecord): AgentS
       return { committedAt: record.committedAt, kind: 'reset', revision: record.revision };
     case 'migrate':
       return { committedAt: record.committedAt, kind: 'migrate', revision: record.revision };
+    case 'compact':
+      return { committedAt: record.committedAt, kind: 'compact', revision: record.revision };
     default: {
       const unreachable: never = record;
       throw new AgentStateError('corrupt', `Unknown journal record kind ${String(unreachable)}`);

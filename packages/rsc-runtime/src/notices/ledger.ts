@@ -13,6 +13,7 @@ import {
 import type { AgentStateStore } from '../state/contract.js';
 import { AgentStateError, canonicalJson } from '../state/index.js';
 import {
+  AGENT_NOTICE_STATES,
   AgentNoticeError,
   type AgentNotice,
   type AgentNoticeAuthorizationDecision,
@@ -24,6 +25,7 @@ import {
   type AgentNoticeDelivery,
   type AgentNoticeExpiryOptions,
   type AgentNoticeLedger,
+  type AgentNoticeLedgerInspection,
   type AgentNoticeLedgerSnapshot,
   type AgentNoticePrincipal,
   type AgentNoticePublishInput,
@@ -31,10 +33,32 @@ import {
   type AgentNoticePublishResult,
   type AgentNoticeRequest,
   type AgentNoticeRequestLease,
+  type AgentNoticeRetainOptions,
+  type AgentNoticeRetentionReport,
   type AgentNoticesHandle,
+  type AgentNoticeState,
   type AgentNoticeWithdrawOptions,
+  type AgentNoticeWithheldEntry,
   type AgentRecipient,
 } from './contract.js';
+import {
+  AGENT_NOTICE_DEFAULT_SENSITIVITY,
+  disclosedNoticeContent,
+  isNoticeSensitivity,
+  type AgentNoticeDisclosure,
+  type AgentNoticeSensitivity,
+} from './redaction.js';
+import {
+  noticeIsTerminal,
+  resolveNoticeRetentionPolicy,
+  selectPrunableNotices,
+  type AgentNoticeRetentionInput,
+} from './retention.js';
+import {
+  resolveNoticeDisclosure,
+  type AgentNoticeDeliveryAdvertisement,
+  type AgentNoticeDeliveryRoute,
+} from './router.js';
 import {
   agentNoticeEventSchemas,
   type AgentNoticeLedgerState,
@@ -43,7 +67,57 @@ import {
 
 export interface CreateAgentNoticeLedgerOptions {
   readonly authorize: AgentNoticeAuthorizer;
+  /**
+   * The host's notice delivery advertisement, whose per-route `sensitivity`
+   * ceilings the ledger honours when it discloses content through the inbox
+   * and next-event routes. Absent means every route admits `internal` (the
+   * pre-sensitivity contract) and `secret` notices are withheld everywhere.
+   */
+  readonly delivery?: AgentNoticeDeliveryAdvertisement;
+  /** Retention overrides; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`. */
+  readonly retention?: AgentNoticeRetentionInput;
 }
+
+/** A notice persisted before the redaction contract carries no class and is `internal`. */
+const sensitivityOf = (notice: AgentNotice): AgentNoticeSensitivity =>
+  notice.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY;
+
+type Disclosed = Extract<AgentNoticeDisclosure, { readonly kind: 'disclosed' }>;
+
+/** Splits matching notices into what a route discloses and what it withholds, with the reason. */
+const discloseFor = (
+  route: AgentNoticeDeliveryRoute,
+  notices: readonly AgentNotice[],
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
+): {
+  readonly disclosed: readonly { readonly disclosure: Disclosed; readonly notice: AgentNotice }[];
+  readonly withheld: readonly AgentNoticeWithheldEntry[];
+} => {
+  const disclosed: { readonly disclosure: Disclosed; readonly notice: AgentNotice }[] = [];
+  const withheld: AgentNoticeWithheldEntry[] = [];
+  for (const notice of notices) {
+    const disclosure = resolveNoticeDisclosure(route, sensitivityOf(notice), advertisement);
+    switch (disclosure.kind) {
+      case 'disclosed':
+        disclosed.push({ disclosure, notice });
+        break;
+      case 'withheld':
+        withheld.push(Object.freeze({ id: notice.id, reason: disclosure.reason }));
+        break;
+      default: {
+        const exhaustive: never = disclosure;
+        return exhaustive;
+      }
+    }
+  }
+  return { disclosed: Object.freeze(disclosed), withheld: Object.freeze(withheld) };
+};
+
+/** The notice as the route hands it out: `content` replaced by the disclosed document. */
+const disclosedNotice = (notice: AgentNotice, disclosure: Disclosed): AgentNotice => {
+  const content = disclosedNoticeContent(notice.content, disclosure);
+  return content === undefined || content === notice.content ? notice : Object.freeze({ ...notice, content });
+};
 
 type NoticeStore = AgentStateStore<AgentNoticeLedgerState, typeof agentNoticeEventSchemas>;
 
@@ -108,6 +182,14 @@ const priority = (value: AgentNoticePublishInput['priority']): AgentNoticePublis
       throw new AgentNoticeError('invalid-input', `Unknown notice priority ${String(exhaustive)}`);
     }
   }
+};
+
+const sensitivity = (value: AgentNoticeSensitivity | undefined): AgentNoticeSensitivity => {
+  if (value === undefined) return AGENT_NOTICE_DEFAULT_SENSITIVITY;
+  if (!isNoticeSensitivity(value)) {
+    throw new AgentNoticeError('invalid-input', `Unknown notice sensitivity ${JSON.stringify(value)}`);
+  }
+  return value;
 };
 
 const recipient = (input: AgentRecipient): AgentRecipient => {
@@ -175,6 +257,7 @@ const snapshotFrom = (
   state: AgentNoticeLedgerState,
 ): AgentNoticeLedgerSnapshot => Object.freeze({
   notices: state.notices,
+  ...(state.retention === undefined ? {} : { retention: state.retention }),
   revision,
 });
 
@@ -232,6 +315,9 @@ const publishProgram = Effect.fnUntraced(function*(
       priority: priority(input.priority),
       recipient: target,
       ...(retryBudget === undefined ? {} : { retryBudget }),
+      // Persisted explicitly: only notices from before the redaction contract
+      // leave the class absent.
+      sensitivity: sensitivity(input.sensitivity),
       state: 'pending',
     });
     return { dedupeKey, id, idempotencyKey, notice, target };
@@ -275,26 +361,41 @@ const publishProgram = Effect.fnUntraced(function*(
 const deliveryFor = (
   notice: AgentNotice,
   invocationId: string,
+  disclosures: ReadonlyMap<string, Disclosed>,
 ): AgentNoticeDelivery | undefined => {
   if (notice.state !== 'attempted') return undefined;
   const receipt = notice.attempts.find((attempt) => attempt.invocationId === invocationId);
-  return receipt === undefined ? undefined : Object.freeze({ notice, receipt });
+  if (receipt === undefined) return undefined;
+  // Attempted in this invocation means the route disclosed it; a receipt from
+  // this invocation without a decision (a replayed admission whose state was
+  // read fresh) falls back to the notice's own class.
+  const disclosure = disclosures.get(notice.id)
+    ?? Object.freeze({ kind: 'disclosed' as const, redacted: sensitivityOf(notice) === 'internal', shape: 'body' as const });
+  return Object.freeze({
+    disclosure: Object.freeze({ redacted: disclosure.redacted, route: 'next-event' as const }),
+    notice: disclosedNotice(notice, disclosure),
+    receipt,
+  });
 };
 
 const inboxProgram = Effect.fnUntraced(function*(
   store: NoticeStore,
   authorize: AgentNoticeAuthorizer,
   request: AgentNoticeRequest,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
 ): Effect.fn.Return<readonly AgentNotice[], Error> {
   const before = yield* storeEffect(() => store.read({ signal: request.signal }));
   const readTime = Date.parse(request.invocation.startedAt);
-  const candidates = before.state.notices.filter((notice) =>
+  const matching = before.state.notices.filter((notice) =>
     notice.state === 'pending'
     && Date.parse(notice.createdAt) <= readTime
     // Inbox reads do not own durable expiry; event admission remains the expiry boundary.
     && (notice.expiresAt === undefined || Date.parse(notice.expiresAt) > readTime)
     && recipientMatchesPrincipal(notice.recipient, request.principal));
-  const decisions = yield* Effect.forEach(candidates, (notice) =>
+  // Redaction policy first: a withheld notice is never authorized for read,
+  // exposed, or returned; the refusal itself is the only thing recorded.
+  const { disclosed, withheld } = discloseFor('mcp-inbox', matching, advertisement);
+  const decisions = yield* Effect.forEach(disclosed, ({ notice }) =>
     authorizeEffect(authorize, {
       noticeId: notice.id,
       phase: 'read',
@@ -304,7 +405,7 @@ const inboxProgram = Effect.fnUntraced(function*(
   const noticeIds = decisions
     .filter(({ decision }) => decision.state === 'authorized')
     .map(({ id }) => id);
-  if (noticeIds.length === 0) return Object.freeze([]);
+  if (noticeIds.length === 0 && withheld.length === 0) return Object.freeze([]);
   const committed = yield* storeEffect(() => store.dispatch(
     'exposed',
     {
@@ -312,6 +413,7 @@ const inboxProgram = Effect.fnUntraced(function*(
       channel: 'mcp-inbox',
       invocationId: request.invocation.id,
       noticeIds,
+      ...(withheld.length === 0 ? {} : { withheld: [...withheld] }),
     },
     {
       idempotencyKey: `agent-notices:expose:${request.invocation.id}`,
@@ -319,15 +421,74 @@ const inboxProgram = Effect.fnUntraced(function*(
     },
   ));
   const returnedIds = new Set(noticeIds);
+  const disclosures = new Map(disclosed.map(({ disclosure, notice }) => [notice.id, disclosure]));
   return Object.freeze(committed.state.notices
     .filter((notice) => notice.state === 'pending' && returnedIds.has(notice.id))
-    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)));
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .map((notice) => {
+      const disclosure = disclosures.get(notice.id);
+      return disclosure === undefined ? notice : disclosedNotice(notice, disclosure);
+    }));
+});
+
+const stateCounts = (notices: readonly AgentNotice[]): AgentNoticeLedgerInspection['counts'] => {
+  const byState = Object.fromEntries(AGENT_NOTICE_STATES.map((state) => [state, 0])) as Record<AgentNoticeState, number>;
+  let terminal = 0;
+  for (const notice of notices) {
+    byState[notice.state] += 1;
+    if (noticeIsTerminal(notice)) terminal += 1;
+  }
+  return Object.freeze({ byState: Object.freeze(byState), terminal, total: notices.length });
+};
+
+/**
+ * Applies the retention policy once: prunes the terminal notices the policy
+ * selects at `at`, then compacts the journal when it exceeds the byte bound.
+ * Both steps are idempotent (a replayed prune returns its committed result;
+ * an already-compact journal is left alone), so a process killed between them
+ * simply finishes on the next call.
+ */
+const retainProgram = Effect.fnUntraced(function*(
+  store: NoticeStore,
+  policy: ReturnType<typeof resolveNoticeRetentionPolicy>,
+  at: string,
+  idempotencyKey: string,
+  signal: AbortSignal | undefined,
+): Effect.fn.Return<AgentNoticeRetentionReport, Error> {
+  const before = yield* storeEffect(() => store.read({ signal }));
+  const prunedIds = selectPrunableNotices(before.state.notices, policy, at);
+  let revision = before.revision;
+  if (prunedIds.length > 0) {
+    // The key is content-addressed under the caller's key: a retry that
+    // selects the same ids replays, one that selects a different set (the
+    // ledger moved on) commits its own prune instead of an idempotency
+    // conflict against the earlier decision.
+    const digest = createHash('sha256').update(canonicalJson(prunedIds), 'utf8').digest('hex').slice(0, 16);
+    const committed = yield* storeEffect(() => store.dispatch(
+      'pruned',
+      { at, noticeIds: [...prunedIds] },
+      { idempotencyKey: `${idempotencyKey}:${digest}`, ...(signal === undefined ? {} : { signal }) },
+    ));
+    revision = committed.revision;
+  }
+  let journal = yield* storeEffect(() => store.inspect(signal === undefined ? {} : { signal }));
+  let compacted = false;
+  if (journal.journalBytes > policy.maxJournalBytes) {
+    const result = yield* storeEffect(() => store.compact(signal === undefined ? {} : { signal }));
+    compacted = result.prunedRecords > 0;
+    revision = result.revision;
+    journal = yield* storeEffect(() => store.inspect(signal === undefined ? {} : { signal }));
+  }
+  return Object.freeze({ compacted, journal, prunedIds, revision });
 });
 
 export const createAgentNoticeLedger = (
   store: NoticeStore,
   options: CreateAgentNoticeLedgerOptions,
-): AgentNoticeLedger => Object.freeze({
+): AgentNoticeLedger => {
+  const policy = resolveNoticeRetentionPolicy(options.retention);
+  const advertisement = options.delivery;
+  return Object.freeze({
   expire(expiry: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot> {
     return runPromise(Effect.gen(function*() {
       const at = yield* noticeEffect(() => timestamp(expiry.at, 'Notice expiry time'));
@@ -339,6 +500,20 @@ export const createAgentNoticeLedger = (
         { idempotencyKey },
       ));
       return snapshotFrom(committed.revision, committed.state);
+    }));
+  },
+
+  inspect(): Promise<AgentNoticeLedgerInspection> {
+    return runPromise(Effect.gen(function*() {
+      const snapshot = yield* storeEffect(() => store.read());
+      const journal = yield* storeEffect(() => store.inspect());
+      return Object.freeze({
+        counts: stateCounts(snapshot.state.notices),
+        journal,
+        policy,
+        ...(snapshot.state.retention === undefined ? {} : { retention: snapshot.state.retention }),
+        revision: snapshot.revision,
+      });
     }));
   },
 
@@ -354,7 +529,7 @@ export const createAgentNoticeLedger = (
             || notice.state === 'attempted' && notice.attempts.length < (notice.retryBudget ?? 1))
           && notice.expiresAt !== undefined
           && Date.parse(notice.expiresAt) <= admissionTime);
-        const candidates = before.state.notices.filter((notice) =>
+        const matching = before.state.notices.filter((notice) =>
           (notice.state === 'pending'
             || notice.state === 'attempted' && notice.attempts.length < (notice.retryBudget ?? 1))
           && Date.parse(notice.createdAt) <= admissionTime
@@ -362,14 +537,18 @@ export const createAgentNoticeLedger = (
           && (notice.expiresAt === undefined
             || Date.parse(notice.expiresAt) > admissionTime)
           && recipientMatchesPrincipal(notice.recipient, request.principal));
-        const decisions = yield* Effect.forEach(candidates, (notice) =>
+        // Redaction policy before authorization: a notice the next-event route
+        // may not carry is neither authorized nor attempted, only refused.
+        const { disclosed, withheld } = discloseFor('next-event', matching, advertisement);
+        const disclosures = new Map(disclosed.map(({ disclosure, notice }) => [notice.id, disclosure]));
+        const decisions = yield* Effect.forEach(disclosed, ({ notice }) =>
           authorizeEffect(options.authorize, {
             noticeId: notice.id,
             phase: 'deliver',
             principal: request.principal,
             recipient: notice.recipient,
           }).pipe(Effect.map((decision) => ({ decision, id: notice.id }))));
-        if (expiring.length > 0 || decisions.length > 0) {
+        if (expiring.length > 0 || decisions.length > 0 || withheld.length > 0) {
           const committed = yield* storeEffect(() => store.dispatch(
             'admitted',
             {
@@ -382,6 +561,7 @@ export const createAgentNoticeLedger = (
               unavailableIds: decisions
                 .filter(({ decision }) => decision.state === 'unavailable')
                 .map(({ id }) => id),
+              ...(withheld.length === 0 ? {} : { withheld: [...withheld] }),
             },
             {
               idempotencyKey: `agent-notices:admit:${request.invocation.id}`,
@@ -392,8 +572,18 @@ export const createAgentNoticeLedger = (
         }
         deliveries = Object.freeze(admitted.notices
           .filter((notice) => recipientMatchesPrincipal(notice.recipient, request.principal))
-          .map((notice) => deliveryFor(notice, request.invocation.id))
+          .map((notice) => deliveryFor(notice, request.invocation.id, disclosures))
           .filter((delivery): delivery is AgentNoticeDelivery => delivery !== undefined));
+        // Retention rides admitted events only (V1 implies no timer): settled
+        // history past the policy leaves the ledger, then an oversized journal
+        // is folded onto its head. Both steps are idempotent per invocation.
+        yield* retainProgram(
+          store,
+          policy,
+          request.invocation.startedAt,
+          `agent-notices:retain:${request.invocation.id}`,
+          request.signal,
+        );
       }
 
       let closed = false;
@@ -459,7 +649,7 @@ export const createAgentNoticeLedger = (
         inbox() {
           return runPromise(Effect.gen(function*() {
             yield* noticeEffect(() => assertOpen(closed, request.signal));
-            return yield* inboxProgram(store, options.authorize, request);
+            return yield* inboxProgram(store, options.authorize, request, advertisement);
           }));
         },
         publish(input: AgentNoticePublishInput, publishOptions: AgentNoticePublishOptions) {
@@ -487,6 +677,15 @@ export const createAgentNoticeLedger = (
   async read(): Promise<AgentNoticeLedgerSnapshot> {
     const snapshot = await store.read();
     return snapshotFrom(snapshot.revision, snapshot.state);
+  },
+
+  retain(retention: AgentNoticeRetainOptions): Promise<AgentNoticeRetentionReport> {
+    return runPromise(Effect.gen(function*() {
+      const at = yield* noticeEffect(() => timestamp(retention.at, 'Notice retention time'));
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(retention.idempotencyKey, 'Notice retention idempotency key'));
+      return yield* retainProgram(store, policy, at, idempotencyKey, undefined);
+    }));
   },
 
   releaseAvailability(options: AgentNoticeAvailabilityReleaseOptions): Promise<AgentNoticeLedgerSnapshot> {
@@ -606,4 +805,5 @@ export const createAgentNoticeLedger = (
       return snapshotFrom(committed.revision, committed.state);
     }));
   },
-});
+  });
+};

@@ -333,8 +333,10 @@ export interface AgentStateCommitResult<TState = unknown> extends AgentStateSnap
 
 /**
  * One committed journal entry, exposed through the polling change cursor.
- * `reset` and `migrate` entries mark history discontinuities: consumers
- * re-read instead of folding payloads.
+ * `reset`, `migrate`, and `compact` entries mark history discontinuities:
+ * consumers re-read instead of folding payloads. A cursor positioned before
+ * a compaction baseline receives that baseline first, because the records it
+ * missed no longer exist.
  */
 export type AgentStateChange =
   | {
@@ -344,8 +346,50 @@ export type AgentStateChange =
       readonly payload: unknown;
       readonly revision: number;
     }
+  | { readonly committedAt: string; readonly kind: 'compact'; readonly revision: number }
   | { readonly committedAt: string; readonly kind: 'migrate'; readonly revision: number }
   | { readonly committedAt: string; readonly kind: 'reset'; readonly revision: number };
+
+/**
+ * Journal compaction (#99 retention): materializes the head as a `compact`
+ * baseline record and deletes every earlier record. Revisions stay monotonic
+ * (the baseline takes the next revision); exact reads below the baseline
+ * become `revision-unavailable`, like reads below a migration. Idempotency
+ * keys of the pruned records are remembered without their results: replaying
+ * one fails `revision-unavailable` (the commit happened, its result is gone)
+ * and reusing one with a different input is still an `idempotency-conflict`.
+ * A journal that is empty or holds only a baseline is already compact, so
+ * `compact()` is a no-op that reports `prunedRecords: 0`.
+ */
+export interface AgentStateCompactOptions {
+  /** Compare-and-swap: fail with `revision-conflict` unless the head revision matches. */
+  readonly expectedRevision?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface AgentStateCompactResult<TState = unknown> extends AgentStateSnapshot<TState> {
+  /** Revision of the retained baseline; equal to the previous head when nothing was pruned. */
+  readonly baselineRevision: number;
+  /** Journal records deleted by this call. */
+  readonly prunedRecords: number;
+}
+
+/** Storage-level facts about one store's journal; never state contents. */
+export interface AgentStateJournalInspection {
+  /** Revision of the first retained record; 0 while the full history is retained. */
+  readonly baselineRevision: number;
+  readonly headRevision: number;
+  /** UTF-8 bytes of the retained journal's payloads and stored states. */
+  readonly journalBytes: number;
+  /** The retained compaction baseline, when the journal starts at one. */
+  readonly lastCompaction?: { readonly at: string; readonly revision: number };
+  /** Retained journal records. */
+  readonly records: number;
+}
+
+export interface AgentStateInspectOptions {
+  readonly signal?: AbortSignal;
+}
 
 export interface AgentStateChangeBatch {
   readonly changes: readonly AgentStateChange[];
@@ -398,11 +442,15 @@ export interface AgentStateStore<
   readonly location: string;
   changes(options: AgentStateChangesOptions): Promise<AgentStateChangeBatch>;
   close(): Promise<void>;
+  /** Materializes the head as a baseline and deletes the journal before it; see {@link AgentStateCompactOptions}. */
+  compact(options?: AgentStateCompactOptions): Promise<AgentStateCompactResult<TState>>;
   dispatch<TName extends AgentStateEventName<TEvents>>(
     name: TName,
     payload: AgentStateEventPayload<TEvents, TName>,
     options: AgentStateDispatchOptions,
   ): Promise<AgentStateCommitResult<TState>>;
+  /** Journal size and compaction facts for retention decisions and diagnostics. */
+  inspect(options?: AgentStateInspectOptions): Promise<AgentStateJournalInspection>;
   read(options?: AgentStateReadOptions): Promise<AgentStateSnapshot<TState>>;
   reset(options: AgentStateResetOptions<TState>): Promise<AgentStateCommitResult<TState>>;
 }

@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import { AGENT_NOTICE_DELIVERY_ROUTES, selectNoticeDeliveryRoutes } from '@agent-bundle/runtime/notices';
+import { AGENT_NOTICE_DELIVERY_ROUTES, resolveNoticeDisclosure, selectNoticeDeliveryRoutes } from '@agent-bundle/runtime/notices';
 import type { AgentNoticeDeliveryAdvertisement, AgentNoticeDeliveryRoute } from '@agent-bundle/runtime/notices';
 
 import {
@@ -1589,6 +1589,93 @@ it('spells the notice delivery taxonomy locally so public declarations never res
     .toEqual([...AGENT_NOTICE_DELIVERY_ROUTES].map(routeFromRuntime).toSorted());
 });
 
+it('advertises dated sensitivity ceilings per route and host (#99 acceptance item 7)', () => {
+  const registry = createDefaultRegistry();
+  const ceiling = (host: string, route: NoticeDeliveryRoute): string | undefined => {
+    const entry = registry.noticeDelivery(host)![route];
+    return entry.state === 'supported' ? entry.sensitivity : undefined;
+  };
+  for (const host of ['claude', 'codex', 'cursor']) {
+    // The hook response returns to the recipient's own host process: the
+    // recipient's trust boundary, so a secret notice may travel in full.
+    expect(ceiling(host, 'current-response')).toBe('secret');
+    expect(ceiling(host, 'next-event')).toBe('secret');
+    // MCP identity is transport-derived and unauthenticated to the plugin.
+    expect(ceiling(host, 'mcp-inbox')).toBe('internal');
+    expect(ceiling(host, 'mcp-resource-updated')).toBe('internal');
+  }
+  expect(ceiling('portable', 'mcp-inbox')).toBe('internal');
+  expect(ceiling('portable', 'mcp-resource-updated')).toBe('internal');
+  // Every named ceiling carries dated evidence.
+  for (const host of ['claude', 'codex', 'cursor', 'portable', 'plugin']) {
+    for (const route of NOTICE_DELIVERY_ROUTES) {
+      const entry = registry.noticeDelivery(host)![route];
+      if (entry.state !== 'supported' || entry.sensitivity === undefined) continue;
+      expect(entry.sensitivityEvidence).toMatch(/2026-09-03/u);
+    }
+  }
+  // The composite plugin target takes the lowest ceiling of its hosts.
+  expect(ceiling('plugin', 'next-event')).toBe('secret');
+  expect(ceiling('plugin', 'mcp-inbox')).toBe('internal');
+  // The runtime resolves the same ceilings into disclosure decisions.
+  expect(resolveNoticeDisclosure('mcp-inbox', 'secret', registry.noticeDelivery('claude')!))
+    .toEqual({ kind: 'withheld', reason: 'sensitivity-exceeds-route' });
+  expect(resolveNoticeDisclosure('next-event', 'secret', registry.noticeDelivery('claude')!))
+    .toEqual({ kind: 'disclosed', redacted: false, shape: 'body' });
+  expect(resolveNoticeDisclosure('mcp-inbox', 'internal', registry.noticeDelivery('portable')!))
+    .toEqual({ kind: 'disclosed', redacted: true, shape: 'body' });
+});
+
+it('fails closed on a sensitivity ceiling it cannot describe honestly', () => {
+  const rows = { ...claudeCapabilityTable.noticeDelivery } as Record<string, { reason?: string; sensitivity?: string; sensitivityEvidence?: string; state: string }>;
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { sensitivity: 'top-secret', sensitivityEvidence: '2026-09-03: x', state: 'supported' } }))
+    .toThrow(/Unsupported notice sensitivity "top-secret" for mcp-inbox/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { sensitivity: 'secret', state: 'supported' } }))
+    .toThrow(/secret sensitivity ceiling for notice delivery route mcp-inbox without dated evidence/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { sensitivity: 'secret', sensitivityEvidence: 'trust me', state: 'supported' } }))
+    .toThrow(CapabilityStateError);
+  // A bare supported row is still the pre-sensitivity contract (internal).
+  expect(noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { state: 'supported' } })['mcp-inbox']).toEqual({ state: 'supported' });
+});
+
+it('intersects sensitivity ceilings to the lowest host, keeping that host\'s evidence', () => {
+  const claude = createDefaultRegistry().noticeDelivery('claude')!;
+  const lowered: AgentNoticeDeliveryAdvertisement = Object.freeze({
+    ...claude,
+    'next-event': Object.freeze({ sensitivity: 'public' as const, sensitivityEvidence: '2026-09-03: host B echoes hook responses to a shared log.', state: 'supported' as const }),
+    'mcp-inbox': Object.freeze({ state: 'supported' as const }),
+  });
+  const merged = intersectNoticeDeliveryAdvertisements(claude, lowered);
+  expect(merged['next-event']).toEqual({
+    sensitivity: 'public',
+    sensitivityEvidence: '2026-09-03: host B echoes hook responses to a shared log.',
+    state: 'supported',
+  });
+  // An unevidenced bare row is `internal`; the evidenced internal row's evidence survives.
+  expect(merged['mcp-inbox']).toEqual(claude['mcp-inbox']);
+  // Two hosts at the same ceiling keep both pieces of evidence, deduplicated and ordered.
+  const same = intersectNoticeDeliveryAdvertisements(claude, Object.freeze({
+    ...claude,
+    'next-event': Object.freeze({ sensitivity: 'secret' as const, sensitivityEvidence: '2026-09-03: host C, same boundary.', state: 'supported' as const }),
+  }));
+  const claudeNextEvent = claude['next-event'];
+  const claudeEvidence = claudeNextEvent.state === 'supported' ? claudeNextEvent.sensitivityEvidence ?? '' : '';
+  expect(claudeEvidence).toMatch(/2026-09-03/u);
+  expect(same['next-event']).toEqual({
+    sensitivity: 'secret',
+    sensitivityEvidence: [claudeEvidence, '2026-09-03: host C, same boundary.']
+      .sort((first, second) => first.localeCompare(second))
+      .join('; '),
+    state: 'supported',
+  });
+  // Neither host named a ceiling: the bare row survives.
+  const bare = intersectNoticeDeliveryAdvertisements(
+    Object.freeze({ ...claude, 'mcp-inbox': Object.freeze({ state: 'supported' as const }) }),
+    Object.freeze({ ...claude, 'mcp-inbox': Object.freeze({ state: 'supported' as const }) }),
+  );
+  expect(bare['mcp-inbox']).toEqual({ state: 'supported' });
+});
+
 it('intersects host advertisements so a composite only claims routes every host supports', () => {
   const claude = createDefaultRegistry().noticeDelivery('claude')!;
   const partial: AgentNoticeDeliveryAdvertisement = Object.freeze({
@@ -1597,7 +1684,9 @@ it('intersects host advertisements so a composite only claims routes every host 
     'next-event': Object.freeze({ reason: '2026-09-02: host B has no hooks.', state: 'unavailable' as const }),
   });
   const merged = intersectNoticeDeliveryAdvertisements(claude, partial);
-  expect(merged['mcp-inbox']).toEqual({ state: 'supported' });
+  // Both hosts carry Claude's evidenced `internal` inbox ceiling; it survives intact.
+  expect(merged['mcp-inbox']).toEqual(claude['mcp-inbox']);
+  expect(merged['mcp-inbox']).toMatchObject({ sensitivity: 'internal', state: 'supported' });
   expect(merged['mcp-resource-updated']).toEqual({ reason: '2026-09-02: host B drops resources/updated.', state: 'unavailable' });
   expect(merged['next-event']).toEqual({ reason: '2026-09-02: host B has no hooks.', state: 'unavailable' });
   // Both reasons survive, deduplicated and ordered, when both hosts decline.

@@ -52,11 +52,35 @@ export const isCredentialKey = (key: string): boolean => {
 export const isProviderEndpointKey = (key: string): boolean =>
   /^(?:CODEX|OPENAI)_(?:API_BASE|BASE_URL|URL)$/iu.test(key);
 
-const providerCredentialPatterns = Object.freeze([
-  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
-  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
-  /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
-]);
+/**
+ * Pattern sources of the free-text secret pass. The notice ledger in
+ * `@agent-bundle/runtime` (`notices/redaction.ts`, `NOTICE_SECRET_PATTERN_SOURCES`)
+ * carries the same three sources: the runtime is an optional peer of this
+ * package, so neither side can import the other's module, and
+ * `notice-redaction-parity.test.ts` pins them byte-identical instead. Edit
+ * both together.
+ */
+export const CREDENTIAL_TEXT_PATTERN_SOURCES = Object.freeze({
+  assignment: String.raw`((?:["']?)(?:api[-_ ]?key|api[-_ ]?token|access[-_ ]?token|authorization|credential|password|secret|token)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)`,
+  provider: Object.freeze([
+    String.raw`\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b`,
+    String.raw`\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b`,
+    String.raw`\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b`,
+  ]),
+  /**
+   * URL userinfo (`scheme://user:secret@host`): the authority runs until one
+   * of the terminators every WHATWG scheme shares (`/`, `?`, `#`) and the
+   * match is greedy through the final `@`, so a raw `@`, quote, backslash, or
+   * whitespace inside a password cannot leave part of it behind. The scheme is
+   * anchored to the start of its own character run, so a URL glued to an
+   * identifier (`_https://user:secret@…`) is masked too.
+   */
+  urlUserinfo: String.raw`(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@`,
+});
+
+const providerCredentialPatterns = Object.freeze(
+  CREDENTIAL_TEXT_PATTERN_SOURCES.provider.map((source) => new RegExp(source, 'iu')),
+);
 
 // `String.prototype.replace` resets `lastIndex` on global regexes, so sharing these is safe.
 const globalProviderCredentialPatterns = Object.freeze(
@@ -67,16 +91,24 @@ const globalProviderCredentialPatterns = Object.freeze(
 export const containsProviderCredential = (value: string): boolean =>
   providerCredentialPatterns.some((pattern) => pattern.test(value));
 
-const credentialAssignmentPattern = /((?:["']?)(?:api[-_ ]?key|api[-_ ]?token|access[-_ ]?token|authorization|credential|password|secret|token)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n]+)/giu;
+const credentialAssignmentPattern = new RegExp(CREDENTIAL_TEXT_PATTERN_SOURCES.assignment, 'giu');
 
-/** Raw process output remains useful evidence after known credential material is irreversibly removed. */
+/** Masks `scheme://user:secret@host` credentials; shared by the probe and Workbench log surfaces. */
+export const urlUserinfoPattern = new RegExp(CREDENTIAL_TEXT_PATTERN_SOURCES.urlUserinfo, 'giu');
+
+/**
+ * Raw process output remains useful evidence after known credential material
+ * is irreversibly removed. Provider forms go first: an unquoted
+ * `authorization: Bearer <token>` would otherwise lose only the word `Bearer`
+ * to the assignment pass and keep the token.
+ */
 export const redactCredentialText = (value: string): string => {
-  let redacted = value.replace(credentialAssignmentPattern, (_match, prefix: string, assigned: string) => {
-    const quote = assigned[0] === '"' || assigned[0] === "'" ? assigned[0] : '';
-    return `${prefix}${quote}[REDACTED]${quote}`;
-  });
+  let redacted = value;
   for (const pattern of globalProviderCredentialPatterns) {
     redacted = redacted.replace(pattern, '[REDACTED]');
   }
-  return redacted;
+  return redacted.replace(credentialAssignmentPattern, (_match, prefix: string, assigned: string) => {
+    const quote = assigned[0] === '"' || assigned[0] === "'" ? assigned[0] : '';
+    return `${prefix}${quote}[REDACTED]${quote}`;
+  });
 };

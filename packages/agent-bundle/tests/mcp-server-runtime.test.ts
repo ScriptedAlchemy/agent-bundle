@@ -2,12 +2,37 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { describe, expect, it } from '@rstest/core';
 import { z } from 'zod';
 
+import type {
+  AgentNoticeInboxSignaller,
+  AgentNoticeInboxSignalOutcome,
+  AgentNoticePrincipal,
+} from '@agent-bundle/runtime/notices';
+
 import {
   advertisedOutputSchema,
   createGeneratedRouteMcpServer,
   type GeneratedNoticeDeliveryBinding,
+  type GeneratedNoticeInboxSignalOutcome,
+  type GeneratedNoticePrincipal,
   type GeneratedRouteExecutionHost,
 } from '../src/mcp-server-runtime.ts';
+
+/**
+ * The generated server's notice binding is spelled locally so the emitted
+ * `mcp-server-runtime.d.ts` never references the optional
+ * `@agent-bundle/runtime/notices` subpath; these assignments fail to compile
+ * the moment the local shape drifts from the runtime signaller it wraps.
+ */
+describe('GeneratedNoticeDeliveryBinding', () => {
+  it('is the runtime inbox signaller, spelled without the optional peer subpath', () => {
+    const fromRuntime = (signaller: AgentNoticeInboxSignaller): GeneratedNoticeDeliveryBinding => signaller;
+    const outcomeFromRuntime = (outcome: AgentNoticeInboxSignalOutcome): GeneratedNoticeInboxSignalOutcome => outcome;
+    const outcomeToRuntime = (outcome: GeneratedNoticeInboxSignalOutcome): AgentNoticeInboxSignalOutcome => outcome;
+    const principalToRuntime = (principal: GeneratedNoticePrincipal): AgentNoticePrincipal => principal;
+    const principalFromRuntime = (principal: AgentNoticePrincipal): GeneratedNoticePrincipal => principal;
+    expect([fromRuntime, outcomeFromRuntime, outcomeToRuntime, principalToRuntime, principalFromRuntime].every((fn) => typeof fn === 'function')).toBe(true);
+  });
+});
 
 /**
  * The MCP specification requires every result of a tool that declares

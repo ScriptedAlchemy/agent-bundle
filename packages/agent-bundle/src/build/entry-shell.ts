@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
-import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
+import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
 import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
@@ -145,6 +145,8 @@ export interface GeneratedCliBinEntryOptions {
   /** Conventional request context providers, mounted for plain commands in this process (#313). */
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
@@ -170,14 +172,42 @@ const generatedStateImports = (
   ];
 };
 
+/**
+ * Notice ledger policy the generated runtime mounts (#99 acceptance item 7):
+ * the host's delivery advertisement, whose per-route sensitivity ceilings the
+ * ledger honours, and the project's resolved retention policy. Emitted as
+ * literals so the artifact carries the exact policy it was built with.
+ */
+export interface GeneratedNoticePolicy {
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
+}
+
+/** The policy literals, declared once per generated module and referenced by name. */
+const noticePolicyDeclarations = (policy: GeneratedNoticePolicy): readonly string[] => [
+  ...(policy.noticeDelivery === undefined
+    ? []
+    : [`const noticeDeliveryAdvertisement = Object.freeze(${stableJson(policy.noticeDelivery)});`]),
+  ...(policy.noticeRetention === undefined
+    ? []
+    : [`const noticeRetentionPolicy = Object.freeze(${stableJson(policy.noticeRetention)});`]),
+];
+
+const noticePolicyFields = (policy: GeneratedNoticePolicy): string => [
+  ...(policy.noticeDelivery === undefined ? [] : [', noticeDelivery: noticeDeliveryAdvertisement']),
+  ...(policy.noticeRetention === undefined ? [] : [', noticeRetention: noticeRetentionPolicy']),
+].join('');
+
 const generatedStateOwner = (
   state: NormalizedStateDefinition | undefined,
   fallback: GeneratedStateFallback,
+  policy: GeneratedNoticePolicy,
 ): readonly string[] => {
   if (state === undefined) return [];
   if (state.lifetime !== 'workspace-durable') {
     return [
-      `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createMemoryStateDriver({ lifetime: ${JSON.stringify(state.lifetime)} }) });`,
+      ...noticePolicyDeclarations(policy),
+      `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createMemoryStateDriver({ lifetime: ${JSON.stringify(state.lifetime)} })${noticePolicyFields(policy)} });`,
       '',
     ];
   }
@@ -185,8 +215,9 @@ const generatedStateOwner = (
     ? "fileURLToPath(new URL('..', import.meta.url))"
     : "join(process.cwd(), '.agent-bundle')";
   return [
+    ...noticePolicyDeclarations(policy),
     `const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? ${fallbackExpression};`,
-    "const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }) });",
+    `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') })${noticePolicyFields(policy)} });`,
     '',
   ];
 };
@@ -279,7 +310,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    ...generatedStateOwner(options.state, stateFallback),
+    ...generatedStateOwner(options.state, stateFallback, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
     'const routes = Object.freeze({',
@@ -385,6 +416,8 @@ export interface GeneratedRenderedRouteWorkerOptions {
   readonly layouts?: readonly CompiledLayout[];
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
   readonly stateFallback?: GeneratedStateFallback;
@@ -482,7 +515,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...providerImports(providers),
     ...layoutImports(layouts),
     '',
-    ...generatedStateOwner(options.state, stateFallback),
+    ...generatedStateOwner(options.state, stateFallback, options),
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
     "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
@@ -558,6 +591,8 @@ export const generatedRenderedRouteWorkerSource = (
 export interface GeneratedRenderedScriptEntryOptions {
   readonly name: string;
   readonly routeId: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   readonly workerFile: string;
 }
@@ -605,6 +640,8 @@ export interface GeneratedRouteMcpEntryOptions {
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   readonly target?: string;
   readonly workerFile: string;
@@ -619,6 +656,8 @@ export interface GeneratedRouteFlightWorkerOptions {
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
 }
 
@@ -663,6 +702,8 @@ const noticeInboxRecord = (wired: boolean): readonly string[] =>
 
 interface NoticeRouteSelection {
   readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
 }
 
@@ -706,11 +747,14 @@ const noticeDeliveryImports = (wired: boolean): readonly string[] =>
     ]
     : [];
 
-const noticeDeliveryOwner = (wired: boolean): readonly string[] =>
+const noticeDeliveryOwner = (wired: boolean, policy: GeneratedNoticePolicy): readonly string[] =>
   wired
     ? [
+      ...noticePolicyDeclarations(policy),
       "const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
-      "const noticeDelivery = createNoticeInboxSignaller({ store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable' }) });",
+      `const noticeDelivery = createNoticeInboxSignaller({ ${
+        policy.noticeDelivery === undefined ? '' : 'delivery: noticeDeliveryAdvertisement, '
+      }store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable'${noticePolicyFields(policy)} }) });`,
       '',
     ]
     : [];
@@ -821,7 +865,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    ...generatedStateOwner(options.state, 'artifact'),
+    ...generatedStateOwner(options.state, 'artifact', options),
     ...providerRegistrySource(providers),
     ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
@@ -1005,7 +1049,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...noticeInboxRecord(wiresInbox),
     '});',
     '',
-    ...noticeDeliveryOwner(wiresResourceUpdated),
+    ...noticeDeliveryOwner(wiresResourceUpdated, options),
     ...(hasEvents
       ? [
           // The endpoint identity is artifact-location dependent, so it stays

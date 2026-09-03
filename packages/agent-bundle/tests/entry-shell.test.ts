@@ -10,6 +10,7 @@ import { claudeAdapter } from '../src/adapters/claude.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
+import { stableJson } from '../src/core/digest.ts';
 import {
   generatedExecutableEntrySource,
   generatedRenderedScriptEntrySource,
@@ -1025,8 +1026,24 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durableEntry).toContain("import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';");
   expect(durableEntry).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';");
   expect(durableEntry).toContain("const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
-  expect(durableEntry).toContain("createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable' })");
+  // The host's advertisement is declared once and handed to both the ledger
+  // (whose sensitivity ceilings it carries) and the signaller (#99 item 7).
+  expect(durableEntry).toContain(`const noticeDeliveryAdvertisement = Object.freeze(${stableJson(claudeAdapter.noticeDelivery)});`);
+  expect(durableEntry).toContain("createNoticeInboxSignaller({ delivery: noticeDeliveryAdvertisement, store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable', noticeDelivery: noticeDeliveryAdvertisement }) })");
+  expect(durableEntry).not.toContain('noticeRetentionPolicy');
   expect(durableEntry).toContain('  notices: noticeDelivery,');
+  // A declared `notices.retention` travels as one frozen literal too.
+  const retainingEntry = entryShellModule.generatedRouteMcpEntrySource({
+    noticeDelivery: claudeAdapter.noticeDelivery!,
+    noticeRetention: { maxJournalBytes: 1024, maxTerminal: 3, terminalTtlMs: 60_000 },
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+    serverName: 'curator',
+    state: state('workspace-durable'),
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(retainingEntry).toContain('const noticeRetentionPolicy = Object.freeze({"maxJournalBytes":1024,"maxTerminal":3,"terminalTtlMs":60000});');
+  expect(retainingEntry).toContain("lifetime: 'workspace-durable', noticeDelivery: noticeDeliveryAdvertisement, noticeRetention: noticeRetentionPolicy })");
   // The server process never evaluates the project's own state definition.
   expect(durableEntry).not.toContain('import stateDefinition from');
   expect(durableEntry).not.toContain('createGeneratedRuntimeState');

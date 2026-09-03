@@ -123,6 +123,8 @@ export type {
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
+  AgentBundleNoticeRetentionConfig,
+  AgentBundleNoticesConfig,
   AgentBundlePayloadConfig,
   AgentBundlePayloadEntry,
   AgentBundlePayloadInput,

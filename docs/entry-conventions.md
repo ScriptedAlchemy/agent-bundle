@@ -182,6 +182,38 @@ whose table marks the route unavailable has no consumer for the signal, so
 those servers register no subscription handlers and advertise no subscribe
 capability.
 
+#### Notice redaction and retention
+
+The generated ledger honours two policies the artifact carries as literals
+(#99 acceptance item 7). The host's `noticeDelivery` advertisement is
+declared once per generated module (`noticeDeliveryAdvertisement`) and passed
+to both the worker's `createGeneratedRuntimeState` and the server's
+`createGeneratedNoticeRuntime` / `createNoticeInboxSignaller`: each supported
+row may name a `sensitivity` ceiling (`public | internal | secret`, absent
+means `internal`) with dated `sensitivityEvidence`, and the ledger withholds a
+notice whose author-declared `sensitivity` exceeds the ceiling of the route
+about to carry it — the inbox omits it, event admission neither authorizes nor
+attempts it, the signaller never announces it — recording the refusal on the
+notice (`withheld[route]`) instead of moving its state. `internal` content
+(the default) is passed through the runtime's secret-pattern redaction on
+every route before it leaves the store; `public` travels as authored;
+`secret` travels as authored only where the row admits it. The built-in hosts
+admit `secret` on `current-response` and `next-event` and `internal` on
+`mcp-inbox` and `mcp-resource-updated`; the pinned tables carry the dated
+evidence and the generated notice reference page renders it.
+
+`notices.retention` in `agent-bundle.config.ts` (`terminalTtl`, `maxTerminal`,
+`maxJournalBytes`; `AB4829` when malformed or declared without `src/state.ts`)
+resolves over the runtime defaults (`7d`, `500`, `16777216`) and is emitted as
+`noticeRetentionPolicy` into every generated module that mounts the ledger, so
+the MCP worker, the server process, the routed CLI bin, and rendered scripts
+prune the same way: settled terminal notices past the TTL (or beyond the cap)
+leave the ledger state on the next admitted event, and the store's journal is
+compacted onto its head once it exceeds the byte bound. `inspect --state`
+reports the resolved policy and whether it was declared or defaulted (the
+Workbench State panel shows the same); live counts and the last compaction are
+facts of one installed store, read through `AgentNoticeLedger.inspect()`.
+
 #### State mutation budgets
 
 `defineState({ ... })` accepts an optional `budgets` runtime policy. Omitted

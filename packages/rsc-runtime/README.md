@@ -321,6 +321,108 @@ availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
 cross-request routes from a per-host advertisement and returns a typed
 unavailable outcome when none is supported; it never fabricates a channel.
 
+### Redaction (#99 acceptance item 7)
+
+A notice's free text lives only in its detached `AgentDocumentSnapshot` —
+`text`, `markdown`, `context`, `progress.message`, `error.message`,
+`resource.name`/`uri`, and every string inside `json.value`, `result.metadata`,
+and the document `value`. Recipient, priority, dedupe key, timestamps, and
+receipts are identity and evidence, never prose; hosts receive them unredacted
+and they must not carry secrets. The store keeps content exactly as authored;
+redaction happens on egress, per route.
+
+`publish()` accepts `sensitivity: 'public' | 'internal' | 'secret'` (default
+`internal`, persisted explicitly on new notices; notices journaled before the
+contract have no class and are `internal`):
+
+- `public` — safe for any surface; delivered as authored.
+- `internal` — for the recipient's own context; every route passes it through
+  `redactSecretText()` first, so a credential pasted into a coordination
+  message never crosses into another actor's context.
+- `secret` — delivered as authored, but only over a route whose host row
+  admits `secret`; otherwise it never leaves the store through that route.
+
+Each route has a structural shape (`AGENT_NOTICE_ROUTE_SHAPES`): `mcp-inbox`,
+`next-event`, `current-response`, and `directed-push` carry the document
+(`body`); `host-toast` carries one bounded line (`title`, `noticeTitle()`);
+`mcp-resource-updated` carries only the inbox URI (`signal`). A supported route
+in an `AgentNoticeDeliveryAdvertisement` may name `sensitivity`, the most
+sensitive class it carries in full, with dated `sensitivityEvidence`; an
+absent ceiling means `internal`, the pre-sensitivity contract, so `secret`
+notices are withheld everywhere until a host row says otherwise.
+`resolveNoticeDisclosure(route, sensitivity, advertisement)` is the whole
+decision: `withheld` (`route-unavailable` or `sensitivity-exceeds-route`) or
+`disclosed` with `shape` and `redacted`. `createAgentNoticeLedger(store, {
+delivery })` and `createNoticeInboxSignaller({ delivery })` take the host's
+advertisement: `inbox()` omits withheld notices and hands out disclosed content
+(the inbox resource projection reports `sensitivity` and
+`disclosure.redacted`), event admission neither authorizes nor attempts a
+withheld notice, `read()` deliveries carry `disclosure` and the disclosed
+`content`, and the signaller never sends `resources/updated` for a notice the
+inbox would withhold. Every refusal is durable evidence, not a state change:
+the notice records `withheld[route] = { count, firstAt, lastAt, reason }` and
+stays eligible for a route whose row admits it. The built-in hosts admit
+`secret` on `current-response` and `next-event` (the hook response returns to
+the recipient's own host process) and `internal` on `mcp-inbox` and
+`mcp-resource-updated` (transport-derived identity the host does not
+authenticate to the plugin); `portable` has only the MCP routes.
+
+The secret pass (`redactSecretText()`, `redactNoticeDocument()`) masks
+credential assignments (`token: …`, `password=…`), recognizable provider
+tokens, and URL userinfo with `[REDACTED]`, the same patterns the compiler's
+credential and probe redaction use; `NOTICE_SECRET_PATTERN_SOURCES` is pinned
+byte-identical to the compiler copy by test because the runtime is an optional
+peer and cannot share the module. Paths are not redacted: coordination
+notices legitimately name files.
+
+### Retention (#99 acceptance item 7)
+
+Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
+`attempted` with an exhausted retry budget (`noticeSettledAt()`) — no longer
+stay in the ledger forever. `createAgentNoticeLedger(store, { retention })`
+takes an `AgentNoticeRetentionPolicy` (`resolveNoticeRetentionPolicy()`
+validates it; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`: `terminalTtlMs`
+seven days, `maxTerminal` 500, `maxJournalBytes` 16 MiB). Generated runtimes
+resolve it from the project's `notices.retention` config (`AB4829` when
+malformed). `retain({ at, idempotencyKey })` applies it once: settled notices
+older than the TTL, plus the earliest-settled beyond the cap, leave the state
+through one `pruned` event (the reducer skips any id that is live again, so a
+stale decision can never drop a pending notice, and records
+`retention = { lastPrunedAt, pruneRuns, prunedTotal }` on the state and
+snapshot); then, when the store's retained journal exceeds `maxJournalBytes`,
+the journal is compacted (`store.compact()`). Event admission runs the same
+pass after it commits, under a per-invocation key, so retention rides
+admitted events only — V1 implies no timer — and the prune key is
+content-addressed on the selected ids, so a retry that selects the same set
+replays and one that selects a different set commits its own decision instead
+of an idempotency conflict. `inspect()` reports the policy, live counts by
+state, the number of terminal notices, the retention summary, and the store's
+`AgentStateJournalInspection`; it never returns content. A process killed
+between the prune and the compaction leaves a pruned state over an unfolded
+journal, which the next pass finishes; a compaction over an already-compact
+journal is a no-op with no new revision.
+
+Journal compaction is a state-kernel operation (`AgentStateStore.compact()`,
+`AgentStateStore.inspect()`), available on both drivers and pinned by the
+conformance suite: the head is materialized as a `compact` baseline record
+that takes the next revision, every earlier record is deleted, exact reads
+below the baseline become `revision-unavailable` (as below a migration), the
+change cursor delivers the baseline as a `compact` discontinuity so a
+subscriber positioned before it re-reads, and the idempotency keys of the
+deleted records are remembered without their results — replaying one is
+`revision-unavailable` (the commit happened; its result is gone) and reusing
+one with a different input is still `idempotency-conflict`. On SQLite the
+baseline insert, key bookkeeping, delete, head update, and the kernel-format
+bump commit in one `BEGIN IMMEDIATE` transaction under `synchronous = FULL`,
+so a writer killed mid-compaction leaves the full journal or the compacted
+one, never a journal missing records its head needs; concurrent processes
+serialize on the database lock and reopen through the same head-vs-replay
+check. The first compaction moves a store to kernel format 2, which a
+pre-compaction kernel refuses with a typed `corrupt` error rather than
+misreading the truncated journal; a store that was never compacted stays
+readable by both. The `maxRevisions` budget still counts absolute revisions:
+compaction bounds bytes and terminal history, not the revision counter.
+
 ## License
 
 Apache License 2.0. The published tarball carries the repository

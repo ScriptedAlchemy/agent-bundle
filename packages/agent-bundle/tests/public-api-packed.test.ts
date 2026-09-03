@@ -176,6 +176,17 @@ it('imports the externalized config entry from a packed npm consumer', async () 
         : '';
       throw new Error(`Packed config typecheck failed.\nstdout:\n${stdout}\nstderr:\n${stderr}`, { cause: error });
     }
+    // The aliased artifact runtime's declarations must stay self-contained
+    // for a consumer without the optional runtime peer's `notices` subpath
+    // (#99 close-out): its notice binding is spelled locally, so no public or
+    // aliased declaration resolves through `@agent-bundle/runtime/notices`.
+    const installedDist = join(consumerRoot, 'node_modules', 'agent-bundle', 'dist');
+    for (const declaration of ['mcp-server-runtime.d.ts', 'api.d.ts', 'index.d.ts', 'adapters/notice-delivery.d.ts', 'adapters/types.d.ts']) {
+      const text = await readFile(join(installedDist, declaration), 'utf8');
+      expect(text, declaration).not.toContain('@agent-bundle/runtime/notices');
+    }
+    const aliasedRuntime = await readFile(join(installedDist, 'mcp-server-runtime.d.ts'), 'utf8');
+    expect(aliasedRuntime).toContain('GeneratedNoticeDeliveryBinding');
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }

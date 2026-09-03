@@ -8,6 +8,8 @@ import {
   type AgentNoticeLedger,
   type AgentNoticePrincipal,
 } from './contract.js';
+import { AGENT_NOTICE_DEFAULT_SENSITIVITY } from './redaction.js';
+import { resolveNoticeDisclosure, type AgentNoticeDeliveryAdvertisement } from './router.js';
 import { recipientMatchesPrincipal } from './state.js';
 
 /** Consecutive compare-and-swap losses tolerated before a reservation reports failure. */
@@ -42,6 +44,13 @@ export interface CreateNoticeInboxSignallerOptions {
    * its hold lapses after the reservation TTL. Defaults to 5 seconds.
    */
   readonly closeTimeoutMs?: number;
+  /**
+   * The host's notice delivery advertisement. A notice the inbox route would
+   * withhold (its sensitivity exceeds the `mcp-inbox` or `mcp-resource-updated`
+   * ceiling) is never signalled: a refetch that shows nothing would leak only
+   * that something was withheld. Absent means every route admits `internal`.
+   */
+  readonly delivery?: AgentNoticeDeliveryAdvertisement;
   /** Clock injection for deterministic tests. */
   readonly now?: () => Date;
   /**
@@ -132,10 +141,18 @@ interface PendingReceipt {
   readonly reservationKey: string;
 }
 
+/** The signal and the inbox it points at must both admit the notice's class. */
+const disclosable = (notice: AgentNotice, advertisement: AgentNoticeDeliveryAdvertisement | undefined): boolean => {
+  const sensitivity = notice.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY;
+  return resolveNoticeDisclosure('mcp-resource-updated', sensitivity, advertisement).kind === 'disclosed'
+    && resolveNoticeDisclosure('mcp-inbox', sensitivity, advertisement).kind === 'disclosed';
+};
+
 const eligibleForSignal = (
   notice: AgentNotice,
   principal: AgentNoticePrincipal,
   nowMs: number,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
 ): boolean => {
   switch (notice.state) {
     case 'pending':
@@ -163,7 +180,7 @@ const eligibleForSignal = (
   if (reservation !== undefined && Date.parse(reservation.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > nowMs) {
     return false;
   }
-  return recipientMatchesPrincipal(notice.recipient, principal);
+  return disclosable(notice, advertisement) && recipientMatchesPrincipal(notice.recipient, principal);
 };
 
 export const createNoticeInboxSignaller = (
@@ -250,7 +267,7 @@ export const createNoticeInboxSignaller = (
       const at = now().toISOString();
       const nowMs = Date.parse(at);
       const noticeIds = Object.freeze(snapshot.notices
-        .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs))
+        .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs, options.delivery))
         .map((notice) => notice.id)
         .toSorted((left, right) => left.localeCompare(right)));
       if (noticeIds.length === 0) return { kind: 'nothing-eligible', revision: snapshot.revision };

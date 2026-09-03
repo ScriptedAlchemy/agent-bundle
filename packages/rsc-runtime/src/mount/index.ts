@@ -1,7 +1,10 @@
 import {
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
+  type AgentNoticeDeliveryAdvertisement,
   type AgentNoticeLedger,
+  type AgentNoticeRetentionInput,
+  resolveNoticeRetentionPolicy,
 } from '../notices/index.js';
 import {
   AgentStateError,
@@ -14,10 +17,20 @@ import {
   type AgentStateStore,
 } from '../state/index.js';
 
+/**
+ * Notice ledger policy a generated runtime mounts beside the project state:
+ * the host's delivery advertisement (whose per-route `sensitivity` ceilings
+ * the ledger honours) and the project's retention overrides.
+ */
+export interface GeneratedNoticePolicyOptions {
+  readonly noticeDelivery?: AgentNoticeDeliveryAdvertisement;
+  readonly noticeRetention?: AgentNoticeRetentionInput;
+}
+
 export interface CreateGeneratedRuntimeStateOptions<
   TState,
   TEvents extends AgentStateEventSchemas,
-> {
+> extends GeneratedNoticePolicyOptions {
   readonly definition: AgentStateDefinition<TState, TEvents>;
   readonly driver: AgentStateDriver;
 }
@@ -52,7 +65,7 @@ export interface GeneratedRuntimeState<
   ): Promise<GeneratedRuntimeRequestBindings<TState, TEvents>>;
 }
 
-export interface CreateGeneratedNoticeRuntimeOptions {
+export interface CreateGeneratedNoticeRuntimeOptions extends GeneratedNoticePolicyOptions {
   readonly driver: AgentStateDriver;
   readonly lifetime: AgentStateLifetime;
 }
@@ -82,6 +95,7 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
   const reject = async <T>(): Promise<T> => Promise.reject(failure);
   return Object.freeze({
     expire: reject,
+    inspect: reject,
     openRequest: async () => Object.freeze({
       close: () => undefined,
       handle: Object.freeze({
@@ -94,6 +108,7 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
     read: reject,
     releaseAvailability: reject,
     reserveAvailability: reject,
+    retain: reject,
     signalAvailability: reject,
     withdraw: reject,
   });
@@ -108,9 +123,14 @@ const generatedNoticeAuthorizer = { authorize: () => ({ state: 'authorized' as c
 
 type NoticeStore = Parameters<typeof createAgentNoticeLedger>[0];
 
-const ledgerFrom = (result: OpenResult<NoticeStore>): AgentNoticeLedger => result.kind === 'opened'
-  ? createAgentNoticeLedger(result.value, generatedNoticeAuthorizer)
-  : failedLedger(result.error);
+const ledgerFrom = (result: OpenResult<NoticeStore>, policy: GeneratedNoticePolicyOptions): AgentNoticeLedger =>
+  result.kind === 'opened'
+    ? createAgentNoticeLedger(result.value, {
+      ...generatedNoticeAuthorizer,
+      ...(policy.noticeDelivery === undefined ? {} : { delivery: policy.noticeDelivery }),
+      ...(policy.noticeRetention === undefined ? {} : { retention: policy.noticeRetention }),
+    })
+    : failedLedger(result.error);
 
 interface StoreSlot<TSlotState, TSlotEvents extends AgentStateEventSchemas> {
   open(): Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>>;
@@ -223,13 +243,16 @@ export const createGeneratedRuntimeState = <
   const shared = definition.lifetime !== 'request';
   const projectSlot = owner.createSlot(definition);
   const noticeSlot = owner.createSlot(agentNoticeStateDefinition(definition.lifetime));
+  // The retention policy is validated once, when the runtime is created, so a
+  // malformed override fails the process at startup rather than the first request.
+  resolveNoticeRetentionPolicy(options.noticeRetention);
 
   return Object.freeze({
     close: owner.close,
 
     async noticeLedger(): Promise<AgentNoticeLedger> {
       if (!shared) return requestLifetimeLedger();
-      return ledgerFrom(await noticeSlot.open());
+      return ledgerFrom(await noticeSlot.open(), options);
     },
 
     async requestBindings(
@@ -243,7 +266,7 @@ export const createGeneratedRuntimeState = <
       const state = project.kind === 'opened'
         ? createAgentStateHandle(project.value, bindingOptions)
         : failedHandle<TState, TEvents>(definition.lifetime, project.error);
-      const noticeLedger = ledgerFrom(notices);
+      const noticeLedger = ledgerFrom(notices, options);
       let released = false;
       return Object.freeze({
         noticeLedger,
@@ -270,11 +293,12 @@ export const createGeneratedNoticeRuntime = (
   const owner = createStoreOwner(options.driver);
   const shared = options.lifetime !== 'request';
   const noticeSlot = owner.createSlot(agentNoticeStateDefinition(options.lifetime));
+  resolveNoticeRetentionPolicy(options.noticeRetention);
   return Object.freeze({
     close: owner.close,
     async noticeLedger(): Promise<AgentNoticeLedger> {
       if (!shared) return requestLifetimeLedger();
-      return ledgerFrom(await noticeSlot.open());
+      return ledgerFrom(await noticeSlot.open(), options);
     },
   });
 };

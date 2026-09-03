@@ -4,9 +4,11 @@ import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.t
 import { featureCapabilityName } from '../core/components.ts';
 import {
   NOTICE_DELIVERY_ROUTES,
+  NOTICE_SENSITIVITIES,
   type NoticeDeliveryAdvertisement,
   type NoticeDeliveryRoute,
   type NoticeDeliveryRouteState,
+  type NoticeSensitivity,
 } from './notice-delivery.ts';
 import type { TargetAdapterMetadata } from './types.ts';
 
@@ -88,9 +90,22 @@ export interface CapabilityTableRow {
 
 export interface NoticeDeliveryCapabilityTableEntry {
   readonly reason?: string;
+  /** The most sensitive notice class the route carries in full; JSON widens the literal. */
+  readonly sensitivity?: string;
+  /** Dated evidence for `sensitivity`; required whenever a ceiling is named. */
+  readonly sensitivityEvidence?: string;
   /** JSON imports widen literals; unknown table states fail closed below. */
   readonly state: string;
 }
+
+const sensitivityRank: Readonly<Record<NoticeSensitivity, number>> = Object.freeze({ internal: 1, public: 0, secret: 2 });
+
+/** The ceiling a supported row admits; absent means `internal` (the pre-sensitivity contract). */
+const routeCeiling = (entry: NoticeDeliveryRouteState): NoticeSensitivity | undefined =>
+  entry.state === 'supported' ? entry.sensitivity ?? 'internal' : undefined;
+
+const isNoticeSensitivity = (value: unknown): value is NoticeSensitivity =>
+  typeof value === 'string' && (NOTICE_SENSITIVITIES as readonly string[]).includes(value);
 
 /**
  * An `unavailable` notice route must say when the host was surveyed: the
@@ -170,8 +185,24 @@ export const noticeDeliveryAdvertisementFrom = (
       throw new CapabilityStateError(`The pinned ${target} table advertises no notice delivery route ${route}.`);
     }
     switch (row.state) {
-      case 'supported':
-        return [route, Object.freeze({ state: 'supported' })];
+      case 'supported': {
+        if (row.sensitivity === undefined) return [route, Object.freeze({ state: 'supported' })];
+        if (!isNoticeSensitivity(row.sensitivity)) {
+          throw new CapabilityStateError(
+            `Unsupported notice sensitivity ${JSON.stringify(row.sensitivity)} for ${route} in the pinned ${target} table.`,
+          );
+        }
+        if (typeof row.sensitivityEvidence !== 'string' || !DATED_REASON.test(row.sensitivityEvidence)) {
+          throw new CapabilityStateError(
+            `The pinned ${target} table names a ${row.sensitivity} sensitivity ceiling for notice delivery route ${route} without dated evidence (an ISO date such as 2026-09-03 naming when the host was surveyed).`,
+          );
+        }
+        return [route, Object.freeze({
+          sensitivity: row.sensitivity,
+          sensitivityEvidence: row.sensitivityEvidence,
+          state: 'supported',
+        })];
+      }
       case 'unavailable':
         if (typeof row.reason !== 'string' || !DATED_REASON.test(row.reason)) {
           throw new CapabilityStateError(
@@ -192,20 +223,39 @@ export const noticeDeliveryAdvertisementFrom = (
  * Intersects host advertisements for a composite adapter: a route is
  * supported only where every host supports it, and the dated reasons of the
  * hosts that do not are kept so the composite stays as honest as its parts.
+ * A supported route's sensitivity ceiling is the lower of the two, with the
+ * evidence of the host that set it; two hosts at the same ceiling keep both
+ * pieces of evidence.
  */
 export const intersectNoticeDeliveryAdvertisements = (
   left: NoticeDeliveryAdvertisement,
   right: NoticeDeliveryAdvertisement,
 ): NoticeDeliveryAdvertisement => Object.freeze(Object.fromEntries(
   NOTICE_DELIVERY_ROUTES.map((route): [NoticeDeliveryRoute, NoticeDeliveryRouteState] => {
-    const reasons = [left[route], right[route]]
-      .flatMap((entry) => (entry.state === 'unavailable' ? [entry.reason] : []));
-    return reasons.length === 0
-      ? [route, Object.freeze({ state: 'supported' })]
-      : [route, Object.freeze({
+    const entries = [left[route], right[route]];
+    const reasons = entries.flatMap((entry) => (entry.state === 'unavailable' ? [entry.reason] : []));
+    if (reasons.length > 0) {
+      return [route, Object.freeze({
         reason: [...new Set(reasons)].sort((first, second) => first.localeCompare(second)).join('; '),
         state: 'unavailable',
       })];
+    }
+    const ceilings = entries.map((entry) => routeCeiling(entry) ?? 'internal');
+    const lowest = ceilings.reduce((low, ceiling) => (sensitivityRank[ceiling] < sensitivityRank[low] ? ceiling : low));
+    const evidence = [...new Set(entries.flatMap((entry) =>
+      entry.state === 'supported' && (entry.sensitivity ?? 'internal') === lowest && entry.sensitivityEvidence !== undefined
+        ? [entry.sensitivityEvidence]
+        : []))].sort((first, second) => first.localeCompare(second));
+    // An `internal` ceiling nobody evidenced is the bare pre-sensitivity row;
+    // a named ceiling always travels with the evidence of the host that set it.
+    if (evidence.length === 0) {
+      return [route, Object.freeze({ state: 'supported' })];
+    }
+    return [route, Object.freeze({
+      sensitivity: lowest,
+      sensitivityEvidence: evidence.join('; '),
+      state: 'supported',
+    })];
   }),
 )) as NoticeDeliveryAdvertisement;
 

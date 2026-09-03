@@ -23,9 +23,11 @@ import type {
 import type { LineageHost } from '@agent-bundle/runtime';
 import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
-import type { AgentNoticeInboxSignaller, AgentNoticePrincipal } from '@agent-bundle/runtime/notices';
 import type { ReactNode } from 'react';
 
+import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
+import type { NormalizedNoticeRetentionPolicy } from '../core/types.ts';
+import type { GeneratedNoticeDeliveryBinding, GeneratedNoticePrincipal } from '../mcp-server-runtime.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts';
@@ -83,6 +85,15 @@ export interface InMemoryMcpSessionOptionsBase<
   readonly state?: {
     readonly definition: AgentStateDefinition<TState, TEvents>;
     readonly driver: AgentStateDriver;
+    /**
+     * The host advertisement the generated runtime would mount (a
+     * `TargetAdapter.noticeDelivery` value): its per-route sensitivity
+     * ceilings decide what the inbox discloses. Absent means every route
+     * admits `internal`, exactly as a generated artifact without one.
+     */
+    readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+    /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+    readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   };
 }
 
@@ -250,16 +261,16 @@ const drain = async (stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> 
 };
 
 const withContextIdentity = (
-  signaller: AgentNoticeInboxSignaller,
+  signaller: GeneratedNoticeDeliveryBinding,
   context: RenderRouteContext,
-): AgentNoticeInboxSignaller => Object.freeze({
+): GeneratedNoticeDeliveryBinding => Object.freeze({
   inboxUri: signaller.inboxUri,
   get subscribed(): boolean {
     return signaller.subscribed;
   },
   close: () => signaller.close(),
   observe: (send: () => Promise<void>) => signaller.observe(send),
-  subscribe: (principal: AgentNoticePrincipal) => signaller.subscribe({
+  subscribe: (principal: GeneratedNoticePrincipal) => signaller.subscribe({
     actor: context.actor ?? principal.actor,
     host: context.host ?? principal.host,
     session: context.session ?? principal.session,
@@ -441,6 +452,7 @@ export const openInMemoryMcpServer = async <
   const notices = runtimeState === undefined || options.state?.definition.lifetime !== 'workspace-durable'
     ? undefined
     : withContextIdentity(dependencies.createNoticeInboxSignaller({
+      ...(options.state.noticeDelivery === undefined ? {} : { delivery: options.state.noticeDelivery }),
       store: { close: async () => undefined, noticeLedger: () => runtimeState.noticeLedger() },
     }), context);
   const server = await dependencies.createGeneratedRouteMcpServer({

@@ -201,6 +201,7 @@ const mcpEntryEntries = async (
       ? undefined
       : generatedRouteMcpEntrySource({
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+        ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
         plugin: { name: model.metadata.name, version: model.metadata.version },
         routes: generatedRoutes,
         serverName,
@@ -256,6 +257,7 @@ const mcpEntryEntries = async (
             artifactEpoch: generatedRouteArtifactEpoch({ name: model.metadata.name, version: model.metadata.version }),
             layouts: model.layouts ?? [],
             ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+            ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
             providers: model.providers ?? [],
             routes: generatedRoutes,
             serverName,

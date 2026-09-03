@@ -191,6 +191,10 @@ const messages = {
       'A notice is an entry in the append-only notice ledger co-mounted with project state (the reserved store id `@agent-bundle/runtime/agent-notice-ledger/v1`). It targets a recipient and moves only through evidenced states — `pending`, `attempted`, `acknowledged`, `expired`, `unavailable`, `withdrawn`. Delivery is attempted through the channels below, and a generated MCP server wires each cross-request route only where its host advertises it: the recipient-scoped inbox resource `agent-bundle://notices/inbox` is registered for stateful projects on hosts advertising `mcp-inbox` (every built-in host), and `resources/subscribe` plus one `notifications/resources/updated` per newly eligible pending notice is offered only where the host additionally advertises `mcp-resource-updated` and the state lifetime is workspace-durable — recorded on the ledger as an availability receipt, never a delivery claim. No host delivery is claimed without a supported channel.',
     noticeChannels: 'Delivery channels',
     unavailableChannels: 'Why a channel is unavailable',
+    sensitivityCeilings: 'Sensitivity ceilings',
+    sensitivityIntro:
+      'Every notice carries an author-declared `sensitivity` — `public`, `internal` (the default), or `secret`. A supported channel names the most sensitive class it carries in full, with the dated evidence for that ceiling; a channel without a named ceiling admits `internal`. A notice above a channel\'s ceiling is withheld from that channel and the refusal is recorded on the notice; `internal` content is passed through the secret-pattern redaction before it leaves the store, `public` content travels as authored, and `secret` content travels as authored only where a channel admits it.',
+    sensitivityEvidence: 'Ceiling evidence',
     diagnosticsTitle: 'Diagnostics reference',
     diagnosticsDescription:
       'Every agent-bundle diagnostic code family, severity, trigger, and recovery hint, copied at build time from the repository diagnostics contract.',
@@ -264,6 +268,10 @@ const messages = {
       '通知是与项目状态共同挂载的只追加通知账本中的一条记录（保留的存储 id 为 `@agent-bundle/runtime/agent-notice-ledger/v1`）。它面向一个接收者，并且只会经历有证据的状态——`pending`、`attempted`、`acknowledged`、`expired`、`unavailable`、`withdrawn`。投递通过下列通道尝试，生成的 MCP 服务器只在宿主宣告了某条跨请求路由时才接线：按接收者限定的收件箱资源 `agent-bundle://notices/inbox` 会为宣告 `mcp-inbox` 的宿主（所有内置宿主）上的有状态项目注册；只有当宿主还宣告了 `mcp-resource-updated` 且 state 生命周期为工作区持久时，才提供 `resources/subscribe` 以及每条新近可用的待处理通知一次 `notifications/resources/updated`——它以可用性回执记录在账本上，绝不是投递声明。没有受支持的通道时，绝不声称已投递到宿主。',
     noticeChannels: '投递通道',
     unavailableChannels: '通道不可用的原因',
+    sensitivityCeilings: '敏感度上限',
+    sensitivityIntro:
+      '每条通知都带有作者声明的 `sensitivity`——`public`、`internal`（默认）或 `secret`。受支持的通道会声明它能完整承载的最高敏感类别，并附上该上限的带日期证据；未声明上限的通道接受 `internal`。高于通道上限的通知会被该通道拒绝，且拒绝会记录在通知上；`internal` 内容在离开存储前会经过密钥模式脱敏，`public` 内容按作者原文传递，`secret` 内容仅在通道允许时按原文传递。',
+    sensitivityEvidence: '上限证据',
     diagnosticsTitle: '诊断参考',
     diagnosticsDescription:
       'agent-bundle 的全部诊断代码族、严重级别、触发条件与恢复提示，在构建时从仓库诊断契约复制而来。',
@@ -609,6 +617,49 @@ function renderNotices(hosts: readonly HostCapabilityTable[], m: Messages): stri
         code(channel),
         ...hosts.map(host => stateCell(capabilityRow(asObject(host.data.noticeDelivery)[channel]), m)),
       ]),
+    ),
+  );
+
+  sections.push(`## ${m.sensitivityCeilings}\n`);
+  sections.push(m.sensitivityIntro);
+  sections.push(
+    table(
+      [m.headers.channel, ...hosts.map(hostHeader)],
+      channels.map(channel => [
+        code(channel),
+        ...hosts.map(host => {
+          const row = asObject(asObject(host.data.noticeDelivery)[channel]);
+          if (row.state !== 'supported') return '—';
+          return code(typeof row.sensitivity === 'string' ? row.sensitivity : 'internal');
+        }),
+      ]),
+    ),
+  );
+  const ceilingEvidence = new Map<string, { readonly channel: string; readonly hosts: string[] }>();
+  for (const host of hosts) {
+    for (const [channel, value] of Object.entries(asObject(host.data.noticeDelivery))) {
+      const row = asObject(value);
+      if (row.state !== 'supported' || typeof row.sensitivityEvidence !== 'string') continue;
+      const key = `${channel}\u0000${row.sensitivityEvidence}`;
+      const existing = ceilingEvidence.get(key);
+      if (existing !== undefined) {
+        existing.hosts.push(host.host);
+      } else {
+        ceilingEvidence.set(key, { channel, hosts: [host.host] });
+      }
+    }
+  }
+  sections.push(`### ${m.sensitivityEvidence}\n`);
+  sections.push(
+    table(
+      [m.headers.channel, m.headers.hosts, m.headers.reason],
+      [...ceilingEvidence.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [
+          code(entry.channel),
+          entry.hosts.map(code).join(', '),
+          escapeProse(key.split('\u0000')[1] ?? ''),
+        ]),
     ),
   );
 
