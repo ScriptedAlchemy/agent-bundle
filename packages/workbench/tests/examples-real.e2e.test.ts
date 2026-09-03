@@ -598,10 +598,10 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     // The co-mounted notice ledger's retention policy (#99 item 7): the
     // curator declares none, so the runtime defaults are shown as such.
     await expect(state).toContainText('Notice retention', { timeout: browserTimeout });
-    await expect(state.locator('.route-state-retention')).toContainText('defaults');
-    await expect(state.locator('.route-state-retention')).toContainText('7d (604800000ms)');
-    await expect(state.locator('.route-state-retention')).toContainText('500');
-    await expect(state.locator('button, input, select, textarea')).toHaveCount(0);
+    await expect(state.locator('.route-state-retention')).toContainText('defaults', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('7d (604800000ms)', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('500', { timeout: browserTimeout });
+    await expect(state.locator('button, input, select, textarea')).toHaveCount(0, { timeout: browserTimeout });
 
     // One generated server owns every MCP kind the curator declares, so each
     // kind must appear as its own server-scoped group rather than a flat list.
