@@ -1949,12 +1949,12 @@ const validateConventionalScripts = (
         // one module exactly when it exports both; the detection is the
         // build's own export scan, so the gate and the envelope always agree.
         if (binNames === undefined) break;
-        // The component contract is the same static scan the route compiler
-        // applies (an async default function), not mere default-export
-        // presence: `export default {}` would build and fail at run time.
-        const exports = renderedScriptExports(route.source, relativePath);
-        const hasMain = exports?.named.has('main') === true;
-        const hasComponent = exports?.asyncDefault === true;
+        // `main` is judged by the bin envelope's own scan (which ignores
+        // type-only exports); the component by the route compiler's scan (an
+        // async default function, not mere default-export presence, since
+        // `export default {}` would build and fail at run time).
+        const hasMain = scriptEntryExports(route.source)?.hasMainExport === true;
+        const hasComponent = renderedScriptExports(route.source, relativePath)?.asyncDefault === true;
         if (hasMain && hasComponent) break;
         const missing = !hasMain && !hasComponent
           ? 'neither an async default Server Component nor a named main'

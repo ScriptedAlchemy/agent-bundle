@@ -322,8 +322,13 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       'export default {};',
       '',
     ].join('\n'),
-    // Component only: the bin envelope would call it as main(argv).
-    'src/scripts/render-poster.tsx': 'export default async () => undefined;\n',
+    // Component plus a type-only main: the bin envelope ignores type exports
+    // and would still call the component as main(argv).
+    'src/scripts/render-poster.tsx': [
+      'export type main = (argv: readonly string[]) => Promise<number>;',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
     // main only: the bin works, but the rendered script has no component to render.
     'src/scripts/render-tool.tsx': 'export const main = async (argv: readonly string[]): Promise<number> => argv.length;\n',
   });
