@@ -38,7 +38,10 @@ it('renders the catalog from injected library context with its contents envelope
 });
 
 it('renders an honest degraded catalog when library context is absent', async () => {
+  // The harness mounts `src/providers/library.ts` automatically, so the
+  // degraded path needs an explicit empty provider map to keep it absent.
   const rendered = await renderRoute('resource:curator/catalog', {
+    context: { providers: {} },
     input: { uri: 'audiobook-curator://catalog' },
   });
   const value = rendered.document.value as {

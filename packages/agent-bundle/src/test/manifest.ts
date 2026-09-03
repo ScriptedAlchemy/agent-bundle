@@ -4,9 +4,12 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { NormalizedMcpApp, NormalizedStateDefinition } from '../core/types.ts';
+import { orderedProviders } from '../routes/provider-execution.ts';
+import { providerKeyFromName } from '../routes/providers.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
+  CompiledProvider,
   CompiledRouteGraph,
   CompiledRouteKind,
 } from '../routes/types.ts';
@@ -154,6 +157,21 @@ export interface TestableStateDescriptor {
   readonly source: string;
 }
 
+/**
+ * One conventional `src/providers/<name>.ts` context provider the harness
+ * mounts for every manifest request scope, exactly as the generated entries
+ * do (#313). `key` is the camel-cased request-context key.
+ */
+export interface TestableProviderDescriptor {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+  /** Project-relative POSIX path of the provider module. */
+  readonly relativePath: string;
+  /** Absolute provider module path. */
+  readonly source: string;
+}
+
 /** One normalized MCP App declaration addressable by the browser proof level. */
 export interface TestableAppDescriptor {
   readonly _meta?: Readonly<Record<string, unknown>>;
@@ -201,6 +219,12 @@ export interface AgentBundleTestManifest {
   readonly projectRoot: string;
   /** The level the manifest and its registered loaders alone supply; every other level stamps its own. */
   readonly proofLevel: AgentTestProofLevel;
+  /**
+   * Conventional request context providers, in the execution order every
+   * generated request scope uses; the harness mounts them automatically unless
+   * a test passes `context.providers`. Absent when the project declares none.
+   */
+  readonly providers?: readonly TestableProviderDescriptor[];
   readonly routes: Readonly<Record<string, TestableRouteDescriptor>>;
   /** Conventional project state mounted automatically for manifest route renders. */
   readonly state?: TestableStateDescriptor;
@@ -221,6 +245,16 @@ const descriptorOf = (route: CompiledAgentRoute): TestableRouteDescriptor => ({
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
   source: route.source,
 });
+
+const providerDescriptors = (
+  providers: readonly CompiledProvider[],
+): readonly TestableProviderDescriptor[] => orderedProviders(providers).map((provider) => ({
+  id: provider.id,
+  key: providerKeyFromName(provider.name),
+  name: provider.name,
+  relativePath: provider.provenance.relativePath,
+  source: provider.source,
+}));
 
 const graphRoutes = (graph: CompiledRouteGraph): readonly CompiledAgentRoute[] => [
   ...(graph.cli?.routes ?? []),
@@ -304,6 +338,7 @@ export const testManifestFromRouteGraph = (input: {
     plugin: input.plugin ?? FALLBACK_PLUGIN_IDENTITY,
     projectRoot: input.projectRoot,
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,
+    ...(input.graph.providers.length === 0 ? {} : { providers: providerDescriptors(input.graph.providers) }),
     routes,
     ...(input.state === undefined
       ? {}

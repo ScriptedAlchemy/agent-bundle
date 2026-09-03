@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
+import { orderedProviders } from '../routes/provider-execution.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
 
@@ -292,7 +293,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
     '  const parsed = parseInput(route, input);',
     '  const cwd = process.cwd();',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     ...(options.state === undefined
       ? []
       : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
@@ -411,7 +412,7 @@ export const generatedRenderedRouteWorkerSource = (
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     '    const cwd = process.cwd();',
     ...(options.state === undefined
@@ -554,17 +555,19 @@ const eventRouteImports = (
 ): readonly string[] => routes.map((route, index) =>
   `import * as route${String(offset + index)} from ${JSON.stringify(route.source)};`);
 
+/**
+ * Event route records stay keyed by the hook identity the worker resolves
+ * from the canonical event (`hook:event-route:tool-after`), but the record's
+ * `id` is the compiled route id (`event:tool/after`): that is the
+ * `operationId` the hook shell opens the request scope with, the lifecycle
+ * replay mounts, the test manifest addresses, and the harness renders, so a
+ * route reading `invocation.operationId` sees one value everywhere.
+ */
 const eventRouteRecords = (
   routes: readonly NormalizedHook[],
   offset: number,
 ): readonly string[] => routes.map((route, index) =>
-  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
-
-const orderedProviders = (providers: readonly CompiledProvider[]): readonly CompiledProvider[] =>
-  [...providers].sort((left, right) => {
-    const byKey = providerKeyFromName(left.name).localeCompare(providerKeyFromName(right.name));
-    return byKey === 0 ? left.source.localeCompare(right.source) : byKey;
-  });
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
 const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider, index) =>
@@ -580,15 +583,27 @@ const providerRegistrySource = (providers: readonly CompiledProvider[]): readonl
     ? []
     : ['const providers = Object.freeze([', ...providerRecords(providers), ']);'];
 
-const processLifetimeValueSource =
-  '{ hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid }';
+/**
+ * Claims this request's hit on the process identity and snapshots it in the
+ * same synchronous step, before any state binding or provider `await`, so a
+ * concurrent request on the same scope cannot move the value this request
+ * mounts as `providers.processLifetime`.
+ */
+const processHitSource = (indent: string): readonly string[] => [
+  `${indent}processLifetime.hits += 1;`,
+  `${indent}const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };`,
+];
+
+const processLifetimeValueSource = 'processHit';
 
 /**
  * Per-request provider execution shared by every generated request scope
  * (shared Flight worker, rendered CLI/script worker, plain routed CLI): once
  * per request, sequentially in deterministic key order, fail-closed on a
  * missing factory or a thrown/rejected factory, with the framework-owned
- * `processLifetime` value seeded first.
+ * `processLifetime` value seeded first. The emitted loop mirrors
+ * `executeProviders` in `../routes/provider-execution.ts`, which the
+ * in-process test harness runs; `entry-shell.test.ts` pins the two together.
  */
 const providerExecutionSource = (
   providers: readonly CompiledProvider[],
@@ -656,7 +671,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     ...(options.state === undefined
       ? []

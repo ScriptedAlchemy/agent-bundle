@@ -136,13 +136,19 @@ and augments `@agent-bundle/runtime`'s `AgentProviderValues`, so
 `(await agent()).providers.library` is a `LibraryContext` with no cast once
 the file is part of the project's TypeScript program (add
 `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
-stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
-`renderRoute(id, { context: { providers: { library } } })`; the harness never
-executes provider modules on a test's behalf. Because the augmentation makes
-declared keys required, the same program also requires `context.providers`
-(and the harness `options` argument) on every `renderRoute`, `invokeCli`, and
-in-memory MCP call, and `providers` on a direct `runAgentRequest`: a handler
-typed against `providers.library` can never observe an unchecked `undefined`.
+stay `unknown`. The `agent-bundle/test` harness (`renderRoute`, `invokeCli`,
+the in-memory MCP helpers) mounts the project's providers automatically, in the
+same order and with the same fail-closed semantics as the generated request
+scopes, so a route-unit test observes what the artifact would mount — including
+a provider that reaches the network or the file system. To stub one, inject
+fixture values through `renderRoute(id, { context: { providers: { library } } })`:
+an explicit map is mounted verbatim and no provider module executes. Because
+the augmentation makes declared keys required, an explicit `context.providers`
+must carry every declared key, and a direct `runAgentRequest` (where nothing
+else supplies providers) requires `providers` outright: a handler typed against
+`providers.library` can never observe an unchecked `undefined`. See the
+[harness section](../packages/agent-bundle/README.md#testing-routes) for the
+module-evaluation caveat that applies to provider-level state.
 
 ### What reaches the MCP wire
 

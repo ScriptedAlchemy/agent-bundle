@@ -17,6 +17,12 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
 } from '../src/build/entry-shell.ts';
+import {
+  executeProviders,
+  orderedProviders,
+  providerFactoryMissingMessage,
+  providerFailedMessage,
+} from '../src/routes/provider-execution.ts';
 
 const execFile = promisify(executeFile);
 
@@ -351,8 +357,14 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
   expect(source).toContain('/project/src/events/tool/after.tsx');
   expect(source).toContain("message.invocation.kind === 'event'");
+  // The worker resolves the event route by its hook identity but mounts the
+  // compiled route id as `operationId`, the same id the hook shell, the
+  // lifecycle replay, and the test harness use for that route.
+  expect(source).toContain(
+    '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
+  );
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '2b9feba295b3a77cd14bdee6527379837a9a21712e649c545d35d1fed107245d',
+    '36f042498df1933c6321bd21e4585599a0d39e5ddb3890657bd660c322f4cc23',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -559,6 +571,12 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   expect(withProviders.indexOf('for (const provider of providers)')).toBeLessThan(
     withProviders.indexOf('const result = await runAgentRequest({'),
   );
+  // The request's hit is claimed and snapshotted in one synchronous step
+  // before any await, so concurrent requests cannot move each other's value.
+  expect(withProviders).toContain(
+    'processLifetime.hits += 1;\n  const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };',
+  );
+  expect(withProviders).toContain('const providerValues = { processLifetime: processHit };');
 
   // A project without providers still mounts only the framework-owned process identity.
   const withoutProviders = entryShellModule.generatedCliBinEntrySource({
@@ -567,9 +585,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     routes: [route],
   });
   expect(withoutProviders).not.toContain('const providers = Object.freeze([');
-  expect(withoutProviders).toContain(
-    'providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
-  );
+  expect(withoutProviders).toContain('providers: { processLifetime: processHit },');
   expect(withoutProviders).not.toContain('import * as provider0');
 });
 
@@ -615,6 +631,84 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
     workerFile: 'report-flight.mjs',
   });
   expect(bridge).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+});
+
+it('keeps the generated provider loop and the in-process execution helper identical', async () => {
+  const providers = [
+    {
+      id: 'provider:zeta',
+      name: 'zeta',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/zeta.ts' },
+      source: '/project/src/providers/zeta.ts',
+    },
+    {
+      id: 'provider:alpha-value',
+      name: 'alpha-value',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/alpha-value.ts' },
+      source: '/project/src/providers/alpha-value.ts',
+    },
+  ];
+  const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    providers,
+    routes: [{
+      config: {},
+      id: 'cli:report',
+      kind: 'cli',
+      provenance: { kind: 'conventional', relativePath: 'src/cli/report.tsx' },
+      source: '/project/src/cli/report.tsx',
+    }],
+  });
+
+  // Ordering: the harness manifest and the generated registry sort identically.
+  expect(orderedProviders(providers).map((provider) => provider.name)).toEqual(['alpha-value', 'zeta']);
+  expect(source.indexOf('key: "alphaValue"')).toBeLessThan(source.indexOf('key: "zeta"'));
+
+  // Messages: the generated template literals evaluate to the helper's text.
+  const evaluate = (template: string, bindings: Record<string, string>): string =>
+    template.replaceAll(/\$\{([^}]+)\}/gu, (_match, expression: string) => bindings[expression] ?? `<${expression}>`);
+  const missing = /throw new TypeError\(`([^`]+)`\)/u.exec(source)?.[1];
+  const failed = /throw new Error\(`([^`]+)`, \{ cause: error \}\)/u.exec(source)?.[1];
+  expect(missing).toBeDefined();
+  expect(failed).toBeDefined();
+  expect(evaluate(missing!, { 'provider.key': 'alphaValue', 'provider.source': 'src/providers/alpha-value.ts' }))
+    .toBe(providerFactoryMissingMessage('alphaValue', 'src/providers/alpha-value.ts'));
+  expect(evaluate(failed!, {
+    'error instanceof Error ? error.message : String(error)': 'boom',
+    'provider.key': 'alphaValue',
+    'provider.source': 'src/providers/alpha-value.ts',
+  })).toBe(providerFailedMessage('alphaValue', 'src/providers/alpha-value.ts', new Error('boom')));
+
+  // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects.
+  const lifetime = { hits: 3, instanceId: 'instance-1', pid: 42 };
+  const calls: string[] = [];
+  const values = await executeProviders({
+    invocation: { kind: 'cli', props: { args: [], command: 'report' } },
+    processLifetime: lifetime,
+    providers: [
+      { key: 'alphaValue', module: { default: (context: { invocation: unknown }) => { calls.push('alphaValue'); return context.invocation; } }, source: 'src/providers/alpha-value.ts' },
+      { key: 'zeta', module: { default: async () => { calls.push('zeta'); return 'z'; } }, source: 'src/providers/zeta.ts' },
+    ],
+    signal: new AbortController().signal,
+  });
+  expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
+  expect(values).toEqual({
+    alphaValue: { kind: 'cli', props: { args: [], command: 'report' } },
+    processLifetime: { hits: 3, instanceId: 'instance-1', pid: 42 },
+    zeta: 'z',
+  });
+  expect(calls).toEqual(['alphaValue', 'zeta']);
+  await expect(executeProviders({
+    invocation: undefined,
+    processLifetime: lifetime,
+    providers: [{ key: 'zeta', module: {}, source: 'src/providers/zeta.ts' }],
+    signal: new AbortController().signal,
+  })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) must default-export a factory.');
+  await expect(executeProviders({
+    invocation: undefined,
+    processLifetime: lifetime,
+    providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
+    signal: new AbortController().signal,
+  })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) failed: boom');
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {

@@ -47,11 +47,12 @@ export type {
   CompileTestManifestOptions,
   TestManifestPluginIdentity,
   TestableAppDescriptor,
+  TestableProviderDescriptor,
   TestableRouteDescriptor,
   TestableStateDescriptor,
 } from './manifest.ts';
 export { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes, testManifest } from './registry.ts';
-export type { AgentTestRouteRegistry } from './registry.ts';
+export type { AgentProviderModuleLoader, AgentTestRouteRegistry } from './registry.ts';
 export { AgentTestError } from './errors.ts';
 export type { AgentTestErrorCode } from './errors.ts';
 export { renderRoute, renderRouteEvents } from './render.ts';

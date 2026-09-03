@@ -21,9 +21,11 @@ import type * as AgentRuntime from '@agent-bundle/runtime';
 
 import { CliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
+import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
@@ -42,8 +44,9 @@ export interface InvokeCliOptionsBase {
 
 /**
  * Dispatch options; `context` carries the request-scope overrides for the
- * dispatched command over the runtime's request contract and is required once
- * the project declares providers (see {@link RenderRouteContextInit}).
+ * dispatched command over the runtime's request contract; omitting it (or its
+ * `providers`) mounts the project's conventional providers exactly as the
+ * generated executable does (see {@link RenderRouteContextInit}).
  */
 export type InvokeCliOptions = InvokeCliOptionsBase & RenderRouteContextInit;
 
@@ -163,6 +166,9 @@ export const invokeCli = async (
   const runtime = await loadRuntime();
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
+  // One simulated executable per invocation: the generated CLI creates its
+  // process identity at module load, so every separate run starts at hit 1.
+  const processLifetime = createProviderProcessLifetime();
   const renderedCommands = manifest.cliCommands.filter((command) => command.rendered);
 
   let executed: CompiledCliCommand | undefined;
@@ -183,6 +189,7 @@ export const invokeCli = async (
       manifest,
       modules: renderedModules,
       onValidated: (validated) => { value = validated; },
+      processLifetime,
       provenance: {
         kind: 'cli',
         manifestDigest: manifest.digest,
@@ -228,6 +235,15 @@ export const invokeCli = async (
           throw new CliInputError(error instanceof Error ? error.message : String(error));
         }
         const root = process.cwd();
+        // Same provider invocation the generated plain-command path builds (#366).
+        const providers = await mountProviders({
+          explicit: context.providers,
+          invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
+          manifest,
+          processHit: claimProcessHit(processLifetime),
+          provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
+          signal: execution.signal,
+        });
         const result = await runtime.runAgentRequest({
           capabilities: {
             command: runtime.unavailable(),
@@ -238,6 +254,7 @@ export const invokeCli = async (
           host: runtime.unavailable('unsupported-surface'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
+          providers,
           invocation: {
             kind: 'cli',
             operationId: command.routeId,
