@@ -18,12 +18,19 @@ export { packOutputFromJson };
 export type { SharedPackOutput };
 
 export interface SharedPack {
-  /** First `npm pack --json` entry recorded when the tarball was produced. */
+  /** The package's own `npm pack --json` entry recorded when the tarball was produced. */
   readonly packOutput: SharedPackOutput;
   readonly tarball: string;
 }
 
 export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
+
+/** packages/ directory and npm package name for each shared-pack key. */
+const sharedPackPackages: Readonly<Record<SharedPackPackage, Readonly<{ directory: string; npmName: string }>>> = {
+  'agent-bundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
+  'create-agent-bundle': { directory: 'create-agent-bundle', npmName: 'create-agent-bundle' },
+  runtime: { directory: 'rsc-runtime', npmName: '@agent-bundle/runtime' },
+};
 
 /**
  * NODE_PATH-free environment with per-command npm cache and tmp roots under
@@ -79,11 +86,14 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   process.once('exit', () => {
     rmSync(destination, { force: true, recursive: true });
   });
+  const { directory, npmName } = sharedPackPackages[packageName];
   const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', destination], {
-    cwd: join(workspaceRoot, 'packages', packageName === 'runtime' ? 'rsc-runtime' : packageName),
+    cwd: join(workspaceRoot, 'packages', directory),
     env: { ...installedEnvironment(), NODE_ENV: 'production' },
   });
-  const packOutput = packOutputFromJson(stdout);
+  // Select by npm name: a workspace-aware `npm pack --json` can list sibling
+  // packages, and the first entry is not necessarily this one.
+  const packOutput = packOutputFromJson(stdout, npmName);
   return { packOutput, tarball: join(destination, packOutput.filename) };
 };
 

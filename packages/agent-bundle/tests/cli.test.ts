@@ -130,7 +130,7 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   const { stdout } = await execFile(
     'npm', ['pack', '--json', '--pack-destination', root], { cwd: packageRoot },
   );
-  const packed = packOutputFromJson(stdout);
+  const packed = packOutputFromJson(stdout, 'agent-bundle');
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await execFile(
     'npm', ['install', ...cachedNpmInstallArguments, join(root, packed.filename)],
