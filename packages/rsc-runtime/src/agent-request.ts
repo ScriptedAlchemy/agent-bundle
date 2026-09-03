@@ -392,10 +392,13 @@ export const agent = async (): Promise<AgentRequestContext> => {
  * Synchronous convenience over {@link agent} for Server Components and
  * ordinary server utilities that cannot `await`. It returns the identical
  * request handle (`useAgent() === await agent()` within one invocation) from
- * the same realm-singleton store, so every lease rule holds unchanged: outside
- * a real invocation it throws `outside-invocation`, and after the request
- * completes it throws `request-closed`. No React dependency: the handle is
- * already resolved in the request's async context, so nothing has to suspend.
+ * the same realm-singleton store, so every lease rule holds unchanged: a call
+ * with no request in its async context — including a call made after
+ * `runAgentRequest` has settled — throws `outside-invocation`, and a handle
+ * captured inside the request (or a continuation that retained its lease)
+ * throws `request-closed` once the request completes. No React dependency:
+ * the handle is already resolved in the request's async context, so nothing
+ * has to suspend.
  */
 export const useAgent = (): AgentRequestContext => {
   const lease = currentLease();

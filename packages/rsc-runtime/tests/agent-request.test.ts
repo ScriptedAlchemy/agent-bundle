@@ -291,8 +291,10 @@ describe('agent request store', () => {
       await Promise.resolve();
       expect(useAgent()).toBe(synchronous);
     });
-    // Outside a real invocation the synchronous form throws the typed error
-    // agent() rejects with; a captured handle stays closed afterward.
+    // After runAgentRequest() settles the caller's async context is restored,
+    // so a fresh useAgent() call is `outside-invocation` — the same code
+    // agent() rejects with. Only the handle captured inside the request (or a
+    // continuation that retained its closed lease) reports `request-closed`.
     expect(() => useAgent()).toThrow(AgentRequestError);
     try {
       useAgent();
@@ -301,6 +303,12 @@ describe('agent request store', () => {
       expect(error).toMatchObject({ code: 'outside-invocation' });
     }
     expect(() => captured?.invocation).toThrow(AgentRequestError);
+    try {
+      void captured?.invocation;
+      throw new Error('expected the captured handle to be closed');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'request-closed' });
+    }
   });
 
   it('re-exports the request store from the plugin entry', () => {
