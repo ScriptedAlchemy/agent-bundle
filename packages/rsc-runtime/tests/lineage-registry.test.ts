@@ -801,16 +801,21 @@ describe('lineage registry Cursor child binding precision (desktop hooks-service
     await observe('agent/start', 's', start('root', 'call-a', '/ws'));
     await observe('tool/before', 'x1', tool('other-root', 'x1', '/ws'));
     expect(registry.snapshot().nodes['other-root']).toMatchObject({ depth: 1, root: 'root' });
-    // The other chat tab is closed: only a root receives sessionEnd.
-    await observe('session/end', 'x-end', {
+    // The other chat tab is closed: only a root receives sessionEnd, and the
+    // event resolves against the corrected root exactly as a known root's would.
+    const ended = await observe('session/end', 'x-end', {
       conversation_id: 'other-root', duration_ms: 1, final_status: 'none', hook_event_name: 'sessionEnd', is_background_agent: false, reason: 'window_close', workspace_roots: ['/ws'],
     });
+    expect(value(ended)).toMatchObject({ conversation: 'other-root', depth: 0, root: 'other-root' });
+    expect(value(ended).parent).toBeUndefined();
     const snapshot = registry.snapshot();
     expect(snapshot.nodes['root']?.stoppedAt).toBeUndefined();
     expect(snapshot.nodes['call-a']).toMatchObject({ id: 'call-a', parent: 'root' });
     expect(snapshot.nodes['call-a']?.stoppedAt).toBeUndefined();
     expect(snapshot.pendingChildren).toEqual(['call-a']);
-    expect(snapshot.nodes['other-root']).toBeUndefined();
+    // The proven root is materialized as stopped, like any retired root, and keeps its first-seen time.
+    expect(snapshot.nodes['other-root']).toMatchObject({ depth: 0, root: 'other-root', stoppedAt: '2026-09-03T00:00:00.000Z' });
+    expect(snapshot.nodes['other-root']?.startedAt).toBe(snapshot.nodes['call-a']?.startedAt);
     // The real child still binds to the restored pending start.
     expect(value(await observe('tool/before', 'c1', tool('child', 'c1', '/ws')))).toMatchObject({ conversation: 'child', depth: 1, parent: 'root', root: 'root' });
   });

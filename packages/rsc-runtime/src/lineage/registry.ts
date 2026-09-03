@@ -337,6 +337,11 @@ export const createAgentLineageRegistry = (
     const node = state.nodes[conversation];
     if (node === undefined || node.depth === 0 || node.subagentId === undefined) return;
     await dispatch('childUnbound', { conversation, subagentId: node.subagentId }, keys);
+    // Materialize the root at once — the bound node carried the conversation's
+    // generation, workspace and first-seen time — so the correcting event
+    // resolves against it like any known root's would, including a
+    // `session/end`, which then retires this node instead of finding none.
+    await dispatch('nodeStarted', rootNode(conversation, node.generation, node.startedAt, node.workspace), keys);
   };
 
   const resolve = (
