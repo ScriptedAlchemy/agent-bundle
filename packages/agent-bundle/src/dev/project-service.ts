@@ -151,9 +151,14 @@ const sourceInput = async (root: string, source: string): Promise<ProjectSourceS
   try {
     const resolvedSource = await realpath(source);
     const path = relativeSourcePath(root, resolvedSource);
+    const [contents, metadata] = await Promise.all([
+      readFile(resolvedSource),
+      lstat(resolvedSource),
+    ]);
     return Object.freeze({
-      sha256: createHash('sha256').update(await readFile(resolvedSource)).digest('hex'),
+      executable: (metadata.mode & 0o111) !== 0,
       path,
+      sha256: createHash('sha256').update(contents).digest('hex'),
     });
   } catch (error) {
     if (error instanceof RangeError) throw error;
@@ -272,7 +277,15 @@ const payloadSourcePaths = async (
     }
   };
   for (const payloadRoot of payloadRoots) {
-    const resolved = resolve(root, payloadRoot);
+    const requested = resolve(root, payloadRoot);
+    if (containedPathComponents(root, requested) === undefined) continue;
+    let resolved;
+    try {
+      resolved = await realpath(requested);
+    } catch {
+      // A payload that does not exist yet contributes no source inputs.
+      continue;
+    }
     if (containedPathComponents(root, resolved) === undefined) continue;
     await visit(resolved);
   }

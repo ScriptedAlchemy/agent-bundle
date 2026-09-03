@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 
@@ -476,7 +476,7 @@ it('creates an exact deeply frozen root-independent project context', async () =
     expect(Object.isFrozen(left.projectContext)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs)).toBe(true);
     expect(Object.isFrozen(left.projectContext?.sourceInputs[0])).toBe(true);
-    expect(Object.keys(left.projectContext?.sourceInputs[0] ?? {})).toEqual(['path', 'sha256']);
+    expect(Object.keys(left.projectContext?.sourceInputs[0] ?? {})).toEqual(['executable', 'path', 'sha256']);
     expect(JSON.stringify(left.projectContext)).not.toContain(leftRoot);
     expect(JSON.stringify(right.projectContext)).not.toContain(rightRoot);
 
@@ -820,6 +820,43 @@ it('reports snapshot failures as frozen preparation diagnostics', async () => {
   }
 });
 
+it.each([
+  { code: 'claude.outputStyles.directory.outside', field: 'outputStyles' },
+  { code: 'claude.workflows.directory.outside', field: 'workflows' },
+] as const)('preserves the $code diagnostic for an escaped payload symlink', async ({ code, field }) => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews escaped payloads',
+    '---',
+    'Review escaped payloads.',
+    '',
+  ].join('\n'));
+  const outside = await mkdtemp(join(tmpdir(), `agent-bundle-${field}-outside-`));
+  try {
+    await writeFile(join(outside, 'payload.md'), 'outside\n');
+    await symlink(outside, join(root, 'payload'), 'dir');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      `  claude: { ${field}: './payload' },`,
+      "  plugin: { name: 'escaped-payload', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const prepared = await new ProjectService({ root }).prepare('inspect');
+
+    expect(prepared.diagnostics).toContainEqual(expect.objectContaining({ code, severity: 'error' }));
+    expect(prepared.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'AB7003' }));
+  } finally {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(outside, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('routes API validation through the project service for configuration failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-dev-api-config-'));
   try {
@@ -876,6 +913,44 @@ it('derives source revisions from authored bytes, including resources and invali
       rm(equivalentRoot, { force: true, recursive: true }),
       rm(invalidRoot, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('changes a payload source revision when an executable bit is lost', async () => {
+  const root = await createProject([
+    '---',
+    'name: review',
+    'description: Reviews executable payloads',
+    '---',
+    'Review executable payloads.',
+    '',
+  ].join('\n'));
+  const binRoot = join(root, 'bin');
+  const executable = join(binRoot, 'review');
+  try {
+    await mkdir(binRoot);
+    await writeFile(executable, '#!/bin/sh\nprintf "reviewed\\n"\n');
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  claude: { bin: './bin' },",
+      "  plugin: { name: 'executable-payload', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
+    await chmod(executable, 0o755);
+    const initial = await new ProjectService({ root }).prepare('inspect');
+
+    await chmod(executable, 0o644);
+    const changed = await new ProjectService({ root }).prepare('inspect');
+
+    expect(changed.projectContext?.sourceInputs.find((input) => input.path === 'bin/review')?.sha256)
+      .toBe(initial.projectContext?.sourceInputs.find((input) => input.path === 'bin/review')?.sha256);
+    expect(initial.projectContext?.revision).toBe(initial.source.revision);
+    expect(changed.projectContext?.revision).toBe(changed.source.revision);
+    expect(changed.source.revision).not.toBe(initial.source.revision);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 

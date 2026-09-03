@@ -210,7 +210,7 @@ export const artifactDistPathIssue = (value: unknown): ArtifactDistPathIssue | u
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
     return 'path';
   }
-  return reservedArtifactDistPathSegments.has(segments[0]!) ? 'reserved' : undefined;
+  return reservedArtifactDistPathSegments.has(segments[0]!.toLowerCase()) ? 'reserved' : undefined;
 };
 
 /** Returns the validated config path, falling back so downstream path resolution cannot throw on malformed input. */
