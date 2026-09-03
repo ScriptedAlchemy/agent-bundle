@@ -207,8 +207,9 @@ jobs:
         id: pins
         run: node scripts/host-cli-pins.mjs print
       # The global npm prefix holding both CLIs (Claude Code and Codex ship
-      # platform-native binaries), keyed by OS, arch, and the exact pins so a
-      # deliberate re-pin misses the cache and installs fresh.
+      # platform-native binaries), keyed by OS, arch, and the exact pins
+      # (package name and version per host) so a deliberate re-pin of either
+      # misses the cache and installs fresh.
       - name: Restore pinned host CLIs
         id: host-cli-cache
         uses: actions/cache@v6
@@ -218,6 +219,8 @@ jobs:
       - name: Install pinned host CLIs
         if: steps.host-cli-cache.outputs.cache-hit != 'true'
         run: node scripts/host-cli-pins.mjs install --prefix "$RUNNER_TEMP/host-cli"
+      # ubuntu runner: npm's global executables live in <prefix>/bin (the
+      # script's globalBinDirectory rule; Windows would be the prefix itself).
       - name: Expose host CLIs on PATH
         run: echo "$RUNNER_TEMP/host-cli/bin" >> "$GITHUB_PATH"
       - name: Verify host CLI versions match the schema pins

@@ -128,6 +128,23 @@ export const verifyHostCliPins = async (pins, probe) => {
   });
 };
 
+/**
+ * Cache-key identity of the pins: package name and version per host, so a
+ * deliberate re-pin of either misses a cache populated for the old package.
+ * Characters outside actions/cache's safe set collapse to `-`.
+ */
+export const pinsCacheKey = (pins) => hostCliHosts
+  .flatMap((host) => [host, pins[host].package, pins[host].version])
+  .map((part) => part.replaceAll(/[^A-Za-z0-9._-]+/gu, '-').replaceAll(/^-+|-+$/gu, ''))
+  .join('-');
+
+/**
+ * Where npm places global executables for a prefix: `<prefix>/bin` on POSIX,
+ * the prefix itself on Windows (https://docs.npmjs.com/cli/configuring-npm/folders#executables).
+ */
+export const globalBinDirectory = (globalPrefix, platform = process.platform) =>
+  platform === 'win32' ? globalPrefix : join(globalPrefix, 'bin');
+
 /** `npm install -g` argument vector for the pinned packages. */
 export const installArguments = (pins, prefix) => Object.freeze([
   'install',
@@ -186,8 +203,10 @@ const runNpm = async (args, environment) => {
 const installPins = async (pins, prefix, environment) => {
   process.stdout.write(`npm ${installArguments(pins, prefix).join(' ')}\n`);
   await runNpm([...installArguments(pins, prefix)], environment);
-  const globalRoot = (await runNpm(['root', '-g', ...(prefix === undefined ? [] : ['--prefix', prefix])], environment)).trim();
-  const binDirectory = join(dirname(dirname(globalRoot)), 'bin');
+  const prefixArguments = prefix === undefined ? [] : ['--prefix', prefix];
+  const globalPrefix = (await runNpm(['prefix', '-g', ...prefixArguments], environment)).trim();
+  const globalRoot = (await runNpm(['root', '-g', ...prefixArguments], environment)).trim();
+  const binDirectory = globalBinDirectory(globalPrefix);
   const pathWithPrefix = `${binDirectory}${process.platform === 'win32' ? ';' : ':'}${environment.PATH ?? ''}`;
   const probeEnvironment = { ...environment, PATH: pathWithPrefix };
   const claude = await probeOnPath('claude', probeEnvironment);
@@ -212,8 +231,7 @@ export const runHostCliPins = async ({
   switch (options.command) {
     case 'print': {
       const lines = hostCliHosts.map((host) => `${host}=${pins[host].version}`);
-      const cacheKey = hostCliHosts.map((host) => `${host}-${pins[host].version}`).join('-');
-      lines.push(`pins=${cacheKey}`);
+      lines.push(`pins=${pinsCacheKey(pins)}`);
       for (const line of lines) process.stdout.write(`${line}\n`);
       const githubOutput = env.GITHUB_OUTPUT;
       if (githubOutput !== undefined && githubOutput.length > 0) {

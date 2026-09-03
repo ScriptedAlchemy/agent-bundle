@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import {
+  globalBinDirectory,
   hostCliPinFromProvenance,
   hostCliProvenancePaths,
   installArguments,
   parseCliVersion,
+  pinsCacheKey,
   readHostCliPins,
   runHostCliPins,
   verifyHostCliPins,
@@ -147,6 +149,21 @@ it('installs exact pinned packages globally into the requested prefix', () => {
   expect(installArguments(pins)).not.toContain('--prefix');
 });
 
+it('keys the CLI cache on package names as well as versions', () => {
+  expect(pinsCacheKey(pins)).toBe('claude-anthropic-ai-claude-code-2.1.250-codex-openai-codex-0.147.0');
+  expect(pinsCacheKey({
+    ...pins,
+    claude: { ...pins.claude, package: '@anthropic-ai/claude-code-preview' },
+  })).not.toBe(pinsCacheKey(pins));
+  expect(pinsCacheKey(pins)).toMatch(/^[A-Za-z0-9._-]+$/u);
+});
+
+it('locates npm global executables in <prefix>/bin on POSIX and in the prefix itself on Windows', () => {
+  expect(globalBinDirectory('/tmp/host-cli', 'linux')).toBe(join('/tmp/host-cli', 'bin'));
+  expect(globalBinDirectory('/tmp/host-cli', 'darwin')).toBe(join('/tmp/host-cli', 'bin'));
+  expect(globalBinDirectory('C:\\tmp\\host-cli', 'win32')).toBe('C:\\tmp\\host-cli');
+});
+
 it('prints the pins and a cache key to stdout and GITHUB_OUTPUT', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-host-cli-pins-'));
   const outputPath = join(fixtureRoot, 'github-output');
@@ -161,7 +178,7 @@ it('prints the pins and a cache key to stdout and GITHUB_OUTPUT', async () => {
     const expected = [
       `claude=${read.claude.version}`,
       `codex=${read.codex.version}`,
-      `pins=claude-${read.claude.version}-codex-${read.codex.version}`,
+      `pins=${pinsCacheKey(read)}`,
     ];
     expect(written.join('')).toBe(`${expected.join('\n')}\n`);
     expect(await readFile(outputPath, 'utf8')).toBe(`${expected.join('\n')}\n`);

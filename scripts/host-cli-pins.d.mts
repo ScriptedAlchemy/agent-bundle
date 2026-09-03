@@ -51,6 +51,10 @@ export declare const verifyHostCliPins: (
   probe: (host: HostCliHost) => Promise<HostCliProbeResult> | HostCliProbeResult,
 ) => Promise<HostCliVerificationReport>;
 
+export declare const pinsCacheKey: (pins: HostCliPins) => string;
+
+export declare const globalBinDirectory: (globalPrefix: string, platform?: NodeJS.Platform) => string;
+
 export declare const installArguments: (pins: HostCliPins, prefix?: string) => readonly string[];
 
 export declare const runHostCliPins: (options?: RunHostCliPinsOptions) => Promise<HostCliPins>;
