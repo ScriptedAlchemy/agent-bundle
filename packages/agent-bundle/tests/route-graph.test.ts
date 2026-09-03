@@ -302,10 +302,20 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       "    object: './src/scripts/render-object.tsx',",
       "    poster: './src/scripts/render-poster.tsx',",
       "    tool: './src/scripts/render-tool.tsx',",
+      "    typed: './src/scripts/render-typed.tsx',",
       '  },',
       "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
       "  targets: ['portable'],",
       '};',
+      '',
+    ].join('\n'),
+    // main plus a type-only default alias of an async function binding: no
+    // JavaScript default export is emitted, so the rendered script has no
+    // component even though a same-named function exists.
+    'src/scripts/render-typed.tsx': [
+      'const Component = async () => undefined;',
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export { type Component as default };',
       '',
     ].join('\n'),
     // Exports both: main(argv) for the bin envelope, the component for the
@@ -339,10 +349,12 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
     join(project, 'src/scripts/render-object.tsx'),
     join(project, 'src/scripts/render-poster.tsx'),
     join(project, 'src/scripts/render-tool.tsx'),
+    join(project, 'src/scripts/render-typed.tsx'),
   ]);
   expect(gate[0]!.message).toContain('render-object.tsx is also the entry of bin "object" but exports no async default Server Component');
   expect(gate[1]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
   expect(gate[2]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no async default Server Component');
+  expect(gate[3]!.message).toContain('render-typed.tsx is also the entry of bin "typed" but exports no async default Server Component');
   expect(gate.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
   // Every rendered script stays discovered beside its bin: the gate names
   // the conflict instead of dropping a route.
@@ -352,6 +364,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       object: './src/scripts/render-object.tsx',
       poster: './src/scripts/render-poster.tsx',
       tool: './src/scripts/render-tool.tsx',
+      typed: './src/scripts/render-typed.tsx',
     },
   }));
   expect(graph.scripts.map((route) => route.id)).toEqual([
@@ -359,6 +372,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
     'script:render-object',
     'script:render-poster',
     'script:render-tool',
+    'script:render-typed',
   ]);
 });
 
