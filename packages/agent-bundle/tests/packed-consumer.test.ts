@@ -92,7 +92,7 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: packedPackageRoot,
       env: installedEnvironment(),
     });
-    const tarball = join(consumerRoot, packOutputFromJson(packed).filename);
+    const tarball = join(consumerRoot, packOutputFromJson(packed, 'agent-bundle').filename);
     await cp(fixtureRoot, projectRoot, { recursive: true });
     const [sourceShellMode, sourcePythonMode] = await Promise.all([
       stat(join(projectRoot, 'src', 'shell.sh')).then((metadata) => metadata.mode & 0o777),

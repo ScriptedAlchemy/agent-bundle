@@ -31,13 +31,22 @@ const asString = (value, message) => {
   return value;
 };
 
-const packOutputFromJson = (stdout) => {
+const packOutputFromJson = (stdout, packageName) => {
   try {
-    return sharedPackOutputFromJson(stdout);
+    return sharedPackOutputFromJson(stdout, packageName);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
 };
+
+/** npm package name declared by a workspace package directory. */
+const packageNameOf = async (packageDirectory) => asString(
+  asRecord(
+    JSON.parse(await readFile(join(repositoryRoot, packageDirectory, 'package.json'), 'utf8')),
+    `${packageDirectory}/package.json is not an object`,
+  ).name,
+  `${packageDirectory}/package.json has no name`,
+);
 
 /** Every name -> Set(version) reachable under the consumer's own node_modules tree. */
 const collectInstalledPackages = async (nodeModulesRoot) => {
@@ -181,7 +190,7 @@ const auditLicenseFiles = async () => {
     const packOutput = packOutputFromJson((await execNpm(['pack', '--dry-run', '--json'], {
       cwd: join(repositoryRoot, packageDirectory),
       env: productionEnvironment,
-    })).stdout);
+    })).stdout, await packageNameOf(packageDirectory));
     await validateLicenseFiles(packOutput, packageDirectory);
   }
 };
@@ -204,7 +213,7 @@ const auditPackedRelease = async () => {
       'pack',
       '--json',
       '--pack-destination', tarballs,
-    ], { cwd: packageRoot, env: productionEnvironment })).stdout);
+    ], { cwd: packageRoot, env: productionEnvironment })).stdout, 'agent-bundle');
     const tarball = join(tarballs, asString(filename, 'npm pack did not produce a tarball filename'));
     // No `--prefer-offline` here (unlike the packed pool's
     // cachedNpmInstallArguments): the tree this install produces is what

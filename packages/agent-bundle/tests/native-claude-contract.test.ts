@@ -11,6 +11,22 @@ const candidatePluginName = 'agent-bundle-native-smoke';
 const candidateSkillName = 'agent-bundle-native-smoke';
 const candidateSkillEventName = `${candidatePluginName}:${candidateSkillName}`;
 
+/**
+ * Every enabled `runNativeClaudeSmoke` digests the normal Claude home before
+ * and after the run. Without an injected `homeDirectory` (or
+ * `CLAUDE_CONFIG_DIR`) that is the developer's real `~/.claude`, which on a
+ * machine with the Claude CLI installed holds gigabytes of plugin caches and
+ * pushes a stubbed smoke past its 5 s budget. Each test gets an empty home.
+ */
+const withIsolatedHome = async <T>(run: (homeDirectory: string) => Promise<T>): Promise<T> => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-contract-home-'));
+  try {
+    return await run(homeDirectory);
+  } finally {
+    await rm(homeDirectory, { force: true, recursive: true });
+  }
+};
+
 it('builds a subscription-authenticated Claude command with the explicit candidate plugin', async () => {
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
@@ -96,8 +112,7 @@ it('runs strict validation before the subscription-backed stream command and ret
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const homeDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-contract-home-'));
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
@@ -124,8 +139,7 @@ it('runs strict validation before the subscription-backed stream command and ret
           ].join('\n'),
         };
     },
-  });
-  await rm(homeDirectory, { force: true, recursive: true });
+  }));
 
   expect(report).toEqual({
     diagnostics: [],
@@ -347,19 +361,20 @@ it('reports an incompatible Claude version as a harness failure before candidate
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after the preflight failure',
     run: async (request: unknown) => {
       calls.push(request);
       return { exitCode: 0, stderr: '', stdout: '2.1.231 (Claude Code)\n' };
     },
-  });
+  }));
 
   expect(report).toEqual({
     diagnostics: [{
@@ -429,7 +444,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
@@ -441,6 +456,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
       CLAUDE_CODE_USE_BEDROCK: '1',
       PATH: '/usr/bin',
     },
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the candidate skill.',
     run: async (request: unknown) => {
@@ -461,7 +477,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
               ].join('\n'),
             };
     },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [],
@@ -501,12 +517,13 @@ it('fails closed when the candidate plugin, exact Skill event, or subscription a
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
 
-  const smokeWithExecution = async (execution: string) => harness!.runNativeClaudeSmoke({
+  const smokeWithExecution = async (execution: string) => withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the candidate skill.',
     run: async (request: { readonly args: readonly string[] }) => {
@@ -517,7 +534,7 @@ it('fails closed when the candidate plugin, exact Skill event, or subscription a
       if (request.args[0] === 'plugin') return { exitCode: 0, stderr: '', stdout: 'Plugin is valid.\n' };
       return { exitCode: 0, stderr: '', stdout: execution };
     },
-  });
+  }));
 
   await expect(smokeWithExecution([
     '{"type":"system","plugins":[]}',
@@ -551,12 +568,13 @@ it('rejects an API-key or alternate-provider auth status before plugin validatio
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after authentication fails',
     run: async (request: unknown) => {
@@ -565,7 +583,7 @@ it('rejects an API-key or alternate-provider auth status before plugin validatio
         ? { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' }
         : { exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"api-key","subscriptionType":"pro"}\n' };
     },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [{ code: 'claude-native.auth.unsupported' }],
@@ -578,18 +596,19 @@ it('reports a signed-out Claude execution as a redacted harness failure', async 
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
 
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after authentication fails',
     run: async (request: { readonly args: readonly string[] }) => request.args[0] === '--version'
       ? { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' }
       : { exitCode: 0, stderr: '', stdout: '{"loggedIn":false}\n' },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [{

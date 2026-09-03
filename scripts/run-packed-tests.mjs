@@ -40,16 +40,19 @@ if (buildExitCode !== 0) process.exit(buildExitCode);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
 try {
+  // [shared-pack key, packages/ directory, npm package name]; the pack entry
+  // is selected by npm name so a workspace-aware `npm pack --json` that lists
+  // sibling packages still yields the intended tarball.
   await Promise.all([
-    ['agent-bundle', 'agent-bundle'],
-    ['create-agent-bundle', 'create-agent-bundle'],
-    ['runtime', 'rsc-runtime'],
-  ].map(async ([packageName, directory]) => {
+    ['agent-bundle', 'agent-bundle', 'agent-bundle'],
+    ['create-agent-bundle', 'create-agent-bundle', 'create-agent-bundle'],
+    ['runtime', 'rsc-runtime', '@agent-bundle/runtime'],
+  ].map(async ([packageName, directory, npmName]) => {
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDirectory], {
       cwd: join(repositoryRoot, 'packages', directory),
       env: { ...environment, NODE_ENV: 'production' },
     });
-    const packOutput = packOutputFromJson(stdout);
+    const packOutput = packOutputFromJson(stdout, npmName);
     await writeFile(
       join(packDirectory, `${packageName}.json`),
       `${JSON.stringify({ packOutput, tarball: join(packDirectory, packOutput.filename) })}\n`,

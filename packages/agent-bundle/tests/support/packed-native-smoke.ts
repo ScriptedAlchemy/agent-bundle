@@ -356,10 +356,12 @@ export const runPackedNativeSmoke = async (options: {
       cwd: packageRoot,
       environment,
     });
-    const packOutput = packOutputFromJson(packed.stdout);
     if (packed.exitCode !== 0) {
-      throw new Error('Packed native smoke could not create exactly one release tarball.');
+      throw new Error('Packed native smoke could not create the release tarball.');
     }
+    // Select the agent-bundle entry by name: a workspace-aware `npm pack --json`
+    // can list sibling packages, and index 0 is not necessarily this one.
+    const packOutput = packOutputFromJson(packed.stdout, 'agent-bundle');
     const installed = await runNodeEntrypoint(npmEntrypoint, [
       'install',
       '--omit=dev',
