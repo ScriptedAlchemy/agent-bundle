@@ -36,7 +36,7 @@ const relativePath = (root: string, path: string): string | undefined => {
 const defaultPathSignature = async (path: string): Promise<string | undefined> => {
   try {
     const source = await stat(path, { bigint: true });
-    return `${source.dev}:${source.ino}:${source.size}:${source.mtimeNs}`;
+    return `${source.dev}:${source.ino}:${source.size}:${source.mtimeNs}:${source.mode}:${source.ctimeNs}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
