@@ -22,10 +22,14 @@ on:
 permissions:
   contents: read
 
-# PR pushes cancel the superseded run of the same PR; main pushes and manual
-# dispatches get SHA-keyed groups with no cancellation (same pattern as ci.yml).
+# PR pushes cancel the superseded run of the same PR. Every run that can
+# deploy (push or manual dispatch on main) shares one non-cancelling group so
+# build-and-deploy runs execute in order and an older, slower build can never
+# deploy over a newer one (GitHub keeps at most one pending run per group, so
+# a superseded pending build is dropped, never reordered). Dispatches on other
+# refs get SHA-keyed groups.
 concurrency:
-  group: docs-${{ github.event.pull_request.number || github.sha }}
+  group: docs-${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'main' || github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -72,6 +76,23 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
-      - uses: actions/configure-pages@v6
-      - id: deployment
+      # Re-running an older main run (or any path that bypasses the queue
+      # above) must not publish a stale site: only deploy when this commit is
+      # still the head of main.
+      - name: Confirm this commit is still the head of main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped deploy: main moved to ${head}; this run built ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.head.outputs.deploy == 'true'
+        uses: actions/configure-pages@v6
+      - if: steps.head.outputs.deploy == 'true'
+        id: deployment
         uses: actions/deploy-pages@v5
