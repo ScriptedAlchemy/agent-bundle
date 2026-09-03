@@ -1,0 +1,183 @@
+---
+description: 'The agent-bundle developer Workbench: its loopback boundaries, epoch-pinned MCP sessions, Playground traces, development host installs, and the optional Agent API.'
+---
+
+# Developer Workbench
+
+`agent-bundle dev` serves a prebuilt developer Workbench over loopback. It is the place to look
+at what the compiler actually emitted — per host, per epoch — and to run the emitted wrappers
+instead of trusting that a green build implies a working plugin.
+
+```sh
+npx agent-bundle dev --root .
+npx agent-bundle dev --root . --port 3100 --no-open
+```
+
+## Boundaries
+
+These are contracts, not defaults:
+
+- **Loopback only.** The server binds to loopback and is never exposed beyond the local machine.
+- **A foreground development session, not a hosted service.** Closing the process ends the
+  session.
+- **Epoch-pinned reads.** Nothing follows a new build implicitly; a surface that reads an
+  artifact names the epoch it read.
+- **Trusted-local operations only.** The browser never supplies a command, a working directory, a
+  native model, or a credential. See [Security](../../reference/security.mdx).
+
+## What it shows
+
+| Page | Contents |
+| --- | --- |
+| Overview | Project identity, normalized model, and diagnostics. |
+| Skills | Every Skill document, including each host's lowered output. |
+| Artifacts | The artifact tree with provenance and epoch comparison. |
+| MCP | An artifact-bound playground with the raw protocol trace. |
+| Hooks | A playground that runs the emitted hook wrapper. |
+| Playground | A durable, ordered trace with replay and export. |
+| Evals | Eval runs and run comparisons. |
+| Logs | Concise events plus raw stdout, stderr, and protocol streams, grouped by producer: normalization, build, diagnostics, MCP, hook, host trial, and grader. |
+
+## MCP sessions bind to an epoch
+
+A Workbench MCP session binds `{ epochId, target, serverName }` when it is opened and never moves
+to a new epoch automatically. That is what makes a protocol trace meaningful: every frame in it
+came from one generated server built from one set of inputs.
+
+- **Restart MCP session** respawns that generated server on its *selected* epoch.
+- To use a newly published epoch, open a **new** session.
+- Compatible MCP Apps preview through the same bound session.
+
+## Playground owns its trace
+
+Only actions started in Playground join its ordered durable trace. Hook and MCP page operations
+stay independent even while a Playground session is open — a trace records a deliberate sequence,
+not everything that happened to be clicked.
+
+From a Playground trace you can replay or export the raw evidence, or promote selected durable
+outcome and assertion evidence into a draft eval case.
+
+`script.run` is a production-mounted, trusted-local Playground operation: it runs only the
+selected manifest-owned emitted script for the selected target, in a managed workspace, and
+preserves bounded stdout and stderr, the exit code, cancellation, and raw event references. See
+[Scripts and assets](../authoring/scripts-assets.mdx).
+
+Native prompts choose a server catalog selection — case, fixture, host, and pinned model — for
+the selected epoch, rather than accepting a browser-supplied command or model.
+
+## The same session programmatically
+
+The public `startDevServer` export accepts the options the CLI flags map to (`root`, `port`,
+`open`, `agentApi`, `installHosts`) and resolves to a `DevServerSession` exposing the loopback
+`url`, a `status()` snapshot, and `close()`:
+
+```ts twoslash
+import { startDevServer } from 'agent-bundle';
+
+export const serve = async (): Promise<void> => {
+  const session = await startDevServer({ port: 3100, root: process.cwd() });
+  console.log(session.url);
+  await session.close();
+};
+```
+
+## Development host installs
+
+Pass `--install-host <claude|codex|cursor>` more than once to install development variants into
+the selected hosts:
+
+```sh
+npx agent-bundle dev --install-host cursor --install-host claude
+```
+
+The first successful epoch uses the ordinary host installer, so Claude and Codex register the
+plugin normally and read its files from their host-owned
+`plugins/cache/<marketplace>/<plugin>/<version>` directory; Cursor reads
+`~/.cursor/plugins/local/<plugin>`. The installed root carries an `.agent-bundle-dev.json` with
+schema version `1`, the project root, the host, and the installed epoch.
+
+Its MCP document always launches the framework CLI through the running dev server's Node
+executable:
+
+```sh
+agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host>
+```
+
+Rebuilds never replace that stable command with an epoch path, and the contents of the host
+process `PATH` do not affect whether the project-local framework can be spawned.
+
+Each later `artifact.available` event copies the new target into an immutable installed
+generation. Top-level directories switch by atomic symlink (or Windows junction) rename and
+top-level files by atomic sibling-file rename, so a host sees an old or a new complete entry and
+no synchronized directory disappears between generations. A failed publication rolls the pointers
+back to the prior generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build
+emits no `artifact.available` at all, so the last-good install is untouched. Re-sync writes the
+host cache directly and does not invoke the Claude or Codex CLI again.
+
+Stopping the dev server leaves the marked development install in place. Hooks and Skills remain
+on disk, while the stable proxy command fails closed until that project's dev server is running
+again.
+
+## Live host MCP proxy
+
+A host can keep one stdio MCP process connected while `dev` rebuilds the generated server behind
+it. The command, the `/mcp/host/<serverName>` endpoint, and its discovery through the project's
+development lock are documented in
+[MCP servers and MCP Apps](../authoring/mcp.mdx).
+
+One rebuild rule matters here: a generated server that crashes is **not** silently respawned
+within the same epoch. Calls remain failed until a successful rebuild swaps in a newly primed
+epoch session.
+
+## Optional Agent API
+
+The Agent API is a separate, authenticated Streamable HTTP MCP endpoint for a Codex client. It is
+**off by default** and is mounted only at `/mcp` on the existing loopback foreground server:
+
+```sh
+AGENT_BUNDLE_AGENT_API_TOKEN='replace-with-a-secret' \
+  npx agent-bundle dev --agent-api --no-open --port 3100
+```
+
+`dev: { agentApi: true }` enables it from configuration, and `--no-agent-api` overrides that
+setting. Startup fails **before serving** if the endpoint is enabled without
+`AGENT_BUNDLE_AGENT_API_TOKEN`. The fixed token is read once, never logged, persisted, or
+returned, and is required as standard `Authorization: Bearer` authentication. Clients may omit
+`Origin`; a supplied origin must exactly match the foreground URL. When the endpoint is disabled
+it is absent, not merely unauthorized.
+
+It has exactly thirteen fixed, ordered tools:
+
+| # | Tool | # | Tool |
+| --- | --- | --- | --- |
+| 1 | `project_status` | 8 | `hooks_list` |
+| 2 | `skills_list` | 9 | `hook_simulate` |
+| 3 | `skill_inspect` | 10 | `evals_list` |
+| 4 | `artifacts_list` | 11 | `eval_run` |
+| 5 | `artifact_inspect` | 12 | `eval_get` |
+| 6 | `mcp_servers_list` | 13 | `diagnostics_list` |
+| 7 | `mcp_invoke` | | |
+
+`eval_run` is limited to deterministic harnesses; it cannot select native hosts. Tool schemas
+reject undeclared root, path, command, cwd, environment, harness, evidence, and outcome fields.
+Artifact-backed calls may name an epoch id; otherwise they atomically lease the active epoch, so
+a hot rebuild sends later calls to the new epoch while an admitted call stays pinned to its
+original epoch. The transport is stateless, so an initialized client can issue later requests at
+the same fixed URL once the foreground server returns.
+
+## Contributor UI HMR
+
+Working on the Workbench UI itself is a different loop from consuming a published one. Start it
+only with a running foreground server:
+
+```sh
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
+```
+
+`packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev` serves
+prebuilt assets and project events; it does not run an Rsbuild development server.
+
+## Next
+
+- [Testing](./testing.mdx) — the proof levels behind the surfaces the Workbench exercises.
+- [Evaluations](./evaluations.mdx) — eval runs, comparisons, and the Eval page.

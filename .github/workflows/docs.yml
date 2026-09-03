@@ -1,0 +1,98 @@
+name: Docs
+
+# Validates the Rspress documentation site (website/) on every pull request
+# and push to main, and deploys website/doc_build to GitHub Pages from main
+# (on push, or on a manual dispatch of the main branch).
+#
+# No `paths:` filter on purpose: package-source changes can break TypeDoc
+# generation and the generated reference pages without touching website/**,
+# and a path-filtered workflow can never safely become a required check.
+# Website-only PRs skip the heavy jobs in ci.yml (scripts/classify-docs-only.mjs
+# treats website/** as docs-only) because this workflow covers them.
+#
+# One-time prerequisite: repository Settings -> Pages -> Source must be
+# "GitHub Actions" (REST: build_type=workflow), or deploy-pages fails.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR pushes cancel the superseded run of the same PR. Every run that can
+# deploy (push or manual dispatch on main) shares one non-cancelling group so
+# build-and-deploy runs execute in order and an older, slower build can never
+# deploy over a newer one (GitHub keeps at most one pending run per group, so
+# a superseded pending build is dropped, never reordered). Dispatches on other
+# refs get SHA-keyed groups.
+concurrency:
+  group: docs-${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'main' || github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Docs site (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      # Website-only PRs skip every ci.yml job that lints, so lint here too.
+      - run: pnpm lint
+      # Typecheck the site config and build it. Rspress's own dead-link,
+      # dead-anchor, dead-image, and language-parity checks fail the build if
+      # TypeDoc or the generated reference pages are missing, since the
+      # authored pages link to them.
+      - run: pnpm docs:site:build
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/doc_build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Never cancel an in-flight Pages deployment.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      # Re-running an older main run (or any path that bypasses the queue
+      # above) must not publish a stale site: only deploy when this commit is
+      # still the head of main.
+      - name: Confirm this commit is still the head of main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped deploy: main moved to ${head}; this run built ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.head.outputs.deploy == 'true'
+        uses: actions/configure-pages@v6
+      - if: steps.head.outputs.deploy == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v5

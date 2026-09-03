@@ -1,0 +1,88 @@
+---
+description: 'The runtime contract for generated agent-bundle executables: the Node.js floor, host path tokens, AGENT_BUNDLE environment variables, .env precedence, and durable state locations.'
+---
+
+# Runtime environment
+
+## Node.js
+
+The compiler and the Workbench need **Node.js 22.19 or later**; generated executables target
+**Node.js 22.12 or newer** unless `runtime.node` raises that floor. Both are stated in
+[Installation](../guide/start/installation.mdx), and the selected executable floor is recorded as
+`runtime.node` in the artifact manifest.
+
+## Host path tokens
+
+Generated documents reference the plugin root through the token each host substitutes, and the
+compiler writes the right spelling per target rather than assuming one:
+
+| Host | Plugin root | Plugin data |
+| --- | --- | --- |
+| Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
+| Codex | `${PLUGIN_ROOT}` (hook commands only) | — (rejected: no documented host equivalent) |
+| portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
+
+Substitution is **positional, not global**. Codex's `${PLUGIN_ROOT}` is the command root of its
+generated hook commands and nothing else: the Codex MCP runtime interpolates no path tokens, so a
+plugin-root token in an MCP `command`, `args`, or `env` value is accepted only when it leads the
+value and the server's `cwd` is the plugin root, in which case the compiler rewrites it to a
+`./`-relative path under `cwd: "./"`; an embedded token, a token without that `cwd`, or any
+plugin-data or workspace-root token is a build error. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` and
+its siblings in Skill and agent content, hook and monitor commands, MCP servers, and LSP servers
+only — never in `settings.json`, which is why `claude.settings` rejects path tokens outright.
+Cursor's pinned loader has its own substituted-field table, and a token outside it reports
+`AB6028` at build time and `AB7320` from Doctor.
+
+## Environment variables
+
+| Variable | Read by | Meaning |
+| --- | --- | --- |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The durable-state anchor. Overrides the built-in fallback. |
+| `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | The bearer token the Agent API requires before it can be enabled. |
+| `AGENT_BUNDLE_HOOK_HOST` | Generated hook wrappers | Pins the declared host explicitly instead of detecting it. |
+| `AGENT_BUNDLE_HOOK_SIMULATION` | Generated hook wrappers | `1` marks a simulated invocation; the Workbench hook playground sets it. |
+| `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | Contributor test suites | `1` compares the installed host CLI contract. |
+| `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | Contributor test suites | `1` runs the signed-in Claude native smoke. |
+| `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | Contributor test suites | `1` runs the signed-in Codex native smoke. |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | Contributor HMR (`packages/workbench/scripts/dev.mjs`) | The running Agent Bundle foreground server URL required before Workbench UI HMR starts. See [Developer Workbench](../guide/development/workbench.mdx). |
+
+The three native-smoke opt-ins exist because those runs need a real signed-in CLI; they are never
+part of an ordinary test run.
+
+## .env precedence under `mcp run`
+
+`agent-bundle mcp run` composes the launch environment in three layers, lowest priority first:
+
+1. The **generated server's own env**, with path tokens already resolved.
+2. The **`.env` file layer**.
+3. The operator's real `process.env`, so an exported variable always wins.
+
+The `.env` layer is the conventional Rsbuild set at the project root (the runtime calls this the
+workspace root) — `.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local` — unless
+`--env-file <path>` replaces it with exactly the files you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
+scratch object, so the real `process.env` is never mutated.
+
+## Durable state
+
+Durable state resolves to `$AGENT_BUNDLE_PLUGIN_ROOT/state`, falling back to the artifact root, or
+to `./.agent-bundle/state` for CLI bins. Only a `workspace-durable` state definition uses the
+SQLite driver; other lifetimes use the in-memory driver and keep nothing on disk.
+
+Under `mcp run`, plugin-root anchors in **env values** expand to the project root by default,
+not the artifact: the artifact is an ephemeral build product there, and anchoring durable state on
+it would fragment that state on every rebuild. Pass `--plugin-root <path>` pointing at the
+artifact target root for a byte-faithful rehearsal of a copied-artifact launch.
+
+A per-server state directory uses the server name when it is a single safe segment; any other
+name becomes a content-addressed `server-<digest>` segment, so a name like `../shared` can never
+traverse out of the state root.
+
+Default state projection budgets are 5,000 ms per commit, 262,144 bytes per event, 1,048,576 bytes
+of state, and 100,000 revisions. `agent-bundle inspect --state` reports the resolved driver,
+lifetime, durable location, and budget source for each definition.
+
+## Next
+
+- [Security](./security.mdx) — the credential and network boundaries around these processes.
+- [CLI](./cli.mdx) — the flags referenced above.

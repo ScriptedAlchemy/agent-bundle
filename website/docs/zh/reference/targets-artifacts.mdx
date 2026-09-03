@@ -1,0 +1,69 @@
+---
+description: '各 agent-bundle target 输出什么，以及产物清单契约：文件种类、摘要、源输入、target schema 固定值与已记录的校验状态。'
+---
+
+# Target 与产物
+
+target 表格——各 target 输出哪种布局，以及 portable 标准为何省略规则、命令与钩子——在
+[配置模型](../guide/authoring/index.mdx)中。目录布局在
+[项目结构](../guide/start/project-structure.mdx)中。本页讲的是这些布局必须满足的产物契约。
+
+## 每个 target 目录都可分发
+
+已构建的 target 目录就是分发单位：构建之后没有打包步骤。每个目录都携带宿主要读取的组件、一份使用捆绑包
+真实插件名与市场名写成的生成式 `INSTALL.md`，以及该 target 所需的安装表面。
+
+| Target | 市场清单 | 安装表面 |
+| --- | --- | --- |
+| `claude` | 本地市场清单。 | `claude plugin marketplace add` + `claude plugin install`。 |
+| `codex` | 本地市场清单。 | `codex plugin marketplace add` + `codex plugin add`。 |
+| `cursor` | `marketplace: true` 时生成本地市场清单（`.cursor-plugin/marketplace.json`）。 | `install.mjs`。 |
+| `portable` | —— | `install.mjs`。 |
+| `plugin` | Claude、Codex 与 Cursor 三份清单，外加一份生成的 `AGENTS.md`。 | `install.mjs` 与各宿主 CLI。 |
+
+当某个 target 缺少必需的安装表面文件时，产物校验会报错，因此捆绑包不可能在缺少其 `INSTALL.md` 所承诺的
+安装器的情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。
+
+## agent-bundle.manifest.json
+
+每份产物输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
+`doctor --from`，以及 packed 与 installed-host 证明级别。
+
+| 字段 | 内容 |
+| --- | --- |
+| `producer` | `{ name: 'agent-bundle', version }`。 |
+| `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、经过校验的 `packageName` 与 `packageVersion`（未打包的开发项目中不存在），以及 `sourceInputs`。 |
+| `files` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
+| `runtime` | `{ node }` —— 所选的生成式可执行文件下限。 |
+| `targets` | 每个 target 的：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
+| `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
+| `validation` | `source`、`artifact` 与各 target 的已记录状态。 |
+
+`kind` 取值为 `bundle`、`copy`、`generated` 或 `prebuilt` —— 分别是打包入口、按字节复制、编译器生成的
+文档，或预构建 payload 文件。`sourceInputs` 记录每个输入路径及其自身的 SHA-256，并在相关时记录它是否
+可执行。
+
+由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工改过的生成文件会
+失败。正是这一契约，让 `validate --artifact`、`mcp` 与 `hooks` 能在项目源码已被删除的产物上工作。
+
+## 版本与修订
+
+有四条版本轴被分别追踪，并且被期望彼此一致：
+
+- **源码** —— 项目 `package.json` 中的发布版本。
+- **已构建产物** —— 清单中的 `project.packageVersion`。
+- **已安装产物** —— 在宿主已安装根目录下找到的那份清单。
+- **运行中的进程** —— 活跃的 MCP `initialize` 所报告的版本。
+
+`host-install` 证明级别会记录全部四者，并在任何一项缺失或不一致时以失败告终。`prepack` 则为前两者，外加
+规范化后的插件元数据与宿主清单把关（`AB7013`）。
+
+target 行还记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
+宿主版本）。两者都不做哈希：Git 已经为仓库自有内容做了版本管理，在仓库内部再哈希一遍会让每次编辑表格
+都产生变动噪声。哈希固定只保留给 vendored 的外部内容 —— `src/adapters/schemas/*` 下带 `PROVENANCE.json`
+的宿主文档 schema、Agent Skills schema 固定值，以及输出文件与源输入。
+
+## 下一步
+
+- [产物校验](../guide/distribution/validation.mdx) —— 读取这份清单的那些检查。
+- [运行时环境](./runtime-environment.mdx) —— 输出的可执行文件在运行时假定了什么。

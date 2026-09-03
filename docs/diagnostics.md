@@ -2,9 +2,12 @@
 
 Every agent-bundle failure or nudge is one structured diagnostic: a stable
 `code` (`AB` + four digits), a `severity` (`error`, `warning`, or `info`), a
-`message`, and usually a `sourcePath` and a `recovery` hint. Commands exit
-nonzero only when an **error** diagnostic is present; warnings and infos never
-gate a build, a validation, or a dev rebuild.
+`message`, and usually a `sourcePath` and a `recovery` hint. The
+diagnostic-gated commands (`build`, `prepack`, `validate`, `doctor`, `install`,
+`dev`) exit nonzero only when an **error** diagnostic is present; warnings and
+infos never gate a build, a validation, or a dev rebuild. `eval` and `inspect`
+additionally exit `1` for a failing or inconclusive trial or an invalid model
+even when no error diagnostic was reported.
 
 ## Code families
 

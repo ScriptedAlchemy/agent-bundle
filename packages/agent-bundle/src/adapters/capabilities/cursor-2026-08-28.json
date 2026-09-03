@@ -469,6 +469,7 @@
       "schemaOnlyFields": ["displayName", "publisher", "category", "tags", "minClientVersions"],
       "state": "supported"
     },
+    "marketplace": ".cursor-plugin/marketplace.json",
     "marketplaceManifest": {
       "entryFields": ["name", "source", "description", "version", "author", "homepage", "repository", "license", "keywords", "logo", "category", "tags", "skills", "rules", "agents", "commands", "hooks", "mcpServers", "variables"],
       "evidence": [

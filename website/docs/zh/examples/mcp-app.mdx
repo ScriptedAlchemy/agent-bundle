@@ -1,0 +1,95 @@
+---
+description: 'MCP App 示例：把一条服务就绪度工作流表达为生成的 stdio MCP 服务器、带类型的工具、交互式 MCP App 资源、Skill、钩子、脚本与确定性 eval。'
+---
+
+# MCP App
+
+一条服务就绪度工作流，只表达一次，却输出为宿主能触达的每一种表面：一个真实的本地 MCP 服务器、一个带
+类型的工具、一个交互式 MCP App 资源、一个 Skill、一个 session-start 钩子、一个夹具检查脚本，以及一个
+确定性 eval。当你想看清这些表面如何拼在一起、而不是单独研究其中之一时，就该读这个示例。
+
+- **在仓库根目录运行：** `pnpm example:mcp-app`
+- **包名：** `@agent-bundle-example/mcp-app`
+- **公开依赖：** `agent-bundle`（`workspace:*`）、`@modelcontextprotocol/server`、
+  `@modelcontextprotocol/ext-apps`、`zod`；浏览器端 App 测试还用到 `@rstest/browser`、`@rstest/core`、
+  `@rstest/playwright` 与 `playwright`
+- **Target：** `portable`、`codex`、`claude`——MCP App 资源仅保留在 portable
+- **凭据：** 不需要——eval 与夹具检查只读取签入的数据
+- **源码：** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
+
+## 它证明什么
+
+- **MCP 入口约定。** `src/mcp/status.ts` 默认导出 `status` 服务器工厂，而配置没有声明服务器 `entry`——构建
+  通过 `src/mcp/<server-id>.ts` 约定发现它。见
+  [MCP 服务器与 MCP App](../guide/authoring/mcp.mdx)。
+- **生成的 stdio 生命周期不由你来写。** 构建会把那个工厂包进生命周期外壳：console 重定向到 stderr 的
+  守卫、信号处理、stdin EOF 退出、有界关停与心跳。
+- **MCP App 是编译出来的资源，不是被服务的页面。** 声明的 app 在 portable target 下编译为
+  `mcp-apps/status.html`，并带有稳定的 `resourceUri`。Codex 与 Claude 保留各自的宿主产物，但不包含这份
+  portable 的 App 资源。
+- **降级证据是一等公民。** `status` 服务器提供不可变的 `compiler` 与 `payments-api` 健康记录，而
+  `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是一张全绿截图。
+- **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
+  `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上——也就是
+  [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
+
+## 编写了什么
+
+| 路径 | 是什么 |
+| --- | --- |
+| `src/mcp/status.ts` | 按约定被发现的 `status` 服务器工厂，提供那两条健康记录。 |
+| `views/status-panel.ts` / `views/status-panel.html` | 编译为 `mcp-apps/status.html` 的 MCP App 入口与模板。 |
+| `src/skills/service-readiness/` | 做出服务就绪度判断所需的证据、检查与报告。 |
+| `src/hooks/session-start.ts` | 把就绪度工作流加入兼容宿主的会话。 |
+| `src/scripts/check-service-fixture.ts` | 在发布演练之前校验签入的编译器夹具。 |
+| `evals/status.eval.ts` | 确定性的 `mcp-app-status` 套件及其 `status-is-healthy` 用例。 |
+
+## 在 Workbench 中操作
+
+1. **Overview** 打开时是 Bundle 仪表盘。它的 Author、Build、Exercise 与 Evaluate 阶段把源码中的能力与
+   它的输出产物、运行时证据和 eval 结果连起来。
+2. **Skills** 默认选中 `service-readiness`；把它编写好的状态策略与就绪度报告资源，与生成输出及其显式
+   eval 覆盖对比。**Hooks** 默认是一份已填充的 Claude `sessionStart` 规范输入。
+3. **Playground** 默认是脚本执行、Claude target 与 `check-service-fixture`。运行它并等待会话定稿：输出
+   的检查器会解析自己输出模块旁边打包好的状态夹具，因此它的成功与 shell 的工作目录无关。
+4. **Artifacts** 在选中 portable target 时，就是 `mcp-apps/status.html` 出现的地方。在存在两次 eval
+   运行之前，**Comparisons** 会刻意显示
+   `At least two recorded runs are needed before a comparison can be aligned.`——这是精确的空状态，
+   不是错误。
+5. **MCP playground** 默认是 portable 与 `status` 服务器。打开会话、列出工具、选择 `show-status`、
+   选中 `payments-api` 并调用它。调用历史会显示降级摘要，以及标注了 Availability 与 P95 latency 的检查，
+   其中后者失败。打开 App 预览：渲染出的面板通过 MCP Apps 桥接展示同一条记录，并带一个以文字标注的
+   琥珀色 `degraded` 指示。检视协议轨迹、使用 **Restart MCP session**，然后关闭、重置并重新打开会话，
+   以演练整个生命周期。
+6. **Evals** 默认选中 `mcp-app-status`。运行 `status-is-healthy`，查看归属于 `service-readiness` 的那次
+   已完成且通过的试次。
+
+如果你修改了某个源文件，请重建并等到 Failed 或 Idle 状态再判断结果；Building 状态仍在进行中。
+
+## 非交互检查
+
+在仓库级 `pnpm build` 之后：
+
+```sh
+cd examples/mcp-app
+pnpm validate
+pnpm build
+pnpm exec agent-bundle eval --case status-is-healthy --trials 1
+```
+
+`pnpm check` 是不打开 Workbench 的“校验加构建”这一对。
+
+## 在 stdio 上运行服务器
+
+```sh
+pnpm exec agent-bundle mcp run --server status --target portable
+```
+
+`mcp run` 会从 portable target 的 MCP 清单解析出生成的入口，并先构建一份临时产物；传入
+`--artifact artifact` 可改为复用 `pnpm build` 的输出。关闭 stdin 以 0 退出，Ctrl-C 以 130 退出，
+每个服务器的状态持久化在 `.agent-bundle/mcp-run/portable/status` 下。
+
+该命令默认会加载项目根目录的 `.env` 集合，包括所选 `--mode` 的变体。启动环境的优先级是清单 env，
+然后是 `.env` 文件，最后是导出的操作者变量。可重复的 `--env-file <path>` 会替换那些约定文件，
+`--no-env` 跳过它们，而 `--plugin-root <path>` 只用于复制产物后的演练。完整契约见
+[运行时环境](../reference/runtime-environment.mdx)。

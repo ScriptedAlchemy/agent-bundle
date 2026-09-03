@@ -1,0 +1,207 @@
+---
+description: '通过框架 harness 测试 agent-bundle 路由：rstest 配置辅助函数、renderRoute、九个证明级别，以及生成式插件的契约矩阵。'
+---
+
+# 测试
+
+路由模块通过框架来测试，而不是通过手写的打包器配置。承载该 harness 的有两个子路径，且两者都是选择
+加入的：`@rstest/core` 与 `react` 是可选 peer 依赖，因此从不测试路由的项目两者都不会安装。渲染还需要
+`@agent-bundle/runtime`，只要项目拥有路由模块就已经拥有它——生成的入口以同样的方式导入它。
+
+## 配置辅助函数
+
+`agent-bundle/rstest` 会编译项目一次——与构建执行的路由图编译完全相同，但不构建产物——并返回一个普通的
+Rstest 配置对象，其中携带测试清单、路由加载器、React 的 `react-server` 解析条件以及自动 JSX 运行时：
+
+```ts
+// rstest.route-unit.config.ts
+import { defineConfig } from '@rstest/core';
+import { agentBundleRstest } from 'agent-bundle/rstest';
+
+export default defineConfig(await agentBundleRstest());
+```
+
+route-unit 测试默认匹配 `tests/route-unit/**/*.test.{ts,tsx}`，并且需要**自己独立的** Rstest 运行，
+因为渲染一个路由要求整个 worker 进程启用 Node 的 `react-server` 条件。请把它们排除在项目普通的
+`rstest` 运行之外。
+
+## 渲染一个路由
+
+`agent-bundle/test` 提供这些辅助函数。`renderRoute` 执行一个路由——通过编译后的 route id，或直接导入
+模块——它经过真实的渲染器与真实的请求存储，并解析为最终的 Agent Document：
+
+```ts twoslash
+import { expectDocument, renderRoute } from 'agent-bundle/test';
+
+export const summarizes = async (): Promise<void> => {
+  const { document } = await renderRoute('tool:library/summarize', {
+    input: { title: 'Dune' },
+  });
+
+  expectDocument(document)
+    .toHaveStatus('success')
+    .toContainMarkdown('Dune')
+    .toHaveValue({ chapters: 24 });
+};
+```
+
+`renderRoute` 接受 `input`、`args`（CLI 路由）、请求 `context` 覆盖（包括一个 `context.progress`
+上报器）、渲染 `limits` 以及一个 `signal`。它返回文档、路由上报的请求作用域进度、解析出的 provenance，
+以及由路由自己的 `resultSchema` 解析后的取值。无论调用方是否提供自己的上报器，进度都会被记录。
+
+`testManifest()` 暴露编译后的路由清单，因此一个测试套件可以在进程内遍历每个路由，而不必为每个路由付出
+一次构建的代价。任何失败——未知路由、被拒绝的路由种类、被拒的输入、渲染错误——都会指明 route id、target
+种类与模块 provenance。
+
+针对 Agent Document 契约的匹配器：`toHaveStatus`、`toContainMarkdown`、`toContainText`、
+`toHaveValue`、`toHaveError` 与 `toHaveNodeKinds`。
+
+这就是 route-unit 证明级别，且仅此而已：它证明一个路由模块渲染出了它所声称的文档。它不是关于 MCP
+传输、打包产物或浏览器表面的证据。
+
+## 证明级别
+
+这些级别是刻意分开的。每个辅助函数都会把自己承载的级别写进 provenance，并在每次失败时打印它，因为
+某一级别的通过绝不是另一级别的凭据。
+
+| 级别 | 辅助函数 | 它证明什么 |
+| --- | --- | --- |
+| `route-unit` | `renderRoute`、`renderRouteEvents` | 一个路由模块渲染出了它所声称的文档——以及渲染事件流。 |
+| `mcp-in-memory` | `openInMemoryMcpServer`、`invokeMcpTool`、`readMcpResource`、`getMcpPrompt`、`listMcpSurface`、`runContractMatrix` | 真实生成式 MCP 服务器的协议契约，经由 SDK 的内存内传输。 |
+| `dev-epoch` | `runDevEpochContractMatrix` | 通过 Workbench 会话服务打开的、锁定到某个 epoch 的生成式 stdio 进程；调用方拥有 epoch 租约与进程生命周期，MCP App 路由被覆盖（表面加 `ui://` 扫描）。 |
+| `cli-dispatch` | `invokeCli`、`cliJson`、`cliNdjson` | 一个普通或渲染式 argv 向量在路由式 CLI 自己的 shell 中被解析并执行——包括渲染式 Markdown、显式 TTY、JSON 与 NDJSON 模式——全部在进程内完成。 |
+| `packed-stdio` | `openPackedMcpServer`、`runPackedContractMatrix` | 已构建产物的生成入口作为真实进程通过 stdio 运行。 |
+| `packed-deleted-source` | `removeProjectSource`、`openPackedMcpServer({ deletedSource })`、`runPackedContractMatrix` | 在项目源码与配置被移除并核实缺失之后，打包后的 stdio 进程仍然可以运行。 |
+| `host-install` | `openInstalledHostMcpServer`、`runInstalledHostContractMatrix` | 一份已构建的捆绑包被投放到隔离的宿主根目录、以输出的宿主格式被发现，并从已安装布局中启动。 |
+
+在这七个级别之外还有两个并列级别，共九个。`agent-bundle/test/browser` 为浏览器安全的 `browser-app` 级别
+提供 `mountBrowserApp`，用于在真实浏览器页面中把生产编译的 MCP App HTML 挂载到产品桥接层之上；
+而 `simulated` 复用不带 `sessionEvidence` 的已安装宿主辅助函数 `openInstalledHostMcpServer`
+—— 一份输出的捆绑包被直接投放到隔离的宿主形状根目录并在没有宿主自有安装的情况下启动，它比
+`host-install` 更弱。
+
+```ts twoslash
+import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';
+
+export const proofs = async (): Promise<Record<string, unknown>> => {
+  // mcp-in-memory: the generated server projects the document to protocol content.
+  const call = await invokeMcpTool('summarize', { input: { title: 'Dune' } });
+
+  // cli-dispatch, plain .ts route: resolve argv, execute, and map the exit code.
+  const run = await invokeCli(['library', 'audit', './books', '--max-files', '8']);
+
+  // cli-dispatch, rendered .tsx route: exercise the shell's rendered output modes.
+  const rendered = await invokeCli(['library', 'report', './books', '--ndjson']);
+  const events = cliNdjson(rendered);
+
+  // An explicit TTY proves the in-place progress path rather than the piped one.
+  const tty = await invokeCli(['library', 'report', './books'], { tty: true });
+
+  return {
+    exitCode: run.exitCode,
+    finalEvent: events.at(-1)?.type,
+    inPlaceProgress: tty.stdout.includes('\r\u001B[2K'),
+    scanned: cliJson(run),
+    structured: call.structuredContent,
+  };
+};
+```
+
+`expectEvents` 针对渲染事件流做断言。`toContainSequence` 对序列是宽容的——多出一个 `progress` 或
+`replace` 帧是合法的，不会把一次本该通过的渲染判红——而缺帧、乱序或序号回退仍然会失败。
+`toHaveMonotonicSequence`、`toCompleteOnce`、`toHaveProgress` 与 `toHaveNoErrors` 覆盖契约的其余部分。
+
+### 进程证据刻意很昂贵
+
+在打包级别中，只有 `packed-stdio` 及其严格更强的升级版 `packed-deleted-source` 属于进程证据：打包一次、
+安装一次、构建一次、移除并核实源码缺失一次、启动一次，然后在这一个会话内遍历每个路由的断言。`dev-epoch`
+是另一种形态的进程证据——Workbench 自己的、锁定到 epoch 的生成式 stdio 进程，而非打包后的产物——因此
+`dev-epoch` 通过并不能说明打包会交付什么。deleted-source 的
+旅程还会从生成式服务器读取内嵌的 MCP App 资源；它不证明原生宿主的安装或派发，也不证明那种把产物复制
+到别处的安装方式。
+
+`host-install` 是独立的、关于已安装布局的进程证据。它的确定性适配器模拟通道是无条件运行的，可用的
+Claude 与 Codex 二进制文件还会证明它们各自公开的安装路径，而 Cursor 会显式记录它那不可用的、非交互式
+宿主会话表面。
+
+## 契约矩阵
+
+契约矩阵是框架自有的生成式插件线上契约测试套件。三个入口共享同一份实现；边界差异是显式的能力标记，而
+不是分叉的检查逻辑。项目只需提供 fixture ——合法输入、为每个内存内工具路由声明的 `resultCompat` 策略、
+可选的 `previousResults` 负载、可选的 `cancellation` case，以及一个可选的、带声明式预期的确定性生命
+周期状态转换驱动。
+
+**`runContractMatrix`（`mcp-in-memory`）** 通过 SDK 的内存内传输，对真实的生成式服务器打开一个真实的
+MCP 客户端并运行完整矩阵。它证明：线上表面相对编译器清单的完整性、fixture 覆盖率、成功路径的调用扫描、
+经由每个工具路由自己的 `resultSchema` 的 JSON 序列化往返、在序列化负载上声明的 additive 或 closed
+兼容行为、当前 schema 对旧版服务器负载的接受度、对由所公布的 `listTools` 输入 JSON Schema 派生出的
+负面输入的拒绝，以及调用中途取消的卫生性。内存内传输可能在不做序列化的情况下传递结构化取值，因此矩阵
+会在校验之前用一次显式的 `JSON.parse(JSON.stringify(...))` 往返来填上这个缺口。MCP App 在表面注册上
+被报告为 not-applicable，因为内存内级别并不注册它们。
+
+**`runPackedContractMatrix`（`packed-stdio` / `packed-deleted-source`）** 针对一个已经打开的打包会话
+运行——那一次打包旅程自己拥有会话的打开与关闭。它为以下内容提供进程 stdio 证据：表面完整性（包括
+`listResources` 中编译后的 MCP App 资源 URI）、fixture 覆盖率、成功路径扫描、对所公布输入 schema 的
+拒绝，以及客户端侧的取消卫生性。它无法加载项目路由模块，因为源码可能已被删除并核实缺失，所以序列化
+往返、兼容性探测与版本偏移检查——包括它们逐生命周期阶段的变体——都会以诚实的理由被报告为
+`not-applicable`。打包后的服务器在返回之前会用自己内置的 `resultSchema` 校验每个工具结果；一次成功的
+扫描调用就是那份证据。
+
+**`runInstalledHostContractMatrix`（`host-install`）** 针对 `openInstalledHostMcpServer` 返回的、已经
+打开的会话运行。打开器会从已安装的根目录读取宿主输出的 MCP 文档，核实清单、组件路径、资源路径与钩子
+路径以及产物文件摘要，启动那条已安装的命令，并从真实的 MCP `initialize` 结果中观察运行中的版本。它的
+报告分别记录源码、已构建产物、已安装产物与运行中进程的版本，任何取值缺失或不一致都会失败关闭。元数据
+记录被观察到的宿主二进制版本、适配器修订号、清单与 schema 摘要，以及框架版本。以模块为后端的检查仍然
+诚实地是 not-applicable，因为加载项目模块会跨回源码与构建树。
+
+```ts twoslash
+import { runContractMatrix } from 'agent-bundle/test';
+
+export const matrix = async (): Promise<void> => {
+  await runContractMatrix({
+    fixtures: {
+      'tool:library/summarize': {
+        input: { title: 'Dune' },
+        previousResults: [{ chapters: 24 }],
+        resultCompat: 'additive',
+      },
+    },
+  });
+};
+```
+
+打包与已安装宿主这两个入口接受同样的 fixture 形状，外加它们所针对的会话：`runPackedContractMatrix`
+需要那个已打开的打包会话，以及在移除源码*之前*编译出的清单；而 `runInstalledHostContractMatrix` 需要
+`openInstalledHostMcpServer` 返回的会话以及同一份清单。
+
+### 生命周期 fixture
+
+生命周期 fixture 会在矩阵那一个已打开的客户端上重放
+`unknown → queued → running → first-progress → repeated-progress → terminal`。框架会校验每个阶段的
+结构化内容与渲染输出、additive 与 closed 兼容性、结算之前的实时进度、日志累积、声明的通知、幂等的
+提交重放，以及带类型的预算拒绝。
+
+调用方提供的同存储 `restart` 回调会在该边界上补充持久性证据；没有它时，这项检查诚实地是
+`not-applicable`。打包侧的调用方应把该回调接到既有打包旅程的重启上，而不是另建一条打包、构建与安装的
+路径。生命周期 fixture 可选的 `state.catalog` 断言会把它声明的 id 与 lifetime 固定到同一次挂载状态
+重放所使用的编译器清单上。
+
+### 事件路由与运行时身份
+
+当编译后的清单包含事件路由时，打包与已安装宿主这两个边界会在顺序矩阵事件之前以及整个过程中，采样只读的
+事件运行时状态。如果预热的 `instanceId` 发生变化、产物 epoch 漂移，或者可用性降级为
+`runtime-restarted` 或 `runtime-unavailable`，`runtime-instance-identity` 检查就会失败。内存内运行
+以及不含事件路由的编译产物，会诚实地把运行时身份报告为 `not-applicable`。
+
+没有任何矩阵边界证明浏览器 App HTML 或产物重建重放。
+
+当所公布的输入 schema 声明了 `additionalProperties: false` 时，普通的 `z.object` 工具路由仍可能在不
+触发协议失败的情况下剥掉未知键。当其他生成的负面输入仍然证明了拒绝路径时，负面输入检查会记录这种容忍。
+
+失败的矩阵会抛出一个聚合后的 `AgentTestError`，错误码为 `contract-violation`，其中指明每个失败的路由、
+每项失败的检查，以及这次运行实际承载的证明级别标签。
+
+## 下一步
+
+- [评测](./evaluations.mdx) —— 追问智能体是否根本抵达了插件的那个表面。
+- [产物校验](../distribution/validation.mdx) —— 为已构建捆绑包把关的那些检查。

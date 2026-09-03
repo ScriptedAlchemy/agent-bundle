@@ -1,0 +1,111 @@
+---
+description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: the install command, host scopes, the standalone install.mjs, the package-relative installer bin, and Doctor.'
+---
+
+# Host installation
+
+Every built target directory contains a generated `INSTALL.md` with commands that use the
+bundle's real plugin and marketplace names. The framework CLI performs those same operations:
+
+```sh
+npx agent-bundle install claude --from artifact/claude --scope user
+npx agent-bundle install codex --from artifact/codex
+npx agent-bundle install cursor --from artifact/cursor
+```
+
+`--from` accepts either a target bundle directory or a **source-free artifact root**, as long as
+the root contains the selected host's target directory.
+
+## What each host accepts
+
+| Host | Mechanism | Scopes |
+| --- | --- | --- |
+| Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. | `user`, `project`, `local` |
+| Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. | `user` |
+| Cursor | Copies the bundle into `~/.cursor/plugins/local/<name>`, because Cursor publishes no non-interactive install verb. | `user` |
+
+Because Claude and Codex targets always ship local marketplace manifests, their public CLIs can
+install the emitted directory directly. The installer fails with a typed diagnostic when the
+selected host binary is unavailable, rather than reporting a success it did not achieve. Host
+installation diagnostics are the `AB700x` family: bundle identity, host availability, scope,
+command failure, and collision checks.
+
+## The standalone installer
+
+Cursor, portable, and composite targets include an `install.mjs` that copies the bundle into
+`~/.cursor/plugins/local/<name>` without overwriting collisions:
+
+```sh
+npx agent-bundle install cursor --from artifact/cursor
+# or, from the emitted target directory:
+node ./install.mjs
+```
+
+Its staged copy is idempotent for identical content and refuses version or content collisions. It
+never invokes `sudo` and never changes `PATH`. Artifact validation rejects a built-in target
+whose required install surface is missing, so a bundle cannot ship without the installer it
+promises.
+
+## The package-relative installer bin
+
+When package outputs ship one of those host packs, the build also emits a package-relative
+installer bin. It uses the plugin name when no configured bin claims it, and
+`<plugin-name>-install` otherwise (with a numeric suffix if both are taken). Map that name to the
+generated `dist/bin/*.js` file in `package.json`; consumers then run:
+
+```sh
+<bin> install <host> [--scope <scope>] [--json]
+```
+
+Help lists only the hosts that were actually built. The executable locates the artifact directory
+beside the installed package from `import.meta.url`, never the caller's working directory, so it
+works from `node_modules` regardless of where it is invoked. **No npm lifecycle performs an
+installation** — installing a package never mutates a host's plugin state.
+
+## Development installs are a different thing
+
+`agent-bundle dev --install-host <host>` maintains a *marked development* install that follows
+successful rebuild epochs, with atomic generation switching and a stable proxy command. That is
+covered in [Developer Workbench](../development/workbench.mdx) and is not the same operation as
+`agent-bundle install`.
+
+## Reinstalling after a rebuild
+
+Every emitted installer — `agent-bundle install <host>`, the package-relative bin, and the
+standalone `install.mjs` — shares one replace policy. An identical copy is an `already-installed`
+no-op. A copy of the **same version whose content hash differs** is replaced automatically, so
+rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A different version is
+refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory — one
+this plugin's installer did not place — is refused either way. Cursor copies carry an install receipt
+(`.agent-bundle-install.json`: plugin, version, host, content hash, owned files); replacement is in
+place and touches owned files only, never unowned entries such as `state/`, and `--replace` adopts
+a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data` before
+reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
+`add`. The emitted `INSTALL.md` documents the same recipe per host.
+
+## Inspect an install without changing it
+
+```sh
+npx agent-bundle doctor --host claude --host cursor --json
+npx agent-bundle doctor --from artifact --json
+```
+
+Doctor is read-only. It probes hosts, inventories installed bundles, compares them against a
+supplied bundle, checks registration proof, samples runtime endpoint health and identity,
+inventories durable state, and re-runs the pinned process-free document and loader validators over
+installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
+`current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or
+`not-installed` (`AB7307`).
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
+| `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. |
+| `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. |
+| `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules; the message retains the originating build-validator code. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
+
+## Next
+
+- [Preview packages](./preview-packages.mdx) — where installable tarballs come from today.
+- [Artifact validation](./validation.mdx) — the checks that gate a bundle before it is installed.

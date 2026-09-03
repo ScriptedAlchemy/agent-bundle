@@ -1,0 +1,246 @@
+---
+description: '声明 agent-bundle 生命周期钩子：规范事件、工具选择器、处理器结果契约，以及钩子模拟。'
+---
+
+# 钩子
+
+钩子是一个处理器模块，编译器会把它包装起来并注册到每个宿主原生的钩子文档中。你只需按规范事件分键
+声明一次，适配器就会把事件名、匹配器与结果形状翻译成所选宿主期望的样子。
+
+## 声明一个钩子
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    sessionStart: { handler: './src/hooks/session-start.ts' },
+  },
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+每个事件都接受一个裸的处理器路径、一个条目对象，或者当同一事件需要多个处理器时，接受由两者组成的
+数组：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    beforeTool: [
+      './src/hooks/audit.ts',
+      {
+        handler: './src/hooks/guard-writes.ts',
+        targets: ['claude'],
+        timeout: 10,
+        tools: ['file.write', 'shell'],
+      },
+    ],
+  },
+  plugin: { description: 'Guarded tooling.', name: 'guarded' },
+  targets: ['portable', 'claude'],
+});
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `handler` | 处理器模块，或一个 `prebuilt` 标记，指向已声明 payload 中某个已构建好的文件。 |
+| `targets` | 把钩子限制到特定 target。默认是所有支持钩子的所选 target。 |
+| `timeout` | 原生钩子超时，**单位为秒**。省略则使用所选宿主的默认值。 |
+| `tools` | 决定钩子何时触发的工具选择器。 |
+| `args` | 额外的命令参数。只有预构建处理器接受参数，且只接受 shell 安全的字符串。 |
+
+## 规范事件
+
+| 事件 | 触发时机 |
+| --- | --- |
+| `sessionStart` | 会话开始时。 |
+| `beforeTool` | 工具调用派发之前。 |
+| `afterTool` | 工具调用返回之后。 |
+| `stop` | 智能体即将停止时。 |
+| `agentStart` | 子智能体启动时。 |
+| `agentStop` | 子智能体停止时。 |
+| `workspaceOpen` | 工作区被打开时。请以[事件路由](#事件路由)（`src/events/workspace/open.tsx`）声明它，而不是配置钩子：没有任何 target 会映射这种朴素钩子形式，因此配置声明的 `workspaceOpen` 在每个宿主上都是构建错误——包括 Cursor，它只通过路由形式支持该事件。 |
+
+不实现某个事件的宿主，就不会收到对应的钩子；输出的文档保持诚实，而不是发明一个等价物。
+
+## 工具选择器
+
+`tools` 接受规范选择器——`shell`、`file.read`、`file.write`、`mcp`、`agent`——在宿主有对应原生匹配器时
+翻译过去。Cursor 映射全部五个；Claude Code 没有 `agent`；Codex 没有 `agent` 也没有 `file.read`。钩子上的每个
+选择器都必须在每个所选 target 上可映射，因此以 `codex` 为 target 的 `tools: ['file.read', 'shell']` 会导致构建
+失败，尽管单独的 `shell` 本可以工作。[事件与钩子矩阵](../../reference/events.md)渲染了这张匹配器表。`tools` 同时接受写成 `<target>:<native-name>` 的显式宿主原生选择器，例如 `claude:WebSearch` 或
+`codex:view_image`，这类选择器只会贡献给该宿主的原生匹配器。
+
+选择了工具的钩子必须让每个所选 target 都至少留下一个可用的选择器。一个只限定 `claude:WebSearch`
+却同时以 `codex` 为 target 的钩子会导致构建失败，而不是输出一份匹配器为空、永远不会触发的 Codex 文档。
+
+## 处理器契约
+
+处理器模块默认导出一个函数，它接收事件负载并返回结果。不返回任何内容等同于继续：
+
+```ts
+// src/hooks/session-start.ts
+interface SessionStartEvent {
+  readonly cwd?: string;
+  readonly sessionId?: string;
+  readonly source?: string;
+  readonly transcriptPath?: string;
+}
+
+export default (event: SessionStartEvent) => ({
+  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  outcome: 'continue' as const,
+});
+```
+
+生成的包装层会在把结果投影为宿主原生输出之前先校验它。只接受四个键，并且每一个都会被检查：
+
+| 键 | 契约 |
+| --- | --- |
+| `outcome` | `continue`、`deny` 或 `stop`。 |
+| `reason` | 非空字符串，仅在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
+| `additionalContext` | 追加到智能体上下文的字符串。 |
+| `updatedInput` | 用于替换待执行调用的输入。 |
+
+逐事件的限制是被强制执行的，而不是「写在文档里、希望有人遵守」：
+
+- `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。
+- `beforeTool` 不能停止，也不能在拒绝的同时替换输入。
+- `stop` 只接受 `continue`，或带原因的 `deny`。
+- `agentStop` 不能停止父流程或替换输入；在 Codex 上也不能追加上下文。
+
+未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
+异常却毫无声响的宿主文档。
+
+## 预构建处理器
+
+自行掌控编译的项目可以把钩子指向已声明 payload 中某个已构建好的文件：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  hooks: {
+    afterTool: [{
+      args: ['--host', 'claude'],
+      handler: { prebuilt: './dist/runtime/hook/index.js' },
+      targets: ['claude'],
+      tools: ['file.write'],
+    }],
+  },
+  payload: { runtime: { source: './dist/runtime', targets: ['claude'] } },
+  plugin: { description: 'Self-compiled runtime.', name: 'prebuilt-plugin' },
+  targets: ['claude'],
+});
+```
+
+预构建钩子输出的原生命令形如 `node "<root>/<payload path>" <args…>`——一条配置声明取代了逐宿主手工
+维护的 `hooks/hooks.json`。预构建钩子按原生钩子文档的方式打包：它们不编译包装层，也不会出现在可模拟
+的钩子索引中。
+
+## 事件路由
+
+配置声明的钩子是紧凑形式。第二种编写形态是**事件路由**：`src/events/` 下的一个文件，其路径就是它处理的
+规范事件族（`src/events/tool/before.tsx`、`src/events/stop.tsx`）。它像 MCP 工具路由一样，是一个异步
+默认导出的 Server Component，再加一个可静态提取的 `config` 导出：
+
+```tsx
+// src/events/tool/after.tsx
+import { Agent } from '@agent-bundle/runtime';
+import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
+
+export const config = {
+  runtime: 'standalone', // 'shared' 表示在生成的 MCP 服务器进程内渲染
+  targets: ['claude', 'codex'],
+  timeoutMs: 30_000, // 在宿主自身原生截止时间之内的预算
+  tools: ['file.write'], // 规范选择器 -> 各宿主的原生匹配器
+} satisfies AgentEventRouteConfig;
+
+export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps) {
+  // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
+  return (
+    <Agent.Result>
+      <Agent.Context>{`Recorded an edit reported by ${canonical.provenance.host}.`}</Agent.Context>
+    </Agent.Result>
+  );
+}
+```
+
+`canonical` 是框架推导出的跨宿主身份——`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
+`observedAt`、一个 `sequence`，以及记录触发宿主与原生事件名的 `provenance`。`native` 是经过校验的宿主
+信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的轴保持不可用。
+
+路由通过它渲染出的文档作答。`Agent.Context` 文本成为宿主的附加上下文通道，`Agent.Result` 的 `value` 可以
+携带 `{ outcome: 'continue' | 'deny', reason?, updatedInput? }`。投影按事件、按宿主进行，非法组合在任何
+内容到达宿主之前就会抛错：`session/end`、`compact/after`、`tool/failure` 与 `workspace/open` 在所有宿主上
+都只可观察；被拒绝的 `tool/before` 在 Claude 与 Codex 上成为 `hookSpecificOutput.permissionDecision`，
+在 Cursor 上则是 `{ permission: 'deny', … }`；被拒绝的 `stop` 成为 `{ decision: 'block', reason }` 或
+Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的[事件与钩子矩阵](../../reference/events.md)。
+
+事件路由可以触达全部二十个规范事件族（`session/end`、`prompt/submit`、`compact/before`、
+`permission/request`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
+
+### 线上到底传了什么
+
+两种形态共享输出的 `hooks/hooks.json` 接线，并且都编译成宿主以
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用的包装层。配置声明的处理器
+在该包装层进程内运行。`runtime: 'shared'` 的事件路由则转发给生成的 MCP 服务器进程内的常驻运行时，
+因此钩子与工具共享状态：
+
+1. **宿主 → 包装层（stdin）。** 宿主写入一个 JSON 信封。包装层以 1 MiB 的硬上限流式读取 stdin，只解析
+   恰好一个值，并按宿主、按事件校验它（`session_id`、`transcript_path`、`cwd`、工具字段……）。任何
+   不匹配都以非零退出。
+2. **包装层 → 运行时（IPC）。** 一条按换行分隔的请求——`protocolVersion`、`artifactEpoch`、`event`、
+   `hostContractRevision`、`target` 与校验过的 `native` 信封——经由每用户的 Unix socket（Windows 上为
+   命名管道）发送。socket 目录为 `0700`，socket 为 `0600`，端点哈希绑定了产物 epoch、target 与产物的
+   安装目录，因此两份安装绝不会共享运行时。请求与 `timeoutMs`（默认 5000 ms）竞速。
+3. **运行时渲染。** 服务端拒绝 epoch 不匹配与畸形消息，构造 `canonical` props，并在请求上下文内通过
+   react-server worker 渲染路由组件。
+4. **运行时 → 包装层。** 一条 JSON 回复：`{ status: 'ok', output }`，或 `{ status: 'error', code }`，
+   其中 `code` 为 `epoch-mismatch`、`invalid-message` 或 `runtime-failed`。
+5. **包装层 → 宿主（stdout）。** 宿主原生的响应。对 `tool/before`，即便路由没有渲染任何决定，包装层也
+   总会给出显式的允许/拒绝决定（除非路由拒绝，否则为允许），以宿主自己的字段名表达；沉默只保留给只可
+   观察的事件族。
+
+失败默认是关闭的。唯一的回退是同时编译了独立形态的路由上的 `fallback: 'standalone'`，而且它**只**在
+`runtime-unavailable`（没有活的 socket）时触发。`runtime-timeout`、`epoch-mismatch`、`invalid-message`
+与 `runtime-failed` 都以非零退出——过期的代码绝不会作答，也绝不会输出伪造的响应。
+
+`runtime: 'standalone'` 的路由把它的模块打进包装层自身：同样的规范身份、同样的投影、没有共享的进程状态。
+`AB4817` 会拒绝这样的路由：它需要共享运行时，但在某个 target 上没有生成的 MCP 入口承载它，也没有独立
+回退。
+
+## 检查与模拟
+
+钩子是「构建通过」最没有说服力的表面，因此输出的包装层可以被直接运行：
+
+```sh
+npx agent-bundle inspect --root . --hooks
+npx agent-bundle hooks list --artifact artifact --target claude
+npx agent-bundle hooks simulate --artifact artifact --target claude \
+  --hook session-start-session-start-7ab7e8a5 \
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
+```
+
+`--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为
+`<event>-<handler>-<hash>`，因此像 `session-start` 这样的裸事件名不会匹配任何钩子。
+`session-start-session-start-7ab7e8a5` 正是本页开头那段声明所产生的名称；哈希覆盖事件、处理器路径、
+targets、tools、timeout 与 args，因此声明的任何改动都会得到新名称——要复制的永远是 `hooks list`
+为你的构建打印出的那一个。
+载荷是**规范**输入；包装层会把它转换为宿主的原生信封并按宿主的方式校验，所以 Claude 的
+`sessionStart` 模拟需要 `sessionId`、`transcriptPath`、`cwd` 与 `source`（工具事件还需要
+`toolName`、`toolInput` 与 `toolUseId`）。
+
+`hooks simulate` 运行的是真实输出的包装层——正是宿主将要执行的那个文件——所以你看到的结果就是宿主
+会得到的结果。开发者 Workbench 提供同样的 playground，并展示每次运行的原始 stdout、stderr 与结果。
+
+## 下一步
+
+- [MCP 服务器与 MCP App](./mcp.mdx) —— 另一种可执行表面。
+- [脚本与资源](./scripts-assets.mdx) —— 钩子或 Skill 可以调用的代码。

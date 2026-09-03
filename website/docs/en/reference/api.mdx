@@ -1,0 +1,49 @@
+---
+description: 'The generated agent-bundle type API: which entry points it covers, how it is produced, and why generated symbol documentation is language-neutral.'
+---
+
+# Type API
+
+The symbol-level reference is **generated from the source**, not written by hand. Browse it at
+[Type API](/api/), or reach it from the top navigation.
+
+## What it covers
+
+Every public entry point is documented from its declarations:
+
+| Entry point | Contents |
+| --- | --- |
+| `agent-bundle` | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
+| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, and the `AgentComponentKind` / `componentKindCapability` component-kind helpers. |
+| `agent-bundle/config` | `defineConfig` and the configuration types. |
+| `agent-bundle/test` | The route-testing harness, matchers, and contract matrices. |
+| `agent-bundle/test/browser` | The MCP App bridge harness for browser-rendered views. |
+| `agent-bundle/eval` | Eval suite definitions, assertions, and run comparison. |
+| `agent-bundle/rstest` | The Rstest configuration helper. |
+| `agent-bundle/meta` | The build-time project identity constant, replaced by the compiler in every compiled surface. |
+| `agent-bundle/mcp-apps` | The MCP App resource registry contract, replaced by the compiler in local MCP servers. |
+| `agent-bundle/cli-entry` | The routed-CLI shell every generated CLI executable is built on. |
+| `agent-bundle/mcp-entry` | The stdio MCP entry shell every generated MCP server is wrapped in. |
+| `agent-bundle/routes` | The route-module authoring types (`AgentEventRouteProps`, `ToolRouteProps`, `CliRouteProps`, the `config` shapes) and `appResourceUri`, the static reference to a sibling MCP App the compiler resolves to its `resourceUri`. |
+
+Because it is generated, it always matches the shipped types: signatures, unions, defaults, and
+the error classes each surface can throw. When this Reference section and the generated pages
+disagree, the generated pages are correct.
+
+## Generated pages are language-neutral
+
+The site mirrors the generated reference under both locales, so [/api/](/api/) and
+[/zh/api/](/zh/api/) resolve for readers of either language. The **content** is not translated:
+the symbol documentation is extracted from source comments and stays in the language it was
+authored in.
+
+That is deliberate. A translated copy of generated output would drift from the source on the first
+refactor, and a symbol reference whose types are current but whose prose is stale is worse than
+one that is honestly monolingual. Hand-written pages — everything in the Guide and the rest of
+this Reference — are complete translations.
+
+## Where to start
+
+- Compiling from a script: `build` and `validate` in `agent-bundle/api`.
+- Writing tests: `renderRoute`, `expectDocument`, and the matrices in `agent-bundle/test`, explained in [Testing](../guide/development/testing.mdx).
+- Writing evals: `defineEvalSuite` and the assertions in `agent-bundle/eval`, explained in [Evaluations](../guide/development/evaluations.mdx).

@@ -1,0 +1,240 @@
+---
+pageType: home
+description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into installable Claude Code, Codex, and Cursor artifacts.'
+titleSuffix: ' - Agent plugin compiler for Claude Code, Codex, and Cursor'
+
+hero:
+  name: agent-bundle
+  text: One typed config, every agent host
+  tagline: Describe skills, hooks, MCP servers, and scripts once. Compile installable artifacts for Claude Code, Codex, and Cursor.
+  image:
+    src: /logo.svg
+    alt: agent-bundle logo
+  actions:
+    - theme: brand
+      text: Introduction
+      link: /guide/start/
+    - theme: alt
+      text: Quick start
+      link: /guide/start/quick-start
+
+features:
+  - icon: 🧩
+    title: One typed configuration
+    details: A single agent-bundle.config.ts holds identity, targets, and policy. The src/ conventions fill in everything it leaves silent, and config always wins when both describe the same thing.
+    link: /guide/authoring/
+    span: 4
+  - icon: 📚
+    title: Skills
+    details: One directory per Skill with its SKILL.md and resources, discovered without a declaration and validated against the pinned Agent Skills specification.
+    link: /guide/authoring/skills
+    span: 4
+  - icon: 🪝
+    title: Lifecycle hooks
+    details: Seven events from sessionStart to workspaceOpen, written once in TypeScript and compiled into the wrapper each host actually spawns.
+    link: /guide/authoring/hooks
+    span: 4
+  - icon: 🔌
+    title: MCP servers and MCP Apps
+    details: Hand-written stdio servers, or generated servers where each tool, resource, and prompt is one module. Browser MCP Apps compile to self-contained HTML.
+    link: /guide/authoring/mcp
+    span: 4
+  - icon: 📜
+    title: Scripts, assets, and package entries
+    details: Plain or rendered scripts, byte-for-byte assets, and a CLI bin or library entry emitted from the same project — one build, both outputs.
+    link: /guide/authoring/scripts-assets
+    span: 4
+  - icon: 🖥️
+    title: Local Workbench
+    details: agent-bundle dev serves a loopback Workbench with diagnostics, the artifact tree, an MCP playground with the raw protocol trace, and a hook playground.
+    link: /guide/development/workbench
+    span: 4
+  - icon: 🔬
+    title: Evidence-driven testing
+    details: Route, protocol, CLI, packed, and host-install proof levels turn "it builds" into recorded evidence, and a pass at one level is never reported as a receipt for another.
+    link: /guide/development/testing
+    span: 4
+  - icon: 📊
+    title: Evaluations
+    details: Eval suites with pass, fail, and inconclusive semantics, run against the real emitted artifact rather than a mock of it.
+    link: /guide/development/evaluations
+    span: 4
+  - icon: 📦
+    title: Every target ships on its own
+    details: A built target directory is the unit you install — it carries its host manifests and a generated INSTALL.md. The artifact root beside it holds agent-bundle.manifest.json, the SHA-256 record that validation, MCP, hooks, and evals read.
+    link: /guide/distribution/
+    span: 4
+---
+
+import { Steps, Tab, Tabs } from '@rspress/core/theme';
+
+## What you write, and what you get
+
+The input is one config file and a conventional `src/` tree. The output is one artifact root
+holding a ready-to-install directory per host — each with its own host manifests, generated
+wrappers, and installation instructions written with the bundle's real names — plus the root
+`agent-bundle.manifest.json` that the whole artifact is validated against.
+
+<div className="ab-compare">
+<div>
+
+### You write
+
+```ts title="agent-bundle.config.ts"
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: {
+    name: 'release-tools',
+    description: 'Release-readiness checks.',
+  },
+  hooks: {
+    sessionStart: {
+      handler: './src/hooks/session-start.ts',
+    },
+  },
+  targets: ['claude', 'codex', 'portable'],
+});
+```
+
+```text title="src/"
+src/
+├── skills/release-review/
+│   ├── SKILL.md
+│   └── references/policy.md
+├── hooks/session-start.ts
+├── mcp/status.ts
+└── scripts/check-service.ts
+```
+
+Skills, the MCP server, and the script are picked up by convention. Only the hook needs a
+declaration, because a handler has to be bound to an event.
+
+</div>
+<div>
+
+### The compiler emits
+
+<Tabs>
+<Tab label="Claude Code">
+
+```text title="artifact/claude/"
+artifact/claude/
+├── .claude-plugin/
+│   ├── plugin.json
+│   └── marketplace.json
+├── .mcp.json
+├── hooks/
+│   ├── hooks.json
+│   └── session-start-….mjs
+├── mcp/mcp-status-….mjs
+├── scripts/check-service.mjs
+├── skills/release-review/
+│   ├── SKILL.md
+│   └── references/policy.md
+└── INSTALL.md
+```
+
+</Tab>
+<Tab label="Codex">
+
+```text title="artifact/codex/"
+artifact/codex/
+├── .codex-plugin/plugin.json
+├── .agents/plugins/marketplace.json
+├── .mcp.json
+├── hooks/
+│   ├── hooks.json
+│   └── session-start-….mjs
+├── mcp/mcp-status-….mjs
+├── scripts/check-service.mjs
+├── skills/release-review/
+│   ├── SKILL.md
+│   └── references/policy.md
+└── INSTALL.md
+```
+
+</Tab>
+<Tab label="Portable">
+
+```text title="artifact/portable/"
+artifact/portable/
+├── plugin.json
+├── mcp.json
+├── mcp/mcp-status-….mjs
+├── scripts/check-service.mjs
+├── skills/release-review/
+│   ├── SKILL.md
+│   └── references/policy.md
+├── install.mjs
+└── INSTALL.md
+```
+
+The Agent Plugins open standard has no hook surface. The hook above declares no `targets`, so it
+inherits only the selected targets that support hooks and `portable` is skipped here without a
+diagnostic. Naming it explicitly — `targets: ['portable']` — is `AB4204` at build time instead.
+
+</Tab>
+</Tabs>
+
+Generated wrapper names end in a short digest of the declaration they were compiled from, not of
+their contents. `artifact/agent-bundle.manifest.json` records every emitted file with its SHA-256, so
+later validation compares real bytes rather than checking that a path exists.
+
+</div>
+</div>
+
+## From source to installed plugin
+
+<Steps>
+
+### Describe
+
+Write `agent-bundle.config.ts` and put Skills, hooks, MCP routes, and scripts under `src/`.
+`agent-bundle inspect` shows the normalized model, so you can confirm which files were picked up
+by convention and which were claimed by config.
+
+### Develop
+
+`agent-bundle dev` rebuilds on every change and serves the developer
+[Workbench](/guide/development/workbench) on loopback: diagnostics, Skill documents, the artifact
+tree with provenance, and playgrounds that drive the emitted MCP server and hook wrappers.
+
+### Prove
+
+Test against the artifact with [proof levels](/guide/development/testing) that stay distinct —
+from route-unit tests up to a bundle installed through the real host CLI — and run
+[evaluations](/guide/development/evaluations) whose results are pass, fail, or inconclusive.
+
+### Ship
+
+`agent-bundle build` validates the project and writes one directory per target.
+[Validation](/guide/distribution/validation) checks the artifact against its manifest, and
+[installation](/guide/distribution/installation) uses each host's own install path.
+
+</Steps>
+
+## One source, every host
+
+| Target | What it emits | Installed with |
+| --- | --- | --- |
+| `claude` | The Claude Code plugin layout, with plugin and local marketplace manifests. | `claude plugin marketplace add` and `claude plugin install`, or `agent-bundle install claude`. |
+| `codex` | The Codex plugin layout, with plugin and local marketplace manifests. | `codex plugin marketplace add` and `codex plugin add`, or `agent-bundle install codex`. |
+| `cursor` | The Cursor plugin layout. | The generated `install.mjs`, or `agent-bundle install cursor`. |
+| `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — Skills and MCP servers — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT. | The generated `install.mjs`. |
+| `plugin` | One multi-host bundle carrying the Claude, Codex, and Cursor manifests over shared component directories. | `install.mjs` or any of the host CLIs. |
+
+Hosts differ in what they can load, so the compiler says so at build time: a surface you select
+for a target that cannot express it is a reported diagnostic, never a quiet omission. The one
+deliberate exception is a hook with no `targets` of its own, which inherits only the hosts that
+support hooks — as the `portable` tab above shows — rather than failing. Every diagnostic has a
+stable `AB` code documented in the [diagnostics reference](/reference/diagnostics).
+
+## Start here
+
+- [Installation](/guide/start/installation) — requirements and the `create-agent-bundle`
+  scaffolder.
+- [Quick start](/guide/start/quick-start) — a project from config to installed plugin.
+- [Examples](/examples/) — runnable products, from a Skills starter, hook and script traces, and
+  an interactive MCP App to a complete media-management plugin, plus two advanced references.
+- [Type API](/api/) — the generated reference for every public `agent-bundle` export.

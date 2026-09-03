@@ -1,0 +1,81 @@
+---
+description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整媒体管理插件的四篇导览，外加两个进阶组合参考。'
+---
+
+# 示例
+
+仓库中带有六个示例，它们是产品，而不是测试夹具。每个示例只使用公开的 `agent-bundle` 导出与
+`workspace:*` 依赖，都通过你自己也会用的那套公开命令行来构建与校验，并且都不需要 API key 或已登录的
+宿主就能进入有意义的状态。其中四个在这里有导览：
+
+| 示例 | 证明什么 | 运行 |
+| --- | --- | --- |
+| [Skills 起步项目](./skills-starter.mdx) | 按约定发现的 Skill，以及确定性的 eval 证据。 | `pnpm example:skills` |
+| [钩子与脚本](./hooks-and-scripts.mdx) | 生成的钩子包装器与脚本进程外壳，包含一个阻断性退出码。 | `pnpm example:hooks` |
+| [MCP App](./mcp-app.mdx) | 一个生成的 stdio MCP 服务器，加上一个交互式 MCP App 资源。 | `pnpm example:mcp-app` |
+| [有声书策展器](./audiobook-curator.mdx) | 一个完整的路由树应用：MCP、投影出的 CLI、提供者与持久状态。 | `pnpm example:audiobook` |
+
+另外两个是进阶组合参考，由各自的 README 说明，这里不做导览：
+
+| 示例 | 证明什么 |
+| --- | --- |
+| [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | 一个根任务与两个位于关联 worktree 中的子智能体，通过持久通知协调。 |
+| [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | 一个可选启用的架构实验：一个 RSC 运行时同时服务钩子、MCP 工具与 MCP App 时间线。不是公开 API。 |
+
+## 如何运行
+
+`pnpm example:*` 脚本要在仓库根目录运行。每个脚本先构建工作区，然后启动该示例的前台
+`agent-bundle dev` 服务器并打印回环 [Workbench](../guide/development/workbench.mdx) URL。传入
+`--open`（例如 `pnpm example:<name> -- --open`）才会打开浏览器：
+
+```sh
+pnpm install
+pnpm example:skills
+```
+
+若需要非交互路径，`pnpm examples:check` 会运行每个示例包自己的 `check` 脚本——校验与构建，以及示例自带
+的类型检查与测试——既不启动 dev 服务器，也不打开浏览器：
+
+```sh
+pnpm examples:check
+```
+
+在仓库级 `pnpm build` 构建过本地 `agent-bundle` 工作区依赖之后，每个示例包也直接暴露同样的公开命令。每个示例都有
+`validate`、`build` 与 `check`；四个导览示例与 Worktree Proximity 还有 `dev`，而 RSC Agent Runtime 演示则通过其测试与
+`eval:hosts` 驱动：
+
+```sh
+cd examples/skills-starter
+pnpm validate   # agent-bundle validate
+pnpm build      # agent-bundle build
+pnpm check      # 校验并构建，不打开 Workbench
+pnpm dev        # agent-bundle dev
+```
+
+## 如何读一个示例
+
+下面每个示例页面都记录同样的四件事：这个示例证明什么、它依赖哪些公开包、它在仓库根目录的运行命令，
+以及源码链接。请把页面和源码对照着看——配置文件故意写得很短，因为 `src/` 约定承担了大部分结构。
+
+在探索时，有两个习惯能让 Workbench 的结论值得信任：
+
+- **等待一个已完成的状态。** 重建报告 Idle 或 Failed 时才算结束。Building 仍在进行中，据此下判断
+  正是健康项目看起来像坏了的原因所在。
+- **把失败的重建理解为“上一个可用产物”的行为。** 失败的构建不会发布 epoch，因此 Workbench 会在报告
+  新诊断的同时继续提供之前发布的产物。恢复签入的源码并重建；新的活跃 epoch 才是修复证据。
+
+[钩子与脚本](./hooks-and-scripts.mdx)正因如此专门带了一段有脚本可循、可逆的诊断演练——故意弄坏一个
+处理器，观察失败的重建如何保留上一个可用产物，恢复源码，再把新的 epoch 当作修复证据来读。
+[Skills 起步项目](./skills-starter.mdx)则针对过期的评测证据练习同一套“重建再恢复”的循环；其余导览只要求你
+在评判一次重建之前等到一个已完成的状态。
+
+## 概念分别在哪里
+
+| 示例中的表面 | 指南页面 |
+| --- | --- |
+| Skill 文档及其 `references/` 与 `assets/` | [Skills](../guide/authoring/skills.mdx) |
+| 生命周期钩子 | [钩子](../guide/authoring/hooks.mdx) |
+| 脚本与资源复制 | [脚本与资源](../guide/authoring/scripts-assets.mdx) |
+| MCP 服务器与 MCP App | [MCP 服务器与 MCP App](../guide/authoring/mcp.mdx) |
+| `bin`/`lib` 包构建 | [CLI 与库包入口](../guide/authoring/package-entries.mdx) |
+| eval 套件、用例与 harness | [评测](../guide/development/evaluations.mdx) |

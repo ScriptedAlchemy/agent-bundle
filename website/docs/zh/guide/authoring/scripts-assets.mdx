@@ -1,0 +1,115 @@
+---
+description: '在每个 agent-bundle 产物中发布可执行脚本与静态资源，包括渲染式 .tsx 脚本与四种 CLI 输出模式。'
+---
+
+# 脚本与资源
+
+脚本是产物中除 MCP 服务器之外携带的可执行文件：Skill 让智能体去运行的那个东西，或者钩子想要执行的
+那项检查。资源则是与它们同行的静态文件。
+
+## 脚本
+
+顶层 `scripts` 是一个从稳定输出名到入口路径的记录，或映射到一个带 `entry` 和可选 `targets` 限制的
+对象：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
+  scripts: {
+    'check-service-fixture': './src/scripts/check-service-fixture.ts',
+    'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+这里的键是**输出名**，因此即使源文件移动，它也保持稳定。编译方式取决于入口的扩展名：
+
+| 入口 | 输出 |
+| --- | --- |
+| JavaScript / TypeScript | 在每个所选 target 产物中打包为 `scripts/<name>.mjs`。 |
+| `.sh`、`.bash`、`.py` | 按字节复制，并保留源文件权限位。 |
+
+### 约定
+
+`src/scripts/<name>.ts` 处一个未被认领的普通模块，无需任何声明即可走同一条流水线发布。引用了该文件的
+`scripts` 条目会认领它——上面的例子中 `detect-risk` 之所以保持显式，正是因为它限制了 target。
+
+`src/scripts/` 下的嵌套模块是硬错误（`AB4808`）——输出名必须无歧义。给某一段路径加 `_` 前缀，或用
+显式 `scripts` 条目认领该文件，即可退出。
+
+每个引用了某模块的显式配置条目——`scripts`、`hooks`、`mcp`、`lib`——都会把它从约定中认领走，只有一个
+例外：`bin` 条目**不会**认领 `src/scripts/<name>.ts` 这样的直接子模块。bin 编译到 `dist/bin/<name>.js`，
+与所有 artifact 互不重叠，而且两种外壳运行同一个 `main`，所以该模块会同时作为 npm bin *和* artifact 中的
+`scripts/<name>.mjs` 发布。这样的模块必须导出 `main` 或自执行：只导出 `default` 的普通脚本是 `AB4738`，
+渲染式 `.tsx` 脚本则必须同时导出默认组件和 `main`（`AB4737`）。若只想作为 bin 发布，给某一段路径加 `_`
+前缀即可。
+
+### 渲染式脚本
+
+`src/scripts/<name>.tsx` 是渲染式脚本。它的 async 默认组件接收 `argv` 与 `signal`，并按完整的 CLI
+输出契约通过 Agent 渲染器渲染。它编译为 `scripts/<name>.mjs`，外加一个 `scripts/<name>-flight.mjs`
+react-server worker。
+
+扩展名就是显式、可见的契约。普通 `.ts` 脚本绝不会被包进 React 行为里，而显式的 `scripts` 配置条目
+无论扩展名如何都保持普通形态。改名为 `.ts` 即可退出。
+
+渲染式脚本与渲染式路由 CLI 命令共享同一套输出契约：
+
+| 模式 | 行为 |
+| --- | --- |
+| 交互式 TTY | 进度就地更新；最终文档以 Markdown 打印。 |
+| 管道输出 | 恰好一份最终 Markdown 文档，没有任何部分回退。 |
+| `--json` | 经过校验的规范最终值。 |
+| `--ndjson` | 带序号的渲染事件流。 |
+
+`--ndjson` 是 agent-bundle 的 CLI 与脚本输出方言，不是 MCP JSON-RPC，并且绝不会作为非 MCP 字节写入
+某个 MCP 服务器的 stdout。诊断信息留在 stderr；机器可读输出独占 stdout。
+
+### 运行脚本
+
+`script.run` 是生产环境挂载、可信本地的 Workbench Playground 操作。它只在受管工作区中、为所选 target
+运行所选的、由清单拥有的输出脚本，并保留有界的 stdout 与 stderr、退出码、取消状态与原始事件引用。
+它无法被交给一条浏览器提供的命令。
+
+## 资源
+
+根 `assets/` 目录下的文件按字节复制到每个 target 产物的 `assets/` 目录。这个约定不需要任何配置。
+
+顶层 `assets` 列表会**取代**该约定，改为显式条目——字面文件路径、整个目录，或 glob，全部相对项目
+根目录解析：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  assets: ['release/*.json', 'evals/fixtures/status/result.json'],
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+`assets/` 之外的条目在产物的 `assets/` 目录下保留其项目相对路径，因此 `release/notes.json` 会落在
+`assets/release/notes.json`。
+
+## 完整性
+
+生成的 `agent-bundle.manifest.json` 为每个输出文件记录 SHA-256 摘要，包括被复制的脚本与资源。因此
+产物校验是内容寻址的：它把真实字节与清单比对，而不是检查某个路径是否存在。
+
+```sh
+npx agent-bundle validate --artifact artifact --strict
+```
+
+## 下一步
+
+- [包入口](./package-entries.mdx) —— `bin`、`lib`、路由式 CLI 与打包器逃生舱。
+- [钩子](./hooks.mdx) —— 经常调用这些脚本的生命周期处理器。

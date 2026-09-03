@@ -1,0 +1,145 @@
+---
+description: 'The agent-bundle configuration model: defineConfig, every top-level field, and the boundary between config and conventions.'
+---
+
+# Configuration model
+
+`agent-bundle.config.ts` at the project root is the whole declarative surface. It is one small
+flat object holding project identity, target selection, and the policy no route file can own.
+Everything structural — which Skills exist, which MCP routes exist, which scripts ship — comes
+from the `src/` conventions unless you override it here.
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+`defineConfig` is an identity helper: it exists to type the object, not to transform it.
+
+## Project identity
+
+`plugin` names the plugin as hosts will see it:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | The host-native plugin slug. Never the npm package name. |
+| `description` | One sentence shown by hosts and written into generated manifests. |
+| `logo` | Project-relative path to an image copied into host artifacts that support it. |
+| `version` | **Deprecated.** The release version belongs in `package.json`. |
+
+`package.json` is authoritative for release identity. A declared `plugin.version` that disagrees
+with it reports the `AB4008` warning, and a release build with no version anywhere is refused
+outright (`AB4013`) rather than packaging the development fallback. Plugin code reads its own
+identity from `agent-bundle/meta` instead of a hand-maintained version module.
+
+## Targets
+
+`targets` selects the artifact layouts the build emits:
+
+| Target | What it emits |
+| --- | --- |
+| `plugin` | One multi-host bundle with `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared component directories. |
+| `claude` | The Claude Code plugin layout. |
+| `codex` | The Codex plugin layout. |
+| `cursor` | The Cursor plugin layout. |
+| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0). Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+
+The portable standard packages only Skills and MCP servers, so rules, commands, and hooks are
+honestly unavailable on that target rather than silently dropped. Claude Code consumes the
+standard only through CLI translation, which is why its dedicated target remains necessary.
+
+## The full surface
+
+| Field | Owns |
+| --- | --- |
+| `plugin` | Project identity. Required. |
+| `targets` | Which artifact layouts to emit. |
+| `skills` | Explicit Skill paths or globs, replacing the `src/skills/*` convention. See [Skills](./skills.mdx). |
+| `hooks` | Lifecycle hook handlers, keyed by canonical event. See [Hooks](./hooks.mdx). |
+| `mcp` | MCP server declarations and their MCP Apps. See [MCP servers and Apps](./mcp.mdx). |
+| `scripts` | Stable output names mapped to script entries. See [Scripts and assets](./scripts-assets.mdx). |
+| `assets` | Explicit asset entries replacing the root `assets/` convention. |
+| `bin` / `lib` | The npm package build. See [Package entries](./package-entries.mdx). |
+| `routes` | Power-tier route-graph policy: `routes.servers` per-server modes, `routes.cli`, and `routes.mcpCommands` projection. |
+| `output` | `distPath` — where the artifact root lives. |
+| `runtime` | `node` — the minimum Node.js version for generated executables. |
+| `payload` | Prebuilt directory trees packaged byte-for-byte. |
+| `state` | `false` to disable the `src/state.ts` convention. |
+| `marketplace` | `true` adds Cursor's optional `.cursor-plugin/marketplace.json`. Claude Code and Codex always emit their local marketplace manifests regardless. |
+| `evals` | Eval suite discovery (`include`), the run directory (`runsDir`), and the optional `semanticGrader`. See [Evaluations](../development/evaluations.mdx). |
+| `dev` | Development-only settings that never reach an artifact, such as `agentApi`. |
+| `tools` | The single bundler escape hatch. |
+
+Host-scoped extension keys — `claude`, `codex`, `cursor`, `portable` — are contributed by the target
+adapters through declaration merging, so a host-specific value stays in its own adapter instead
+of leaking into compiler core. Ordinary projects need no extension key at all.
+
+## Host-scoped declarations
+
+Every host key is optional and every field inside it is optional. `claude` and `codex` extend
+the shared `AgentBundleHostConfig`, whose single field `nativeHooks` names a project-authored,
+target-native hook document (`hooks.json`) the adapter validates and merges beside the compiled
+hooks. The adapter-owned fields are:
+
+| Key | Fields | Where they land |
+| --- | --- | --- |
+| `claude` (`ClaudeHostConfig`) | `bin`, `channels`, `defaultEnabled`, `dependencies`, `displayName`, `lspServers`, `marketplace`, `metadata`, `monitors`, `outputStyles`, `settings`, `themes`, `userConfig`, `workflows` | `bin`, `outputStyles`, and `workflows` are project directories copied to the plugin-root conventions of the same name; `channels`, `dependencies`, `defaultEnabled`, `displayName`, `metadata`, and `userConfig` are validated into `.claude-plugin/plugin.json` (`channels` must name servers in the emitted `.mcp.json`); `marketplace` enriches the generated marketplace entry; `monitors` and `themes` are experimental and emit `monitors/monitors.json` and one `themes/<key>.json` per key; `lspServers` and `settings` are described below. |
+| `codex` (`CodexHostConfig`) | `apps`, `author`, `homepage`, `interface`, `keywords`, `license`, `marketplace`, `repository` | `author`, `homepage`, `keywords`, `license`, and `repository` are publisher metadata in `.codex-plugin/plugin.json`; `interface` (brand color, category, capabilities, composer icon, default prompts, developer name, …) is merged over the compiler's generated install-surface defaults; `apps` maps registered MCP connection ids into the root `.app.json` compatibility document; `marketplace` authors the emitted `.agents/plugins/marketplace.json` entry — `category` (defaults to the interface category), `displayName` (defaults to the plugin name), and `policy` with `installation` (`AVAILABLE`, `INSTALLED_BY_DEFAULT`, `NOT_AVAILABLE`) and `authentication` (`ON_INSTALL`, `ON_USE`); the source always stays the local plugin root, and any other key is an error rather than a silently shipped field. |
+| `cursor` (`CursorHostConfig`) | `author`, `category`, `homepage`, `keywords`, `license`, `minClientVersions`, `publisher`, `repository`, `tags` | Manifest metadata layered onto the generated `.cursor-plugin/plugin.json`, every field admitted by the pinned Cursor plugin schema. `author` is a closed `{ name, email? }` object (no `url`); `minClientVersions` maps client identifiers to strict `X.Y.Z` semver strings, e.g. `{ cursor: '3.13.0' }`, and anything else is an error. Cursor documents no `nativeHooks` surface, so `cursor` does not extend `AgentBundleHostConfig`. |
+| `portable` ([`PortableManifestConfig`](../../api/interfaces/index.PortableManifestConfig.md)) | `author`, `extensions`, `homepage`, `keywords`, `license`, `repository` | Agent Plugins 1.0.0 §5.4 metadata layered onto the emitted root `plugin.json`; `extensions` maps reverse-domain client namespaces to opaque object payloads (§8). Omitted fields are omitted from the manifest. |
+
+Everything else about a Cursor plugin is derived from the cross-host model. The host capability
+tables in the [host reference](../../reference/hosts.md) record which of these surfaces each pinned
+host version actually honours.
+
+Two Claude Code surfaces deserve a closer look because their contracts are narrower than their
+names suggest:
+
+- **`claude.lspServers`** — emitted as a plugin-root `.lsp.json` by the `claude` target and the
+  Claude half of `plugin`. Path tokens expand only in `command`, `args`, `env`, and
+  `workspaceFolder`. agent-bundle does not include the language-server binary; install it
+  separately so the declared command is available on `PATH`. Codex, Cursor, and the portable
+  format do not receive this configuration.
+- **`claude.settings`** — emitted as a plugin-root `settings.json` that Claude Code applies when
+  the plugin is enabled. The pinned contract supports only `agent` and `subagentStatusLine`, and
+  any other key is rejected rather than shipped as a default Claude Code would silently ignore.
+  No path tokens are expanded here, because `settings.json` is absent from the host's
+  placeholder-substitution table. Declaring `agent` also raises a warning while the plugin
+  `agents/` component is deferred: the referenced agent has to reach the plugin root some other
+  way, such as a prebuilt payload.
+
+## Runtime floor
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  runtime: { node: '24.0' },
+  targets: ['portable'],
+});
+```
+
+Generated executables target Node.js 22.12 or newer by default. `runtime.node` raises that floor
+— it can never be lowered — and the selected floor is recorded as `runtime.node` in the artifact
+manifest.
+
+## JSX means rendering
+
+Structure lives in config and conventions; JSX appears only where something is rendered. An
+executable route is one async default Server Component that does the work and returns `Agent.*`
+nodes, and it calls `await agent()` only when it needs host, session, actor, workspace,
+capability, or state context. There is no public `execute`/`render` split, and a plain `.ts`
+route is never wrapped in React behavior.
+
+## Authorable surfaces
+
+- [Skills](./skills.mdx) — Markdown Skills, their resources, and rendered Skill sources.
+- [Hooks](./hooks.mdx) — the seven canonical lifecycle events and tool selectors.
+- [MCP servers and Apps](./mcp.mdx) — generated route servers, handwritten stdio entries, and browser Apps.
+- [Scripts and assets](./scripts-assets.mdx) — artifact scripts and static files.
+- [Package entries](./package-entries.mdx) — `bin`, `lib`, the routed CLI, and the bundler escape hatch.

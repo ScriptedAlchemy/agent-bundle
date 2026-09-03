@@ -1,0 +1,162 @@
+---
+description: 'agent-bundle 识别的约定 src/ 根目录、配置与约定之间的关系，以及构建输出的落点。'
+---
+
+# 项目结构
+
+一个 agent-bundle 项目就是普通的 Node 包，只是在根目录多了一个文件，并采用约定的 `src/` 目录树。
+这里没有任何东西是强制的：配置沉默时由约定补齐，而当两者描述同一件事时，配置总是胜出。
+
+## 目录布局
+
+```text
+my-plugin/
+├── agent-bundle.config.ts     # 项目标识、targets 与策略
+├── package.json               # 权威的发布版本号与包标识
+├── assets/                    # 按字节复制到每个产物中的静态文件
+└── src/
+    ├── skills/<name>/SKILL.md # 每个目录一个 Skill，并带有自己的资源
+    ├── commands/*.md          # 宿主斜杠命令文档
+    ├── rules/*.mdc            # 宿主规则文档
+    ├── hooks/*.ts             # 由配置引用的生命周期钩子处理器
+    ├── mcp/<server-id>.ts     # 手写的 stdio MCP 服务器入口
+    ├── mcp/<server>/          # 或生成式服务器，每个路由一个模块
+    │   ├── tools/*.tsx
+    │   ├── resources/*.tsx
+    │   ├── prompts/*.tsx
+    │   ├── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
+    │   └── layout.tsx         # 可选的按服务器布局，包裹该服务器的路由
+    ├── scripts/<name>.ts      # 产物脚本（.tsx 通过 Agent 渲染器渲染）
+    ├── cli.ts                 # 单个包 bin
+    ├── cli/**/*.ts            # 或路由式 CLI，嵌套即命令路径
+    ├── index.ts               # 库入口
+    ├── layout.tsx             # 可选的共享布局，包裹每个渲染式路由
+    ├── state.ts               # 项目状态定义
+    └── providers/<name>.ts    # 请求上下文 provider
+```
+
+## 各个根目录的含义
+
+| 路径 | 表面 | 如何退出 |
+| --- | --- | --- |
+| `src/skills/<name>/SKILL.md` | 一个 Skill。目录中其余内容都作为它的资源随行。完全不需要任何声明即可随产物发布。 | 删除该目录，或收窄 `skills` 配置中的 glob。 |
+| `src/commands/*.md` | 扁平的宿主命令文档。 | 删除该文件。 |
+| `src/rules/*.mdc` | 扁平的宿主规则文档。 | 删除该文件。 |
+| `src/mcp/<server-id>.ts` | 某个已声明、但未指定 `entry`、`command` 或 `url` 的 MCP 服务器的 stdio 入口。 | 显式声明 `entry`。 |
+| `src/mcp/<server>/{tools,resources,prompts}/*` | 生成式 MCP 服务器路由。路径提供身份；每个模块提供静态 `config`、schema，以及一个 async 默认 Server Component。 | 把 `routes.servers.<server>` 设为 `custom`、`command` 或 `remote`。 |
+| `src/mcp/<server>/apps/*` | 浏览器 MCP App 入口，编译为自包含 HTML 并注册到生成的服务器上。必须提供静态 `config.resourceUri`。 | 使用自定义服务器，或给文件名加 `_` 前缀。 |
+| `src/scripts/<name>.ts` | 一个普通脚本，在每个所选 target 中编译为 `scripts/<name>.mjs`。嵌套模块是硬错误（`AB4808`）。 | 给某一段路径加 `_` 前缀，或用显式 `scripts` 条目认领该文件。 |
+| `src/scripts/<name>.tsx` | 渲染式脚本：async 默认组件接收 `argv` 与 `signal`，并按 CLI 输出契约通过 Agent 渲染器渲染。 | 改名为 `.ts`、给某一段路径加 `_` 前缀，或认领该文件。 |
+| `src/cli.ts` | 一个以 `plugin.name` 命名的包 bin。 | `bin: false` |
+| `src/cli/**/*.{ts,tsx}` | 路由式 CLI 命令，编译进一张做过冲突检查的命令图与一个可执行文件。嵌套即身份：`src/cli/library/audit.ts` 以 `<bin> library audit` 运行。它取代 `src/cli.ts` 约定。 | `bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。 |
+| `src/index.ts` | 库输出，带声明文件。 | `lib: false` |
+| `src/layout.{ts,tsx}` | 共享文档布局：默认导出一个接收 `{ children, route, signal }` 的组件，在每个渲染式路由——生成式 MCP 工具、资源与提示、渲染式路由 CLI 命令、投影的 MCP 命令与渲染式脚本——外层渲染 `Agent.Result`。事件路由与浏览器 App 永不被包裹。 | 重命名为 `_layout.tsx`。 |
+| `src/mcp/<server>/layout.{ts,tsx}` | 按服务器的布局，嵌套在根布局之内，包裹该生成式服务器的路由。 | 重命名为 `_layout.tsx`，或把 `routes.servers.<server>` 设为非生成模式。 |
+| `src/state.ts` | 项目状态：默认导出 `defineState`。生成的 MCP、路由式 CLI 与渲染式脚本的请求作用域都会挂载它。 | `state: false`，或改名为 `_state.ts`。 |
+| `src/providers/<name>.{ts,tsx}` | 一个请求上下文 provider，挂载在请求句柄的 `providers.<camelCaseName>` 上。 | 给文件名加 `_` 前缀。 |
+| `assets/` | 静态资源，按字节复制到每个 target 产物的 `assets/` 目录。 | 改为声明顶层 `assets` 列表。 |
+
+路由与包入口约定精确匹配 `.ts` 与 `.tsx` 文件；state 约定则专指 `src/state.ts`。被发现的条目在
+规范化模型中带有 `provenance.kind: 'conventional'`，因此 `agent-bundle inspect` 能告诉你某个文件
+是被约定识别的，还是被配置认领的。
+
+## 配置与约定
+
+配置保存任何单个文件都无法拥有的内容——项目标识、target 选择与策略：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+只有当你需要约定无法表达的东西时才添加显式声明——不同的路径、target 限制，或退出约定：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  scripts: {
+    // Restricted to one target, so it cannot ride the convention.
+    'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+当项目呈现出前约定时代的写法时，源码校验会报告**信息级**提示，而不是错误：`AB4730` 对应一个自行连接
+传输层的 stdio 入口（改为默认导出工厂函数即可升级到框架生命周期外壳），`AB4731` / `AB4732` /
+`AB4733` 对应 `src/cli.ts`、`src/index.ts` 或 `src/mcp/<server-id>.ts` 存在、但被显式配置遮蔽的情形。
+`bin: false` 与 `lib: false` 这两个退出方式则完全静默。
+
+## 输出落在哪里
+
+`agent-bundle build` 会写出两类彼此独立的东西。
+
+### 宿主产物
+
+在产物根目录下，每个所选 target 一个目录。命令行把该根目录默认为 `artifact/`，因此它永远不会与下文的包构建
+冲突；`output.distPath` 或 `--output` 可以移动它：
+
+```text
+artifact/
+├── agent-bundle.manifest.json # 每个产出文件及其 SHA-256
+└── plugin/                    # targets: ['plugin'] — 一个多宿主捆绑包
+    ├── .claude-plugin/
+    ├── .codex-plugin/
+    ├── .cursor-plugin/
+    ├── bin/<plugin-name>.mjs      # 路由式 CLI，存在 src/cli/** 时出现
+    ├── skills/
+    ├── hooks/
+    ├── mcp/
+    ├── scripts/
+    ├── assets/
+    ├── AGENTS.md
+    └── INSTALL.md
+```
+
+单宿主布局由 `claude`、`codex`、`cursor` 与 `portable` 这几个 target 提供。
+`agent-bundle.manifest.json` 位于产物根目录、与各 target 目录并列，记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
+
+`output.distPath` 只移动产物根目录；它从不改变每个 target 内部由框架拥有的布局。优先级是 CLI
+`--output`，然后 `output.distPath`，最后是默认值——对同时输出包构建的 `agent-bundle build` 是
+`artifact`，对不带 `packageOutputs` 的编程式 `build()` 是 `dist`。取值必须是非空、限定在项目根目录内的
+相对 POSIX 路径。
+
+### npm 包构建
+
+当项目声明了 `bin`/`lib`——或通过约定提供了它们——同一次构建还会在 `dist/` 下写出可供 node 消费的
+包构建：
+
+```text
+dist/
+├── bin/<name>.js              # 自执行 ESM、shebang、可执行位
+├── <stem>.js                  # 库入口
+└── **/*.d.ts                  # 声明文件，当 lib.dts 开启时
+```
+
+`dist` 是强制忽略的目录：包输出永远不会进入项目源码快照，也不会进入 Skill 与资源发现。两类输出不得重叠：
+在带有包入口的项目上把 `output.distPath` 或 `--output` 指向 `dist` 就是 `AB4706`。默认值已经把二者分开，
+显式写出也无妨：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  output: { distPath: 'artifact' },
+  plugin: { description: 'A CLI plus a plugin.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+## 下一步
+
+- [配置模型](../authoring/index.mdx) —— 完整的配置表面。
+- [Skills](../authoring/skills.mdx)、[钩子](../authoring/hooks.mdx)、
+  [MCP 服务器与 MCP App](../authoring/mcp.mdx) —— 每种表面一页。
+- [脚本与资源](../authoring/scripts-assets.mdx) 与
+  [包入口](../authoring/package-entries.mdx) —— 其余的构建输出。

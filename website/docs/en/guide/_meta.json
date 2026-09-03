@@ -1,0 +1,22 @@
+[
+  {
+    "type": "dir-section-header",
+    "name": "start",
+    "label": "Start"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "authoring",
+    "label": "Authoring"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "development",
+    "label": "Development"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "distribution",
+    "label": "Distribution"
+  }
+]

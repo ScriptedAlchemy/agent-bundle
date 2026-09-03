@@ -1,0 +1,136 @@
+---
+description: 'The agent-bundle contributor workflow: the three local gates, the local-merge loop, Changesets, the opt-in native host smokes, and the documentation site.'
+---
+
+# Contributing
+
+This page is for people changing **agent-bundle itself**. None of it is a requirement for
+authoring a plugin — a plugin author needs `agent-bundle` and Node.js, and nothing on this page.
+
+The repository is a pnpm workspace. Node.js 22.19 or later is the floor here for the same reason
+it is the floor for the framework.
+
+From a fresh checkout:
+
+```sh
+pnpm install
+pnpm build
+```
+
+`pnpm build` builds the workspace packages the rest of the scripts and every example depend on,
+so it comes first after a fresh install.
+
+## The three gates
+
+| Command | What it proves | When to run it |
+| --- | --- | --- |
+| `pnpm check` | The local delivery gate: build, unit, route-unit, projection, and integration tests, lint, typecheck. | While working, and before every push. |
+| `pnpm check:release` | Packaging evidence alongside `pnpm check`: `npm pack` dry run, the release audit, and the packed test pools including the scaffolder template matrix. | Before touching packaging, exports, or the published surface. |
+| `pnpm check:local-ci` | The full hosted CI gate — the three-Node verify matrix plus the examples, release, and micro-eval jobs — in parallel local worktrees. | As the merge gate. |
+
+Narrower scripts exist for iteration: `pnpm test:unit`, `pnpm test:route-unit`,
+`pnpm test:projection`, `pnpm test:integration`, `pnpm lint`, and `pnpm typecheck`. They are
+faster signals, not gates.
+
+## The local-merge loop
+
+`pnpm check:local-ci` exists because a hosted verify leg is slow, and because local green is what
+merges a branch here. It runs every leg in an isolated git worktree pinned to the branch's HEAD
+commit, each with its own `node_modules` and its own temp root:
+
+1. Run `pnpm check:local-ci` on the branch's HEAD commit — uncommitted changes are **not**
+   covered, and the runner warns when it finds them.
+2. If the gate is green, the branch is mergeable.
+3. Hosted CI still runs on the merged commit and stays the asynchronous post-merge safety net. If
+   it disagrees with the local run, the hosted result wins and the merge gets a follow-up fix.
+
+For quick iteration, `pnpm check:local-ci --current-node-only` runs one verify-equivalent leg on
+the active Node. It skips the Node matrix and the examples, release, and micro-eval gates, so it
+is a fast signal rather than a merge gate. `--fresh` recreates the reused leg worktrees when
+staleness is suspected.
+
+The runner resolves each hosted Node line (22.19.x, 24.x, 26.x) from an explicit
+`AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26` override first, then `mise`, then `~/.nvm`,
+then the current process, and version-checks every binary before use. A missing line fails
+with the exact install command rather than silently running the wrong runtime. The leg
+worktrees, the per-step logs, and the leg × step × status × duration × test census summary
+all live under the gitignored `.worktrees/local-ci/` directory.
+
+[`docs/local-ci.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/local-ci.md)
+is the full contract, including what the local gate deliberately does not cover.
+
+## Changesets
+
+Versioning goes through [Changesets](https://github.com/changesets/changesets). Add one in the
+same commit as a user-visible change:
+
+```sh
+pnpm changeset
+```
+
+Pick the affected packages and the bump, and describe the change from the reader's side — a
+changeset is release-note copy, not a commit message. `pnpm version-packages` applies pending
+changesets, and publishing runs `pnpm check:release` before `changeset publish`. Private
+workspace packages, including the examples and this site, are not versioned or tagged.
+
+Nothing is published to npm yet. The current release channel is the pkg.pr.new preview
+tarballs described in [Preview packages](../guide/distribution/preview-packages.mdx).
+
+## Native host smokes are opt-in
+
+Some evidence needs a signed-in Claude or Codex CLI on the machine, so it cannot be a gate. Those
+smokes are opt-in locally and are deliberately skipped in CI; the hosted workflow that runs them
+is `workflow_dispatch`-only and names the host it exercises.
+
+```sh
+pnpm test:packed:native:claude
+pnpm test:packed:native:codex
+pnpm test:host-install:session:claude
+```
+
+Everything else in the test matrix is credential-free. `host-install` keeps an unconditional
+deterministic adapter-simulator lane, available host binaries additionally prove their public
+install paths, and Cursor records its unavailable non-interactive host-session surface explicitly
+rather than reporting a pass it did not earn. That boundary is the whole point of the proof
+levels in [Testing](../guide/development/testing.mdx): a level is never reported as a receipt for
+a stronger one.
+
+Dependency review, package previews, and the release publish workflow are hosted-only for
+structural reasons — the first reads GitHub's advisory database against the pull-request diff,
+and the other two are publish-side effects rather than checks.
+
+## The documentation site
+
+This site is a private workspace package. Run it from the repository root:
+
+```sh
+pnpm docs:site:dev       # local dev server with hot reload
+pnpm docs:site:build     # typecheck, build, and verify the build artifacts
+pnpm docs:site:preview   # serve the built site
+```
+
+`pnpm docs:site:build` is the gate, and the `Docs` workflow runs it on every pull request and
+deploys `main` to GitHub Pages. The build fails on a dead internal link, a dead anchor, a missing
+image, or a page that exists in one locale but not the other — the last one is why every English
+page under `guide/`, `reference/`, `examples/`, and `contributing/` has a Chinese counterpart with
+the same structure. TypeScript samples stay identical across locales; prose and code comments are
+translated. The generated Type API, host capability, event, notice, and diagnostics reference
+pages are rendered from repository sources of truth at build time and mirrored, not translated.
+
+## Repository conventions
+
+Two rules are worth stating because they are easy to break by accident:
+
+- **`examples/*` are user-facing products, not fixtures.** They may use only public
+  `agent-bundle` exports and `workspace:*` dependencies, and they are validated at a desktop
+  viewport. The developer Workbench is a desktop-only application.
+- **Vendored reference material under `repos/` is read-only.** Do not edit, format, or import
+  from it. Application code imports the published package.
+
+The framework's own contracts are documented in the repository next to the code:
+[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md)
+for the authoring model,
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)
+for the package build, and
+[Diagnostics](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md)
+for the `AB` code catalog.

@@ -1,0 +1,56 @@
+---
+description: 'How an agent-bundle project becomes something a host can install: build, validate, and ship each target directory as an independently distributable bundle.'
+---
+
+# Shipping a bundle
+
+`agent-bundle build` makes each target directory **independently distributable**. There is no
+packaging step after the build and no per-host repackaging script: a target directory is the unit
+you copy, publish, or hand to a host CLI.
+
+```sh
+npx agent-bundle build --root . --output artifact
+```
+
+## The pipeline
+
+| Step | Command | What it produces |
+| --- | --- | --- |
+| Build | `agent-bundle build` | One directory per selected target, plus the `dist/` package build when the project declares `bin`/`lib`. |
+| Validate | `agent-bundle validate --artifact <dir> --strict` | Content-addressed proof that the emitted bytes match the manifest, plus host-tool findings where a host publishes a validator. |
+| Install | `agent-bundle install <host> --from <dir>` | The bundle registered in Claude, Codex, or Cursor. |
+
+The build already validates the project before it writes anything, so a separate `validate` run
+against source is a fast pre-flight rather than a required stage. Validating the **artifact** is
+the interesting one, because it needs no project sources at all.
+
+## What ships inside a target directory
+
+Every built target contains a generated `INSTALL.md` written with the bundle's **real** plugin
+and marketplace names — not placeholders — so the file can be followed verbatim. The multi-host
+`plugin` target also carries a generated `AGENTS.md` explaining how to install it into each host.
+
+Claude and Codex targets always include local marketplace manifests, which is what lets their
+public CLIs install the emitted directory directly. Cursor, portable, and composite targets
+include a standalone `install.mjs`, because Cursor exposes marketplace management but no
+non-interactive plugin install verb.
+
+`agent-bundle.manifest.json` records every emitted file with its SHA-256, so validation compares
+real bytes rather than checking that a path exists. The per-target layouts themselves are covered
+in [Project structure](../start/project-structure.mdx).
+
+## The npm-facing half
+
+A project that also ships as an npm package has a second output: `dist/bin/<name>.js` executables
+and a library entry, described in [Package entries](../authoring/package-entries.mdx). When
+package outputs and at least one host pack are built together, the framework also emits a
+package-relative installer bin — see [Host installation](./installation.mdx).
+
+`agent-bundle prepack` is the gate for that half: it runs the release build, dry-runs `npm pack`
+without scripts, and verifies packaged outputs, artifact hashes, bins, and versions.
+
+## In this section
+
+- [Artifact validation](./validation.mdx) — source and artifact validation, and what each host's own tooling contributes.
+- [Host installation](./installation.mdx) — installing into Claude, Codex, and Cursor, and the install scopes each one accepts.
+- [Preview packages](./preview-packages.mdx) — the pkg.pr.new release channel that stands in for npm today.

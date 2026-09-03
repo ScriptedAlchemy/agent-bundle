@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="agent-bundle">
+  <title>agent-bundle</title>
+  <!-- Brand teal reads against both the light (#fff) and dark (#121212) canvases. -->
+  <g fill="none" stroke="#14b8a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 3.5 27 9.25 16 15 5 9.25 16 3.5Z" />
+    <path d="M5 16.25 16 22 27 16.25" />
+    <path d="M5 23.25 16 29 27 23.25" />
+  </g>
+</svg>

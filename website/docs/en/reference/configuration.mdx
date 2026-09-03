@@ -1,0 +1,167 @@
+---
+description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the deprecated plugin.version field.'
+---
+
+# Configuration
+
+The conceptual model — what config owns versus what the `src/` conventions own — is in
+[Configuration model](../guide/authoring/index.mdx). This page is the field contract.
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+## Top-level fields
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `plugin` | `{ name, description?, logo?, ... }` | **Required.** |
+| `targets` | `string[]` | Adapter-selected. |
+| `skills` | `string[]` | The `src/skills/*` convention. |
+| `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | The `src/hooks/*` convention. |
+| `mcp` | `{ servers: Record<string, ...> }` | The `src/mcp/*` convention. |
+| `scripts` | `Record<string, string \| { entry, targets? }>` | The `src/scripts/*` convention. |
+| `assets` | `string[]` | The root `assets/` convention. |
+| `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
+| `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
+| `routes` | Route-graph policy | Convention-derived. |
+| `output` | `{ distPath? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. |
+| `runtime` | `{ node }` | Node 22.12. |
+| `payload` | `Record<string, string \| { source, targets? }>` | None. |
+| `state` | `false` | The `src/state.ts` convention. |
+| `marketplace` | `boolean` | Adapter-selected. |
+| `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
+| `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
+| `tools` | `{ rsbuild?, rspack? }` | None. |
+
+Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
+adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
+strict finite JSON (`AB4500`), and host-specific values stay in their adapter rather than in
+compiler core. The field-by-field list of every adapter-owned key is in
+[Host-scoped declarations](../guide/authoring/index.mdx#host-scoped-declarations).
+
+### Generated type definitions
+
+The config is a TypeScript contract, not a runtime schema: `defineConfig` accepts an
+`AgentBundleConfig` (or a factory returning one), and `validateSource` enforces the rules on this
+page with structured diagnostics. The exact shapes below are generated from the package source
+by TypeDoc on every documentation build, so they cannot drift from the published types.
+
+| Field | Type definition |
+| --- | --- |
+| whole config | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
+| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| host extensions | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
+| validation | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+
+## plugin
+
+| Field | Rule |
+| --- | --- |
+| `name` | Required. The host-native plugin slug, never the npm package name. |
+| `description` | One sentence written into generated manifests. |
+| `logo` | Project-relative image path. Missing, non-file, or outside the project reports `AB4012`; missing from the built artifact or escaping the deploy tree reports `AB6025`. |
+| `version` | **Deprecated.** |
+
+`package.json` is authoritative for release identity. Declare the release version only there:
+a `plugin.version` that disagrees with `package.json` reports the `AB4008` warning, and a release
+build with no version anywhere is refused with `AB4013` rather than shipping the
+`0.0.0-dev.<short-revision>` development fallback. The field remains only for compatibility and
+will be removed under the normal breaking-change policy.
+
+## hooks
+
+Keys are the seven canonical events: `sessionStart`, `beforeTool`, `afterTool`, `stop`,
+`agentStart`, `agentStop`, `workspaceOpen`. A value is one entry, or an array of entries, each
+either a module path or `{ handler, tools?, targets?, timeout?, args? }`. How each canonical
+event and tool selector lowers to a host-native event and matcher is the generated
+[Event and hook matrix](./events.md).
+
+The **hook result** contract is documented in full in [Hooks](../guide/authoring/hooks.mdx). One
+field is worth repeating because it is easy to get wrong: `reason` is a non-empty string that is
+valid **only** when denying a `beforeTool`, `stop`, or `agentStop` hook, and denying one of those
+without a reason fails.
+
+## output and runtime
+
+`output.distPath` is the artifact output directory relative to the project root. The CLI
+(`build`, `prepack`, `dev`) defaults it to `artifact`, because the CLI also runs the package build
+and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `packageOutputs: true`.
+The per-invocation `--output` flag wins, but is subject to the same project-root
+containment check; an output path that is absolute or external, has an invalid shape, or lands
+in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
+
+`runtime.node` is a minimum Node.js version in `major.minor[.patch]` form. It can only raise the
+default floor for generated executables, never lower it, and the selected floor is recorded as
+`runtime.node` in the artifact manifest. The floor itself is described in
+[Configuration model](../guide/authoring/index.mdx).
+
+## payload
+
+Keys are artifact-root destination directories — one safe path segment outside the
+compiler-owned namespaces — and values are already-built source directories. Payload trees are
+copied byte-for-byte and are **opaque to the compiler**, which cannot rewrite their internal
+sibling references, so stable names are the correctness contract. Integrity stays
+content-addressed through the artifact manifest.
+
+## evals
+
+Accepts exactly three keys; anything else is rejected.
+
+| Field | Default | Rule |
+| --- | --- | --- |
+| `include` | `['evals/**/*.eval.ts']` | A non-empty array of relative patterns that never escape the project root. |
+| `runsDir` | `.agent-bundle/runs` | A relative child directory of the project root. |
+| `semanticGrader` | none | Must contain exactly `harness` and `model`. `harness` must be `'claude'`; `model` must be a safe model identifier, not a path. |
+
+Provider credential material in the `evals` block is rejected outright
+(`EVAL_CREDENTIAL_REJECTED`) — Agent Bundle reuses the host CLI's existing signed-in session. See
+[Security](./security.mdx).
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  evals: {
+    include: ['evals/**/*.eval.ts'],
+    runsDir: '.agent-bundle/runs',
+    semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+  },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+## dev
+
+Development-only settings that never become part of a built artifact.
+
+| Field | Meaning |
+| --- | --- |
+| `dev.agentApi` | Exposes the authenticated, loopback-only Agent API from `agent-bundle dev`. The `--agent-api` / `--no-agent-api` flags override it. |
+| `dev.contracts.fixtures` | **Required when `dev.contracts` is set.** Project-relative module whose default export maps route ids to contract fixtures. Declaring `dev.contracts` switches `agent-bundle dev` from adopting every epoch directly to gating host-facing adoption on the development contract matrix: an epoch whose checks fail still publishes to the Workbench playground, but live host connections and development installs keep the last passing epoch (`AB7211`). A malformed block, a fixtures module that escapes the project root, cannot load, or exports the wrong shape is `AB7210`. |
+| `dev.contracts.server` | The MCP server the matrix checks. Optional only when the project compiles exactly one server. |
+| `dev.runtime.provider` | The development runtime provider module. |
+
+## tools
+
+The single bundler escape hatch. Both fragments merge last-but-bounded into every bundler config
+the framework synthesizes, and the artifact invariant assertions still run after the merge, so a
+hatch value that breaks an artifact contract is a hard diagnostic rather than a silent override
+(`AB472x`).
+
+The hatch executes under two bundler engine copies: artifact scripts, MCP entries, hooks, and the
+package build compile through Rslib's nested Rsbuild/Rspack, while MCP App views compile through
+the workspace-pinned `@rsbuild/core`. Never construct plugins or perform `instanceof` checks
+against an imported `@rspack/core` — use the `utils` argument passed to `tools.rspack` mutator
+functions (`(config, { rspack }) => ...`), which always hands you the executing engine's own
+`rspack` object.

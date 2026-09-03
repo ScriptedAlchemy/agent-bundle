@@ -1,0 +1,119 @@
+---
+description: '用脚手架创建 agent-bundle 项目，或手写 agent-bundle.config.ts，然后构建并运行开发者 Workbench。'
+---
+
+# 快速开始
+
+有两条入门路径。脚手架生成的项目本身就能通过自带的 `check`；手写路径则只需要在已有仓库里加四行配置。
+
+## 用脚手架创建项目
+
+最快的方式是 `create-agent-bundle`。它会依次询问名称、模板与宿主 targets：
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+```
+
+等到 npm 正式发布之后，这条命令会变成 `npm create agent-bundle`。在此之前，请使用
+[预览通道](./installation.mdx)中的提交 SHA 或 PR 编号。
+
+同时指定目录与模板的运行会被视为脚本化调用，不再询问任何问题——其余取值回退到各自的默认值：
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin \
+  --template mcp-server \
+  --targets portable,codex,claude
+```
+
+### 模板
+
+| 模板 | 你会得到什么 |
+| --- | --- |
+| `minimal` | 一个纯 Skills 插件：一个 `src/skills/<name>/SKILL.md` 目录，此外别无他物。 |
+| `mcp-server` | 由一个 `src/mcp/<server>/tools/<name>.tsx` 路由模块构成的 stdio MCP 服务器，外加一个产物脚本，并已接好框架测试 harness。 |
+| `cli-tool` | 通过 `src/cli.ts` bin 约定提供的可安装 CLI，外加一个带声明文件的 `src/index.ts` 库导出。 |
+
+每个模板都自带 `check` 脚本（validate、build、typecheck、tests），并且校验时零诊断——包括 `AB473x`
+迁移提示，因为这些模板从一开始就是按照 entry 约定编写的。`mcp-server` 模板还自带消费者测试 harness，
+每个测试池都标注了自己承载的证明级别。
+
+脚手架生成的项目会把 `agent-bundle` 固定到与脚手架自身同一提交的预览包，因此脚手架与它所固定的框架
+永远不会互相冲突。全部参数见
+[create-agent-bundle README](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/packages/create-agent-bundle/README.md)。
+
+## 或者手写配置
+
+在项目根目录的 `agent-bundle.config.ts` 中描述插件：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'What it does.' },
+  targets: ['plugin'],
+  skills: ['src/skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+大多数项目需要的比这还少，因为配置沉默时 `src/` 约定会自动补齐：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+发布版本号来自 `package.json`。`plugin.version` 字段仍然可用，但它是已废弃的兼容轴；取值与
+`package.json` 不一致时会报告 `AB4008` 警告。
+
+## 构建，或交互式开发
+
+```sh
+npx agent-bundle build --root .                 # 把可安装产物写到 artifact/
+npx agent-bundle dev --root .                   # 带实时重建的本地 Workbench
+```
+
+`build` 会校验项目并写出产物；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
+开发者 Workbench，并随输入变化持续重建：项目概览与诊断、Skill 文档、带 provenance 与 epoch 对比的
+产物树、绑定到产物、带原始协议轨迹的 MCP playground、运行真实生成包装层的钩子 playground，以及
+eval 运行。
+
+## 查看编译器的判断
+
+```sh
+npx agent-bundle inspect --root .            # 规范化配置与逐 target 计划
+npx agent-bundle inspect --root . --skills   # 加上 skill focus
+npx agent-bundle validate --root .           # 检查项目源码
+```
+
+`inspect` 读取源码配置并展示规范化后的模型——这正是确认某个约定是否真的被识别的地方。
+
+## 安装结果
+
+每个构建出的 target 目录中都包含生成的 `INSTALL.md`，其中的命令使用该捆绑包真实的插件名与市场名。按上文构建出
+`portable`、`codex` 与 `claude` 三个 target 后，宿主安装命令是：
+
+```sh
+npx agent-bundle install claude --from artifact/claude --scope user
+npx agent-bundle install codex --from artifact/codex
+```
+
+把 `cursor` 加入 `targets` 就会构建出 `artifact/cursor`，然后用 `npx agent-bundle install cursor --from
+artifact/cursor` 以同样方式安装。`plugin` 构建则只有一份覆盖所有宿主的 `INSTALL.md`。
+
+若想在 Claude Code 上进行免安装的开发循环：
+
+```sh
+claude --plugin-dir artifact/claude plugin list --json
+```
+
+## 下一步
+
+- [项目结构](./project-structure.mdx) —— 每个 `src/` 根目录的含义，以及输出落在哪里。
+- [配置模型](../authoring/index.mdx) —— 每个配置字段及其归属。
+- [Skills](../authoring/skills.mdx) —— 大多数插件最先编写的表面。

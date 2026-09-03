@@ -1,0 +1,71 @@
+---
+description: 'agent-bundle 的安全边界：不接受提供方凭据、仅 loopback 的开发表面、Agent API bearer token、安装器的克制，以及惰性的 Skill Markdown。'
+---
+
+# 安全
+
+下面大多数内容是一种拒绝，而不是一项功能。它们是框架恪守的契约，不是你能用某个标志放宽的默认值。
+
+## 提供方凭据
+
+**本包绝不接受、索取、注入或持久化任何模型提供方 API key。**
+
+原生 Claude 与 Codex harness 使用已经安装并已登录的 CLI，并且是在提供方 key 相关的环境变量被移除*之后*
+运行的。`evals` 配置块中形似凭据的材料会被直接拒绝而不是被忽略：Agent Bundle 复用宿主 CLI 已有的会话，
+并且不存在任何从配置中读取 API key 的回退路径。
+
+每次 Codex 试验都会设置一个临时的 `CODEX_HOME`，并只把已安装 CLI 那份不透明的 `auth.json` 复制进去。
+你日常的 Codex home、配置与已安装插件状态不会被用作试验状态，也不会被改动。贡献者冒烟命令会移除提供方
+API key 与形似凭据的环境取值，并在所选宿主的日常 home 状态发生变化时失败。
+
+原生的已认证冒烟测试被排除在默认与日常本地测试运行之外，而运行它们的那个可信自托管 CI 工作流使用既有的
+订阅会话，且**不使用任何工作流 secret**。
+
+## 开发服务器
+
+`agent-bundle dev` **只绑定 loopback**，并且是一个前台开发会话，而不是托管服务。浏览器不是可信输入源：
+它绝不提供命令、工作目录、原生模型或凭据，且由浏览器提供的原生模型与凭据会被拒绝。所有操作都只是可信
+本地操作。
+
+Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是**惰性的**。Skill 文档是用于
+展示的内容，而不是用于执行的标记。
+
+## Agent API
+
+Agent API 默认关闭。启用时，它是挂载在同一个 loopback 前台服务器 `/mcp` 路径上、经过认证的 Streamable
+HTTP MCP 端点，拥有恰好十三个固定且有序的工具。
+
+- 若在没有 `AGENT_BUNDLE_AGENT_API_TOKEN` 的情况下启用该端点，启动会在**开始服务之前**失败。
+- 这个固定 token 只被读取一次，绝不会被记录日志、持久化或返回。
+- 必须使用标准的 `Authorization: Bearer` 认证。
+- 客户端可以省略 `Origin`；一旦提供，它必须与前台 URL 完全一致。
+- 当该端点被禁用时，它是**不存在的**，而不只是未授权。
+
+操作细节见[开发者 Workbench](../guide/development/workbench.mdx)。
+
+## 安装
+
+安装一个包绝不会改动宿主的插件状态：**任何 npm 生命周期都不会执行安装**。独立的 `install.mjs` 会复制到
+`~/.cursor/plugins/local/<name>` 且不覆盖冲突内容，对内容相同的情况是幂等的，会拒绝版本或内容冲突，
+绝不调用 `sudo`，也绝不修改 `PATH`。
+
+`agent-bundle doctor` 在构造上就是只读的。它只按目录条目与文件系统元数据清点持久状态——绝不打开数据
+库——并且绝不修复任何东西。
+
+## 产物完整性
+
+对于被分发出去的捆绑包，内容寻址就是信任锚。每个输出文件都在 `agent-bundle.manifest.json` 中携带一份
+SHA-256，因此被修改过的产物会校验失败，而不是被悄悄装上；当源码、已构建产物、已安装产物与运行中进程的
+版本不一致时，`host-install` 证明级别会以失败告终。
+
+路径包含性在两个方向上都被强制：逃逸出部署树的声明式 logo（`AB6025`）、解析到 Cursor 捆绑包之外的符号
+链接（`AB6028`）、符号链接逃逸出 `~/.cursor/plugins/local` 的已安装本地插件（`AB7320`）、离开项目根目录
+的 eval `runsDir`，以及会穿出自身状态根目录的 MCP 服务器名，全都会被拒绝。
+
+## 未作出的声明
+
+本包不发布示例 RSC provider，也不发布宿主凭据。原生 Claude 与 Codex 评测 harness（`runClaudeTrial`、
+`runCodexEvalTrial`、`--harness claude|codex`）驱动的是你已经安装并登录的 CLI，自身不携带任何凭据。第三方声明——包括 vendored MCP Inspector 快照
+的许可证与 provenance——随已发布的包一同交付。
+
+各证据表面**不能**证明什么，见[已知限制](./limitations.mdx)。
