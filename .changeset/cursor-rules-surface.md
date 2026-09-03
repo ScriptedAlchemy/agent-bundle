@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add conventional `rules/*.mdc` authoring with validated Cursor rule emission

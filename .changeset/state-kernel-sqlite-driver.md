@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
 Ship the workspace-durable state driver on `node:sqlite` (#98 v1, G3)

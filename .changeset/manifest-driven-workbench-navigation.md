@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Derive Workbench navigation and its route catalog from the compiled route graph

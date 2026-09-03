@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add conventional `commands/*.md` authoring with validated Cursor and Claude

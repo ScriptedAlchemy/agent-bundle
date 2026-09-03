@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 agent-bundle owns the build (RFC #50 Phase 1): one `agent-bundle.config.ts` now produces the npm package build alongside host artifacts, with framework-owned entry lifecycles and one bundler escape hatch.

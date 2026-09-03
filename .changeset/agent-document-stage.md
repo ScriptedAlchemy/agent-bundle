@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add the Workbench Agent Document stage (#105 stage 2). The dev server gains a

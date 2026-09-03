@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Emit evidence-backed install instructions for every target, add safe Cursor

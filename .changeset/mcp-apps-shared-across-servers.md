@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 One MCP App can now be served by several local servers (#42): declaring the

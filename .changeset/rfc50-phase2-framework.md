@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 RFC #50 Phase 2, framework side. `validate`/`inspect`/`build`/`dev` now

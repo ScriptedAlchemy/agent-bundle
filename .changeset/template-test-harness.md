@@ -1,5 +1,5 @@
 ---
-"create-agent-bundle": minor
+"create-agent-bundle": patch
 ---
 
 Scaffold the framework test harness with the `mcp-server` template (#103

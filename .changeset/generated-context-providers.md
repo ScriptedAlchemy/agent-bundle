@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 "@agent-bundle/runtime": patch
 ---
 

@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Compile the conventional route tree into an immutable route-graph IR (#93, PR-1) and expose it through `agent-bundle inspect --routes`.

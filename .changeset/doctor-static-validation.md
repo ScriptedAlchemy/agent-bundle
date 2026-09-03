@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Surface pinned static bytes-at-rest validation findings for supplied bundles

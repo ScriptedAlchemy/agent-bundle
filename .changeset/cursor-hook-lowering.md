@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Lower hooks to Cursor. The `cursor` target now emits the flat versioned

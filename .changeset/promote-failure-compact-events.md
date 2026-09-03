@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Promote canonical `tool/failure`, `compact/before`, and `compact/after`

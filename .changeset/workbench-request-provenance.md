@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Expose credential-free request provenance for Workbench lifecycle replays, including explicit host, session, actor, workspace, and invocation axes with typed absence. Lifecycle routes now execute under the same receipt-sourced context shown in the Workbench, and the strict client decoder rejects unsupported wire fields.

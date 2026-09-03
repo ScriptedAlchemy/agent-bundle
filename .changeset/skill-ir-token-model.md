@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Compile one Skill source into a canonical IR with a typed plugin-surface token registry and closed per-host lowering (#108).

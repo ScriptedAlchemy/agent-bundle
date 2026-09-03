@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Agent Bundle config now supports `output.distPath` to relocate the build

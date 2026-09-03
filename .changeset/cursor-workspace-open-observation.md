@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Support Cursor's canonical `workspace/open` event route as a fire-and-forget
