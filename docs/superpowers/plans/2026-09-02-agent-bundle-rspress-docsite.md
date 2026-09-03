@@ -85,7 +85,7 @@
 - Create: `website/scripts/verify-build.mjs`
 
 **Interfaces:**
-- Produces: root `docs:dev`, `docs:build`, `docs:preview`, and `docs:check` commands.
+- Produces: root `docs:site:dev`, `docs:site:build`, and `docs:site:preview` commands.
 - Produces: `@agent-bundle/docs` workspace with local TypeScript 6 despite the repository's root TypeScript 7.
 - Produces: a persistent output assertion used after every production build.
 
@@ -225,10 +225,9 @@ Add to root `package.json`:
 ```json
 {
   "scripts": {
-    "docs:build": "pnpm --filter @agent-bundle/docs build",
-    "docs:check": "pnpm --filter @agent-bundle/docs check",
-    "docs:dev": "pnpm --filter @agent-bundle/docs dev",
-    "docs:preview": "pnpm --filter @agent-bundle/docs preview"
+    "docs:site:build": "pnpm --filter @agent-bundle/docs check",
+    "docs:site:dev": "pnpm --filter @agent-bundle/docs dev",
+    "docs:site:preview": "pnpm --filter @agent-bundle/docs preview"
   }
 }
 ```
@@ -437,7 +436,7 @@ pages exist before dead-link checking, so authored pages may safely link into
 every `rspress dev` startup pays a full TypeScript program build over the
 package source graph; if that becomes painful for authoring, an optional
 `DOCS_SKIP_API=1` gate around `pluginTypeDoc` plus the mirror is acceptable —
-dev-only, never in `docs:check`. Generated API pages will also render an
+dev-only, never in `docs:site:build`. Generated API pages will also render an
 "Edit this page" link pointing at generated paths that do not exist in the
 repository; accept that knowingly for this iteration rather than patching the
 theme.
@@ -461,7 +460,7 @@ pluginTwoslash({
 })
 ```
 
-Do not add the package-release build to `docs:check`.
+Do not add the package-release build to `docs:site:build`.
 
 Use `pluginLlms` explicitly with its locale defaults (English root files,
 Chinese files under `zh/`), excluding the generated reference so eleven entry
@@ -568,7 +567,7 @@ links are not dead-link-checked, so nothing else will catch the omission.
 Run:
 
 ```bash
-pnpm docs:check
+pnpm docs:site:build
 ```
 
 Expected: pass with Twoslash, links, anchors, images, and locale parity enabled.
@@ -601,16 +600,16 @@ Expected: pass with Twoslash, links, anchors, images, and locale parity enabled.
 
 - [ ] **Step 1: Write paired Development pages and validate**
 
-Run `pnpm docs:check`; expected pass.
+Run `pnpm docs:site:build`; expected pass.
 
 - [ ] **Step 2: Write paired Distribution pages and validate**
 
-Run `pnpm docs:check`; expected pass.
+Run `pnpm docs:site:build`; expected pass.
 
 - [ ] **Step 3: Write paired Reference pages and validate**
 
 Add the Reference entry to both locale `_nav.json` files (nav links are not
-dead-link-checked). Run `pnpm docs:check`; expected pass.
+dead-link-checked). Run `pnpm docs:site:build`; expected pass.
 
 ---
 
@@ -654,7 +653,7 @@ Examples, Contributing, and Type API entries.
 Run:
 
 ```bash
-pnpm docs:check
+pnpm docs:site:build
 ```
 
 Expected: pass and verify all nine required build artifacts plus the
@@ -675,7 +674,7 @@ per-export API assertions.
 - Modify: `packages/agent-bundle/package.json`
 
 **Interfaces:**
-- Consumes: `pnpm docs:check` and `website/doc_build`.
+- Consumes: `pnpm docs:site:build` and `website/doc_build`.
 - Produces: PR validation and main-only Pages deployment.
 
 - [ ] **Step 1: Add the Pages workflow**
@@ -698,7 +697,7 @@ The build job runs:
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm docs:check
+pnpm docs:site:build
 ```
 
 Upload the Pages artifact only for pushes to `main`. A dependent deploy job
@@ -748,7 +747,7 @@ source and the website docs intentionally omit it).
 Run:
 
 ```bash
-pnpm docs:check
+pnpm docs:site:build
 pnpm lint
 ```
 
@@ -774,7 +773,7 @@ Run:
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm docs:check
+pnpm docs:site:build
 pnpm lint
 ```
 
@@ -792,7 +791,7 @@ Verify:
 
 - [ ] **Step 4: Run desktop browser acceptance at 1440×900**
 
-Start `pnpm docs:dev` once, then verify:
+Start `pnpm docs:site:dev` once, then verify:
 
 1. English and Chinese homepages render with no loading state or missing asset.
 2. Locale switching preserves the corresponding route.

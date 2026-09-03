@@ -69,7 +69,8 @@ export default defineConfig({
 
 ## 宿主扩展
 
-可移植的 Skill 元数据——`name`、`description`、`license`、`compatibility`、`allowedTools`，以及一个
+可移植的 Skill 元数据——`name`、`description`、`license`、`compatibility`、`allowed-tools`（Agent Skills
+的拼写；驼峰式 `allowedTools` 只在 `targets.claude` 下被接受），以及一个
 自由形式的 `metadata` 记录——每个 target 都能理解。宿主专属的键位于各自宿主之下，因此只会抵达该适配器：
 
 | 宿主 | 示例 |
@@ -78,7 +79,8 @@ export default defineConfig({
 | `codex` | `dependencies.tools`、`interface`（显示名、图标、品牌色、默认提示词）、`policy.allowImplicitInvocation` |
 | `cursor` | `globs`、`icon`、`color`、`paths`、`disableModelInvocation` |
 
-每个 Skill 的 `targets` 列表可以限制哪些产物才会收到这个 Skill。
+Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
+`AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
 
 ## 路径 token
 

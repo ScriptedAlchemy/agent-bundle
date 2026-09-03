@@ -72,8 +72,9 @@ wins over the convention.
 
 ## Host extensions
 
-Portable Skill metadata — `name`, `description`, `license`, `compatibility`, `allowedTools`, and
-a free-form `metadata` record — is understood by every target. Host-specific keys live under
+Portable Skill metadata — `name`, `description`, `license`, `compatibility`, `allowed-tools` (the
+Agent Skills spelling; camelCase `allowedTools` is accepted only under `targets.claude`), and a
+free-form `metadata` record — is understood by every target. Host-specific keys live under
 their host so they reach only that adapter:
 
 | Host | Examples |
@@ -82,7 +83,9 @@ their host so they reach only that adapter:
 | `codex` | `dependencies.tools`, `interface` (display name, icons, brand color, default prompt), `policy.allowImplicitInvocation` |
 | `cursor` | `globs`, `icon`, `color`, `paths`, `disableModelInvocation` |
 
-A per-Skill `targets` list restricts which artifacts receive the Skill at all.
+`targets` in Skill frontmatter is that per-host object and nothing else; a list such as
+`targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
+is no per-Skill artifact restriction.
 
 ## Path tokens
 

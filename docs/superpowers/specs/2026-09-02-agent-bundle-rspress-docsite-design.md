@@ -32,10 +32,10 @@ Create a private workspace at `website/` named `@agent-bundle/docs`.
 `pnpm-workspace.yaml` will include `website`, and the repository root will
 expose:
 
-- `docs:dev` to run the Rspress development server.
-- `docs:build` to create the production static site.
-- `docs:preview` to preview the production output.
-- `docs:check` to typecheck the website and perform a production build.
+- `docs:site:dev` to run the Rspress development server.
+- `docs:site:build` to typecheck the website and perform the production build
+  (the check gate; there is no separate build-only root script).
+- `docs:site:preview` to preview the production output.
 
 The documentation build remains separate from the package-release `build`
 script. Publishing npm packages must not become dependent on documentation
@@ -241,7 +241,7 @@ long-form guide.
 ## Build and Failure Behavior
 
 The documentation package exposes `dev`, `build`, `preview`, and `typecheck`.
-The repository-level `docs:check` runs typechecking and then a production
+The repository-level `docs:site:build` runs typechecking and then a production
 Rspress build.
 
 The production build is the validation boundary. It fails on:
@@ -272,7 +272,7 @@ The workflow:
 - supports manual dispatch
 - installs the repository-pinned Node and pnpm versions
 - installs dependencies with the frozen lockfile
-- runs `pnpm docs:check`
+- runs `pnpm docs:site:build`
 - uploads `website/doc_build` as the Pages artifact
 - deploys only for a push to `main`
 - uses the official Pages configure, upload, and deploy actions
@@ -291,7 +291,7 @@ deploying.
 Implementation is accepted when:
 
 1. A frozen-lockfile install succeeds.
-2. `pnpm docs:check` succeeds with link, anchor, image, and language-parity
+2. `pnpm docs:site:build` succeeds with link, anchor, image, and language-parity
    checks enabled.
 3. The output contains the English and Chinese homepages.
 4. The output contains English and Chinese `llms.txt` and `llms-full.txt`
