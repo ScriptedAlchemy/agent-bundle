@@ -105,7 +105,7 @@ it('lays both host manifests over one shared bundle root', () => {
     readonly mcpServers: Record<string, { readonly args: readonly string[]; readonly cwd?: string; readonly env?: Record<string, string> }>;
   };
   expect(claudeMcp.mcpServers['status']!.args[0]).toBe('${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs');
-  expect(claudeMcp.mcpServers['status']!.cwd).toBe('${CLAUDE_PLUGIN_ROOT}');
+  expect(claudeMcp.mcpServers['status']).not.toHaveProperty('cwd');
   expect(claudeMcp.mcpServers['status']!.env).toEqual({ AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}' });
 
   const codexMcp = JSON.parse(documents['.codex-plugin/mcp.json']!) as {

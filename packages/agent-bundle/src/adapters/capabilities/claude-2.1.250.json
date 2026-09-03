@@ -345,6 +345,82 @@
         ]
       }
     },
+    "packageLifecycle": {
+      "nodeDependencyInstall": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits compile-time plugin artifacts but does not currently place package.json plus a supported lockfile at the plugin root or run Claude's host-owned dependency install in a copied cache entry.",
+        "manifest": "package.json",
+        "commands": {
+          "bun.lock": "bun install --frozen-lockfile --ignore-scripts",
+          "bun.lockb": "bun install --frozen-lockfile --ignore-scripts",
+          "npm-shrinkwrap.json": "npm ci --ignore-scripts",
+          "package-lock.json": "npm ci --ignore-scripts"
+        },
+        "lockfilePrecedence": ["bun.lock", "bun.lockb", "npm-shrinkwrap.json", "package-lock.json"],
+        "timeoutSeconds": 60,
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that automatic dependency installation is eligible only when the copied plugin root contains package.json plus bun.lock, bun.lockb, npm-shrinkwrap.json, or package-lock.json, and maps those lockfiles to frozen Bun install or npm ci commands with --ignore-scripts.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents deterministic lockfile precedence as bun.lock, bun.lockb, npm-shrinkwrap.json, then package-lock.json; Claude invokes the first match from PATH without falling back when its package manager is missing.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents exact lockfile resolution, disabled preinstall/install/postinstall scripts, a 60-second timeout, non-blocking skipped or failed installs, and the possibility of a partial node_modules tree after timeout.",
+          "retrieved 2026-09-02: packages/agent-bundle/src/adapters/types.ts documents that prebuilt payload files are emitted beneath their required named destination, so the compiler has no current surface that copies package.json or a lockfile directly to the plugin root.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin root carrying package.json plus package-lock.json, does not name either file, and creates no node_modules directory, proving validation does not run the documented install-time contract."
+        ]
+      },
+      "yarnPnpmInstallAlternative": {
+        "state": "unavailable",
+        "reason": "Agent Bundle does not run automatic Yarn or pnpm installs; Claude skips those lockfiles at host install time, while authors must explicitly install such dependencies from a hook into persistent plugin data.",
+        "skippedLockfiles": ["yarn.lock", "pnpm-lock.yaml"],
+        "persistentDataToken": "${CLAUDE_PLUGIN_DATA}",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that Claude skips yarn.lock and pnpm-lock.yaml because Yarn and pnpm resolution-time configuration hooks can bypass --ignore-scripts, records the skip as a debug warning, and still loads the plugin.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference directs Yarn-, pnpm-, Python-, and lifecycle-script-dependent installs to a hook that installs into ${CLAUDE_PLUGIN_DATA}, which persists across plugin updates."
+        ]
+      },
+      "pluginCacheLifecycle": {
+        "state": "unavailable",
+        "reason": "Agent Bundle emits compile-time artifacts; cache copying or linking, resolved-version directory naming, orphan marking and sweeping, symlink materialization, and host component path-escape rejection happen during Claude installation and runtime.",
+        "cacheRoot": "~/.claude/plugins/cache",
+        "orphanGraceDays": 14,
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that marketplace plugins are copied into ~/.claude/plugins/cache, except command sources in link mode, and that each resolved version gets its own directory while release-tag versions receive a commit-SHA suffix.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that update or uninstall marks the old version orphaned for a roughly 14-day background grace period, that sweeping runs only while at least one plugin is installed, and that Glob and Grep skip orphaned versions.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that development symlink version entries are neither orphaned nor removed, cache parent folders remain while any directory or symlink exists, and Claude never writes version-tracking files inside a linked checkout.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents symlink containment: links within a plugin are preserved relatively, links elsewhere in the same marketplace are dereferenced for copied marketplace installs, links outside the marketplace are skipped, and non-marketplace local or command-copy installs preserve only links within the plugin.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents that a component path resolving outside the plugin root is rejected with `path escapes plugin directory`, the plugin loads without that component, and files above the plugin root are not copied into the cache.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a skills entry symlinked to a directory outside the plugin root and does not name it, proving symlink containment remains an install-copy check rather than a validation check."
+        ]
+      },
+      "pluginPathSubstitution": {
+        "state": "degraded",
+        "reason": "Agent Bundle lowers and validates its canonical path tokens in structured Claude MCP, LSP, settings, generated-hook, and monitor fields, but authored Skill content and target-native hook documents remain opaque compile-time payloads and actual placeholder substitution is owned by Claude at runtime.",
+        "tokens": ["${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_PLUGIN_DATA}", "${CLAUDE_PROJECT_DIR}"],
+        "fields": {
+          "skillAndAgentContent": ["anywhere"],
+          "hookCommands": ["command", "args"],
+          "monitorCommands": ["command"],
+          "mcpStdio": ["command", "args", "env"],
+          "mcpRemote": ["url", "headers", "headersHelper"],
+          "lsp": ["command", "args", "env", "workspaceFolder"]
+        },
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents ${CLAUDE_PLUGIN_ROOT}, ${CLAUDE_PLUGIN_DATA}, and ${CLAUDE_PROJECT_DIR}, exports all three to hook, MCP, and LSP subprocesses, and substitutes them anywhere in Skill and agent content and in hook and monitor commands.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents the closed structured field table: MCP stdio command, args, and env; MCP HTTP, SSE, and WS url, headers, and headersHelper; and LSP command, args, env, and workspaceFolder.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/hooks documents that command hooks substitute path placeholders in exec-form command and args as plain strings, while shell-form commands require quoting and export the same three environment variables.",
+          "retrieved 2026-09-02: packages/agent-bundle/src/adapters/claude.ts lowers canonical path tokens in the documented structured fields and rejects them from settings.json and undocumented MCP or LSP fields, while Skill Markdown and target-native hook documents are copied without semantic rewriting."
+        ]
+      },
+      "pluginDataLifecycle": {
+        "state": "unavailable",
+        "reason": "Agent Bundle can emit ${CLAUDE_PLUGIN_DATA} references but cannot observe the last installed scope, prompt for deletion, delete persistent data, or apply Claude's --keep-data uninstall option.",
+        "deleteOnLastScopeUninstall": true,
+        "cliDeleteDefault": true,
+        "keepDataFlag": "--keep-data",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents ${CLAUDE_PLUGIN_DATA} as ~/.claude/plugins/data/{sanitized-id}/, created on first reference and shared across plugin versions.",
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents automatic data deletion only when the plugin is uninstalled from its last installed scope, an interactive size display and deletion prompt, CLI deletion by default, and --keep-data preservation."
+        ]
+      }
+    },
     "experimentalThemes": {
       "defaultDirectory": "themes",
       "experimental": true,

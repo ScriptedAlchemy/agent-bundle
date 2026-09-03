@@ -997,7 +997,7 @@ it('plans byte-stable native Codex and Claude plugin trees from the same frozen 
       relativePath: '.claude-plugin/plugin.json',
     },
     {
-      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","cwd":"${CLAUDE_PLUGIN_ROOT}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
+      content: '{"mcpServers":{"http":{"headers":{"Authorization":"Bearer literal"},"type":"http","url":"https://mcp.example.test/stream"},"stdio":{"args":["--root","${CLAUDE_PLUGIN_ROOT}/tools/server.mjs"],"command":"node","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","CACHE_DIR":"cache"},"type":"stdio"}}}\n',
       kind: 'write',
       relativePath: '.mcp.json',
     },
@@ -1120,7 +1120,7 @@ it('plans a Cursor workspace/open event route without enabling the plain hook vo
   }));
 });
 
-it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd, and the env anchor', () => {
+it('anchors compiled Claude MCP entries with absolute arguments and the env anchor', () => {
   const compiled = {
     ...plugin,
     mcpServers: Object.freeze([Object.freeze({
@@ -1134,14 +1134,13 @@ it('anchors compiled Claude MCP entries with absolute arguments, plugin-root cwd
   const document = JSON.parse(entry?.kind === 'write' ? entry.content : '{}') as {
     mcpServers: Record<string, { args?: string[]; cwd?: string; env?: Record<string, string> }>;
   };
-  // The absolute entry path stays as the hedge against Claude Code ignoring
-  // cwd at runtime; cwd is emitted anyway as schema-valid future-proofing,
-  // and the env anchor is the guaranteed working-directory-independent root.
+  // Claude's placeholder table does not substitute MCP cwd. The absolute
+  // entry path and env anchor keep the generated server independent of cwd.
   expect(document.mcpServers.stdio).toMatchObject({
     args: ['${CLAUDE_PLUGIN_ROOT}/mcp/compiled-server.mjs'],
-    cwd: '${CLAUDE_PLUGIN_ROOT}',
     env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}', CACHE_DIR: 'cache' },
   });
+  expect(document.mcpServers.stdio).not.toHaveProperty('cwd');
 });
 
 it('emits Claude LSP configuration and expands only the four documented token fields', () => {
@@ -1159,11 +1158,11 @@ it('emits Claude LSP configuration and expands only the four documented token fi
         ROOT: pathTokens.pluginRoot,
         WORKSPACE: pathTokens.workspaceRoot,
       },
-      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
-      initializationOptions: { token: pathTokens.pluginData },
+      extensionToLanguage: { '.ts': 'typescript' },
+      initializationOptions: { token: 'literal' },
       maxRestarts: 3,
       restartOnCrash: true,
-      settings: { token: pathTokens.workspaceRoot },
+      settings: { token: 'literal' },
       shutdownTimeout: 2_000,
       startupTimeout: 5_000,
       transport: 'socket',
@@ -1188,11 +1187,11 @@ it('emits Claude LSP configuration and expands only the four documented token fi
         ROOT: '${CLAUDE_PLUGIN_ROOT}',
         WORKSPACE: '${CLAUDE_PROJECT_DIR}',
       },
-      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
-      initializationOptions: { token: pathTokens.pluginData },
+      extensionToLanguage: { '.ts': 'typescript' },
+      initializationOptions: { token: 'literal' },
       maxRestarts: 3,
       restartOnCrash: true,
-      settings: { token: pathTokens.workspaceRoot },
+      settings: { token: 'literal' },
       shutdownTimeout: 2_000,
       startupTimeout: 5_000,
       transport: 'socket',
@@ -1200,6 +1199,22 @@ it('emits Claude LSP configuration and expands only the four documented token fi
     },
   });
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('lspServers');
+});
+
+it('rejects Claude path substitutions in undocumented LSP fields', () => {
+  const plan = createDefaultRegistry().get('claude').plan(withClaudeLsp(plugin, {
+    typescript: {
+      command: 'typescript-language-server',
+      extensionToLanguage: { '.ts': `typescript-${pathTokens.pluginRoot}` },
+      initializationOptions: { data: '${CLAUDE_PLUGIN_DATA}' },
+    },
+  }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.substitution.token.unsupported',
+    'claude.substitution.token.unsupported',
+  ]);
+  expect(plan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
 });
 
 it('emits sorted, allowlisted Claude userConfig declarations with config provenance', () => {
@@ -2455,7 +2470,7 @@ it('records every selected component provenance for generated host documents', (
   }
 });
 
-it('applies only native path-token semantics and surfaces exact capability diagnostics', () => {
+it('accepts Claude path tokens only in the documented MCP fields and rejects stdio cwd', () => {
   const codex = createDefaultRegistry().get('codex').plan({
     ...plugin,
     mcpServers: [
@@ -2490,10 +2505,19 @@ it('applies only native path-token semantics and surfaces exact capability diagn
       {
         args: [`${pathTokens.workspaceRoot}/tool`],
         command: pathTokens.pluginRoot,
-        cwd: pathTokens.pluginData,
+        cwd: '/workspace',
         env: { WORKSPACE: pathTokens.workspaceRoot },
         id: 'mcp:workspace',
         name: 'workspace',
+        provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
+        targets: ['claude'],
+        transport: 'stdio',
+      },
+      {
+        command: 'node',
+        cwd: pathTokens.pluginData,
+        id: 'mcp:unsupported-cwd',
+        name: 'unsupported-cwd',
         provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
         targets: ['claude'],
         transport: 'stdio',
@@ -2510,10 +2534,11 @@ it('applies only native path-token semantics and surfaces exact capability diagn
     ],
   });
   expect(claude.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+    'claude.substitution.token.unsupported',
     'claude.mcp.token.headers.key',
   ]);
   expect(claude.entries.find((entry) => entry.relativePath === '.mcp.json')).toEqual({
-    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"${CLAUDE_PLUGIN_DATA}","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
+    content: '{"mcpServers":{"workspace":{"args":["${CLAUDE_PROJECT_DIR}/tool"],"command":"${CLAUDE_PLUGIN_ROOT}","cwd":"/workspace","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}","WORKSPACE":"${CLAUDE_PROJECT_DIR}"},"type":"stdio"}}}\n',
     kind: 'write',
     relativePath: '.mcp.json',
     sourceInputs: ['/workspace/agent-bundle.config.ts'],

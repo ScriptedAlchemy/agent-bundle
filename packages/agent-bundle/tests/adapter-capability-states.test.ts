@@ -429,6 +429,76 @@ it('records dated unavailable Claude distribution and policy capability rows', (
   ]);
 });
 
+const claudePackageLifecycleCapabilities = [
+  'nodeDependencyInstall',
+  'yarnPnpmInstallAlternative',
+  'pluginCacheLifecycle',
+  'pluginPathSubstitution',
+  'pluginDataLifecycle',
+] as const;
+
+it('records dated Claude package, cache, and data lifecycle capability rows', () => {
+  const registry = createDefaultRegistry();
+  const packageLifecycle = (
+    claudeCapabilityTable.plugin as unknown as {
+      readonly packageLifecycle?: Readonly<Record<
+        (typeof claudePackageLifecycleCapabilities)[number],
+        {
+          readonly evidence: readonly string[];
+          readonly reason: string;
+          readonly state: string;
+        }
+      >>;
+    }
+  ).packageLifecycle;
+
+  expect(packageLifecycle).toBeDefined();
+  if (packageLifecycle === undefined) return;
+  expect(Object.keys(packageLifecycle).sort()).toEqual([...claudePackageLifecycleCapabilities].sort());
+  for (const capability of claudePackageLifecycleCapabilities) {
+    const row = packageLifecycle[capability];
+    expect(row.state).toBe(capability === 'pluginPathSubstitution' ? 'degraded' : 'unavailable');
+    expect(row.reason.length).toBeGreaterThan(0);
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
+    expect(registry.get('claude').capabilities[capability]).toMatchObject({
+      reason: row.reason,
+      state: row.state,
+    });
+    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
+      state: 'unavailable',
+    });
+  }
+});
+
+it('pins the documented Claude dependency precedence and substitution field table', () => {
+  const lifecycle = claudeCapabilityTable.plugin.packageLifecycle;
+
+  expect(lifecycle.nodeDependencyInstall).toMatchObject({
+    commands: {
+      'bun.lock': 'bun install --frozen-lockfile --ignore-scripts',
+      'bun.lockb': 'bun install --frozen-lockfile --ignore-scripts',
+      'npm-shrinkwrap.json': 'npm ci --ignore-scripts',
+      'package-lock.json': 'npm ci --ignore-scripts',
+    },
+    lockfilePrecedence: ['bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'package-lock.json'],
+    manifest: 'package.json',
+    timeoutSeconds: 60,
+  });
+  expect(lifecycle.yarnPnpmInstallAlternative).toMatchObject({
+    persistentDataToken: '${CLAUDE_PLUGIN_DATA}',
+    skippedLockfiles: ['yarn.lock', 'pnpm-lock.yaml'],
+  });
+  expect(lifecycle.pluginPathSubstitution.fields).toEqual({
+    hookCommands: ['command', 'args'],
+    lsp: ['command', 'args', 'env', 'workspaceFolder'],
+    mcpRemote: ['url', 'headers', 'headersHelper'],
+    mcpStdio: ['command', 'args', 'env'],
+    monitorCommands: ['command'],
+    skillAndAgentContent: ['anywhere'],
+  });
+});
+
 it.each([
   ['marketplaceManifest', 'completed marketplace manifest'],
   ['allowCrossMarketplaceDependenciesOn', 'cross-marketplace dependency allowlist'],

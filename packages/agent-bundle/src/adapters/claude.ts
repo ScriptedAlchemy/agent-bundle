@@ -49,7 +49,6 @@ import { stringify as stringifyYaml } from 'yaml';
 import {
   commandWriteEntries,
   createAdapterValidator,
-  hasPathToken,
   schemaDescriptorsFrom,
   sortedEntries,
   sourceInputs,
@@ -424,7 +423,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.18.0',
+  adapterRevision: '1.19.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -436,6 +435,7 @@ const agentCapabilities = Object.freeze(Object.fromEntries(
     unavailableCapability(row.reason),
   ]),
 ));
+const packageLifecycle = capabilityTable.plugin.packageLifecycle;
 
 export const claudeArtifactValidation = deepFreeze({
   documents: [
@@ -511,7 +511,7 @@ const planMcpServer = (
     const declaredEnv = server.env === undefined
       ? undefined
       : Object.fromEntries(Object.entries(server.env).map(([key, value]) => {
-          if (hasPathToken(key)) {
+          if (findClaudePathSubstitutionToken(key) !== undefined) {
             diagnostics.push(errorDiagnostic(
               'claude.mcp.token.env.key',
               `Claude MCP environment key "${key}" cannot use a path token.`,
@@ -519,13 +519,19 @@ const planMcpServer = (
           }
           return [key, expandClaudeToken(value)];
         }));
+    const canonicalPluginRootCwd = server.cwd === pathTokens.pluginRoot;
+    if (!canonicalPluginRootCwd && server.cwd !== undefined) {
+      const token = findClaudePathSubstitutionToken(server.cwd);
+      if (token !== undefined) {
+        diagnostics.push(unsupportedClaudeSubstitutionDiagnostic('MCP stdio', 'cwd', token));
+      }
+    }
     if (diagnostics.length > 0) return { diagnostics };
     const args = server.args?.map(expandClaudeToken);
     // Claude Code currently ignores stdio cwd at runtime (see
-    // anthropics/claude-code#17565), so the absolute entry path stays as the
-    // script-resolution hedge and the env anchor carries the working
-    // plugin-root guarantee; cwd is still emitted below as documented,
-    // schema-valid future-proofing.
+    // anthropics/claude-code#17565), and its placeholder table excludes cwd.
+    // Keep the absolute entry path plus env anchor as the working-directory
+    // hedge; a canonical plugin-root cwd is omitted from the emitted server.
     if (server.source !== undefined && server.cwd === pathTokens.pluginRoot && args?.[0] !== undefined) {
       args[0] = `${hookContract.commandRoot}/${args[0]}`;
     }
@@ -534,7 +540,7 @@ const planMcpServer = (
       value: {
         ...(args === undefined ? {} : { args }),
         command: expandClaudeToken(server.command),
-        ...(server.cwd === undefined ? {} : { cwd: expandClaudeToken(server.cwd) }),
+        ...(server.cwd === undefined || canonicalPluginRootCwd ? {} : { cwd: server.cwd }),
         env: withPluginRootEnvAnchor(declaredEnv, expandClaudeToken(pathTokens.pluginRoot)),
         type: 'stdio',
       },
@@ -548,7 +554,7 @@ const planMcpServer = (
   const headers = server.headers === undefined
     ? undefined
     : Object.fromEntries(Object.entries(server.headers).map(([key, value]) => {
-        if (hasPathToken(key)) {
+        if (findClaudePathSubstitutionToken(key) !== undefined) {
           diagnostics.push(errorDiagnostic(
             'claude.mcp.token.headers.key',
             `Claude MCP header key "${key}" cannot use a path token.`,
@@ -592,6 +598,45 @@ const lspServerFields: ReadonlySet<string> = new Set([
 /** Normalized config extension values are already strict JSON, so a plain shape test is enough. */
 const isDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const claudePathSubstitutionTokens = Object.freeze([
+  ...Object.values(pathTokens),
+  '${CLAUDE_PLUGIN_ROOT}',
+  '${CLAUDE_PLUGIN_DATA}',
+  '${CLAUDE_PROJECT_DIR}',
+]);
+
+const findClaudePathSubstitutionToken = (
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+): string | undefined => {
+  if (typeof value === 'string') {
+    return claudePathSubstitutionTokens.find((token) => value.includes(token));
+  }
+  if (typeof value !== 'object' || value === null || seen.has(value)) return undefined;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const token = findClaudePathSubstitutionToken(entry, seen);
+      if (token !== undefined) return token;
+    }
+    return undefined;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    const token = findClaudePathSubstitutionToken(key, seen) ?? findClaudePathSubstitutionToken(entry, seen);
+    if (token !== undefined) return token;
+  }
+  return undefined;
+};
+
+const unsupportedClaudeSubstitutionDiagnostic = (
+  component: string,
+  field: string,
+  token: string,
+): Diagnostic => errorDiagnostic(
+  'claude.substitution.token.unsupported',
+  `Claude ${component} field "${field}" cannot use ${JSON.stringify(token)}; the pinned placeholder table does not substitute path tokens in that field.`,
+);
 
 const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   isDataRecord(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
@@ -1800,6 +1845,13 @@ const planClaudeMarketplace = (model: NormalizedPlugin): ClaudeMarketplacePlan =
 const expandLspToken = (value: unknown): unknown =>
   typeof value === 'string' ? expandClaudeToken(value) : value;
 
+const lspPathSubstitutionFields: ReadonlySet<string> = new Set([
+  'args',
+  'command',
+  'env',
+  'workspaceFolder',
+]);
+
 const planLspServer = (
   name: string,
   declared: unknown,
@@ -1813,11 +1865,18 @@ const planLspServer = (
     return { diagnostics };
   }
   for (const field of Object.keys(declared).sort()) {
-    if (lspServerFields.has(field)) continue;
-    diagnostics.push(errorDiagnostic(
-      'claude.lsp.field.unknown',
-      `Claude LSP server "${name}" declares unknown field "${field}".`,
-    ));
+    if (!lspServerFields.has(field)) {
+      diagnostics.push(errorDiagnostic(
+        'claude.lsp.field.unknown',
+        `Claude LSP server "${name}" declares unknown field "${field}".`,
+      ));
+      continue;
+    }
+    if (lspPathSubstitutionFields.has(field)) continue;
+    const token = findClaudePathSubstitutionToken(declared[field]);
+    if (token !== undefined) {
+      diagnostics.push(unsupportedClaudeSubstitutionDiagnostic(`LSP server "${name}"`, field, token));
+    }
   }
   const command = declared['command'];
   if (typeof command !== 'string' || command.length === 0) {
@@ -1836,7 +1895,7 @@ const planLspServer = (
   const env = declared['env'];
   if (isDataRecord(env)) {
     for (const key of Object.keys(env).sort()) {
-      if (!hasPathToken(key)) continue;
+      if (findClaudePathSubstitutionToken(key) === undefined) continue;
       diagnostics.push(errorDiagnostic(
         'claude.lsp.token.env.key',
         `Claude LSP environment key "${key}" cannot use a path token.`,
@@ -2641,7 +2700,7 @@ const planSubagentStatusLine = (
     ));
     return { diagnostics };
   }
-  if (hasPathToken(command)) {
+  if (findClaudePathSubstitutionToken(command) !== undefined) {
     diagnostics.push(settingsTokenDiagnostic('subagentStatusLine.command'));
     return { diagnostics };
   }
@@ -2696,7 +2755,7 @@ export const planClaudeSettings = (model: NormalizedPlugin): ClaudeSettingsPlan 
         'claude.settings.agent.invalid',
         'Claude settings agent must be a nonempty plugin agent name; it activates that agent as the main thread.',
       ));
-    } else if (hasPathToken(agent)) {
+    } else if (findClaudePathSubstitutionToken(agent) !== undefined) {
       diagnostics.push(settingsTokenDiagnostic('agent'));
     } else {
       document['agent'] = agent;
@@ -3174,6 +3233,15 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document manifest dependencies.',
     ),
+    nodeDependencyInstall: unavailableCapability(packageLifecycle.nodeDependencyInstall.reason),
+    yarnPnpmInstallAlternative: unavailableCapability(packageLifecycle.yarnPnpmInstallAlternative.reason),
+    pluginCacheLifecycle: unavailableCapability(packageLifecycle.pluginCacheLifecycle.reason),
+    pluginPathSubstitution: Object.freeze({
+      evidence,
+      reason: packageLifecycle.pluginPathSubstitution.reason,
+      state: 'degraded',
+    }),
+    pluginDataLifecycle: unavailableCapability(packageLifecycle.pluginDataLifecycle.reason),
     managedAllowManagedHooksOnly: unavailableCapability(
       distributionPolicy.managedAllowManagedHooksOnly.reason,
     ),

@@ -186,7 +186,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.16.0',
+  adapterRevision: '1.17.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -616,6 +616,36 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       claudeAdapter.capabilities.dependencies!,
       unavailableCapability(
         'The pinned Codex and Cursor plugin contracts publish no dependency declaration or resolution surface; manifest dependencies reach Claude Code only.',
+      ),
+    ),
+    nodeDependencyInstall: intersectCapabilityStates(
+      claudeAdapter.capabilities.nodeDependencyInstall!,
+      unavailableCapability(
+        'The unified bundle emits compile-time host artifacts and has no shared host-owned Node dependency installation transaction.',
+      ),
+    ),
+    yarnPnpmInstallAlternative: intersectCapabilityStates(
+      claudeAdapter.capabilities.yarnPnpmInstallAlternative!,
+      unavailableCapability(
+        'The pinned Codex and Cursor contracts publish no shared Claude-style Yarn or pnpm persistent-data installation fallback.',
+      ),
+    ),
+    pluginCacheLifecycle: intersectCapabilityStates(
+      claudeAdapter.capabilities.pluginCacheLifecycle!,
+      unavailableCapability(
+        'The unified bundle does not own one cross-host plugin cache, version resolution, orphan sweep, or symlink materialization lifecycle.',
+      ),
+    ),
+    pluginPathSubstitution: intersectCapabilityStates(
+      claudeAdapter.capabilities.pluginPathSubstitution!,
+      unavailableCapability(
+        'The pinned Codex and Cursor contracts do not share Claude path placeholders or their component-specific substitution field table.',
+      ),
+    ),
+    pluginDataLifecycle: intersectCapabilityStates(
+      claudeAdapter.capabilities.pluginDataLifecycle!,
+      unavailableCapability(
+        'The unified bundle cannot delete or preserve Claude persistent plugin data as one cross-host uninstall transaction.',
       ),
     ),
     managedAllowManagedHooksOnly: intersectCapabilityStates(
