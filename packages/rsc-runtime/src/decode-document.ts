@@ -67,8 +67,6 @@ interface DeclaredValue {
 
 interface DecodeState {
   bytes: number;
-  /** Result nodes whose `metadata` is already a budgeted snapshot (the product of a merge), never charged twice. */
-  readonly chargedMetadata: WeakSet<AgentDocumentNode>;
   /** Serialized bytes of authored metadata that merging overwrote or dropped, so they never leave the finished document's byte budget. */
   discardedBytes: number;
   readonly limits: AgentRenderLimits;
@@ -81,8 +79,10 @@ interface DecodeState {
 /**
  * The decode pass's JSON budget, charging the same node, depth, and byte
  * limits `createAgentDocument` enforces on the finished document. Merging
- * removes the inner result and may overwrite its keys, so pre-merge metadata
- * is charged here, at its authored depth, before anything is dropped.
+ * removes the inner result, splices its children one level toward the root,
+ * and may overwrite its keys, so every JSON payload — result metadata, JSON
+ * node values, and the adopted result value — is charged here at the depth it
+ * was authored, before anything moves or is dropped.
  */
 const decodeBudget = (state: DecodeState): JsonSnapshotBudget => ({
   addBytes(n) {
@@ -140,23 +140,19 @@ const adoptedValue = (declared: DeclaredValue, state: DecodeState): DeclaredValu
  * container winning conflicts, so nested layouts and the route each
  * contribute their own keys; any other declared shape — including an explicit
  * JSON `null` — lets the container win outright. Only a container that
- * declares no metadata at all adopts the inner result's. `depth` is the
- * container's; the inner result sat one level below it. An inner result that
- * is itself a merged container already carries a budgeted snapshot, which is
- * carried forward rather than charged again, so nested layouts pay for each
- * authored object exactly once. Whatever the merge overwrites or drops is
- * recorded in `discardedBytes`: the finished document is measured together
- * with it, so splitting a payload between overwritten metadata and retained
- * content cannot slip past `maxDocumentBytes`.
+ * declares no metadata at all adopts the inner result's. Both operands are
+ * already budgeted snapshots (every result charges its metadata where it was
+ * authored), so nested layouts pay for each authored object exactly once.
+ * Whatever the merge overwrites or drops is recorded in `discardedBytes`: the
+ * finished document is measured together with it, so splitting a payload
+ * between overwritten metadata and retained content cannot slip past
+ * `maxDocumentBytes`.
  */
 const mergedMetadata = (
-  container: JsonValue | undefined,
-  inner: AgentResultNode,
-  depth: number,
+  outer: JsonValue | undefined,
+  nested: JsonValue | undefined,
   state: DecodeState,
 ): JsonValue | undefined => {
-  const outer = jsonMetadata(container, depth, state);
-  const nested = state.chargedMetadata.has(inner) ? inner.metadata : jsonMetadata(inner.metadata, depth + 1, state);
   if (outer === undefined) return nested;
   if (nested === undefined) return outer;
   if (isJsonObject(outer) && isJsonObject(nested)) {
@@ -186,7 +182,7 @@ const decodeResult = (
 ): AgentResultNode => {
   const decoded = Children.toArray(props.children as ReactNode).map((child) => decodeNode(child, depth + 1, state));
   const ownValue = props.value as JsonValue | undefined;
-  const ownMetadata = props.metadata as JsonValue | undefined;
+  const ownMetadata = jsonMetadata(props.metadata as JsonValue | undefined, depth, state);
   const mergeIndex = ownValue === undefined
     ? decoded.findIndex((child) => child.kind === 'result' && state.resultValues.has(child))
     : -1;
@@ -194,7 +190,7 @@ const decodeResult = (
   const children = merged === undefined
     ? decoded
     : [...decoded.slice(0, mergeIndex), ...merged.children, ...decoded.slice(mergeIndex + 1)];
-  const metadata = merged === undefined ? ownMetadata : mergedMetadata(ownMetadata, merged, depth, state);
+  const metadata = merged === undefined ? ownMetadata : mergedMetadata(ownMetadata, merged.metadata, state);
   const node: AgentResultNode = {
     children,
     kind: 'result',
@@ -204,7 +200,6 @@ const decodeResult = (
     if (ownValue !== undefined) state.resultValues.set(node, { charged: false, depth, value: ownValue });
     return node;
   }
-  state.chargedMetadata.add(node);
   state.resultValues.set(node, adoptedValue(state.resultValues.get(merged)!, state));
   return node;
 };
@@ -224,7 +219,10 @@ const decodeNode = (node: ReactNode, depth: number, state: DecodeState): AgentDo
     case 'agent-context':
       return { kind: 'context', text: textChild(props.children, element.type) };
     case 'agent-json':
-      return { kind: 'json', value: props.value as JsonValue };
+      return {
+        kind: 'json',
+        value: budgetedJson(props.value as JsonValue, 'Agent JSON node value must be JSON-serializable', depth, state),
+      };
     case 'agent-progress':
       return {
         completed: props.completed as number,
@@ -268,7 +266,6 @@ export const decodeAgentDocument = (
   }
   const state: DecodeState = {
     bytes: 0,
-    chargedMetadata: new WeakSet(),
     discardedBytes: 0,
     limits: resolved,
     nodes: 0,

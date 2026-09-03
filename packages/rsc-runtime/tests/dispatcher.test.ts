@@ -229,6 +229,25 @@ describe('decodeAgentDocument', () => {
     );
     expect(decodeAgentDocument(liftedValue, { maxDocumentDepth: 4 }).value).toEqual(deepValue);
 
+    // Splicing moves the merged result's children one level toward the root;
+    // their JSON payloads — `Agent.Json` values and nested result metadata —
+    // are still measured where they were authored (node at depth 3: object 3,
+    // nested object 4, leaf 5), not where the finished tree places them (2–4).
+    const jsonLeaf = createElement('agent-json', { value: { a: { b: 1 } } });
+    expect(() => decodeAgentDocument(createElement('agent-result', { value: 1 }, jsonLeaf), { maxDocumentDepth: 4 })).not.toThrow();
+    const splicedJson = createElement('agent-result', null, createElement('agent-result', { value: 1 }, jsonLeaf));
+    expect(() => decodeAgentDocument(splicedJson, { maxDocumentDepth: 4 })).toThrow(
+      expect.objectContaining({ code: 'document-depth-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(splicedJson, { maxDocumentDepth: 5 })).not.toThrow();
+    const nestedMetadata = createElement('agent-result', { metadata: { a: { b: 1 } } }, leaf);
+    expect(() => decodeAgentDocument(createElement('agent-result', { value: 1 }, nestedMetadata), { maxDocumentDepth: 4 })).not.toThrow();
+    const splicedMetadata = createElement('agent-result', null, createElement('agent-result', { value: 1 }, nestedMetadata));
+    expect(() => decodeAgentDocument(splicedMetadata, { maxDocumentDepth: 4 })).toThrow(
+      expect.objectContaining({ code: 'document-depth-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(splicedMetadata, { maxDocumentDepth: 5 })).not.toThrow();
+
     // Two containers charge the adopted value once, at the declaring depth.
     const twice = createElement('agent-result', null, createElement('agent-result', null, createElement('agent-result', { value: fields('v') }, leaf)));
     expect(decodeAgentDocument(twice, { maxDocumentNodes: 2_100 }).value).toEqual(fields('v'));
