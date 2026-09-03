@@ -530,6 +530,7 @@ export const createAgentNoticeLedger = (
         ? undefined
         : nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
       const expectedRevision = yield* noticeEffect(() => availabilityExpectedRevision(options.expectedRevision));
+      const before = reservationKey === undefined ? undefined : yield* storeEffect(() => store.read());
       const committed = yield* storeEffect(() => store.dispatch(
         'availability-signalled',
         {
@@ -540,6 +541,23 @@ export const createAgentNoticeLedger = (
         },
         { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
       ));
+      // A fresh commit (not an idempotent replay, whose revision predates the
+      // head just read) records nothing on a live notice this key no longer
+      // held; the reducer refused it, and the caller must learn that.
+      if (before !== undefined && committed.revision > before.revision) {
+        const lost = before.state.notices.filter((notice) =>
+          noticeIds.includes(notice.id)
+          && (notice.state === 'pending' || notice.state === 'attempted')
+          && notice.availabilityReservation?.key !== reservationKey);
+        if (lost.length > 0) {
+          return yield* Effect.fail(new AgentNoticeError(
+            'reservation-lost',
+            `Notice availability reservation ${JSON.stringify(reservationKey)} no longer holds ${
+              lost.map((notice) => notice.id).join(', ')
+            }; no receipt was recorded for it`,
+          ));
+        }
+      }
       return snapshotFrom(committed.revision, committed.state);
     }));
   },

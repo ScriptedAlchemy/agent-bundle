@@ -148,11 +148,15 @@ export const createNoticeInboxSignaller = (
   let subscription: InboxSubscription | undefined;
   let signalSequence = 0;
   // Sends that reached the wire but whose receipt commit failed. The send is
-  // a fact, so the receipt is retried with the same idempotency key on every
-  // later observation (and on close) until it lands; the memory dedupe alone
-  // would otherwise let a restarted signaller spend the same slot again once
-  // the abandoned hold lapsed.
+  // a fact, so the receipt is retried with the same idempotency key — on an
+  // independent timer that also renews the hold, before every later
+  // observation, and on close — until it lands or the hold is lost. The memory
+  // dedupe alone would otherwise let a restarted signaller spend the same slot
+  // again once the abandoned hold lapsed.
   const pendingReceipts = new Map<string, PendingReceipt>();
+  let receiptRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let renewalSequence = 0;
+  let closed = false;
   // Observations and subscription changes serialize on one queue: two renders
   // completing together cannot both select the same notice and send two
   // signals for one revision, and an unsubscribe (or re-subscribe) that
@@ -245,17 +249,62 @@ export const createNoticeInboxSignaller = (
     reservationKey: receipt.reservationKey,
   });
 
-  /** Retries every outstanding receipt; the first failure is returned so the caller reports it. */
+  const isReservationLost = (error: unknown): boolean =>
+    error instanceof AgentNoticeError && error.code === 'reservation-lost';
+
+  /**
+   * Retries every owed receipt, renewing its hold first so the slot stays ours
+   * while the ledger recovers. A receipt whose hold was lost (the ledger could
+   * not be reached for a whole TTL and another signaller took over) can never
+   * be recorded — the takeover's send is the one the budget counts — so it is
+   * dropped and reported once. The first failure is returned so the caller
+   * reports it.
+   */
   const drainPendingReceipts = async (ledger: AgentNoticeLedger): Promise<unknown> => {
     for (const receipt of [...pendingReceipts.values()]) {
+      renewalSequence += 1;
+      try {
+        await ledger.reserveAvailability({
+          at: now().toISOString(),
+          idempotencyKey: `agent-notices:availability:renew:${receipt.reservationKey}:owed:${String(renewalSequence)}`,
+          noticeIds: receipt.noticeIds,
+          reservationKey: receipt.reservationKey,
+        });
+      } catch {
+        // The commit below is the write that matters; a failed renewal only
+        // shortens how long the hold survives a longer outage.
+      }
       try {
         await commitReceipt(ledger, receipt);
         pendingReceipts.delete(receipt.reservationKey);
       } catch (error) {
+        if (isReservationLost(error)) pendingReceipts.delete(receipt.reservationKey);
         return error;
       }
     }
     return undefined;
+  };
+
+  /**
+   * Keeps retrying owed receipts on the renewal cadence, independently of
+   * renders: a server that receives no further render past the TTL would
+   * otherwise let its hold lapse while a wire-successful send stayed unrecorded.
+   * The timer exists only while a receipt is owed.
+   */
+  const scheduleReceiptRetry = (): void => {
+    if (closed || receiptRetryTimer !== undefined || pendingReceipts.size === 0) return;
+    receiptRetryTimer = setTimeout(() => {
+      receiptRetryTimer = undefined;
+      void serialized(async () => {
+        if (closed || pendingReceipts.size === 0) return;
+        try {
+          await drainPendingReceipts(await options.store.noticeLedger());
+        } catch {
+          // Retried on the next tick.
+        }
+      }).finally(scheduleReceiptRetry);
+    }, renewalIntervalMs);
+    receiptRetryTimer.unref?.();
   };
 
   /**
@@ -271,16 +320,14 @@ export const createNoticeInboxSignaller = (
     hold: { readonly noticeIds: readonly string[]; readonly reservationKey: string },
     pending: Promise<T>,
   ): Promise<T> => {
-    let renewals = 0;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = (): void => {
       if (stopped) return;
-      renewals += 1;
-      const renewal = renewals;
+      renewalSequence += 1;
       void ledger.reserveAvailability({
         at: now().toISOString(),
-        idempotencyKey: `agent-notices:availability:renew:${hold.reservationKey}:${String(renewal)}`,
+        idempotencyKey: `agent-notices:availability:renew:${hold.reservationKey}:${String(renewalSequence)}`,
         noticeIds: hold.noticeIds,
         reservationKey: hold.reservationKey,
       }).catch(() => undefined).then(() => {
@@ -314,6 +361,7 @@ export const createNoticeInboxSignaller = (
     // wire, and a ledger that cannot take them is not one to spend against.
     const owed = await drainPendingReceipts(ledger);
     if (owed !== undefined) {
+      scheduleReceiptRetry();
       return Object.freeze({ error: owed, kind: 'failed' as const, stage: 'record' as const });
     }
     if (current === undefined || pendingUnsubscribes > 0) {
@@ -368,6 +416,11 @@ export const createNoticeInboxSignaller = (
       pendingReceipts.delete(receipt.reservationKey);
       return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: committed.revision });
     } catch (error) {
+      if (isReservationLost(error)) {
+        pendingReceipts.delete(receipt.reservationKey);
+      } else {
+        scheduleReceiptRetry();
+      }
       return Object.freeze({ error, kind: 'failed' as const, stage: 'record' as const });
     }
   };
@@ -378,6 +431,11 @@ export const createNoticeInboxSignaller = (
       return subscription !== undefined;
     },
     close(): Promise<void> {
+      closed = true;
+      if (receiptRetryTimer !== undefined) {
+        clearTimeout(receiptRetryTimer);
+        receiptRetryTimer = undefined;
+      }
       return serialized(async () => {
         subscription = undefined;
         if (pendingReceipts.size > 0) {

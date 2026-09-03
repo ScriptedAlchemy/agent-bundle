@@ -205,7 +205,13 @@ export interface AgentNoticeAvailabilitySignalOptions {
   readonly expectedRevision?: number;
   readonly idempotencyKey: string;
   readonly noticeIds: readonly string[];
-  /** The reservation this signal finalizes; the reservation is cleared with the receipt. */
+  /**
+   * The reservation this signal finalizes. The receipt is recorded only on
+   * notices this key still holds and the hold is cleared with it; a key that
+   * lost the hold (another signaller took over after the TTL) records nothing
+   * and the call rejects with `reservation-lost`, so two holders can never
+   * both spend one budget slot.
+   */
   readonly reservationKey?: string;
 }
 
@@ -242,6 +248,8 @@ export type AgentNoticeErrorCode =
   | 'aborted'
   | 'invalid-input'
   | 'request-closed'
+  /** A reserved availability receipt was refused because the reservation key no longer holds the slot. */
+  | 'reservation-lost'
   | 'unauthorized';
 
 export class AgentNoticeError extends Error {

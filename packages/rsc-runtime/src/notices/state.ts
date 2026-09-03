@@ -278,6 +278,12 @@ const transitionAvailability = (
   switch (notice.state) {
     case 'pending':
     case 'attempted':
+      // A reserved receipt is honoured only by the key that holds the slot: a
+      // holder whose hold lapsed and was taken over records nothing, so the
+      // takeover's send is the one the budget counts.
+      if (input.reservationKey !== undefined && notice.availabilityReservation?.key !== input.reservationKey) {
+        return notice;
+      }
       return Object.freeze({
         ...withoutReservation(notice, input.reservationKey),
         availability: Object.freeze({

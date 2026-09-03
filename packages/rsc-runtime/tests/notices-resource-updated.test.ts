@@ -6,6 +6,7 @@ import {
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
   createNoticeInboxSignaller,
+  type AgentNoticeError,
   type AgentNoticeLedger,
   type AgentNoticePrincipal,
   type AgentNoticePublishInput,
@@ -450,6 +451,123 @@ describe('notice inbox resources/updated signaller', () => {
     await expect(restarted.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
     expect(sends).toHaveLength(1);
     expect(published.notice.id).toBe(settled?.id);
+    await driver.close();
+  });
+
+  it('retries an owed receipt on its own cadence, renewing the hold, without waiting for another render', async () => {
+    const { driver, ledger } = await openLedger();
+    let receiptOutage = true;
+    let clock = Date.parse(T1);
+    const flaky: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      signalAvailability: async (input) => {
+        if (receiptOutage) throw new AgentStateError('unavailable', 'receipt commit lost');
+        return ledger.signalAvailability(input);
+      },
+    });
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(clock),
+      reservationRenewalIntervalMs: 5,
+      store: { close: async () => undefined, noticeLedger: async () => flaky },
+    });
+    await signaller.subscribe(principal('s1'));
+    await publish(ledger, { sessionId: 's1' });
+    const { send, sends } = sender();
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'record' });
+    expect(sends).toHaveLength(1);
+
+    // While the ledger refuses the receipt, the retry loop keeps the hold
+    // renewed as the wall clock moves, so no other process treats it as
+    // abandoned even though no render arrives.
+    clock = Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS + 5_000;
+    const heldAt = async (): Promise<string | undefined> =>
+      (await ledger.read()).notices[0]?.availabilityReservation?.at;
+    for (let i = 0; i < 200 && await heldAt() === T1; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(await heldAt()).toBe(new Date(clock).toISOString());
+    const other = signallerOver(ledger, () => new Date(clock));
+    await other.subscribe(principal('s1'));
+    await expect(other.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
+
+    // The ledger recovers: the receipt lands from the timer alone.
+    receiptOutage = false;
+    const availability = async () => (await ledger.read()).notices[0]?.availability;
+    for (let i = 0; i < 200 && await availability() === undefined; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(await availability()).toMatchObject({ count: 1, firstAt: T1 });
+    expect((await ledger.read()).notices[0]).not.toHaveProperty('availabilityReservation');
+    expect(sends).toHaveLength(1);
+    await signaller.close();
+    await driver.close();
+  });
+
+  it('refuses to record a receipt for a hold another process took over, so budget one stays one', async () => {
+    const { driver, ledger } = await openLedger();
+    let clock = Date.parse(T1);
+    // Process A can reserve once but every renewal fails: the ledger is
+    // unreachable for A while its send hangs past the TTL.
+    let reservations = 0;
+    const partitioned: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      reserveAvailability: async (input) => {
+        reservations += 1;
+        if (reservations > 1) throw new AgentStateError('unavailable', 'partitioned');
+        return ledger.reserveAvailability(input);
+      },
+    });
+    const processA = createNoticeInboxSignaller({
+      now: () => new Date(clock),
+      reservationRenewalIntervalMs: 5,
+      store: { close: async () => undefined, noticeLedger: async () => partitioned },
+    });
+    await processA.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+
+    let finishSend: () => void = () => undefined;
+    const sendSettled = new Promise<void>((resolve) => {
+      finishSend = resolve;
+    });
+    const sends: string[] = [];
+    const observingA = processA.observe(async () => {
+      sends.push('A');
+      await sendSettled;
+    });
+    const heldBy = async (): Promise<string | undefined> =>
+      (await ledger.read()).notices[0]?.availabilityReservation?.key;
+    for (let i = 0; i < 200 && await heldBy() === undefined; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    const keyA = await heldBy();
+    expect(keyA).toBeDefined();
+
+    // A whole TTL passes with A unable to renew; process B takes the hold over
+    // and sends.
+    clock = Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS + 1_000;
+    const processB = signallerOver(ledger, () => new Date(clock));
+    await processB.subscribe(principal('s1'));
+    await expect(processB.observe(async () => {
+      sends.push('B');
+    })).resolves.toMatchObject({ kind: 'signalled', noticeIds: [published.notice.id] });
+    expect(sends).toEqual(['A', 'B']);
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    // A's send finally completes. Its receipt is refused — B's hold (already
+    // finalized) is the one the budget counted — and A reports the loss rather
+    // than pushing the notice to count 2.
+    finishSend();
+    const outcomeA = await observingA;
+    expect(outcomeA).toMatchObject({ kind: 'failed', stage: 'record' });
+    expect((outcomeA as { error: AgentNoticeError }).error).toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    // Nothing is owed any more: a later observation neither retries nor resends.
+    await expect(processA.observe(async () => {
+      sends.push('A-again');
+    })).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toEqual(['A', 'B']);
+    await processA.close();
     await driver.close();
   });
 

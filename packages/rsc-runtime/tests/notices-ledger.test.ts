@@ -945,6 +945,17 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
       noticeIds: [id],
       reservationKey: 'holder-c:1',
     });
+    // A key that does not hold the slot records nothing and is told so; the
+    // hold and the budget are untouched.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:stale',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    const afterStale = (await ledger.read()).notices[0];
+    expect(afterStale).not.toHaveProperty('availability');
+    expect(afterStale?.availabilityReservation).toMatchObject({ key: 'holder-c:1' });
     const signalled = await ledger.signalAvailability({
       at: '2026-09-01T19:05:00.000Z',
       idempotencyKey: 'signal:c',
@@ -953,6 +964,25 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     });
     expect(signalled.notices[0]?.availability).toMatchObject({ count: 1, firstAt: '2026-09-01T19:05:00.000Z' });
     expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+    // Replaying the committed receipt (same key, same payload) is not a lost
+    // hold: the idempotent result comes back and nothing is counted twice.
+    const replayed = await ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    expect(replayed.revision).toBe(signalled.revision);
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    // A late receipt from the holder that lost the slot is refused even once
+    // the hold is gone: only the send the ledger authorized is counted.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:05:01.000Z',
+      idempotencyKey: 'signal:stale-after',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
 
     for (const invalid of [
       () => ledger.reserveAvailability({ at: 'never', idempotencyKey: 'x', noticeIds: [id], reservationKey: 'k' }),
