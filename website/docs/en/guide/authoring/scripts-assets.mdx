@@ -47,6 +47,14 @@ Nested modules under `src/scripts/` are a hard error (`AB4808`) — the output n
 unambiguous. Opt out by prefixing a path segment with `_`, or by claiming the file with an
 explicit `scripts` entry.
 
+Every explicit config entry that references a module — `scripts`, `hooks`, `mcp`, `lib` — claims
+it out of convention, with one exception: a `bin` entry does **not** claim a direct
+`src/scripts/<name>.ts` child. The bin compiles to `dist/bin/<name>.js`, disjoint from every
+artifact, and both envelopes run the same `main`, so the module ships as the npm bin *and* the
+artifact `scripts/<name>.mjs`. Such a module must export `main` or be self-executing: a
+`default`-only plain script is `AB4738`, and a rendered `.tsx` script must export both its default
+component and `main` (`AB4737`). For a bin-only module, prefix a path segment with `_`.
+
 ### Rendered scripts
 
 `src/scripts/<name>.tsx` is a rendered script. Its async default component receives `argv` and
