@@ -416,6 +416,33 @@
         "state": "supported"
       }
     },
+    "overviewSurfaces": {
+      "mcpUi": {
+        "evidence": [
+          "retrieved 2026-09-03: https://learn.chatgpt.com/docs/plugins lists connectors that 'can optionally include custom UI' among plugin parts and points builders at the optional UI guide when a plugin needs custom UI.",
+          "retrieved 2026-09-03: https://developers.openai.com/plugins/build/chatgpt-ui states that custom UI is optional, that ChatGPT implements the open MCP Apps standard (`_meta.ui.resourceUri`, the `ui/*` JSON-RPC bridge over postMessage), that components run inside an iframe in ChatGPT, and that tools must stay useful without a component 'so ChatGPT and Codex can complete the workflow without UI'.",
+          "observed 2026-09-03: codex-cli 0.147.0 is a terminal client with no component-rendering surface, and the pinned .codex-plugin/plugin.json contract publishes no UI field; the compiled MCP server serves `ui://` resources with `_meta` passthrough per the open MCP Apps standard regardless of host."
+        ],
+        "reason": "Agent Bundle compiles MCP Apps as `ui://` resources with `_meta` passthrough served by the compiled MCP server, which is the open MCP Apps contract that ChatGPT renders; Codex CLI 0.147.0 renders no components, so the emitted UI is inert there and every tool remains usable without it. Rendering is a ChatGPT host surface, not a Codex plugin artifact.",
+        "state": "degraded"
+      },
+      "browserExtensions": {
+        "evidence": [
+          "retrieved 2026-09-03: https://learn.chatgpt.com/docs/plugins lists 'Browser extensions: browser capabilities that a plugin needs for its workflow' among the parts a plugin can contain.",
+          "retrieved 2026-09-03: https://learn.chatgpt.com/docs/build-plugins and https://developers.openai.com/plugins/build/plugins describe an installable plugin as skills, an MCP server, or both, and publish no browser-extension authoring field; the pinned plugin.schema.json is closed to name, version, description, author, homepage, repository, license, keywords, interface, skills, mcpServers, hooks, and apps."
+        ],
+        "reason": "Browser extensions are host-managed plugin parts with no schema-backed authoring field in the pinned .codex-plugin/plugin.json contract; the compiler infers nothing and the closed manifest schema rejects any authored field until a package contract publishes one.",
+        "state": "unavailable"
+      },
+      "scheduledTaskTemplates": {
+        "evidence": [
+          "retrieved 2026-09-03: https://learn.chatgpt.com/docs/plugins lists 'Scheduled task templates: reusable starting points for recurring tasks where scheduled tasks are available' among the parts a plugin can contain.",
+          "retrieved 2026-09-03: https://learn.chatgpt.com/docs/build-plugins and https://developers.openai.com/plugins/build/plugins publish no scheduled-task authoring field, and the pinned plugin.schema.json is closed to the documented manifest fields."
+        ],
+        "reason": "Scheduled task templates are host-managed plugin parts with no schema-backed authoring field in the pinned .codex-plugin/plugin.json contract; the compiler infers nothing and the closed manifest schema rejects any authored field until a package contract publishes one.",
+        "state": "unavailable"
+      }
+    },
     "hookEnvironment": {
       "claudePluginData": {
         "evidence": [

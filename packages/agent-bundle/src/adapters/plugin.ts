@@ -132,6 +132,9 @@ const codexDistributionCapabilities = [
   'restrictToAllowedSources',
   'workspacePublishing',
 ] as const;
+const overviewSurfacesUnifiedReason =
+  'The Codex plugins overview names optional MCP UI, browser extensions, and scheduled task templates as plugin parts, but the pinned Claude and Cursor plugin contracts publish no shared field for any of them.';
+const codexOverviewSurfaceCapabilities = ['browserExtensions', 'mcpUi', 'scheduledTaskTemplates'] as const;
 const codexHookContractCapabilities = [
   'hookAdditionalContextLimit',
   'hookAsyncCommands',
@@ -228,7 +231,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.23.0',
+  adapterRevision: '1.24.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -634,6 +637,13 @@ const codexHookContractUnifiedCapabilities = Object.freeze(Object.fromEntries([
     intersectCapabilityStates(
       codexAdapter.capabilities[capability]!,
       unavailableCapability(distributionUnifiedReason),
+    ),
+  ]),
+  ...codexOverviewSurfaceCapabilities.map((capability) => [
+    capability,
+    intersectCapabilityStates(
+      codexAdapter.capabilities[capability]!,
+      unavailableCapability(overviewSurfacesUnifiedReason),
     ),
   ]),
 ]));

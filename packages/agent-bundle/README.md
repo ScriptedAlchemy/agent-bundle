@@ -74,7 +74,12 @@ npm `version` must be a semver version, range, or dist-tag, and Git `ref` must s
 enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
 managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or
 admin-owned and are recorded in `codex-0.147.0.json` (`distribution`) with dated evidence instead of
-being claimed.
+being claimed. The overview-level plugin parts get the same treatment (`plugin.overviewSurfaces`):
+optional MCP UI is `degraded` (the compiled MCP server serves `ui://` resources per the open MCP
+Apps standard that ChatGPT renders, while Codex CLI renders no components and every tool stays
+usable without UI), and browser extensions and scheduled task templates are `unavailable`
+because no package or manifest contract publishes an authoring field for them, so nothing is
+inferred.
 
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the

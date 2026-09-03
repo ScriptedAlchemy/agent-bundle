@@ -68,7 +68,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.8.0',
+    adapterRevision: '1.9.0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -170,7 +170,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.23.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.24.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
