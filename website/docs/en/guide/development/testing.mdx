@@ -82,11 +82,12 @@ and prints it in every failure, because a pass at one level is never a receipt f
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | The packed stdio process still runs after project source and configuration are removed and verified absent. |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | A built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout. |
 
-Two adjacent levels live in the same helper family. `agent-bundle/test/browser` supplies the
-browser-safe `browser-app` level for production-compiled MCP App HTML mounted over the product
-bridge in a real browser page, and `openInstalledHostMcpServer` **without** `sessionEvidence`
-records `simulated` — an emitted bundle staged directly into an isolated host-shaped root and
-spawned without a host-owned install, which is weaker than `host-install`.
+Two further levels sit alongside these six. `agent-bundle/test/browser` supplies `mountBrowserApp`
+for the browser-safe `browser-app` level — production-compiled MCP App HTML mounted over the
+product bridge in a real browser page — and `simulated` reuses the installed-host helper
+`openInstalledHostMcpServer` without `sessionEvidence`: an emitted bundle staged directly into
+an isolated host-shaped root and spawned without a host-owned install, which is weaker than
+`host-install`.
 
 ```ts twoslash
 import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';

@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
 | `marketplace` | `boolean` | Adapter-selected. |
-| `dev` | `{ agentApi?, runtime? }` | Off. |
+| `dev` | `{ agentApi?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
 
@@ -94,7 +94,8 @@ reason fails. `agentStop` is not one of them.
 
 `output.distPath` is the artifact output directory relative to the project root, defaulting to
 `dist`. The per-invocation `--output` flag wins, but is subject to the same project-root
-containment check; absolute and external output paths are unsupported (`AB4707`–`AB4709`).
+containment check; an output path that is absolute or external, has an invalid shape, or lands
+in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
 
 `runtime.node` is a minimum Node.js version in `major.minor[.patch]` form. It can only raise the
 default floor for generated executables, never lower it, and the selected floor is recorded as

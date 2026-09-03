@@ -19,8 +19,9 @@ compiler writes the right spelling per target rather than assuming one:
 | Host | Plugin root | Plugin data |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
-| Codex, portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
+| Codex | `${PLUGIN_ROOT}` | — (rejected: no documented host equivalent) |
+| portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 Substitution is **positional, not global**. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` and
 its siblings in Skill and agent content, hook and monitor commands, MCP servers, and LSP servers
@@ -39,6 +40,7 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | Contributor test suites | `1` compares the installed host CLI contract. |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | Contributor test suites | `1` runs the signed-in Claude native smoke. |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | Contributor test suites | `1` runs the signed-in Codex native smoke. |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | Contributor HMR (`packages/workbench/scripts/dev.mjs`) | The running Agent Bundle foreground server URL required before Workbench UI HMR starts. See [Developer Workbench](../guide/development/workbench.mdx). |
 
 The three native-smoke opt-ins exist because those runs need a real signed-in CLI; they are never
 part of an ordinary test run.
@@ -51,9 +53,9 @@ part of an ordinary test run.
 2. The **`.env` file layer**.
 3. The operator's real `process.env`, so an exported variable always wins.
 
-The `.env` layer is the conventional Rsbuild set at the workspace root — `.env`, `.env.local`,
-`.env.<mode>`, `.env.<mode>.local` — unless `--env-file <path>` replaces it with exactly the files
-you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
+The `.env` layer is the conventional Rsbuild set at the project root (the runtime calls this the
+workspace root) — `.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local` — unless
+`--env-file <path>` replaces it with exactly the files you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
 scratch object, so the real `process.env` is never mutated.
 
 ## Durable state
@@ -62,7 +64,7 @@ Durable state resolves to `$AGENT_BUNDLE_PLUGIN_ROOT/state`, falling back to the
 to `./.agent-bundle/state` for CLI bins. Only a `workspace-durable` state definition uses the
 SQLite driver; other lifetimes use the in-memory driver and keep nothing on disk.
 
-Under `mcp run`, plugin-root anchors in **env values** expand to the workspace root by default,
+Under `mcp run`, plugin-root anchors in **env values** expand to the project root by default,
 not the artifact: the artifact is an ephemeral build product there, and anchoring durable state on
 it would fragment that state on every rebuild. Pass `--plugin-root <path>` pointing at the
 artifact target root for a byte-faithful rehearsal of a copied-artifact launch.

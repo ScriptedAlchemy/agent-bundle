@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
 | `marketplace` | `boolean` | 由适配器选择。 |
-| `dev` | `{ agentApi?, runtime? }` | 关闭。 |
+| `dev` | `{ agentApi?, runtime? }` | 无。 |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
 
@@ -87,7 +87,8 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 ## output 与 runtime
 
 `output.distPath` 是相对项目根目录的产物输出目录，默认为 `dist`。逐次调用的 `--output` 标志优先，但同样
-受相同的项目根包含性检查约束；不支持绝对路径与外部输出路径（`AB4707`–`AB4709`）。
+受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径
+均不受支持（`AB4707`–`AB4709`）。
 
 `runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
 绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在

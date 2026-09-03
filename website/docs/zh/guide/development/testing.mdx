@@ -73,10 +73,11 @@ export const summarizes = async (): Promise<void> => {
 | `packed-deleted-source` | `removeProjectSource`、`openPackedMcpServer({ deletedSource })`、`runPackedContractMatrix` | 在项目源码与配置被移除并核实缺失之后，打包后的 stdio 进程仍然可以运行。 |
 | `host-install` | `openInstalledHostMcpServer`、`runInstalledHostContractMatrix` | 一份已构建的捆绑包被投放到隔离的宿主根目录、以输出的宿主格式被发现，并从已安装布局中启动。 |
 
-同一个辅助函数家族里还有两个相邻级别。`agent-bundle/test/browser` 提供浏览器安全的 `browser-app`
-级别，用于在真实浏览器页面中把生产编译的 MCP App HTML 挂载到产品桥接层之上；而**不带**
-`sessionEvidence` 的 `openInstalledHostMcpServer` 记录的是 `simulated` —— 一份输出的捆绑包被直接
-投放到隔离的宿主形状根目录并在没有宿主自有安装的情况下启动，它比 `host-install` 更弱。
+在这六个级别之外还有两个并列级别。`agent-bundle/test/browser` 为浏览器安全的 `browser-app` 级别
+提供 `mountBrowserApp`，用于在真实浏览器页面中把生产编译的 MCP App HTML 挂载到产品桥接层之上；
+而 `simulated` 复用不带 `sessionEvidence` 的已安装宿主辅助函数 `openInstalledHostMcpServer`
+—— 一份输出的捆绑包被直接投放到隔离的宿主形状根目录并在没有宿主自有安装的情况下启动，它比
+`host-install` 更弱。
 
 ```ts twoslash
 import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';

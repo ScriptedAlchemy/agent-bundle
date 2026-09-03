@@ -18,8 +18,9 @@ description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js
 | 宿主 | 插件根 | 插件数据 |
 | --- | --- | --- |
 | Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
-| Cursor | `${CURSOR_PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
-| Codex、portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | — （拒绝：没有文档化的宿主等价物） |
+| Codex | `${PLUGIN_ROOT}` | — （拒绝：没有文档化的宿主等价物） |
+| portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
 
 替换是**按位置的，而不是全局的**。Claude Code 只在 Skill 与 agent 内容、钩子与 monitor 命令、MCP 服务器
 以及 LSP 服务器中替换 `${CLAUDE_PLUGIN_ROOT}` 及其同类——绝不在 `settings.json` 中替换，这正是
@@ -37,6 +38,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | 贡献者测试套件 | `1` 用于比对已安装宿主 CLI 的契约。 |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Claude 原生冒烟测试。 |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Codex 原生冒烟测试。 |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | 贡献者 HMR（`packages/workbench/scripts/dev.mjs`） | 启动 Workbench 界面 HMR 之前必须设置的、正在运行的 Agent Bundle 前台服务器 URL。见[开发者 Workbench](../guide/development/workbench.mdx)。 |
 
 这三个原生冒烟测试的开关之所以存在，是因为那些运行需要一个真实的、已登录的 CLI；它们绝不属于日常测试
 运行的一部分。
@@ -49,8 +51,9 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 2. **`.env` 文件层**。
 3. 操作者真实的 `process.env`，因此已导出的变量总是胜出。
 
-`.env` 层是工作区根目录下 Rsbuild 的约定集合 —— `.env`、`.env.local`、`.env.<mode>`、
-`.env.<mode>.local` —— 除非 `--env-file <path>` 用你指定的那些文件替换它，或者 `--no-env` 把它移除。
+`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合 —— `.env`、`.env.local`、
+`.env.<mode>`、`.env.<mode>.local` —— 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
+`--no-env` 把它移除。
 这两个标志互斥。文件被读入一个临时对象，因此真实的 `process.env` 绝不会被改动。
 
 ## 持久状态
@@ -59,7 +62,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 `./.agent-bundle/state`。只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
 不在磁盘上留下任何东西。
 
-在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到工作区根目录，而不是产物：在那里产物只是
+在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
 启动」，请传入指向产物 target 根目录的 `--plugin-root <path>`。
 
