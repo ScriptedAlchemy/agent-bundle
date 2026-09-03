@@ -1241,6 +1241,7 @@ export const normalizeProject = async (
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const commands = normalizeCommands(discovered, targetNames);
   const providers = discovered.routeGraph?.providers ?? [];
+  const layouts = discovered.routeGraph?.layouts ?? [];
   const rules = normalizeRules(discovered, targetNames);
   const state: NormalizedStateDefinition | undefined = discovered.state?.definition === undefined
     ? undefined
@@ -1263,6 +1264,7 @@ export const normalizeProject = async (
     ...(hostBins.length === 0 ? {} : { hostBins }),
     ...(hostOutputStyles.length === 0 ? {} : { hostOutputStyles }),
     ...(hostWorkflows.length === 0 ? {} : { hostWorkflows }),
+    ...(layouts.length === 0 ? {} : { layouts }),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,

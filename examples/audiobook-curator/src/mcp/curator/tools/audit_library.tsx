@@ -2,7 +2,6 @@ import { Agent, agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { libraryAuditHeadline } from '../../../components/headlines.js';
 import { LibraryAnalysis } from '../../../components/library-analysis.js';
 import { AuditFileCards, AuditSummary } from '../../../components/library-shelf.js';
@@ -28,15 +27,13 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
     total: 1,
   });
   return (
-    <CuratorDocument
-      headline={libraryAuditHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{libraryAuditHeadline(receipt)}</Agent.Text>
       <AuditSummary receipt={receipt} />
       <AuditFileCards receipt={receipt} />
       <Suspense fallback={<Agent.Progress completed={0} message="Analyzing duplicate and multipart groups" />}>
         <LibraryAnalysis receipt={receipt} signal={signal} />
       </Suspense>
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

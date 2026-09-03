@@ -1,8 +1,7 @@
-import { agent } from '@agent-bundle/runtime';
+import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
 import { MetadataIntegrityReport } from '../../../components/integrity-report.js';
 import { MetadataMutation } from '../../../components/mutation-receipt.js';
@@ -40,10 +39,11 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
         />
       );
   return (
-    <CuratorDocument headline={headline} receipt={receipt}>
+    <Agent.Result value={receipt}>
+      <Agent.Text>{headline}</Agent.Text>
       <MetadataMutation receipt={receipt} />
       <MetadataIntegrityReport receipt={receipt} />
       {shelf}
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

@@ -2,6 +2,9 @@ export { Agent, Hook, Mcp } from './elements.js';
 export type {
   AgentErrorProps,
   AgentJsonProps,
+  AgentLayoutProps,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentMediaProps,
   AgentProgressProps,
   AgentResourceProps,

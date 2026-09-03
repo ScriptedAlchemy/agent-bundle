@@ -98,6 +98,25 @@ export interface AgentProviderContext {
 /** Default export contract for one `src/providers/<name>.{ts,tsx}` module. */
 export type AgentProviderFactory = (context: AgentProviderContext) => unknown | Promise<unknown>;
 
+/** The route kinds a conventional layout wraps; event routes are host protocol responses and stay unwrapped. */
+export type AgentLayoutRouteKind = 'tool' | 'resource' | 'prompt' | 'cli' | 'script';
+
+/**
+ * Stable identity of the route a layout is wrapping, baked at compile time
+ * from the route graph. `name` is the protocol-facing name: the MCP tool,
+ * resource, or prompt name, the space-joined CLI command path, or the script
+ * name. The layout component's props type, `AgentLayoutProps`, ships from
+ * `@agent-bundle/runtime` because it carries React's `ReactNode` children and
+ * this package's root declarations stay React-free for config-only consumers.
+ */
+export interface AgentLayoutRoute {
+  readonly id: string;
+  readonly kind: AgentLayoutRouteKind;
+  readonly name: string;
+  /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
+  readonly serverId?: string;
+}
+
 export type AgentEventDelivery = 'immediate';
 export type AgentEventRuntimeMode = 'shared' | 'standalone';
 export type AgentEventFallbackMode = 'none' | 'standalone';

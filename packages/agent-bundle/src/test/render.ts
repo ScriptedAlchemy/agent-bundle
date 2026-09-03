@@ -29,6 +29,7 @@ import type {
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
+import { composeLayouts, loadLayoutChain, type LayoutChainTarget, type LoadedLayout } from './layouts.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
 import {
@@ -303,6 +304,8 @@ const knownRouteIds = (manifest: AgentBundleTestManifest): string =>
 interface ResolvedTarget {
   readonly component: (props: never) => unknown;
   readonly kind: RenderableRouteKind;
+  /** The manifest layout chain, outermost first; empty for a module rendered directly. */
+  readonly layouts: readonly LoadedLayout[];
   readonly manifest?: AgentBundleTestManifest;
   readonly module: AgentRouteModule;
   readonly provenance: RenderedRouteProvenance;
@@ -398,7 +401,7 @@ const resolveTarget = async (
       source: 'module',
       targets: [],
     });
-    return { component: componentOf(target, provenance), kind, module: target, provenance };
+    return { component: componentOf(target, provenance), kind, layouts: [], module: target, provenance };
   }
   const manifest = options.manifest ?? testManifest();
   const descriptor = manifest.routes[target];
@@ -457,9 +460,11 @@ const resolveTarget = async (
     );
   }
   const module = await loader();
+  const layouts = await loadLayoutChain(manifest, descriptor, { ...provenance, kind });
   return {
     component: componentOf(module, { ...provenance, kind }),
     kind,
+    layouts,
     manifest,
     module,
     provenance: { ...provenance, kind },
@@ -609,6 +614,9 @@ interface FlightDispatcherOptions {
   readonly component: (props: never) => unknown;
   readonly componentProps: (request: AgentRenderDispatch) => Readonly<Record<string, unknown>>;
   readonly contextProgress?: AgentProgressReporter;
+  /** The manifest layout chain composed around the route element, exactly as the generated worker composes it. */
+  readonly layouts: readonly LoadedLayout[];
+  readonly layoutRoute: LayoutChainTarget;
   readonly limits?: Partial<AgentRenderLimits>;
   readonly renderer: Renderer;
   /** Async so conventional providers execute inside the request, before the scope opens, as generated scopes do. */
@@ -622,10 +630,14 @@ const createFlightDispatcher = (options: FlightDispatcherOptions): AgentRuntime.
       progress: progressFor(options.collected, options.contextProgress, request.progress),
       signal: request.signal,
     }, async () => drain(options.renderer.renderAgentFlight(
-      options.renderer.createElement(
-        options.component as never,
-        options.componentProps(request) as never,
-      ),
+      composeLayouts(
+        options.renderer.createElement,
+        options.layouts,
+        options.layoutRoute,
+        options.component,
+        options.componentProps(request),
+        request.signal,
+      ) as React.ReactNode,
       { signal: request.signal },
     )))),
   }, options.limits === undefined ? {} : { limits: options.limits });
@@ -666,6 +678,15 @@ export const prepareCliRenderHost = async (
     renderer,
     options.signal,
   );
+  // Rendered commands compose the manifest layout chain of their backing
+  // route (a projected MCP command keeps its tool route's server layout),
+  // resolved up front because the generated shell's render factory is sync.
+  const layoutsByRoute = new Map<string, readonly LoadedLayout[]>();
+  for (const routeId of options.modules.keys()) {
+    const descriptor = options.manifest.routes[routeId];
+    if (descriptor === undefined) continue;
+    layoutsByRoute.set(routeId, await loadLayoutChain(options.manifest, descriptor, { ...options.provenance, routeId }));
+  }
   return Object.freeze({
     close: mounted.close,
     render: (
@@ -711,11 +732,14 @@ export const prepareCliRenderHost = async (
             props: { input: parsed as never, operationId: command.routeId },
           };
       const collected: AgentProgressUpdate[] = [];
+      const descriptor = options.manifest.routes[command.routeId];
       const dispatcher = createFlightDispatcher({
         collected,
         component: componentOf(module, { ...options.provenance, routeId: command.routeId }),
         componentProps: (request) => ({ input: parsed, signal: request.signal }),
         contextProgress: context.progress,
+        layoutRoute: descriptor ?? { id: command.routeId, kind: command.mcp === undefined ? 'cli' : 'tool' },
+        layouts: layoutsByRoute.get(command.routeId) ?? [],
         renderer,
         requestInit: async (request) => {
           const root = process.cwd();
@@ -808,6 +832,12 @@ const prepareRender = async (
     component: resolved.component,
     componentProps: (request) => componentProps(request.invocation, resolved.kind, options, request.signal),
     contextProgress: context.progress,
+    layoutRoute: {
+      id: resolved.provenance.routeId,
+      kind: resolved.kind,
+      ...(resolved.provenance.serverId === undefined ? {} : { serverId: resolved.provenance.serverId }),
+    },
+    layouts: resolved.layouts,
     limits: options.limits,
     renderer,
     requestInit: async (request) => ({

@@ -48,6 +48,7 @@ export type {
   TestManifestPluginIdentity,
   TestableAppDescriptor,
   TestableProviderDescriptor,
+  TestableLayoutDescriptor,
   TestableRouteDescriptor,
   TestableStateDescriptor,
 } from './manifest.ts';

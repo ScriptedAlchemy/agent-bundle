@@ -19,10 +19,12 @@ import {
 } from './config-extract.ts';
 import {
   validateEventRouteModuleContract,
+  validateLayoutModuleContract,
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
 import { extractInputSchema } from './input-schema.ts';
+import { isLayoutRouteKind } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -35,6 +37,7 @@ import {
   type CompiledAgentRoute,
   type CompiledCliMode,
   type CompiledCliSurface,
+  type CompiledLayout,
   type CompiledProvider,
   type CompiledRouteGraph,
   type CompiledRouteKind,
@@ -52,6 +55,8 @@ type ProjectIgnoreRules = Awaited<ReturnType<typeof readProjectIgnoreRules>>;
  * flat collection.
  */
 const routeGlobs = [
+  'src/layout.{ts,tsx}',
+  'src/mcp/*/layout.{ts,tsx}',
   'src/mcp/*/{tools,resources,prompts,apps}/*.{ts,tsx}',
   'src/events/*/*.{ts,tsx}',
   'src/events/stop.{ts,tsx}',
@@ -73,6 +78,24 @@ const mcpRouteKinds: Readonly<Record<string, CompiledRouteKind>> = {
 const safeIdentitySegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
 const serverModeOverrides = new Set(['generated', 'custom', 'command', 'remote']);
+
+/** True when a `routes.servers.<name>` override keeps the server's own entry instead of compiling its routes. */
+const isNonGeneratedServerOverride = (override: CompiledServerMode | undefined): boolean => {
+  switch (override) {
+    case 'custom':
+    case 'command':
+    case 'remote':
+      return true;
+    case 'generated':
+    case 'conflict':
+    case undefined:
+      return false;
+    default: {
+      const unreachable: never = override;
+      throw new TypeError(`Unhandled server mode override ${String(unreachable)}.`);
+    }
+  }
+};
 
 const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
 
@@ -124,6 +147,17 @@ interface DiscoveredProviderModule {
   readonly surface: 'provider';
 }
 
+interface DiscoveredLayoutModule {
+  readonly id: string;
+  /** The path-derived name segments; each must satisfy the safe-identity rule. */
+  readonly identitySegments: readonly string[];
+  readonly relativePath: string;
+  readonly scope: CompiledLayout['scope'];
+  readonly serverName?: string;
+  readonly source: string;
+  readonly surface: 'layout';
+}
+
 interface DiscoveredRouteModule {
   readonly event?: CanonicalAgentEvent;
   readonly id: string;
@@ -136,15 +170,39 @@ interface DiscoveredRouteModule {
   readonly surface: 'route';
 }
 
-type DiscoveredModule = DiscoveredProviderModule | DiscoveredRouteModule;
+type DiscoveredModule = DiscoveredLayoutModule | DiscoveredProviderModule | DiscoveredRouteModule;
 
 const stemOf = (fileName: string): string => fileName.slice(0, -extname(fileName).length);
+
+const layoutStem = 'layout';
 
 /** Derives kind and identity from one glob-matched route path; the globs guarantee segment shape. */
 const classifyModule = (source: string, relativePath: string): DiscoveredModule => {
   const segments = relativePath.split('/');
   const collection = segments[1]!;
   const stem = stemOf(segments[segments.length - 1]!);
+  if (segments.length === 2 && stem === layoutStem) {
+    return {
+      id: 'layout:root',
+      identitySegments: [],
+      relativePath,
+      scope: 'root',
+      source,
+      surface: 'layout',
+    };
+  }
+  if (collection === 'mcp' && segments.length === 4 && stem === layoutStem) {
+    const serverName = segments[2]!;
+    return {
+      id: `layout:mcp:${serverName}`,
+      identitySegments: [serverName],
+      relativePath,
+      scope: 'server',
+      serverName,
+      source,
+      surface: 'layout',
+    };
+  }
   if (collection === 'mcp') {
     const serverName = segments[2]!;
     const kind = mcpRouteKinds[segments[3]!]!;
@@ -532,6 +590,7 @@ export const isEmptyRouteGraph = (graph: CompiledRouteGraph): boolean =>
   graph.cli === undefined &&
   graph.diagnostics.length === 0 &&
   graph.events.length === 0 &&
+  (graph.layouts?.length ?? 0) === 0 &&
   graph.providers.length === 0 &&
   graph.scripts.length === 0 &&
   graph.servers.length === 0;
@@ -570,6 +629,17 @@ export const compileRouteGraph = async (
     if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
+    // The documented opt-out: a server pinned to custom, command, or remote
+    // keeps its own entry, so its layout never enters the graph — it is not
+    // duplicate-checked, validated, or retained, because no generated worker
+    // composes it.
+    if (
+      module.surface === 'layout' &&
+      module.scope === 'server' &&
+      isNonGeneratedServerOverride(overrides.servers.get(module.serverName!))
+    ) {
+      continue;
+    }
     if (
       module.surface === 'route' &&
       module.kind === 'event-route' &&
@@ -618,6 +688,15 @@ export const compileRouteGraph = async (
     }
     const existing = modulesById.get(module.id);
     if (existing !== undefined) {
+      if (module.surface === 'layout') {
+        diagnostics.push(routeError(
+          'AB4831',
+          `Layout ${JSON.stringify(module.id)} is declared by both ${existing.relativePath} and ${relativePath}.`,
+          'Keep exactly one layout module per scope (one of .ts or .tsx), then inspect again.',
+          source,
+        ));
+        continue;
+      }
       diagnostics.push(routeError(
         'AB4802',
         `Route id ${JSON.stringify(module.id)} is declared by both ${existing.relativePath} and ${relativePath}.`,
@@ -635,12 +714,31 @@ export const compileRouteGraph = async (
   const scripts: CompiledAgentRoute[] = [];
   const cliRoutes: CompiledAgentRoute[] = [];
   const providers: CompiledProvider[] = [];
+  const layouts: CompiledLayout[] = [];
   const moduleTextBySource = new Map<string, string>();
   // Config extraction runs over the whole tree before any route compiles:
   // an `appResourceUri()` reference resolves against every App route the
   // tree declares, wherever the App module sorts relative to its referrer.
   const pending: { readonly metadata: ExtractedModuleMetadata; readonly module: DiscoveredRouteModule }[] = [];
   for (const module of modules) {
+    if (module.surface === 'layout') {
+      layouts.push({
+        id: module.id,
+        provenance: { kind: 'conventional', relativePath: module.relativePath },
+        scope: module.scope,
+        ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
+        source: module.source,
+      });
+      const layoutText = await readRouteModuleText(module.source);
+      if (layoutText !== undefined) {
+        diagnostics.push(...validateLayoutModuleContract(
+          layoutText,
+          module.relativePath,
+          module.source,
+        ));
+      }
+      continue;
+    }
     if (module.surface === 'provider') {
       providers.push({
         id: module.id,
@@ -804,6 +902,21 @@ export const compileRouteGraph = async (
     });
   }
 
+  for (const layout of layouts) {
+    if (layout.scope !== 'server') continue;
+    const server = servers.find((candidate) => candidate.id === layout.serverId);
+    // App routes are browser builds and never take a layout, so a server that
+    // declares only apps has nothing for its layout to wrap.
+    if (server === undefined || !server.routes.some((route) => isLayoutRouteKind(route.kind))) {
+      diagnostics.push(routeError(
+        'AB4832',
+        `Layout module ${layout.provenance.relativePath} names MCP server ${JSON.stringify(layout.serverId!.slice('mcp:'.length))}, which declares no tool, resource, or prompt route modules.`,
+        'Add tools, resources, or prompts under that server directory, move the layout to the server that owns the routes, prefix the file with _ to opt out, or set routes.servers.<server> to custom, command, or remote.',
+        layout.source,
+      ));
+    }
+  }
+
   const projected = overrides.mcpCommands === undefined
     ? undefined
     : compileMcpCliCommands(servers, overrides.mcpCommands);
@@ -864,6 +977,11 @@ export const compileRouteGraph = async (
           },
         }),
     events: events.map(routeIdentity),
+    // Layouts join the identity only when declared, so pre-layout projects
+    // keep their recorded graph digests.
+    ...(layouts.length === 0
+      ? {}
+      : { layouts: layouts.map((layout) => ({ id: layout.id, relativePath: layout.provenance.relativePath })) }),
     providers: providers.map((provider) => ({ id: provider.id, relativePath: provider.provenance.relativePath })),
     scripts: scripts.map(routeIdentity),
     servers: servers.map((server) => ({
@@ -878,6 +996,7 @@ export const compileRouteGraph = async (
     diagnostics,
     digest: digest(identity),
     events,
+    ...(layouts.length === 0 ? {} : { layouts }),
     providers,
     scripts,
     servers,

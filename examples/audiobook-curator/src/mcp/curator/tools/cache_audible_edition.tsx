@@ -1,8 +1,8 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleCacheReceipt } from '../../../audible.js';
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { Callout, DataList } from '../../../components/primitives.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
 
@@ -19,7 +19,8 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
   const receipt = await operation.handler(input, { signal }) as AudibleCacheReceipt;
   const headline = `Cached Audible ${receipt.region}/${receipt.asin} product evidence${receipt.chapters === undefined ? ' without chapter metadata' : ' with chapter metadata'}.`;
   return (
-    <CuratorDocument headline={headline} receipt={receipt}>
+    <Agent.Result value={receipt}>
+      <Agent.Text>{headline}</Agent.Text>
       <DataList fields={[
         { label: 'Audible edition', value: `${receipt.region}/${receipt.asin}` },
         { label: 'Product evidence', value: receipt.product },
@@ -29,6 +30,6 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
       {receipt.chapterError === undefined
         ? null
         : <Callout tone="warning">{`Chapter metadata was not cached: ${receipt.chapterError}`}</Callout>}
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

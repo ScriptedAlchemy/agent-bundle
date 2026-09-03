@@ -31,7 +31,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'journal', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -43,6 +43,7 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/context',
         'tool:harness/echo',
         'tool:harness/journal',
+        'tool:harness/layout-probe',
         'tool:harness/lifecycle',
         'tool:harness/mutation-probe',
         'tool:harness/publish-notice',
@@ -54,6 +55,19 @@ describe('the in-memory MCP projection level', () => {
       ],
       serverName: 'harness',
     });
+  });
+
+  it('composes the compiled layout chain around a tool while the route keeps its protocol result shape', async () => {
+    const invocation = await invokeMcpTool('layout-probe', { input: { label: 'wired' } });
+
+    expect(invocation.isError).toBe(false);
+    // The route's own text, then the server layout's addition for this route:
+    // the layout's container result merged with the route's valued result.
+    expect(invocation.content).toEqual([
+      { text: 'probe: wired', type: 'text' },
+      { text: 'layout: tool layout-probe via mcp:harness', type: 'text' },
+    ]);
+    expect(invocation.structuredContent).toEqual({ label: 'wired' });
   });
 
   it('projects a rendered Agent Document into the protocol content the server returns', async () => {
@@ -104,11 +118,27 @@ describe('the in-memory MCP projection level', () => {
       _meta: { ui: { resourceUri: 'ui://route-harness/panel.html' } },
       outputSchema: { type: 'object' },
     });
+    // The route's own metadata reaches _meta merged with the fixture's root and
+    // server layout metadata (the layouts are containers, so the route's keys
+    // sit beside theirs); the metadata-free echo route carries only the
+    // layouts' keys. A layout-free document with no metadata projects no _meta
+    // at all — pinned by mcp-projector.test.ts and generated-route-server.test.ts.
+    const layoutMeta = (routeId: string) => ({
+      invocation: 'tool',
+      layout: 'harness',
+      route: routeId,
+      server: 'mcp:harness',
+      shell: 'route-harness',
+      wrapped: 'tool',
+    });
     const invocation = await invokeMcpTool('strict-report', { input: { reportId: 'meta-1' } });
-    expect(invocation._meta).toEqual({ ui: { resourceUri: 'ui://route-harness/panel.html' } });
+    expect(invocation._meta).toEqual({
+      ...layoutMeta('tool:harness/strict-report'),
+      ui: { resourceUri: 'ui://route-harness/panel.html' },
+    });
     expect(invocation.structuredContent).toEqual({ reportId: 'meta-1', summary: 'summary for meta-1' });
     const echo = await invokeMcpTool('echo', { input: { message: 'no metadata' } });
-    expect(echo._meta).toBeUndefined();
+    expect(echo._meta).toEqual(layoutMeta('tool:harness/echo'));
   });
 
   it('carries a represented error to the protocol as isError rather than a transport failure', async () => {

@@ -114,6 +114,28 @@ export interface CompiledProvider {
 }
 
 /**
+ * The scope one conventional layout module wraps: `src/layout.{ts,tsx}` wraps
+ * every rendered route of the project (generated MCP routes, rendered CLI
+ * commands, projected MCP commands, and rendered scripts);
+ * `src/mcp/<server>/layout.{ts,tsx}` wraps that server's routes inside the
+ * root layout. Event routes are host protocol responses, not documents for a
+ * reader, so no layout applies to them.
+ */
+export type CompiledLayoutScope = 'root' | 'server';
+
+/** One conventional layout module compiled into the immutable route graph. */
+export interface CompiledLayout {
+  /** `layout:root` or `layout:mcp:<server>`. */
+  readonly id: string;
+  readonly provenance: RouteProvenance;
+  readonly scope: CompiledLayoutScope;
+  /** The owning MCP server id (`mcp:<name>`); `server` scope only. */
+  readonly serverId?: string;
+  /** Absolute layout module path. */
+  readonly source: string;
+}
+
+/**
  * The packaging mode of one MCP server that owns discovered route modules.
  * `generated`, `custom`, `command`, and `remote` are explicit or inferred
  * decisions; `conflict` records that discovery found routes but an existing
@@ -216,6 +238,8 @@ export interface CompiledRouteGraph {
   /** sha256 over the graph's project-relative identity. */
   readonly digest: string;
   readonly events: readonly CompiledAgentRoute[];
+  /** Conventional layout modules; absent when the project declares none so pre-layout graphs digest unchanged. */
+  readonly layouts?: readonly CompiledLayout[];
   readonly providers: readonly CompiledProvider[];
   readonly scripts: readonly CompiledAgentRoute[];
   readonly servers: readonly CompiledServerSurface[];

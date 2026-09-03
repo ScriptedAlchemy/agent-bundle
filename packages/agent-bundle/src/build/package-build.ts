@@ -121,6 +121,7 @@ export const planPackageEntries = async (
       const sourceInputs = Object.freeze([...new Set([
         bin.provenance.sourcePath,
         ...bin.generatedCli.routes.map((route) => route.source),
+        ...(model.layouts ?? []).map((layout) => layout.source),
         ...(model.providers ?? []).map((provider) => provider.source),
         ...(model.state === undefined ? [] : [model.state.source]),
       ])]);
@@ -158,6 +159,7 @@ export const planPackageEntries = async (
           source: bin.source,
           sourceInputs,
           virtualSource: generatedRenderedRouteWorkerSource({
+            layouts: model.layouts ?? [],
             providers: model.providers ?? [],
             routes: renderedRoutes,
             ...(model.state === undefined ? {} : { state: model.state }),

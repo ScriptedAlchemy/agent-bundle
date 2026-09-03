@@ -21,9 +21,11 @@ import type {
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
+import type { ReactNode } from 'react';
 
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
+import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
@@ -268,6 +270,7 @@ export const openInMemoryMcpServer = async <
     module: { default: (props: never) => unknown; inputSchema?: unknown; resultSchema: { parse: (value: unknown) => unknown } };
     name: string;
   }> = {};
+  const layoutsByRoute = new Map<string, readonly LoadedLayout[]>();
   for (const descriptor of descriptors) {
     if (descriptor.kind !== 'tool' && descriptor.kind !== 'resource' && descriptor.kind !== 'prompt') continue;
     const loader = registeredRouteLoader(manifest, descriptor.id);
@@ -303,6 +306,10 @@ export const openInMemoryMcpServer = async <
       module: { ...module, resultSchema: module.resultSchema },
       name: descriptor.id.slice(descriptor.id.lastIndexOf('/') + 1),
     };
+    layoutsByRoute.set(
+      descriptor.id,
+      await loadLayoutChain(manifest, descriptor, routeProvenance(descriptor, manifest)),
+    );
   }
   if (options.state !== undefined) {
     const record = dependencies.noticeInboxRoute.noticeInboxRouteRecord(dependencies.noticeInboxRoute);
@@ -373,10 +380,14 @@ export const openInMemoryMcpServer = async <
             ...(request.progress === undefined ? {} : { progress: request.progress }),
             signal: request.signal,
           }, async () => drain(dependencies.renderAgentFlight(
-            dependencies.createElement(route.module.default as never, {
-              input: props.input,
-              signal: request.signal,
-            } as never),
+            composeLayouts(
+              dependencies.createElement,
+              layoutsByRoute.get(route.id) ?? [],
+              { id: route.id, kind: route.kind, serverId: `mcp:${serverName}` },
+              route.module.default,
+              { input: props.input, signal: request.signal },
+              request.signal,
+            ) as ReactNode,
             { signal: request.signal },
           ))));
         } finally {

@@ -336,6 +336,67 @@ describe('renderRoute through the real renderer', () => {
   });
 });
 
+describe('layout composition at the route-unit level', () => {
+  it('composes the root and server layouts around a manifest route without changing its projected nodes or value', async () => {
+    const rendered = await renderRoute('tool:harness/echo', {
+      context: { workspace },
+      input: { message: 'wrapped' },
+    });
+
+    // Same node kinds and value as the layout-free render: the layouts'
+    // container results merged into the route's valued result.
+    expectDocument(rendered)
+      .toHaveStatus('success')
+      .toHaveNodeKinds(['result', 'markdown', 'text'])
+      .toHaveValue({ message: 'wrapped', operationId: 'tool:harness/echo', workspace: '/tmp/harness-library' });
+    // Root layout metadata wins conflicts; the server layout contributes its own keys.
+    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toEqual({
+      invocation: 'tool',
+      layout: 'harness',
+      route: 'tool:harness/echo',
+      server: 'mcp:harness',
+      shell: 'route-harness',
+      wrapped: 'tool',
+    });
+  });
+
+  it('hands the server layout the route identity and merges route metadata beneath it', async () => {
+    const rendered = await renderRoute('tool:harness/layout-probe', { input: { label: 'unit' } });
+
+    expectDocument(rendered)
+      .toHaveNodeKinds(['result', 'text', 'text'])
+      .toContainText('probe: unit')
+      .toContainText('layout: tool layout-probe via mcp:harness')
+      .toHaveValue({ label: 'unit' });
+    expect(rendered.result).toEqual({ label: 'unit' });
+    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toMatchObject({
+      from: 'route',
+      layout: 'harness',
+      route: 'tool:harness/layout-probe',
+      shell: 'route-harness',
+    });
+  });
+
+  it('applies only the root layout to a rendered CLI command', async () => {
+    const rendered = await renderRoute('cli:report', { input: { topic: 'layouts' } });
+
+    expectDocument(rendered).toHaveStatus('success').toHaveValue({ count: 2, stateMounted: true, status: 'ready', topic: 'layouts' });
+    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toEqual({
+      invocation: 'cli',
+      shell: 'route-harness',
+      wrapped: 'cli',
+    });
+  });
+
+  it('composes no layout around a module rendered directly, because layouts are a compiler convention', async () => {
+    const rendered = await renderRoute({ default: Echo }, { input: { message: 'direct' }, routeId: 'tool:harness/echo' });
+
+    expectDocument(rendered).toHaveNodeKinds(['result', 'markdown', 'text']);
+    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toBeUndefined();
+    expect(rendered.provenance.source).toBe('module');
+  });
+});
+
 describe('route-unit render failures', () => {
   it('names the route and the abort when the request was already cancelled', async () => {
     const controller = new AbortController();

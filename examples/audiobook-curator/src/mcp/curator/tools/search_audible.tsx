@@ -1,9 +1,9 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleSearchReceipt } from '../../../audible.js';
 import { SearchRanking } from '../../../components/candidate-ranking.js';
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { audibleSearchHeadline } from '../../../components/headlines.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
 
@@ -20,11 +20,9 @@ export const resultSchema = operation.resultSchema;
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as AudibleSearchReceipt;
   return (
-    <CuratorDocument
-      headline={audibleSearchHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{audibleSearchHeadline(receipt)}</Agent.Text>
       <SearchRanking receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

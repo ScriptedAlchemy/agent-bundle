@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
-import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+import { expectDocument, invokeMcpTool, renderRoute, testManifest } from 'agent-bundle/test';
 
 /**
  * The route-unit proof level for this example: it proves the curator's route
@@ -18,6 +18,8 @@ it('compiles the curator routes through the framework test manifest, with no bui
   expect(manifest.proofLevel).toBe('route-unit');
   expect(manifest.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
   expect(Object.keys(manifest.routes)).toContain('prompt:curator/curate');
+  // The one shared document shell every rendered curator route composes through.
+  expect(manifest.layouts.map((layout) => layout.id)).toEqual(['layout:root']);
 });
 
 it('renders the curation prompt route into a final Agent Document', async () => {
@@ -36,6 +38,11 @@ it('renders the curation prompt route into a final Agent Document', async () => 
       }],
     });
   expect(rendered.provenance).toMatchObject({ proofLevel: 'route-unit', routeId: 'prompt:curator/curate' });
+  // The layout's shell merged with the route's valued result: one root, the
+  // route's value, plus the shell's provenance metadata.
+  expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toEqual({
+    curator: { route: 'prompt:curator/curate', server: 'mcp:curator', surface: 'prompt' },
+  });
 });
 
 it('renders the composed library-audit tool document with its canonical receipt', async () => {
@@ -62,6 +69,17 @@ it('renders the composed library-audit tool document with its canonical receipt'
       duplicateCandidates: [],
       operation: 'library-audit',
       summary: { files: 0 },
+    });
+
+    // Over the real protocol the layout leaves `structuredContent` as the
+    // route's receipt and hands hosts the shell's provenance as `_meta`.
+    const invocation = await invokeMcpTool('audit_library', { input: { concurrency: 1, sources: [sources] } });
+    expect(invocation.isError).toBe(false);
+    const { generatedAt: _rendered, ...stableReceipt } = receipt as typeof receipt & { readonly generatedAt: string };
+    const { generatedAt: _projected, ...stableProjected } = invocation.structuredContent as typeof receipt & { readonly generatedAt: string };
+    expect(stableProjected).toEqual(stableReceipt);
+    expect(invocation._meta).toEqual({
+      curator: { route: 'tool:curator/audit_library', server: 'mcp:curator', surface: 'tool' },
     });
   } finally {
     await rm(directory, { force: true, recursive: true });
@@ -160,6 +178,10 @@ it('renders the library-audit CLI route with in-flight progress and the canonica
     expect(receipt.operation).toBe('library-audit');
     expect(receipt.exitCode).toBe(0);
     expect(receipt.summary.files).toBe(0);
+    // The same shell wraps rendered CLI commands; a CLI route has no owning server.
+    expect(rendered.document.root.kind === 'result' ? rendered.document.root.metadata : undefined).toEqual({
+      curator: { route: 'cli:library-audit', server: null, surface: 'cli' },
+    });
     // The component reported request-scoped progress around the audit.
     expect(rendered.progress.map((update) => update.completed)).toEqual([0, 1]);
     // The receipt landed in the requested report file, exactly like the
