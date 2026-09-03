@@ -71,9 +71,13 @@ actor, or workspace is a typed reason, never a fabricated string. The context
 handle throws after the request completes. Workspace identity is deliberately
 scalar: when a native envelope provides multiple `workspace_roots` and no
 `cwd`, the first root is the primary workspace exposed by `agent()`; later
-roots remain available only in the native event payload. `state`, `notices`,
-and `providers` are reserved extension slots; provider discovery and
-`useAgent()` arrive later.
+roots remain available only in the native event payload. Synchronous Server
+Components and utilities that cannot `await` call `useAgent()` instead; it
+returns the identical handle from the same store under the same lease rules
+(`outside-invocation` before a request, `request-closed` after it). `providers`
+carries the values contributed by conventional `src/providers/*` modules, which
+the `agent-bundle` compiler discovers, executes in order, and types per project;
+`state` and `notices` remain reserved extension slots.
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.
