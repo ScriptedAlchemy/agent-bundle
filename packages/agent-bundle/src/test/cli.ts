@@ -25,6 +25,7 @@ import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
@@ -303,7 +304,7 @@ export const invokeCli = async (
 /** The parsed canonical JSON line a successful command wrote to stdout. */
 export const cliJson = (invocation: CliInvocation): unknown => {
   try {
-    return JSON.parse(invocation.stdout) as unknown;
+    return parseCanonicalJsonLine(invocation.stdout);
   } catch (error) {
     throw new AgentTestError('projection-failed', 'The dispatched command did not write one canonical JSON line to stdout.', {
       cause: error,
@@ -327,33 +328,7 @@ export const cliJson = (invocation: CliInvocation): unknown => {
 /** The ordered render events a successful `--ndjson` invocation wrote to stdout. */
 export const cliNdjson = (invocation: CliInvocation): readonly CliRenderedEvent[] => {
   try {
-    const lines = invocation.stdout.endsWith('\n')
-      ? invocation.stdout.slice(0, -1).split('\n')
-      : invocation.stdout.split('\n');
-    if (lines.length === 0 || lines.some((line) => line.trim() === '')) {
-      throw new SyntaxError('NDJSON output must contain one non-empty JSON object per line.');
-    }
-    return Object.freeze(lines.map((line) => {
-      const event = JSON.parse(line) as unknown;
-      if (typeof event !== 'object' || event === null || Array.isArray(event)) {
-        throw new SyntaxError('NDJSON output lines must be JSON objects.');
-      }
-      const record = event as Record<string, unknown>;
-      if (!Number.isInteger(record['sequence'])) {
-        throw new SyntaxError('NDJSON render events must carry an integer sequence.');
-      }
-      switch (record['type']) {
-        case 'shell':
-        case 'progress':
-        case 'replace':
-        case 'error':
-        case 'complete':
-          break;
-        default:
-          throw new SyntaxError('NDJSON output contains an unknown render-event type.');
-      }
-      return event as CliRenderedEvent;
-    }));
+    return parseRenderedEventLines(invocation.stdout);
   } catch (error) {
     throw new AgentTestError('projection-failed', 'The dispatched command did not write one JSON object per line to stdout.', {
       cause: error,

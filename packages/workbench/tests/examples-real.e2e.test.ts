@@ -5,6 +5,7 @@ import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
+import { inspectWorkbenchSurface, workbenchPageLabel } from '../../agent-bundle/src/test/index.ts';
 import {
   captureExampleState,
   copyExample,
@@ -668,6 +669,39 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     expect(projectedMcpRouteIds).toEqual(await tools.locator('.route-id').allTextContents());
     expect(new Set(cliRouteIds).size).toBe(cliRouteIds.length);
     expect(cliRouteIds).toHaveLength(authoredCliRouteIds.length + projectedMcpRouteIds.length);
+
+    // The consumer harness's workbench-surface level claims to hand a test
+    // exactly what this page shows, without a browser. Pin that claim to the
+    // real page: same CLI catalog order, same tool inventory, same headings,
+    // same navigation.
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const surfaceCli = surface.catalog.groups.find((group) => group.label === 'CLI commands');
+    expect(surfaceCli?.entries.map((entry) => entry.route.id)).toEqual(cliRouteIds);
+    expect(surface.catalog.groups.find((group) => group.label === 'curator · Tools')?.entries.map((entry) => entry.route.id))
+      .toEqual(await tools.locator('.route-id').allTextContents());
+    for (const group of surface.catalog.groups) {
+      await expect(page.getByRole('heading', { name: group.label, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    expect(surfaceCli?.entries.find((entry) => entry.route.id === 'cli:library-audit')?.commandUsage)
+      .toBe(await cli.locator('.route-command').filter({ hasText: 'library-audit' }).textContent());
+    for (const pageName of surface.pages) {
+      await expect(page.getByRole('link', { name: workbenchPageLabel(pageName), exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    for (const pageName of surface.unavailablePages) {
+      await expect(page.getByRole('link', { name: workbenchPageLabel(pageName), exact: true })).toHaveCount(0);
+    }
+    // Same rail order, too: `surface.pages` claims the Workbench's own
+    // navigation order, so it must equal the rendered rail (Runtime is a
+    // dev-server runtime capability the surface does not model).
+    // Each rail link is an aria-hidden glyph span followed by the label text node.
+    const railLabels = (await page.getByLabel('Workbench navigation').getByRole('link').evaluateAll((links) =>
+      links.map((link) => Array.from(link.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent ?? '')
+        .join('')
+        .trim())))
+      .filter((label) => label !== 'Runtime');
+    expect(railLabels).toEqual(surface.pages.map(workbenchPageLabel));
     await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/shelf.tsx', { timeout: browserTimeout });
@@ -689,7 +723,8 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     // invented: the curator declares no conventional event routes or scripts
     // and discovers one conventional context provider.
     await expect(page.getByRole('region', { name: 'Route graph identity' }).locator('dd').first())
-      .toHaveText('50', { timeout: browserTimeout });
+      .toHaveText(String(surface.catalog.routeCount), { timeout: browserTimeout });
+    expect(surface.catalog.routeCount).toBe(50);
     await expect(page.getByRole('heading', { name: 'Event routes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toBeVisible({ timeout: browserTimeout });

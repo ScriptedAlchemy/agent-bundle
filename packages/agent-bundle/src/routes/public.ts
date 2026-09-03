@@ -260,3 +260,14 @@ export interface CliRouteProps<InputSchema extends RouteSchema> {
   readonly input: RouteSchemaOutput<InputSchema>;
   readonly signal: AbortSignal;
 }
+
+/**
+ * Props received by a rendered script's (`src/scripts/<name>.tsx`) async
+ * default Server Component: the argv left after the framework reserved
+ * `--json` / `--ndjson`, exactly as the generated executable passes it, and
+ * the request abort signal.
+ */
+export interface ScriptRouteProps {
+  readonly argv: readonly string[];
+  readonly signal: AbortSignal;
+}

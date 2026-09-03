@@ -360,7 +360,10 @@ await renderRoute('tool:curator/status', {
 ```
 
 The same seam accepts `actor`, `workspace`, and `capabilities`; tests can use
-`unavailable(...)` to pin a transport's honest absence semantics.
+`unavailable(...)` to pin a transport's honest absence semantics. `invokeCli`
+(routed commands) and `runScript` (conventional scripts) accept the same
+`context` for their rendered surfaces and open the request scope with the
+surface-specific `invocation.kind` the generated executable would use.
 
 ### Migration nudges
 

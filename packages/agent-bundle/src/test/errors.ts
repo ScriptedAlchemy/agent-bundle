@@ -14,6 +14,7 @@ export type AgentTestErrorCode =
   | 'render-failed'
   | 'result-rejected'
   | 'route-not-found'
+  | 'script-not-found'
   | 'server-not-found'
   | 'unsupported-rich-content'
   | 'unsupported-route-kind';

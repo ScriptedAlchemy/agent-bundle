@@ -21,8 +21,9 @@ const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
  * helpers reading it never silently disagree about what the registry carries.
  * 4: `providerLoaders` (conventional context providers mounted by the harness).
  * 5: `layoutLoaders` (conventional layouts composed around manifest renders).
+ * 6: `manifest.scripts` (the script-dispatch level's inventory).
  */
-export const AGENT_TEST_REGISTRY_VERSION = 5;
+export const AGENT_TEST_REGISTRY_VERSION = 6;
 
 export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;

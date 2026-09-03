@@ -1,9 +1,10 @@
 import { relative, resolve, sep } from 'node:path';
 
+import { isRenderedScriptRoute, judgeScriptRoute, scriptRouteName } from '../config/script-routes.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import type { NormalizedMcpApp, NormalizedStateDefinition } from '../core/types.ts';
+import type { NormalizedMcpApp, NormalizedScript, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
 import type {
@@ -33,6 +34,17 @@ import type {
  * - `cli-dispatch` runs an argv vector through the routed CLI's own shell over
  *   the compiled command graph, in this process. It proves command
  *   resolution, argv projection, and exit codes, not a spawned binary.
+ * - `script-dispatch` runs one conventional `src/scripts/*` module through the
+ *   contract its generated `scripts/<name>.mjs` executable carries, in this
+ *   process: a rendered `.tsx` script through the rendered-script shell and
+ *   its four output modes, a plain `.ts` script through the `main` process
+ *   envelope. It proves the script's behavior and output contract, not the
+ *   bundled artifact or a spawned process.
+ * - `workbench-surface` projects the compiled route graph the way the dev
+ *   server serves it to the Workbench — route catalog, state, lifecycle
+ *   fixtures, page availability — without a browser or a dev server. It
+ *   proves what the Workbench would be given, not that the Workbench rendered
+ *   it.
  * - `packed-stdio` installs the packed release tarball into a clean consumer,
  *   spawns the generated stdio entry as a real process, and drives it with a
  *   real MCP client. This is the packed process-and-protocol evidence level.
@@ -54,6 +66,8 @@ export type AgentTestProofLevel =
   | 'mcp-in-memory'
   | 'dev-epoch'
   | 'cli-dispatch'
+  | 'script-dispatch'
+  | 'workbench-surface'
   | 'packed-stdio'
   | 'packed-deleted-source'
   | 'browser-app'
@@ -64,6 +78,8 @@ export const ROUTE_UNIT_PROOF_LEVEL = 'route-unit' as const;
 export const MCP_IN_MEMORY_PROOF_LEVEL = 'mcp-in-memory' as const;
 export const DEV_EPOCH_PROOF_LEVEL = 'dev-epoch' as const;
 export const CLI_DISPATCH_PROOF_LEVEL = 'cli-dispatch' as const;
+export const SCRIPT_DISPATCH_PROOF_LEVEL = 'script-dispatch' as const;
+export const WORKBENCH_SURFACE_PROOF_LEVEL = 'workbench-surface' as const;
 export const PACKED_STDIO_PROOF_LEVEL = 'packed-stdio' as const;
 export const PACKED_DELETED_SOURCE_PROOF_LEVEL = 'packed-deleted-source' as const;
 export const BROWSER_APP_PROOF_LEVEL = 'browser-app' as const;
@@ -85,6 +101,10 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
       return 'dev-epoch (epoch-pinned generated stdio entry spawned as a real process through the Workbench session service; NOT packed or native-host evidence)';
     case 'cli-dispatch':
       return 'cli-dispatch (argv dispatched through the routed CLI shell in-process; NOT a spawned binary)';
+    case 'script-dispatch':
+      return 'script-dispatch (conventional script run through its generated executable contract — rendered-script shell in-process, or plain main envelope as a Node process over the source; NOT the bundled scripts/<name>.mjs artifact)';
+    case 'workbench-surface':
+      return 'workbench-surface (compiled route graph projected exactly as the dev server serves it to the Workbench; NOT a browser, dev-server, or built-artifact receipt)';
     case 'packed-stdio':
       return 'packed-stdio (packed tarball installed into a clean consumer, generated stdio entry spawned as a real process)';
     case 'packed-deleted-source':
@@ -159,6 +179,24 @@ export interface TestableLayoutDescriptor {
   /** The owning MCP server id (`mcp:<name>`); `server` scope only. */
   readonly serverId?: string;
   /** Absolute layout module path. */
+  readonly source: string;
+}
+
+/**
+ * One conventional `src/scripts/<name>` module the script-dispatch level can
+ * run. `rendered` is the extension contract (#102 stage 3): `.tsx`/`.jsx`
+ * scripts render through the Agent renderer, everything else is a plain
+ * executable module. Explicit `scripts:` configuration entries are bundled
+ * entries rather than routes, so they never appear here.
+ */
+export interface TestableScriptDescriptor {
+  /** The path-derived script name (`script:verify` -> `verify`). */
+  readonly name: string;
+  /** Project-relative POSIX path of the script module. */
+  readonly relativePath: string;
+  readonly rendered: boolean;
+  readonly routeId: string;
+  /** Absolute script module path. */
   readonly source: string;
 }
 
@@ -241,6 +279,13 @@ export interface AgentBundleTestManifest {
    */
   readonly providers?: readonly TestableProviderDescriptor[];
   readonly routes: Readonly<Record<string, TestableRouteDescriptor>>;
+  /**
+   * The conventional `src/scripts/*` modules from the same pass, collision-
+   * checked by name, so the script-dispatch level runs the product's own
+   * script contract instead of guessing at file extensions. Empty when the
+   * project compiles no conventional scripts.
+   */
+  readonly scripts: readonly TestableScriptDescriptor[];
   /** Conventional project state mounted automatically for manifest route renders. */
   readonly state?: TestableStateDescriptor;
   /** Host targets the project selected. Route-unit rendering is target-neutral; these name the projection surfaces a later proof level owns. */
@@ -324,6 +369,59 @@ const appDescriptors = (
 };
 
 /**
+ * The script names explicit `scripts:` configuration claims. Normalization
+ * carries them as config-provenance scripts; a conventional route that
+ * collides with one is an `AB4809` error and never ships.
+ */
+const configuredScriptNames = (scripts: readonly NormalizedScript[]): ReadonlySet<string> =>
+  new Set(scripts.filter((script) => script.provenance.kind === 'config').map((script) => script.name));
+
+/**
+ * Only the conventional script routes normalization ships become
+ * `scripts/<name>.mjs` executables. The same #102 judgment gates this
+ * inventory, so `runScript` can never carry a `script-dispatch` proof for a
+ * nested (`AB4808`) or configuration-conflicting (`AB4809`) route whose
+ * executable cannot exist.
+ */
+const scriptDescriptors = (
+  graph: CompiledRouteGraph,
+  configured: ReadonlySet<string>,
+): readonly TestableScriptDescriptor[] => {
+  const seen = new Map<string, string>();
+  return graph.scripts.flatMap((route): TestableScriptDescriptor[] => {
+    const judgment = judgeScriptRoute(route, configured);
+    switch (judgment) {
+      case 'nested':
+      case 'conflicting':
+        return [];
+      case 'rendered':
+      case 'shippable':
+        break;
+      default: {
+        const exhaustive: never = judgment;
+        return exhaustive;
+      }
+    }
+    const name = scriptRouteName(route);
+    const existing = seen.get(name);
+    if (existing !== undefined) {
+      throw new Error(
+        `Duplicate compiled script name ${JSON.stringify(name)}: ${existing} and ${route.provenance.relativePath} `
+        + 'would both compile to the same scripts/<name>.mjs executable.',
+      );
+    }
+    seen.set(name, route.provenance.relativePath);
+    return [{
+      name,
+      relativePath: route.provenance.relativePath,
+      rendered: isRenderedScriptRoute(route),
+      routeId: route.id,
+      source: route.source,
+    }];
+  });
+};
+
+/**
  * Projects the compiled route graph into the manifest the harness addresses.
  * The graph is an input here, never recompiled: one compiler pass feeds the
  * build, `inspect`, and the harness alike.
@@ -335,6 +433,8 @@ export const testManifestFromRouteGraph = (input: {
   readonly graph: CompiledRouteGraph;
   readonly plugin?: TestManifestPluginIdentity;
   readonly projectRoot: string;
+  /** The normalized script inventory; its config-provenance entries decide which conventional routes conflict. */
+  readonly scripts?: readonly NormalizedScript[];
   readonly state?: NormalizedStateDefinition;
   readonly targets?: readonly string[];
 }): AgentBundleTestManifest => {
@@ -364,6 +464,7 @@ export const testManifestFromRouteGraph = (input: {
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,
     ...(input.graph.providers.length === 0 ? {} : { providers: providerDescriptors(input.graph.providers) }),
     routes,
+    scripts: scriptDescriptors(input.graph, configuredScriptNames(input.scripts ?? [])),
     ...(input.state === undefined
       ? {}
       : {
@@ -416,6 +517,7 @@ export const compileTestManifest = async (
         },
       }),
     projectRoot: prepared.root,
+    scripts: prepared.model?.scripts ?? [],
     ...(prepared.model?.state === undefined ? {} : { state: prepared.model.state }),
     targets: prepared.model?.targets.map((target) => target.name) ?? [],
   });
