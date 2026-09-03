@@ -224,6 +224,20 @@ it('composes the root and server layouts around every rendered surface of one bu
     stdout: '',
   });
 
+  // The artifact-hosted executable (`<target>/bin/<name>.mjs`) composes the
+  // same chains as the package-built one, and its worker lists the layouts
+  // among its source inputs.
+  const hostedBin = result.build.compiledCliBins.find((bin) => bin.target === 'portable');
+  expect(hostedBin?.workerSourceInputs).toEqual(expect.arrayContaining([
+    join(root, 'src/layout.tsx'),
+    join(root, 'src/mcp/harness/layout.tsx'),
+  ]));
+  const hostedBinPath = join(output, 'portable', 'bin', 'layout-fixture.mjs');
+  const hostedReport = await execFile(process.execPath, [hostedBinPath, 'report', '/library']);
+  expect(hostedReport.stdout).toBe(piped.stdout);
+  const hostedProjected = await execFile(process.execPath, [hostedBinPath, 'harness', 'lookup', '--input', '{"message":"projected"}']);
+  expect(hostedProjected.stdout).toBe(projected.stdout);
+
   // A rendered script takes the root layout.
   const scriptPath = join(output, 'portable', 'scripts', 'summarize.mjs');
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
