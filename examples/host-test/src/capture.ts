@@ -66,6 +66,10 @@ const SECRET_KEY = /(?:(?<!progress)(?<!progress_)token|secret|password|passwd|a
  */
 const EMBEDDED_SECRET = new RegExp([
   String.raw`\bBearer\s+[A-Za-z0-9._~+/=-]{16,}`,
+  String.raw`\bBasic\s+[A-Za-z0-9+/=]{8,}`,
+  String.raw`(?<=\b(?:Authorization|Proxy-Authorization|Cookie|Set-Cookie|X-Api-Key|X-Auth-Token)\s*[:=]\s*)[^\r\n]+`,
+  // Cookie-style session/auth assignments; `session_id=`/`sessionId=` are conversation ids the probe exists to keep.
+  String.raw`(?<=\b(?:session|auth|jwt|csrf|xsrf)(?:(?![_-]?id\b)[A-Za-z0-9_-])*=)[A-Za-z0-9._~+/=-]{8,}`,
   String.raw`\b(?:sk|ghp|gho|ghu|ghs|xox[abposr]|glpat|npm_|AKIA)[-_A-Za-z0-9]{12,}`,
   String.raw`\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
   String.raw`(?<=\b[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL)[A-Za-z0-9_]*\s*[=:]\s*["']?)[^\s"']{6,}`,

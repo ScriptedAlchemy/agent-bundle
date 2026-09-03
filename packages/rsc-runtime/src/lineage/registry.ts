@@ -69,9 +69,14 @@ const nativeString = (native: Readonly<Record<string, unknown>>, key: string): s
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 };
 
+/**
+ * The hosts' own subagent-spawning tools, by exact native spelling (observed
+ * 2026-09-03: Claude `Agent`, Codex `collaborationspawn_agent`, Cursor
+ * `Task`). MCP tools are prefixed (`mcp__…`) and never match.
+ */
 const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> = Object.freeze({
   claude: (toolName) => toolName === 'Agent' || toolName === 'Task',
-  codex: (toolName) => toolName.endsWith('spawn_agent'),
+  codex: (toolName) => toolName === 'collaborationspawn_agent' || toolName === 'spawn_agent',
   cursor: (toolName) => toolName === 'Task',
 });
 
@@ -325,8 +330,11 @@ export const createAgentLineageRegistry = (
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true);
     if (rootNodeValue === undefined) return;
     const claim = await claimSpawn(host, rootNodeValue.root, keys);
-    if (claim.kind === 'ambiguous') return;
-    const parent = (claim.kind === 'claimed' ? nodeFor(claim.call.conversation) : undefined) ?? rootNodeValue;
+    // No spawn to claim (the pre-tool hook was missed, or the registry
+    // restarted) proves nothing about the parent: a nested agent would be
+    // misfiled under the root, so the start stays unresolved.
+    if (claim.kind !== 'claimed') return;
+    const parent = nodeFor(claim.call.conversation) ?? rootNodeValue;
     await dispatch('nodeStarted', {
       depth: parent.depth + 1,
       ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),

@@ -388,7 +388,9 @@ describe('lineage registry durability and retention (review round 3)', () => {
     await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' }, '2026-09-03T00:00:00.000Z');
     const total = LINEAGE_STOPPED_RETENTION + 10;
     for (let index = 0; index < total; index += 1) {
+      await observe('tool/before', `spawn-${String(index)}`, { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: `spawn-${String(index)}` }, '2026-09-03T00:00:00.000Z');
       await observe('agent/start', `start-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, `2026-09-03T00:00:${String(index % 60).padStart(2, '0')}.000Z`);
+      await observe('tool/after', `spawned-${String(index)}`, { hook_event_name: 'PostToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_response: {}, tool_use_id: `spawn-${String(index)}` }, '2026-09-03T00:00:00.000Z');
     }
     for (let index = 0; index < total; index += 1) {
       await observe('agent/stop', `stop-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStop', session_id: 'root', stop_hook_active: false }, `2026-09-03T01:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`);
@@ -580,6 +582,7 @@ describe('lineage registry failure handling (review round 8)', () => {
     await observe('tool/before', 'f', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'failed' });
     await observe('tool/failure', 'ff', { error: 'boom', hook_event_name: 'PostToolUseFailure', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'failed' });
     expect(registry.snapshot().pendingSpawns).toEqual([]);
+    await observe('tool/before', 'ps', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'ps' });
     await observe('agent/start', 'p', { agent_id: 'parent-agent', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
     await observe('tool/before', 'ok', { agent_id: 'parent-agent', hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'ok' });
     const child = await observe('agent/start', 'c', { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' });
@@ -611,5 +614,31 @@ describe('lineage registry failure handling (review round 8)', () => {
     expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'm1' }, toolName: 'dump' })).toMatchObject({ value: { conversation: 'root' } });
     await store.close();
     await driver.close();
+  });
+});
+
+describe('lineage registry spawn evidence (review round 9)', () => {
+  it('leaves a subagent start unresolved when no spawn call can be claimed', async () => {
+    const registry = createAgentLineageRegistry();
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    const start = await registry.observe({
+      event: 'agent/start',
+      host: 'claude',
+      idempotencyKey: 'orphan',
+      native: { agent_id: 'orphan', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' },
+    });
+    expect(start).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().nodes['orphan']).toBeUndefined();
+  });
+
+  it('does not mistake a generated MCP tool named spawn_agent for the Codex collaboration spawn', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'mcp', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__server__spawn_agent', tool_use_id: 'm' });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+    await observe('tool/before', 'sp', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'sp' });
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['sp']);
   });
 });

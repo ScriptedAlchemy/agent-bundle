@@ -422,6 +422,10 @@ for every event by the id the payload carries. The observed host vocabulary
 | Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
 | Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the newest pending start when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>` |
 
+A Claude or Codex subagent is placed only when its spawning pre-tool hook
+(`Agent`/`Task`, `collaborationspawn_agent`) was observed, so projects that
+want `parent`/`depth` for subagents route `tool/before` alongside
+`agent/start`; a start with no claimable spawn stays `id-not-resolvable`.
 Only root-shaped Cursor events (`session/start`, `prompt/submit`, `stop`,
 `session/end`, `compact/*`, `workspace/open`) may establish a root; a fresh
 Cursor conversation seen on a tool event binds to the single pending
