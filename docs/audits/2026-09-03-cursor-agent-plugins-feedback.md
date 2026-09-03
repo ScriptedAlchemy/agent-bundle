@@ -2,7 +2,8 @@
 
 Prepared 2026-09-03 for #426. Everything below was observed on the current
 installed stable build and is reproducible with the plugin in "Minimal
-repro" (one directory, three files, no dependencies). The maintainer submits
+repro" (one directory, four files — three for items 1–5 plus `mcp/launch.sh`
+for item 6 — no dependencies beyond `node`). The maintainer submits
 it; this repository cannot post on their behalf.
 
 **Where to submit (pick one, template-compatible):**
