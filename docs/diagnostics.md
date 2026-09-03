@@ -722,8 +722,10 @@ rewritten; when a rebuilt artifact introduces a path that an existing unowned
 entry already occupies, replacement aborts before any change (`AB7004`,
 "Refusing to overwrite unowned files") and names the colliding paths. Receipt
 file lists are validated as strict POSIX-relative paths (no backslashes, no
-`..`/`.`/empty segments, no drive letters) before they can drive a deletion; a
-receipt that fails validation reads as absent.
+`..`/`.`/empty segments, no drive letters, nothing under a runtime root such as
+`state/`) before they can drive a deletion; a receipt that fails validation
+reads as absent, and a receipt that is not a regular file (a symbolic link, a
+FIFO) is refused outright (`AB7004`) before it is read.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

@@ -155,6 +155,8 @@ const run = async (
     const result = await execFile(process.execPath, [installer, ...args], {
       cwd: dirname(installer),
       env: { ...process.env, HOME: home },
+      // A regression that reads a FIFO receipt would otherwise hang the whole suite.
+      timeout: 30_000,
     });
     return { code: 0, stderr: result.stderr, stdout: result.stdout };
   } catch (error) {
@@ -293,7 +295,39 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect(partial.code).toBe(1);
     expect(partial.stderr).toContain('Refusing content collision');
     expect(partial.stderr).toContain('predates install receipts');
+
+    // A receipt claiming runtime state reads as absent too: the durable store is never deletion-eligible.
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await writeFile(join(destination, installReceiptFile), JSON.stringify({
+      ...receipt,
+      files: [...(receipt['files'] as string[]), 'state/plugin.sqlite'],
+    }));
+    const claimsState = await run(installer, [], home);
+    expect(claimsState.code).toBe(1);
+    expect(claimsState.stderr).toContain('predates install receipts');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    const adoptedOverState = await run(installer, ['--replace'], home);
+    expect(adoptedOverState).toMatchObject({ code: 0, stderr: '' });
+    expect(adoptedOverState.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
+    await rm(join(destination, 'state'), { recursive: true });
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    await run(installer, [], home);
+
+    // A receipt that is not a regular file (a FIFO would block the read forever) is refused before reading.
+    if (process.platform !== 'win32') {
+      await rm(join(destination, installReceiptFile));
+      await execFile('mkfifo', [join(destination, installReceiptFile)]);
+      const fifo = await run(installer, [], home);
+      expect(fifo.code).toBe(1);
+      expect(fifo.stderr).toContain(`Refusing unsupported filesystem entry "${installReceiptFile}"`);
+      const forcedFifo = await run(installer, ['--replace'], home);
+      expect(forcedFifo.code).toBe(1);
+      expect(forcedFifo.stderr).toContain(`Refusing unsupported filesystem entry "${installReceiptFile}"`);
+      await rm(join(destination, installReceiptFile));
+    }
 
     // An unowned symlinked directory beneath which the artifact starts writing: refused before any change.
     await writeFile(join(destination, installReceiptFile), JSON.stringify(receipt));

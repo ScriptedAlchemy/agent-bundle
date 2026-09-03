@@ -848,6 +848,31 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
   }
 });
 
+it('reports a Claude listing with a malformed scope as unknown inventory (AB7303) instead of a partial known one', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: `${request.executable} 1.2.3\n` });
+      return commandResult({ stdout: JSON.stringify([
+        { enabled: true, id: 'alpha@alpha-marketplace', installPath: '/cache/alpha/1.0.0', scope: 'user', version: '1.0.0' },
+        { enabled: true, id: 'alpha@alpha-marketplace', installPath: '/cache/alpha-project/1.0.0', version: '1.0.0' },
+      ]) });
+    };
+    const report = await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+    expect(hostReport(report, 'claude').inventory).toEqual({ findings: [], status: 'unknown' });
+    const unusable = report.diagnostics.filter((entry) => entry.code === 'AB7303');
+    expect(unusable).toHaveLength(1);
+    expect(unusable[0]?.message).toContain('a row lacks id, installPath, scope, or version');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports a malformed host bundle as a Doctor error', async () => {
   const fixture = await temporaryDoctor();
   try {

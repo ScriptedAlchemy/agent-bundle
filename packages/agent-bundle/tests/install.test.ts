@@ -1,6 +1,8 @@
+import { execFile as executeFile } from 'node:child_process';
 import { access, chmod, cp, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
@@ -50,6 +52,13 @@ const listFiles = async (root: string): Promise<readonly string[]> =>
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(value)}\n`);
+};
+
+const execFile = promisify(executeFile);
+
+/** Creates a named pipe; Windows has no FIFOs, so callers skip there. */
+const makeFifo = async (path: string): Promise<void> => {
+  await execFile('mkfifo', [path]);
 };
 
 const createHostBundle = async (
@@ -713,7 +722,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
     for (const files of [
       ['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile],
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
-      ['state/plugin.sqlite'], ['state'],
+      ['state/plugin.sqlite'], ['state'], ['State/plugin.sqlite'], ['STATE'],
     ]) {
       await writeJson(join(root, installReceiptFile), {
         contentHash: 'abc',
@@ -744,6 +753,87 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
     expect(await readInstallReceipt(root)).toMatchObject({ files: ['skills/probe/SKILL.md', 'plugin.json'] });
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('never lets a receipt claim runtime state: a receipt owning state/ reads as legacy and the store survives', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    // Emitted bundles carry the install surface; without a trusted receipt that is what marks a copy as legacy.
+    await writeFile(join(fixture.bundleRoot, 'INSTALL.md'), '# install\n');
+    await writeFile(join(fixture.bundleRoot, 'install.mjs'), '// installer\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+
+    // A corrupted (or pre-policy) receipt that lists the durable store as an owned file.
+    const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as { files: string[] };
+    await writeJson(join(destination, installReceiptFile), { ...receipt, files: [...receipt.files, 'state/plugin.sqlite'] });
+    expect(await readInstallReceipt(destination)).toBeUndefined();
+
+    // Same-version drift is no longer automatic: the copy is treated as legacy, nothing is touched.
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    const refused = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect(refused).toBeInstanceOf(DiagnosticError);
+    expect((refused as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'cursor' });
+    expect((refused as DiagnosticError).diagnostics[0]?.message).toContain('predates install receipts');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+
+    // Explicit adoption rewrites the artifact's files and leaves the store alone and unowned.
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' }))
+      .toMatchObject({ state: 'replaced' });
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    expect((await readInstallReceipt(destination))?.files.some((file) => file.startsWith('state/'))).toBe(false);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('refuses a receipt that is not a regular file before reading it', async () => {
+  if (process.platform === 'win32') return;
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    const receiptPath = join(destination, installReceiptFile);
+    await rm(receiptPath);
+    // A FIFO with no writer would block `readFile` forever; the lstat gate refuses it instead.
+    await makeFifo(receiptPath);
+
+    const expectRefused = (failure: unknown): void => {
+      expect(failure).toBeInstanceOf(DiagnosticError);
+      expect((failure as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'cursor' });
+      expect((failure as DiagnosticError).diagnostics[0]?.message).toContain(
+        `Refusing unsupported filesystem entry "${installReceiptFile}"`,
+      );
+    };
+    expectRefused(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure));
+    expectRefused(await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' })
+      .catch((failure: unknown) => failure));
+    await expect(readInstallReceipt(destination)).rejects.toThrow(
+      `Refusing unsupported filesystem entry "${installReceiptFile}"`,
+    );
+    await expect(treeInventory(destination)).rejects.toThrow(
+      `Refusing unsupported filesystem entry "${installReceiptFile}"`,
+    );
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
   }
 });
 

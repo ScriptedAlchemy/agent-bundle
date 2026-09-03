@@ -38,6 +38,15 @@ export const installReceiptFormat = 'agent-bundle-install-receipt/1';
 export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
 
 /**
+ * Whether a root entry name is a preserved runtime root. Matched
+ * case-insensitively: on case-insensitive filesystems `State/` *is* `state/`,
+ * so no spelling of a runtime root may be inventoried, staged, or claimed by a
+ * receipt.
+ */
+export const isPreservedRuntimeRoot = (name: string): boolean =>
+  preservedRuntimeEntries.includes(name.toLowerCase());
+
+/**
  * Root files every emitted Cursor-compatible bundle carries. A receipt-less
  * copy with these files and a matching manifest name is a legacy agent-bundle
  * install (placed before receipts existed); anything else is foreign.
@@ -138,7 +147,7 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
     }
     // Runtime-owned roots (`state/`) are never plugin content: not hashed, not installed, not owned,
     // whether they sit in an installed copy or in an artifact that was run in place.
-    if (preservedRuntimeEntries.includes(name)) continue;
+    if (isPreservedRuntimeRoot(name)) continue;
     await visit(name);
   }
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
@@ -247,8 +256,8 @@ export const isReceiptPath = (value: unknown): value is string =>
   value !== installReceiptFile &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
-  // Runtime roots are never installer-owned, whatever a receipt claims.
-  !preservedRuntimeEntries.includes(value.split('/')[0] ?? '') &&
+  // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.
+  !isPreservedRuntimeRoot(value.split('/')[0] ?? '') &&
   value.split('/').every((segment) =>
     segment !== '' &&
     segment !== '.' &&
@@ -452,7 +461,7 @@ export const stageArtifact = async (options: {
         const relativePath = relative(artifactRoot, source);
         if (relativePath === '') return true;
         const top = relativePath.split(sep)[0] ?? '';
-        return top !== installReceiptFile && !preservedRuntimeEntries.includes(top);
+        return top !== installReceiptFile && !isPreservedRuntimeRoot(top);
       },
       force: false,
       recursive: true,
