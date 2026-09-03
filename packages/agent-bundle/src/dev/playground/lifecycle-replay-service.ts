@@ -480,7 +480,7 @@ export class LifecycleReplayService {
     let nativeResponse: Readonly<Record<string, unknown>> | undefined;
     let projectionDiagnostic: Readonly<{ readonly code: string; readonly message: string }> | undefined;
     try {
-      nativeResponse = projectEventDocument(rendered.document, event, target.target, target.nativeEvent);
+      nativeResponse = projectEventDocument(rendered.document, event, target.target, target.nativeEvent, nativeInput);
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
       projectionDiagnostic = Object.freeze({

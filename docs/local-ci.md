@@ -175,6 +175,18 @@ machine is exactly the contention that scale exists for. Exporting
 running other heavy work) overrides the default; the integration config
 never lets it drop below what its own pool shape requires.
 
+Load-sensitive failures are fixed at their cause, never absorbed with a
+per-test `retry`. The recurring shape is a test that acts before the product
+has published the state it is about to assert on; the fix is to wait on the
+product's own readiness signal. Precedents: the dev watcher's stat-signature
+dedupe (#122/#329), content-identity reload announcements (#200/#332), and
+the `examples-real.e2e` source edits, which used to pair a file write with an
+immediate manual rebuild and so raced the watcher's own rebuild of the same
+write for a second epoch. Those edits now go through
+`replaceWatchedSourceAndAwaitRebuild` (`packages/agent-bundle/tests/support/watched-files.ts`):
+one atomic replacement, then a wait on the coordinator's published build
+attempt, so one edit is exactly one build.
+
 ## What is deliberately not covered
 
 - **dependency-review** runs as a GitHub-side action against the GitHub

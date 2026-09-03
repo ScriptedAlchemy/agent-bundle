@@ -26,9 +26,11 @@ import type {
   GeneratedCliRenderContext,
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
+import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import {
   registeredManifestIdentity,
   registeredRouteLoader,
@@ -47,24 +49,30 @@ import type {
  * request contract. `host`, `session`, `actor`, `workspace`, and
  * `capabilities` are the identity-injection seam for context-dependent route
  * tests; construct observed values with `available` or `unavailable` from
- * `@agent-bundle/runtime`.
+ * `@agent-bundle/runtime`. `providers` is the opt-out for conventional
+ * provider discovery: when present it is mounted verbatim; when absent the
+ * harness executes the project's `src/providers/*` exactly as the generated
+ * request scopes do. It stays optional even once the generated
+ * `.agent-bundle/routes.d.ts` augmentation declares provider keys — omitting
+ * it runs the real providers, which is the artifact's behavior — while an
+ * explicit map must still carry every declared key, so a fixture cannot leave
+ * a promised value `undefined`.
  */
-export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'signal'> & {
+export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'providers' | 'signal'> & {
   readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
   readonly progress?: AgentProgressReporter;
+  readonly providers?: AgentProviderValues;
 };
 
 /**
- * The `context` member of every harness call. The harness installs fixture
- * values instead of executing `src/providers/*`, so once the project's
- * generated `.agent-bundle/routes.d.ts` augmentation declares required provider
- * keys, `context` (and its `providers`) becomes mandatory: a test cannot omit
- * the fixtures while the route's types promise them. Provider-free projects
- * keep `context` optional.
+ * The `context` member of every harness call. Unlike a direct
+ * `runAgentRequest`, where `providers` becomes mandatory once the augmentation
+ * declares keys because nothing else would supply them, a harness call
+ * mounts the project's conventional providers itself, so `context` is always
+ * optional: omitting it observes what the artifact mounts, and passing
+ * `context.providers` substitutes a complete fixture map.
  */
-export type RenderRouteContextInit = Record<never, never> extends AgentProviderValues
-  ? { readonly context?: RenderRouteContext }
-  : { readonly context: RenderRouteContext };
+export type RenderRouteContextInit = { readonly context?: RenderRouteContext };
 
 export interface RenderRouteOptionsBase {
   /** CLI route arguments; `cli` routes only. */
@@ -84,13 +92,11 @@ export interface RenderRouteOptionsBase {
 export type RenderRouteOptions = RenderRouteOptionsBase & RenderRouteContextInit;
 
 /**
- * The trailing options parameter of every harness entry point. Provider-free
- * projects may omit it; once the generated augmentation declares provider
- * keys it is mandatory, so no harness call can silently skip the fixtures.
+ * The trailing options parameter of every harness entry point. It is always
+ * optional: a call that omits it mounts the project's conventional providers
+ * exactly as the generated request scopes do (see {@link RenderRouteContextInit}).
  */
-export type HarnessOptionsArguments<Options> = Record<never, never> extends AgentProviderValues
-  ? readonly [options?: Options]
-  : readonly [options: Options];
+export type HarnessOptionsArguments<Options> = readonly [options?: Options];
 
 export interface RenderedRoute {
   /** The final Agent Document the real renderer produced. */
@@ -211,9 +217,50 @@ const cliArguments = (
   );
 };
 
+/**
+ * The executable surface name the generated entry records and hands to
+ * providers, derived like the artifact derives it: a routed CLI command is
+ * its space-joined command path (`tooling report`), a script is its
+ * path-derived name (`script:tooling-summary` -> `tooling-summary`), and an
+ * event route is its canonical event. The compiled command graph is the
+ * authority for command paths; without a manifest (module-direct renders)
+ * the harness falls back to the route id's own path segments.
+ */
+const executableSurface = (
+  kind: RenderableRouteKind,
+  routeId: string,
+  manifest: AgentBundleTestManifest | undefined,
+): string => {
+  switch (kind) {
+    case 'prompt':
+    case 'resource':
+    case 'tool':
+      return protocolName(routeId);
+    case 'event-route':
+      return routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId;
+    case 'cli': {
+      // Only authored `src/cli/**` commands have a `cli` route kind. Projected
+      // MCP commands (`command.mcp`) carry their tool's route id, so a request
+      // for one resolves as that `tool` route above, exactly like the generated
+      // entry's `command.mcp !== undefined` branch.
+      const command = manifest?.cliCommands.find((candidate) =>
+        candidate.mcp === undefined && candidate.routeId === routeId);
+      if (command !== undefined) return command.path.join(' ');
+      return (routeId.startsWith('cli:') ? routeId.slice('cli:'.length) : routeId).replaceAll('/', ' ');
+    }
+    case 'script':
+      return routeId.startsWith('script:') ? routeId.slice('script:'.length) : routeId;
+    default: {
+      const exhaustive: never = kind;
+      throw new AgentTestError('unsupported-route-kind', `Unsupported renderable route kind ${String(exhaustive)}.`);
+    }
+  }
+};
+
 const invocationFor = (
   kind: RenderableRouteKind,
   routeId: string,
+  surface: string,
   options: RenderRouteOptions,
   provenance: RenderedRouteProvenance,
 ): AgentRenderInvocation => {
@@ -229,20 +276,14 @@ const invocationFor = (
       // The generated server names the canonical event, not the route id, and
       // carries the host envelope as `payload`; the harness matches both so a
       // route sees the props the artifact would hand it.
-      return {
-        kind: 'event',
-        props: {
-          event: routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId,
-          payload: (options.input ?? {}) as never,
-        },
-      };
+      return { kind: 'event', props: { event: surface, payload: (options.input ?? {}) as never } };
     case 'cli':
-      return { kind: 'cli', props: { args: cliArguments(options, provenance), command: routeId } };
+      // The generated executable passes `command.path.join(' ')`, never the
+      // route id, so providers branching on `command` see the artifact's value.
+      return { kind: 'cli', props: { args: cliArguments(options, provenance), command: surface } };
     case 'script':
-      return {
-        kind: 'script',
-        props: { input: cliArguments(options, provenance) as never, name: routeId },
-      };
+      // The generated script passes its path-derived name (`tooling-summary`).
+      return { kind: 'script', props: { input: cliArguments(options, provenance) as never, name: surface } };
     default: {
       const exhaustive: never = kind;
       throw new AgentTestError(
@@ -309,14 +350,20 @@ const componentProps = (
   }
 };
 
-/** The request-scope invocation the generated server opens for one route. */
+/**
+ * The request-scope invocation the generated entry opens for one route:
+ * `operationId` is the route id and `surface` the executable surface name on
+ * every kind, exactly as the generated MCP server, CLI, and script shells
+ * record them.
+ */
 const requestInvocation = (
   invocation: AgentRenderInvocation,
   routeId: string,
+  surface: string,
 ): AgentInvocationInput => ({
   kind: invocation.kind,
-  ...(invocation.kind === 'tool' ? { operationId: routeId } : {}),
-  surface: invocation.kind === 'tool' ? protocolName(routeId) : routeId,
+  operationId: routeId,
+  surface,
 });
 
 const componentOf = (
@@ -564,13 +611,14 @@ interface FlightDispatcherOptions {
   readonly contextProgress?: AgentProgressReporter;
   readonly limits?: Partial<AgentRenderLimits>;
   readonly renderer: Renderer;
-  readonly requestInit: (request: AgentRenderDispatch) => AgentRequestInit;
+  /** Async so conventional providers execute inside the request, before the scope opens, as generated scopes do. */
+  readonly requestInit: (request: AgentRenderDispatch) => Promise<AgentRequestInit>;
 }
 
 const createFlightDispatcher = (options: FlightDispatcherOptions): AgentRuntime.AgentRenderDispatcher =>
   options.renderer.createAgentRenderDispatcher({
     execute: async (request) => streamOf(await options.renderer.runAgentRequest({
-      ...options.requestInit(request),
+      ...(await options.requestInit(request)),
       progress: progressFor(options.collected, options.contextProgress, request.progress),
       signal: request.signal,
     }, async () => drain(options.renderer.renderAgentFlight(
@@ -587,6 +635,8 @@ export interface PrepareCliRenderHostOptions {
   readonly manifest: AgentBundleTestManifest;
   readonly modules: ReadonlyMap<string, AgentRouteModule>;
   readonly onValidated: (value: unknown) => void;
+  /** The invoking CLI's process identity; the rendered command runs inside that same simulated executable. */
+  readonly processLifetime: ProviderProcessLifetime;
   readonly provenance: RenderedRouteProvenance;
   readonly signal: AbortSignal;
 }
@@ -667,8 +717,16 @@ export const prepareCliRenderHost = async (
         componentProps: (request) => ({ input: parsed, signal: request.signal }),
         contextProgress: context.progress,
         renderer,
-        requestInit: (request) => {
+        requestInit: async (request) => {
           const root = process.cwd();
+          const providers = await mountProviders({
+            explicit: context.providers,
+            invocation,
+            manifest: options.manifest,
+            processHit: claimProcessHit(options.processLifetime),
+            provenance: { ...options.provenance, routeId: command.routeId },
+            signal: request.signal,
+          });
           return {
             capabilities: {
               command: renderer.unavailable(),
@@ -680,6 +738,7 @@ export const prepareCliRenderHost = async (
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
+            providers,
             invocation: command.mcp === undefined
               ? {
                   kind: 'cli',
@@ -735,10 +794,14 @@ const prepareRender = async (
 ): Promise<PreparedRender> => {
   const resolved = await resolveTarget(target, options);
   const renderer = await loadRenderer();
-  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, options, resolved.provenance);
+  const surface = executableSurface(resolved.kind, resolved.provenance.routeId, resolved.manifest);
+  const invocation = invocationFor(resolved.kind, resolved.provenance.routeId, surface, options, resolved.provenance);
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
+  // A route-unit render stands in for one fresh executable serving one
+  // request; nothing is warm across renders, so each starts at hit 1.
+  const processLifetime = createProviderProcessLifetime();
   const mounted = await mountManifestState(resolved.manifest, resolved.provenance, context, renderer, signal);
   const dispatcher = createFlightDispatcher({
     collected,
@@ -747,11 +810,21 @@ const prepareRender = async (
     contextProgress: context.progress,
     limits: options.limits,
     renderer,
-    requestInit: (request) => ({
+    requestInit: async (request) => ({
       ...context,
       ...mounted.context,
+      // The render invocation is exactly what the generated Flight worker
+      // receives as `message.invocation`, so providers see the same shape.
+      providers: await mountProviders({
+        explicit: context.providers,
+        invocation: request.invocation,
+        manifest: resolved.manifest,
+        processHit: claimProcessHit(processLifetime),
+        provenance: resolved.provenance,
+        signal: request.signal,
+      }),
       invocation: {
-        ...requestInvocation(request.invocation, resolved.provenance.routeId),
+        ...requestInvocation(request.invocation, resolved.provenance.routeId, surface),
         ...context.invocation,
         kind: request.invocation.kind,
       },

@@ -149,6 +149,104 @@ it('projects subagent-stop continuation only through supported host contracts', 
     .toThrow(/must resolve the invoking host/u);
 });
 
+it('projects the Cursor subagent lifecycle through its documented permission and followup_message channels only', async () => {
+  // https://cursor.com/docs/hooks#subagentstart / #subagentstop (retrieved 2026-09-02).
+  const startNative = {
+    conversation_id: 'conv-456',
+    cursor_version: '1.7.2',
+    hook_event_name: 'subagentStart',
+    is_parallel_worker: false,
+    parent_conversation_id: 'conv-456',
+    subagent_id: 'abc-123',
+    subagent_model: 'claude-sonnet-4-20250514',
+    subagent_type: 'explore',
+    task: 'Explore the authentication flow',
+    tool_call_id: 'tc-789',
+    workspace_roots: ['/workspace'],
+  };
+  const startProps = createCanonicalEventProps('agent/start', startNative, 'cursor', 'subagentStart', '2026-08-28', new AbortController().signal);
+  const startInput = {
+    input: { canonical: startProps.canonical, native: startProps.native },
+    kind: 'event-route',
+    routeId: 'event:agent/start',
+  } as const;
+
+  const denied = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Explore subagents are disabled here.' } }),
+  }, startInput);
+  expect(projectEventDocument(denied.document, 'agent/start', 'cursor', 'subagentStart')).toEqual({
+    permission: 'deny',
+    user_message: 'Explore subagents are disabled here.',
+  });
+  const allowed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, startInput);
+  expect(projectEventDocument(allowed.document, 'agent/start', 'cursor', 'subagentStart')).toBeUndefined();
+  const startContext = await renderRoute({
+    default: async () => createElement(Agent.Result, null, createElement(Agent.Context, null, 'Read the test conventions first.')),
+  }, startInput);
+  expect(() => projectEventDocument(startContext.document, 'agent/start', 'cursor', 'subagentStart'))
+    .toThrow(/Cursor subagentStart has no additional-context channel/u);
+  const startReplaced = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { updatedInput: { task: 'Different task' } } }),
+  }, startInput);
+  expect(() => projectEventDocument(startReplaced.document, 'agent/start', 'cursor', 'subagentStart'))
+    .toThrow(/agent\/start cannot replace native input/u);
+
+  const stopNative = {
+    agent_transcript_path: '/workspace/subagents/abc-123.txt',
+    conversation_id: 'conv-456',
+    description: 'Exploring auth flow',
+    duration_ms: 45_000,
+    hook_event_name: 'subagentStop',
+    loop_count: 0,
+    message_count: 12,
+    modified_files: ['src/auth.ts'],
+    status: 'completed',
+    subagent_type: 'explore',
+    summary: 'Found the login handler.',
+    task: 'Explore the authentication flow',
+    tool_call_count: 8,
+  };
+  const stopProps = createCanonicalEventProps('agent/stop', stopNative, 'cursor', 'subagentStop', '2026-08-28', new AbortController().signal);
+  const stopInput = {
+    input: { canonical: stopProps.canonical, native: stopProps.native },
+    kind: 'event-route',
+    routeId: 'event:agent/stop',
+  } as const;
+
+  const continued = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Run one more focused pass.' } }),
+  }, stopInput);
+  expect(projectEventDocument(continued.document, 'agent/stop', 'cursor', 'subagentStop', stopNative)).toEqual({
+    followup_message: 'Run one more focused pass.',
+  });
+  // Cursor consumes followup_message only when status is "completed"; a
+  // continuation requested for an errored or aborted subagent fails closed
+  // instead of emitting output Cursor would silently ignore.
+  for (const status of ['error', 'aborted']) {
+    expect(() => projectEventDocument(continued.document, 'agent/stop', 'cursor', 'subagentStop', { ...stopNative, status }))
+      .toThrow(new RegExp(`consumes followup_message only when status is "completed"; this subagent reported "${status}"`, 'u'));
+  }
+  const observed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, stopInput);
+  expect(projectEventDocument(observed.document, 'agent/stop', 'cursor', 'subagentStop', stopNative)).toBeUndefined();
+  expect(projectEventDocument(observed.document, 'agent/stop', 'cursor', 'subagentStop', { ...stopNative, status: 'error' })).toBeUndefined();
+  // A reason without a deny outcome is invalid on both published Cursor
+  // handler paths; the route path must not swallow it.
+  const reasonWithoutDeny = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'continue', reason: 'Looks fine.' } }),
+  }, stopInput);
+  expect(() => projectEventDocument(reasonWithoutDeny.document, 'agent/stop', 'cursor', 'subagentStop', stopNative))
+    .toThrow(/agent\/stop reason is only valid when outcome is deny/u);
+  const stopContext = await renderRoute({
+    default: async () => createElement(Agent.Result, null, createElement(Agent.Context, null, 'Check the final result.')),
+  }, stopInput);
+  expect(() => projectEventDocument(stopContext.document, 'agent/stop', 'cursor', 'subagentStop'))
+    .toThrow(/Cursor subagentStop has no additional-context channel/u);
+});
+
 it('projects workspace/open as a fire-and-forget observation only', async () => {
   const props = createCanonicalEventProps(
     'workspace/open',

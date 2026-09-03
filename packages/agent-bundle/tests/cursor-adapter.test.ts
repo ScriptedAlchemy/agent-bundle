@@ -165,6 +165,137 @@ it('validates Cursor documents against the vendored real-host schemas', () => {
   })).toBe(true);
 });
 
+const withCursorConfig = (value: unknown): NormalizedPlugin => ({
+  ...plugin(),
+  extensions: {
+    cursor: {
+      id: 'extension:cursor',
+      key: 'cursor',
+      provenance: { kind: 'config', sourcePath: configPath },
+      target: 'cursor',
+      value,
+    },
+  },
+  targets: [
+    ...plugin().targets,
+    { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: configPath } },
+  ],
+});
+
+it('registers the cursor config extension and emits schema-admitted manifest metadata on both Cursor manifests', () => {
+  const registry = createDefaultRegistry();
+  expect(registry.configExtensions().map((extension) => extension.key)).toContain('cursor');
+
+  const model = withCursorConfig({
+    author: { email: 'devtools@example.test', name: 'Example DevTools' },
+    category: 'developer-tools',
+    homepage: 'https://example.test/cursor-review',
+    keywords: ['review', 'cursor'],
+    license: 'MIT',
+    minClientVersions: { cursor: '3.13.0' },
+    publisher: 'Example',
+    repository: 'https://github.com/example/cursor-review',
+    tags: ['code-review'],
+  });
+  const plan = cursorAdapter.plan(model);
+  expect(plan.diagnostics).toEqual([]);
+  const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).toMatchObject({
+    author: { email: 'devtools@example.test', name: 'Example DevTools' },
+    category: 'developer-tools',
+    homepage: 'https://example.test/cursor-review',
+    keywords: ['review', 'cursor'],
+    license: 'MIT',
+    minClientVersions: { cursor: '3.13.0' },
+    name: 'cursor-review',
+    publisher: 'Example',
+    repository: 'https://github.com/example/cursor-review',
+    tags: ['code-review'],
+  });
+  expect(cursorPluginValidator(manifest)).toBe(true);
+  const manifestEntry = plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json');
+  expect(manifestEntry?.sourceInputs).toContain(configPath);
+
+  const bundle = pluginAdapter.plan(model);
+  expect(bundle.diagnostics).toEqual([]);
+  const bundleManifest = JSON.parse(
+    (bundle.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
+  ) as Record<string, unknown>;
+  expect(bundleManifest).toMatchObject({ author: { name: 'Example DevTools' }, minClientVersions: { cursor: '3.13.0' }, publisher: 'Example' });
+  const claudeManifest = JSON.parse(
+    (bundle.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json') as { readonly content: string }).content,
+  ) as Record<string, unknown>;
+  expect(claudeManifest).not.toHaveProperty('publisher');
+  expect(claudeManifest).not.toHaveProperty('minClientVersions');
+});
+
+it('rejects cursor manifest metadata the pinned schema does not admit and emits no partial metadata', () => {
+  const model = withCursorConfig({
+    author: { name: 'Example', url: 'https://example.test' },
+    homepage: 'ftp://example.test',
+    keywords: ['ok', ''],
+    license: ' ',
+    minClientVersions: { cursor: '3.13' },
+    nativeHooks: './hooks.json',
+    repository: 'https://github.com/example/cursor-review',
+  });
+  const plan = cursorAdapter.plan(model);
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual([
+    'cursor.manifest.author.invalid',
+    'cursor.manifest.field.unknown',
+    'cursor.manifest.homepage.invalid',
+    'cursor.manifest.keywords.invalid',
+    'cursor.manifest.license.invalid',
+    'cursor.manifest.minClientVersions.invalid',
+  ]);
+  expect(plan.diagnostics.every((diagnostic) => diagnostic.severity === 'error' && diagnostic.target === 'cursor')).toBe(true);
+  const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  for (const field of ['author', 'homepage', 'keywords', 'license', 'minClientVersions', 'repository']) {
+    expect(manifest).not.toHaveProperty(field);
+  }
+  expect(pluginAdapter.plan(model).diagnostics.map((diagnostic) => diagnostic.code)).toContain('plugin.cursor.manifest.author.invalid');
+
+  expect(cursorAdapter.plan(withCursorConfig({ minClientVersions: {} })).diagnostics.map((diagnostic) => diagnostic.code))
+    .toEqual(['cursor.manifest.minClientVersions.invalid']);
+  expect(cursorAdapter.plan(withCursorConfig({})).diagnostics).toEqual([]);
+});
+
+it('rejects cursor URLs that new URL() would normalize but the pinned uri format rejects, without a generic schema error', () => {
+  const normalizedByUrlParser = [
+    ' https://example.test/cursor-review ',
+    'https://example.test/cursor review',
+    'https://example.test/päth',
+    'https://example.test/<review>',
+  ];
+  for (const url of normalizedByUrlParser) {
+    expect(() => new URL(url)).not.toThrow();
+    const model = withCursorConfig({ homepage: url, repository: 'https://github.com/example/cursor-review' });
+    const plan = cursorAdapter.plan(model);
+    expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['cursor.manifest.homepage.invalid']);
+    const manifest = JSON.parse(writeContents(model)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+    expect(manifest).not.toHaveProperty('homepage');
+    expect(manifest).not.toHaveProperty('repository');
+  }
+  // author.email goes through the same pinned `format: "email"` checker; a
+  // hand regex would admit the doubled dot and defer the failure to the
+  // generic schema pass.
+  const doubledDot = withCursorConfig({ author: { email: 'dev@example..com', name: 'Example' } });
+  expect(cursorAdapter.plan(doubledDot).diagnostics.map((diagnostic) => diagnostic.code))
+    .toEqual(['cursor.manifest.author.email.invalid']);
+  expect(JSON.parse(writeContents(doubledDot)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('author');
+  const exact = withCursorConfig({
+    author: { email: 'dev@example.com', name: 'Example' },
+    homepage: 'https://example.test',
+    repository: 'https://EXAMPLE.test/a%2Fb?ref=main#readme',
+  });
+  const plan = cursorAdapter.plan(exact);
+  expect(plan.diagnostics).toEqual([]);
+  const manifest = JSON.parse(writeContents(exact)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest['author']).toEqual({ email: 'dev@example.com', name: 'Example' });
+  expect(manifest['homepage']).toBe('https://example.test');
+  expect(manifest['repository']).toBe('https://EXAMPLE.test/a%2Fb?ref=main#readme');
+});
+
 it('copies plugin.logo into the artifact and references it from plugin.json', () => {
   const model: NormalizedPlugin = {
     ...plugin(),

@@ -4,7 +4,10 @@
     "cliInstall": false,
     "evidence": [
       "Cursor CLI exposes plugin marketplace management but no non-interactive plugin install verb.",
-      "Cursor documents physical local plugin copies under ~/.cursor/plugins/local/<name>."
+      "Cursor documents physical local plugin copies under ~/.cursor/plugins/local/<name>.",
+      "retrieved 2026-09-02: https://cursor.com/docs/plugins \"Test plugins locally\" documents copying either plugin format into ~/.cursor/plugins/local/<name>, restarting Cursor or running Developer: Reload Window, and confirming components in Customize; discovery depends on Allow Local Plugin Imports (off by default on Enterprise) and a same-named marketplace install takes precedence over the local copy.",
+      "retrieved 2026-09-02: https://cursor.com/docs/plugins also documents `ln -s /path/to/my-plugin ~/.cursor/plugins/local/my-plugin` for faster iteration, while the loader observed on 2026-08-31 (server build 9746bf0) realpath-checks local-plugin symlinks and rejects targets outside ~/.cursor/plugins/local; the generated installer copies, which satisfies both sources.",
+      "2026-09-03: Cursor IDE 3.18.25 `Cursor Plugins` output channel logged loadUserLocalPlugin for each physical directory under ~/.cursor/plugins/local (cargo-hauler, lcm-cursor, tracedecay) and `loadUserLocalPlugins completed (3 plugins loaded)`; the directory scan is the observed discovery mechanism and no settings entry references them."
     ],
     "localRoot": "~/.cursor/plugins/local/<name>",
     "method": "copy",
@@ -14,52 +17,68 @@
   },
   "deferredNativeEvents": {
     "afterAgentResponse": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list). Input is { text } with no output fields; matcher value AgentResponse; runs in cloud agents.",
       "state": "unavailable"
     },
     "afterAgentThought": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list). Input is { text, duration_ms? } with no output fields; matcher value AgentThought; runs in cloud agents.",
       "state": "unavailable"
     },
     "afterFileEdit": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: agent-edit variant overlapping canonical tool/after per the #258 selector rule; a dedicated family requires fixture evidence that the generic tool route loses information.",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: agent-edit variant overlapping canonical tool/after per the #258 selector rule (postToolUse with the ^Write$ matcher fires for the same edit); a dedicated family requires a canonical-vocabulary decision because the native input { file_path, edits[{ old_string, new_string }] } carries per-edit diffs the generic tool_output string does not, and no output fields are documented. Matcher is the tool type (TabWrite, Write); runs in cloud agents.",
       "state": "unavailable"
     },
     "afterMCPExecution": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with mcp selector per the #258 selector rule.",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with mcp selector per the #258 selector rule (postToolUse with the ^MCP: matcher). Native input adds mcp_server_name, mcp_server_url, result_json, and duration with no output fields; deferred while cloud agents cannot run it.",
       "state": "unavailable"
     },
     "afterShellExecution": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with shell selector per the #258 selector rule.",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/after with shell selector per the #258 selector rule (postToolUse with the ^Shell$ matcher). Native input is { command, output, duration, sandbox } with raw terminal output rather than the JSON-stringified tool_output, and no output fields; matcher is the full command string; runs in cloud agents.",
       "state": "unavailable"
     },
     "afterTabFileEdit": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list). Only Tab triggers it, edits carry range/old_line/new_line, no output fields, and Tab hooks do not run in cloud agents.",
       "state": "unavailable"
     },
     "beforeMCPExecution": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with mcp selector per the #258 selector rule.",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with mcp selector per the #258 selector rule (preToolUse with the ^MCP: matcher). Native input adds mcp_server_name plus url/mcp_server_url (HTTP) or command (stdio) and its output admits permission ask, which the canonical deny/continue vocabulary does not express; deferred while cloud agents cannot run it.",
       "state": "unavailable"
     },
     "beforeReadFile": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with file.read selector per the #258 selector rule.",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with file.read selector per the #258 selector rule (preToolUse with the ^Read$ matcher). Native input adds content and attachments and its output is { permission allow|deny, user_message }; failClosed is documented for it; matcher is the tool type (TabRead, Read); runs in cloud agents.",
       "state": "unavailable"
     },
     "beforeShellExecution": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with shell selector per the #258 selector rule.",
-      "state": "unavailable"
-    },
-    "beforeSubmitPrompt-cloud": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: cloud/desktop availability differences are capability dimensions; cloud rows stay scoped per surface rather than universal-support claims (#258 defer list).",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native variant of canonical tool/before with shell selector per the #258 selector rule (preToolUse with the ^Shell$ matcher). Native input is { command, cwd, sandbox } and its output admits permission ask, which the canonical deny/continue vocabulary does not express; matcher is the full command string; runs in cloud agents.",
       "state": "unavailable"
     },
     "beforeTabFileRead": {
-      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list).",
+      "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: Tab-surface callback, native/deferred until a canonical consumer is accepted (#258 defer list). Only Tab triggers it, there is no attachments field, output is { permission allow|deny }, and Tab hooks do not run in cloud agents.",
       "state": "unavailable"
     }
   },
   "hooks": {
     "config": "hooks/hooks.json",
+    "cloud": {
+      "configurationSources": ["project", "team", "enterprise"],
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/hooks documents cloud agents loading project .cursor/hooks.json, Enterprise team hooks, and Enterprise system-wide hooks; user-level ~/.cursor/hooks.json is not available because cloud VMs lack the local home directory.",
+        "retrieved 2026-09-02: https://cursor.com/docs/hooks documents that cloud agents run command-based hooks only, that hooks do not run during read-only exploratory turns, and the per-event cloud availability table mirrored in hooks.nativeEvents.",
+        "retrieved 2026-09-02: https://cursor.com/docs/hooks lists no plugin-distributed hooks/hooks.json among the cloud configuration sources, so every cloud row below describes the native event, not a delivery guarantee for this plugin's hooks."
+      ],
+      "executionTypes": ["command"],
+      "pluginHooks": {
+        "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks lists project, team, and enterprise hooks.json as the cloud configuration sources; a plugin's hooks/hooks.json is not a documented cloud source, so this compiler makes no cloud-delivery claim for generated plugin hooks.",
+        "state": "unavailable"
+      }
+    },
+    "environment": {
+      "alwaysPresent": ["CURSOR_PROJECT_DIR", "CURSOR_VERSION", "CLAUDE_PROJECT_DIR"],
+      "conditional": ["CURSOR_USER_EMAIL", "CURSOR_TRANSCRIPT_PATH", "CURSOR_CODE_REMOTE"],
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/hooks documents CURSOR_PROJECT_DIR, CURSOR_VERSION, and the CLAUDE_PROJECT_DIR alias as always present, CURSOR_USER_EMAIL when logged in, CURSOR_TRANSCRIPT_PATH when transcripts are enabled, CURSOR_CODE_REMOTE=\"true\" in remote workspaces, and sessionStart env output propagated to later hooks in the session. CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA are not documented, so the composite bundle keeps those compatibility variables unavailable on Cursor."
+      ]
+    },
     "events": {
       "agentStart": "subagentStart",
       "agentStop": "subagentStop",
@@ -73,13 +92,25 @@
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no teammate-idle event.",
         "state": "unavailable"
       },
-      "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
-      "agent/stop": { "nativeEvent": "subagentStop", "state": "supported" },
+      "agent/start": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "subagentStart",
+        "state": "supported"
+      },
+      "agent/stop": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "subagentStop",
+        "state": "supported"
+      },
       "compact/after": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no postCompact event.",
         "state": "unavailable"
       },
-      "compact/before": { "nativeEvent": "preCompact", "state": "supported" },
+      "compact/before": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "preCompact",
+        "state": "supported"
+      },
       "config/change": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no configChange event.",
         "state": "unavailable"
@@ -96,7 +127,11 @@
         "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks documents no standalone permission-request event; pre-tool permission control is beforeShellExecution/beforeMCPExecution and is not inferred as this family per #258.",
         "state": "unavailable"
       },
-      "prompt/submit": { "nativeEvent": "beforeSubmitPrompt", "state": "supported" },
+      "prompt/submit": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "beforeSubmitPrompt",
+        "state": "supported"
+      },
       "session/end": {
         "availability": {
           "cloud": {
@@ -108,8 +143,22 @@
         "nativeEvent": "sessionEnd",
         "state": "supported"
       },
-      "session/start": { "nativeEvent": "sessionStart", "state": "supported" },
-      "stop": { "nativeEvent": "stop", "state": "supported" },
+      "session/start": {
+        "availability": {
+          "cloud": {
+            "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks defers cloud sessionStart while cloud agents can begin in a read-only environment where hooks do not load, so it would fire too late; Self-Hosted Machines workers fire it when a session claims the worker.",
+            "state": "unavailable"
+          },
+          "desktop": { "state": "supported" }
+        },
+        "nativeEvent": "sessionStart",
+        "state": "supported"
+      },
+      "stop": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "stop",
+        "state": "supported"
+      },
       "stop/failure": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no stop-failure event.",
         "state": "unavailable"
@@ -122,10 +171,32 @@
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no taskCreated event.",
         "state": "unavailable"
       },
-      "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
-      "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
-      "tool/failure": { "nativeEvent": "postToolUseFailure", "state": "supported" },
-      "workspace/open": { "nativeEvent": "workspaceOpen", "state": "supported" }
+      "tool/after": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "postToolUse",
+        "state": "supported"
+      },
+      "tool/before": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "preToolUse",
+        "state": "supported"
+      },
+      "tool/failure": {
+        "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
+        "nativeEvent": "postToolUseFailure",
+        "state": "supported"
+      },
+      "workspace/open": {
+        "availability": {
+          "cloud": {
+            "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks states workspaceOpen is an IDE lifecycle hook that does not apply to cloud agents.",
+            "state": "unavailable"
+          },
+          "desktop": { "state": "supported" }
+        },
+        "nativeEvent": "workspaceOpen",
+        "state": "supported"
+      }
     },
     "matchers": {
       "agent": "^Task$",
@@ -133,6 +204,71 @@
       "file.write": "^Write$",
       "mcp": "^MCP:",
       "shell": "^Shell$"
+    },
+    "nativeEvents": {
+      "afterAgentResponse": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "literal AgentResponse", "outputFields": [], "row": "deferredNativeEvents.afterAgentResponse" },
+      "afterAgentThought": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "literal AgentThought", "outputFields": [], "row": "deferredNativeEvents.afterAgentThought" },
+      "afterFileEdit": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "tool type (TabWrite, Write)", "outputFields": [], "row": "deferredNativeEvents.afterFileEdit" },
+      "afterMCPExecution": { "canonical": null, "category": "agent", "cloud": "unavailable", "matcher": null, "outputFields": [], "row": "deferredNativeEvents.afterMCPExecution" },
+      "afterShellExecution": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "full command string", "outputFields": [], "row": "deferredNativeEvents.afterShellExecution" },
+      "afterTabFileEdit": { "canonical": null, "category": "tab", "cloud": "unavailable", "matcher": null, "outputFields": [], "row": "deferredNativeEvents.afterTabFileEdit" },
+      "beforeMCPExecution": { "canonical": null, "category": "agent", "cloud": "unavailable", "matcher": null, "outputFields": ["permission", "user_message", "agent_message"], "row": "deferredNativeEvents.beforeMCPExecution" },
+      "beforeReadFile": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "tool type (TabRead, Read)", "outputFields": ["permission", "user_message"], "row": "deferredNativeEvents.beforeReadFile" },
+      "beforeShellExecution": { "canonical": null, "category": "agent", "cloud": "supported", "matcher": "full command string", "outputFields": ["permission", "user_message", "agent_message"], "row": "deferredNativeEvents.beforeShellExecution" },
+      "beforeSubmitPrompt": { "canonical": "prompt/submit", "category": "agent", "cloud": "supported", "matcher": "literal UserPromptSubmit", "outputFields": ["continue", "user_message"], "row": "eventRoutes.prompt/submit" },
+      "beforeTabFileRead": { "canonical": null, "category": "tab", "cloud": "unavailable", "matcher": null, "outputFields": ["permission"], "row": "deferredNativeEvents.beforeTabFileRead" },
+      "postToolUse": { "canonical": "tool/after", "category": "agent", "cloud": "supported", "matcher": "tool type (Shell, Read, Write, Grep, Delete, Task, MCP:<tool_name>)", "outputFields": ["updated_mcp_tool_output", "additional_context"], "row": "eventRoutes.tool/after" },
+      "postToolUseFailure": { "canonical": "tool/failure", "category": "agent", "cloud": "supported", "matcher": "tool type (Shell, Read, Write, Grep, Delete, Task, MCP:<tool_name>)", "outputFields": [], "row": "eventRoutes.tool/failure" },
+      "preCompact": { "canonical": "compact/before", "category": "agent", "cloud": "supported", "matcher": null, "outputFields": ["user_message"], "row": "eventRoutes.compact/before" },
+      "preToolUse": { "canonical": "tool/before", "category": "agent", "cloud": "supported", "matcher": "tool type (Shell, Read, Write, Grep, Delete, Task, MCP:<tool_name>)", "outputFields": ["permission", "user_message", "agent_message", "updated_input"], "row": "eventRoutes.tool/before" },
+      "sessionEnd": { "canonical": "session/end", "category": "agent", "cloud": "unavailable", "matcher": null, "outputFields": [], "row": "eventRoutes.session/end" },
+      "sessionStart": { "canonical": "session/start", "category": "agent", "cloud": "unavailable", "matcher": null, "outputFields": ["env", "additional_context"], "row": "eventRoutes.session/start" },
+      "stop": { "canonical": "stop", "category": "agent", "cloud": "supported", "matcher": "literal Stop", "outputFields": ["followup_message"], "row": "eventRoutes.stop" },
+      "subagentStart": { "canonical": "agent/start", "category": "agent", "cloud": "supported", "matcher": "subagent type (generalPurpose, explore, shell, ...)", "outputFields": ["permission", "user_message"], "row": "eventRoutes.agent/start" },
+      "subagentStop": { "canonical": "agent/stop", "category": "agent", "cloud": "supported", "matcher": "subagent type (generalPurpose, explore, shell, ...)", "outputFields": ["followup_message"], "row": "eventRoutes.agent/stop" },
+      "workspaceOpen": { "canonical": "workspace/open", "category": "app", "cloud": "unavailable", "matcher": null, "outputFields": ["pluginPaths"], "row": "eventRoutes.workspace/open" }
+    },
+    "options": {
+      "command": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents command hooks as the default type, receiving JSON on stdin and returning JSON on stdout; exit 0 uses the JSON, exit 2 blocks the action, and other exit codes fail open. Generated Cursor wrappers signal deny through the documented JSON channels and never rely on exit 2; a wrapper validation failure exits 1, which Cursor treats as fail-open unless failClosed is set."
+        ],
+        "state": "supported"
+      },
+      "failClosed": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents failClosed (default false) so hook crashes, timeouts, and invalid JSON block the action instead of allowing it, recommended for security-critical beforeMCPExecution and beforeReadFile hooks; the pinned hooks.schema.json admits it."
+        ],
+        "reason": "Agent Bundle's canonical hook vocabulary has no fail-closed authoring field, so generated entries omit failClosed and inherit Cursor's fail-open default; a wrapper that exits 1 on a malformed envelope therefore lets the action proceed.",
+        "state": "unavailable"
+      },
+      "loopLimit": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents loop_limit (default 5, null for no limit) as the per-script cap on stop and subagentStop followup_message auto-continuations; the pinned hooks.schema.json admits it."
+        ],
+        "reason": "Agent Bundle's canonical hook vocabulary has no loop-limit authoring field, so generated stop and subagentStop entries omit loop_limit and inherit Cursor's default of 5 auto follow-ups per script.",
+        "state": "unavailable"
+      },
+      "matcher": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents matcher as a per-hook filter whose subject depends on the event: tool type for preToolUse/postToolUse/postToolUseFailure (Shell, Read, Write, Grep, Delete, Task, MCP:<tool_name>), subagent type for subagentStart/subagentStop, the full command string for beforeShellExecution/afterShellExecution, tool type for beforeReadFile (TabRead, Read) and afterFileEdit (TabWrite, Write), and literal values UserPromptSubmit, Stop, AgentResponse, and AgentThought for beforeSubmitPrompt, stop, afterAgentResponse, and afterAgentThought.",
+          "retrieved 2026-09-02: canonical tool selectors lower to the pinned tool-type matchers (^Shell$, ^Read$, ^Write$, ^MCP:, ^Task$) on preToolUse/postToolUse; the `cursor:<native-name>` selector escape hatch admits Grep and Delete or a specific MCP:<tool_name>. Selectors on subagentStart/subagentStop would match subagent types, not tool names, so authors must not attach tool selectors to agentStart/agentStop hooks."
+        ],
+        "state": "supported"
+      },
+      "prompt": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents prompt hooks ({ type: \"prompt\", prompt, timeout?, model? }) evaluated by a fast LLM returning { ok, reason? } with $ARGUMENTS substitution; cloud agents run command hooks only. The pinned hooks.schema.json admits prompt entries."
+        ],
+        "reason": "Agent Bundle compiles handler modules into command hooks; it has no authoring surface for LLM-evaluated prompt hooks, and cloud agents cannot run them.",
+        "state": "unavailable"
+      },
+      "timeout": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/hooks documents timeout in seconds with a platform default; canonical timeoutMs lowers to ceil(seconds) on every generated entry that declares one."
+        ],
+        "state": "supported"
+      }
     }
   },
   "mcp": {
@@ -181,17 +317,169 @@
   },
   "observedCliVersion": "2026-08-28",
   "plugin": {
+    "agents": {
+      "component": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents agents as Markdown (.md, .mdc, .markdown) files in the plugin-root agents/ directory with name and description frontmatter, discovered by folder or replaced by the manifest agents path field; https://cursor.com/docs/plugins lists Agents as a Cursor Plugins-only component.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 record the #100 stage-2 G5 narrowing: re-admitting agents requires its own evidence-backed increment, so this compiler emits no agents/ directory or manifest agents pointer on Cursor either."
+        ],
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers Agent Bundle's authored plugin agents/ component; Cursor documents the component, but this compiler emits no agents/ directory or manifest agents pointer until a later stage admits it.",
+        "state": "unavailable"
+      }
+    },
+    "canvases": {
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/plugins \"Cursor Plugin canvases\" advertises prebuilt canvases (Hex Canvas, Atlassian Canvas) opened from an installed plugin in Customize, but neither that page nor https://cursor.com/docs/reference/plugins defines a canvas component field, file layout, or schema, and the pinned cursor/plugins@0701892 plugin.schema.json has no canvas property."
+      ],
+      "reason": "Cursor advertises plugin canvases without publishing a schema-backed authoring contract; no canvas component is inferred from marketplace examples, so this compiler emits none.",
+      "state": "unavailable"
+    },
     "commands": true,
-    "manifest": ".cursor-plugin/plugin.json",
-    "marketplace": ".cursor-plugin/marketplace.json",
-    "rules": true,
-    "skills": true,
+    "componentDiscovery": {
+      "defaults": {
+        "agents": "agents/ (.md, .mdc, .markdown)",
+        "commands": "commands/ (.md, .mdc, .markdown, .txt)",
+        "hooks": "hooks/hooks.json",
+        "mcpServers": "mcp.json",
+        "rootSkill": "SKILL.md at the plugin root (only without skills/ and without a manifest skills field)",
+        "rules": "rules/ (.md, .mdc, .markdown)",
+        "skills": "skills/<name>/SKILL.md"
+      },
+      "emitted": {
+        "commands": "./commands/",
+        "hooks": "./hooks/hooks.json",
+        "mcpServers": "./mcp.json",
+        "rules": "./rules/",
+        "skills": "./skills/"
+      },
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents folder-based discovery defaults (skills/ subdirectories with SKILL.md; rules/ and agents/ .md/.mdc/.markdown; commands/ .md/.mdc/.markdown/.txt; hooks/hooks.json; mcp.json; root SKILL.md single-skill fallback) and that a manifest field replaces folder discovery for that component so the default folder is not also scanned.",
+        "retrieved 2026-09-02: the generated .cursor-plugin/plugin.json points every emitted component at its default location (./skills/, ./rules/, ./commands/, ./hooks/hooks.json, ./mcp.json), so replacement and discovery resolve to the same files; emitted rules are .mdc and commands are .md, subsets of the documented suffixes."
+      ],
+      "replacement": "manifest-path-replaces-default-scan",
+      "state": "supported"
+    },
+    "contract": "cursor-plugin",
+    "distributionPolicy": {
+      "autoRefresh": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents Enable Auto Refresh re-indexing a GitHub-imported team marketplace at most once every 10 minutes on pushes to the tracked branch (requires the Cursor GitHub App), full-manifest re-reads for Import from Repo marketplaces, existing-plugin-only refresh for individually added plugins, and a manual Refresh button."
+        ],
+        "reason": "Agent Bundle emits marketplace documents but does not configure dashboard Auto Refresh, install the Cursor GitHub App, or trigger manual re-indexing.",
+        "state": "unavailable"
+      },
+      "installModes": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents team-marketplace plugin installation modes Default Off (developers choose), Default On (installed by default, opt-out allowed), and Required (always installed, cannot be uninstalled), chosen per plugin by admins after setting marketplace access."
+        ],
+        "modes": ["Default Off", "Default On", "Required"],
+        "reason": "Installation modes are set per plugin by team admins in Dashboard -> Plugins; no plugin manifest or marketplace field declares them, so this compiler emits nothing for them.",
+        "state": "unavailable"
+      },
+      "localPluginImports": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents that ~/.cursor/plugins/local discovery depends on Allow Local Plugin Imports under Dashboard -> Settings -> Security & Identity -> Marketplace and Plugins on Teams and Enterprise, off by default on Enterprise."
+        ],
+        "reason": "Agent Bundle's installer copies into ~/.cursor/plugins/local but cannot grant the admin-controlled Allow Local Plugin Imports setting a Teams or Enterprise user needs before Cursor discovers the copy.",
+        "state": "unavailable"
+      },
+      "localSymlinkInstall": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents `ln -s /path/to/my-plugin ~/.cursor/plugins/local/my-plugin` for faster local iteration.",
+          "2026-08-31: the installed cursor-agent-exec loader (server build 9746bf0) realpath-checked local-plugin symlinks and rejected `symlink target ... is outside ~/.cursor/plugins/local` with only a warn-level log (#127); the #327 built-artifact validator mirrors that containment rule inside the bundle.",
+          "2026-09-03: Cursor IDE 3.18.25 loaded three physical local plugin directories; no symlinked entry was present to re-test the rejection."
+        ],
+        "reason": "The generated installer and doctor guidance copy the built bundle instead of symlinking it: Cursor's docs now show a symlink, but the observed loader rejected symlinks resolving outside ~/.cursor/plugins/local, and a copy loads under both readings.",
+        "state": "unavailable"
+      },
+      "marketplaceAccess": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents team marketplaces (1 on Teams, unlimited on Enterprise) available to the whole team by default, restrictable to selected Organization Groups (SCIM-synced) under Marketplace Settings -> Marketplace Access, with Enterprise admins alone adding marketplaces."
+        ],
+        "reason": "Marketplace scope and access are dashboard settings on the team's marketplace, not plugin-authored fields; this compiler emits nothing for them.",
+        "state": "unavailable"
+      },
+      "marketplaceReview": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins and https://cursor.com/docs/reference/plugins document that official marketplace plugins are Git repositories submitted at cursor.com/marketplace/publish, manually reviewed before listing and on each update, must be open source, and follow a submission checklist (valid manifest, unique kebab-case name, description, valid component frontmatter, committed relative-path logo, README.md, declared variables, relative manifest paths, local testing, unique names in .cursor-plugin/marketplace.json)."
+        ],
+        "reason": "Agent Bundle emits a checklist-conformant artifact (manifest, relative pointers, declared variables, copied logo) but does not host it in a Git repository, submit it, or complete Cursor's manual review.",
+        "state": "unavailable"
+      },
+      "teamMarketplaces": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins documents team marketplaces distributing Agent Plugins and Cursor Plugins through Dashboard -> Plugins (Add Marketplace, Import from Repo, Add to Marketplace), the Default team marketplace linking Team MCP servers, and the warning that removing a linked MCP plugin or the marketplace can delete the Team MCP server."
+        ],
+        "reason": "Team marketplaces are created and populated in the Cursor dashboard from a Git repository; this compiler emits the repository-side .cursor-plugin/marketplace.json only.",
+        "state": "unavailable"
+      }
+    },
+    "formats": {
+      "agentPlugin": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/plugins and https://cursor.com/docs/reference/plugins document Agent Plugins as a root plugin.json with the agent-plugins.org 1.0.0 schema identifier packaging skills and mcp.json, loaded by Cursor without changes and distributable through the same marketplaces and ~/.cursor/plugins/local.",
+          "retrieved 2026-09-02: the portable target owns that format (portable-1.0.0.json); the cursor target rejects ${PLUGIN_ROOT}/${PLUGIN_DATA} tokens (cursor.mcp.token) so no artifact mixes Agent Plugin paths or tokens into a Cursor Plugin."
+        ],
+        "manifest": "plugin.json",
+        "reason": "The cursor target emits the full Cursor Plugin format only; the portable Agent Plugin format is emitted by the portable target and is never mixed into this artifact.",
+        "state": "unavailable"
+      },
+      "cursorPlugin": {
+        "evidence": [
+          "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents Cursor Plugins by their .cursor-plugin/plugin.json manifest with skills, MCP servers, rules, agents, commands, hooks, and variables, developed in parallel with the Agent Plugins standard."
+        ],
+        "manifest": ".cursor-plugin/plugin.json",
+        "state": "supported"
+      }
+    },
     "localInstall": {
       "method": "copy",
       "root": "~/.cursor/plugins/local/<name>"
     },
-    "contract": "cursor-plugin",
-    "schema": "cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a:schemas/plugin.schema.json"
+    "manifest": ".cursor-plugin/plugin.json",
+    "manifestMetadata": {
+      "authoredFields": ["author.name", "author.email", "homepage", "repository", "license", "keywords", "publisher", "category", "tags", "minClientVersions"],
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents .cursor-plugin/plugin.json requiring only name (lowercase kebab-case alphanumerics, hyphens, periods; must start and end alphanumeric) with optional description, version, author { name, email? }, homepage, repository, license, keywords, logo, component paths, hooks, mcpServers, and variables; author.url is not admitted by the pinned schema and is rejected.",
+        "retrieved 2026-09-02: the pinned cursor/plugins@0701892 plugin.schema.json additionally admits displayName, publisher, category, tags, and minClientVersions ({ cursor: semver, ... }); the current public reference documents category and tags only as marketplace-entry fields and omits displayName, publisher, and minClientVersions, so those are emitted only when authored under cursor.* and are recorded here as schema-admitted rather than reference-documented.",
+        "retrieved 2026-09-02: generated fields are name, displayName (schema-admitted, falls back to name), description, version, logo, component pointers, and variables; author, homepage, repository, license, keywords, publisher, category, tags, and minClientVersions come from the cursor.* config extension and are emitted verbatim when valid."
+      ],
+      "generatedFields": ["name", "displayName", "description", "version", "logo", "commands", "hooks", "mcpServers", "rules", "skills", "variables"],
+      "schemaOnlyFields": ["displayName", "publisher", "category", "tags", "minClientVersions"],
+      "state": "supported"
+    },
+    "marketplace": ".cursor-plugin/marketplace.json",
+    "marketplaceManifest": {
+      "entryFields": ["name", "source", "description", "version", "author", "homepage", "repository", "license", "keywords", "logo", "category", "tags", "skills", "rules", "agents", "commands", "hooks", "mcpServers", "variables"],
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents .cursor-plugin/marketplace.json at the repository root with required name (kebab-case), owner { name, email? }, and plugins (max 500 entries) plus optional metadata { description, version, pluginRoot }; entries carry name, source (path or object with path and options), description, version, author, homepage, repository, license, keywords, logo, category, tags, component paths, hooks, mcpServers, and variables (manifest values take precedence when both set).",
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents resolution: the parser looks for <source>/.cursor-plugin/plugin.json, merges it with the marketplace entry with manifest values taking precedence, and runs component discovery inside the source directory.",
+        "retrieved 2026-09-02: the generated document is the pinned-schema-valid single-entry form { name: <plugin>-marketplace, owner: { name }, plugins: [{ name, source: './', description }] }; it emits no entry component overrides because the per-plugin manifest is authoritative under the documented precedence, so the emitted entry count (1) is within the 500 limit by construction."
+      ],
+      "generatedEntryFields": ["name", "source", "description"],
+      "maxEntries": 500,
+      "mergePrecedence": "plugin-manifest-over-marketplace-entry",
+      "state": "supported"
+    },
+    "rootSkill": {
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents a plugin-root SKILL.md as a single-skill plugin only when there is no skills/ directory and no manifest skills field."
+      ],
+      "reason": "Agent Bundle always emits skills under skills/<name>/SKILL.md with an explicit manifest skills pointer, so the root SKILL.md single-skill fallback is never produced.",
+      "state": "unavailable"
+    },
+    "rules": true,
+    "schema": "cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a:schemas/plugin.schema.json",
+    "skills": true,
+    "variables": {
+      "acceptedKeywords": ["type", "title", "description", "default", "enum", "const", "properties", "required", "items", "length and numeric constraints"],
+      "evidence": [
+        "retrieved 2026-09-02: https://cursor.com/docs/reference/plugins documents variables as a JSON Schema whose top level must be { type: \"object\", properties: {...} } with a fixed accepted keyword set (type, title, description, default, enum, const, properties, required, items, common length/numeric constraints); values are set by admins in Dashboard -> Plugins -> Configure and substituted into ${VAR} placeholders; the plugin never stores secret values, and the submission checklist requires every ${VAR} used by mcp.json to be declared.",
+        "retrieved 2026-09-02: the generated manifest derives variables from every ${VAR} placeholder in the emitted mcp.json (excluding the built-in CURSOR_PLUGIN_ROOT/CLAUDE_PLUGIN_ROOT tokens) as { type: \"string\" } properties under { type: \"object\" }, emits no values, and omits the block when no placeholder is used; required, title, description, default, and enum are not authored."
+      ],
+      "secretValuesEmitted": false,
+      "state": "supported"
+    }
   },
   "tokens": {
     "pluginRoot": "${CURSOR_PLUGIN_ROOT}",
@@ -219,7 +507,12 @@
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents preCompact as observational and unable to block or modify compaction. Its optional user_message is user-facing rather than agent context, so the canonical Agent.Result and Agent.Context vocabulary exposes no output channel for it.",
       "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks Agent and cloud event inventories document no postCompact event, so compact/after is unavailable rather than inferred from preCompact.",
       "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture attempts for postToolUseFailure and preCompact could not dispatch because the binary required unavailable authentication; the pinned official contract is the evidence source.",
-      "2026-09-01: https://cursor.com/docs/plugins and https://prod.cursor.com/docs/reference/plugins document agents as a full Cursor Plugin component alongside rules and commands; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
+      "2026-09-01: https://cursor.com/docs/plugins and https://prod.cursor.com/docs/reference/plugins document agents as a full Cursor Plugin component alongside rules and commands; #100 stage 2 defers the agents component per the G5 narrowing in #107, so the plugin.agents.component row is unavailable with that gate as its reason.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents subagentStart input as subagent_id, subagent_type, task, parent_conversation_id, tool_call_id, subagent_model, is_parallel_worker, and optional git_branch (plus the common envelope), with output { permission allow|deny, user_message }; ask is treated as deny. The canonical agent/start deny therefore lowers to permission deny with user_message on Cursor, unlike Claude and Codex where SubagentStart cannot block; Cursor documents no additional-context channel for subagentStart, so Agent.Context fails closed there.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents subagentStop input as subagent_type, status (completed|error|aborted), task, description, summary, duration_ms, message_count, tool_call_count, loop_count, modified_files, and agent_transcript_path (string|null), with output { followup_message } consumed only when status is completed and capped by loop_limit (default 5). The canonical agent/stop deny lowers to followup_message with the reason, mirroring the stop family; no additional-context channel is documented, so Agent.Context fails closed.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents the common input envelope (conversation_id, generation_id, model, model_id?, model_params?, hook_event_name, cursor_version, workspace_roots, user_email, transcript_path) for every agent hook; generated wrappers require session_id or conversation_id plus the per-event fields and reject anything else only when documented types are violated.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents preToolUse output permission allow|deny (ask accepted by the schema but not enforced), user_message, agent_message, and updated_input; postToolUse output updated_mcp_tool_output (MCP tools only) and additional_context; sessionStart output env and additional_context (continue/user_message accepted but unenforced); stop output followup_message. The Cursor projections emit exactly those channels.",
+      "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture attempts for subagentStart and subagentStop could not dispatch because the binary required unavailable authentication; the pinned official contract plus the wrapper fixture replay in tests are the evidence source for the subagent lifecycle envelopes."
     ]
   }
 }

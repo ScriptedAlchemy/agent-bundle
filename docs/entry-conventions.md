@@ -204,14 +204,25 @@ of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `processLifetime` is reserved for the framework-owned process identity and hit
 counter, so provider filenames must not derive that key.
 
-Route-unit and CLI-dispatch tests inject provider values through the same
-`context` seam as identity axes (`renderRoute(id, { context: { providers:
-{ library: fixture } } })`); the harness never executes conventional provider
-modules, so a test chooses exactly the values a component observes. Once the
-generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, the
-harness `options` and its `context.providers` become required (as does
-`providers` on a direct `runAgentRequest`), so omitting a fixture the route's
-types promise is a compile error rather than a runtime `undefined`.
+The `agent-bundle/test` harness mounts the same providers, in the same order
+and with the same fail-closed semantics, for every manifest-backed helper
+(`renderRoute`, `renderRouteEvents`, `invokeCli`, and the in-memory MCP
+helpers), so a route test observes what the artifact would mount. A test that
+wants to choose the values instead injects them through the same `context`
+seam as identity axes (`renderRoute(id, { context: { providers: { library:
+fixture } } })`): an explicit map is mounted verbatim and no conventional
+provider module executes. A module rendered directly (no compiled manifest)
+has no project to discover, so it observes only `processLifetime`. Once the
+generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, an
+explicit `context.providers` map must carry every declared key (as must
+`providers` on a direct `runAgentRequest`), so a fixture that omits a value the
+route's types promise is a compile error rather than a runtime `undefined`;
+omitting `context.providers` altogether stays legal and mounts the real
+providers. The harness reproduces the per-executable process identity, not
+per-executable module evaluation: provider modules are evaluated once per test
+worker, so module-level provider state is shared across the simulated
+executables of that worker and is only proven cold by the proof levels that
+spawn the artifact.
 
 ### Handler request context
 

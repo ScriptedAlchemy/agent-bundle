@@ -22,8 +22,10 @@ import type {
 } from '@agent-bundle/runtime/state';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 
+import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
@@ -73,8 +75,9 @@ export interface InMemoryMcpSessionOptionsBase<
 
 /**
  * Session options; `context` holds the request-scoped overrides applied to
- * every route render in this session and is required once the project
- * declares providers (see {@link RenderRouteContextInit}).
+ * every route render in this session; omitting it (or its `providers`) mounts
+ * the project's conventional providers exactly as the generated server does
+ * (see {@link RenderRouteContextInit}).
  */
 export type InMemoryMcpSessionOptions<
   TState = unknown,
@@ -311,6 +314,9 @@ export const openInMemoryMcpServer = async <
   // the same warm host wrapper the artifact uses — it simply renders here
   // instead of in a spawned thread.
   const artifactEpoch = `${manifest.plugin.name}@${manifest.plugin.version}`;
+  // One process identity per open server, like the artifact's Flight worker:
+  // every request this session handles shares it, and a new server starts fresh.
+  const processLifetime = createProviderProcessLifetime();
   const runtimeState = options.state === undefined
     ? undefined
     : dependencies.createGeneratedRuntimeState(options.state);
@@ -328,8 +334,23 @@ export const openInMemoryMcpServer = async <
             details: [`registered:   ${Object.keys(routes).sort().join(', ')}`],
           });
         }
+        // The hit is claimed before state bindings are awaited, in the
+        // generated worker's order, so a failed or slow binding still consumes
+        // this request's hit and concurrent requests keep arrival order.
+        const processHit = claimProcessHit(processLifetime);
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
+          // Conventional providers run before the scope opens, over the same
+          // tool invocation the generated Flight worker hands them.
+          const descriptor = manifest.routes[route.id];
+          const providers = await mountProviders({
+            explicit: context.providers,
+            invocation: request.invocation,
+            manifest,
+            processHit,
+            ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
+            signal: request.signal,
+          });
           return streamOf(await dependencies.runAgentRequest({
             // Mirror the Flight worker boundary while allowing the documented
             // harness context seam to override forwarded transport identity.
@@ -338,6 +359,7 @@ export const openInMemoryMcpServer = async <
             session: transport.session,
             workspace: transport.workspace,
             ...context,
+            providers,
             invocation: {
               kind: 'tool' as const,
               operationId: route.id,

@@ -419,6 +419,48 @@ than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target
 kind, and the module provenance.
 
+Conventional request context providers (`src/providers/*`, see
+[entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
+are mounted automatically for every manifest-backed helper — `renderRoute`,
+`renderRouteEvents`, `invokeCli`, and the in-memory MCP helpers — exactly as the
+generated request scopes mount them: discovered from the compiled manifest,
+executed once per request in the same deterministic key order, handed the same
+surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
+request closed when a factory throws. `providers.processLifetime` is scoped the
+way the artifact scopes it: each `invokeCli` call and each `renderRoute` render
+is a fresh simulated executable (hit 1, new `instanceId`), while one open
+`openInMemoryMcpServer` session shares a single identity across every request
+it handles, like the artifact's warm Flight worker. Pass `context.providers` to opt out: an explicit map is mounted
+verbatim and no conventional provider runs, which is how a test stubs a provider
+that would otherwise reach the network or the file system.
+
+```ts
+// Real providers, as the artifact would mount them.
+const real = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+
+// Stubbed providers: nothing under src/providers/ executes.
+const stubbed = await invokeCli(['library', 'audit', './books'], {
+  context: { providers: { libraryTooling: { tool: 'ffprobe 6.1' } } },
+});
+```
+
+`context` (and `context.providers`) stays optional even once the generated
+`.agent-bundle/routes.d.ts` augmentation declares provider keys: omitting it
+runs the real providers, which is what the artifact does, while an explicit map
+must carry every declared key, so a fixture cannot leave a promised value
+`undefined`. Only a direct `runAgentRequest` requires `providers` in that case,
+because nothing else would supply them.
+
+The harness simulates the process identity per executable, not module
+evaluation: one Rstest worker evaluates each provider module once, so
+module-level state in a provider is shared across every simulated CLI
+invocation, render, and in-memory server in that worker (as it is for the route
+modules themselves), whereas a real artifact evaluates the module afresh in
+every CLI process and Flight worker. A provider's module-level cache, counter,
+or singleton is therefore only proven by the packed and projected proof levels
+that spawn the artifact; a route-unit test that needs cold state should stub
+the provider through `context.providers` or reset that state between calls.
+
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`,
 `toContainText`, `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
 
@@ -679,7 +721,7 @@ observed host version (`observedVersion`) and target, while adapters carry a mon
 `adapterRevision`. Git already versions repository-owned content; hashing it again inside the
 repository is self-referential and causes churn on every table edit.
 
-`AgentBundleConfig` merges bundled portable, Codex, and Claude declarations
+`AgentBundleConfig` merges bundled portable, Codex, Claude, and Cursor declarations
 through `AgentBundleConfigExtensions`. `TargetRegistry` owns the unique
 extension descriptor and adapter for each target. Ordinary projects need no
 extension key; extension values are strict finite JSON and host-specific values

@@ -183,6 +183,43 @@ export const validateNativeEventEnvelope = (
     if (canonicalEvent === 'stop' && typeof native.loop_count !== 'number') {
       return nativeEventError('native loop_count must be a number');
     }
+    if (canonicalEvent === 'agent/start') {
+      // https://cursor.com/docs/hooks#subagentstart (retrieved 2026-09-02).
+      // Only git_branch is documented "(optional)"; every other field is required.
+      requireNativeString(native, 'subagent_id');
+      requireNativeString(native, 'subagent_type');
+      requireNativeStringValue(native, 'task');
+      requireNativeString(native, 'parent_conversation_id');
+      requireNativeString(native, 'tool_call_id');
+      requireNativeStringValue(native, 'subagent_model');
+      requireNativeBoolean(native, 'is_parallel_worker');
+      if (Object.hasOwn(native, 'git_branch')) requireNativeStringValue(native, 'git_branch');
+    }
+    if (canonicalEvent === 'agent/stop') {
+      // https://cursor.com/docs/hooks#subagentstop (retrieved 2026-09-02).
+      requireNativeString(native, 'subagent_type');
+      if (!['completed', 'error', 'aborted'].includes(String(native.status))) {
+        return nativeEventError('native status is invalid');
+      }
+      // The documented subagentStop input marks no field optional;
+      // agent_transcript_path is `string | null`.
+      for (const field of ['task', 'description', 'summary']) {
+        requireNativeStringValue(native, field);
+      }
+      for (const field of ['duration_ms', 'message_count', 'tool_call_count']) {
+        requireNativeNumber(native, field);
+      }
+      requireNativeNumber(native, 'loop_count');
+      if (!Array.isArray(native.modified_files) || !native.modified_files.every((file) => typeof file === 'string')) {
+        return nativeEventError('native modified_files must be an array of strings');
+      }
+      if (
+        !Object.hasOwn(native, 'agent_transcript_path')
+        || (native.agent_transcript_path !== null && typeof native.agent_transcript_path !== 'string')
+      ) {
+        return nativeEventError('native agent_transcript_path must be a string or null');
+      }
+    }
     return native;
   }
   requireNativeString(native, 'session_id');
@@ -399,11 +436,18 @@ const appendContext = (node: AgentDocumentNode, contexts: string[]): void => {
   }
 };
 
+/**
+ * Projects a rendered event document to the host's native output. Pass the
+ * validated native envelope when the host's output contract depends on input
+ * state (Cursor consumes `subagentStop.followup_message` only for a completed
+ * subagent); the production callers always do.
+ */
 export const projectEventDocument = (
   document: AgentDocument,
   event: CanonicalAgentEvent,
   target: string,
   nativeEvent: string,
+  nativeInput?: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> | undefined => {
   if (target === 'plugin') {
     throw new TypeError('Composite plugin event projection must resolve the invoking host before projecting output.');
@@ -429,44 +473,69 @@ export const projectEventDocument = (
       : Object.freeze({ decision: 'block', reason: requireDenyReason() });
   }
   if (event === 'agent/start') {
-    if (parsedValue?.outcome === 'deny') {
-      throw new TypeError('agent/start cannot block subagent creation on any supported host.');
-    }
     if (parsedValue?.updatedInput !== undefined) {
       throw new TypeError('agent/start cannot replace native input.');
     }
+    if (target === 'cursor') {
+      // https://cursor.com/docs/hooks#subagentstart (retrieved 2026-09-02):
+      // output is { permission: allow | deny, user_message? }; there is no
+      // additional-context channel, and `ask` is treated as deny.
+      if (additionalContext !== undefined) {
+        throw new TypeError('Cursor subagentStart has no additional-context channel.');
+      }
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('agent/start reason is only valid when outcome is deny.');
+      }
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ permission: 'deny', user_message: requireDenyReason() })
+        : undefined;
+    }
+    if (parsedValue?.outcome === 'deny') {
+      throw new TypeError('agent/start cannot block subagent creation on Claude Code or Codex.');
+    }
     if (additionalContext === undefined) return undefined;
-    return target === 'cursor'
-      ? Object.freeze({ additional_context: additionalContext })
-      : deepFreeze({
-          hookSpecificOutput: {
-            additionalContext,
-            hookEventName: nativeEvent,
-          },
-        });
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'agent/stop') {
     if (parsedValue?.updatedInput !== undefined) {
       throw new TypeError('agent/stop cannot replace native input.');
     }
-    if (parsedValue?.outcome === 'deny') {
-      if (target === 'cursor') {
-        throw new TypeError('agent/stop cannot block subagent completion on cursor.');
+    if (target === 'cursor') {
+      // https://cursor.com/docs/hooks#subagentstop (retrieved 2026-09-02):
+      // output is { followup_message? }, consumed only when status is
+      // completed and capped by loop_limit; there is no context channel.
+      if (additionalContext !== undefined) {
+        throw new TypeError('Cursor subagentStop has no additional-context channel; only followup_message is documented.');
       }
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('agent/stop reason is only valid when outcome is deny.');
+      }
+      if (parsedValue?.outcome !== 'deny') return undefined;
+      if (nativeInput !== undefined && nativeInput.status !== 'completed') {
+        throw new TypeError(
+          `Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported ${JSON.stringify(nativeInput.status)}, so the continuation would be ignored.`,
+        );
+      }
+      return Object.freeze({ followup_message: requireDenyReason() });
+    }
+    if (parsedValue?.outcome === 'deny') {
       return Object.freeze({ decision: 'block', reason: requireDenyReason() });
     }
     if (additionalContext === undefined) return undefined;
     if (target === 'codex') {
       throw new TypeError('agent/stop additional context is not supported by the Codex SubagentStop output schema.');
     }
-    return target === 'cursor'
-      ? Object.freeze({ additional_context: additionalContext })
-      : deepFreeze({
-          hookSpecificOutput: {
-            additionalContext,
-            hookEventName: nativeEvent,
-          },
-        });
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'session/end') {
     if (

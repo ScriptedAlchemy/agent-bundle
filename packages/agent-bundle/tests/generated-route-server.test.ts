@@ -918,7 +918,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       '  const context = await agent();',
       '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
       '  const host = context.host.state === "available" ? context.host.value.name : "unavailable";',
-      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:tool/after:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
+      '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${host}:${context.invocation.operationId}|${context.invocation.surface}:${String(processLifetime.hits)}:${processLifetime.instanceId}`));',
       '}',
       '',
     ].join('\n')),
@@ -973,11 +973,14 @@ it('renders composite plugin events through each concrete host in one warm runti
     }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined });
     const firstContext = (claude as { hookSpecificOutput: { additionalContext: string } })
       .hookSpecificOutput.additionalContext;
-    const instanceId = firstContext.slice('claude:tool/after:1:'.length);
+    // The worker mounts the compiled route id as `operationId` and the
+    // canonical event as `surface` — the same pair the hook shell, the
+    // lifecycle replay, and `renderRoute` record for this route.
+    const instanceId = firstContext.slice('claude:event:tool/after|tool/after:1:'.length);
     expect(instanceId).not.toBe('');
     expect(claude).toEqual({
       hookSpecificOutput: {
-        additionalContext: `claude:tool/after:1:${instanceId}`,
+        additionalContext: `claude:event:tool/after|tool/after:1:${instanceId}`,
         hookEventName: 'PostToolUse',
       },
     });
@@ -993,7 +996,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       transcript_path: null,
     }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
       hookSpecificOutput: {
-        additionalContext: `codex:tool/after:2:${instanceId}`,
+        additionalContext: `codex:event:tool/after|tool/after:2:${instanceId}`,
         hookEventName: 'PostToolUse',
       },
     });
@@ -1008,7 +1011,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       tool_output: '{"ok":true}',
       tool_use_id: 'tool-cursor',
     }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined })).resolves.toEqual({
-      additional_context: `cursor:tool/after:3:${instanceId}`,
+      additional_context: `cursor:event:tool/after|tool/after:3:${instanceId}`,
     });
 
     await expect(runHook(sharedSession.output, {

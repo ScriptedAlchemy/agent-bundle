@@ -22,6 +22,7 @@ import { codexAdapter, codexArtifactPaths, codexPluginDocumentValidator, planCod
 import {
   createCursorHookContract,
   cursorAdapter,
+  cursorContractCapabilityRows,
   cursorHooksValidator,
   cursorManifest,
   cursorMarketplaceValidator,
@@ -31,6 +32,7 @@ import {
   cursorVariables,
   emptyCursorHooksDocument,
   isValidCursorPluginName,
+  planCursorManifestMetadata,
   planCursorMarketplace,
   planCursorMcpServer,
 } from './cursor.ts';
@@ -231,7 +233,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.24.0',
+  adapterRevision: '1.25.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -504,6 +506,8 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       }
     }
     const cursorManifestVariables = cursorVariables(cursorMcp);
+    const cursorManifestMetadata = planCursorManifestMetadata(model, cursorMcpPlanContext);
+    diagnostics.push(...cursorManifestMetadata.diagnostics);
     // `commands/` contains Claude-generated frontmatter. The pinned Cursor
     // evidence establishes plain Markdown commands, but not tolerance for
     // Claude frontmatter, so this composite manifest deliberately omits it.
@@ -513,7 +517,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       ...(selectedRules.length === 0 ? {} : { rules: './rules/' }),
       ...(model.skills.some((skill) => skill.targets.includes(pluginName)) ? { skills: './skills/' } : {}),
       ...(cursorManifestVariables === undefined ? {} : { variables: cursorManifestVariables }),
-    });
+    }, cursorManifestMetadata.document);
     const cursorManifestValid = cursorPluginValidator(manifest);
     diagnostics.push(...schemaDiagnostics('cursor-plugin', cursorManifestValid, cursorPluginValidator.errors));
     if (cursorManifestValid) {
@@ -526,6 +530,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
           ...targetSourceInputs,
           ...selectedRules.map((rule) => rule.source),
           model.metadata.logo?.source,
+          ...cursorManifestMetadata.sourceInputs,
         ),
       });
       const logoEntry = pluginLogoCopyEntry(model);
@@ -653,20 +658,46 @@ const agentCapabilities = Object.freeze(Object.fromEntries(
     const capability = rowName === 'component' ? 'agents' : `agents.${rowName}`;
     return [
       capability,
-      intersectCapabilityStates(
-        claudeAdapter.capabilities[capability]!,
-        unavailableCapability(
-          'The pinned Codex and Cursor plugin contracts publish no shared plugin agents component or agent-frontmatter surface.',
-        ),
-      ),
+      rowName === 'component'
+        ? intersectCapabilityStates(
+            intersectCapabilityStates(claudeAdapter.capabilities.agents!, cursorAdapter.capabilities.agents!),
+            unavailableCapability('The pinned Codex plugin contract publishes no plugin agents component.'),
+          )
+        : intersectCapabilityStates(
+            claudeAdapter.capabilities[capability]!,
+            unavailableCapability(
+              'The pinned Codex plugin contract publishes no plugin agents component, and the pinned Cursor agents component documents only name and description frontmatter, so no shared agent-frontmatter surface exists.',
+            ),
+          ),
     ];
   }),
+));
+
+/**
+ * Cursor-only contract rows (#189) reach the Cursor half of the bundle only;
+ * each composite row is the honest intersection with the hosts that publish
+ * no matching surface. Rows shared with Claude or Codex intersect the real
+ * host judgments below instead.
+ */
+const cursorOnlyCapabilities = Object.freeze(Object.fromEntries(
+  Object.keys(cursorContractCapabilityRows)
+    .filter((capability) => !['agents', 'manifestMetadata', 'marketplaceManifest'].includes(capability))
+    .map((capability) => [
+      capability,
+      intersectCapabilityStates(
+        cursorAdapter.capabilities[capability]!,
+        unavailableCapability(
+          `The pinned Claude Code and Codex plugin contracts publish no shared ${capability} surface; the Cursor row reaches the Cursor half of the bundle only.`,
+        ),
+      ),
+    ]),
 ));
 
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...cursorOnlyCapabilities,
     ...agentCapabilities,
     ...codexHookContractUnifiedCapabilities,
     ...compositeEventCapabilities,
@@ -817,9 +848,12 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       cursorAdapter.capabilities.marketplace!,
     ),
     marketplaceManifest: intersectCapabilityStates(
-      claudeAdapter.capabilities.marketplaceManifest!,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities.marketplaceManifest!,
+        cursorAdapter.capabilities.marketplaceManifest!,
+      ),
       unavailableCapability(
-        'The unified bundle emits the Claude marketplace overlay, but the pinned Codex and Cursor contracts do not share its completed marketplace manifest surface.',
+        'The unified bundle emits the Claude marketplace overlay and the Cursor marketplace document, but the pinned Codex contract does not share a completed marketplace manifest surface.',
       ),
     ),
     allowCrossMarketplaceDependenciesOn: intersectCapabilityStates(
@@ -841,9 +875,7 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
         claudeAdapter.capabilities.manifestMetadata!,
         codexAdapter.capabilities.manifestMetadata!,
       ),
-      unavailableCapability(
-        'The pinned Cursor plugin contract does not share the authored Codex and Claude manifest metadata fields.',
-      ),
+      cursorAdapter.capabilities.manifestMetadata!,
     ),
     manifestPaths: intersectCapabilityStates(
       intersectCapabilityStates(
