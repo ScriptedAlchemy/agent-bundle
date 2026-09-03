@@ -25,10 +25,10 @@ export const META_UNAVAILABLE_MESSAGE =
 export const META_UNAVAILABLE_RECOVERY =
   'Run the test under agentBundleRstest() or agentBundleBrowserRstest() from agent-bundle/rstest, '
   + 'which alias agent-bundle/meta to the project identity the compiler stamps, or compile the surface with `agent-bundle build`. '
-  + 'In a custom test runner, alias `agent-bundle/meta` (resolve.alias, exact match) to a module exporting '
-  + '{ name, packageName, packageVersion, version } plus a frozen `meta` default computed from the project\'s '
-  + 'agent-bundle.config.ts plugin name and package.json version — the `.agent-bundle/test/meta.mjs` module '
-  + 'agentBundleRstest() writes is that module.';
+  + 'In a custom test runner, alias `agent-bundle/meta` (resolve.alias, exact match) to a module with the named exports '
+  + '{ name, packageName, packageVersion, version, meta } — `meta` the frozen object of the other four, exported as both '
+  + 'the named binding and the default export — computed from the project\'s agent-bundle.config.ts plugin name and '
+  + 'package.json version; the `.agent-bundle/test/meta.mjs` module agentBundleRstest() writes is that module.';
 
 /** The structured diagnostic, in the same shape every other AB code reports. */
 export const metaUnavailableDiagnostic = (): Diagnostic => Object.freeze({
