@@ -77,6 +77,9 @@ importers:
       publint:
         specifier: 0.3.24
         version: 0.3.24
+      rsbuild-plugin-publint:
+        specifier: 1.0.0
+        version: 1.0.0(@rsbuild/core@2.2.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -2429,6 +2432,15 @@ packages:
       '@typescript/native-preview':
         optional: true
       typescript:
+        optional: true
+
+  rsbuild-plugin-publint@1.0.0:
+    resolution: {integrity: sha512-QNu6zL0TOmFZfrCiKSmkw092jDhhPpiA1QYDRkvhkW1wDLowuVEYOqdV87Eo/I6geV0nuKKnCgLHT+Fevbz6pA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    peerDependencies:
+      '@rsbuild/core': ^1.0.0 || ^2.0.0-0
+    peerDependenciesMeta:
+      '@rsbuild/core':
         optional: true
 
   rsbuild-plugin-rsc@0.1.1:
@@ -4851,6 +4863,12 @@ snapshots:
       '@rsbuild/core': 2.1.13
     optionalDependencies:
       typescript: 7.0.2
+
+  rsbuild-plugin-publint@1.0.0(@rsbuild/core@2.2.1):
+    dependencies:
+      publint: 0.3.24
+    optionalDependencies:
+      '@rsbuild/core': 2.2.1
 
   rsbuild-plugin-rsc@0.1.1(@rsbuild/core@2.2.1)(react-server-dom-rspack@0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)):
     dependencies:

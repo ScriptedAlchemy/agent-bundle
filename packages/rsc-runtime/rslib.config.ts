@@ -1,4 +1,5 @@
 import { defineConfig } from '@rslib/core';
+import { pluginPublint } from 'rsbuild-plugin-publint';
 
 const sharedLib = {
   bundle: true,
@@ -84,6 +85,8 @@ export default defineConfig({
     filenameHash: false,
     target: 'node',
   },
+  // Suggestions stay informational; errors and warnings block publishing.
+  plugins: [pluginPublint({ throwOn: 'warning' })],
   root: import.meta.dirname,
   source: {
     tsconfigPath: './tsconfig.build.json',
