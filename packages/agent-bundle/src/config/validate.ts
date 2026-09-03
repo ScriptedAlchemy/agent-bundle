@@ -477,10 +477,12 @@ const validateMcpApps = (
   loaded: LoadedConfig,
   seenApps: Map<string, string | undefined>,
   seenUris: Map<string, string>,
+  options: { readonly generated?: boolean } = {},
 ): Diagnostic[] => {
   if (server.apps === undefined) return [];
   const diagnostics: Diagnostic[] = [];
-  const hasLocalEntry = server.entry !== undefined || (
+  // A route-generated server always has a compiled local entry (#380).
+  const hasLocalEntry = options.generated === true || server.entry !== undefined || (
     server.command === undefined && server.url === undefined &&
     conventionalMcpEntrySource(loaded.context.projectRoot, name) !== undefined
   );
@@ -750,6 +752,55 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+/**
+ * The declaration a route-generated server accepts (#380). Config wins and
+ * conventions fill: the `src/mcp/<name>/` route modules supply the entry, so
+ * a `mcp.servers.<name>` block *augments* that server — `env`, `args`,
+ * `targets`, `apps`, and `transport: 'stdio'` — and never redeclares it.
+ * `entry`, `command`, and `url` are a precise error rather than a silently
+ * ignored field: the route graph already compiles this server, so a second
+ * entry claim has no reading the compiler could honor.
+ */
+const validateGeneratedMcpServerDeclaration = (
+  name: string,
+  value: unknown,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  if (!nonemptyString(name)) {
+    diagnostics.push(sourceDiagnostic('AB4302', 'MCP server names must be nonempty.', loaded.configPath));
+  }
+  if (!isRecord(value)) {
+    diagnostics.push(sourceDiagnostic('AB4303', `MCP server ${JSON.stringify(name)} must be an object.`, loaded.configPath));
+    return diagnostics;
+  }
+  const server = value as AgentBundleMcpServer;
+  const claims = (['entry', 'command', 'url'] as const).filter((key) => server[key] !== undefined);
+  if (claims.length > 0) {
+    diagnostics.push({
+      code: 'AB4340',
+      message: `MCP server ${JSON.stringify(name)} is compiled from src/mcp/${name}/ route modules, so its declaration cannot set ${claims.join(', ')}; a config declaration for a generated server only augments it.`,
+      recovery: `Remove ${claims.join(', ')} to keep the generated server (env, args, targets, and apps still apply), or set routes.servers.${name} to custom, command, or remote to serve the declared entry instead of the route modules.`,
+      severity: 'error',
+      sourcePath: loaded.configPath,
+    });
+    return diagnostics;
+  }
+  diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
+  if (server.transport !== undefined && server.transport !== 'stdio') {
+    diagnostics.push(sourceDiagnostic('AB4308', `MCP server ${JSON.stringify(name)} entry must use stdio transport.`, loaded.configPath));
+  }
+  if (server.cwd !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4309', `MCP server ${JSON.stringify(name)} local entry cannot set cwd.`, loaded.configPath));
+  }
+  if (server.headers !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+  }
+  diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+  diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+  return diagnostics;
+};
+
 const validatePluginLogo = (
   loaded: LoadedConfig,
   pluginRecord: Record<string, unknown> | undefined,
@@ -840,6 +891,7 @@ const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
 
 const validateMcp = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   registry: NormalizationTargetRegistry,
   payloads: readonly DeclaredPayload[],
 ): Diagnostic[] => {
@@ -851,12 +903,35 @@ const validateMcp = (
   if (!isRecord(mcp.servers)) {
     return [sourceDiagnostic('AB4301', 'MCP configuration must define a servers object.', loaded.configPath)];
   }
+  // The same judgment normalization applies: a server the route graph
+  // compiles in generated mode is declared by its route modules, and a config
+  // block for it augments rather than redeclares (#380).
+  const generatedServers = (discovered.routeGraph?.servers ?? [])
+    .filter((server) => server.mode === 'generated' && server.routes.length > 0);
+  const generated = new Set(generatedServers.map((server) => server.name));
+  // Route-declared Apps (`src/mcp/<server>/apps/*`) take part in the same
+  // name and resourceUri collision checks as configured ones: a config App
+  // that reuses a route App's name is AB4325 (a route module is never an
+  // identical config declaration) and one that reuses its resourceUri under
+  // another name is AB4330, instead of both Apps reaching the generated server.
   const names = new Map<string, string | undefined>();
   const uris = new Map<string, string>();
+  for (const server of generatedServers) {
+    for (const route of server.routes) {
+      if (route.kind !== 'app') continue;
+      const appName = route.id.slice(route.id.lastIndexOf('/') + 1);
+      if (!names.has(appName)) names.set(appName, undefined);
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri === 'string' && !uris.has(resourceUri)) uris.set(resourceUri, appName);
+    }
+  }
   return Object.entries(mcp.servers).flatMap(([name, server]) => {
-    const diagnostics = validateMcpServer(name, server, loaded, registry, payloads);
+    const isGenerated = generated.has(name);
+    const diagnostics = isGenerated
+      ? validateGeneratedMcpServerDeclaration(name, server, loaded)
+      : validateMcpServer(name, server, loaded, registry, payloads);
     return isRecord(server)
-      ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris)]
+      ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris, { generated: isGenerated })]
       : diagnostics;
   });
 };
@@ -1855,7 +1930,7 @@ export const validateSource = (
   diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));
-  diagnostics.push(...validateMcp(loaded, registry, payloads));
+  diagnostics.push(...validateMcp(loaded, discovered, registry, payloads));
   diagnostics.push(...validateOutput(loaded));
   diagnostics.push(...validatePayload(loaded, registry, options?.payloadFreshness !== false));
   diagnostics.push(...validateRuntime(loaded));

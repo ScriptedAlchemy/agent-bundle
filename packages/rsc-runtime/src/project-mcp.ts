@@ -35,7 +35,7 @@ export const DEFAULT_MCP_RICH_CONTENT_CAPABILITIES: McpRichContentCapabilities =
 
 export type McpRichContentFallback = 'text' | 'fail';
 
-export type McpProjectionErrorCode = 'unsupported-rich-content';
+export type McpProjectionErrorCode = 'unsupported-rich-content' | 'invalid-result-metadata';
 
 export type McpRichContentKind = 'audio' | 'image' | 'resource';
 
@@ -167,6 +167,26 @@ const objectStructuredContent = (value: unknown): JsonObject | undefined => {
   return isJsonObject(snapshot) ? snapshot : undefined;
 };
 
+/**
+ * `Agent.Result metadata` is the route's result-level `CallToolResult._meta`
+ * (#383). MCP `_meta` is an object, so anything else fails the projection
+ * closed instead of being dropped or coerced: a route that renders scalar
+ * metadata has said something the wire cannot carry.
+ */
+const resultMetadata = (document: AgentDocument): JsonObject | undefined => {
+  if (document.root.kind !== 'result') return undefined;
+  const metadata = document.root.metadata;
+  if (metadata === undefined) return undefined;
+  const snapshot = snapshotJsonValue(metadata, 'MCP result _meta must be JSON-serializable');
+  if (!isJsonObject(snapshot)) {
+    throw new McpProjectionError(
+      'invalid-result-metadata',
+      'MCP result _meta must be a JSON object; Agent.Result metadata projects to CallToolResult._meta',
+    );
+  }
+  return snapshot;
+};
+
 export const documentToCallToolResult = (
   document: AgentDocument,
   options: Pick<ProjectMcpRenderOptions, 'capabilities' | 'richContentFallback' | 'structuredContent'> = {},
@@ -179,7 +199,9 @@ export const documentToCallToolResult = (
     options.richContentFallback ?? 'fail',
   );
   const structured = objectStructuredContent(options.structuredContent ?? document.value);
+  const metadata = resultMetadata(document);
   return {
+    ...(metadata === undefined ? {} : { _meta: metadata }),
     content,
     ...(document.status === 'success' ? {} : { isError: true }),
     ...(structured === undefined ? {} : { structuredContent: structured }),

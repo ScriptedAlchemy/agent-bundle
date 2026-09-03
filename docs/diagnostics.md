@@ -14,7 +14,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity, see below; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
 | `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
 | `AB42xx` | Hook configuration and native hook sources. |
-| `AB43xx` | MCP server and MCP App configuration. |
+| `AB43xx` | MCP server and MCP App configuration (`AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; see below). |
 | `AB44xx` | Script configuration. |
 | `AB4500` | Registered config extensions (strict finite JSON). |
 | `AB46xx` | Assets and the generated-runtime floor. |
@@ -288,6 +288,20 @@ simply not been built yet is a validation **warning** that only
 | `AB4748` | error (build) | `agent-bundle build` refuses a prebuilt entry file absent from its payload. |
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
+
+## Config beside a route-generated MCP server (`AB4340`)
+
+A `mcp.servers.<id>` block for a server the route graph compiles in
+`generated` mode augments that server (`env`, `args`, `targets`, `apps`,
+`transport: 'stdio'`) — see the precedence table in
+[Entry conventions](entry-conventions.md#config-beside-a-route-generated-mcp-server).
+The local-entry field rules apply to it unchanged (`AB4305`, `AB4308`–`AB4312`,
+`AB432x`), and it never triggers `AB4304` or `AB4322`: the route modules are
+its entry.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4340` | error | A declaration for a route-generated server sets `entry`, `command`, or `url` while `routes.servers.<id>` is `generated`. The routes already compile this server, so a second entry claim has no reading the compiler could honor. Remove the field to keep the generated server (the other fields still apply), or set the mode to `custom`, `command`, or `remote` to serve the declared entry and omit the routes. Without an explicit mode the same collision is `AB4800`. |
 
 ## Conventional host components: rules and commands (`AB4900`–`AB4906`, `AB4920`–`AB4926`)
 

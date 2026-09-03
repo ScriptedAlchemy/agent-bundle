@@ -49,6 +49,8 @@ export interface McpContentBlock {
 }
 
 export interface McpToolInvocation {
+  /** Result-level `CallToolResult._meta`, projected from `Agent.Result metadata`. */
+  readonly _meta?: Readonly<Record<string, unknown>>;
   readonly content: readonly McpContentBlock[];
   readonly isError: boolean;
   readonly provenance: McpProjectionProvenance;
@@ -417,8 +419,9 @@ export const invokeMcpTool = async (
   const result = await session.client.callTool({
     arguments: (options.input ?? {}) as Record<string, unknown>,
     name: tool,
-  }) as { content?: unknown; isError?: boolean; structuredContent?: unknown };
+  }) as { _meta?: Readonly<Record<string, unknown>>; content?: unknown; isError?: boolean; structuredContent?: unknown };
   return Object.freeze({
+    ...(result._meta === undefined ? {} : { _meta: result._meta }),
     content: asContentBlocks(result.content),
     isError: result.isError === true,
     provenance: session.provenance,

@@ -182,6 +182,57 @@ const selectedConfig = (
   keys.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]),
 );
 
+/** The JSON Schema draft the MCP SDK targets when it advertises a Standard Schema. */
+const JSON_SCHEMA_TARGET = 'draft-2020-12';
+
+interface StandardJsonSchemaSource {
+  readonly '~standard'?: {
+    readonly jsonSchema?: {
+      readonly output?: (options: { readonly target: string }) => unknown;
+    };
+  };
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * A typeless JSON Schema root is object-shaped when it carries object keywords
+ * or every member of its `oneOf`/`anyOf`/`allOf` composition is — the same
+ * judgment the MCP SDK applies before stamping `type: "object"`.
+ */
+const objectRootedJsonSchema = (schema: unknown): boolean => {
+  if (!isRecord(schema)) return false;
+  if (schema['type'] !== undefined) return schema['type'] === 'object';
+  if (['properties', 'patternProperties', 'additionalProperties', 'required'].some((key) => key in schema)) return true;
+  return ['oneOf', 'anyOf', 'allOf'].some((key) => {
+    const members = schema[key];
+    return Array.isArray(members) && members.length > 0 && members.every(objectRootedJsonSchema);
+  });
+};
+
+/**
+ * Advertises a tool `outputSchema` only when the route's `resultSchema`
+ * describes an object: the MCP specification requires every result of a tool
+ * that declares `outputSchema` to carry `structuredContent`, and the
+ * projection emits `structuredContent` only for object-valued documents. A
+ * text-only route (`z.undefined()`, `z.string()`, an array schema) therefore
+ * advertises none, while an object schema keeps the SDK's fail-closed output
+ * validation. A schema that cannot describe itself as JSON Schema is handed
+ * to the SDK unchanged so its own conversion decides.
+ */
+export const advertisedOutputSchema = (schema: unknown): unknown => {
+  const toJsonSchema = (schema as StandardJsonSchemaSource | null | undefined)?.['~standard']?.jsonSchema?.output;
+  if (typeof toJsonSchema !== 'function') return schema;
+  let jsonSchema: unknown;
+  try {
+    jsonSchema = toJsonSchema({ target: JSON_SCHEMA_TARGET });
+  } catch {
+    return undefined;
+  }
+  return objectRootedJsonSchema(jsonSchema) ? schema : undefined;
+};
+
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
 export const registerGeneratedRoutes = (
   server: McpServer,
@@ -191,11 +242,12 @@ export const registerGeneratedRoutes = (
 ): void => {
   for (const route of Object.values(routes)) {
     switch (route.kind) {
-      case 'tool':
+      case 'tool': {
+        const outputSchema = advertisedOutputSchema(route.module.resultSchema);
         server.registerTool(route.name, {
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
           inputSchema: route.module.inputSchema,
-          outputSchema: route.module.resultSchema,
+          ...(outputSchema === undefined ? {} : { outputSchema }),
         } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
           const clientName = server.server.getClientVersion()?.name;
           const rendered = await renderGeneratedRoute(
@@ -209,6 +261,7 @@ export const registerGeneratedRoutes = (
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }) as never);
         break;
+      }
       case 'resource': {
         const uri = route.config['uri'];
         if (typeof uri !== 'string' || uri.trim() === '') {

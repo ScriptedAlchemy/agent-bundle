@@ -1,8 +1,36 @@
 import { resolve } from 'node:path';
 
-import { defineConfig } from '@rslib/core';
+import { defineConfig, type Rspack, type rspack as RspackInstance } from '@rslib/core';
 import { pluginPublint } from 'rsbuild-plugin-publint';
 import packageManifest from './package.json' with { type: 'json' };
+
+const esmNodeGlobalsShim = [
+  '// agent-bundle ESM shims for the bundled TypeScript parser',
+  "const __filename = process.getBuiltinModule('node:url').fileURLToPath(import.meta.url);",
+  "const __dirname = process.getBuiltinModule('node:path').dirname(__filename);",
+  '',
+].join('\n');
+
+/**
+ * Prepends the `__filename`/`__dirname` shim to every emitted ESM chunk that
+ * still references those CommonJS globals (the bundled TypeScript parser's
+ * eager `getNodeSystem()`); every other chunk is left untouched.
+ */
+const esmNodeGlobalsPlugin = (rspack: typeof RspackInstance): Rspack.RspackPluginInstance => ({
+  apply(compiler: Rspack.Compiler) {
+    compiler.hooks.thisCompilation.tap('agent-bundle:esm-node-globals', (compilation: Rspack.Compilation) => {
+      compilation.hooks.processAssets.tap({
+        name: 'agent-bundle:esm-node-globals',
+        stage: rspack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONS,
+      }, (assets: Rspack.Assets) => {
+        for (const [name, asset] of Object.entries(assets)) {
+          if (!name.endsWith('.js') || !/\b__(?:filename|dirname)\b/u.test(asset.source().toString())) continue;
+          compilation.updateAsset(name, new rspack.sources.ConcatSource(esmNodeGlobalsShim, asset));
+        }
+      });
+    });
+  },
+});
 
 export default defineConfig({
   lib: [
@@ -25,6 +53,23 @@ export default defineConfig({
   // Suggestions stay informational; errors and warnings block publishing.
   plugins: [pluginPublint({ throwOn: 'warning' })],
   root: import.meta.dirname,
+  tools: {
+    // The TypeScript 5 parser is bundled (a devDependency, #381) so consumers
+    // never receive its `tsc` bin beside their own TypeScript.
+    rspack: (config, { rspack }) => {
+      // Its `sys.tryEnableSourceMapsForHost` requires `source-map-support`
+      // inside a try/catch for the tsc CLI only; the static route-config
+      // extractor never reaches it.
+      config.ignoreWarnings = [...(config.ignoreWarnings ?? []), /Can't resolve 'source-map-support'/u];
+      // Its eager `getNodeSystem()` reads the CommonJS `__filename`/`__dirname`
+      // globals, which the ESM output does not define and which Rspack's
+      // `node-module` rewrite leaves untouched inside that module. The chunk
+      // that carries them gets a module-scoped shim derived from its own
+      // `import.meta.url` (`process.getBuiltinModule` is Node >= 22.3).
+      config.node = { ...(typeof config.node === 'object' ? config.node : {}), __dirname: false, __filename: false };
+      config.plugins = [...(config.plugins ?? []), esmNodeGlobalsPlugin(rspack)];
+    },
+  },
   source: {
     tsconfigPath: './tsconfig.build.json',
     define: {

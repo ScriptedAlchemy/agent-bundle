@@ -304,6 +304,134 @@ it('keeps routes and silences AB4800 under an explicit generated mode', async ()
   expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(['tool:curator/inspect']);
 });
 
+it('accepts a config declaration that augments a route-generated server with env, args, targets, and apps (#380)', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      '  mcp: { servers: { curator: {',
+      "    apps: { panel: { entry: './views/panel.ts', resourceUri: 'ui://routes-fixture/panel.html' } },",
+      "    args: ['--strict'],",
+      "    env: { CURATOR_MODE: 'strict' },",
+      "    targets: ['portable'],",
+      "    transport: 'stdio',",
+      '  } } },',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable', 'claude'],",
+      '};',
+      '',
+    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'views/panel.ts': "document.body.textContent = 'panel';\n",
+  });
+
+  const validation = await validate({ root: project });
+  expect(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+
+  const result = await inspect({ root: project });
+  expect(result.state).toBe('ready');
+  const ready = result as ReadyInspectResult;
+  expect(ready.model.mcpServers).toHaveLength(1);
+  expect(ready.model.mcpServers[0]).toMatchObject({
+    args: [expect.stringMatching(/^mcp\/mcp-curator-[0-9a-f]+\.mjs$/u), '--strict'],
+    env: { CURATOR_MODE: 'strict' },
+    id: 'mcp:curator',
+    provenance: { kind: 'conventional' },
+    targets: ['portable'],
+    transport: 'stdio',
+  });
+  expect(ready.model.mcpServers[0]!.generatedRoutes?.map((route) => route.id)).toEqual(['tool:curator/inspect']);
+  expect(ready.model.mcpApps?.map((app) => ({ id: app.id, provenance: app.provenance.kind, targets: app.targets }))).toEqual([
+    { id: 'mcp-app:curator:panel', provenance: 'config', targets: ['portable'] },
+  ]);
+});
+
+it('errors with AB4340 when a declaration for a route-generated server redeclares its entry', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  mcp: { servers: { curator: { entry: './src/mcp/curator.ts', env: { CURATOR_MODE: 'strict' } } } },",
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  routes: { servers: { curator: 'generated' } },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+
+  const validation = await validate({ root: project });
+  const errors = validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(errors)).toEqual(['AB4340']);
+  expect(errors[0]!.message).toContain('cannot set entry');
+  expect(errors[0]!.recovery).toContain('routes.servers.curator');
+  expect(codesOf(validation.diagnostics)).not.toContain('AB4304');
+  expect(codesOf(validation.diagnostics)).not.toContain('AB4800');
+});
+
+it('checks an augmenting declaration\'s Apps against the route-declared Apps of the same server', async () => {
+  const configWithApps = (apps: string): string => [
+    'export default {',
+    `  mcp: { servers: { curator: { apps: { ${apps} } } } },`,
+    "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+    "  targets: ['portable'],",
+    '};',
+    '',
+  ].join('\n');
+  const routes = {
+    'src/mcp/curator/apps/dashboard.tsx': `export const config = { resourceUri: 'ui://curator/dashboard.html' }; ${moduleSource}`,
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'views/panel.ts': "document.body.textContent = 'panel';\n",
+  };
+
+  // Same resourceUri under another name: AB4330, not two Apps on one URI.
+  const sameUri = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("panel: { entry: './views/panel.ts', resourceUri: 'ui://curator/dashboard.html' }"),
+  });
+  const sameUriErrors = (await validate({ root: sameUri })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(sameUriErrors)).toEqual(['AB4330']);
+
+  // Same name as a route App: AB4325 from validation, before the duplicate ID would surface as AB4101.
+  const sameName = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("dashboard: { entry: './views/panel.ts', resourceUri: 'ui://curator/panel.html' }"),
+  });
+  const sameNameErrors = (await validate({ root: sameName })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  expect(codesOf(sameNameErrors)).toEqual(['AB4325']);
+
+  // A distinct name and URI still augments cleanly beside the route App.
+  const distinct = await createInspectProject({
+    ...routes,
+    'agent-bundle.config.ts': configWithApps("panel: { entry: './views/panel.ts', resourceUri: 'ui://curator/panel.html' }"),
+  });
+  expect((await validate({ root: distinct })).diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+  const ready = (await inspect({ root: distinct })) as ReadyInspectResult;
+  expect(ready.state).toBe('ready');
+  expect(ready.model.mcpApps?.map((app) => app.id)).toEqual(['mcp-app:curator:dashboard', 'mcp-app:curator:panel']);
+});
+
+it('applies the local-entry field rules to an augmenting declaration', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  mcp: { servers: { curator: { cwd: './elsewhere', headers: { a: 'b' }, transport: 'streamable-http' } } },",
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+  });
+
+  const validation = await validate({ root: project });
+  expect(codesOf(validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).sort()).toEqual([
+    'AB4308',
+    'AB4309',
+    'AB4310',
+  ]);
+});
+
 it('omits a server\'s routes and silences AB4800 under an explicit custom mode', async () => {
   const root = await createRoot();
   await writeTree(root, {
