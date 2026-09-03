@@ -49,6 +49,11 @@ export const eventRouteOnlyHookEvents = Object.freeze([
   'permissionRequest',
   'permissionDenied',
   'stopFailure',
+  'fileChange',
+  'configChange',
+  'taskCreate',
+  'taskComplete',
+  'agentIdle',
 ] as const);
 
 export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];

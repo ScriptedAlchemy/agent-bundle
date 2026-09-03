@@ -116,6 +116,11 @@ const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEven
   'permission/request': 'permissionRequest',
   'permission/denied': 'permissionDenied',
   'stop/failure': 'stopFailure',
+  'file/change': 'fileChange',
+  'config/change': 'configChange',
+  'task/create': 'taskCreate',
+  'task/complete': 'taskComplete',
+  'agent/idle': 'agentIdle',
   'workspace/open': 'workspaceOpen',
 });
 

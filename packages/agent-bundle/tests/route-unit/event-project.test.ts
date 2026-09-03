@@ -596,3 +596,77 @@ it('projects permission/denied and stop/failure as observation-only Claude famil
   expect(() => projectEventDocument(failureRejected.document, 'stop/failure', 'claude', 'StopFailure'))
     .toThrow(/observes an API-error turn end/u);
 });
+
+it('projects the stage-4 Claude-only families with their documented decision channels', async () => {
+  const render = async (event: string, native: Record<string, unknown>, nativeEvent: string, value?: JsonValue, context?: string) => {
+    const props = createCanonicalEventProps(
+      event as never,
+      native,
+      'claude',
+      nativeEvent,
+      '2.1.250',
+      new AbortController().signal,
+    );
+    return renderRoute({
+      default: async () => createElement(
+        Agent.Result,
+        value === undefined ? null : { value },
+        context === undefined ? undefined : createElement(Agent.Context, null, context),
+      ),
+    }, {
+      input: { canonical: props.canonical, native: props.native },
+      kind: 'event-route',
+      routeId: `event:${event}`,
+    });
+  };
+  const base = {
+    cwd: '/workspace',
+    session_id: 'session-1',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+
+  // file/change: side-effect only.
+  const fileNative = { ...base, file_path: '/workspace/.env', hook_event_name: 'FileChanged' };
+  const fileObserved = await render('file/change', fileNative, 'FileChanged');
+  expect(projectEventDocument(fileObserved.document, 'file/change', 'claude', 'FileChanged')).toBeUndefined();
+  const fileDenied = await render('file/change', fileNative, 'FileChanged', { outcome: 'deny', reason: 'No.' });
+  expect(() => projectEventDocument(fileDenied.document, 'file/change', 'claude', 'FileChanged'))
+    .toThrow(/no decision control on Claude FileChanged/u);
+
+  // config/change: top-level decision block.
+  const configNative = { ...base, hook_event_name: 'ConfigChange', source: 'project_settings' };
+  const configDenied = await render('config/change', configNative, 'ConfigChange', { outcome: 'deny', reason: 'Config changes are frozen during release.' });
+  expect(projectEventDocument(configDenied.document, 'config/change', 'claude', 'ConfigChange')).toEqual({
+    decision: 'block',
+    reason: 'Config changes are frozen during release.',
+  });
+
+  // task/create: decision block cancels the task.
+  const taskNative = { ...base, hook_event_name: 'TaskCreated', task_id: 'task-001', task_subject: 'Subject' };
+  const taskDenied = await render('task/create', taskNative, 'TaskCreated', { outcome: 'deny', reason: 'Tasks are frozen.' });
+  expect(projectEventDocument(taskDenied.document, 'task/create', 'claude', 'TaskCreated')).toEqual({
+    decision: 'block',
+    reason: 'Tasks are frozen.',
+  });
+
+  // task/complete: exit-code-only blocking is not projected.
+  const completeNative = { ...base, hook_event_name: 'TaskCompleted', permission_mode: 'default', task_id: 'task-001', task_subject: 'Subject' };
+  const completeObserved = await render('task/complete', completeNative, 'TaskCompleted');
+  expect(projectEventDocument(completeObserved.document, 'task/complete', 'claude', 'TaskCompleted')).toBeUndefined();
+  const completeDenied = await render('task/complete', completeNative, 'TaskCompleted', { outcome: 'deny', reason: 'Not done.' });
+  expect(() => projectEventDocument(completeDenied.document, 'task/complete', 'claude', 'TaskCompleted'))
+    .toThrow(/exit-code-only on Claude TaskCompleted/u);
+
+  // agent/idle: continue:false keeps the teammate working.
+  const idleNative = { ...base, hook_event_name: 'TeammateIdle', permission_mode: 'default', team_name: 'team', teammate_name: 'researcher' };
+  const idleDenied = await render('agent/idle', idleNative, 'TeammateIdle', { outcome: 'deny', reason: 'Backlog remains.' });
+  expect(projectEventDocument(idleDenied.document, 'agent/idle', 'claude', 'TeammateIdle')).toEqual({
+    continue: false,
+    stopReason: 'Backlog remains.',
+  });
+  const idleObserved = await render('agent/idle', idleNative, 'TeammateIdle');
+  expect(projectEventDocument(idleObserved.document, 'agent/idle', 'claude', 'TeammateIdle')).toBeUndefined();
+  const idleContextual = await render('agent/idle', idleNative, 'TeammateIdle', undefined, 'Context.');
+  expect(() => projectEventDocument(idleContextual.document, 'agent/idle', 'claude', 'TeammateIdle'))
+    .toThrow(/no documented additional-context channel/u);
+});
