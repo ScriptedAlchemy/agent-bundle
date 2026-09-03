@@ -375,9 +375,11 @@ export class McpProbeService {
    */
   #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
     let cap: NodeJS.Timeout | undefined;
+    // The cap stays referenced on purpose: it is the only handle guaranteeing
+    // the removal runs when a stalled teardown outlives Workbench shutdown,
+    // and it is cleared the moment the teardown settles.
     const capped = new Promise<void>((resolvePromise) => {
       cap = setTimeout(resolvePromise, mcpProbePluginDataTeardownCapMs);
-      cap.unref();
     });
     const pending = Promise.race([teardown, capped])
       .then(() => {
