@@ -14,6 +14,7 @@ import {
   createAgentNoticeLedger,
   createNoticeInboxSignaller,
   disclosedNoticeContent,
+  noticeRedactionPlaceholder,
   noticeTitle,
   redactNoticeDocument,
   redactSecretText,
@@ -27,8 +28,10 @@ import {
 } from '../src/notices/index.js';
 import type { AgentDocumentSnapshot } from '../src/index.js';
 import {
+  DEFAULT_AGENT_RENDER_LIMITS,
   agent,
   available,
+  createAgentDocument,
   runAgentRequest,
   unavailable,
 } from '../src/index.js';
@@ -204,6 +207,35 @@ describe('secret pass (flare-redact)', () => {
     expect(Object.isFrozen(((redacted.root as { children: readonly { value?: unknown }[] }).children[2]!.value as { auth: unknown }).auth)).toBe(true);
     // The original is untouched: redaction is applied on egress, never in place.
     expect((snapshot.root as { children: readonly { text?: string }[] }).children[0]!.text).toBe('password: p4ss');
+  });
+
+  it('hands out the placeholder when redaction would grow a document past the byte bound', () => {
+    // 350,000 chars of six-character e-mails per node: each finding grows by
+    // four characters, so two nodes authored well inside 1 MiB redact to ~1.1 MiB.
+    const dense = 'x@y.io '.repeat(50_000);
+    const authored = createAgentDocument({
+      root: { children: [{ kind: 'text', text: dense }, { kind: 'text', text: dense }], kind: 'result' },
+      status: 'success',
+      version: 1,
+    });
+    expect(Buffer.byteLength(JSON.stringify(authored), 'utf8')).toBeLessThan(DEFAULT_AGENT_RENDER_LIMITS.maxDocumentBytes);
+    expect(redactNoticeDocument(authored)).toEqual(noticeRedactionPlaceholder(authored));
+    expect(redactNoticeDocument(authored)).toEqual({ root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 });
+    // One node of the same text still fits and is redacted in place.
+    const single = createAgentDocument({ root: { kind: 'text', text: dense }, status: 'success', version: 1 });
+    expect((redactNoticeDocument(single).root as { text: string }).text).toBe(`${NOTICE_REDACTION_MARK} `.repeat(50_000));
+  });
+
+  it('fails closed to the mark when the library refuses to bound a string', () => {
+    // flare-redact throws RedactionLimitError past 50,000 findings in one string.
+    const pathological = 'x@y.io '.repeat(50_001);
+    expect(redactSecretText(pathological)).toBe(NOTICE_REDACTION_MARK);
+    expect(containsSecretText(pathological)).toBe(true);
+    expect(redactNoticeDocument({
+      root: { kind: 'json', value: { note: 'keep', wall: [pathological] } },
+      status: 'success',
+      version: 1,
+    }).root).toEqual({ kind: 'json', value: NOTICE_REDACTION_MARK });
   });
 
   it('projects a bounded single-line title for title-only routes', () => {

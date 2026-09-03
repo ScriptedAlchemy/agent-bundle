@@ -63,6 +63,7 @@ export {
   containsSecretText,
   disclosedNoticeContent,
   isNoticeSensitivity,
+  noticeRedactionPlaceholder,
   noticeTitle,
   redactNoticeDocument,
   redactSecretText,

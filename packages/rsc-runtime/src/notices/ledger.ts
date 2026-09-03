@@ -44,9 +44,9 @@ import {
 } from './contract.js';
 import {
   AGENT_NOTICE_DEFAULT_SENSITIVITY,
-  NOTICE_REDACTION_MARK,
   disclosedNoticeContent,
   isNoticeSensitivity,
+  noticeRedactionPlaceholder,
   type AgentNoticeDisclosure,
   type AgentNoticeSensitivity,
 } from './redaction.js';
@@ -151,14 +151,7 @@ const currentlyDisclosedNotice = (
       return { notice: disclosedNotice(notice, disclosure), redacted: disclosure.redacted };
     case 'withheld':
       return {
-        notice: Object.freeze({
-          ...notice,
-          content: Object.freeze({
-            root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
-            status: notice.content.status,
-            version: notice.content.version,
-          }),
-        }),
+        notice: Object.freeze({ ...notice, content: noticeRedactionPlaceholder(notice.content) }),
         redacted: true,
       };
     default: {
@@ -406,14 +399,7 @@ const publishProgram = Effect.fnUntraced(function*(
   // replay of it) comes back with content, and that content is the caller's.
   const notice = persisted.id === prepared.id
     ? persisted
-    : Object.freeze({
-      ...persisted,
-      content: Object.freeze({
-        root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
-        status: persisted.content.status,
-        version: persisted.content.version,
-      }),
-    });
+    : Object.freeze({ ...persisted, content: noticeRedactionPlaceholder(persisted.content) });
   return Object.freeze({
     deduped: committed.replayed || persisted.id !== prepared.id,
     notice,

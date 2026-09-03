@@ -399,11 +399,17 @@ credential-shaped member name (`password`, `token`, `apiKey`,
 `authorization`, …) is masked whole regardless of content, and member names
 themselves are scanned like any other string. Not redacted: paths (coordination
 notices legitimately name files), numbers, base64 image and audio payloads,
-and vocabulary fields (`kind`, `status`, `code`, `mimeType`). Known gap at the
-pinned version: the OpenAI detector caps at 64 key characters, so a
-project-scoped `sk-proj-…` key of production length (~160) is not recognized;
-authors pasting one should publish as `secret`, and the detector is a
-reportable upstream fix, not something to patch here. The compiler keeps its
+and vocabulary fields (`kind`, `status`, `code`, `mimeType`). Two detector
+limits at the pinned version are part of the contract, not patched here: the
+assignment detector needs a value of at least four characters (`password=abc`
+in free text is not a finding; the same value as `{ "password": "abc" }` is
+masked by member name), and the OpenAI detector caps at 64 key characters, so
+a project-scoped `sk-proj-…` key of production length (~160) is not
+recognized. Authors pasting either should publish as `secret`; both are
+reportable upstream fixes. A redacted document that has grown past the
+Agent Document byte bound (the mark is longer than the shortest values it
+replaces) is handed out as the one-line `[REDACTED]` placeholder instead, so
+the bound made at publish holds on egress. The compiler keeps its
 own, older credential pass for probe and log text
 (`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
 parity, and no vendored-code notice is involved — `flare-redact` is an

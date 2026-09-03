@@ -1,5 +1,6 @@
-import { compilePolicy } from 'flare-redact';
+import { RedactionLimitError, compilePolicy } from 'flare-redact';
 
+import { DEFAULT_AGENT_RENDER_LIMITS } from '../agent-document.js';
 import type { AgentDocumentNode, AgentDocumentSnapshot } from '../agent-document.js';
 import type { JsonValue } from '../lower-mcp.js';
 
@@ -36,7 +37,10 @@ import type { JsonValue } from '../lower-mcp.js';
  * and IBANs; a structured value stored directly under a credential-shaped
  * member name (`password`, `token`, `apiKey`, `authorization`, …) is masked
  * whole regardless of content. Paths are not redacted: coordination notices
- * legitimately name files. The compiler keeps its own, older credential pass
+ * legitimately name files. Detector limits at the pinned version are part of
+ * the contract (README, "Redaction"): an assignment value shorter than four
+ * characters and an OpenAI key longer than 64 characters are not findings.
+ * The compiler keeps its own, older credential pass
  * for probe and log text (`packages/agent-bundle/src/core/credentials.ts`);
  * the two are not held in parity.
  */
@@ -70,11 +74,26 @@ export const NOTICE_REDACTION_MARK = '[REDACTED]';
  */
 const secretPass = compilePolicy({ mask: NOTICE_REDACTION_MARK });
 
+/**
+ * The library refuses a string it cannot bound (more than 50,000 findings, or
+ * longer than 16 MiB) with `RedactionLimitError`. On egress that refusal
+ * fails closed: the value is replaced by the mark whole rather than letting
+ * one pathological notice fail the inbox for every reader.
+ */
+const failClosed = <T>(run: () => T, fallback: T): T => {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof RedactionLimitError) return fallback;
+    throw error;
+  }
+};
+
 /** Irreversibly removes recognizable credential material from free text. */
-export const redactSecretText = (value: string): string => secretPass.redact(value);
+export const redactSecretText = (value: string): string => failClosed(() => secretPass.redact(value), NOTICE_REDACTION_MARK);
 
 /** True when the secret pass would change `value`. */
-export const containsSecretText = (value: string): boolean => !secretPass.isClean(value);
+export const containsSecretText = (value: string): boolean => failClosed(() => !secretPass.isClean(value), true);
 
 const freezeRedactedJson = (value: JsonValue): JsonValue => {
   if (value === null || typeof value !== 'object') return value;
@@ -94,7 +113,8 @@ const freezeRedactedJson = (value: JsonValue): JsonValue => {
  * other string; the result is then deep-frozen with its member names passed
  * through the same scan.
  */
-const redactJson = (value: JsonValue): JsonValue => freezeRedactedJson(secretPass.redact(value));
+const redactJson = (value: JsonValue): JsonValue =>
+  freezeRedactedJson(failClosed<JsonValue>(() => secretPass.redact(value), NOTICE_REDACTION_MARK));
 
 const redactNode = (node: AgentDocumentNode): AgentDocumentNode => {
   switch (node.kind) {
@@ -135,16 +155,38 @@ const redactNode = (node: AgentDocumentNode): AgentDocumentNode => {
 };
 
 /**
- * Applies the secret pass to every free-text field of a detached snapshot.
- * Structure, node count, status, and codes are unchanged, so the result still
- * satisfies the Agent Document bounds the original passed; a string only ever
- * shrinks or is replaced by the fixed mark.
+ * The document a route hands out in place of content it may not disclose:
+ * one text node carrying the mark, with the original status and version.
  */
-export const redactNoticeDocument = (snapshot: AgentDocumentSnapshot): AgentDocumentSnapshot => Object.freeze({
-  ...snapshot,
-  root: redactNode(snapshot.root),
-  ...(snapshot.value === undefined ? {} : { value: redactJson(snapshot.value) }),
+export const noticeRedactionPlaceholder = (snapshot: AgentDocumentSnapshot): AgentDocumentSnapshot => Object.freeze({
+  root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
+  status: snapshot.status,
+  version: snapshot.version,
 });
+
+const documentBytes = (document: AgentDocumentSnapshot): number =>
+  new TextEncoder().encode(JSON.stringify(document)).byteLength;
+
+/**
+ * Applies the secret pass to every free-text field of a detached snapshot.
+ * Structure, depth, node count, status, and codes are unchanged, so those
+ * bounds still hold; bytes need not — the mark is longer than the shortest
+ * values it replaces (`pass=abcd`, `a@b.co`), so a document authored at the
+ * byte bound can grow past it. A redacted document that no longer fits the
+ * bound the original passed is replaced by the placeholder rather than handed
+ * out oversized: the bound is a promise to hosts, made at publish and kept on
+ * egress.
+ */
+export const redactNoticeDocument = (snapshot: AgentDocumentSnapshot): AgentDocumentSnapshot => {
+  const redacted: AgentDocumentSnapshot = Object.freeze({
+    ...snapshot,
+    root: redactNode(snapshot.root),
+    ...(snapshot.value === undefined ? {} : { value: redactJson(snapshot.value) }),
+  });
+  return documentBytes(redacted) > DEFAULT_AGENT_RENDER_LIMITS.maxDocumentBytes
+    ? noticeRedactionPlaceholder(snapshot)
+    : redacted;
+};
 
 const firstProse = (node: AgentDocumentNode): string | undefined => {
   switch (node.kind) {
