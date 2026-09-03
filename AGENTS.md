@@ -68,6 +68,12 @@
   after a rebase or force-push: after every push, post an `@codex review` PR
   comment if no fresh review appears within a few minutes, and confirm its
   summary comment cites the current head SHA before merging.
+- Reviewer quota fallback: if the connector answers "usage limits reached", or
+  no review arrives within about ten minutes of two `@codex review` requests,
+  record the last-reviewed and unreviewed head SHAs in the PR body's "Review
+  status" section and merge on green CI. Re-request the review once credits
+  return; a thread it opens on an already-merged PR is answered in a
+  follow-up PR like any other.
 - Address every review thread — fix it in the same PR or reply with a precise
   reason — and reply on every thread. After each push, re-check for new
   threads and repeat until there are none. Only then merge.
