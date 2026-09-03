@@ -39,9 +39,10 @@ export default defineConfig({
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
 
-宿主作用域的扩展键（`claude`、`codex`、`portable`）由各 target 适配器通过对
+宿主作用域的扩展键（`claude`、`codex`、`cursor`、`portable`）由各 target 适配器通过对
 `AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
-留在各自的适配器中，而不进入编译器核心。
+留在各自的适配器中，而不进入编译器核心。每个适配器所拥有的键的逐字段清单见
+[宿主作用域声明](../guide/authoring/index.mdx#宿主作用域声明)。
 
 ### 生成的类型定义
 

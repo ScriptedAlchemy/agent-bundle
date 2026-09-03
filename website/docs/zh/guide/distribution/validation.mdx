@@ -23,8 +23,10 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
-`recovery` 提示。只有存在 error 级诊断时命令才以非零退出；warning 与 info 绝不会为构建、校验或 dev
-重建把关。
+`recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有
+存在 error 级诊断时才以非零退出；warning 与 info 绝不会为构建、校验或 dev 重建把关。`eval` 与 `inspect`
+在试验失败或无定论、或模型无效时也会以 `1` 退出，这与错误诊断无关——见
+[命令行退出码](../../reference/cli.mdx#退出码)。
 
 ## Claude Code 严格校验
 

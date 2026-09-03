@@ -27,8 +27,11 @@ files are checked too — a manifest-declared `logo` that is missing from the ar
 the deploy tree reports `AB6025`.
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
-a `sourcePath` and a `recovery` hint. Commands exit nonzero **only** when an error diagnostic is
-present; warnings and infos never gate a build, a validation, or a dev rebuild.
+a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,
+`validate`, `doctor`, `install`, and `dev` — exit nonzero **only** when an error diagnostic is
+present; warnings and infos never gate a build, a validation, or a dev rebuild. `eval` and
+`inspect` also exit `1` for a failing or inconclusive trial or an invalid model, with no error
+diagnostic involved — see the [CLI exit codes](../../reference/cli.mdx#exit-codes).
 
 ## Claude Code strict validation
 

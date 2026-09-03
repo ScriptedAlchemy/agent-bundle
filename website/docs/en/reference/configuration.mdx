@@ -39,10 +39,11 @@ export default defineConfig({
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
 
-Host-scoped extension keys (`claude`, `codex`, `portable`) are contributed by target adapters
-through declaration merging on `AgentBundleConfigExtensions`. Extension values must be strict
-finite JSON (`AB4500`), and host-specific values stay in their adapter rather than in compiler
-core.
+Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
+adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
+strict finite JSON (`AB4500`), and host-specific values stay in their adapter rather than in
+compiler core. The field-by-field list of every adapter-owned key is in
+[Host-scoped declarations](../guide/authoring/index.mdx#host-scoped-declarations).
 
 ### Generated type definitions
 
