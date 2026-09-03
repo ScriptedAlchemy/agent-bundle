@@ -29,6 +29,8 @@ export const LineageNodeSchema = z.object({
 export const OpenToolCallSchema = z.object({
   conversation: id,
   openedAt: timestamp,
+  /** The root the conversation belonged to when the window opened, so retirement finds it even after its node is pruned. */
+  root: id.optional(),
   toolCallId: id,
   toolName: id,
   /** A sibling of this spawn was already claimed blind, so no later start can be matched to it with certainty. */
@@ -167,11 +169,12 @@ export const reduceLineage = (
       const retired = new Set(
         Object.values(state.nodes).filter((node) => node.root === root).map((node) => node.id).concat(root),
       );
+      const belongs = (open: OpenToolCall): boolean => open.root === root || retired.has(open.conversation);
       return {
         ...state,
-        openCalls: state.openCalls.filter((open) => !retired.has(open.conversation)),
+        openCalls: state.openCalls.filter((open) => !belongs(open)),
         pendingChildren: state.pendingChildren.filter((pending) => !retired.has(pending)),
-        pendingSpawns: state.pendingSpawns.filter((open) => !retired.has(open.conversation)),
+        pendingSpawns: state.pendingSpawns.filter((open) => !belongs(open)),
       };
     }
     default: {

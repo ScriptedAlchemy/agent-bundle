@@ -205,6 +205,7 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     const before = {
       hook_event_name: 'preToolUse', conversation_id: 'root-c', tool_input: {}, tool_name: 'Read', tool_use_id: 'call-1',
     };
+    await registry.observe({ event: 'prompt/submit', host: 'cursor', idempotencyKey: 'prompt', native: { conversation_id: 'root-c', hook_event_name: 'beforeSubmitPrompt' } });
     await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'dup', native: before, observedAt: '2026-09-03T00:00:00.000Z' });
     const revisionAfterFirst = (await store.read()).revision;
     // A later, unrelated event advances the journal.
@@ -524,5 +525,48 @@ describe('lineage registry cross-server and storeless behaviour (review round 6)
     await registry.observe({ event: 'tool/after', host: 'cursor', idempotencyKey: 'close', native: { ...before, hook_event_name: 'postToolUse', tool_output: '{}' } });
     await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:05.000Z' });
     expect(registry.snapshot().openCalls).toEqual([]);
+  });
+});
+
+describe('lineage registry serialization (review round 7)', () => {
+  it('serializes concurrent starts so two sibling spawns are claimed once each', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const registry = createAgentLineageRegistry({ store });
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await Promise.all([
+      observe('tool/before', 'sp1', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp1' }),
+      observe('tool/before', 'sp2', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp2' }),
+    ]);
+    const [a, b] = await Promise.all([
+      observe('agent/start', 'a', { agent_id: 'a', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }),
+      observe('agent/start', 'b', { agent_id: 'b', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }),
+    ]);
+    expect(value(a)).toMatchObject({ depth: 1, parent: 'root' });
+    expect(value(b)).toMatchObject({ depth: 1, parent: 'root' });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+    await store.close();
+    await driver.close();
+  });
+
+  it('records no correlation window for a carrier the tree cannot place', async () => {
+    const registry = createAgentLineageRegistry();
+    await registry.observe({
+      event: 'tool/before',
+      host: 'cursor',
+      idempotencyKey: 'orphan',
+      native: { conversation_id: 'unknown', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'u' },
+    });
+    expect(registry.snapshot().openCalls).toEqual([]);
+    await registry.observe({ event: 'prompt/submit', host: 'cursor', idempotencyKey: 'p', native: { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt' } });
+    await registry.observe({
+      event: 'tool/before',
+      host: 'cursor',
+      idempotencyKey: 'known',
+      native: { conversation_id: 'root', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'k' },
+    });
+    expect(registry.snapshot().openCalls).toMatchObject([{ conversation: 'root', root: 'root', toolCallId: 'k' }]);
   });
 });

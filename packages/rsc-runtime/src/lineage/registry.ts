@@ -358,58 +358,80 @@ export const createAgentLineageRegistry = (
     await dispatch('sessionRetired', { root }, keys);
   };
 
+  // Observations mutate the tree in several awaited steps (candidate selection,
+  // claim, node start); running them one at a time keeps two concurrent hooks
+  // from selecting the same spawn or binding the same pending child.
+  let queue: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(work: () => Promise<T>): Promise<T> => {
+    const run = queue.then(work, work);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  };
+
+  const observeSerialized = async (observation: LineageObservation): Promise<Observed<AgentLineage>> => {
+    await hydrate();
+    const keys = journalKeys(observation.idempotencyKey);
+    const observedAt = observation.observedAt ?? new Date().toISOString();
+    const { event, host, native } = observation;
+    const carrier = lineageCarrier(host, native);
+    switch (event) {
+      case 'agent/start':
+        await observeStart(observation, observedAt, keys);
+        break;
+      case 'agent/stop':
+        await observeStop(observation, observedAt, keys);
+        break;
+      case 'session/end':
+        await observeSessionEnd(observation, observedAt, keys);
+        break;
+      default:
+        break;
+    }
+    // Claude and Codex name the root on every payload; Cursor never repeats
+    // it, so only root-shaped Cursor events may establish a root, and a
+    // fresh child conversation binds to the single pending start.
+    // A session that ends before this registry saw it start leaves no node
+    // behind: establishing one after retirement would never be pruned.
+    if (event !== 'session/end' && carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
+      const rootLike = host === 'cursor'
+        ? CURSOR_ROOT_EVENTS.has(event)
+        : carrier.conversation === carrier.root;
+      if (rootLike || host === 'cursor') {
+        await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike);
+      }
+    }
+    const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');
+    const toolName = nativeString(native, 'tool_name');
+    // Correlation windows exist only for conversations the tree can place;
+    // a window for an unplaceable carrier could never resolve and could not
+    // be retired with its session.
+    const carrierNode = carrier.conversation === undefined ? undefined : nodeFor(carrier.conversation);
+    if (carrier.conversation !== undefined && carrierNode !== undefined && toolCallId !== undefined && toolName !== undefined) {
+      if (event === 'tool/before') {
+        await dispatch('toolCallOpened', {
+          conversation: carrier.conversation,
+          openedAt: observedAt,
+          root: carrierNode.root,
+          ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
+          toolCallId,
+          toolName,
+        }, keys);
+      } else if (event === 'tool/after' || event === 'tool/failure') {
+        await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
+      }
+    }
+    return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
+  };
+
   const registry: AgentLineageRegistry = {
-    async observe(observation) {
-      await hydrate();
-      const keys = journalKeys(observation.idempotencyKey);
-      const observedAt = observation.observedAt ?? new Date().toISOString();
-      const { event, host, native } = observation;
-      const carrier = lineageCarrier(host, native);
-      switch (event) {
-        case 'agent/start':
-          await observeStart(observation, observedAt, keys);
-          break;
-        case 'agent/stop':
-          await observeStop(observation, observedAt, keys);
-          break;
-        case 'session/end':
-          await observeSessionEnd(observation, observedAt, keys);
-          break;
-        default:
-          break;
-      }
-      // Claude and Codex name the root on every payload; Cursor never repeats
-      // it, so only root-shaped Cursor events may establish a root, and a
-      // fresh child conversation binds to the single pending start.
-      // A session that ends before this registry saw it start leaves no node
-      // behind: establishing one after retirement would never be pruned.
-      if (event !== 'session/end' && carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
-        const rootLike = host === 'cursor'
-          ? CURSOR_ROOT_EVENTS.has(event)
-          : carrier.conversation === carrier.root;
-        if (rootLike || host === 'cursor') {
-          await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike);
-        }
-      }
-      const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');
-      const toolName = nativeString(native, 'tool_name');
-      if (carrier.conversation !== undefined && toolCallId !== undefined && toolName !== undefined) {
-        if (event === 'tool/before') {
-          await dispatch('toolCallOpened', {
-            conversation: carrier.conversation,
-            openedAt: observedAt,
-            ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
-            toolCallId,
-            toolName,
-          }, keys);
-        } else if (event === 'tool/after' || event === 'tool/failure') {
-          await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
-        }
-      }
-      return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
+    observe(observation) {
+      return serialized(() => observeSerialized(observation));
     },
 
     async resolveToolCall(query) {
+      // Observations already accepted settle first, so a call that arrived
+      // after its pre-tool hook sees that hook's window.
+      await queue;
       await hydrate();
       if (store !== undefined) {
         // Another generated server of the same install may hold the event
