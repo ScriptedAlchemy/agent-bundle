@@ -60,7 +60,7 @@ schema 校验它们输出的 JSON 文档，并把宿主的 schema 生成器视�
 | 代码 | 严重级别 | 含义 |
 | --- | --- | --- |
 | `AB6026` | info | 每份 Cursor 报告都会声明 Cursor 未发布 plugin-validate 动词，并指明本地校验所用的 vendored schema 固定版本。 |
-| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。 |
+| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。hooks 文档是 `.cursor-plugin/plugin.json` 的 `hooks` 字段所指定的那个（`cursor` 目标为 `hooks/hooks.json`，统一 `plugin` 目标为 `hooks/hooks-cursor.json`，或内联对象），仅在该字段缺失时才回退到 `hooks/hooks.json`；指定的文件缺失或逃逸出插件根目录时为 error。 |
 | `AB6028` | error | 生成的字节违反了被固定的 Cursor 加载器证据：清单候选优先级选中了回退清单、符号链接解析到捆绑包之外，或者 `CURSOR_PLUGIN_ROOT` 出现在加载器替换字段之外。 |
 | `AB6029` | info / warning | Cursor Agent 版本探测不可用（`ENOENT`，info），或未能完成（warning）。本地的固定 schema 校验仍会运行。 |
 | `AB6030` | info | Codex CLI 不可用，或已安装的 Codex 版本未发布插件校验命令。 |
