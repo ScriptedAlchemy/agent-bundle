@@ -78,8 +78,9 @@ duration × test census) is printed and written to
 ## Real-host install proofs
 
 The host-install proof suites (`host-install-proof.test.ts`,
-`packed-host-install-proof.test.ts`, `dev-host-install.test.ts`, and the
-packed Claude plugin validation in `packed-native-smoke.test.ts`) skip their
+`packed-host-install-proof.test.ts`, `dev-host-install.test.ts`,
+`dev-live-host.test.ts`, and the packed Claude plugin validation in
+`packed-native-smoke.test.ts`) skip their
 Claude and Codex legs whenever the `claude` or `codex` CLI is not on PATH.
 That skip is what let #364 change the Codex `interface.logo` emission and
 break both proofs on `main` without CI noticing. Hosted CI therefore runs a
