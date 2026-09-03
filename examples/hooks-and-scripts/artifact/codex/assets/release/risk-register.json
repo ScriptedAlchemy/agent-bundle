@@ -1,0 +1,16 @@
+{
+  "risks": [
+    {
+      "id": "REL-204",
+      "severity": "high",
+      "status": "open",
+      "summary": "Complete the final approval for the release notes before publishing."
+    },
+    {
+      "id": "REL-198",
+      "severity": "medium",
+      "status": "mitigated",
+      "summary": "Package signing rehearsal is documented in the release runbook."
+    }
+  ]
+}

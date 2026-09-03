@@ -1252,8 +1252,8 @@ export const nativeHookWrapperSource = (
     '    else if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
     '    requireString(input, "tool_use_id");',
     '    if (canonicalEvent === "afterTool") {',
-    '      if (target === "codex") { if (input.tool_response === undefined) fail("native PostToolUse tool_response is required"); }',
-    '      else if (typeof input.tool_response !== "object" || input.tool_response === null) fail("native PostToolUse tool_response must be an object or an array");',
+    // Claude delivers an MCP tool's PostToolUse tool_response as a plain string (2.1.257, 2026-09-03), so presence is the only host-independent rule.
+    '      if (input.tool_response === undefined) fail("native PostToolUse tool_response is required");',
     '    }',
     '    return;',
     '  }',

@@ -166,7 +166,6 @@ it('preserves stale and real native-envelope diagnostics at the HTTP boundary', 
         session_id: 'session-1',
         tool_input: {},
         tool_name: 'Write',
-        tool_response: 'invalid',
         tool_use_id: 'tool-1',
         transcript_path: '/tmp/lifecycle-replay/transcript.jsonl',
       },
@@ -176,7 +175,7 @@ it('preserves stale and real native-envelope diagnostics at the HTTP boundary', 
     await expect(malformed.json()).resolves.toEqual({
       diagnostic: {
         code: 'AB8211',
-        message: 'Agent Bundle event route error: native tool_response must be an object or an array',
+        message: 'Agent Bundle event route error: native tool_response is required',
       },
     });
 

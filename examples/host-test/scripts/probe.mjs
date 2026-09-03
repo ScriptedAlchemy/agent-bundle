@@ -4,10 +4,10 @@
 // uninstall. Nothing here touches the real ~/.claude, ~/.codex, or ~/.cursor.
 //
 //   node scripts/probe.mjs install   <claude|codex|cursor> [--no-auth] [--root <dir>]
-//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text>] [--model <m>] [--timeout <ms>]
+//   node scripts/probe.mjs capture   <claude|codex|cursor> [--prompt <text>] [--model <m>] [--timeout <ms>] [--scripted-model]
 //   node scripts/probe.mjs uninstall <claude|codex|cursor> [--keep-home]
 //   node scripts/probe.mjs status    <claude|codex|cursor>
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -31,6 +31,7 @@ const parseArgs = (argv) => {
       case '--prompt': flags.prompt = rest[++index]; break;
       case '--model': flags.model = rest[++index]; break;
       case '--timeout': flags.timeout = Number(rest[++index]); break;
+      case '--scripted-model': flags.scriptedModel = true; break;
       default: throw new Error(`Unknown flag ${flag}`);
     }
   }
@@ -218,16 +219,43 @@ const scenarioPrompt = () => flags.prompt ?? [
   '6. Reply with exactly one final line: HOST_TEST_DONE <the log.path from step 3>',
 ].join('\n');
 
+/**
+ * With --scripted-model the real Claude Code binary talks to a local scripted
+ * Messages API (scripts/mock-anthropic.mjs) instead of Anthropic, so the hook,
+ * MCP, and subagent plumbing under test is the host's own while no account is
+ * needed; the model text in the transcript is then not evidence of anything.
+ */
 const captureClaude = () => {
+  const scripted = flags.scriptedModel === true;
   const args = [
-    '-p', scenarioPrompt(),
+    '-p', scripted ? 'You are exercising the host-test probe plugin. Do the scripted steps.' : scenarioPrompt(),
     '--output-format', 'json',
     '--dangerously-skip-permissions',
-    '--model', flags.model ?? 'sonnet',
+    '--model', flags.model ?? (scripted ? 'claude-sonnet-4-5' : 'sonnet'),
   ];
-  log(`claude ${args.slice(2).join(' ')}`);
-  const result = run('claude', args, { cwd: paths.workspace, timeout: flags.timeout ?? 900_000 });
-  return result;
+  const port = 8790 + Math.floor(Math.random() * 100);
+  const mock = scripted
+    ? spawn(process.execPath, [join(exampleRoot, 'scripts', 'mock-anthropic.mjs'), String(port), join(paths.captures, 'scripted-model.log')], { stdio: 'ignore' })
+    : undefined;
+  const environment = {
+    ...isolatedEnvironment(),
+    ...(scripted
+      ? {
+          ANTHROPIC_API_KEY: 'scripted-model',
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${String(port)}`,
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1',
+          PROBE_WORKSPACE: paths.workspace,
+        }
+      : {}),
+  };
+  log(`claude ${args.slice(2).join(' ')}${scripted ? ` (scripted model on 127.0.0.1:${String(port)})` : ''}`);
+  try {
+    if (mock !== undefined) spawnSync(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 800)']);
+    return run('claude', args, { cwd: paths.workspace, env: environment, timeout: flags.timeout ?? 900_000 });
+  } finally {
+    mock?.kill();
+  }
 };
 
 const captureCodex = () => {

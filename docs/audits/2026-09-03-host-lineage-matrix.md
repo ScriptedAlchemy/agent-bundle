@@ -125,10 +125,12 @@ fires (fixture rows Claude 5→6, Codex 9→10→11, Cursor 81→82→83).
 | Codex | `mcp__host_test__dump` | `exec-<uuid>` | `{ progressToken, plugin_id, threadId, "x-codex-turn-metadata": { session_id, thread_id, turn_id, parent_thread_id?, forked_from_thread_id?, thread_source: "user"|"subagent", subagent_kind?, sandbox, workspaces{…git commit…}, model, reasoning_effort, turn_started_at_unix_ms } }` | `codex-mcp-client` 0.147.0 | none | **Yes, fully** — lineage (thread, parent, root) is in `_meta` itself |
 | Cursor | `MCP:dump` | plain uuid | `{ progressToken }` only | `cursor-vscode` 1.0.0 | none | **No** — only the pre-tool hook (tool name + ordering) can attach a conversation |
 
-Claude's `PostToolUse` for MCP tools delivers `tool_response` as an **array of
-content blocks**, not an object; the framework's pinned validator rejected
-every such event (`native tool_response must be an object`, confirmed in the
-host's `--debug hooks` log). Fixed in this change set.
+Claude's `PostToolUse` for MCP tools delivers `tool_response` as a **plain
+string** (the tool's text content, here the JSON text of the result), not an
+object; the framework's pinned validator rejected every such event (`native
+tool_response must be an object`, confirmed in the host's `--debug hooks` log
+and by a raw user-level hook that captured the payload verbatim). Fixed in this
+change set: presence is now the only host-independent rule, matching Codex.
 
 ## 4. Environment variable names seen by plugin processes (names only)
 
@@ -175,7 +177,7 @@ deliver no user identity to hooks or MCP servers.
   `no-shared-runtime`, `unsupported-surface`).
 - Hook→MCP correlation: Codex from `_meta`, Claude from
   `claudecode/toolUseId`, Cursor from the open `MCP:<tool>` pre-tool hook.
-- Claude `PostToolUse` array `tool_response` accepted.
+- Claude `PostToolUse` string `tool_response` (MCP tools) accepted.
 
 ## 7. Gaps and host-blocked items
 

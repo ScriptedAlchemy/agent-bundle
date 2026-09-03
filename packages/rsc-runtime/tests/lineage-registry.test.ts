@@ -65,8 +65,15 @@ const value = (observed: Awaited<ReturnType<AgentLineageRegistry['observe']>>) =
 describe('lineage registry replaying the 2026-09-03 host captures', () => {
   it('Claude 2.1.257: subagent events resolve to their own agent under the root session, nested depth 2, parent inferred from the open Agent call', async () => {
     const registry = createAgentLineageRegistry();
-    const lineages = await replay('claude', fixture('claude-2.1.257.ndjson'), registry);
-    const root = 'a7f96472-e9d0-447a-826d-36da9b635fd6';
+    const records = fixture('claude-2.1.257.ndjson');
+    const lineages = await replay('claude', records, registry);
+    const root = records[0]!.event!.native['session_id'] as string;
+    const [subagent, nested] = records
+      .filter((record) => record.event?.canonical.event === 'agent/start')
+      .map((record) => record.event!.native['agent_id'] as string);
+    const spawnCalls = records
+      .filter((record) => record.event?.canonical.event === 'tool/before' && record.event.native['tool_name'] === 'Agent')
+      .map((record) => record.event!.native['tool_use_id'] as string);
 
     const sessionStart = value(lineages[0]!.lineage);
     expect(sessionStart).toMatchObject({ conversation: root, depth: 0, resolution: 'native', root });
@@ -74,34 +81,36 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
 
     const subagentStart = lineages.find((entry) => entry.kind === 'agent/start')!;
     expect(value(subagentStart.lineage)).toMatchObject({
-      conversation: 'aca96ce761c9f0cea',
+      conversation: subagent,
       depth: 1,
       parent: root,
       resolution: 'registry',
       root,
-      subagent: { id: 'aca96ce761c9f0cea', toolCallId: 'toolu_mock_5', type: 'general-purpose' },
+      subagent: { id: subagent, toolCallId: spawnCalls[0], type: 'general-purpose' },
     });
 
     const nestedStart = lineages.filter((entry) => entry.kind === 'agent/start')[1]!;
     expect(value(nestedStart.lineage)).toMatchObject({
-      conversation: 'ac093bdad0566ffa7',
+      conversation: nested,
       depth: 2,
-      parent: 'aca96ce761c9f0cea',
+      parent: subagent,
       root,
-      subagent: { toolCallId: 'toolu_mock_10' },
+      subagent: { toolCallId: spawnCalls[1] },
     });
 
-    const nestedTool = lineages.find((entry) => entry.kind === 'tool/before' && entry.native?.['agent_id'] === 'ac093bdad0566ffa7')!;
-    expect(value(nestedTool.lineage)).toMatchObject({ conversation: 'ac093bdad0566ffa7', depth: 2, parent: 'aca96ce761c9f0cea', root });
+    const nestedTool = lineages.find((entry) => entry.kind === 'tool/before' && entry.native?.['agent_id'] === nested)!;
+    expect(value(nestedTool.lineage)).toMatchObject({ conversation: nested, depth: 2, parent: subagent, root });
 
     // The MCP probe call carries claudecode/toolUseId, which names the open PreToolUse.
     const probes = lineages.filter((entry) => entry.kind === 'mcp:probe');
     expect(probes.map((entry) => value(entry.lineage).depth)).toEqual([0, 1, 2]);
-    expect(value(probes[1]!.lineage)).toMatchObject({ conversation: 'aca96ce761c9f0cea', resolution: 'registry' });
+    expect(value(probes[1]!.lineage)).toMatchObject({ conversation: subagent, resolution: 'registry' });
 
+    // PostToolUse for MCP tools now arrives (string tool_response), so every window closes.
+    expect(registry.snapshot().openCalls).toEqual([]);
     const snapshot = registry.snapshot();
     expect(Object.values(snapshot.nodes).filter((node) => node.stoppedAt !== undefined).map((node) => node.id).sort())
-      .toEqual(['ac093bdad0566ffa7', 'aca96ce761c9f0cea']);
+      .toEqual([nested, subagent].sort());
   });
 
   it('Codex 0.147.0: MCP _meta resolves lineage natively including parent_thread_id; hooks agree', async () => {
@@ -169,16 +178,20 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     const driver = createMemoryStateDriver({ lifetime: 'process' });
     const definition = agentLineageStateDefinition('process');
     const store = await driver.open(definition);
+    const records = fixture('claude-2.1.257.ndjson');
+    const root = records[0]!.event!.native['session_id'] as string;
+    const firstStart = records.findIndex((record) => record.event?.canonical.event === 'agent/start');
+    const subagent = records[firstStart]!.event!.native['agent_id'] as string;
     const first = createAgentLineageRegistry({ store });
-    await replay('claude', fixture('claude-2.1.257.ndjson').slice(0, 12), first);
+    await replay('claude', records.slice(0, firstStart + 1), first);
     const second = createAgentLineageRegistry({ store });
     const lineage = await second.observe({
       event: 'tool/before',
       host: 'claude',
       idempotencyKey: 'rehydrated',
-      native: { agent_id: 'aca96ce761c9f0cea', hook_event_name: 'PreToolUse', session_id: 'a7f96472-e9d0-447a-826d-36da9b635fd6', tool_name: 'Bash', tool_use_id: 'later' },
+      native: { agent_id: subagent, hook_event_name: 'PreToolUse', session_id: root, tool_name: 'Bash', tool_use_id: 'later' },
     });
-    expect(value(lineage)).toMatchObject({ conversation: 'aca96ce761c9f0cea', depth: 1, parent: 'a7f96472-e9d0-447a-826d-36da9b635fd6' });
+    expect(value(lineage)).toMatchObject({ conversation: subagent, depth: 1, parent: root });
     await store.close();
     await driver.close();
   });

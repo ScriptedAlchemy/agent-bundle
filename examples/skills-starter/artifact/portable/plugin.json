@@ -1,0 +1,1 @@
+{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"A practical engineering operations bundle for incidents, dependency upgrades, and releases.","name":"skills-starter","version":"1.0.0"}

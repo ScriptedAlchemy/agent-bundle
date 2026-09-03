@@ -1,0 +1,1 @@
+{"mcpServers":{"status":{"args":["${CLAUDE_PLUGIN_ROOT}/mcp/mcp-status-073c1634.mjs"],"command":"node","env":{"AGENT_BUNDLE_PLUGIN_ROOT":"${CLAUDE_PLUGIN_ROOT}"},"type":"stdio"}}}

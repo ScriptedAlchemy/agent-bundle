@@ -138,8 +138,8 @@ export const renderDumpMarkdown = (result: DumpResult): string => {
       : `unavailable (${result.state.reason ?? 'unknown'})`}`,
     `- Matched: ${String(result.matched)}${result.filter.conversation === undefined ? '' : ` for ${result.filter.conversation}`}`,
     '',
-    '| # | kind | event | host | runtime | ids |',
-    '| --- | --- | --- | --- | --- | --- |',
+    '| # | kind | event | host | runtime | lineage | ids |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const record of result.records) {
     const summary = record as Partial<ReturnType<typeof summarizeRecord>> & { readonly ids?: JsonObject };
@@ -147,7 +147,17 @@ export const renderDumpMarkdown = (result: DumpResult): string => {
       .filter(([key]) => key !== 'cwd' && key !== 'hook_event_name' && key !== 'transcript_path' && key !== 'agent_transcript_path')
       .map(([key, value]) => `${key}=${String(value)}`)
       .join(', ');
-    lines.push(`| ${String(summary.index ?? '')} | ${String(summary.kind ?? '')} | ${String(summary.event ?? summary.nativeEvent ?? '')} | ${String(summary.host ?? '')} | ${String(summary.runtime ?? '')} | ${ids} |`);
+    lines.push(`| ${String(summary.index ?? '')} | ${String(summary.kind ?? '')} | ${String(summary.event ?? summary.nativeEvent ?? '')} | ${String(summary.host ?? '')} | ${String(summary.runtime ?? '')} | ${renderLineage(summary.lineage)} | ${ids} |`);
   }
   return lines.join('\n');
+};
+
+/** One cell: `depth N · <conversation> ← <parent> (resolution)` or the typed unavailable reason. */
+export const renderLineage = (lineage: JsonValue | undefined): string => {
+  if (lineage === undefined || lineage === null || typeof lineage !== 'object' || Array.isArray(lineage)) return 'not recorded';
+  const observed = lineage as { readonly state?: string; readonly reason?: string; readonly value?: JsonValue };
+  if (observed.state !== 'available') return `unavailable · ${observed.reason ?? 'unknown'}`;
+  const value = (observed.value ?? {}) as { readonly conversation?: string; readonly depth?: number; readonly parent?: string; readonly resolution?: string; readonly root?: string };
+  const parent = value.parent === undefined ? '' : ` ← ${value.parent}`;
+  return `depth ${String(value.depth ?? '?')} · ${value.conversation ?? '?'}${parent} (${value.resolution ?? '?'})`;
 };
