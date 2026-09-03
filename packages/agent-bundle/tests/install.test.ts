@@ -621,9 +621,33 @@ it('refuses to hash or write through a symlinked directory inside a receipt-mana
     expect(await readdir(elsewhere)).toEqual([]);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
 
-    // An owned path whose ancestor became a symlink (development installs re-point top-level directories).
     await rm(join(destination, 'skills'));
     await rm(join(fixture.bundleRoot, 'skills'), { recursive: true });
+
+    // A symlinked receipt is never deletion authority.
+    const receiptPath = join(destination, installReceiptFile);
+    await rm(receiptPath);
+    await writeFile(join(elsewhere, 'receipt.json'), JSON.stringify({
+      contentHash: 'abc',
+      files: ['payload.txt'],
+      format: 'agent-bundle-install-receipt/1',
+      host: 'cursor',
+      installedAt: '2026-09-03T00:00:00.000Z',
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    }));
+    await symlink(join(elsewhere, 'receipt.json'), receiptPath);
+    const linkedReceipt = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((linkedReceipt as DiagnosticError).diagnostics[0]?.message).toContain(
+      `Refusing unsupported filesystem entry "${installReceiptFile}"`,
+    );
+    await rm(join(elsewhere, 'receipt.json'));
+    await rm(destination, { force: true, recursive: true });
+    expect(await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' }))
+      .toMatchObject({ state: 'installed' });
+
+    // An owned path whose ancestor became a symlink (development installs re-point top-level directories).
     await cp(join(destination, '.cursor-plugin'), join(destination, '.real-manifest'), { recursive: true });
     await rm(join(destination, '.cursor-plugin'), { recursive: true });
     await symlink(join(destination, '.real-manifest'), join(destination, '.cursor-plugin'));

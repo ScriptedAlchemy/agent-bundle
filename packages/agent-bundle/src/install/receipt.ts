@@ -8,6 +8,7 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   rmdir,
@@ -17,7 +18,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, sameFile } from '../core/paths.ts';
+import { exists } from '../core/paths.ts';
 
 /**
  * Host-agnostic install ownership core shared by `agent-bundle install`,
@@ -118,7 +119,11 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
     hashEntry(hash, relativePath, await readFile(path));
   };
   for (const name of sortNames(await readdir(root))) {
-    if (name === installReceiptFile) continue;
+    if (name === installReceiptFile) {
+      // The receipt is deletion authority; it is skipped from the hash but may never be a link.
+      if ((await lstat(join(root, name))).isSymbolicLink()) throw unsupportedEntry(name);
+      continue;
+    }
     await visit(name);
   }
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
@@ -127,22 +132,26 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
 /**
  * Whether an existing entry at `relativePath` is one of the previously owned
  * files: the exact recorded name, or — on case-insensitive filesystems — a
- * case alias of a recorded name that resolves to the same inode. Inode
- * equality alone is not enough: an operator hard link to an owned file under
- * an unrelated name is not ours.
+ * case alias of a recorded name. An alias is proven by the filesystem itself:
+ * both spellings canonicalise (`realpath`, on-disk casing) to the same path.
+ * Inode equality is deliberately not used: two distinct entries `Foo` and
+ * `foo` hard-linked together on a case-sensitive filesystem are not aliases,
+ * and an operator hard link under an unrelated name is not ours either.
+ * Ancestors have already been proven symlink-free before this runs.
  */
 const isOwnedEntry = async (
   root: string,
   owned: ReadonlySet<string>,
   relativePath: string,
-  metadata: Stats,
 ): Promise<boolean> => {
   if (owned.has(relativePath)) return true;
   const alias = relativePath.toLowerCase();
+  let canonical: string | undefined;
   for (const candidate of owned) {
     if (candidate.toLowerCase() !== alias) continue;
     try {
-      if (sameFile(await lstat(join(root, candidate)), metadata)) return true;
+      canonical ??= await realpath(join(root, relativePath));
+      if (await realpath(join(root, candidate)) === canonical) return true;
     } catch (error) {
       if (!isErrno(error, 'ENOENT')) throw error;
     }
@@ -174,7 +183,7 @@ const assertRealAncestors = async (
           if (metadata.isSymbolicLink()) throw unsupportedEntry(directory);
           if (
             !metadata.isDirectory() &&
-            !(metadata.isFile() && await isOwnedEntry(root, ownedFiles, directory, metadata))
+            !(metadata.isFile() && await isOwnedEntry(root, ownedFiles, directory))
           ) {
             throw unsupportedEntry(directory);
           }
@@ -227,11 +236,17 @@ export const isReceiptPath = (value: unknown): value is string =>
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isReceiptPath);
 
-/** Reads the receipt at a plugin root; malformed or unsafe receipts read as absent. */
+/**
+ * Reads the receipt at a plugin root; malformed or unsafe receipts read as
+ * absent. A receipt that is a symbolic link is refused outright: it would let
+ * another file supply the owned-file list that drives deletions.
+ */
 export const readInstallReceipt = async (destination: string): Promise<InstallReceipt | undefined> => {
+  const path = join(destination, installReceiptFile);
   let value: unknown;
   try {
-    value = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as unknown;
+    if ((await lstat(path)).isSymbolicLink()) throw unsupportedEntry(installReceiptFile);
+    value = JSON.parse(await readFile(path, 'utf8')) as unknown;
   } catch (error) {
     if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
     throw error;
@@ -479,7 +494,7 @@ const isWhollyOwnedDirectory = async (
         if (!await visit(relative)) return false;
         continue;
       }
-      if (!metadata.isFile() || !owned.has(relative)) return false;
+      if (!metadata.isFile() || !await isOwnedEntry(destination, owned, relative)) return false;
       files += 1;
     }
     return true;
@@ -524,7 +539,7 @@ export const replaceInstalledTree = async (options: {
     }
     const tolerated = metadata.isDirectory() && !metadata.isSymbolicLink()
       ? await isWhollyOwnedDirectory(options.destination, file, owned)
-      : metadata.isFile() && await isOwnedEntry(options.destination, owned, file, metadata);
+      : metadata.isFile() && await isOwnedEntry(options.destination, owned, file);
     if (!tolerated) collisions.push(file);
   }
   if (collisions.length > 0) {
