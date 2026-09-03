@@ -127,8 +127,51 @@ export interface ToolRouteProps<InputSchema extends RouteSchema> {
   readonly signal: AbortSignal;
 }
 
+/**
+ * The MCP Apps `_meta.ui` block a tool, resource, or prompt stamps on its
+ * listing so hosts open the referenced App beside the result. Set
+ * `resourceUri` to {@link appResourceUri} of the App route instead of
+ * repeating the App's `ui://` literal: the compiler resolves the reference
+ * to the App's static `config.resourceUri`, so the two can never drift. The
+ * block stays open for the rest of the MCP Apps `ui` vocabulary
+ * (`prefersBorder`, `csp`, `permissions`, …).
+ */
+export interface RouteUiMeta {
+  readonly [key: string]: unknown;
+  readonly resourceUri?: string;
+}
+
+/**
+ * Listing-level `_meta` of an MCP route. It stays inside the static
+ * route-config grammar (see the diagnostics reference), with `ui` typed so
+ * `_meta.ui.resourceUri` can reference an App route.
+ */
+export type RouteMeta = Readonly<Record<string, unknown>> & {
+  readonly ui?: RouteUiMeta;
+};
+
+/**
+ * References an MCP App route's `config.resourceUri` from another route's
+ * static `config` (typically `_meta.ui.resourceUri`). The App must belong to
+ * the same generated server as the referencing route — a generated server
+ * registers only its own Apps. Accepted references:
+ *
+ * - `'<app>'` — the App route `src/mcp/<server>/apps/<app>.{ts,tsx}` of the
+ *   referencing route's server;
+ * - `'<server>/<app>'` or `'app:<server>/<app>'` — the same App by route id;
+ * - `'./…'` or `'../…'` — the App route module relative to the referencing
+ *   module, with or without its `.ts`/`.tsx` extension.
+ *
+ * The compiler evaluates the call statically while extracting `config` and
+ * replaces it with the target App's `resourceUri`; a reference to no App of
+ * the same server is `AB4826`. The route module still evaluates at run time (generated entries
+ * import it for its default export), where the call returns the reference
+ * unchanged — generated servers read the compiled config, never this value.
+ */
+export const appResourceUri = (reference: string): string => reference;
+
 export interface ToolConfig {
-  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
   /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
@@ -137,7 +180,7 @@ export interface ToolConfig {
 }
 
 export interface ResourceConfig {
-  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly _meta?: RouteMeta;
   readonly description?: string;
   readonly mimeType?: string;
   readonly title?: string;
@@ -145,15 +188,22 @@ export interface ResourceConfig {
 }
 
 export interface PromptConfig {
-  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly _meta?: RouteMeta;
   readonly description?: string;
   readonly title?: string;
 }
 
 export interface AppRouteConfig {
-  readonly _meta?: Readonly<Record<string, unknown>>;
+  readonly _meta?: RouteMeta;
   readonly resourceUri: string;
   readonly targets?: readonly string[];
+  /**
+   * Optional HTML shell for the compiled App. The path resolves relative to
+   * the route module, the way its imports do (`'./dashboard.html'`); the
+   * older project-root-relative form is still accepted while only one of the
+   * two interpretations names an existing file. When both exist and differ,
+   * or neither exists, the build fails with `AB4827` naming both candidates.
+   */
   readonly template?: string;
 }
 

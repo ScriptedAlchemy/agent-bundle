@@ -53,6 +53,37 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 }
 ```
 
+An MCP App is one browser entry under `src/mcp/<server>/apps/`, and a tool
+that opens it references the App instead of repeating its `ui://` literal:
+
+```ts
+// src/mcp/runtime/apps/dashboard.ts
+import type { AppRouteConfig } from 'agent-bundle';
+
+export const config = {
+  resourceUri: 'ui://my-plugin/dashboard.html',
+  template: './dashboard.html', // resolves beside this file, like an import
+} satisfies AppRouteConfig;
+```
+
+```tsx
+// src/mcp/runtime/tools/open-dashboard.tsx
+import type { ToolConfig } from 'agent-bundle';
+import { appResourceUri } from 'agent-bundle/routes';
+
+export const config = {
+  _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
+  description: 'Open the dashboard.',
+} satisfies ToolConfig;
+```
+
+`appResourceUri('dashboard')` is resolved by the compiler to the App route's
+`config.resourceUri` (`AB4826` when no such App exists); a `const` string
+literal imported from a relative sibling module is accepted in static `config`
+as well, and is the form to use when the component also needs the URI at run
+time. The full grammar and the `config.template` resolution rule are in
+[Diagnostics](diagnostics.md).
+
 The compiler statically reads `config`, imports schemas and implementations
 only into generated entries, installs `runAgentRequest`, and derives the real
 MCP server from the route graph. Each call renders through a warm internal
@@ -122,7 +153,7 @@ The final Agent Document of a tool route lowers to one `CallToolResult`:
 | `Agent.Text`, `Agent.Markdown`, `Agent.Context`, `Agent.Json` children | Ordered `content` text blocks (`Agent.Json` as its JSON text). |
 | `Agent.Image`, `Agent.Audio`, `Agent.Resource` | Native `image`, `audio`, and `resource_link` blocks; a host without that capability fails the projection closed unless a text fallback is selected. |
 | `Agent.Result value` | `structuredContent` when the value is a JSON object; a non-object value emits none and is never wrapped. |
-| `Agent.Result metadata` | `CallToolResult._meta`. It must be a JSON object (snapshotted through the same wire boundary as `structuredContent`); anything else fails the projection closed with `McpProjectionError('invalid-result-metadata')`. Listing-level `_meta` still comes from static `config._meta`, so the MCP Apps convention stamps `_meta.ui.resourceUri` on both halves. |
+| `Agent.Result metadata` | `CallToolResult._meta`. It must be a JSON object (snapshotted through the same wire boundary as `structuredContent`); anything else fails the projection closed with `McpProjectionError('invalid-result-metadata')`. Listing-level `_meta` still comes from static `config._meta`, so the MCP Apps convention stamps `_meta.ui.resourceUri` on both halves. In `config._meta.ui.resourceUri`, reference the App route instead of repeating its `ui://` literal: `appResourceUri('dashboard')` from `agent-bundle/routes` resolves at compile time to that App route's `config.resourceUri`, and a `const` string literal imported from a relative sibling module (`import { DASHBOARD_URI } from '../constants'`) is accepted too and stays available at run time for the result half. |
 | `Agent.Error code message` | `isError: true` plus one text block `[<code>] <message>`. The wire has no error-code field, so the code is deliberately kept in the text (the routed CLI prints the same `**[code]** message` form); choose codes that read well to the model. |
 | `resultSchema` | `outputSchema` in `tools/list` **only when the schema describes an object** (`z.object`, `z.record`, a discriminated union of objects). The MCP specification requires every result of a tool that declares `outputSchema` to carry `structuredContent`, so a text-only route declares `resultSchema = z.undefined()` (or any non-object schema), advertises no `outputSchema`, and returns no `structuredContent`. An object schema keeps the SDK's fail-closed output validation on every call. |
 

@@ -400,6 +400,99 @@ it('augments a generated server from config and projects result _meta and text-o
   }
 });
 
+it('compiles appResourceUri() and imported-const references to the App route resourceUri and a route-relative template (#388)', { retry: 2, timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-app-refs-'));
+  roots.push(root);
+  await writeGeneratedProject(root, {
+    // The one literal: the App route's own resourceUri, itself an imported const.
+    'src/mcp/curator/constants.ts': "export const DASHBOARD_URI = 'ui://generated-routes-fixture/dashboard.html';\n",
+    'src/mcp/curator/apps/dashboard.ts': [
+      "import { DASHBOARD_URI } from '../constants.ts';",
+      "export const config = { resourceUri: DASHBOARD_URI, template: './dashboard.html' };",
+      "document.getElementById('shell').textContent = 'Curator dashboard';",
+      '',
+    ].join('\n'),
+    // Route-relative template: resolves beside the route module like its imports.
+    'src/mcp/curator/apps/dashboard.html': '<!doctype html><html><head><title>route-relative-shell</title></head><body><main id="shell"></main></body></html>\n',
+    // The tool references the App through the compile-time helper (run-time
+    // import from the light routes subpath, never the compiler root).
+    'src/mcp/curator/tools/open.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { appResourceUri } from 'agent-bundle/routes';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { _meta: { ui: { resourceUri: appResourceUri('dashboard') } }, description: 'Open the dashboard.' };",
+      'export const inputSchema = z.object({}).strict();',
+      "export const resultSchema = z.object({ status: z.literal('ready') }).strict();",
+      'export default async function Open() {',
+      "  return createElement(Agent.Result, { value: { status: 'ready' } }, createElement(Agent.Text, null, 'ready'));",
+      '}',
+      '',
+    ].join('\n'),
+    // The resource references the same constant module the App reads.
+    'src/mcp/curator/resources/catalog.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "import { DASHBOARD_URI } from '../constants';",
+      "export const config = { _meta: { ui: { resourceUri: DASHBOARD_URI } }, description: 'Read the catalog.', mimeType: 'application/json', uri: 'catalog://books' };",
+      'export const inputSchema = z.object({ uri: z.string() }).strict();',
+      'export const resultSchema = z.object({ contents: z.array(z.object({ mimeType: z.string(), text: z.string(), uri: z.string() })) }).strict();',
+      'export default async function Catalog({ input }) {',
+      "  return createElement(Agent.Result, { value: { contents: [{ mimeType: 'application/json', text: '{}', uri: input.uri }] } }, createElement(Agent.Text, null, 'Catalog ready.'));",
+      '}',
+      '',
+    ].join('\n'),
+  });
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['portable'] });
+  expect(compiled.model.mcpApps?.map((app) => ({ id: app.id, resourceUri: app.resourceUri, template: app.template }))).toEqual([{
+    id: 'mcp-app:curator:dashboard',
+    resourceUri: 'ui://generated-routes-fixture/dashboard.html',
+    template: join(root, 'src/mcp/curator/apps/dashboard.html'),
+  }]);
+  const compiledTool = compiled.model.mcpServers[0]!.generatedRoutes!.find((route) => route.id === 'tool:curator/open');
+  expect(compiledTool?.config).toEqual({
+    _meta: { ui: { resourceUri: 'ui://generated-routes-fixture/dashboard.html' } },
+    description: 'Open the dashboard.',
+  });
+  // The compiled App HTML came from the route-relative template.
+  const html = await readFile(join(output, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+  expect(html).toContain('route-relative-shell');
+  expect(html).toContain('Curator dashboard');
+
+  const server = compiled.model.mcpServers[0]!;
+  const client = new Client({ name: 'generated-app-refs-test', version: '0.0.0' });
+  const transport = new StdioClientTransport({
+    args: [join(output, 'portable', server.args![0]!)],
+    command: process.execPath,
+    stderr: 'pipe',
+  });
+  let diagnostics = '';
+  transport.stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
+  try {
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      throw new Error(`Generated route server failed to connect: ${diagnostics}`, { cause: error });
+    }
+    const listed = await client.listTools();
+    expect(listed.tools.find((tool) => tool.name === 'open')).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://generated-routes-fixture/dashboard.html' } },
+    });
+    const resources = await client.listResources();
+    expect(resources.resources.find((resource) => resource.uri === 'catalog://books')).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://generated-routes-fixture/dashboard.html' } },
+    });
+    await expect(client.readResource({ uri: 'ui://generated-routes-fixture/dashboard.html' })).resolves.toMatchObject({
+      contents: [{ text: expect.stringContaining('route-relative-shell'), uri: 'ui://generated-routes-fixture/dashboard.html' }],
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 it('observes one process-lifetime provider across consecutive generated tool calls', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-warm-'));
   roots.push(root);
