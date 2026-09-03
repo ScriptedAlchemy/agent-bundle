@@ -481,10 +481,17 @@ export const createAgentNoticeLedger = (
         }
         return options.noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
       });
+      const expectedRevision = yield* noticeEffect(() => {
+        if (options.expectedRevision !== undefined
+          && (!Number.isInteger(options.expectedRevision) || options.expectedRevision < 0)) {
+          throw new AgentNoticeError('invalid-input', 'Notice availability expectedRevision must be a non-negative integer');
+        }
+        return options.expectedRevision;
+      });
       const committed = yield* storeEffect(() => store.dispatch(
         'availability-signalled',
         { at, channel: 'mcp-resource-updated', noticeIds },
-        { idempotencyKey },
+        { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
       ));
       return snapshotFrom(committed.revision, committed.state);
     }));

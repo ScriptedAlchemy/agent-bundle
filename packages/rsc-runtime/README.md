@@ -262,14 +262,18 @@ itself: one long-lived MCP connection's subscription to the reserved inbox
 resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
 own handle on the workspace-durable store its Flight worker mounts
 (`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
-after every completed render `observe(send)` reads the ledger, sends at most
-one `notifications/resources/updated` for the subscriber's newly eligible
-pending notices, and records the availability receipt. Eligibility is
+after every completed render `observe(send)` reads the ledger, claims the
+availability receipt for the subscriber's newly eligible pending notices as
+one compare-and-swap against the revision it read (`expectedRevision`), and
+only then sends at most one `notifications/resources/updated`. Eligibility is
 recipient-matched against the subscriber's observed identity, respects
 `nextAttemptAt`, and is bounded by `retryBudget` (availability signals per
-notice, durable across restarts); exposure and availability receipts never
-re-trigger a signal, so a subscribed client cannot be driven into a refetch
-loop. Subscribing fails closed when the store is unreadable, and only the
+notice, durable across restarts); because the budget is spent before the wire
+write, two server processes over one store can never both signal the same
+notice, and a transport failure after the claim leaves the notice pending and
+readable rather than freeing a duplicate. Exposure and availability receipts
+never re-trigger a signal, so a subscribed client cannot be driven into a
+refetch loop. Subscribing fails closed when the store is unreadable, and only the
 workspace-durable lifetime is wired — volatile stores live in the worker's
 heap, so those servers honestly advertise no `resources.subscribe`.
 

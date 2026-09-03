@@ -1,11 +1,19 @@
 import { randomUUID } from 'node:crypto';
 
-import type {
-  AgentNotice,
-  AgentNoticeLedger,
-  AgentNoticePrincipal,
+import { AgentStateError } from '../state/index.js';
+import {
+  AgentNoticeError,
+  type AgentNotice,
+  type AgentNoticeLedger,
+  type AgentNoticePrincipal,
 } from './contract.js';
 import { recipientMatchesPrincipal } from './state.js';
+
+/** Consecutive compare-and-swap losses tolerated before a claim reports failure. */
+const MAX_CLAIM_ATTEMPTS = 4;
+
+const isRevisionConflict = (error: unknown): boolean =>
+  error instanceof AgentStateError && error.code === 'revision-conflict';
 
 /** The reserved inbox resource URI every generated stateful MCP server registers. */
 export const AGENT_NOTICE_INBOX_URI = 'agent-bundle://notices/inbox';
@@ -111,50 +119,94 @@ export const createNoticeInboxSignaller = (
   // select the same notice and send two signals for one revision.
   let queue: Promise<unknown> = Promise.resolve();
 
+  /**
+   * Claims the budget for every newly eligible notice as one compare-and-swap
+   * against the revision the eligibility was computed from. Two server
+   * processes over one durable store therefore cannot both spend a notice's
+   * single signal: the loser sees `revision-conflict`, re-reads, and finds the
+   * count already at budget. A bounded number of conflicts is retried because
+   * unrelated writers (publishes, exposures) also move the revision.
+   */
+  const claim = async (
+    ledger: AgentNoticeLedger,
+    current: InboxSubscription,
+  ): Promise<
+    | { readonly at: string; readonly kind: 'claimed'; readonly noticeIds: readonly string[]; readonly revision: number }
+    | { readonly kind: 'nothing-eligible'; readonly revision: number }
+    | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' }
+  > => {
+    for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
+      let snapshot: Awaited<ReturnType<AgentNoticeLedger['read']>>;
+      try {
+        snapshot = await ledger.read();
+      } catch (error) {
+        return { error, kind: 'failed', stage: 'read' };
+      }
+      const at = now().toISOString();
+      const nowMs = Date.parse(at);
+      const noticeIds = Object.freeze(snapshot.notices
+        .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs))
+        .map((notice) => notice.id)
+        .toSorted((left, right) => left.localeCompare(right)));
+      if (noticeIds.length === 0) return { kind: 'nothing-eligible', revision: snapshot.revision };
+      signalSequence += 1;
+      try {
+        const committed = await ledger.signalAvailability({
+          at,
+          expectedRevision: snapshot.revision,
+          idempotencyKey: `agent-notices:availability:${current.id}:${String(signalSequence)}`,
+          noticeIds,
+        });
+        return { at, kind: 'claimed', noticeIds, revision: committed.revision };
+      } catch (error) {
+        if (!isRevisionConflict(error)) return { error, kind: 'failed', stage: 'record' };
+      }
+    }
+    return {
+      error: new AgentNoticeError(
+        'invalid-input',
+        `Notice availability claim lost ${String(MAX_CLAIM_ATTEMPTS)} consecutive revision races`,
+      ),
+      kind: 'failed',
+      stage: 'record',
+    };
+  };
+
   const observeOnce = async (send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> => {
     const current = subscription;
     if (current === undefined) {
       return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
     }
     let ledger: AgentNoticeLedger;
-    let snapshot: Awaited<ReturnType<AgentNoticeLedger['read']>>;
     try {
       ledger = await options.store.noticeLedger();
-      snapshot = await ledger.read();
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'read' as const });
     }
-    const at = now().toISOString();
-    const nowMs = Date.parse(at);
-    const noticeIds = Object.freeze(snapshot.notices
-      .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs))
-      .map((notice) => notice.id)
-      .toSorted((left, right) => left.localeCompare(right)));
-    if (noticeIds.length === 0) {
-      return Object.freeze({ kind: 'idle', reason: 'nothing-eligible', revision: snapshot.revision });
+    const claimed = await claim(ledger, current);
+    switch (claimed.kind) {
+      case 'failed':
+        return Object.freeze({ error: claimed.error, kind: 'failed' as const, stage: claimed.stage });
+      case 'nothing-eligible':
+        return Object.freeze({ kind: 'idle', reason: 'nothing-eligible', revision: claimed.revision });
+      case 'claimed':
+        break;
+      default: {
+        const exhaustive: never = claimed;
+        return exhaustive;
+      }
     }
-    // The subscription may have been replaced while the ledger was read; a
-    // signal for a stale subscriber must not be sent or recorded.
-    if (subscription !== current) {
-      return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: snapshot.revision });
-    }
+    // The budget is spent durably before the wire write so no other process
+    // can spend it too; a transport failure here leaves the notice pending and
+    // readable through the inbox, and the receipt honestly records that this
+    // connection attempted the signal.
+    for (const id of claimed.noticeIds) current.signalled.add(id);
     try {
       await send();
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'send' as const });
     }
-    for (const id of noticeIds) current.signalled.add(id);
-    signalSequence += 1;
-    try {
-      const committed = await ledger.signalAvailability({
-        at,
-        idempotencyKey: `agent-notices:availability:${current.id}:${String(signalSequence)}`,
-        noticeIds,
-      });
-      return Object.freeze({ kind: 'signalled', noticeIds, revision: committed.revision });
-    } catch (error) {
-      return Object.freeze({ error, kind: 'failed' as const, stage: 'record' as const });
-    }
+    return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: claimed.revision });
   };
 
   return Object.freeze({

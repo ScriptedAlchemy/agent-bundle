@@ -179,6 +179,12 @@ export interface AgentNoticeRequestLease {
 
 export interface AgentNoticeAvailabilitySignalOptions {
   readonly at: string;
+  /**
+   * Compare-and-swap guard: the receipt commits only if the ledger is still at
+   * this revision, so concurrent signallers over one durable store cannot both
+   * spend a notice's budget (typed `revision-conflict` otherwise).
+   */
+  readonly expectedRevision?: number;
   readonly idempotencyKey: string;
   readonly noticeIds: readonly string[];
 }

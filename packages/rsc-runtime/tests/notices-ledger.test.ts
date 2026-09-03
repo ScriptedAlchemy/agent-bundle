@@ -832,6 +832,32 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     })).rejects.toMatchObject({ code: 'invalid-input' });
     await driver.close();
   });
+
+  it('guards availability receipts with compare-and-swap so racing signallers cannot both spend a budget', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const stale = (await ledger.read()).revision;
+    await ledger.signalAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      expectedRevision: stale,
+      idempotencyKey: 'availability:a',
+      noticeIds: [published.notice.id],
+    });
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: stale,
+      idempotencyKey: 'availability:b',
+      noticeIds: [published.notice.id],
+    })).rejects.toMatchObject({ code: 'revision-conflict' });
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      expectedRevision: -1,
+      idempotencyKey: 'availability:c',
+      noticeIds: [published.notice.id],
+    })).rejects.toMatchObject({ code: 'invalid-input' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
 });
 
 describe('notice delivery route selection', () => {

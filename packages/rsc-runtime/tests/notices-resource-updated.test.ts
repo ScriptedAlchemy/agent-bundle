@@ -280,25 +280,95 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
-  it('records no availability when the wire send fails and retries on the next render', async () => {
+  it('claims the durable budget before the wire write, so a failed send never frees a second signal', async () => {
     const { driver, ledger } = await openLedger();
     const signaller = signallerOver(ledger);
     await signaller.subscribe(principal('s1'));
     await publish(ledger, { sessionId: 's1' });
 
-    let fail = true;
     let sends = 0;
     const send = async (): Promise<void> => {
-      if (fail) throw new Error('transport closed');
       sends += 1;
+      throw new Error('transport closed');
     };
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'send' });
-    expect((await ledger.read()).notices[0]?.availability).toBeUndefined();
-
-    fail = false;
-    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
     expect(sends).toBe(1);
+    // The receipt records the attempt this connection made; the notice stays
+    // pending and readable through the inbox, and the default budget is spent.
+    expect((await ledger.read()).notices[0]).toMatchObject({ availability: { count: 1 }, state: 'pending' });
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    const restarted = signallerOver(ledger);
+    await restarted.subscribe(principal('s1'));
+    await expect(restarted.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toBe(1);
+    await driver.close();
+  });
+
+  it('lets exactly one of two racing server processes spend a notice budget', async () => {
+    const { driver, ledger } = await openLedger();
+    await publish(ledger, { sessionId: 's1' });
+    const { send, sends } = sender();
+
+    // Process B reads the ledger before process A claims, then stalls until
+    // A has committed: its compare-and-swap must lose and its re-read must
+    // find the budget already spent.
+    let releaseB: () => void = () => undefined;
+    const aDone = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    let lag = false;
+    const laggingLedger: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      read: async () => {
+        const snapshot = await ledger.read();
+        if (lag) {
+          lag = false;
+          await aDone;
+        }
+        return snapshot;
+      },
+    });
+    const processA = signallerOver(ledger);
+    const processB = signallerOver(laggingLedger);
+    await processA.subscribe(principal('s1'));
+    await processB.subscribe(principal('s1'));
+
+    lag = true;
+    const bObserve = processB.observe(send);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const aOutcome = await processA.observe(send);
+    releaseB();
+    const bOutcome = await bObserve;
+
+    expect(aOutcome).toMatchObject({ kind: 'signalled' });
+    expect(bOutcome).toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
     expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
+
+  it('gives up a claim after repeated revision races instead of spinning', async () => {
+    const { driver, ledger } = await openLedger();
+    await publish(ledger, { sessionId: 's1' });
+    let interference = 0;
+    // Every read is followed by an unrelated commit before the claim lands.
+    const contended: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      read: async () => {
+        const snapshot = await ledger.read();
+        interference += 1;
+        await publish(ledger, { sessionId: 'someone-else' });
+        return snapshot;
+      },
+    });
+    const signaller = signallerOver(contended);
+    await signaller.subscribe(principal('s1'));
+    const { send, sends } = sender();
+    const outcome = await signaller.observe(send);
+    expect(outcome).toMatchObject({ kind: 'failed', stage: 'record' });
+    expect(interference).toBeGreaterThanOrEqual(2);
+    expect(sends).toEqual([]);
+    expect((await ledger.read()).notices[0]?.availability).toBeUndefined();
     await driver.close();
   });
 
