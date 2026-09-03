@@ -3,8 +3,22 @@ export { cliArgvGrammar, extractCliArgv, reservedCliOptionNames } from './cli-ar
 export type { ExtractedCliArgv } from './cli-argv.ts';
 export { cliCommandPath, compileCliCommands, isRenderedCliRoute } from './cli-commands.ts';
 export type { CompiledCliCommandSurface } from './cli-commands.ts';
-export { extractRouteConfig, routeConfigGrammar } from './config-extract.ts';
-export type { ExtractedRouteConfig } from './config-extract.ts';
+export {
+  appResourceUriHelperName,
+  extractRouteConfig,
+  resolveRouteConfigAppReferences,
+  routeConfigGrammar,
+  routeHelpersSpecifier,
+} from './config-extract.ts';
+export type {
+  AppReferenceSite,
+  AppReferenceTarget,
+  ExtractedRouteConfig,
+  RouteConfigAppReference,
+  RouteConfigExtractionOptions,
+} from './config-extract.ts';
+export { appRouteTemplatePath, resolveAppRouteTemplate } from './app-template.ts';
+export type { AppRouteTemplateResolution } from './app-template.ts';
 export { inspectRouteGraph } from './inspect.ts';
 export type { RouteGraphInspection } from './inspect.ts';
 export { emptyRouteConfig } from './types.ts';
@@ -31,7 +45,7 @@ export {
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
-export { canonicalAgentEvents } from './public.ts';
+export { appResourceUri, canonicalAgentEvents } from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
@@ -49,8 +63,10 @@ export type {
   CliRouteProps,
   PromptConfig,
   ResourceConfig,
+  RouteMeta,
   RouteSchema,
   RouteSchemaOutput,
+  RouteUiMeta,
   ToolConfig,
   ToolRouteProps,
 } from './public.ts';

@@ -72,6 +72,10 @@
       "types": "./dist/mcp-entry.d.ts",
       "import": "./dist/mcp-entry.js"
     },
+    "./routes": {
+      "types": "./dist/routes/public.d.ts",
+      "import": "./dist/routes.js"
+    },
     "./rstest": {
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"

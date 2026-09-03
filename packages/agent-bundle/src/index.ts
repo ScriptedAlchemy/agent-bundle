@@ -37,8 +37,10 @@ export type {
   CliRouteProps,
   PromptConfig,
   ResourceConfig,
+  RouteMeta,
   RouteSchema,
   RouteSchemaOutput,
+  RouteUiMeta,
   ToolConfig,
   ToolRouteProps,
 } from './routes/public.ts';

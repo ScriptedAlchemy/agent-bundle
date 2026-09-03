@@ -59,6 +59,7 @@ import type {
   NormalizedStateDefinition,
   SourceProvenance,
 } from '../core/types.ts';
+import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
@@ -878,6 +879,11 @@ const normalizeMcpApps = (
         : server.targets;
       const metadata = route.config['_meta'];
       const template = route.config['template'];
+      // Route-relative first, legacy project-root-relative when unambiguous;
+      // the route-graph compiler already reported AB4827 for the other cases.
+      const templatePath = typeof template === 'string'
+        ? appRouteTemplatePath(resolveAppRouteTemplate(loaded.context.projectRoot, route.source, template))
+        : undefined;
       apps.push({
         ...(isRecord(metadata) ? { _meta: structuredClone(metadata) } : {}),
         id: `mcp-app:${surface.name}:${name}`,
@@ -888,7 +894,7 @@ const normalizeMcpApps = (
         serverName: surface.name,
         source: route.source,
         targets: sortedUnique(targets),
-        ...(typeof template === 'string' ? { template: resolve(loaded.context.projectRoot, template) } : {}),
+        ...(templatePath === undefined ? {} : { template: templatePath }),
       });
     }
   }

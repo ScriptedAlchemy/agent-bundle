@@ -5,12 +5,18 @@ import { extname, relative, resolve } from 'node:path';
 import fastGlob from 'fast-glob';
 
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
   compileMcpCliCommands,
   type McpCommandSelection,
 } from './cli-commands.ts';
-import { extractRouteConfig } from './config-extract.ts';
+import {
+  type AppReferenceTarget,
+  type ExtractedRouteConfig,
+  extractRouteConfig,
+  resolveRouteConfigAppReferences,
+} from './config-extract.ts';
 import {
   validateEventRouteModuleContract,
   validateProviderModuleContract,
@@ -377,31 +383,55 @@ const readRouteModuleText = async (source: string): Promise<string | undefined> 
 
 /**
  * Statically extracts one route module's `config` export from already-read
- * source text. A module a racing deletion removed simply has no config;
- * extraction diagnostics (AB4805/AB4806) accumulate beside the discovery
- * diagnostics.
+ * source text. A module a racing deletion removed simply has no config.
+ * Extraction diagnostics (AB4805/AB4806) are reported once every module is
+ * extracted, beside the App-reference resolution (AB4826) that needs the
+ * whole discovered tree.
  */
 interface ExtractedModuleMetadata {
-  readonly config: Readonly<Record<string, unknown>>;
+  readonly extracted: ExtractedRouteConfig;
   readonly inputSchema?: RouteInputSchema;
 }
+
+const emptyExtractedRouteConfig: ExtractedRouteConfig = deepFreeze({
+  appReferences: [],
+  config: emptyRouteConfig,
+  diagnostics: [],
+});
 
 const extractedModuleMetadata = (
   module: DiscoveredRouteModule,
   moduleText: string | undefined,
-  diagnostics: Diagnostic[],
+  projectRoot: string,
 ): ExtractedModuleMetadata => {
   if (moduleText === undefined) {
-    return { config: emptyRouteConfig };
+    return { extracted: emptyExtractedRouteConfig };
   }
-  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
-  diagnostics.push(...extracted.diagnostics);
+  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
   const inputSchema = extractInputSchema(moduleText, module.relativePath);
   return {
-    config: extracted.config,
+    extracted,
     ...(inputSchema === undefined ? {} : { inputSchema }),
   };
 };
+
+/**
+ * Every App route whose `resourceUri` extracted to a non-empty literal
+ * string, so `appResourceUri()` references elsewhere in the tree resolve to
+ * it. Apps whose own config was rejected, or whose `resourceUri` is itself an
+ * App reference, are not targets: a reference to them is AB4826 rather than a
+ * silently wrong URI.
+ */
+const appReferenceTargets = (
+  pending: readonly { readonly metadata: ExtractedModuleMetadata; readonly module: DiscoveredRouteModule }[],
+): readonly AppReferenceTarget[] => pending.flatMap(({ metadata, module }) => {
+  if (module.kind !== 'app') return [];
+  if (metadata.extracted.appReferences.some((reference) => reference.path[0] === 'resourceUri')) return [];
+  const resourceUri = metadata.extracted.config['resourceUri'];
+  return typeof resourceUri === 'string' && resourceUri.trim() !== ''
+    ? [{ id: module.id, resourceUri, source: module.source }]
+    : [];
+});
 
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
   config: route.config,
@@ -535,6 +565,10 @@ export const compileRouteGraph = async (
   const cliRoutes: CompiledAgentRoute[] = [];
   const providers: CompiledProvider[] = [];
   const moduleTextBySource = new Map<string, string>();
+  // Config extraction runs over the whole tree before any route compiles:
+  // an `appResourceUri()` reference resolves against every App route the
+  // tree declares, wherever the App module sorts relative to its referrer.
+  const pending: { readonly metadata: ExtractedModuleMetadata; readonly module: DiscoveredRouteModule }[] = [];
   for (const module of modules) {
     if (module.surface === 'provider') {
       providers.push({
@@ -557,8 +591,22 @@ export const compileRouteGraph = async (
     if (moduleText !== undefined) {
       moduleTextBySource.set(module.source, moduleText);
     }
-    const metadata = extractedModuleMetadata(module, moduleText, diagnostics);
-    const route = compiledRoute(module, metadata.config, metadata.inputSchema);
+    pending.push({ metadata: extractedModuleMetadata(module, moduleText, projectRoot), module });
+  }
+  const appTargets = appReferenceTargets(pending);
+  for (const { metadata, module } of pending) {
+    const moduleText = moduleTextBySource.get(module.source);
+    const resolved = resolveRouteConfigAppReferences(
+      metadata.extracted,
+      {
+        relativePath: module.relativePath,
+        ...(module.serverName === undefined ? {} : { serverName: module.serverName }),
+        source: module.source,
+      },
+      appTargets,
+    );
+    diagnostics.push(...resolved.diagnostics);
+    const route = compiledRoute(module, resolved.config, metadata.inputSchema);
     if (route.kind === 'event-route' && moduleText !== undefined) {
       diagnostics.push(...validateEventRouteModuleContract(
         moduleText,
@@ -627,6 +675,34 @@ export const compileRouteGraph = async (
               'Export const config with the App resourceUri, then inspect again.',
               route.source,
             ));
+          }
+          const template = route.config['template'];
+          if (typeof template === 'string') {
+            const resolution = resolveAppRouteTemplate(projectRoot, route.source, template);
+            switch (resolution.kind) {
+              case 'resolved':
+                break;
+              case 'ambiguous':
+                diagnostics.push(routeError(
+                  'AB4827',
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, which names two different existing files: ${resolution.routeRelative} (route-relative) and ${resolution.projectRelative} (project-root-relative).`,
+                  'Templates resolve relative to the route module; rewrite the path so it names the route-relative file only (or remove the project-root-relative duplicate), then inspect again.',
+                  route.source,
+                ));
+                break;
+              case 'missing':
+                diagnostics.push(routeError(
+                  'AB4827',
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but neither ${resolution.routeRelative} (route-relative) nor ${resolution.projectRelative} (project-root-relative) exists.`,
+                  'Templates resolve relative to the route module; point config.template at an existing HTML file beside the route (for example \'./dashboard.html\'), then inspect again.',
+                  route.source,
+                ));
+                break;
+              default: {
+                const unreachable: never = resolution;
+                throw new TypeError(`Unhandled template resolution ${String(unreachable)}.`);
+              }
+            }
           }
           continue;
         }
