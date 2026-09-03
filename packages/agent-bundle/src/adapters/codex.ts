@@ -178,7 +178,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.11.0',
+  adapterRevision: '1.12.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });

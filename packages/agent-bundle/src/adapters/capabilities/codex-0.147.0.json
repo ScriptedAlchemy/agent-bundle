@@ -395,6 +395,15 @@
     }
   },
   "mcp": {
+    "pathTokenLowering": {
+      "evidence": [
+        "2026-09-03: plugin.hookEnvironment records PLUGIN_ROOT and PLUGIN_DATA as environment variables Codex exports to plugin hook commands; the pinned schemas/codex/mcp.schema.json declares no placeholder or interpolation rule for .mcp.json command, args, env, or cwd values, so this table records no mcp.pathTokens field list for Codex.",
+        "2026-09-03: packages/agent-bundle/src/adapters/codex.ts lowers a leading ${PLUGIN_ROOT} in command, args, env values, and cwd to a ./-relative path under cwd \"./\" only when the server's cwd is the plugin root, and fails the build for embedded plugin-root tokens (codex.mcp.token.plugin-root.embedded.*), plugin-root tokens without a plugin-root cwd (codex.mcp.token.plugin-root.cwd.required.*), ${PLUGIN_DATA} (codex.mcp.token.plugin-data.*), and workspace-root tokens (codex.mcp.token.workspace-root.*); this row is what the generated hosts reference renders in place of the token-field list."
+      ],
+      "fields": ["command", "args", "env", "cwd"],
+      "reason": "No host interpolation. `command`, `args`, `env` values, and `cwd` accept a *leading* `${PLUGIN_ROOT}` only when `cwd` is the plugin root; the compiler rewrites it to a `./`-relative path under `cwd: \"./\"`. Embedded tokens, `${PLUGIN_DATA}`, and workspace-root tokens are build errors.",
+      "state": "degraded"
+    },
     "stdio": true,
     "streamableHttp": true
   },

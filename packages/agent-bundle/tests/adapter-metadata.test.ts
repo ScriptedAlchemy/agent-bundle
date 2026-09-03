@@ -68,7 +68,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.11.0',
+    adapterRevision: '1.12.0',
     observedVersion: '0.147.0',
     schemas: [
       {
