@@ -105,13 +105,9 @@ export const validateNativeEventEnvelope = (
         return nativeEventError('native workspace_roots must be a nonempty array of nonempty strings');
       }
       requireNativeString(native, 'cursor_version');
-      if (
-        Object.hasOwn(native, 'user_email')
-        && native.user_email !== null
-        && typeof native.user_email !== 'string'
-      ) {
-        return nativeEventError('native user_email must be a string or null');
-      }
+      // Cursor also sends the signed-in user's email on this envelope. The
+      // framework does not read, validate, or surface operator identity; the
+      // field passes through untouched inside the native payload.
       return native;
     }
     if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {

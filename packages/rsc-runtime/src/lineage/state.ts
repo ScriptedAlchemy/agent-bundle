@@ -23,6 +23,12 @@ export const LineageNodeSchema = z.object({
   subagentId: id.optional(),
   toolCallId: id.optional(),
   type: id.optional(),
+  /**
+   * Digest of the Cursor `workspace_roots` the node was seen in. A pending
+   * child only binds to a conversation from the same workspace, so two
+   * windows sharing one durable registry never bind each other's children.
+   */
+  workspace: id.optional(),
 }).strict();
 
 /** A pre-tool hook whose post-tool hook has not fired: the correlation window for MCP calls and spawns. */
@@ -66,6 +72,12 @@ export type LineageState = z.output<typeof LineageStateSchema>;
 export const lineageEventSchemas = {
   /** A Cursor child conversation is now known for a pending subagent id: the node moves to its conversation id. */
   childBound: z.object({ conversation: id, subagentId: id }).strict(),
+  /**
+   * A conversation bound blind to a pending Cursor child later carried a
+   * user-only event (`beforeSubmitPrompt`): it was a root whose prompt the
+   * registry never saw. The node returns to its subagent id and waits again.
+   */
+  childUnbound: z.object({ conversation: id, subagentId: id }).strict(),
   nodeStarted: LineageNodeSchema,
   nodeStopped: z.object({ id, stoppedAt: timestamp }).strict(),
   /** A finished session releases its correlation windows and pending spawns. */
@@ -150,6 +162,22 @@ export const reduceLineage = (
         nodes: { ...rest, [conversation]: { ...pending, id: conversation } },
         pendingChildren: state.pendingChildren.filter((candidate) => candidate !== subagentId),
         seenStarts: remember(state.seenStarts, [conversation]),
+      };
+    }
+    case 'childUnbound': {
+      const { conversation, subagentId } = event.payload as { conversation: string; subagentId: string };
+      const bound = state.nodes[conversation];
+      if (bound === undefined || bound.subagentId !== subagentId || state.nodes[subagentId] !== undefined) return state;
+      const { [conversation]: _moved, ...rest } = state.nodes;
+      return {
+        ...state,
+        nodes: { ...rest, [subagentId]: { ...bound, id: subagentId } },
+        // A child whose stop already arrived stays a finished, never-bound
+        // node; a live one waits for its real conversation again.
+        pendingChildren: bound.stoppedAt === undefined
+          ? [subagentId, ...state.pendingChildren.filter((candidate) => candidate !== subagentId)]
+          : state.pendingChildren,
+        seenStarts: state.seenStarts.filter((known) => known !== conversation),
       };
     }
     case 'toolCallOpened': {

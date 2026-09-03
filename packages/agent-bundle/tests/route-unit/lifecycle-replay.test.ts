@@ -364,7 +364,6 @@ it('replays the Cursor workspaceOpen starter as an observation with no native re
   expect(target?.fixture?.native).toEqual({
     cursor_version: 'lifecycle-replay',
     hook_event_name: 'workspaceOpen',
-    user_email: null,
     workspace_roots: ['/tmp'],
   });
   const replay = await service.replay({

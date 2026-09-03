@@ -722,3 +722,86 @@ describe('lineage registry replay ledger across degradation (review round 11)', 
     await driver.close();
   });
 });
+
+describe('lineage registry Cursor child binding precision (desktop hooks-service evidence, 2026-09-03)', () => {
+  const cursor = (registry: AgentLineageRegistry) =>
+    (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+  const start = (parent: string, id: string, workspace: string) => ({
+    conversation_id: parent, hook_event_name: 'subagentStart', is_parallel_worker: false, parent_conversation_id: parent,
+    subagent_id: id, subagent_type: 'general-purpose', tool_call_id: id, workspace_roots: [workspace],
+  });
+  const tool = (conversation: string, id: string, workspace: string) => ({
+    conversation_id: conversation, hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'Shell', tool_use_id: id, workspace_roots: [workspace],
+  });
+
+  it('binds an unseen conversation only to the pending child of its own workspace', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'pa', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws/a'] });
+    await observe('prompt/submit', 'pb', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws/b'] });
+    await observe('agent/start', 'sa', start('root-a', 'call-a', '/ws/a'));
+    await observe('agent/start', 'sb', start('root-b', 'call-b', '/ws/b'));
+    // Two starts are pending overall, but only one per workspace: each window's child binds to its own parent.
+    expect(value(await observe('tool/before', 'ta', tool('child-a', 'ta', '/ws/a')))).toMatchObject({ conversation: 'child-a', depth: 1, parent: 'root-a', root: 'root-a', subagent: { id: 'call-a' } });
+    expect(value(await observe('tool/before', 'tb', tool('child-b', 'tb', '/ws/b')))).toMatchObject({ conversation: 'child-b', depth: 1, parent: 'root-b', root: 'root-b', subagent: { id: 'call-b' } });
+  });
+
+  it('refuses to bind a conversation from a workspace where nothing is pending', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'pa', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws/a'] });
+    await observe('agent/start', 'sa', start('root-a', 'call-a', '/ws/a'));
+    // A conversation in another window is not A's child, however alone the pending start is.
+    expect(await observe('tool/before', 'tc', tool('other-window', 'tc', '/ws/c'))).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().pendingChildren).toEqual(['call-a']);
+    // A payload without roots (older Cursor builds) keeps the single-pending rule.
+    const { workspace_roots: _roots, ...rootless } = tool('child-a', 'ta', '/ws/a');
+    expect(value(await observe('tool/before', 'ta', rootless))).toMatchObject({ conversation: 'child-a', parent: 'root-a' });
+  });
+
+  it('undoes a blind binding when the bound conversation receives a prompt, and rebinds the real child', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] });
+    await observe('agent/start', 's', start('root', 'call-a', '/ws'));
+    // A second chat tab whose prompt predates the registry speaks first: it is bound blind.
+    expect(value(await observe('tool/before', 'x1', tool('other-root', 'x1', '/ws')))).toMatchObject({ conversation: 'other-root', depth: 1, parent: 'root' });
+    // Its next prompt proves it a root: subagents never receive one.
+    const corrected = await observe('prompt/submit', 'x-prompt', { conversation_id: 'other-root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] });
+    expect(value(corrected)).toMatchObject({ conversation: 'other-root', depth: 0, root: 'other-root' });
+    expect(value(corrected).parent).toBeUndefined();
+    const snapshot = registry.snapshot();
+    expect(snapshot.pendingChildren).toEqual(['call-a']);
+    expect(snapshot.nodes['call-a']).toMatchObject({ depth: 1, id: 'call-a', parent: 'root', subagentId: 'call-a' });
+    expect(snapshot.seenStarts).not.toContain('other-root');
+    // The real child now binds to the restored pending start.
+    expect(value(await observe('tool/before', 'c1', tool('child', 'c1', '/ws')))).toMatchObject({ conversation: 'child', depth: 1, parent: 'root', subagent: { id: 'call-a' } });
+    expect(value(await observe('tool/before', 'x2', tool('other-root', 'x2', '/ws')))).toMatchObject({ conversation: 'other-root', depth: 0, resolution: 'native' });
+  });
+
+  it('keeps a mis-bound child that already stopped as a finished node instead of re-queuing it', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] });
+    await observe('agent/start', 's', start('root', 'call-a', '/ws'));
+    await observe('tool/before', 'x1', tool('other-root', 'x1', '/ws'));
+    await observe('agent/stop', 'stop', { ...start('root', 'call-a', '/ws'), hook_event_name: 'subagentStop', status: 'completed' });
+    expect(value(await observe('prompt/submit', 'x-prompt', { conversation_id: 'other-root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] }))).toMatchObject({ depth: 0 });
+    const snapshot = registry.snapshot();
+    expect(snapshot.pendingChildren).toEqual([]);
+    expect(snapshot.nodes['call-a']).toMatchObject({ id: 'call-a', stoppedAt: '2026-09-03T00:00:00.000Z' });
+    expect(snapshot.nodes['other-root']).toMatchObject({ depth: 0, root: 'other-root' });
+  });
+
+  it('records the workspace digest on Cursor roots and children and never the raw roots', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws/b', '/ws/a'] });
+    await observe('agent/start', 's', start('root', 'call-a', '/ws/a'));
+    const { nodes } = registry.snapshot();
+    expect(nodes['root']?.workspace).toMatch(/^[0-9a-f]{16}$/u);
+    expect(nodes['call-a']?.workspace).toMatch(/^[0-9a-f]{16}$/u);
+    expect(JSON.stringify(nodes)).not.toContain('/ws/');
+  });
+});

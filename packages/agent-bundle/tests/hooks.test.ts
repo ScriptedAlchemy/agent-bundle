@@ -1131,7 +1131,6 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',
-      user_email: null,
       workspace_roots: ['/tmp'],
     });
     await expect(runNativeHook(wrapper, starter!)).resolves.toEqual({

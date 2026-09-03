@@ -71,6 +71,13 @@ export const config = {
 其来源，不知道时则发布带有类型化原因的 `unavailable`。裸 stdio 既不提供 session id 也不提供 HTTP
 actor 认证，因此这两个轴保持诚实的不可用，而不是被伪造出来。
 
+句柄还带有 `lineage`，它是"我的父会话是谁、根会话是什么、我们是否是子代理"这一问题的唯一答案——
+`{ conversation, root, parent?, depth, generation?, subagent?, resolution }`，由常驻运行时的注册表根据
+宿主的子代理 start/stop 与 pre-tool 钩子解析得出；无法解析时则给出带类型化原因的 `unavailable`
+（`id-not-resolvable`、`no-subagent-events`、`no-shared-runtime`、`cloud-agent-no-user-hooks`、
+`unsupported-surface`、`not-provided`）。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
+会话背后的人是谁。
+
 ## 共享布局
 
 `src/layout.tsx` 是每个渲染式路由外层的组合点——页面框架中 `layout.tsx` 的思路应用到 Agent Document 上。

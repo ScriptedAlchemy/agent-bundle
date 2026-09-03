@@ -76,6 +76,14 @@ transport publishes an `available` value and its source when it knows one, or `u
 a typed reason when it does not. Bare stdio supplies neither a session id nor HTTP actor
 authentication, so those axes stay honestly unavailable rather than being fabricated.
 
+The handle also carries `lineage`, the one answer to "who is my parent, what is the root
+conversation, and are we a subagent?" — `{ conversation, root, parent?, depth, generation?,
+subagent?, resolution }`, resolved by the warm runtime's registry from the host's subagent
+start/stop and pre-tool hooks, or `unavailable` with a typed reason (`id-not-resolvable`,
+`no-subagent-events`, `no-shared-runtime`, `cloud-agent-no-user-hooks`, `unsupported-surface`,
+`not-provided`). There is deliberately no operator or user identity axis: the framework never
+reads or surfaces who the human behind a host session is.
+
 ## Shared layouts
 
 `src/layout.tsx` is the composition point around every rendered route — the `layout.tsx` idea from
