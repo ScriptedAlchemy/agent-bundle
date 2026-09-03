@@ -91,8 +91,9 @@ pnpm --filter @agent-bundle-example/host-test probe:uninstall claude
   and stops twice, while a `/compact` turn submits no prompt and never stops
   (`fixtures/host-lineage/claude-2.1.259-orchestration.ndjson`). If the first
   turn reports no `session_id`, the capture fails instead of running the
-  remaining turns as fresh sessions; `--scripted-model` plays a fixed
-  transcript and refuses `--scenario`/`--prompt`. Codex and Cursor drivers take
+  remaining turns as fresh sessions; `--prompt` and `--scenario` refuse each
+  other, and `--scripted-model` plays a fixed transcript and refuses both.
+  Codex and Cursor drivers take
   the first turn only and refuse longer scenarios. `scenarios/claude-orchestration.json` is
   the checked-in orchestration scenario (two parallel `Agent` spawns, one
   sequential spawn that nests another, the `host-test:host-test` skill, a

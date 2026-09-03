@@ -75,6 +75,21 @@ bypassed), `PreCompact`/`PostCompact`, `FileChanged`, `ConfigChange`,
 `PreCompact`/`PostCompact` (manual `/compact`) and `PostToolUseFailure`; the
 rest stayed unobserved.
 
+Payload excerpt (2.1.257 fixture `claude-2.1.257.ndjson`, SubagentStart of the nested agent, row 32 — note the absence
+of any parent field):
+
+```json
+{"session_id":"7f7a50ca-3609-4612-8db1-a34c8985088a","transcript_path":"…/-tmp-host-test-claude-workspace/7f7a50ca-….jsonl","cwd":"/tmp/host-test/claude-workspace","prompt_id":"a78d8bed-e865-426a-a3e4-ee9ce500493c","agent_id":"a9bc7270b816a535e","agent_type":"general-purpose","hook_event_name":"SubagentStart"}
+```
+
+Payload excerpt (2.1.257 fixture, root `Stop`, row 18, fired while the background subagent was
+still running — the only Claude payload that names a live child other than
+SubagentStart):
+
+```json
+{"session_id":"7f7a50ca-…","prompt_id":"a78d8bed-…","permission_mode":"bypassPermissions","effort":{"level":"high"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Steps 1-5 are complete; the subagent is running in the background. …","background_tasks":[{"id":"aebe95b6e051369a4","type":"subagent","status":"running","description":"Host-test probe subagent","agent_type":"general-purpose"}],"session_crons":[]}
+```
+
 ### Claude Code 2.1.259 orchestration run (live model 2026-09-03, multi-turn)
 
 `claude-2.1.259-orchestration.ndjson` (141 records: 127 hook events, 14 MCP
@@ -181,21 +196,6 @@ Findings specific to this run:
 - **Compaction is inducible** by sending `/compact` as a resumed `-p` prompt;
   auto-compaction was not attempted (the session peaked at ~44k context
   tokens), so `trigger: "auto"` remains unobserved.
-
-Payload excerpt (SubagentStart of the nested agent, row 32 — note the absence
-of any parent field):
-
-```json
-{"session_id":"7f7a50ca-3609-4612-8db1-a34c8985088a","transcript_path":"…/-tmp-host-test-claude-workspace/7f7a50ca-….jsonl","cwd":"/tmp/host-test/claude-workspace","prompt_id":"a78d8bed-e865-426a-a3e4-ee9ce500493c","agent_id":"a9bc7270b816a535e","agent_type":"general-purpose","hook_event_name":"SubagentStart"}
-```
-
-Payload excerpt (root `Stop`, row 18, fired while the background subagent was
-still running — the only Claude payload that names a live child other than
-SubagentStart):
-
-```json
-{"session_id":"7f7a50ca-…","prompt_id":"a78d8bed-…","permission_mode":"bypassPermissions","effort":{"level":"high"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Steps 1-5 are complete; the subagent is running in the background. …","background_tasks":[{"id":"aebe95b6e051369a4","type":"subagent","status":"running","description":"Host-test probe subagent","agent_type":"general-purpose"}],"session_crons":[]}
-```
 
 ### Codex CLI 0.147.0
 

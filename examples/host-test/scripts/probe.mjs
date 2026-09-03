@@ -260,6 +260,9 @@ const scenarioPrompt = () => flags.prompt ?? [
  */
 const scenarioTurns = () => {
   if (flags.scenario === undefined) return [scenarioPrompt()];
+  // Both flags name the prompts of the run; honouring one and dropping the
+  // other would capture a different experiment than the caller asked for.
+  if (flags.prompt !== undefined) throw new Error('--prompt and --scenario both supply the prompts: pass one of them');
   const file = resolve(flags.scenario);
   const scenario = JSON.parse(readFileSync(file, 'utf8'));
   const turns = Array.isArray(scenario) ? scenario : scenario?.turns;
