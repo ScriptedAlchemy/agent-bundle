@@ -9,11 +9,73 @@ import {
   McpProbeService,
   McpProbeTargetNotFoundError,
   mcpProbeInstructionTextLimit,
+  mcpProbePluginDataTeardownCapMs,
+  mcpProbeTeardownWaitMs,
   mcpProbeToolLimit,
   type McpProbeClient,
   type McpProbeServiceOptions,
+  type McpProbeTimers,
   type McpProbeTransport,
 } from '../src/dev/playground/mcp-probe-service.ts';
+
+interface ManualTimer {
+  readonly callback: () => void;
+  readonly delayMs: number;
+}
+
+/**
+ * Manual scheduler for the probe's timer seam: nothing fires on its own. A test
+ * waits for the service to arm a timer with a given delay (event-ordered — the
+ * promise settles when the code under test reaches that point), then fires it.
+ */
+const manualTimers = (): Readonly<{
+  readonly fire: (delayMs: number) => Promise<void>;
+  readonly pending: () => readonly number[];
+  readonly timers: McpProbeTimers;
+}> => {
+  const armed = new Set<ManualTimer>();
+  const waiters = new Set<() => void>();
+  const find = (delayMs: number): ManualTimer | undefined =>
+    [...armed].find((timer) => timer.delayMs === delayMs);
+  return Object.freeze({
+    fire: async (delayMs) => {
+      let timer = find(delayMs);
+      while (timer === undefined) {
+        await new Promise<void>((resolvePromise) => { waiters.add(resolvePromise); });
+        timer = find(delayMs);
+      }
+      armed.delete(timer);
+      timer.callback();
+    },
+    pending: () => [...armed].map((timer) => timer.delayMs),
+    timers: {
+      schedule: (callback, delayMs) => {
+        const timer: ManualTimer = { callback, delayMs };
+        armed.add(timer);
+        for (const wake of [...waiters]) {
+          waiters.delete(wake);
+          wake();
+        }
+        return () => {
+          armed.delete(timer);
+        };
+      },
+    },
+  });
+};
+
+/** Never settles: a teardown that hangs for the rest of the test. */
+const stalled = (): Promise<never> => new Promise<never>(() => undefined);
+
+/**
+ * Whether `promise` has already settled, decided at the next macrotask so every
+ * microtask chained off the current turn has run first — no wall-clock wait.
+ */
+const settledBeforeNextTurn = (promise: Promise<unknown>): Promise<boolean> =>
+  Promise.race([
+    promise.then(() => true, () => true),
+    new Promise<boolean>((resolvePromise) => { setImmediate(() => resolvePromise(false)); }),
+  ]);
 
 const createBundle = async (
   servers: Readonly<Record<string, unknown>> = {
@@ -393,40 +455,47 @@ it('returns a timed-out report without awaiting stalled teardown', async () => {
   const root = await createBundle();
   let clientCloses = 0;
   let transportCloses = 0;
-  let guard: NodeJS.Timeout | undefined;
+  const timers = manualTimers();
   try {
-    const stalledClose = async (): Promise<void> =>
-      new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
     const service = serviceFor(root, {
+      // A frozen clock keeps the whole budget for the connect step, so the
+      // budget timer is armed with exactly `timeoutMs`.
+      clock: () => 0,
       createClient: () => client({
-        close: async () => {
+        close: () => {
           clientCloses += 1;
-          await stalledClose();
+          return stalled();
         },
-        connect: () => new Promise(() => undefined),
+        connect: () => stalled(),
       }),
-      createStdioTransport: () => transport(async () => {
+      createStdioTransport: () => transport(() => {
         transportCloses += 1;
-        await stalledClose();
+        return stalled();
       }),
       timeoutMs: 10,
+      timers: timers.timers,
     });
 
-    const report = await Promise.race([
-      service.probe({ host: 'claude', serverName: 'timeline' }),
-      new Promise<never>((_resolve, reject) => {
-        guard = setTimeout(
-          () => reject(new Error('The timed-out probe remained blocked on teardown.')),
-          150,
-        );
-      }),
-    ]);
+    const probe = service.probe({ host: 'claude', serverName: 'timeline' });
+    // The budget expires while connect is still pending: the timeout starts
+    // the transport close, and the report path arms the bounded teardown wait.
+    await timers.fire(10);
+    // Both closes hang forever; only the teardown wait may release the report.
+    await timers.fire(mcpProbeTeardownWaitMs);
+    expect(await settledBeforeNextTurn(probe)).toBe(true);
 
+    const report = await probe;
     expect(report.status).toBe('timed-out');
     expect(clientCloses).toBe(1);
     expect(transportCloses).toBeGreaterThan(0);
+    // The detached plugin-data cap is the only timer still armed: teardown is
+    // running in the background, not on the response path. Firing it releases
+    // the plugin-data removal, which `settle()` then fences.
+    expect(timers.pending()).toEqual([mcpProbePluginDataTeardownCapMs]);
+    await timers.fire(mcpProbePluginDataTeardownCapMs);
+    await service.settle();
+    expect(timers.pending()).toEqual([]);
   } finally {
-    if (guard !== undefined) clearTimeout(guard);
     await rm(root, { force: true, recursive: true });
   }
 });
@@ -434,39 +503,40 @@ it('returns a timed-out report without awaiting stalled teardown', async () => {
 it('returns a timed-out report without awaiting stalled teardown when the budget is spent before connecting', async () => {
   const root = await createBundle();
   let transportCloses = 0;
-  let guard: NodeJS.Timeout | undefined;
   let ticks = 0;
+  const timers = manualTimers();
   try {
     const service = serviceFor(root, {
       // The clock reads 0 at probe start and the whole budget later at every
       // subsequent read, so the connect step finds no time remaining.
       clock: () => (ticks++ === 0 ? 0 : 10_000),
       createClient: () => client({
-        close: async () => new Promise((resolvePromise) => setTimeout(resolvePromise, 250)),
-        connect: () => new Promise(() => undefined),
+        close: () => stalled(),
+        connect: () => stalled(),
       }),
-      createStdioTransport: () => transport(async () => {
+      createStdioTransport: () => transport(() => {
         transportCloses += 1;
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+        return stalled();
       }),
       timeoutMs: 10,
+      timers: timers.timers,
     });
 
-    const report = await Promise.race([
-      service.probe({ host: 'claude', serverName: 'timeline' }),
-      new Promise<never>((_resolve, reject) => {
-        guard = setTimeout(
-          () => reject(new Error('The budget-exhausted probe remained blocked on teardown.')),
-          150,
-        );
-      }),
-    ]);
+    const probe = service.probe({ host: 'claude', serverName: 'timeline' });
+    // No budget timer is armed on this path; the report waits only for the
+    // bounded teardown wait, never for the stalled closes.
+    await timers.fire(mcpProbeTeardownWaitMs);
+    expect(await settledBeforeNextTurn(probe)).toBe(true);
 
+    const report = await probe;
     expect(report.status).toBe('timed-out');
     expect(report.failure?.kind).toBe('connect');
     expect(transportCloses).toBeGreaterThan(0);
+    expect(timers.pending()).toEqual([mcpProbePluginDataTeardownCapMs]);
+    await timers.fire(mcpProbePluginDataTeardownCapMs);
+    await service.settle();
+    expect(timers.pending()).toEqual([]);
   } finally {
-    if (guard !== undefined) clearTimeout(guard);
     await rm(root, { force: true, recursive: true });
   }
 });

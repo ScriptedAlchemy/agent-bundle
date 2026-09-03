@@ -479,11 +479,17 @@ export interface AgentRenderEventSequence {
   readonly emit: (input: AgentRenderEventInput) => AgentRenderEvent;
 }
 
+/**
+ * `now` is the sequence's only time source (elapsed-time and event-rate
+ * bounds); it defaults to the wall clock and exists so a render pipeline can
+ * run every deadline against one injected clock.
+ */
 export const createAgentRenderEventSequence = (
   limitOverrides: Partial<AgentRenderLimits> = {},
+  now: () => number = Date.now,
 ): AgentRenderEventSequence => {
   const limits = resolveAgentRenderLimits(limitOverrides);
-  const startedAt = Date.now();
+  const startedAt = now();
   const recentTimes: number[] = [];
   let completed = false;
   let nextSequence = 0;
@@ -501,12 +507,12 @@ export const createAgentRenderEventSequence = (
           'The render is complete; later work requires a new invocation handoff',
         );
       }
-      const now = Date.now();
-      if (now - startedAt > limits.maxElapsedMs) {
+      const emittedAt = now();
+      if (emittedAt - startedAt > limits.maxElapsedMs) {
         throw elapsedTimeExceeded(limits.maxElapsedMs);
       }
-      recentTimes.push(now);
-      const windowStart = now - 1000;
+      recentTimes.push(emittedAt);
+      const windowStart = emittedAt - 1000;
       while (recentTimes[0] !== undefined && recentTimes[0] < windowStart) {
         recentTimes.shift();
       }
@@ -538,7 +544,7 @@ export const createAgentRenderEventSequence = (
       return nextSequence;
     },
     get remainingMs() {
-      return limits.maxElapsedMs - (Date.now() - startedAt);
+      return limits.maxElapsedMs - (now() - startedAt);
     },
   });
 };

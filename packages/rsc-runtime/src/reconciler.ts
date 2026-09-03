@@ -1,4 +1,4 @@
-import { Deferred, Duration, Effect, Exit, Option, Queue, Stream, type Scope } from 'effect';
+import { Clock, Deferred, Duration, Effect, Exit, Option, Queue, Stream, type Scope } from 'effect';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 
@@ -486,6 +486,12 @@ const progressInput = (update: AgentProgressUpdate): AgentRenderEventInput => ({
 });
 
 export interface AgentRenderEventStreamOptions {
+  /**
+   * Time source for the `maxElapsedMs` deadline: both the event sequence's
+   * elapsed check and the pending-boundary deadline sleep read it. Defaults to
+   * the runtime clock; tests inject a `TestClock` so no real time elapses.
+   */
+  readonly clock?: Clock.Clock;
   readonly demand: FlightDemand;
   readonly flight: Promise<ReadableStream<Uint8Array>>;
   readonly limits?: Partial<AgentRenderLimits>;
@@ -513,7 +519,11 @@ const handoffRequired = (): AgentContractError =>
 export const createAgentRenderEventSession = (
   options: AgentRenderEventStreamOptions,
 ): AgentRenderEventSession => {
-  const sequence = createAgentRenderEventSequence(options.limits);
+  const clock = options.clock;
+  const sequence = createAgentRenderEventSequence(
+    options.limits,
+    clock === undefined ? undefined : () => clock.currentTimeMillisUnsafe(),
+  );
   const maxBufferedProgress = resolveAgentRenderLimits(options.limits).maxEvents;
   let offerProgress: ((input: AgentRenderEventInput) => Effect.Effect<void, Error>) | undefined;
   let progressFailure: Error | undefined;
@@ -606,7 +616,10 @@ export const createAgentRenderEventSession = (
       );
     }),
   );
-  return { events, progress };
+  return {
+    events: clock === undefined ? events : Stream.provideService(events, Clock.Clock, clock),
+    progress,
+  };
 };
 
 
