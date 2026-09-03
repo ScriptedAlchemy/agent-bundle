@@ -15,6 +15,36 @@
 - Never accept or capture a Workbench route while its loading state is still visible.
 - Browser acceptance must cover populated state plus the documented stale-diagnostic and repair flow.
 
+## Documentation site
+
+- `website/` is the public Rspress docsite
+  (<https://scriptedalchemy.github.io/agent-bundle/>), deployed from `main`
+  by `.github/workflows/docs.yml`. It is user-facing product, held to the
+  same accuracy bar as the code it describes.
+- A PR that adds or changes user-facing behavior — a CLI command or flag,
+  config key, public export or entry point, hook event or result rule, host
+  target or artifact, diagnostic code, environment variable, or example —
+  updates the matching page under `website/docs/en/**` **and** its
+  `website/docs/zh/**` translation in the same PR. Ask the same question
+  when writing the changeset: if the summary is user-facing, the docs almost
+  certainly need the same change. Internal refactors, tests, and CI do not.
+- Reference prose must match the source. State what the code does, not what
+  the design intended; when unsure, read the adapter or validator before
+  writing the sentence. Where the generated pages and hand-written pages
+  disagree, the generated pages are right — fix the hand-written one.
+- Never hand-edit generated pages: `website/docs/{en,zh}/api/**` comes from
+  TypeDoc, and the hosts, events, and diagnostics reference pages are
+  rendered at build time from `packages/agent-bundle/src/adapters/capabilities/*.json`
+  and `docs/diagnostics.md`. Change the source, and the site follows.
+- `pnpm docs:site:build` is the gate: typecheck, build, and Rspress's
+  dead-link, dead-anchor, dead-image, and language-parity checks. Parity
+  fails the build if one locale gains a page the other lacks. Run it before
+  pushing anything under `website/`, and after any change to public
+  exports, since TypeDoc compiles `packages/agent-bundle/src` directly.
+- The site is desktop-first, like the Workbench. Wide tables scroll; code
+  samples wrap at roughly 90 columns so they render without horizontal
+  overflow at the default content width.
+
 ## Changesets
 
 - Every PR that changes a publishable package (`packages/agent-bundle`,
