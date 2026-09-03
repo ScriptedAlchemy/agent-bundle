@@ -709,6 +709,10 @@ it('settle() fences in-flight probes, not only already-registered teardowns (#39
   const connectReleased = new Promise<void>((resolvePromise) => {
     releaseConnect = resolvePromise;
   });
+  let connectReached!: () => void;
+  const connectStarted = new Promise<void>((resolvePromise) => {
+    connectReached = resolvePromise;
+  });
   try {
     const service = serviceFor(root, {
       createClient: () => client({
@@ -716,6 +720,7 @@ it('settle() fences in-flight probes, not only already-registered teardowns (#39
           // A probe that is still connecting when shutdown begins: its
           // teardown is not registered yet, so a fence over teardowns alone
           // would resolve immediately.
+          connectReached();
           await connectReleased;
         },
       }),
@@ -732,13 +737,16 @@ it('settle() fences in-flight probes, not only already-registered teardowns (#39
 
     const probe = service.probe({ host: 'claude', serverName: 'timeline' });
     void probe.then(() => { events.push('report-returned'); });
-    // Let the probe reach its (blocked) connect before shutdown starts.
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    // Wait for the probe to reach its (blocked) connect before shutdown
+    // starts: plugin data exists by then, and the teardown is not registered.
+    await connectStarted;
     await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).resolves.toBe('present');
 
     let settled = false;
     const settle = service.settle().then(() => { settled = true; });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    // A fence over registered teardowns alone would resolve within the
+    // current macrotask; draining one is enough to observe that regression.
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
     expect(settled).toBe(false);
 
     releaseConnect();
