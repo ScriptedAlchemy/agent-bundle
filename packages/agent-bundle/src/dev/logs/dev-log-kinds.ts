@@ -47,6 +47,19 @@ export type DevLogKindMap = { readonly [TProducer in DevLogProducer]: (typeof de
 
 export type DevLogKindFor<TProducer extends DevLogProducer> = DevLogKindMap[TProducer];
 
+/** The closed set of context keys a producer may attach; everything else is dropped at the boundary. */
+export const safeContextKeys: ReadonlySet<string> = new Set([
+  'buildId',
+  'diagnosticCode',
+  'epochId',
+  'hookId',
+  'projectId',
+  'routeId',
+  'runId',
+  'sessionId',
+  'target',
+]);
+
 export const hasControlOrSeparators = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);

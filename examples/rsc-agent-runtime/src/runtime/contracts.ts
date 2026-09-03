@@ -113,7 +113,6 @@ export interface DevRuntimeInspectionResponse {
   readonly inspection: DevRuntimeInspectionEnvelope;
 }
 
-export type McpTimeline = RuntimeSnapshot;
 
 export interface ToolAnnotations {
   readOnlyHint: boolean;

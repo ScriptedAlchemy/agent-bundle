@@ -458,13 +458,6 @@ export const expectIdempotencyKey = (key: string): string => {
   return key;
 };
 
-export const expectCanonicalPayload = (value: unknown, label: string): string => {
-  if (!isJsonSafe(value)) {
-    throw new AgentStateError('invalid-event', `${label} must be JSON-safe`);
-  }
-  return canonicalJson(value);
-};
-
 export const expectRevisionShape = (revision: number | undefined, label: string): void => {
   if (revision !== undefined && (!Number.isInteger(revision) || revision < 0)) {
     throw new AgentStateError('invalid-input', `${label} must be an integer >= 0`);

@@ -57,7 +57,6 @@ export const TopologyStateSchema = z
 
 export type Actor = z.output<typeof ActorSchema>;
 export type Activity = z.output<typeof ActivitySchema>;
-export type EdgeRefusal = z.output<typeof EdgeRefusalSchema>;
 export type TopologyState = z.output<typeof TopologyStateSchema>;
 
 const actorObservedSchema = ActorSchema.omit({ worktreeRoot: true }).strict();

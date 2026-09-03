@@ -69,9 +69,3 @@ export const requestContextProvenanceSchema: z.ZodType<RequestContextProvenance>
   session: z.union([availableSessionSchema, unavailableSchema]),
   workspace: z.union([availableWorkspaceSchema, unavailableSchema]),
 });
-
-/** Strictly decodes the credential-free request context carried by Workbench routes. */
-export const decodeRequestContextProvenance = (value: unknown): RequestContextProvenance | undefined => {
-  const parsed = requestContextProvenanceSchema.safeParse(value);
-  return parsed.success ? Object.freeze(parsed.data) : undefined;
-};
