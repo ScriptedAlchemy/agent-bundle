@@ -58,6 +58,24 @@ a `matcher` on `UserPromptSubmit` or `Stop`, and a `codex:WebSearch`-style hoste
 Hook trust (review by current hash in `/hooks`, plugin hooks skipped until trusted, managed hooks
 immutable) is host-owned and is recorded as unavailable rather than claimed.
 
+The Codex artifact is also its own repo marketplace: `.agents/plugins/marketplace.json` carries one
+local `./` entry whose `category` follows the plugin's interface category and whose
+`policy.installation` / `policy.authentication` default to `AVAILABLE` / `ON_INSTALL`.
+`codex.marketplace` authors the picker `displayName`, the `category`, and the documented policy
+values, except `installation: NOT_AVAILABLE`, which fails the build
+(`codex.marketplace.policy.installation.not-installable`) because live `codex plugin add` refuses
+such entries and that is exactly the command the emitted `INSTALL.md` and `installBundle()` run.
+The pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources for
+validating real-world marketplaces (Git and registry URLs must carry a syntactically valid
+host (DNS, IPv4, or bracketed IPv6), port, and path rather than a bare scheme prefix, and
+npm `version` must be a semver version, range, or dist-tag, and Git `ref` must satisfy
+`git check-ref-format`), but the adapter never emits them. Personal and legacy
+`.claude-plugin/marketplace.json` discovery, the `~/.codex/plugins/cache` layout, `config.toml`
+enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
+managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or
+admin-owned and are recorded in `codex-0.147.0.json` (`distribution`) with dated evidence instead of
+being claimed.
+
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
 optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the
