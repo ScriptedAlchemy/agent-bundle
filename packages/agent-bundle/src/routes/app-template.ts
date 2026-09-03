@@ -38,7 +38,7 @@ const isFile = (path: string): boolean => {
 /**
  * Resolves an App route's `config.template` against both candidate bases.
  * An absolute template, or a relative one whose two interpretations coincide,
- * resolves without probing the filesystem; otherwise exactly one existing
+ * has one candidate, which still has to exist; otherwise exactly one existing
  * candidate wins, and the ambiguous and missing outcomes are reported for the
  * compiler to diagnose (AB4827).
  */
@@ -49,10 +49,12 @@ export const resolveAppRouteTemplate = (
 ): AppRouteTemplateResolution => {
   const routeRelative = resolve(dirname(routeSource), template);
   const projectRelative = resolve(projectRoot, template);
-  if (routeRelative === projectRelative) {
-    return { form: 'route-relative', kind: 'resolved', path: routeRelative };
-  }
   const routeExists = isFile(routeRelative);
+  if (routeRelative === projectRelative) {
+    return routeExists
+      ? { form: 'route-relative', kind: 'resolved', path: routeRelative }
+      : { kind: 'missing', projectRelative, routeRelative };
+  }
   const projectExists = isFile(projectRelative);
   if (routeExists && projectExists) return { kind: 'ambiguous', projectRelative, routeRelative };
   if (routeExists) return { form: 'route-relative', kind: 'resolved', path: routeRelative };

@@ -609,9 +609,27 @@ export interface AppReferenceSite {
   readonly source: string;
 }
 
-const stripModuleExtension = (path: string): string => {
-  const extension = extname(path);
-  return extension === '' ? path : path.slice(0, -extension.length);
+/**
+ * The extensions an App route module can carry (the discovery globs admit
+ * `.ts`/`.tsx`) and the TypeScript-style specifier spellings that map onto
+ * them. Only these count as an extension of a relative reference, so a
+ * dotted App name such as `foo.bar` keeps its dot and a mistyped suffix
+ * (`dashboard.tss`) matches nothing.
+ */
+const appModuleExtensions: Readonly<Record<string, string>> = {
+  '.js': '.ts',
+  '.jsx': '.tsx',
+  '.ts': '.ts',
+  '.tsx': '.tsx',
+};
+
+/** The App sources one relative reference may name: exact (after `.js`-style mapping) or extensionless. */
+const relativeAppCandidates = (site: AppReferenceSite, reference: string): readonly string[] => {
+  const candidate = resolve(dirname(site.source), reference);
+  const extension = extname(reference).toLowerCase();
+  const mapped = appModuleExtensions[extension];
+  if (mapped !== undefined) return [`${candidate.slice(0, -extension.length)}${mapped}`];
+  return [`${candidate}.ts`, `${candidate}.tsx`];
 };
 
 const findAppTarget = (
@@ -620,9 +638,8 @@ const findAppTarget = (
   apps: readonly AppReferenceTarget[],
 ): AppReferenceTarget | undefined => {
   if (isRelativeSpecifier(reference)) {
-    const candidate = resolve(dirname(site.source), reference);
-    const stem = stripModuleExtension(candidate);
-    return apps.find((app) => app.source === candidate || stripModuleExtension(app.source) === stem);
+    const candidates = relativeAppCandidates(site, reference);
+    return apps.find((app) => candidates.includes(app.source));
   }
   if (reference.startsWith('app:')) return apps.find((app) => app.id === reference);
   if (reference.includes('/')) return apps.find((app) => app.id === `app:${reference}`);

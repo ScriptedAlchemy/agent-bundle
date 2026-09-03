@@ -13,6 +13,8 @@ const extract = (
   options: RouteConfigExtractionOptions = {},
 ) => extractRouteConfig(text, relativePath, `/project/${relativePath}`, options);
 
+const codes = (diagnostics: readonly { readonly code: string }[]): string[] => diagnostics.map((diagnostic) => diagnostic.code);
+
 /** An in-memory project tree standing in for the sibling modules a const reference imports. */
 const virtualProject = (files: Readonly<Record<string, string>>): RouteConfigExtractionOptions => ({
   projectRoot: '/project',
@@ -219,11 +221,19 @@ it('records appResourceUri() references for the graph compiler and resolves them
   expect(Object.isFrozen((resolved.config as { _meta: { ui: object } })._meta.ui)).toBe(true);
 });
 
+const notesApps = [
+  { id: 'app:notes/dashboard', resourceUri: 'ui://notes/dashboard.html', source: '/project/src/mcp/notes/apps/dashboard.tsx' },
+  { id: 'app:notes/foo.bar', resourceUri: 'ui://notes/foo.bar.html', source: '/project/src/mcp/notes/apps/foo.bar.ts' },
+];
+
 it.each([
-  ['the route id', "appResourceUri('app:notes/dashboard')"],
-  ['a relative module path without extension', "appResourceUri('../apps/dashboard')"],
-  ['a relative module path with extension', "appResourceUri('../apps/dashboard.tsx')"],
-])('resolves an App reference written as %s', (_name, call) => {
+  ['the route id', "appResourceUri('app:notes/dashboard')", 'ui://notes/dashboard.html'],
+  ['a relative module path without extension', "appResourceUri('../apps/dashboard')", 'ui://notes/dashboard.html'],
+  ['a relative module path with extension', "appResourceUri('../apps/dashboard.tsx')", 'ui://notes/dashboard.html'],
+  ['a relative module path with a .js-style extension', "appResourceUri('../apps/dashboard.jsx')", 'ui://notes/dashboard.html'],
+  ['a dotted App name without extension', "appResourceUri('../apps/foo.bar')", 'ui://notes/foo.bar.html'],
+  ['a dotted App name with extension', "appResourceUri('./../apps/foo.bar.ts')", 'ui://notes/foo.bar.html'],
+])('resolves an App reference written as %s', (_name, call, resourceUri) => {
   const extracted = extract([
     "import { appResourceUri } from 'agent-bundle/routes';",
     `export const config = { _meta: { ui: { resourceUri: ${call} } } };`,
@@ -231,10 +241,28 @@ it.each([
   const resolved = resolveRouteConfigAppReferences(
     extracted,
     { relativePath: 'src/mcp/notes/tools/search.ts', serverName: 'notes', source: '/project/src/mcp/notes/tools/search.ts' },
-    [{ id: 'app:notes/dashboard', resourceUri: 'ui://notes/dashboard.html', source: '/project/src/mcp/notes/apps/dashboard.tsx' }],
+    notesApps,
   );
   expect(resolved.diagnostics).toEqual([]);
-  expect(resolved.config).toEqual({ _meta: { ui: { resourceUri: 'ui://notes/dashboard.html' } } });
+  expect(resolved.config).toEqual({ _meta: { ui: { resourceUri } } });
+});
+
+it.each([
+  ['a mistyped extension', "appResourceUri('../apps/dashboard.tss')"],
+  ['the wrong route-module extension', "appResourceUri('../apps/dashboard.ts')"],
+  ['a path into another directory', "appResourceUri('./dashboard')"],
+])('rejects a relative App reference with %s (AB4826)', (_name, call) => {
+  const extracted = extract([
+    "import { appResourceUri } from 'agent-bundle/routes';",
+    `export const config = { _meta: { ui: { resourceUri: ${call} } } };`,
+  ].join('\n'));
+  const resolved = resolveRouteConfigAppReferences(
+    extracted,
+    { relativePath: 'src/mcp/notes/tools/search.ts', serverName: 'notes', source: '/project/src/mcp/notes/tools/search.ts' },
+    notesApps,
+  );
+  expect(codes(resolved.diagnostics)).toEqual(['AB4826']);
+  expect(resolved.config).toBe(emptyRouteConfig);
 });
 
 it('diagnoses an App reference that matches no App route (AB4826) and drops the config', () => {

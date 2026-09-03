@@ -722,14 +722,19 @@ export const compileRouteGraph = async (
                   route.source,
                 ));
                 break;
-              case 'missing':
+              case 'missing': {
+                // An absolute template has one candidate; name it once.
+                const candidates = resolution.routeRelative === resolution.projectRelative
+                  ? `${resolution.routeRelative} does not exist`
+                  : `neither ${resolution.routeRelative} (route-relative) nor ${resolution.projectRelative} (project-root-relative) exists`;
                 diagnostics.push(routeError(
                   'AB4827',
-                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but neither ${resolution.routeRelative} (route-relative) nor ${resolution.projectRelative} (project-root-relative) exists.`,
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but ${candidates}.`,
                   'Templates resolve relative to the route module; point config.template at an existing HTML file beside the route (for example \'./dashboard.html\'), then inspect again.',
                   route.source,
                 ));
                 break;
+              }
               default: {
                 const unreachable: never = resolution;
                 throw new TypeError(`Unhandled template resolution ${String(unreachable)}.`);

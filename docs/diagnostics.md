@@ -374,7 +374,9 @@ in every tool that opens it:
   `config.resourceUri` while compiling the graph. References are `'<app>'`
   (an App on the same generated server), `'<server>/<app>'`,
   `'app:<server>/<app>'`, or a module path relative to the referencing file
-  (`'../apps/dashboard'`, with or without extension). The argument may be a
+  (`'../apps/dashboard'`, with or without its `.ts`/`.tsx` extension — a
+  `.js`/`.jsx` spelling maps onto the TypeScript source, and any other suffix
+  is part of the App name). The argument may be a
   string literal or a const identifier of the first form. An unknown
   reference — or a reference to an App whose own `resourceUri` is not a
   static string, or whose server is not generated — is `AB4826`, and the

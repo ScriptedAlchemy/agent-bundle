@@ -868,6 +868,19 @@ it('resolves an App route template relative to the route module, accepting the l
   expect(missingGraph.diagnostics[0]!.message).toContain(`${join(missing, 'src/mcp/curator/apps/dashboard.html')} (route-relative)`);
   expect(missingGraph.diagnostics[0]!.message).toContain(`${join(missing, 'dashboard.html')} (project-root-relative)`);
 
+  // An absolute template has a single candidate, which still has to exist.
+  const absolute = await createRoot();
+  await writeTree(absolute, { 'src/mcp/curator/apps/dashboard.tsx': app(join(absolute, 'shell', 'missing.html')) });
+  const absoluteGraph = await compileRouteGraph(absolute, fixtureConfig());
+  expect(codesOf(absoluteGraph.diagnostics)).toEqual(['AB4827']);
+  expect(absoluteGraph.diagnostics[0]!.message).toContain(`but ${join(absolute, 'shell', 'missing.html')} does not exist.`);
+  const absolutePresent = await createRoot();
+  await writeTree(absolutePresent, {
+    'shell/dashboard.html': html,
+    'src/mcp/curator/apps/dashboard.tsx': app(join(absolutePresent, 'shell', 'dashboard.html')),
+  });
+  expect((await compileRouteGraph(absolutePresent, fixtureConfig())).diagnostics).toEqual([]);
+
   // The same tree in another checkout digests identically: the template stays
   // the authored path in the IR, and only its resolution is machine-specific.
   const twin = await createRoot();
