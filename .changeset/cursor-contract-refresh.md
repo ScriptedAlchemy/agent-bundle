@@ -18,4 +18,4 @@ diagnostics (`cursor.manifest.field.unknown`, `cursor.manifest.author.*`,
 discovery, variables, marketplace limits, distribution and local-install
 surfaces, canvases, and the agents component as dated capability rows, mirrored
 through the unified `plugin` adapter. Cursor `adapterRevision` 1.8.0 → 1.9.0,
-unified plugin 1.22.0 → 1.23.0. (#375)
+unified plugin 1.24.0 → 1.25.0. (#375)
