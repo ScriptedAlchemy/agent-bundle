@@ -270,39 +270,32 @@ const withoutReservation = (notice: AgentNotice, reservationKey: string | undefi
   return Object.freeze(rest);
 };
 
+/**
+ * Records a wire-level availability receipt. The receipt is evidence that a
+ * `resources/updated` signal reached the wire, so it is recorded whatever the
+ * notice's state became after the hold was taken: an acknowledgement, expiry,
+ * or withdrawal that raced the send does not erase the send, and the state
+ * itself is never moved by a receipt. A reserved receipt is honoured only by
+ * the key that holds the slot: a holder whose hold lapsed and was taken over
+ * records nothing, so the takeover's send is the one the budget counts.
+ */
 const transitionAvailability = (
   notice: AgentNotice,
   input: { readonly at: string; readonly noticeIds: ReadonlySet<string>; readonly reservationKey: string | undefined },
 ): AgentNotice => {
   if (!input.noticeIds.has(notice.id)) return notice;
-  switch (notice.state) {
-    case 'pending':
-    case 'attempted':
-      // A reserved receipt is honoured only by the key that holds the slot: a
-      // holder whose hold lapsed and was taken over records nothing, so the
-      // takeover's send is the one the budget counts.
-      if (input.reservationKey !== undefined && notice.availabilityReservation?.key !== input.reservationKey) {
-        return notice;
-      }
-      return Object.freeze({
-        ...withoutReservation(notice, input.reservationKey),
-        availability: Object.freeze({
-          channel: 'mcp-resource-updated' as const,
-          count: (notice.availability?.count ?? 0) + 1,
-          firstAt: notice.availability?.firstAt ?? input.at,
-          lastAt: input.at,
-        }),
-      });
-    case 'expired':
-    case 'unavailable':
-    case 'withdrawn':
-    case 'acknowledged':
-      return notice;
-    default: {
-      const exhaustive: never = notice.state;
-      return exhaustive;
-    }
+  if (input.reservationKey !== undefined && notice.availabilityReservation?.key !== input.reservationKey) {
+    return notice;
   }
+  return Object.freeze({
+    ...withoutReservation(notice, input.reservationKey),
+    availability: Object.freeze({
+      channel: 'mcp-resource-updated' as const,
+      count: (notice.availability?.count ?? 0) + 1,
+      firstAt: notice.availability?.firstAt ?? input.at,
+      lastAt: input.at,
+    }),
+  });
 };
 
 /**

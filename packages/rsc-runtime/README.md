@@ -279,7 +279,11 @@ bounded by `retryBudget` (availability receipts per notice, durable across
 restarts); because the slot is held before the wire write, two server processes
 over one store can never both signal the same notice; a receipt presented by a
 key that lost its hold is refused (`reservation-lost`) rather than counted, so
-a stale send and a takeover send can never push a budget-one notice to two. A
+a stale send and a takeover send can never push a budget-one notice to two.
+Ownership, not state, decides whether a receipt lands: a notice acknowledged,
+expired, or withdrawn while its send was in flight still keeps the hold, so the
+receipt for the send that happened is recorded on it without moving its state,
+and a key that never held the slot is refused on a terminal notice too. A
 send that reached the wire but whose receipt commit failed stays owed: the same
 idempotent receipt is retried on the renewal cadence (renewing its hold as it
 goes), before any later observation spends, and on `close()`, so a live process

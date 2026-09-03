@@ -1037,6 +1037,86 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     expect(signalled.notices[0]?.availability).toMatchObject({ count: 1 });
     expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
 
+    await driver.close();
+  });
+
+  it('records the receipt of a send that raced an acknowledgement instead of discarding it as a no-op', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:holder',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    // The wire send succeeds, and before its receipt is finalized the
+    // recipient acknowledges the notice through another request.
+    const acknowledged = await run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-racing',
+      kind: 'event',
+      startedAt: '2026-09-01T19:04:01.000Z',
+    }, async () => (await agent()).notices!.acknowledge(id));
+    expect(acknowledged.state).toBe('acknowledged');
+    expect(acknowledged.availabilityReservation).toEqual({ at: '2026-09-01T19:04:00.000Z', key: 'holder:1' });
+
+    // The holder still owns the slot, so the receipt for the send that
+    // happened lands on the acknowledged notice without moving its state.
+    const signalled = await ledger.signalAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      idempotencyKey: 'signal:holder',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    expect(signalled.notices[0]).toMatchObject({
+      acknowledgement: { invocationId: 'ack-racing' },
+      availability: { channel: 'mcp-resource-updated', count: 1, firstAt: '2026-09-01T19:04:02.000Z' },
+      state: 'acknowledged',
+    });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    // A key that never held the slot is still refused on a terminal notice,
+    // so a stale holder cannot invent evidence after the fact.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:03.000Z',
+      idempotencyKey: 'signal:stranger',
+      noticeIds: [id],
+      reservationKey: 'stranger:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    // Expiry after the hold behaves the same: the receipt records on the
+    // expired notice and the state stays expired.
+    const expiring = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-expiring',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('expiring'),
+      expiresAt: '2026-09-01T19:05:30.000Z',
+      priority: 'high',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:expiring' }));
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:05:01.000Z',
+      idempotencyKey: 'reserve:expiring',
+      noticeIds: [expiring.notice.id],
+      reservationKey: 'holder:2',
+    });
+    await ledger.expire({ at: '2026-09-01T19:05:31.000Z', idempotencyKey: 'expire:racing' });
+    expect((await ledger.read()).notices.find((notice) => notice.id === expiring.notice.id)?.state).toBe('expired');
+    const lateReceipt = await ledger.signalAvailability({
+      at: '2026-09-01T19:06:00.000Z',
+      idempotencyKey: 'signal:expiring',
+      noticeIds: [expiring.notice.id],
+      reservationKey: 'holder:2',
+    });
+    const expired = lateReceipt.notices.find((notice) => notice.id === expiring.notice.id);
+    expect(expired).toMatchObject({ availability: { count: 1 }, state: 'expired' });
+    expect(expired).not.toHaveProperty('availabilityReservation');
+
     for (const invalid of [
       () => ledger.reserveAvailability({ at: 'never', idempotencyKey: 'x', noticeIds: [id], reservationKey: 'k' }),
       () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'y', noticeIds: [], reservationKey: 'k' }),

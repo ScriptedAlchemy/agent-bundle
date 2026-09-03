@@ -571,9 +571,12 @@ export const createAgentNoticeLedger = (
             : Effect.fail(error)));
         if (committed === undefined) continue;
         if (!committed.replayed) {
+          // Ownership, not state, decides: a notice acknowledged, expired, or
+          // withdrawn after the send still keeps its hold, and the receipt for
+          // the send that happened lands on it; only a hold held by another
+          // key (or no hold at all) refuses the receipt.
           const lost = before.state.notices.filter((notice) =>
             noticeIds.includes(notice.id)
-            && (notice.state === 'pending' || notice.state === 'attempted')
             && notice.availabilityReservation?.key !== reservationKey);
           if (lost.length > 0) {
             return yield* Effect.fail(new AgentNoticeError(

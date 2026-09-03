@@ -140,6 +140,38 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('records the receipt of a send that an acknowledgement raced, so the evidence is never silently dropped', async () => {
+    const { driver, ledger } = await openLedger();
+    const signaller = signallerOver(ledger);
+    await signaller.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+
+    // The wire write succeeds, and while it is in flight the recipient
+    // acknowledges the notice through its own request.
+    const send = async (): Promise<void> => {
+      await runAgentRequest({
+        host: available({ name: 'claude' }, 'native'),
+        invocation: { id: 'ack-during-send', kind: 'tool', startedAt: T1 },
+        noticeLedger: ledger,
+        session: available({ sessionId: 's1' }, 'native'),
+        workspace: available({ root: '/workspace' }, 'native'),
+      }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+    };
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled', noticeIds: [published.notice.id] });
+
+    // The receipt landed on the acknowledged notice: the send is recorded as
+    // availability evidence, the state stays acknowledged, and nothing is owed.
+    const after = (await ledger.read()).notices.find((notice) => notice.id === published.notice.id);
+    expect(after).toMatchObject({
+      acknowledgement: { invocationId: 'ack-during-send' },
+      availability: { channel: 'mcp-resource-updated', count: 1, firstAt: T1 },
+      state: 'acknowledged',
+    });
+    expect(after).not.toHaveProperty('availabilityReservation');
+    await expect(signaller.observe(sender().send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    await driver.close();
+  });
+
   it('never signals a connection whose principal the recipient does not match', async () => {
     const { driver, ledger } = await openLedger();
     const signaller = signallerOver(ledger);
