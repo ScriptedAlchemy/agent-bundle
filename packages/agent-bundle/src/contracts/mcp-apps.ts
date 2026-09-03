@@ -27,9 +27,9 @@ export type {
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
 } from '../dev/mcp-app-runtime-preview-service.ts';
-export { isMcpAppConsentCapability } from '../dev/mcp-apps/mcp-app-sandbox.ts';
+export { isMcpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
+export type { McpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
 export type {
-  McpAppConsentCapability,
   McpAppConsentChallenge,
   McpAppConsentRequest,
   McpAppDocumentPolicySnapshot,

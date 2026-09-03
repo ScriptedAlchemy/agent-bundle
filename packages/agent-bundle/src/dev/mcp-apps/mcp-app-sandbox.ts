@@ -5,6 +5,7 @@ import { isIP, type Socket } from 'node:net';
 import { isRecord } from '../../core/strict-json.ts';
 
 import type { McpAppJsonValue } from './mcp-app-binding-service.ts';
+import type { McpAppConsentCapability } from './mcp-app-consent.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
 
@@ -145,12 +146,7 @@ export interface McpAppSandboxPolicy {
   readonly warnings: readonly McpAppSandboxWarning[];
 }
 
-const mcpAppConsentCapabilities = ['call-tool', 'download-file', 'open-external-link', 'clipboard-write', 'camera', 'microphone', 'geolocation', 'request-display-mode'] as const;
-
-export type McpAppConsentCapability = (typeof mcpAppConsentCapabilities)[number];
-
-export const isMcpAppConsentCapability = (value: unknown): value is McpAppConsentCapability =>
-  (mcpAppConsentCapabilities as readonly unknown[]).includes(value);
+export { isMcpAppConsentCapability, type McpAppConsentCapability } from './mcp-app-consent.ts';
 
 export interface McpAppConsentGrant {
   readonly authorizationId: string;
