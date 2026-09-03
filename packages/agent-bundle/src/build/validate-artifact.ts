@@ -436,18 +436,22 @@ const validateTargetContracts = async (options: {
 };
 
 /**
- * Agent Plugins 1.0.0 bytes-at-rest lane (AB6035–AB6037) over every emitted
- * portable tree, so a standard-invalid `mcp.json` or layout fails ordinary
- * `build` and `validate --artifact` rather than only `--host-validation`.
+ * Agent Plugins 1.0.0 bytes-at-rest lane (AB6035–AB6037) over every tree
+ * emitted by the built-in portable adapter, so a standard-invalid `mcp.json`
+ * or layout fails ordinary `build` and `validate --artifact` rather than only
+ * `--host-validation`. The lane keys on the registered adapter identity, not
+ * the name: an advanced registry may bind `portable` to its own adapter and
+ * contract, and that output is validated by its own `artifactValidation`.
  */
 const validatePortableTargets = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifest;
+  readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   for (const target of options.manifest.targets) {
-    if (target.name !== portableAdapter.name) continue;
+    if (!options.registry.has(target.name) || options.registry.get(target.name) !== portableAdapter) continue;
     const prefix = `${target.name}/`;
     if (!options.files.some((file) => file.path.startsWith(prefix))) continue;
     for (const entry of await validatePortablePluginFiles({
@@ -772,6 +776,7 @@ export const validateArtifactWithSnapshot = async (
       artifactRoot,
       files: inspection.files,
       manifest,
+      registry,
     }),
     validateMcpCoherence({
       artifactRoot,

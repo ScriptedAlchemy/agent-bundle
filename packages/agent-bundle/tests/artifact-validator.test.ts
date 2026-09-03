@@ -892,6 +892,32 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
   }
 });
 
+it('leaves an advanced registry adapter that reuses the portable name to its own artifact contract', async () => {
+  const registry = new TargetRegistry().register({
+    artifactValidation: {
+      documents: [{ path: 'document.json', required: true, schema: 'document' }],
+      schemas: [{ name: 'document', validate: validateCustomDocument }],
+    },
+    capabilities: {},
+    metadata: customMetadata,
+    name: 'portable',
+    plan: () => ({ diagnostics: [], entries: [] }),
+  } satisfies TargetAdapter);
+  const target = targetFromRegistry(registry, 'portable');
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'portable/document.json' },
+  ], true, [target]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    // No AB6035 for the absent Agent Plugins plugin.json: the byte lane keys on the
+    // built-in adapter identity. Only the name-keyed install-surface requirement remains.
+    expect(diagnostics.map((entry) => entry.code).sort()).toEqual(['AB6023', 'AB6024']);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('admits nested project assets in the target-owned recursive asset namespace', async () => {
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
