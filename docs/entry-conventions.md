@@ -77,8 +77,8 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`); the legacy project-root-relative form is accepted only while unambiguous (`AB4827` otherwise). Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. | Use a custom server or prefix the file with `_` |
-| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
@@ -86,6 +86,36 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
+
+### Which config keys claim a conventional module
+
+An explicit config entry that references a module under a conventional route
+directory *claims* it: the module belongs to that declaration and leaves
+conventional discovery. Claims are decided by the module path the entry
+resolves to, so nothing is ever compiled twice into one artifact output. The
+exception is `bin`: a bin compiles to `dist/bin/<name>.js`, which is disjoint
+from every artifact output, and the bin envelope and the artifact-script
+envelope run the same `main`, so a direct `src/scripts/<name>` child a `bin`
+entry references stays a conventional script and ships on both surfaces. (A
+nested `src/scripts/<dir>/<name>` module or one whose stem is not a safe route
+identity — which the flat scripts artifact could not ship anyway — stays
+claimed, so a bin-only entry there never turns into `AB4808` or `AB4803`.)
+`inspect` shows such a module under both `packageBuild.bins` and `scripts`; no
+diagnostic fires, because that is the intended "same entry, npm bin + hook
+target" shape. `lib` is not an executable surface, so a `lib.entry` claims
+its module like every other key.
+
+| Config key | Claims a module under | Effect on a `src/scripts/<name>.ts` module it references |
+| --- | --- | --- |
+| `scripts.<name>` | every route directory | Claimed: the explicit entry ships it as `scripts/<name>.mjs`; the convention no longer applies. A *different* module under `src/scripts/` sharing the configured `<name>` is `AB4809`. |
+| `hooks.<event>[].handler` | every route directory | Claimed: the module is a hook handler compiled under `hooks/`, not an artifact script. |
+| `mcp.servers.<id>.entry`, `mcp.servers.<id>.apps.<app>.entry` / `.template` | every route directory | Claimed: the module is the server or App entry compiled under `mcp/` or `mcp-apps/`. |
+| `lib.entry` | every route directory | Claimed: the module is the library entry compiled to `dist/<stem>.js`, not an artifact script. |
+| `bin.<name>` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and any `src/scripts/**` module that is nested or unsafely named — **not** a safely named direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/bin/<name>.js` and `scripts/<name>.mjs`. The module must export `main` or be self-executing: a plain `default`-only module is `AB4738`, and a rendered `src/scripts/<name>.tsx` must export both the default component and `main`, otherwise `AB4737`. |
+
+To ship a `src/scripts/` module as a bin only, prefix a path segment with `_`
+(`src/scripts/_hauler.ts`): private segments opt the module out of discovery
+while the `bin` entry still references it explicitly.
 
 ### Config beside a route-generated MCP server
 

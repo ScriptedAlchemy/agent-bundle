@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
-import { scanEntryExportsSource } from '../build/entry-exports.ts';
+import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -18,6 +18,7 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -1865,21 +1866,111 @@ const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagno
  * resolution. Discovery is not a packaging choice - a route never
  * disappears silently.
  */
+/** The explicit `bin` names claiming each absolute entry source, tolerant of malformed config shapes. */
+const explicitBinNamesBySource = (loaded: LoadedConfig): ReadonlyMap<string, readonly string[]> => {
+  const bin = loaded.config.bin;
+  const names = new Map<string, string[]>();
+  if (!isRecord(bin)) return names;
+  for (const [name, declaration] of Object.entries(bin)) {
+    const entry = typeof declaration === 'string'
+      ? declaration
+      : isRecord(declaration) ? (declaration as AgentBundleBinEntry).entry : undefined;
+    if (!nonemptyString(entry)) continue;
+    const source = resolve(loaded.context.projectRoot, entry);
+    names.set(source, [...(names.get(source) ?? []), name]);
+  }
+  return names;
+};
+
+/**
+ * The build's own static export scan of one conventional script, so the
+ * dual-surface gates below agree with the bin envelope's export selection
+ * (`main` first, then `default`). Undefined when the module is unreadable.
+ */
+const scriptEntryExports = (source: string): EntryExportScan | undefined => {
+  try {
+    return scanEntryExportsSource(readFileSync(source, 'utf8'));
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The route compiler's static export scan of one rendered script, which
+ * judges the default export's component shape (an async function) rather
+ * than its mere presence. Undefined when the module is unreadable.
+ */
+const renderedScriptExports = (source: string, relativePath: string): RouteModuleExports | undefined => {
+  try {
+    return scanRouteModuleExports(readFileSync(source, 'utf8'), relativePath);
+  } catch {
+    return undefined;
+  }
+};
+
 const validateConventionalScripts = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const configured = configuredScriptNames(loaded.config);
+  const binNamesBySource = explicitBinNamesBySource(loaded);
   for (const route of discovered.routeGraph?.scripts ?? []) {
     const relativePath = route.provenance.relativePath;
     const judgment = judgeScriptRoute(route, configured);
+    const binNames = binNamesBySource.get(route.source);
+    const binList = binNames?.map((name) => JSON.stringify(name)).join(', ');
     switch (judgment) {
-      case 'shippable':
+      case 'shippable': {
+        // A plain script a `bin` entry also names ships as both surfaces: the
+        // npm bin and the artifact script are disjoint outputs (#389). Both
+        // pipelines wrap a `main` export in the process envelope and bundle a
+        // self-executing module byte for byte, so those shapes agree. Only
+        // the bin envelope falls back to a default export; the artifact
+        // script would merely define it, so that shape is gated.
+        const exports = binNames === undefined ? undefined : scriptEntryExports(route.source);
+        if (exports !== undefined && !exports.hasMainExport && exports.hasDefaultExport) {
+          diagnostics.push({
+            code: 'AB4738',
+            message: `Script ${relativePath} is also the entry of bin ${binList} and exports a default but no main; the bin envelope would run the default export while the artifact script would only define it.`,
+            recovery: 'Export a named main(argv) so both the bin and the artifact script run the same entry, make the module self-executing (no default export), or prefix a path segment with "_" to keep the module bin-only.',
+            severity: 'error',
+            sourcePath: route.source,
+          });
+        }
+        break;
+      }
       // Rendered scripts ship through the Agent renderer pipeline (#102
       // stage 3); AB4807 is retired and never reused.
-      case 'rendered':
+      case 'rendered': {
+        // The rendered-script default export is a Server Component the
+        // renderer drives. The bin envelope prefers a named `main` export and
+        // only falls back to the default export, so the two surfaces can share
+        // one module exactly when it exports both; the detection is the
+        // build's own export scan, so the gate and the envelope always agree.
+        if (binNames === undefined) break;
+        // `main` is judged by the bin envelope's own scan (which ignores
+        // type-only exports); the component by the route compiler's scan (an
+        // async default function, not mere default-export presence, since
+        // `export default {}` would build and fail at run time). A default
+        // re-exported from another module (`export { default } from`) cannot
+        // be judged statically and is accepted; the worker still verifies it.
+        const hasMain = scriptEntryExports(route.source)?.hasMainExport === true;
+        const routeExports = renderedScriptExports(route.source, relativePath);
+        const hasComponent = routeExports?.asyncDefault === true || routeExports?.named.has('default') === true;
+        if (hasMain && hasComponent) break;
+        const missing = !hasMain && !hasComponent
+          ? 'neither an async default Server Component nor a named main'
+          : hasMain ? 'no async default Server Component' : 'no named main';
+        diagnostics.push({
+          code: 'AB4737',
+          message: `Rendered script ${relativePath} is also the entry of bin ${binList} but exports ${missing}; the artifact script renders the default component and the bin envelope calls main(argv).`,
+          recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+          severity: 'error',
+          sourcePath: route.source,
+        });
         break;
+      }
       case 'nested':
         diagnostics.push({
           code: 'AB4808',

@@ -91,7 +91,11 @@ export const scanRouteModuleExports = (
       continue;
     }
     if (ts.isExportDeclaration(statement) && statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+      // Type-only exports (`export type { X }`, `export { type X as default }`)
+      // emit no JavaScript binding, so they satisfy no runtime contract.
+      if (statement.isTypeOnly) continue;
       for (const element of statement.exportClause.elements) {
+        if (element.isTypeOnly) continue;
         const name = element.name.text;
         if (name === 'default' && statement.moduleSpecifier === undefined) {
           defaultIdentifier = element.propertyName?.text ?? name;

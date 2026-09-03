@@ -258,6 +258,169 @@ it('never compiles a module explicit configuration claims: config always wins', 
   expect('routeGraph' in discovered).toBe(false);
 });
 
+it('keeps a bin-claimed src/scripts module in script discovery while lib still claims (#389)', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/cli/doctor.ts': moduleSource,
+    'src/cli.ts': moduleSource,
+    'src/index.ts': moduleSource,
+    'src/scripts/hauler.ts': moduleSource,
+    'src/scripts/internal/tool.ts': moduleSource,
+    'src/scripts/my tool.ts': moduleSource,
+    'src/scripts/shared.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    // The #389 shape: one entry is the npm bin and the artifact hook target.
+    bin: {
+      doctor: './src/cli/doctor.ts',
+      hauler: './src/scripts/hauler.ts',
+      main: './src/cli.ts',
+      spaced: './src/scripts/my tool.ts',
+      tool: './src/scripts/internal/tool.ts',
+    },
+    lib: { entry: './src/scripts/shared.ts' },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  // A bin claim never removes a safely named direct src/scripts/<name> child:
+  // the bin and the artifact script are disjoint outputs running the same
+  // main, so both surfaces ship. The nested and the unsafely named modules
+  // stay claimed — discovering them would only turn a valid bin-only
+  // configuration into AB4808 or AB4803 — and a lib entry still claims its
+  // module: a library is not a script.
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:hauler']);
+  // Every other route kind still belongs to the claiming declaration.
+  expect(graph.cli).toBeUndefined();
+});
+
+it('gates a bin-claimed rendered script with AB4737 only when it exports no main (#389)', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      '  bin: {',
+      "    notes: './src/scripts/render-notes.tsx',",
+      "    object: './src/scripts/render-object.tsx',",
+      "    poster: './src/scripts/render-poster.tsx',",
+      "    reexport: './src/scripts/render-reexport.tsx',",
+      "    tool: './src/scripts/render-tool.tsx',",
+      "    typed: './src/scripts/render-typed.tsx',",
+      '  },',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    // A default re-exported from a private sibling cannot be judged
+    // statically; it is accepted (the worker still verifies it at run time).
+    'src/scripts/_component.tsx': 'export default async () => undefined;\n',
+    'src/scripts/render-reexport.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      "export { default } from './_component.tsx';",
+      '',
+    ].join('\n'),
+    // main plus a type-only default alias of an async function binding: no
+    // JavaScript default export is emitted, so the rendered script has no
+    // component even though a same-named function exists.
+    'src/scripts/render-typed.tsx': [
+      'const Component = async () => undefined;',
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export { type Component as default };',
+      '',
+    ].join('\n'),
+    // Exports both: main(argv) for the bin envelope, the component for the
+    // rendered script, so the module serves both surfaces.
+    'src/scripts/render-notes.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    // A default export that is not a component: present, but the rendered
+    // script would fail at run time, so presence alone is not enough.
+    'src/scripts/render-object.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export default {};',
+      '',
+    ].join('\n'),
+    // Component plus a type-only main: the bin envelope ignores type exports
+    // and would still call the component as main(argv).
+    'src/scripts/render-poster.tsx': [
+      'export type main = (argv: readonly string[]) => Promise<number>;',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    // main only: the bin works, but the rendered script has no component to render.
+    'src/scripts/render-tool.tsx': 'export const main = async (argv: readonly string[]): Promise<number> => argv.length;\n',
+  });
+
+  const result = await validate({ root: project });
+  const gate = result.diagnostics.filter(({ code }) => code === 'AB4737');
+  expect(gate.map((diagnostic) => diagnostic.sourcePath)).toEqual([
+    join(project, 'src/scripts/render-object.tsx'),
+    join(project, 'src/scripts/render-poster.tsx'),
+    join(project, 'src/scripts/render-tool.tsx'),
+    join(project, 'src/scripts/render-typed.tsx'),
+  ]);
+  expect(gate[0]!.message).toContain('render-object.tsx is also the entry of bin "object" but exports no async default Server Component');
+  expect(gate[1]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
+  expect(gate[2]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no async default Server Component');
+  expect(gate[3]!.message).toContain('render-typed.tsx is also the entry of bin "typed" but exports no async default Server Component');
+  expect(gate.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+  // Every rendered script stays discovered beside its bin: the gate names
+  // the conflict instead of dropping a route.
+  const graph = await compileRouteGraph(project, fixtureConfig({
+    bin: {
+      notes: './src/scripts/render-notes.tsx',
+      object: './src/scripts/render-object.tsx',
+      poster: './src/scripts/render-poster.tsx',
+      reexport: './src/scripts/render-reexport.tsx',
+      tool: './src/scripts/render-tool.tsx',
+      typed: './src/scripts/render-typed.tsx',
+    },
+  }));
+  expect(graph.scripts.map((route) => route.id)).toEqual([
+    'script:render-notes',
+    'script:render-object',
+    'script:render-poster',
+    'script:render-reexport',
+    'script:render-tool',
+    'script:render-typed',
+  ]);
+});
+
+it('gates a bin-claimed plain script with AB4738 only when its bin would run a default export the script ignores (#389)', async () => {
+  const project = await createInspectProject({
+    'agent-bundle.config.ts': [
+      'export default {',
+      '  bin: {',
+      "    'default-only': './src/scripts/default-only.ts',",
+      "    hauler: './src/scripts/hauler.ts',",
+      "    plain: './src/scripts/plain.ts',",
+      '  },',
+      "  plugin: { name: 'routes-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    // The bin envelope would run this default export; the artifact script
+    // pipeline only wraps main, so scripts/default-only.mjs would be inert.
+    'src/scripts/default-only.ts': 'export default async (argv: readonly string[]): Promise<number> => argv.length;\n',
+    // main is wrapped by both envelopes; a self-executing module bundles
+    // byte for byte on both surfaces.
+    'src/scripts/hauler.ts': 'export const main = async (argv: readonly string[]): Promise<number> => argv.length;\n',
+    'src/scripts/plain.ts': "process.stdout.write('plain\\n');\n",
+  });
+
+  const result = await validate({ root: project });
+  const gate = result.diagnostics.filter(({ code }) => code === 'AB4738');
+  expect(gate).toHaveLength(1);
+  expect(gate[0]).toMatchObject({
+    message: expect.stringContaining('default-only.ts is also the entry of bin "default-only" and exports a default but no main'),
+    severity: 'error',
+    sourcePath: join(project, 'src/scripts/default-only.ts'),
+  });
+  expect(result.diagnostics.filter(({ code }) => code === 'AB4737')).toEqual([]);
+});
+
 it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
   const root = await createRoot();
   await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });
