@@ -1315,6 +1315,15 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       stderr: 'Agent Bundle hook error: native subagent_id must be a string\n',
       stdout: '',
     });
+    // The common envelope's conversation_id is required even though the
+    // subagent envelope also carries parent_conversation_id; the parent id is
+    // not a substitute for the session identifier.
+    const { conversation_id: _conversationId, ...startWithoutConversation } = startInput;
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutConversation)).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native session_id or conversation_id must be a string\n',
+      stdout: '',
+    });
     await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), {
       ...stopInput,
       status: 'cancelled',
