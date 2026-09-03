@@ -1,4 +1,6 @@
+import { Agent, agent } from '@agent-bundle/runtime';
 import { describe, expect, it } from '@rstest/core';
+import { createElement } from 'react';
 
 import Echo from '../../fixtures/route-harness/src/mcp/harness/tools/echo.tsx';
 import { AgentTestError } from '../../src/test/errors.ts';
@@ -259,6 +261,38 @@ describe('renderRoute through the real renderer', () => {
       .toContainMarkdown('Observed tool/after from claude.')
       .toContainContext('actor unavailable:not-provided')
       .toHaveValue(undefined);
+  });
+
+  it('mounts provider fixture values through the context seam instead of executing provider modules', async () => {
+    const library = { stages: ['discover', 'curate'], tooling: { ffmpeg: { available: false } } };
+    const Providers = async (): Promise<unknown> => {
+      const { providers } = await agent();
+      return createElement(Agent.Result, {
+        value: {
+          frozen: Object.isFrozen(providers),
+          keys: Object.keys(providers).sort(),
+          library: providers['library'] as never,
+        },
+      }, createElement(Agent.Text, null, 'providers observed'));
+    };
+
+    const rendered = await renderRoute({ default: Providers as never }, {
+      context: { providers: { library } },
+      routeId: 'tool:harness/providers (module)',
+    });
+
+    expectDocument(rendered).toHaveStatus('success').toHaveValue({
+      frozen: true,
+      keys: ['library'],
+      library,
+    });
+
+    // A render without fixtures observes an empty, frozen provider map — the
+    // harness never runs conventional src/providers modules on the test's behalf.
+    const unfixtured = await renderRoute({ default: Providers as never }, {
+      routeId: 'tool:harness/providers (module)',
+    });
+    expectDocument(unfixtured).toHaveValue({ frozen: true, keys: [], library: undefined });
   });
 
   it('renders a route module handed in directly, without the compiled manifest', async () => {
