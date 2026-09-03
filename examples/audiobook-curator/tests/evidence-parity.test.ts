@@ -59,6 +59,32 @@ describe('optional identity evidence parity', () => {
     expect(receipt).toMatchObject({ exitCode: 0, verifiedRecording: true });
   });
 
+  it('normalizes non-object Audiolocate results to an empty fingerprint record', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-audiolocate-non-object-'));
+    roots.push(root);
+    const file = join(root, 'book.m4b');
+    await writeFile(file, 'book');
+
+    for (const output of ['null', '[1,2]']) {
+      const process: MediaProcess = async () => ({
+        stderr: '',
+        stdout: `__AGENT_BUNDLE_AUDIOLOCATE_RESULT__${output}\n`,
+      });
+      const receipt = await verifyAudibleSample({ asin: 'ASIN', file, sampleUrl: 'https://sample.example/book.mp3' }, {
+        audiolocatePython: 'python-test',
+        http: async () => Buffer.from('sample'),
+        process,
+      });
+
+      expect(receipt).toMatchObject({
+        exitCode: 2,
+        fingerprint: {},
+        verifiedRecording: false,
+      });
+      expect(Array.isArray(receipt.fingerprint)).toBe(false);
+    }
+  });
+
   it('deduplicates ranked ASINs and isolates candidate failures', async () => {
     const root = await mkdtemp(join(tmpdir(), 'curator-identify-'));
     roots.push(root);
