@@ -23,6 +23,12 @@ export const LineageNodeSchema = z.object({
   subagentId: id.optional(),
   toolCallId: id.optional(),
   type: id.optional(),
+  /**
+   * Digest of the Cursor `workspace_roots` the node was seen in. A pending
+   * child only binds to a conversation from the same workspace, so two
+   * windows sharing one durable registry never bind each other's children.
+   */
+  workspace: id.optional(),
 }).strict();
 
 /** A pre-tool hook whose post-tool hook has not fired: the correlation window for MCP calls and spawns. */
@@ -66,6 +72,12 @@ export type LineageState = z.output<typeof LineageStateSchema>;
 export const lineageEventSchemas = {
   /** A Cursor child conversation is now known for a pending subagent id: the node moves to its conversation id. */
   childBound: z.object({ conversation: id, subagentId: id }).strict(),
+  /**
+   * A conversation bound blind to a pending Cursor child later carried a
+   * user-only event (`beforeSubmitPrompt`): it was a root whose prompt the
+   * registry never saw. The node returns to its subagent id and waits again.
+   */
+  childUnbound: z.object({ conversation: id, subagentId: id }).strict(),
   nodeStarted: LineageNodeSchema,
   nodeStopped: z.object({ id, stoppedAt: timestamp }).strict(),
   /** A finished session releases its correlation windows and pending spawns. */
@@ -150,6 +162,40 @@ export const reduceLineage = (
         nodes: { ...rest, [conversation]: { ...pending, id: conversation } },
         pendingChildren: state.pendingChildren.filter((candidate) => candidate !== subagentId),
         seenStarts: remember(state.seenStarts, [conversation]),
+      };
+    }
+    case 'childUnbound': {
+      const { conversation, subagentId } = event.payload as { conversation: string; subagentId: string };
+      const bound = state.nodes[conversation];
+      if (bound === undefined || bound.subagentId !== subagentId || state.nodes[subagentId] !== undefined) return state;
+      const { [conversation]: _moved, ...rest } = state.nodes;
+      // Everything started beneath the misbound conversation belongs to the
+      // root it is about to become: same shape, re-rooted, depth rebased.
+      const descendants = new Set<string>();
+      const descendsFrom = (node: LineageNode, hops = 0): boolean => {
+        if (node.parent === conversation) return true;
+        if (node.parent === undefined || hops > Object.keys(rest).length) return false;
+        const parent = rest[node.parent];
+        return parent !== undefined && descendsFrom(parent, hops + 1);
+      };
+      for (const node of Object.values(rest)) {
+        if (node.root === bound.root && descendsFrom(node)) descendants.add(node.id);
+      }
+      const rerooted = (node: LineageNode): LineageNode =>
+        descendants.has(node.id) ? { ...node, depth: node.depth - bound.depth, root: conversation } : node;
+      const rerootedCall = (call: OpenToolCall): OpenToolCall =>
+        call.conversation === conversation || descendants.has(call.conversation) ? { ...call, root: conversation } : call;
+      return {
+        ...state,
+        nodes: { ...Object.fromEntries(Object.entries(rest).map(([key, node]) => [key, rerooted(node)])), [subagentId]: { ...bound, id: subagentId } },
+        openCalls: state.openCalls.map(rerootedCall),
+        // A child whose stop already arrived stays a finished, never-bound
+        // node; a live one waits for its real conversation again.
+        pendingChildren: bound.stoppedAt === undefined
+          ? [subagentId, ...state.pendingChildren.filter((candidate) => candidate !== subagentId)]
+          : state.pendingChildren,
+        pendingSpawns: state.pendingSpawns.map(rerootedCall),
+        seenStarts: state.seenStarts.filter((known) => known !== conversation),
       };
     }
     case 'toolCallOpened': {

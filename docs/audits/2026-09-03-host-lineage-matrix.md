@@ -112,28 +112,30 @@ from the rollout filename in `transcript_path`):
 
 ### Cursor 3.18.25 (desktop)
 
-| Event (native) | `conversation_id`* | `session_id`* | `generation_id` | `subagent_id` / `tool_call_id` | `parent_conversation_id` | `is_parallel_worker` | `user_email` | Other |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| beforeSubmitPrompt | root | = conversation_id | per generation | — | — | — | yes | `prompt`, `attachments`, `model`, `model_id`, `composer_mode`, `cursor_version`, `workspace_roots`, `transcript_path: null` |
-| preToolUse / postToolUse (root) | root | = conversation_id | per generation | `tool_use_id` (`call-<uuid>-<n>\nfc_<id>_<k>` for model tools, plain uuid for `Shell` and `MCP:*`) | — | — | yes | `tool_name` (`Read`, `Grep`, `Shell`, `Write`, `Task`, `MCP:dump`, `MCP:probe`), `tool_input`, `tool_output` (JSON string, Post), `duration` (Post), `cwd: ""` on `Shell`, `model: ""` on `Task` |
-| preToolUse / postToolUse (inside a subagent) | **a new conversation id** (`bf617dfd-…`) | = that new id | new | tool_use_id | **absent** | **absent** | yes | **nothing in the payload names the parent** |
-| preToolUse / postToolUse (inside the nested agent) | another new id (`46efda32-…`) | = id | new | | absent | absent | yes | |
-| subagentStart | **the parent's** conversation id | = parent | **equals the conversation id** (not a generation) | `subagent_id` = `tool_call_id` = the parent's `Task` `tool_use_id` (a two-line composite) | = conversation_id | `false` | yes | `subagent_type`, `subagent_model`, `task` (full prompt), parent `transcript_path`; **the child's conversation id is not included** |
-| subagentStop | parent's | = parent | = conversation id | `subagent_id` | = conversation_id | — | yes | `status`, `duration_ms`, `message_count`, `tool_call_count`, `loop_count`, `task`, `description`, `agent_transcript_path: null` |
-| stop | root | = root | root generation | — | — | — | yes | `status`, `loop_count`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, root `transcript_path` |
+| Event (native) | `conversation_id`* | `session_id`* | `generation_id` | `subagent_id` / `tool_call_id` | `parent_conversation_id` | `is_parallel_worker` | Other |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| beforeSubmitPrompt | root | = conversation_id | per generation | — | — | — | `prompt`, `attachments`, `model`, `model_id`, `composer_mode`, `cursor_version`, `workspace_roots`, `transcript_path: null` |
+| preToolUse / postToolUse (root) | root | = conversation_id | per generation | `tool_use_id` (`call-<uuid>-<n>\nfc_<id>_<k>` for model tools, plain uuid for `Shell` and `MCP:*`) | — | — | `tool_name` (`Read`, `Grep`, `Shell`, `Write`, `Task`, `MCP:dump`, `MCP:probe`), `tool_input`, `tool_output` (JSON string, Post), `duration` (Post), `cwd: ""` on `Shell`, `model: ""` on `Task` |
+| preToolUse / postToolUse (inside a subagent) | **a new conversation id** (`bf617dfd-…`) | = that new id | new | tool_use_id | **absent** | **absent** | **nothing in the payload names the parent** |
+| preToolUse / postToolUse (inside the nested agent) | another new id (`46efda32-…`) | = id | new | | absent | absent | |
+| subagentStart | **the parent's** conversation id | = parent | **equals the conversation id** (not a generation) | `subagent_id` = `tool_call_id` = the parent's `Task` `tool_use_id` (a two-line composite) | = conversation_id | `false` | `subagent_type`, `subagent_model`, `task` (full prompt), parent `transcript_path`; **the child's conversation id is not included** |
+| subagentStop | parent's | = parent | = conversation id | `subagent_id` | = conversation_id | — | `status`, `duration_ms`, `message_count`, `tool_call_count`, `loop_count`, `task`, `description`, `agent_transcript_path: null` |
+| stop | root | = root | root generation | — | — | — | `status`, `loop_count`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, root `transcript_path` |
 
 Not delivered to the plugin in this run: `sessionStart` (never fired for the
 plugin; the sibling raw-hooks probe on the same build saw none either),
 `workspaceOpen` (fired to user-level hooks only), `sessionEnd` (nothing arrived
 when the window was closed with the agent idle), `postToolUseFailure`,
-`preCompact`. `preToolUse` was delivered twice for some `Read`/`Grep` calls
-with the same `tool_use_id` (pairs 3/4, 9/10, … in the fixture).
+`preCompact`. §9 below shows that on a real desktop `workspaceOpen` and
+`sessionEnd` *do* reach plugin-scoped hooks and only `sessionStart` never
+does. `preToolUse` was delivered twice for some `Read`/`Grep` calls with the
+same `tool_use_id` (pairs 3/4, 9/10, … in the fixture).
 
 Payload excerpt (subagentStart — the only place the parent link exists, and it
 does not name the child conversation):
 
 ```json
-{"conversation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","generation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","model":"default","subagent_id":"call-2ec9530d-b502-4c4f-8a6e-63f0bf7ebc9a-29\nfc_49466487-df47-9fb4-8b10-079ee845fb97_0","subagent_type":"general-purpose","task":"…","parent_conversation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","tool_call_id":"call-2ec9530d-…\nfc_49466487-…_0","subagent_model":"default","is_parallel_worker":false,"session_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","hook_event_name":"subagentStart","cursor_version":"3.18.25","workspace_roots":["/tmp/host-test/cursor-workspace"],"user_email":"probe@example.invalid","transcript_path":"…/agent-transcripts/b60ae0c1-…/b60ae0c1-….jsonl"}
+{"conversation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","generation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","model":"default","subagent_id":"call-2ec9530d-b502-4c4f-8a6e-63f0bf7ebc9a-29\nfc_49466487-df47-9fb4-8b10-079ee845fb97_0","subagent_type":"general-purpose","task":"…","parent_conversation_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","tool_call_id":"call-2ec9530d-…\nfc_49466487-…_0","subagent_model":"default","is_parallel_worker":false,"session_id":"b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c","hook_event_name":"subagentStart","cursor_version":"3.18.25","workspace_roots":["/tmp/host-test/cursor-workspace"],"user_email":"…","transcript_path":"…/agent-transcripts/b60ae0c1-…/b60ae0c1-….jsonl"}
 ```
 
 ## 2. Which id a subagent's own events carry
@@ -208,9 +210,11 @@ gives shell commands the agent runs `CURSOR_CONVERSATION_ID`/`CURSOR_REQUEST_ID`
 | Codex | Yes — `session_id` is the root thread on every event, and `_meta.x-codex-turn-metadata.session_id` on MCP calls | Yes on MCP calls (`parent_thread_id`); on hooks only through the registry (or the parent rollout at `SubagentStop`) |
 | Cursor | Only through the registry — a child's payload carries neither root nor parent | Only through the registry (ordering-bound) |
 
-**Actor principal facts** (for #391): Cursor delivers `user_email` on every hook
-payload and `CURSOR_USER_EMAIL` in the hook environment; Claude and Codex
-deliver no user identity to hooks or MCP servers.
+**Operator identity is out of scope.** The maintainer decided on 2026-09-03
+(#391, closed as not planned) that agent-bundle will not derive or surface who
+the human behind a host session is; the fields some hosts send for that are
+passed through inside `native` unread, and `request.lineage` — parent session,
+root, and the parent-of-subagent chain — is the only identity-adjacent surface.
 
 ## 6. Framework consequences landed with this audit
 
@@ -228,10 +232,11 @@ deliver no user identity to hooks or MCP servers.
 
 | Gap | Host | Evidence | Status |
 | --- | --- | --- | --- |
-| No parent id on `SubagentStart`; child events carry no parent | Claude, Codex | §1, §2 | Inferred from the open spawn tool call; filed as a host request |
-| Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Ordering-bound in the registry; ambiguous for parallel workers; filed |
+| No parent id on `SubagentStart`; child events carry no parent | Claude, Codex | §1, §2 | Inferred from the newest unclaimed spawn call under the same root; refused when two parents have unclaimed spawns; filed as #422 / #423 |
+| Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Bound by elimination in the registry (single pending start per workspace); refused while ambiguous for parallel workers; filed as #424 |
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
-| `sessionStart`, `workspaceOpen`, `sessionEnd` not delivered to plugin hooks | Cursor | §1 | Recorded; owned by the Cursor installer/emitter lane for follow-up |
+| `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 gap 4); lineage never depends on it to establish a root |
+| Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (`beforeSubmitPrompt`, `stop`, `sessionEnd`, `preCompact`) |
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
 | Claude `PostToolUse(Agent).tool_response.agentId` not consumed by the registry | Claude | §1, §2 | The registry claims the newest unclaimed spawn under the root at `SubagentStart` and marks same-parent sibling cohorts `siblingsUncertain`; the parent's `Agent` PostToolUse could later firm those up. Not needed for either live run (spawns were sequential); left as an improvement |
@@ -263,3 +268,48 @@ No lineage or projection code change was needed: the registry replay test
 (`packages/rsc-runtime/tests/lineage-registry.test.ts`) now runs against both
 live fixtures and passes unchanged apart from asserting the new
 `tool_response.agentId` host fact.
+
+## 9. Cursor desktop hooks-service evidence (added 2026-09-03)
+
+Cursor desktop keeps a per-window hooks log
+(`~/.config/Cursor/logs/<launch>/<window>/output_*/cursor.hooks.workspaceId-*.log`)
+that prints `Hook step requested: <event>` for **every** step before it looks
+up declared hooks — 58,717 `preToolUse` steps appear with no hook declared for
+them — so an absent step is non-dispatch, not a registration problem. The
+retained logs on the maintainer's machine (cursor_version 3.14.7 for
+2026-08-14 → 2026-08-25, 3.18.25 on 2026-09-03; 89,219 steps; 35
+conversations; a local plugin declaring `sessionStart`, `sessionEnd`,
+`workspaceOpen`, `stop`, `postToolUse`, `preCompact`, `afterFileEdit`,
+`afterShellExecution`) show:
+
+| Step | Requested | Delivered to the plugin-scoped hook (`from claude-plugin config`) |
+| --- | --- | --- |
+| `preToolUse` | 58,717 | n/a (not declared) |
+| `postToolUse` | 29,308 | yes |
+| `afterShellExecution` | 887 | yes |
+| `afterFileEdit` | 270 | yes |
+| `workspaceOpen` | 12 | yes — sessionless envelope |
+| `stop` | 8 | yes |
+| `beforeSubmitPrompt` | 7 | yes — `prompt`, `attachments[]`, `composer_mode`, `generation_id` |
+| `sessionEnd` | 6 | yes — `reason: window_close`, `final_status: none`, `duration_ms`, `is_background_agent: false`, `session_id` = `conversation_id`, `generation_id: ""`, `transcript_path: null` |
+| `preCompact` | 4 | yes |
+| **`sessionStart`** | **0** | — |
+
+Consequences for lineage:
+
+- `workspaceOpen` and `sessionEnd` are confirmed plugin-scoped deliveries on
+  the desktop; the §1 run missed them because the Xvfb CLI session never
+  closed a window. Only `sessionStart` remains a host gap (#424 gap 4).
+- Only 7 of the 35 conversations ever produced `beforeSubmitPrompt`; 28 were
+  first seen on `postToolUse`/`preToolUse`/`afterShellExecution` (the log
+  starts mid-conversation after a Cursor restart, or the plugin loaded
+  mid-conversation). `transcript_path` is `null` on 98.5 % of desktop events,
+  so it cannot mark roots either. A registry that binds the next unseen
+  conversation to a lone pending `subagentStart` can therefore mis-bind a
+  second chat tab; the registry now scopes binding to the same
+  `workspace_roots` and undoes a binding when the bound conversation later
+  receives `beforeSubmitPrompt`, which a subagent never does.
+- No `Task` tool call appears in these desktop logs, so desktop
+  `subagentStart`/`subagentStop` delivery is unobserved here; the §1 CLI
+  capture remains the evidence for the subagent families.
+

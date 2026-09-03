@@ -55,11 +55,14 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
 /**
  * Props received by an event route's async default Server Component.
  *
- * Read transport-owned request identity with `await agent()` from
- * `@agent-bundle/runtime`. The invocation, host, session, actor, and workspace
- * axes are `Observed`, including typed unavailable reasons when the host
- * cannot know an axis. Business payload fields cannot override them.
- * Generated event scopes currently expose actor as unavailable.
+ * Read transport-owned request context with `await agent()` from
+ * `@agent-bundle/runtime`. The invocation, host, session, actor, workspace,
+ * and lineage axes are `Observed`, including typed unavailable reasons when
+ * the host cannot know an axis. Business payload fields cannot override them.
+ * `lineage` answers "who is my parent, what is the root, am I a subagent";
+ * `actor` is the HTTP-authenticated client of a streamable MCP transport and
+ * is unavailable on hook-driven event scopes. The framework never derives or
+ * surfaces the operator's identity from a host payload.
  */
 export interface AgentEventRouteProps {
   readonly canonical: AgentEventCanonicalIdentity;

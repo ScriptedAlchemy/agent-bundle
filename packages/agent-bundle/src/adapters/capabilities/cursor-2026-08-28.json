@@ -324,19 +324,19 @@
     },
     "root": {
       "state": "degraded",
-      "reason": "2026-09-03: a child's events carry only their own fresh conversation_id, so the root is known only through the registry that bound the child at start (resolution: inferred)."
+      "reason": "2026-09-03: a child's events carry only their own fresh conversation_id (host gap tracked in #424), so the root is known only through the registry that bound the child (resolution: inferred); a Cursor root itself is established only by a root-shaped event (beforeSubmitPrompt, stop, sessionEnd, preCompact, sessionStart when delivered), never by a tool hook."
     },
     "parent": {
       "state": "degraded",
-      "reason": "2026-09-03: parent_conversation_id appears only on subagentStart/subagentStop; the child conversation is bound to the most recent pending start by ordering, which is ambiguous for parallel workers."
+      "reason": "2026-09-03: parent_conversation_id appears only on the parent's subagentStart/subagentStop, which also omit the child conversation id (#424). The registry binds a never-seen conversation to the pending subagentStart only when exactly one is pending in the same workspace_roots (so windows sharing one durable registry never bind each other's children); with several pending — parallel workers — it stays id-not-resolvable until all but one have stopped, and a blind binding is undone — with anything started beneath it re-rooted — the moment the conversation carries a root-only event (beforeSubmitPrompt, stop, sessionEnd, preCompact), which a subagent never does, so a sessionEnd on a misbound chat retires that chat and never the parent it was filed under."
     },
     "depth": {
       "state": "degraded",
-      "reason": "2026-09-03: no depth counter is delivered; derived from the inferred parent chain."
+      "reason": "2026-09-03: no depth counter is delivered (#424); derived from the inferred parent chain, so exactly as certain as parent."
     },
     "mcp-correlation": {
       "state": "degraded",
-      "reason": "2026-09-03: tools/call _meta carries only progressToken and the client name is cursor-vscode; the generated server resolves the caller through the open preToolUse whose tool_name is MCP:<tool>."
+      "reason": "2026-09-03: tools/call _meta carries only progressToken and the client name is cursor-vscode (#424); the generated server resolves the caller through the open preToolUse whose tool_name is MCP:<tool>, and refuses when open windows for that tool span several conversations."
     },
     "cloud": {
       "state": "unavailable",
@@ -583,6 +583,8 @@
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents beforeSubmitPrompt input as prompt plus file/rule attachments, matcher evaluation against the literal UserPromptSubmit, and output as continue plus optional user_message. continue:false blocks submission; no additional-context or prompt-rewrite channel is documented.",
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents sessionEnd input as session_id, reason, duration_ms, is_background_agent, final_status, and optional error_message. It is fire-and-forget; output is logged but unused. The same source states cloud agents have no sessionEnd because they lack an editor-lifetime session boundary.",
       "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture was attempted with trusted project hooks, but the binary required Cursor authentication unavailable in the capture environment; the pinned official contract is the evidence source for beforeSubmitPrompt and sessionEnd.",
+      "2026-09-03: Cursor desktop hooks-service logs on the maintainer's machine (~/.config/Cursor/logs/<launch>/<window>/output_*/cursor.hooks.workspaceId-*.log; cursor_version 3.14.7 for 2026-08-14 → 2026-08-25 and 3.18.25 on 2026-09-03; 89,219 `Hook step requested` lines across 35 conversations, with a local plugin declaring sessionStart, sessionEnd, workspaceOpen, stop, postToolUse, preCompact, afterFileEdit and afterShellExecution) delivered plugin-scoped (`from claude-plugin config`) workspaceOpen 12×, sessionEnd 6× (reason window_close, final_status none, session_id = conversation_id, generation_id \"\", transcript_path null — accepted by the session/end validator), beforeSubmitPrompt 7×, stop 8×, preCompact 4×, postToolUse 29,308× — so workspaceOpen and sessionEnd do reach plugin-scoped hooks on the desktop even though the 2026-09-03 Xvfb CLI capture (fixtures/host-lineage/cursor-3.18.25.ndjson) saw neither.",
+      "2026-09-03: the same desktop hooks-service logs requested sessionStart 0× in 89,219 steps. The service logs every requested step before matching declared hooks (58,717 preToolUse steps were requested with no hook declared for them), so this is non-dispatch by Cursor desktop 3.14.7/3.18.25, not a registration gap; the cursor-agent CLI run with trusted project hooks (2026-09-02) did dispatch sessionStart with session and conversation ids. Lineage therefore never depends on session/start to establish a Cursor root — beforeSubmitPrompt, stop, sessionEnd and preCompact are the root-shaped events — and only 7 of those 35 desktop conversations ever produced beforeSubmitPrompt (28 were first seen on a tool hook after a Cursor restart or plugin load mid-conversation), which is why a blind child binding is corrected as soon as the bound conversation carries any root-only event (tracked in #424, gap 4).",
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents postToolUseFailure input as tool_name, tool_input, tool_use_id, cwd, error_message, failure_type, duration, and is_interrupt, with no supported output fields. Unlike Claude PostToolUseFailure, failure_type includes permission_denied.",
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents preCompact as observational and unable to block or modify compaction. Its optional user_message is user-facing rather than agent context, so the canonical Agent.Result and Agent.Context vocabulary exposes no output channel for it.",
       "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks Agent and cloud event inventories document no postCompact event, so compact/after is unavailable rather than inferred from preCompact.",

@@ -312,7 +312,6 @@ export const createNativeEventStarter = (
         ? {
             cursor_version: 'lifecycle-replay',
             hook_event_name: nativeEvent,
-            user_email: null,
             workspace_roots: ['/tmp'],
           }
         : base);

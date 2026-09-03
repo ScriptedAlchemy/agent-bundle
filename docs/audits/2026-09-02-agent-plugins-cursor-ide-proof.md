@@ -88,6 +88,6 @@ are not provided (§9.1), and a plugin-relative `./` `command` is resolved
 against the workspace folder instead of the plugin root (§7.2.1). Full
 table, log excerpts, and 1440×900 captures:
 [`2026-09-03-agent-plugins-cursor-ide-proof.md`](./2026-09-03-agent-plugins-cursor-ide-proof.md);
-ready-to-submit vendor report:
-[`2026-09-03-cursor-agent-plugins-feedback.md`](./2026-09-03-cursor-agent-plugins-feedback.md).
+internal observations record (not submitted to Cursor, by maintainer decision):
+[`2026-09-03-cursor-agent-plugins-observations.md`](./2026-09-03-cursor-agent-plugins-observations.md).
 No capability row moved to `supported`.

@@ -343,9 +343,14 @@ not. Generated MCP request scopes observe the negotiated client identity as a
 native host, derive workspace from the server process working directory, and
 use native transport session and HTTP authentication data when supplied. Bare
 stdio supplies neither a session id nor HTTP actor authentication, so those
-axes remain honestly unavailable. Generated event scopes currently mount no
-actor principal, so event routes observe actor as unavailable rather than
-receiving a fabricated value.
+axes remain honestly unavailable. `actor` is the HTTP-authenticated MCP
+client and nothing else: hook-driven event scopes observe it as unavailable
+rather than receiving a fabricated value, and the framework never derives an
+operator identity (a signed-in user, an email) from any host payload or
+environment — hosts that send one (Cursor's `user_email`) have it passed
+through inside `native` untouched and unread. Who the *conversation* is —
+its parent, its root, whether it is a subagent — is the
+[`lineage` axis](#conversation-lineage-requestlineage).
 
 Handlers authored with `defineOperation` receive the same handle as optional
 `context.request` in the second `execute` argument:
@@ -389,9 +394,12 @@ surface-specific `invocation.kind` the generated executable would use.
 
 #### Conversation lineage (`request.lineage`)
 
-`(await agent()).lineage` is an `Observed<AgentLineage>` with one shape on
-every surface — event routes, generated MCP tools, routed CLI commands, and
-rendered scripts:
+`request.lineage` is the one answer to "who is my parent, what is the root
+conversation, and are we a subagent (of whom)?". It is the only place the
+framework places a request in the host's conversation tree; there is no
+separate operator or user identity axis, by design. `(await agent()).lineage`
+is an `Observed<AgentLineage>` with one shape on every surface — event routes,
+generated MCP tools, routed CLI commands, and rendered scripts:
 
 ```ts
 interface AgentLineage {
@@ -420,17 +428,35 @@ for every event by the id the payload carries. The observed host vocabulary
 | --- | --- | --- | --- | --- |
 | Claude | `agent_id`, else `session_id` | `session_id` | the agent whose `Agent`/`Task` `PreToolUse` is the newest unclaimed spawn | `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` |
 | Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
-| Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the newest pending start when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>` |
+| Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the single pending start in the same workspace when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>` |
 
 A Claude or Codex subagent is placed only when its spawning pre-tool hook
 (`Agent`/`Task`, `collaborationspawn_agent`) was observed, so projects that
 want `parent`/`depth` for subagents route `tool/before` alongside
 `agent/start`; a start with no claimable spawn stays `id-not-resolvable`.
-Only root-shaped Cursor events (`session/start`, `prompt/submit`, `stop`,
-`session/end`, `compact/*`, `workspace/open`) may establish a root; a fresh
-Cursor conversation seen on a tool event binds to the single pending
-`subagentStart`, and stays unresolved while several are pending or after a
-registry restart. `session/end` retires the root and every descendant still
+Cursor names a child only on the parent's `subagentStart` (`subagent_id` =
+the parent's `Task` call id); the child's own hooks carry a fresh
+`conversation_id` and nothing that points back, so the registry binds by
+elimination and refuses when elimination is not possible:
+
+- Only root-shaped Cursor events (`session/start`, `prompt/submit`, `stop`,
+  `session/end`, `compact/*`, `workspace/open`) may establish a root.
+- A never-seen Cursor conversation on a tool event binds to the pending
+  `subagentStart` only when exactly one is pending **in its workspace**
+  (`workspace_roots` digest, so two windows sharing one durable registry never
+  bind each other's children). With several pending in that workspace it
+  stays `id-not-resolvable` until all but one have stopped; after a registry
+  restart it stays unresolved, because nothing distinguishes it from a root.
+- A blind binding is undone the moment the bound conversation carries any
+  root-shaped event (`prompt/submit`, `stop`, `session/end`, `compact/*`) —
+  subagents never do — so a second chat tab whose prompt predates the registry
+  (Cursor desktop restarts mid-conversation, and many conversations are first
+  seen on a tool hook) becomes the root it is, anything it started meanwhile is
+  re-rooted beneath it, and the pending child waits for its real conversation
+  again. The correction runs before the event acts, so a `session/end` on a
+  misbound chat retires that chat, never the parent it was filed under.
+
+`session/end` retires the root and every descendant still
 marked live; stopped nodes are pruned past the retention bound as they stop.
 Redelivered payloads replay their journal entries (keys derive from the
 canonical idempotency key and the payload minus receipt timestamps; a

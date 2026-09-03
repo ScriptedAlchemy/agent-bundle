@@ -80,7 +80,11 @@ const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> 
   cursor: (toolName) => toolName === 'Task',
 });
 
-/** Cursor events only the user-facing conversation emits; a subagent's conversation never carries them. */
+/**
+ * Cursor events only the user-facing conversation emits; a subagent's
+ * conversation never carries them. Observed on a conversation the registry
+ * bound blind to a pending child, one proves the binding wrong.
+ */
 const CURSOR_ROOT_EVENTS: ReadonlySet<string> = new Set([
   'session/start',
   'session/end',
@@ -90,6 +94,24 @@ const CURSOR_ROOT_EVENTS: ReadonlySet<string> = new Set([
   'compact/after',
   'workspace/open',
 ]);
+
+
+/**
+ * A digest of the Cursor `workspace_roots` on a payload. Every Cursor hook
+ * carries it (observed 2026-09-03 on CLI and desktop), and a subagent runs in
+ * its parent's workspace, so a pending child never binds across workspaces.
+ */
+const cursorWorkspace = (native: Readonly<Record<string, unknown>>): string | undefined => {
+  const roots = native['workspace_roots'];
+  if (!Array.isArray(roots)) return undefined;
+  const paths = roots.filter((root): root is string => typeof root === 'string' && root.trim() !== '').sort();
+  if (paths.length === 0) return undefined;
+  return createHash('sha256').update(canonicalJson(paths), 'utf8').digest('hex').slice(0, 16);
+};
+
+/** An unknown workspace on either side matches: older Cursor builds that omit the roots keep the single-pending rule. */
+const sameWorkspace = (left: string | undefined, right: string | undefined): boolean =>
+  left === undefined || right === undefined || left === right;
 
 const lineageOf = (node: LineageNode, generation: string | undefined, resolution: AgentLineageResolution): AgentLineage => Object.freeze({
   conversation: node.id,
@@ -138,12 +160,18 @@ const journalKeys = (idempotencyKey: string): JournalKeys => ({
   },
 });
 
-const rootNode = (conversation: string, generation: string | undefined, startedAt: string): LineageNode => ({
+const rootNode = (
+  conversation: string,
+  generation: string | undefined,
+  startedAt: string,
+  workspace: string | undefined,
+): LineageNode => ({
   depth: 0,
   ...(generation === undefined ? {} : { generation }),
   id: conversation,
   root: conversation,
   startedAt,
+  ...(workspace === undefined ? {} : { workspace }),
 });
 
 export const createAgentLineageRegistry = (
@@ -259,9 +287,10 @@ export const createAgentLineageRegistry = (
   /**
    * The node for a conversation that speaks for itself, creating it when it is
    * new. A never-seen Cursor conversation while exactly one `subagentStart` is
-   * pending is that child speaking for the first time; with several pending
-   * children the child payload carries nothing to tell them apart, so the
-   * conversation stays unresolved rather than being bound arbitrarily.
+   * pending *in its workspace* is that child speaking for the first time; with
+   * several pending children the child payload carries nothing to tell them
+   * apart, so the conversation stays unresolved rather than being bound
+   * arbitrarily.
    */
   const ensureRoot = async (
     host: LineageHost,
@@ -270,24 +299,49 @@ export const createAgentLineageRegistry = (
     observedAt: string,
     keys: JournalKeys,
     allowRoot: boolean,
+    workspace: string | undefined,
   ): Promise<LineageNode | undefined> => {
     const existing = state.nodes[conversation];
     if (existing !== undefined) return existing;
     // A root-shaped event is a root: it never binds to a pending child, so an
     // unrelated conversation starting beside a pending spawn stays its own root.
     if (allowRoot) {
-      const node = rootNode(conversation, generation, observedAt);
+      const node = rootNode(conversation, generation, observedAt, workspace);
       await dispatch('nodeStarted', node, keys);
       return node;
     }
-    if (host === 'cursor' && state.pendingChildren.length === 1) {
-      const subagentId = state.pendingChildren[0]!;
-      await dispatch('childBound', { conversation, subagentId }, keys);
-      return state.nodes[conversation];
+    if (host === 'cursor') {
+      const pending = state.pendingChildren.filter((subagentId) => sameWorkspace(state.nodes[subagentId]?.workspace, workspace));
+      if (pending.length === 1) {
+        await dispatch('childBound', { conversation, subagentId: pending[0]! }, keys);
+        return state.nodes[conversation];
+      }
     }
     // No single pending start and not root-shaped: a Cursor child's tool event
     // after a registry restart carries nothing that distinguishes it from a root.
     return undefined;
+  };
+
+  /**
+   * A conversation bound blind to a pending Cursor child that now carries a
+   * root-only event was a root all along (its prompt predates the registry, or
+   * Cursor never delivered it). The child returns to pending, anything started
+   * beneath the conversation is re-rooted under it, and the conversation
+   * becomes the root it is.
+   */
+  const correctMisboundChild = async (
+    conversation: string,
+    observedAt: string,
+    keys: JournalKeys,
+  ): Promise<void> => {
+    const node = state.nodes[conversation];
+    if (node === undefined || node.depth === 0 || node.subagentId === undefined) return;
+    await dispatch('childUnbound', { conversation, subagentId: node.subagentId }, keys);
+    // Materialize the root at once — the bound node carried the conversation's
+    // generation, workspace and first-seen time — so the correcting event
+    // resolves against it like any known root's would, including a
+    // `session/end`, which then retires this node instead of finding none.
+    await dispatch('nodeStarted', rootNode(conversation, node.generation, node.startedAt, node.workspace), keys);
   };
 
   const resolve = (
@@ -314,7 +368,8 @@ export const createAgentLineageRegistry = (
       if (subagentId === undefined || parentId === undefined) return;
       // A replayed start already registered (or bound) this child, even if its node was pruned since.
       if (state.seenStarts.includes(subagentId) || state.nodes[subagentId] !== undefined || Object.values(state.nodes).some((node) => node.subagentId === subagentId)) return;
-      const parent = await ensureRoot(host, parentId, undefined, observedAt, keys, false);
+      const workspace = cursorWorkspace(native);
+      const parent = await ensureRoot(host, parentId, undefined, observedAt, keys, false, workspace);
       if (parent === undefined) return;
       await dispatch('nodeStarted', {
         depth: parent.depth + 1,
@@ -326,6 +381,7 @@ export const createAgentLineageRegistry = (
         subagentId,
         ...(nativeString(native, 'tool_call_id') === undefined ? {} : { toolCallId: nativeString(native, 'tool_call_id')! }),
         ...(nativeString(native, 'subagent_type') === undefined ? {} : { type: nativeString(native, 'subagent_type')! }),
+        ...(workspace === undefined ? {} : { workspace }),
       }, keys);
       return;
     }
@@ -335,7 +391,7 @@ export const createAgentLineageRegistry = (
     // A replayed start must not claim a second spawn or rewrite the node — even
     // after retention pruned the node, the start identity is remembered.
     if (state.seenStarts.includes(agentId) || state.nodes[agentId] !== undefined) return;
-    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true);
+    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true, undefined);
     if (rootNodeValue === undefined) return;
     const claim = await claimSpawn(host, rootNodeValue.root, keys);
     // No spawn to claim (the pre-tool hook was missed, or the registry
@@ -401,6 +457,14 @@ export const createAgentLineageRegistry = (
     const observedAt = observation.observedAt ?? new Date().toISOString();
     const { event, host, native } = observation;
     const carrier = lineageCarrier(host, native);
+    // A Cursor conversation bound blind to a pending child cannot carry a
+    // root-only event; one that does was a root the registry had not seen, so
+    // the binding is undone before anything acts on the wrong tree — a
+    // `session/end` must retire this conversation, not the parent it was
+    // misfiled under.
+    if (host === 'cursor' && CURSOR_ROOT_EVENTS.has(event) && carrier.conversation !== undefined) {
+      await correctMisboundChild(carrier.conversation, observedAt, keys);
+    }
     switch (event) {
       case 'agent/start':
         await observeStart(observation, observedAt, keys);
@@ -416,15 +480,15 @@ export const createAgentLineageRegistry = (
     }
     // Claude and Codex name the root on every payload; Cursor never repeats
     // it, so only root-shaped Cursor events may establish a root, and a
-    // fresh child conversation binds to the single pending start.
-    // A session that ends before this registry saw it start leaves no node
-    // behind: establishing one after retirement would never be pruned.
+    // fresh child conversation binds to the single pending start in its
+    // workspace. A session that ends before this registry saw it start leaves
+    // no node behind: establishing one after retirement would never be pruned.
     if (event !== 'session/end' && carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
       const rootLike = host === 'cursor'
         ? CURSOR_ROOT_EVENTS.has(event)
         : carrier.conversation === carrier.root;
       if (rootLike || host === 'cursor') {
-        await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike);
+        await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike, host === 'cursor' ? cursorWorkspace(native) : undefined);
       }
     }
     const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');

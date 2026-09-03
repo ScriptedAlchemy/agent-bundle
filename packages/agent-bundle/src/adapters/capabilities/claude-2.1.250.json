@@ -172,11 +172,11 @@
     },
     "parent": {
       "state": "degraded",
-      "reason": "live model 2026-09-03, Claude Code 2.1.257: no hook payload names a subagent's parent; the runtime registry infers it from the Agent/Task PreToolUse that is open when SubagentStart fires (resolution: registry), verified at depth 1 and 2 in both background and foreground spawn paths; the parent's Agent PostToolUse tool_response.agentId confirms the inference after the fact."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257: no hook payload names a subagent's parent (host gap tracked in #422: SubagentStart carries only the child agent_id, and a subagent's own hooks carry session_id + agent_id); the runtime registry infers it from the Agent/Task PreToolUse that is the newest unclaimed spawn when SubagentStart fires (resolution: registry) — verified at depth 1 and 2 in both background and foreground spawn paths, exact for sequential spawns, refused as id-not-resolvable when two parents have unclaimed spawns, and toolCallId is withheld when siblings from one parent were claimed blind; the parent's Agent PostToolUse tool_response.agentId confirms the inference after the fact."
     },
     "depth": {
       "state": "degraded",
-      "reason": "live model 2026-09-03, Claude Code 2.1.257: no depth counter is delivered (the result document's subagent_stats.max_depth is not a hook field); the registry derives depth from the inferred parent chain."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257: no depth counter is delivered (#422; the result document's subagent_stats.max_depth is not a hook field); the registry derives it from the inferred parent chain, so it is exactly as certain as parent."
     },
     "mcp-correlation": {
       "state": "supported",

@@ -101,8 +101,12 @@ it('validates Cursor workspaceOpen without inventing an agent session', () => {
   }
   expect(() => validateNativeEventEnvelope({ ...documented, cursor_version: '' }, options))
     .toThrow(/native cursor_version must be a nonempty string/u);
-  expect(() => validateNativeEventEnvelope({ ...documented, user_email: 7 }, options))
-    .toThrow(/native user_email must be a string or null/u);
+  // Operator identity is not a framework concern: the envelope validator never
+  // inspects `user_email`, whatever Cursor puts there.
+  for (const userEmail of [undefined, null, 'someone@example.com', 7]) {
+    const envelope = { ...documented, user_email: userEmail };
+    expect(validateNativeEventEnvelope(envelope, options)).toBe(envelope);
+  }
 
   expect(() => validateNativeEventEnvelope({
     ...documented,

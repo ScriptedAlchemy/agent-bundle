@@ -1,33 +1,25 @@
-# Cursor product feedback — Agent Plugins 1.0.0 `${PLUGIN_ROOT}` expansion (ready to submit)
+# Cursor observations — Agent Plugins 1.0.0 `${PLUGIN_ROOT}` expansion
 
-Prepared 2026-09-03 for #426. Everything below was observed on the current
-installed stable build and is reproducible with the plugin in "Minimal
-repro" (one directory, four files — three for items 1–5 plus `mcp/launch.sh`
-for item 6 — no dependencies beyond `node`). The maintainer submits
-it; this repository cannot post on their behalf.
+Recorded 2026-09-03 for #426 as internal reference. Everything below was
+observed on the current installed stable build and is reproducible with the
+plugin in "Minimal repro" (one directory, four files — three for items 1–5
+plus `mcp/launch.sh` for item 6 — no dependencies beyond `node`).
 
-**Where to submit (pick one, template-compatible):**
+Maintainer decision (2026-09-03): this is **not** submitted to Cursor. The
+record exists so the `portable` capability table and any future re-check of a
+newer Cursor build have a precise baseline to compare against; the `portable`
+rows stay `degraded` until a build is observed that expands the placeholders.
 
-- Bug report (preferred — every item below is a MUST violation with a
-  deterministic repro): <https://forum.cursor.com/c/support/bug-report/6> →
-  "New Topic" (direct link
-  <https://forum.cursor.com/new-topic?category=support/bug-report>). The
-  forum's bug template asks for product area, description, steps, expected
-  behaviour, screenshots, and the About-dialog version block; all of it is
-  filled in below. Reporting guidance: <https://cursor.com/help/troubleshooting/reporting-bugs>.
-- Feature request, if triaged as "Agent Plugins §9 support" rather than a
-  defect: <https://forum.cursor.com/c/ideas/feature-requests/5>.
-- Email fallback named by the reporting guide: `hi@cursor.com`.
-
-Attach the two screenshots from
+Screenshots of the two states (spec shape failing, proprietary placeholder
+connected) are in
 `docs/assets/agent-plugins-cursor-proof/2026-09-03-plugin-detail-spec-shape-error.png`
 and `…/2026-09-03-plugin-detail-cursor-placeholder-connected.png`.
 
 ---
 
-## Bug report body
+## Observed behaviour
 
-**Where does the bug appear:** Cursor IDE → MCP & tools (plugin loader for
+**Where it appears:** Cursor IDE → MCP & tools (plugin loader for
 Agent Plugins packages placed in `~/.cursor/plugins/local`).
 
 **Version block (Menu → About Cursor):** Cursor 3.18.25, Linux x64 (deb,
@@ -163,7 +155,8 @@ starts, the marker shows `argv[1]` and `PROBE_ROOT` expanded to
 mapping of `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` (and the §9.1 variables, the
 default `cwd`, and `./` command resolution) onto the pipeline that already
 serves `${CURSOR_PLUGIN_ROOT}` when the package is an Agent Plugins package
-(`$schema` under `https://agent-plugins.org/schemas/`).
+(`$schema` under `https://agent-plugins.org/schemas/`) — this is what a
+future build would need to do for the `portable` rows to move.
 
 ### Why it matters
 
