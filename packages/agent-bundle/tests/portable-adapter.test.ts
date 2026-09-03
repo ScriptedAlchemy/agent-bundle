@@ -477,6 +477,7 @@ it('fails closed at plan time on Agent Plugins 1.0.0 normative MCP rules the sch
         transport: 'stdio',
       },
       { command: 'C:\\tools\\server.exe', id: 'mcp:win-abs', name: 'windows-absolute', provenance, targets: ['portable'], transport: 'stdio' },
+      { command: 'C:server', id: 'mcp:win-drive', name: 'windows-drive-relative', provenance, targets: ['portable'], transport: 'stdio' },
       {
         command: 'node',
         env: { '${PLUGIN_ROOT}': 'literal' },
@@ -509,6 +510,7 @@ it('fails closed at plan time on Agent Plugins 1.0.0 normative MCP rules the sch
     ['portable.mcp.command.standard', 'Portable MCP server "anchor-collision" command "./../anchor/server" escapes the plugin root (Agent Plugins 1.0.0 §4.1).'],
     ['portable.mcp.cwd.standard', 'Portable MCP server "anchor-cwd" cwd "${PLUGIN_ROOT}/../anchor" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).'],
     ['portable.mcp.command.standard', 'Portable MCP server "windows-absolute" command "C:\\\\tools\\\\server.exe" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
+    ['portable.mcp.command.standard', 'Portable MCP server "windows-drive-relative" command "C:server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).'],
     ['portable.mcp.env.standard', 'Portable MCP server "placeholder-env-key" env key "${PLUGIN_ROOT}" contains an Agent Plugins placeholder, but expansion never applies to env keys (Agent Plugins 1.0.0 §9.2).'],
     ['portable.mcp.url.standard', 'Portable MCP server "plain-http" url uses plain HTTP against non-loopback host "mcp.example.test"; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).'],
     ['portable.mcp.headers.standard', 'Portable MCP server "bad-headers" headers/x-tenant repeats header "X-Tenant" under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).'],

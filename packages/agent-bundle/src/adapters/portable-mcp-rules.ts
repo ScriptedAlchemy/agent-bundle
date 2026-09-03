@@ -58,7 +58,10 @@ export const containedPortableRelativePath = (relativePath: string): string | un
 
 const staysInsidePosixRoot = (relativePath: string): boolean => containedPortableRelativePath(relativePath) !== undefined;
 
-const isAnyPlatformAbsolute = (value: string): boolean => posix.isAbsolute(value) || win32.isAbsolute(value);
+// A nonempty win32 root also catches drive-relative forms such as `C:server`,
+// which `win32.isAbsolute` reports as relative yet resolve against a per-drive cwd.
+const isAnyPlatformRooted = (value: string): boolean =>
+  posix.isAbsolute(value) || win32.isAbsolute(value) || win32.parse(value).root.length > 0;
 
 /** §7.2.1: a stdio command is a bare executable name or a plugin-relative `./` path. */
 export const portableCommandIssues = (command: unknown): readonly PortableMcpRuleIssue[] => {
@@ -75,7 +78,7 @@ export const portableCommandIssues = (command: unknown): readonly PortableMcpRul
     }
     return Object.freeze([]);
   }
-  if (command.length === 0 || /[\s/\\\0]/u.test(command) || isAnyPlatformAbsolute(command) || command.startsWith('.')) {
+  if (command.length === 0 || /[\s/\\\0]/u.test(command) || isAnyPlatformRooted(command) || command.startsWith('.')) {
     return Object.freeze([issue(
       'command',
       `${JSON.stringify(command)} is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1)`,
