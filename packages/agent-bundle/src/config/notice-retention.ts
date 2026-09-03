@@ -10,7 +10,7 @@ import type {
 /**
  * `notices.retention` (#99 acceptance item 7): the retention policy of the
  * notice ledger a stateful project co-mounts beside `src/state.ts`. Validated
- * here as `AB4829`; the runtime re-validates the resolved policy when the
+ * here as `AB4833`; the runtime re-validates the resolved policy when the
  * generated runtime mounts it.
  */
 
@@ -57,7 +57,7 @@ const isPlainRecord = (value: unknown): value is Readonly<Record<string, unknown
 const retentionKeys = new Set(['maxJournalBytes', 'maxTerminal', 'terminalTtl']);
 
 const diagnostic = (message: string, sourcePath: string, hasState: boolean): Diagnostic => ({
-  code: 'AB4829',
+  code: 'AB4833',
   message,
   recovery: hasState
     ? 'Declare `notices.retention` as an object whose `terminalTtl` is a positive integer of milliseconds or a duration such as "7d", "12h", or "30m", and whose `maxTerminal` and `maxJournalBytes` are positive integers; omit a field to keep its default.'

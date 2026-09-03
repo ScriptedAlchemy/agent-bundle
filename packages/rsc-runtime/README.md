@@ -389,7 +389,7 @@ stay in the ledger forever. `createAgentNoticeLedger(store, { retention })`
 takes an `AgentNoticeRetentionPolicy` (`resolveNoticeRetentionPolicy()`
 validates it; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`: `terminalTtlMs`
 seven days, `maxTerminal` 500, `maxJournalBytes` 16 MiB). Generated runtimes
-resolve it from the project's `notices.retention` config (`AB4829` when
+resolve it from the project's `notices.retention` config (`AB4833` when
 malformed). `retain({ at, idempotencyKey })` applies it once: settled notices
 older than the TTL, plus the earliest-settled beyond the cap, leave the state
 through one `pruned` event (the reducer skips any id that is live again, so a

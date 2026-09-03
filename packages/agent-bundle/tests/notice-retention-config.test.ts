@@ -12,7 +12,7 @@ const config = (notices: unknown): AgentBundleConfig => ({
   plugin: { name: 'fixture', version: '1.0.0' },
 } as AgentBundleConfig);
 
-describe('notices.retention config (AB4829)', () => {
+describe('notices.retention config (AB4833)', () => {
   it('parses durations as positive integers of milliseconds or unit literals', () => {
     expect(parseNoticeRetentionDuration(1)).toBe(1);
     expect(parseNoticeRetentionDuration(86_400_000)).toBe(86_400_000);
@@ -45,7 +45,7 @@ describe('notices.retention config (AB4829)', () => {
     expect(normalizeNoticeRetention(config({}), '/p/c.ts', false)).toEqual({ diagnostics: [] });
   });
 
-  it('reports malformed shapes, unknown keys, and non-positive values as AB4829 errors', () => {
+  it('reports malformed shapes, unknown keys, and non-positive values as AB4833 errors', () => {
     const cases: readonly [unknown, RegExp][] = [
       ['nope', /`notices` configuration must be an object/u],
       [{ retentoin: {} }, /unknown key "retentoin"/u],
@@ -60,7 +60,7 @@ describe('notices.retention config (AB4829)', () => {
       expect(result.retention).toBeUndefined();
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]).toMatchObject({
-        code: 'AB4829',
+        code: 'AB4833',
         message: expect.stringMatching(message),
         severity: 'error',
         sourcePath: '/project/agent-bundle.config.ts',
@@ -68,14 +68,14 @@ describe('notices.retention config (AB4829)', () => {
     }
     // Several bad fields are reported together, once each.
     const many = normalizeNoticeRetention(config({ retention: { maxTerminal: -1, terminalTtl: 'x' } }), '/p/c.ts', true);
-    expect(many.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['AB4829', 'AB4829']);
+    expect(many.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['AB4833', 'AB4833']);
   });
 
   it('refuses a retention policy for a project without a state module', () => {
     const result = normalizeNoticeRetention(config({ retention: { maxTerminal: 3 } }), '/p/agent-bundle.config.ts', false);
     expect(result.retention).toBeUndefined();
     expect(result.diagnostics).toEqual([expect.objectContaining({
-      code: 'AB4829',
+      code: 'AB4833',
       message: expect.stringContaining('declares no state module'),
       recovery: expect.stringContaining('src/state.ts'),
     })]);

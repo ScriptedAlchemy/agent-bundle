@@ -203,7 +203,7 @@ admit `secret` on `current-response` and `next-event` and `internal` on
 evidence and the generated notice reference page renders it.
 
 `notices.retention` in `agent-bundle.config.ts` (`terminalTtl`, `maxTerminal`,
-`maxJournalBytes`; `AB4829` when malformed or declared without `src/state.ts`)
+`maxJournalBytes`; `AB4833` when malformed or declared without `src/state.ts`)
 resolves over the runtime defaults (`7d`, `500`, `16777216`) and is emitted as
 `noticeRetentionPolicy` into every generated module that mounts the ledger, so
 the MCP worker, the server process, the routed CLI bin, and rendered scripts

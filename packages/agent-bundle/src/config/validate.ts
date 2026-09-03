@@ -2201,7 +2201,7 @@ export const validateSource = (
       loaded.configPath,
     ));
   }
-  // `notices.retention` (AB4829) needs the co-mounted ledger a state module brings.
+  // `notices.retention` (AB4833) needs the co-mounted ledger a state module brings.
   diagnostics.push(...normalizeNoticeRetention(
     loaded.config,
     loaded.configPath,

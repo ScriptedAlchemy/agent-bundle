@@ -131,30 +131,35 @@ const acknowledgementRoute = (request: AgentNoticeRequest): AgentNoticeDeliveryR
   request.invocation.kind === 'event' ? 'next-event' : 'mcp-inbox';
 
 /**
- * A notice returned from `acknowledge()`: the state moved, but the content
- * comes back only as the request's route may disclose it. A withheld class
- * yields a placeholder document (the mark, same status and version) rather
- * than the authored text an id learned from a redacted inbox would otherwise
- * unlock.
+ * A notice handed out by a route that decided nothing about it in this call
+ * (an acknowledgement, or a replayed admission whose attempt receipt already
+ * exists): the content comes back only as the route's *current* ceiling may
+ * disclose it, so a store reopened under a lowered ceiling never replays the
+ * authored text. A withheld class yields a placeholder document (the mark,
+ * same status and version) rather than the authored text an id learned from a
+ * redacted inbox would otherwise unlock.
  */
-const acknowledgedNotice = (
+const currentlyDisclosedNotice = (
   notice: AgentNotice,
   route: AgentNoticeDeliveryRoute,
   advertisement: AgentNoticeDeliveryAdvertisement | undefined,
-): AgentNotice => {
+): { readonly notice: AgentNotice; readonly redacted: boolean } => {
   const disclosure = resolveNoticeDisclosure(route, sensitivityOf(notice), advertisement);
   switch (disclosure.kind) {
     case 'disclosed':
-      return disclosedNotice(notice, disclosure);
+      return { notice: disclosedNotice(notice, disclosure), redacted: disclosure.redacted };
     case 'withheld':
-      return Object.freeze({
-        ...notice,
-        content: Object.freeze({
-          root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
-          status: notice.content.status,
-          version: notice.content.version,
+      return {
+        notice: Object.freeze({
+          ...notice,
+          content: Object.freeze({
+            root: Object.freeze({ kind: 'text' as const, text: NOTICE_REDACTION_MARK }),
+            status: notice.content.status,
+            version: notice.content.version,
+          }),
         }),
-      });
+        redacted: true,
+      };
     default: {
       const exhaustive: never = disclosure;
       return exhaustive;
@@ -405,18 +410,28 @@ const deliveryFor = (
   notice: AgentNotice,
   invocationId: string,
   disclosures: ReadonlyMap<string, Disclosed>,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
 ): AgentNoticeDelivery | undefined => {
   if (notice.state !== 'attempted') return undefined;
   const receipt = notice.attempts.find((attempt) => attempt.invocationId === invocationId);
   if (receipt === undefined) return undefined;
-  // Attempted in this invocation means the route disclosed it; a receipt from
-  // this invocation without a decision (a replayed admission whose state was
-  // read fresh) falls back to the notice's own class.
-  const disclosure = disclosures.get(notice.id)
-    ?? Object.freeze({ kind: 'disclosed' as const, redacted: sensitivityOf(notice) === 'internal', shape: 'body' as const });
+  const decided = disclosures.get(notice.id);
+  if (decided !== undefined) {
+    return Object.freeze({
+      disclosure: Object.freeze({ redacted: decided.redacted, route: 'next-event' as const }),
+      notice: disclosedNotice(notice, decided),
+      receipt,
+    });
+  }
+  // A receipt from this invocation without a decision is a replayed admission
+  // (the attempt already existed, so the notice was not a candidate). The
+  // content is disclosed against the route's *current* ceiling, never the one
+  // that held when the receipt was written: a store reopened under a lowered
+  // ceiling hands out the placeholder, not the authored secret.
+  const current = currentlyDisclosedNotice(notice, 'next-event', advertisement);
   return Object.freeze({
-    disclosure: Object.freeze({ redacted: disclosure.redacted, route: 'next-event' as const }),
-    notice: disclosedNotice(notice, disclosure),
+    disclosure: Object.freeze({ redacted: current.redacted, route: 'next-event' as const }),
+    notice: current.notice,
     receipt,
   });
 };
@@ -615,7 +630,7 @@ export const createAgentNoticeLedger = (
         }
         deliveries = Object.freeze(admitted.notices
           .filter((notice) => recipientMatchesPrincipal(notice.recipient, request.principal))
-          .map((notice) => deliveryFor(notice, request.invocation.id, disclosures))
+          .map((notice) => deliveryFor(notice, request.invocation.id, disclosures, advertisement))
           .filter((delivery): delivery is AgentNoticeDelivery => delivery !== undefined));
         // Retention rides admitted events only (V1 implies no timer): settled
         // history past the policy leaves the ledger, then an oversized journal
@@ -690,7 +705,7 @@ export const createAgentNoticeLedger = (
             // the content comes back exactly as the route that could have
             // shown it to this request discloses it, so an id learned from a
             // redacted inbox cannot fetch the authored text through here.
-            return acknowledgedNotice(acknowledged, acknowledgementRoute(request), advertisement);
+            return currentlyDisclosedNotice(acknowledged, acknowledgementRoute(request), advertisement).notice;
           }));
         },
         inbox() {

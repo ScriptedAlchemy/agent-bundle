@@ -99,41 +99,6 @@ it('inspects volatile and workspace-durable state without inventing runtime path
     });
     expect(JSON.parse(volatile.stdout).selected.state).not.toHaveProperty('durableLocation');
 
-    // A declared `notices.retention` resolves over the defaults and is reported as declared.
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  notices: { retention: { maxTerminal: 12, terminalTtl: '2d' } },",
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n'));
-    const retaining = await inspectCli(root, ['--state', '--json']);
-    expect(retaining).toMatchObject({ code: 0, stderr: '' });
-    expect(JSON.parse(retaining.stdout).selected.state.noticeRetention).toEqual({
-      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 12, terminalTtlMs: 172_800_000 },
-      source: 'declared',
-    });
-    // A malformed policy is an AB4829 source error, never a silently defaulted one.
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  notices: { retention: { terminalTtl: 'soon' } },",
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n'));
-    const malformed = await inspectCli(root, ['--state', '--json']);
-    expect(malformed.code).not.toBe(0);
-    expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4829');
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '};',
-      '',
-    ].join('\n'));
-
     await writeFile(stateSource, [
       'export default defineState({',
       "  id: 'fixture/durable-state',",
@@ -195,6 +160,49 @@ it('inspects volatile and workspace-durable state without inventing runtime path
       },
     });
     expect(JSON.parse(dynamic.stdout).selected.state.budgets).not.toHaveProperty('resolved');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports the declared notice retention policy and rejects a malformed one as AB4833', { timeout: 20_000 }, async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'src', 'state.ts'), [
+      'export default defineState({',
+      "  id: 'fixture/retained-state',",
+      "  lifetime: 'workspace-durable',",
+      '});',
+      '',
+    ].join('\n'));
+    // A declared `notices.retention` resolves over the defaults and is reported as declared.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { maxTerminal: 12, terminalTtl: '2d' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const retaining = await inspectCli(root, ['--state', '--json']);
+    expect(retaining).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(retaining.stdout).selected.state.noticeRetention).toEqual({
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 12, terminalTtlMs: 172_800_000 },
+      source: 'declared',
+    });
+
+    // A malformed policy is an AB4833 source error, never a silently defaulted one.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { terminalTtl: 'soon' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const malformed = await inspectCli(root, ['--state', '--json']);
+    expect(malformed.code).not.toBe(0);
+    expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4833');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

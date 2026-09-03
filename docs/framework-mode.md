@@ -327,7 +327,7 @@ exceeds `maxJournalBytes`. Every field is optional and defaults to the values
 shown; pruning runs only on admitted events and explicit `retain()` calls, so
 no timer is implied. A malformed policy — an unknown key, a non-positive or
 fractional value, a duration outside that grammar, or a policy declared by a
-project without a state module — is `AB4829`. `inspect --state` and the
+project without a state module — is `AB4833`. `inspect --state` and the
 Workbench State panel show the resolved policy and whether it was declared or
 defaulted.
 

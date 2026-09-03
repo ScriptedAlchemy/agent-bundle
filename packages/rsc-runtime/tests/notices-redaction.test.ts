@@ -288,6 +288,34 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     await open.driver.close();
   });
 
+  it('discloses a replayed admission against the current ceiling, not the one that held when it was attempted', async () => {
+    // One durable store, two ledgers over it: the host first admitted secret
+    // on next-event, then a reconfiguration lowered the ceiling to internal.
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentNoticeStateDefinition('process'));
+    const permissive = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'next-event': 'secret' }),
+    });
+    const lowered = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'next-event': 'internal' }),
+    });
+    const secret = await publish(permissive, { id: 'secret', sensitivity: 'secret' });
+    const event = { actorId: 'recipient', id: 'event-replay', kind: 'event' as const, startedAt: '2026-09-03T10:10:00.000Z' };
+    const first = await run(permissive, event, async () => (await agent()).notices!.read());
+    expect(first.map((delivery) => [delivery.disclosure.redacted, (delivery.notice.content.root as { text: string }).text]))
+      .toEqual([[false, SECRET_TEXT]]);
+    // The same invocation replayed under the lowered ceiling: the attempt
+    // receipt already exists, so nothing is re-attempted, and the content
+    // comes back as the placeholder rather than the authored secret.
+    const replayed = await run(lowered, event, async () => (await agent()).notices!.read());
+    expect(replayed.map((delivery) => [delivery.disclosure.redacted, delivery.notice.id, delivery.notice.content]))
+      .toEqual([[true, secret.notice.id, { root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 }]]);
+    expect((await lowered.read()).notices[0]?.attempts).toHaveLength(1);
+    await driver.close();
+  });
+
   it('delivers internal notices redacted on next-event and treats pre-sensitivity notices as internal', async () => {
     const { driver, ledger, store } = await openLedger();
     const internal = await publish(ledger, { id: 'internal' });
