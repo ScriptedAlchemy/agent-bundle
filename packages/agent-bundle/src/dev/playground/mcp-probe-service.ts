@@ -142,12 +142,20 @@ const hasAbsolutePath = (value: string): boolean =>
   /(?:file:|(?:^|[\s"'([{=,]|:(?!\/\/))\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
 
 /**
+ * URL userinfo (`scheme://user:secret@host`) is a credential that the generic
+ * credential redaction does not recognize; because URLs are exempt from the
+ * absolute-path fail-closed rule, the userinfo is stripped before that check.
+ */
+const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@"'<>]+@/giu;
+
+/**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
- * read-only service to log retention: credential text is removed first,
- * bundle paths become a label, and every other absolute path fails closed.
+ * read-only service to log retention: credential text is removed first, URL
+ * userinfo is masked, bundle paths become a label, and every other absolute
+ * path fails closed.
  */
 const redactProbeText = (value: string, bundleRoot: string, maximum: number): string => {
-  const redacted = redactCredentialText(value).replace(
+  const redacted = redactCredentialText(value).replace(urlUserinfoPattern, '$1[REDACTED]@').replace(
     bundlePathPattern(bundleRoot),
     (match) => {
       const normalized = match.replace(/^file:\/\//u, '').replaceAll('\\', '/');
