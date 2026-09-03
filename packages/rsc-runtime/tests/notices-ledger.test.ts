@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@rstest/core';
 
 import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
   selectNoticeDeliveryRoutes,
@@ -881,6 +882,46 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
       noticeIds: [id],
       reservationKey: 'holder-b:1',
     })).rejects.toMatchObject({ code: 'revision-conflict' });
+
+    // A live hold is not overwritten by a different key even without a
+    // compare-and-swap; the holder's own key renews it; a lapsed hold is taken.
+    const contested = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      idempotencyKey: 'reserve:b-uncontended',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(contested.notices[0]?.availabilityReservation).toEqual({ at: '2026-09-01T19:04:00.000Z', key: 'holder-a:1' });
+    const renewed = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:10.000Z',
+      idempotencyKey: 'renew:a:1',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(renewed.notices[0]?.availabilityReservation).toEqual({ at: '2026-09-01T19:04:10.000Z', key: 'holder-a:1' });
+    const lapsedAt = new Date(Date.parse('2026-09-01T19:04:10.000Z') + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS).toISOString();
+    const takenOver = await ledger.reserveAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'reserve:b-after-lapse',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(takenOver.notices[0]?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    // The lapsed holder's late renewal cannot steal the hold back.
+    const lateRenewal = await ledger.reserveAvailability({
+      at: new Date(Date.parse(lapsedAt) + 1_000).toISOString(),
+      idempotencyKey: 'renew:a:2',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(lateRenewal.notices[0]?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    await ledger.releaseAvailability({ idempotencyKey: 'release:b-takeover', noticeIds: [id], reservationKey: 'holder-b:1' });
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:a-again',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
 
     // Releasing with another holder's key leaves the hold intact; the owner's key clears it.
     const foreignRelease = await ledger.releaseAvailability({

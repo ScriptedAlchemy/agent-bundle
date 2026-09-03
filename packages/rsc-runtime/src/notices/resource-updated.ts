@@ -28,6 +28,12 @@ export interface AgentNoticeInboxStore {
 export interface CreateNoticeInboxSignallerOptions {
   /** Clock injection for deterministic tests. */
   readonly now?: () => Date;
+  /**
+   * How often a hold is renewed while its `send()` is still pending. Defaults
+   * to a third of `AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` so a live
+   * holder never lapses; only a holder whose process is gone does.
+   */
+  readonly reservationRenewalIntervalMs?: number;
   readonly store: AgentNoticeInboxStore;
 }
 
@@ -59,11 +65,14 @@ export type AgentNoticeInboxSignalOutcome =
 export interface AgentNoticeInboxSignaller {
   readonly inboxUri: typeof AGENT_NOTICE_INBOX_URI;
   readonly subscribed: boolean;
+  /** Commits any receipt still owed for a send that reached the wire, then closes the store. */
   close(): Promise<void>;
   /**
-   * Runs after one completed render: reads the ledger and, when the
-   * subscriber has newly eligible pending notices, sends exactly one
-   * `resources/updated` through `send` and records the availability receipt.
+   * Runs after one completed render: first commits any receipt still owed from
+   * an earlier send, then reads the ledger and, when the subscriber has newly
+   * eligible pending notices, holds their budget slot, sends exactly one
+   * `resources/updated` through `send` (renewing the hold while the write is
+   * pending), and records the availability receipt once the write succeeded.
    * Never throws; failures are returned so the render path stays unaffected.
    */
   observe(send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome>;
@@ -87,6 +96,13 @@ interface InboxSubscription {
   readonly id: string;
   readonly principal: AgentNoticePrincipal;
   readonly signalled: Set<string>;
+}
+
+/** A send that succeeded on the wire whose availability receipt has not been committed yet. */
+interface PendingReceipt {
+  readonly at: string;
+  readonly noticeIds: readonly string[];
+  readonly reservationKey: string;
 }
 
 const eligibleForSignal = (
@@ -127,8 +143,16 @@ export const createNoticeInboxSignaller = (
   options: CreateNoticeInboxSignallerOptions,
 ): AgentNoticeInboxSignaller => {
   const now = options.now ?? ((): Date => new Date());
+  const renewalIntervalMs = options.reservationRenewalIntervalMs
+    ?? Math.floor(AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS / 3);
   let subscription: InboxSubscription | undefined;
   let signalSequence = 0;
+  // Sends that reached the wire but whose receipt commit failed. The send is
+  // a fact, so the receipt is retried with the same idempotency key on every
+  // later observation (and on close) until it lands; the memory dedupe alone
+  // would otherwise let a restarted signaller spend the same slot again once
+  // the abandoned hold lapsed.
+  const pendingReceipts = new Map<string, PendingReceipt>();
   // Observations and subscription changes serialize on one queue: two renders
   // completing together cannot both select the same notice and send two
   // signals for one revision, and an unsubscribe (or re-subscribe) that
@@ -210,9 +234,74 @@ export const createNoticeInboxSignaller = (
     };
   };
 
+  /** Commits the receipt for one wire-successful send; idempotent across retries. */
+  const commitReceipt = (
+    ledger: AgentNoticeLedger,
+    receipt: PendingReceipt,
+  ): Promise<Awaited<ReturnType<AgentNoticeLedger['read']>>> => ledger.signalAvailability({
+    at: receipt.at,
+    idempotencyKey: `agent-notices:availability:signal:${receipt.reservationKey}`,
+    noticeIds: receipt.noticeIds,
+    reservationKey: receipt.reservationKey,
+  });
+
+  /** Retries every outstanding receipt; the first failure is returned so the caller reports it. */
+  const drainPendingReceipts = async (ledger: AgentNoticeLedger): Promise<unknown> => {
+    for (const receipt of [...pendingReceipts.values()]) {
+      try {
+        await commitReceipt(ledger, receipt);
+        pendingReceipts.delete(receipt.reservationKey);
+      } catch (error) {
+        return error;
+      }
+    }
+    return undefined;
+  };
+
+  /**
+   * Keeps a hold alive while its protocol write is pending. A write that
+   * outlives the TTL would otherwise let another process treat the hold as
+   * abandoned and send too; renewing under the same key refreshes `at`, and
+   * the reducer refuses a renewal once a different key has legitimately taken
+   * over, so a holder that could not renew for a whole TTL never steals back.
+   * The timer exists only for the duration of one in-flight send.
+   */
+  const renewWhile = async <T>(
+    ledger: AgentNoticeLedger,
+    hold: { readonly noticeIds: readonly string[]; readonly reservationKey: string },
+    pending: Promise<T>,
+  ): Promise<T> => {
+    let renewals = 0;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = (): void => {
+      if (stopped) return;
+      renewals += 1;
+      const renewal = renewals;
+      void ledger.reserveAvailability({
+        at: now().toISOString(),
+        idempotencyKey: `agent-notices:availability:renew:${hold.reservationKey}:${String(renewal)}`,
+        noticeIds: hold.noticeIds,
+        reservationKey: hold.reservationKey,
+      }).catch(() => undefined).then(() => {
+        if (stopped) return;
+        timer = setTimeout(tick, renewalIntervalMs);
+        timer.unref?.();
+      });
+    };
+    timer = setTimeout(tick, renewalIntervalMs);
+    timer.unref?.();
+    try {
+      return await pending;
+    } finally {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
   const observeOnce = async (send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> => {
     const current = subscription;
-    if (current === undefined) {
+    if (current === undefined && pendingReceipts.size === 0) {
       return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
     }
     let ledger: AgentNoticeLedger;
@@ -221,7 +310,13 @@ export const createNoticeInboxSignaller = (
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'read' as const });
     }
-    if (pendingUnsubscribes > 0) {
+    // Receipts owed from earlier sends come first: they are facts about the
+    // wire, and a ledger that cannot take them is not one to spend against.
+    const owed = await drainPendingReceipts(ledger);
+    if (owed !== undefined) {
+      return Object.freeze({ error: owed, kind: 'failed' as const, stage: 'record' as const });
+    }
+    if (current === undefined || pendingUnsubscribes > 0) {
       return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
     }
     const claimed = await claim(ledger, current);
@@ -245,7 +340,7 @@ export const createNoticeInboxSignaller = (
     // send finalizes the hold into the availability receipt. Only the receipt
     // means the protocol write succeeded.
     try {
-      await send();
+      await renewWhile(ledger, claimed, send());
     } catch (error) {
       try {
         await ledger.releaseAvailability({
@@ -259,14 +354,18 @@ export const createNoticeInboxSignaller = (
       }
       return Object.freeze({ error, kind: 'failed' as const, stage: 'send' as const });
     }
+    // The wire write succeeded: this subscription never sends for these notices
+    // again, and the receipt is owed until it commits.
     for (const id of claimed.noticeIds) current.signalled.add(id);
+    const receipt: PendingReceipt = Object.freeze({
+      at: claimed.at,
+      noticeIds: claimed.noticeIds,
+      reservationKey: claimed.reservationKey,
+    });
+    pendingReceipts.set(receipt.reservationKey, receipt);
     try {
-      const committed = await ledger.signalAvailability({
-        at: claimed.at,
-        idempotencyKey: `agent-notices:availability:signal:${claimed.reservationKey}`,
-        noticeIds: claimed.noticeIds,
-        reservationKey: claimed.reservationKey,
-      });
+      const committed = await commitReceipt(ledger, receipt);
+      pendingReceipts.delete(receipt.reservationKey);
       return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: committed.revision });
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'record' as const });
@@ -279,8 +378,18 @@ export const createNoticeInboxSignaller = (
       return subscription !== undefined;
     },
     close(): Promise<void> {
-      subscription = undefined;
-      return options.store.close();
+      return serialized(async () => {
+        subscription = undefined;
+        if (pendingReceipts.size > 0) {
+          try {
+            await drainPendingReceipts(await options.store.noticeLedger());
+          } catch {
+            // A receipt still owed at close is lost with the process; the hold
+            // it left behind lapses after the TTL.
+          }
+        }
+        await options.store.close();
+      });
     },
     observe(send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> {
       return serialized(() => observeOnce(send));

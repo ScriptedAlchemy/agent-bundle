@@ -406,6 +406,143 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('keeps a wire-successful send owed until its receipt commits, so a restart cannot resend it', async () => {
+    const { driver, ledger } = await openLedger();
+    let receiptOutage = true;
+    const flaky: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      signalAvailability: async (input) => {
+        if (receiptOutage) throw new AgentStateError('unavailable', 'receipt commit lost');
+        return ledger.signalAvailability(input);
+      },
+    });
+    const signaller = signallerOver(flaky);
+    await signaller.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+    const { send, sends } = sender();
+
+    // The wire write succeeded; only the second-phase receipt failed.
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'record' });
+    expect(sends).toHaveLength(1);
+    const owed = (await ledger.read()).notices[0];
+    expect(owed).not.toHaveProperty('availability');
+    expect(owed?.availabilityReservation).toMatchObject({ at: T1 });
+
+    // While the receipt is owed the signaller neither resends nor spends anew:
+    // the retry of the same idempotent receipt comes first, and its failure is
+    // the reported outcome.
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'record' });
+    expect(sends).toHaveLength(1);
+
+    // Once the ledger takes writes again the owed receipt lands before anything
+    // else, with the original send time, and the slot is finally spent.
+    receiptOutage = false;
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
+    const settled = (await ledger.read()).notices[0];
+    expect(settled?.availability).toMatchObject({ count: 1, firstAt: T1, lastAt: T1 });
+    expect(settled).not.toHaveProperty('availabilityReservation');
+
+    // A restarted process long after the hold would have lapsed finds the
+    // budget spent rather than a pending notice with a stale hold.
+    const restarted = signallerOver(ledger, () => new Date(Date.parse(T1) + 2 * AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS));
+    await restarted.subscribe(principal('s1'));
+    await expect(restarted.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toHaveLength(1);
+    expect(published.notice.id).toBe(settled?.id);
+    await driver.close();
+  });
+
+  it('commits an owed receipt on close instead of losing it with the process', async () => {
+    const { driver, ledger } = await openLedger();
+    let receiptOutage = true;
+    const flaky: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      signalAvailability: async (input) => {
+        if (receiptOutage) throw new AgentStateError('unavailable', 'receipt commit lost');
+        return ledger.signalAvailability(input);
+      },
+    });
+    let closed = 0;
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(T1),
+      store: {
+        close: async () => {
+          closed += 1;
+        },
+        noticeLedger: async () => flaky,
+      },
+    });
+    await signaller.subscribe(principal('s1'));
+    await publish(ledger, { sessionId: 's1' });
+    const { send, sends } = sender();
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'record' });
+    expect(sends).toHaveLength(1);
+
+    receiptOutage = false;
+    await signaller.close();
+    expect(closed).toBe(1);
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
+
+  it('renews the hold while a protocol write is pending so no other process treats it as abandoned', async () => {
+    const { driver, ledger } = await openLedger();
+    let clock = Date.parse(T1);
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(clock),
+      reservationRenewalIntervalMs: 5,
+      store: { close: async () => undefined, noticeLedger: async () => ledger },
+    });
+    await signaller.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+
+    let finishSend: () => void = () => undefined;
+    const sendSettled = new Promise<void>((resolve) => {
+      finishSend = resolve;
+    });
+    const sends: string[] = [];
+    const slowSend = async (): Promise<void> => {
+      sends.push(AGENT_NOTICE_INBOX_URI);
+      await sendSettled;
+    };
+    const observing = signaller.observe(slowSend);
+
+    // The write is still in flight when the wall clock passes the TTL, yet the
+    // hold's `at` keeps moving with it, so a second process sees a live hold.
+    const heldAt = async (): Promise<string | undefined> =>
+      (await ledger.read()).notices[0]?.availabilityReservation?.at;
+    const reservedAt = await (async () => {
+      for (let i = 0; i < 200 && await heldAt() === undefined; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      return heldAt();
+    })();
+    expect(reservedAt).toBe(T1);
+    clock = Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS + 1_000;
+    for (let i = 0; i < 200 && await heldAt() === T1; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(await heldAt()).toBe(new Date(clock).toISOString());
+
+    const other = signallerOver(ledger, () => new Date(clock));
+    await other.subscribe(principal('s1'));
+    await expect(other.observe(async () => {
+      sends.push('other');
+    })).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+
+    finishSend();
+    await expect(observing).resolves.toMatchObject({ kind: 'signalled', noticeIds: [published.notice.id] });
+    expect(sends).toEqual([AGENT_NOTICE_INBOX_URI]);
+    const settled = (await ledger.read()).notices[0];
+    expect(settled?.availability).toMatchObject({ count: 1 });
+    expect(settled).not.toHaveProperty('availabilityReservation');
+    // Renewal stops with the send: no further hold appears afterwards.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await ledger.read()).notices[0]).not.toHaveProperty('availabilityReservation');
+    await driver.close();
+  });
+
   it('treats a reservation as held until its TTL elapses, then as abandoned', async () => {
     const { driver, ledger } = await openLedger();
     const published = await publish(ledger, { sessionId: 's1' });

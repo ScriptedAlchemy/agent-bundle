@@ -11,10 +11,11 @@ import type {
   AgentStateLifetime,
 } from '../state/contract.js';
 import { canonicalJson, defineState } from '../state/index.js';
-import type {
-  AgentNotice,
-  AgentNoticePrincipal,
-  AgentRecipient,
+import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
+  type AgentNotice,
+  type AgentNoticePrincipal,
+  type AgentRecipient,
 } from './contract.js';
 
 const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state', [
@@ -299,10 +300,12 @@ const transitionAvailability = (
 };
 
 /**
- * Holds a budget slot without spending it. A live notice may carry one
- * reservation; a newer reserver replaces an older one outright because the
- * ledger cannot tell abandoned from slow, so the signaller decides staleness
- * by `at` against the reservation TTL before it ever reserves.
+ * Holds a budget slot without spending it. A live notice carries at most one
+ * reservation: the holder renews it by reserving again under the same key,
+ * and a different key takes it over only once the current hold is older than
+ * the reservation TTL at the event's own `at` — a rule the reducer can apply
+ * deterministically on replay, so a slow holder's renewal can never steal a
+ * hold back from the process that legitimately took over after it lapsed.
  */
 const transitionAvailabilityReservation = (
   notice: AgentNotice,
@@ -311,11 +314,20 @@ const transitionAvailabilityReservation = (
   if (!input.noticeIds.has(notice.id)) return notice;
   switch (notice.state) {
     case 'pending':
-    case 'attempted':
+    case 'attempted': {
+      const held = notice.availabilityReservation;
+      if (
+        held !== undefined
+        && held.key !== input.reservationKey
+        && Date.parse(held.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > Date.parse(input.at)
+      ) {
+        return notice;
+      }
       return Object.freeze({
         ...notice,
         availabilityReservation: Object.freeze({ at: input.at, key: input.reservationKey }),
       });
+    }
     case 'expired':
     case 'unavailable':
     case 'withdrawn':

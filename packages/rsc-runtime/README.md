@@ -272,10 +272,15 @@ protocol write failed, so the receipt only ever means the write succeeded and
 a failed send costs no budget. Eligibility is recipient-matched against the
 subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
 slot another signaller currently holds (a hold older than
-`AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned), and is
+`AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned; a live
+holder renews it under its key while its write is pending, and the reducer
+refuses a renewal once another key has legitimately taken over), and is
 bounded by `retryBudget` (availability receipts per notice, durable across
 restarts); because the slot is held before the wire write, two server processes
-over one store can never both signal the same notice. Exposure and availability
+over one store can never both signal the same notice. A send that reached the
+wire but whose receipt commit failed stays owed: the same idempotent receipt is
+retried before any later observation spends (and on `close()`), so a restarted
+process cannot resend a notice the wire already carried. Exposure and availability
 receipts never re-trigger a signal, so a subscribed client cannot be driven into
 a refetch loop. Subscribing fails closed when the store is unreadable,
 `unsubscribe()` resolves only after in-flight observations settle, and only the
