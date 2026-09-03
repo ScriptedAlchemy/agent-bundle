@@ -94,6 +94,30 @@
     "stdio": true,
     "streamableHttp": true
   },
+  "noticeDelivery": {
+    "current-response": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks, so there is no synchronous hook response surface (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "directed-push": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-initiated directed cross-actor message API at this pin; the Claude Notification hook observes host-emitted notifications and does not send them.",
+      "state": "unavailable"
+    },
+    "host-toast": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-facing toast/notification send API at this pin.",
+      "state": "unavailable"
+    },
+    "mcp-inbox": {
+      "state": "supported"
+    },
+    "mcp-resource-updated": {
+      "state": "supported"
+    },
+    "next-event": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks, so no event admission surface exists (https://agent-plugins.org/).",
+      "state": "unavailable"
+    }
+  },
   "observedSpecificationVersion": "1.0.0",
   "plugin": {
     "manifest": "plugin.json",

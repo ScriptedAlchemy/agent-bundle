@@ -120,6 +120,28 @@
     "stdio": true,
     "streamableHttp": true
   },
+  "noticeDelivery": {
+    "current-response": {
+      "state": "supported"
+    },
+    "directed-push": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-initiated directed cross-actor message API at this pin; the Claude Notification hook observes host-emitted notifications and does not send them.",
+      "state": "unavailable"
+    },
+    "host-toast": {
+      "reason": "retrieved 2026-09-02 (#99 survey): no documented plugin-facing toast/notification send API at this pin.",
+      "state": "unavailable"
+    },
+    "mcp-inbox": {
+      "state": "supported"
+    },
+    "mcp-resource-updated": {
+      "state": "supported"
+    },
+    "next-event": {
+      "state": "supported"
+    }
+  },
   "observedCliVersion": "2.1.250",
   "plugin": {
     "agents": {
