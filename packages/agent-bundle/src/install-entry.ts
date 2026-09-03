@@ -17,9 +17,13 @@ export interface GeneratedInstallProcessOptions {
 }
 
 const usage = (options: GeneratedInstallProcessOptions): string => [
-  `Usage: ${options.name} install <host> [--scope <scope>] [--json]`,
+  `Usage: ${options.name} install <host> [--scope <scope>] [--replace|--force] [--json]`,
   '',
   `Built hosts: ${options.hosts.join(', ')}`,
+  '',
+  '--replace (alias --force) replaces an existing agent-bundle install of this plugin even when',
+  'its version differs. Same-version content drift is replaced automatically; foreign installs',
+  'are always refused.',
   '',
 ].join('\n');
 
@@ -32,11 +36,32 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] =>
       severity: 'error' as const,
     })]);
 
+const stateLabel = (state: InstallResult['state']): string => {
+  switch (state) {
+    case 'adopted':
+      return 'Adopted';
+    case 'already-installed':
+      return 'Already installed';
+    case 'installed':
+      return 'Installed';
+    case 'replaced':
+      return 'Replaced';
+    default: {
+      const exhaustive: never = state;
+      throw new TypeError(`Unknown install state ${String(exhaustive)}.`);
+    }
+  }
+};
+
 const writeHuman = (result: InstallResult): void => {
   const destination = result.destination ?? result.bundleRoot;
+  const content = result.previousContentHash !== undefined && result.contentHash !== undefined
+    ? ` (content ${result.previousContentHash.slice(0, 12)} -> ${result.contentHash.slice(0, 12)})`
+    : result.contentHash === undefined
+      ? ''
+      : ` (content ${result.contentHash.slice(0, 12)})`;
   process.stdout.write(
-    `${result.state === 'already-installed' ? 'Already installed' : 'Installed'} ` +
-    `${result.plugin}@${result.version} for ${result.host} at ${destination}\n`,
+    `${stateLabel(result.state)} ${result.plugin}@${result.version} for ${result.host} at ${destination}${content}\n`,
   );
 };
 
@@ -49,6 +74,7 @@ const isScope = (value: string): value is InstallScope =>
 interface ParsedInstallArguments {
   readonly host: InstallHost;
   readonly json: boolean;
+  readonly replace: boolean;
   readonly scope: InstallScope;
 }
 
@@ -66,11 +92,16 @@ const parseArguments = (
     );
   }
   let json = false;
+  let replace = false;
   let scope: InstallScope = 'user';
   for (let index = 2; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--json') {
       json = true;
+      continue;
+    }
+    if (argument === '--replace' || argument === '--force') {
+      replace = true;
       continue;
     }
     if (argument === '--scope') {
@@ -84,7 +115,7 @@ const parseArguments = (
     }
     throw new TypeError(`Unknown installer argument ${JSON.stringify(argument)}.`);
   }
-  return Object.freeze({ host: candidate, json, scope });
+  return Object.freeze({ host: candidate, json, replace, scope });
 };
 
 export const runGeneratedInstallProcess = async (
@@ -111,6 +142,7 @@ export const runGeneratedInstallProcess = async (
     const result = await installBundle({
       from: artifactRoot,
       host: parsed.host,
+      replace: parsed.replace,
       scope: parsed.scope,
     });
     if (parsed.json) process.stdout.write(`${stableJson(result)}\n`);

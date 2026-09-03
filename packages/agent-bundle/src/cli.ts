@@ -29,6 +29,7 @@ import type {
 import type {
   DoctorDurableStateReport,
   DoctorHost,
+  DoctorInstallComparison,
   DoctorReport,
   runDoctor,
 } from './install/doctor.ts';
@@ -82,8 +83,10 @@ interface BuildCommandOptions extends SourceCommandOptions {
 }
 
 interface InstallCommandOptions {
+  readonly force?: boolean;
   readonly from: string;
   readonly json?: boolean;
+  readonly replace?: boolean;
   readonly scope: string;
 }
 
@@ -274,12 +277,61 @@ const writeHumanPrepack = (output: Output, result: Awaited<ReturnType<typeof pre
   );
 };
 
+const installStateLabel = (state: InstallResult['state']): string => {
+  switch (state) {
+    case 'adopted':
+      return 'Adopted';
+    case 'already-installed':
+      return 'Already installed';
+    case 'installed':
+      return 'Installed';
+    case 'replaced':
+      return 'Replaced';
+    default: {
+      const exhaustive: never = state;
+      throw new TypeError(`Unknown install state ${String(exhaustive)}.`);
+    }
+  }
+};
+
+const shortContentHash = (hash: string): string => hash.slice(0, 12);
+
 const writeHumanInstall = (output: Output, result: InstallResult): void => {
   const destination = result.destination ?? result.bundleRoot;
+  const content = result.previousContentHash !== undefined && result.contentHash !== undefined
+    ? ` (content ${shortContentHash(result.previousContentHash)} -> ${shortContentHash(result.contentHash)})`
+    : result.contentHash === undefined
+      ? ''
+      : ` (content ${shortContentHash(result.contentHash)})`;
   output.write(
-    `${result.state === 'already-installed' ? 'Already installed' : 'Installed'} ` +
-    `${result.plugin}@${result.version} for ${result.host} at ${destination}\n`,
+    `${installStateLabel(result.state)} ${result.plugin}@${result.version} for ${result.host} at ${destination}${content}\n`,
   );
+};
+
+const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
+  const installed = comparison.installedContentHash === undefined
+    ? ''
+    : `; installed ${comparison.installedVersion ?? 'unknown version'} ` +
+      `content ${shortContentHash(comparison.installedContentHash)}, ` +
+      `artifact content ${shortContentHash(comparison.artifactContentHash)}`;
+  switch (comparison.status) {
+    case 'current':
+      return `current${installed}`;
+    case 'stale':
+      return `stale (same version, different content)${installed}`;
+    case 'version-mismatch':
+      return `version mismatch${installed}`;
+    case 'foreign':
+      return `foreign install${installed}`;
+    case 'not-installed':
+      return 'not installed';
+    case 'unknown':
+      return 'unknown (host inventory unavailable)';
+    default: {
+      const exhaustive: never = comparison.status;
+      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+    }
+  }
 };
 
 const formatByteSize = (bytes: number): string => {
@@ -302,6 +354,9 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
         ? ''
         : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
       output.write(`  bundle:${identity} ${host.bundle.state}\n`);
+      if (host.bundle.comparison !== undefined) {
+        output.write(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
+      }
     }
     const reports = [
       ...host.inventory.findings.map((finding) => finding.durableState),
@@ -579,6 +634,12 @@ export const runCli = async (
     .argument('<host>', 'Destination host: claude, codex, or cursor', installHost)
     .option('--from <bundle-dir>', 'Target bundle directory or artifact root', process.cwd())
     .option('--scope <scope>', 'Host install scope', installScope, 'user')
+    .option(
+      '--replace',
+      'Replace an existing agent-bundle install of this plugin even when its version differs; ' +
+        'same-version content drift is replaced automatically and foreign installs are always refused',
+    )
+    .option('--force', 'Alias for --replace')
     .option('--json', 'Write one machine-readable JSON document');
   installCommand.action(async (
     host: InstallHost,
@@ -588,6 +649,7 @@ export const runCli = async (
     const result = await install({
       from: options.from,
       host,
+      replace: options.replace === true || options.force === true,
       scope: installScope(options.scope),
     });
     if (options.json === true) writeMachine(stdout, result);

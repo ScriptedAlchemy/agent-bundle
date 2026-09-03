@@ -305,7 +305,7 @@ claudePluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'claude',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       inventory: { hooks: 1, mcpServers: 1, skills: 1 },
       proofLevel: proofLabel,
       registration: {
@@ -353,7 +353,7 @@ codexPluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'codex',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       manifest: {
         interfaceCapabilities: ['hooks', 'mcp', 'skills'],
         interfaceFields: [...expectedCodexInterfaceFields],
@@ -412,7 +412,7 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
       plugin: 'schema-valid',
     },
     host: 'cursor',
-    install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
     logo: {
       path: './assets/docs/media/logo.svg',
       resolvesInsideDeployTree: true,
@@ -470,7 +470,7 @@ it(
       },
       hooks: 'not-emitted',
       host: 'cursor',
-      install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+      install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
       manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',

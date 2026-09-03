@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
+import { installReceiptFile } from '../src/install/receipt.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
@@ -82,7 +83,7 @@ it('builds a package-relative installer with fallback naming and built-host argv
 
   const help = await run(installer, [], { cwd: tmpdir() });
   expect(help).toMatchObject({ code: 0, stderr: '' });
-  expect(help.stdout).toContain('install <host> [--scope <scope>] [--json]');
+  expect(help.stdout).toContain('install <host> [--scope <scope>] [--replace|--force] [--json]');
   expect(help.stdout).toContain('cursor');
   expect(help.stdout).not.toContain('claude');
 
@@ -107,13 +108,37 @@ it('builds a package-relative installer with fallback naming and built-host argv
     env: { ...process.env, HOME: home },
   });
   expect(installed).toMatchObject({ code: 0, stderr: '' });
-  expect(JSON.parse(installed.stdout)).toMatchObject({
+  const installedDocument = JSON.parse(installed.stdout) as { readonly contentHash?: string };
+  expect(installedDocument).toMatchObject({
+    contentHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
     host: 'cursor',
     plugin: 'installer-fixture',
     state: 'installed',
     version: '1.2.3',
   });
-  await expect(stat(join(home, '.cursor', 'plugins', 'local', 'installer-fixture'))).resolves.toBeDefined();
+  const destination = join(home, '.cursor', 'plugins', 'local', 'installer-fixture');
+  await expect(stat(destination)).resolves.toBeDefined();
+  await expect(stat(join(destination, installReceiptFile))).resolves.toBeDefined();
+
+  // Both replace spellings parse; an identical artifact stays a no-op even when forced.
+  for (const flag of ['--replace', '--force']) {
+    const noop = await run(installer, ['install', 'cursor', flag, '--json'], {
+      cwd: tmpdir(),
+      env: { ...process.env, HOME: home },
+    });
+    expect(noop, flag).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(noop.stdout), flag).toMatchObject({ contentHash: installedDocument.contentHash, state: 'already-installed' });
+  }
+
+  // Same-version content drift of the receipt-managed copy is replaced without a flag.
+  await writeFile(join(destination, 'INSTALL.md'), '# stale\n');
+  const replaced = await run(installer, ['install', 'cursor'], { cwd: tmpdir(), env: { ...process.env, HOME: home } });
+  expect(replaced).toMatchObject({ code: 0, stderr: '' });
+  expect(replaced.stdout).toMatch(/^Replaced installer-fixture@1\.2\.3 for cursor at .* \(content [0-9a-f]{12} -> [0-9a-f]{12}\)\n$/u);
+
+  const unknown = await run(installer, ['install', 'cursor', '--overwrite'], { cwd: tmpdir() });
+  expect(unknown.code).toBe(1);
+  expect(unknown.stderr).toContain('Unknown installer argument "--overwrite"');
 }, 120_000);
 
 it('chooses an unused installer name when both primary candidates are bins', async () => {
@@ -142,7 +167,7 @@ it('handles installer help when the project path contains a percent sign', async
   const help = await run(join(root, 'dist', 'bin', 'installer-fixture-install.js'), ['--help'], { cwd: tmpdir() });
 
   expect(help).toMatchObject({ code: 0, stderr: '' });
-  expect(help.stdout).toContain('install <host> [--scope <scope>] [--json]');
+  expect(help.stdout).toContain('install <host> [--scope <scope>] [--replace|--force] [--json]');
 }, 120_000);
 
 it('uses the plugin name when free and skips portable-only artifacts', async () => {
