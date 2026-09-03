@@ -135,25 +135,27 @@ const detectRuntime = (context: AgentRequestContext, argv: readonly string[]): C
   }
 };
 
-/** The framework request context as the route observed it, minus non-data members. */
-export const snapshotRequest = (context: AgentRequestContext): JsonObject => {
-  const lineage = (context as AgentRequestContext & { readonly lineage?: unknown }).lineage;
-  return {
-    actor: asJson(context.actor),
-    capabilities: asJson(context.capabilities),
-    hasNotices: context.notices !== undefined,
-    hasState: context.state !== undefined,
-    host: asJson(context.host),
-    invocation: asJson(context.invocation),
-    ...(lineage === undefined ? {} : { lineage: asJson(lineage) }),
-    providers: {
-      keys: Object.keys(context.providers).sort((left, right) => left.localeCompare(right)),
-      processLifetime: asJson(context.providers.processLifetime),
-    },
-    session: asJson(context.session),
-    workspace: asJson(context.workspace),
-  };
-};
+/**
+ * The framework request context as the route observed it, minus non-data
+ * members. `lineage` is a first-class `Observed` member of the context, so it
+ * is recorded on every line: `available` with the resolved tree position, or
+ * `unavailable` with the runtime's per-host reason.
+ */
+export const snapshotRequest = (context: AgentRequestContext): JsonObject => ({
+  actor: asJson(context.actor),
+  capabilities: asJson(context.capabilities),
+  hasNotices: context.notices !== undefined,
+  hasState: context.state !== undefined,
+  host: asJson(context.host),
+  invocation: asJson(context.invocation),
+  lineage: asJson(context.lineage),
+  providers: {
+    keys: Object.keys(context.providers).sort((left, right) => left.localeCompare(right)),
+    processLifetime: asJson(context.providers.processLifetime),
+  },
+  session: asJson(context.session),
+  workspace: asJson(context.workspace),
+});
 
 export interface CaptureInput {
   readonly event?: AgentEventRouteProps;

@@ -1,8 +1,10 @@
 import {
   agent,
+  type AgentLineage,
   type AgentStateHandle,
   type JsonObject,
   type JsonValue,
+  type Observed,
 } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
@@ -155,9 +157,11 @@ export const renderDumpMarkdown = (result: DumpResult): string => {
 /** One cell: `depth N · <conversation> ← <parent> (resolution)` or the typed unavailable reason. */
 export const renderLineage = (lineage: JsonValue | undefined): string => {
   if (lineage === undefined || lineage === null || typeof lineage !== 'object' || Array.isArray(lineage)) return 'not recorded';
-  const observed = lineage as { readonly state?: string; readonly reason?: string; readonly value?: JsonValue };
-  if (observed.state !== 'available') return `unavailable · ${observed.reason ?? 'unknown'}`;
-  const value = (observed.value ?? {}) as { readonly conversation?: string; readonly depth?: number; readonly parent?: string; readonly resolution?: string; readonly root?: string };
-  const parent = value.parent === undefined ? '' : ` ← ${value.parent}`;
-  return `depth ${String(value.depth ?? '?')} · ${value.conversation ?? '?'}${parent} (${value.resolution ?? '?'})`;
+  // The serialized `Observed<AgentLineage>` the capture wrote from `request.lineage`.
+  const observed = lineage as unknown as Observed<AgentLineage> | { readonly state?: undefined };
+  if (observed.state !== 'available') {
+    return `unavailable · ${observed.state === 'unavailable' ? observed.reason : 'unknown'}`;
+  }
+  const { conversation, depth, parent, resolution } = observed.value;
+  return `depth ${String(depth)} · ${conversation}${parent === undefined ? '' : ` ← ${parent}`} (${resolution})`;
 };

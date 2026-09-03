@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
-import { available } from '@agent-bundle/runtime';
+import { available, type AgentLineage } from '@agent-bundle/runtime';
 import {
   createGeneratedRuntimeState,
   type GeneratedRuntimeState,
@@ -45,12 +45,19 @@ const eventInput = (
   native,
 });
 
-const render = async (route: string, input: unknown, sessionId = 'root-session', host = 'claude') => {
+const render = async (
+  route: string,
+  input: unknown,
+  sessionId = 'root-session',
+  host = 'claude',
+  lineage?: AgentLineage,
+) => {
   const bindings = await runtimeState.requestBindings();
   try {
     return await renderRoute(route, {
       context: {
         host: available({ name: host }, 'native'),
+        ...(lineage === undefined ? {} : { lineage: available(lineage, 'native') }),
         noticeLedger: bindings.noticeLedger,
         session: available({ sessionId }, 'native'),
         state: bindings.state,
@@ -124,12 +131,45 @@ it('records the complete native envelope, the request context, and env names for
       hasState: true,
       host: { state: 'available', value: { name: 'claude' } },
       invocation: { kind: 'event' },
+      // `request.lineage` is recorded on every line; the route-unit context
+      // mounts none, so the runtime's unavailable reason is the evidence.
+      lineage: { state: 'unavailable' },
       session: { state: 'available', value: { sessionId: 'root-session' } },
     },
   });
   const env = (record as { env: { names: string[] } }).env.names;
   expect(env).toContain(LOG_DIR_ENV);
   expect(JSON.stringify(record)).not.toContain(logDir.replace('captures.ndjson', 'value-should-not-appear'));
+});
+
+it('records the mounted request.lineage verbatim and renders it in the dump table', async () => {
+  const lineage: AgentLineage = {
+    conversation: 'agent-1',
+    depth: 1,
+    parent: 'root-session',
+    resolution: 'registry',
+    root: 'root-session',
+    subagent: { id: 'agent-1' },
+  };
+  await render('event:tool/before', eventInput('tool/before', {
+    agent_id: 'agent-1',
+    cwd: '/repo',
+    hook_event_name: 'PreToolUse',
+    session_id: 'root-session',
+    tool_input: { command: 'pwd' },
+    tool_name: 'Bash',
+    tool_use_id: 'toolu_02',
+  }), 'root-session', 'claude', lineage);
+
+  const [record] = await readLogLines();
+  expect(record).toMatchObject({ request: { lineage: { source: 'native', state: 'available', value: lineage } } });
+
+  const dumped = await render('tool:host-test/dump', { conversation: 'agent-1' });
+  expect(dumped.document.value).toMatchObject({
+    matched: 1,
+    records: [expect.objectContaining({ lineage: { source: 'native', state: 'available', value: lineage } })],
+  });
+  expectDocument(dumped).toContainMarkdown('depth 1 · agent-1 ← root-session (registry)');
 });
 
 it('redacts secret-looking native values but keeps ids intact', async () => {
