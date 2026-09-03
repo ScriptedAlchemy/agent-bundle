@@ -50,6 +50,7 @@ export default defineConfig({
   root: docsDir,
   base: '/agent-bundle/',
   siteOrigin: 'https://scriptedalchemy.github.io',
+  globalStyles: path.join(websiteDir, 'styles/index.css'),
   lang: 'en',
   title: siteTitle,
   description: siteDescription,
@@ -79,6 +80,10 @@ export default defineConfig({
   },
   markdown: {
     shiki: {
+      // Twoslash hovers render JSDoc code fences from dependency types, so the
+      // grammar set cannot be inferred from page sources alone (same fix as
+      // the upstream rspress.rs site).
+      langs: ['markdown', 'mdx', 'ts', 'tsx', 'js', 'jsx', 'json', 'bash', 'yaml', 'css', 'html'],
       transformers: [
         transformerNotationDiff(),
         transformerNotationHighlight(),
