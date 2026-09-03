@@ -293,7 +293,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
     '  const parsed = parseInput(route, input);',
     '  const cwd = process.cwd();',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     ...(options.state === undefined
       ? []
       : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
@@ -412,7 +412,7 @@ export const generatedRenderedRouteWorkerSource = (
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     '    const cwd = process.cwd();',
     ...(options.state === undefined
@@ -583,8 +583,18 @@ const providerRegistrySource = (providers: readonly CompiledProvider[]): readonl
     ? []
     : ['const providers = Object.freeze([', ...providerRecords(providers), ']);'];
 
-const processLifetimeValueSource =
-  '{ hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid }';
+/**
+ * Claims this request's hit on the process identity and snapshots it in the
+ * same synchronous step, before any state binding or provider `await`, so a
+ * concurrent request on the same scope cannot move the value this request
+ * mounts as `providers.processLifetime`.
+ */
+const processHitSource = (indent: string): readonly string[] => [
+  `${indent}processLifetime.hits += 1;`,
+  `${indent}const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };`,
+];
+
+const processLifetimeValueSource = 'processHit';
 
 /**
  * Per-request provider execution shared by every generated request scope
@@ -661,7 +671,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     ...(options.state === undefined
       ? []

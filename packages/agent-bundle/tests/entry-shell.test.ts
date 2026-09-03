@@ -364,7 +364,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
     '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
   );
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'f0a574cc26aa4c7d5556e7468d13743c1da55d372fe5e6eae9151df0be873948',
+    '36f042498df1933c6321bd21e4585599a0d39e5ddb3890657bd660c322f4cc23',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -571,6 +571,12 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   expect(withProviders.indexOf('for (const provider of providers)')).toBeLessThan(
     withProviders.indexOf('const result = await runAgentRequest({'),
   );
+  // The request's hit is claimed and snapshotted in one synchronous step
+  // before any await, so concurrent requests cannot move each other's value.
+  expect(withProviders).toContain(
+    'processLifetime.hits += 1;\n  const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };',
+  );
+  expect(withProviders).toContain('const providerValues = { processLifetime: processHit };');
 
   // A project without providers still mounts only the framework-owned process identity.
   const withoutProviders = entryShellModule.generatedCliBinEntrySource({
@@ -579,9 +585,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
     routes: [route],
   });
   expect(withoutProviders).not.toContain('const providers = Object.freeze([');
-  expect(withoutProviders).toContain(
-    'providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
-  );
+  expect(withoutProviders).toContain('providers: { processLifetime: processHit },');
   expect(withoutProviders).not.toContain('import * as provider0');
 });
 

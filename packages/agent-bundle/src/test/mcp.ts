@@ -25,7 +25,7 @@ import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { mountProviders } from './providers.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
@@ -333,6 +333,10 @@ export const openInMemoryMcpServer = async <
             details: [`registered:   ${Object.keys(routes).sort().join(', ')}`],
           });
         }
+        // The hit is claimed before state bindings are awaited, in the
+        // generated worker's order, so a failed or slow binding still consumes
+        // this request's hit and concurrent requests keep arrival order.
+        const processHit = claimProcessHit(processLifetime);
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
           // Conventional providers run before the scope opens, over the same
@@ -342,7 +346,7 @@ export const openInMemoryMcpServer = async <
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
-            processLifetime,
+            processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
             signal: request.signal,
           });

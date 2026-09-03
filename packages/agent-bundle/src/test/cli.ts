@@ -25,7 +25,7 @@ import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { mountProviders } from './providers.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
@@ -239,7 +239,7 @@ export const invokeCli = async (
           explicit: context.providers,
           invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
           manifest,
-          processLifetime,
+          processHit: claimProcessHit(processLifetime),
           provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
           signal: execution.signal,
         });

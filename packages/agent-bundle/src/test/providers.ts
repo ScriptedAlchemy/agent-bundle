@@ -5,6 +5,7 @@ import {
   providerProcessLifetimeValue,
   type ExecutableProvider,
   type ProviderProcessLifetime,
+  type ProviderProcessLifetimeValue,
 } from '../routes/provider-execution.ts';
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest, TestableProviderDescriptor } from './manifest.ts';
@@ -31,15 +32,10 @@ export interface MountProvidersOptions {
   /** Absent for a module rendered directly: no project, so nothing to discover. */
   readonly manifest: AgentBundleTestManifest | undefined;
   /**
-   * The process identity of the simulated executable, scoped exactly as the
-   * artifact scopes its module-level `processLifetime`: one per CLI
-   * invocation (each generated executable starts at hit 1), one per rendered
-   * route request, and one per open in-memory MCP server session (shared by
-   * every request that session handles). Never shared across unrelated
-   * helper calls, so a provider branching on `hits` or `instanceId` cannot
-   * observe warmth the artifact would not exhibit.
+   * This request's claimed hit on the simulated executable's process identity
+   * (see {@link claimProcessHit}); mounted verbatim as `providers.processLifetime`.
    */
-  readonly processLifetime: ProviderProcessLifetime;
+  readonly processHit: ProviderProcessLifetimeValue;
   readonly provenance?: RenderedRouteProvenance;
   readonly signal: AbortSignal;
 }
@@ -64,20 +60,32 @@ const loadProvider = async (
 };
 
 /**
+ * Claims one request's hit on a simulated executable's process identity and
+ * snapshots it in the same synchronous step, exactly where the generated
+ * scopes do: before any state binding or provider module `await`, so a
+ * concurrent request on the same identity cannot move this request's value.
+ *
+ * Callers scope the identity as the artifact scopes its module-level
+ * `processLifetime`: one per CLI invocation (each generated executable starts
+ * at hit 1), one per rendered route request, and one per open in-memory MCP
+ * server session (shared by every request that session handles). It is never
+ * shared across unrelated helper calls, so a provider branching on `hits` or
+ * `instanceId` cannot observe warmth the artifact would not exhibit.
+ */
+export const claimProcessHit = (processLifetime: ProviderProcessLifetime): ProviderProcessLifetimeValue => {
+  processLifetime.hits += 1;
+  return providerProcessLifetimeValue(processLifetime);
+};
+
+/**
  * The `providers` value for one harness request scope: the explicit map when
  * the test supplied one, otherwise the project's conventional providers
- * executed in the generated order over the caller's process identity.
+ * executed in the generated order over the claimed process hit.
  */
 export const mountProviders = async (options: MountProvidersOptions): Promise<AgentProviderValues> => {
   if (options.explicit !== undefined) return options.explicit;
-  const { processLifetime } = options;
-  processLifetime.hits += 1;
-  // Snapshot before the first await, as the generated worker does right after
-  // its increment: a concurrent request on the same lifetime must not move
-  // this request's hit count while its provider modules load.
-  const snapshot = providerProcessLifetimeValue(processLifetime);
   if (options.manifest === undefined) {
-    return { processLifetime: snapshot };
+    return { processLifetime: options.processHit };
   }
   const providers: ExecutableProvider[] = [];
   for (const descriptor of options.manifest.providers ?? []) {
@@ -85,7 +93,7 @@ export const mountProviders = async (options: MountProvidersOptions): Promise<Ag
   }
   return executeProviders({
     invocation: options.invocation,
-    processLifetime: { ...snapshot },
+    processLifetime: { ...options.processHit },
     providers,
     signal: options.signal,
   });

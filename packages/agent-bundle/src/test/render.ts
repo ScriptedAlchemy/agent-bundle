@@ -30,7 +30,7 @@ import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { mountProviders } from './providers.ts';
+import { claimProcessHit, mountProviders } from './providers.ts';
 import {
   registeredManifestIdentity,
   registeredRouteLoader,
@@ -238,7 +238,12 @@ const executableSurface = (
     case 'event-route':
       return routeId.startsWith('event:') ? routeId.slice('event:'.length) : routeId;
     case 'cli': {
-      const command = manifest?.cliCommands.find((candidate) => candidate.routeId === routeId);
+      // Only authored `src/cli/**` commands have a `cli` route kind. Projected
+      // MCP commands (`command.mcp`) carry their tool's route id, so a request
+      // for one resolves as that `tool` route above, exactly like the generated
+      // entry's `command.mcp !== undefined` branch.
+      const command = manifest?.cliCommands.find((candidate) =>
+        candidate.mcp === undefined && candidate.routeId === routeId);
       if (command !== undefined) return command.path.join(' ');
       return (routeId.startsWith('cli:') ? routeId.slice('cli:'.length) : routeId).replaceAll('/', ' ');
     }
@@ -717,7 +722,7 @@ export const prepareCliRenderHost = async (
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
-            processLifetime: options.processLifetime,
+            processHit: claimProcessHit(options.processLifetime),
             provenance: { ...options.provenance, routeId: command.routeId },
             signal: request.signal,
           });
@@ -813,7 +818,7 @@ const prepareRender = async (
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
-        processLifetime,
+        processHit: claimProcessHit(processLifetime),
         provenance: resolved.provenance,
         signal: request.signal,
       }),

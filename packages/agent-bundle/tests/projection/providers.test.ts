@@ -1,4 +1,8 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { describe, expect, it } from '@rstest/core';
+import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
+import { z } from 'zod';
 
 import { cliJson, invokeCli } from '../../src/test/cli.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
@@ -72,7 +76,11 @@ describe('conventional providers through the harness', () => {
     });
   });
 
-  it('mounts providers for an MCP route at the route-unit level', async () => {
+  it('mounts providers for an MCP route at the route-unit level, including when it is also a projected CLI command', async () => {
+    // `harness tooling` is projected onto the CLI from this tool; its command
+    // carries the tool's route id, so rendering it takes the tool branch the
+    // generated entry takes for `command.mcp !== undefined`.
+    expect(testManifest().cliCommands.find((command) => command.mcp?.tool === 'tooling')?.routeId).toBe('tool:harness/tooling');
     const rendered = await renderRoute('tool:harness/tooling');
 
     expect(rendered.result).toEqual({
@@ -150,6 +158,44 @@ describe('conventional providers through the harness', () => {
     // request move it.
     expect(lifetimes.map((lifetime) => lifetime.hits).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
     expect(new Set(lifetimes.map((lifetime) => lifetime.instanceId)).size).toBe(1);
+  });
+
+  it('claims the hit before awaiting state bindings, so hits follow arrival order like the generated worker', async () => {
+    type Lifetime = { processLifetime: { hits: number; instanceId: string } };
+    const definition = defineState({
+      events: { changed: z.object({ value: z.string() }).strict() },
+      id: 'providers/request-state',
+      initial: { value: '' },
+      lifetime: 'request',
+      reduce: (_state, event) => ({ value: event.payload.value }),
+      schema: z.object({ value: z.string() }).strict(),
+    });
+    const inner = createMemoryStateDriver({ lifetime: 'request' });
+    let projectOpens = 0;
+    const driver: AgentStateDriver = {
+      ...inner,
+      open: async (opened) => {
+        // Only the first request's project store is slow to open; the second
+        // request's bindings resolve first.
+        if (opened.id === definition.id && projectOpens++ === 0) await sleep(150);
+        return inner.open(opened);
+      },
+    };
+    await using session = await openInMemoryMcpServer({ state: { definition, driver } });
+
+    const [first, second] = await Promise.all([
+      session.client.callTool({ arguments: {}, name: 'tooling' }),
+      session.client.callTool({ arguments: {}, name: 'tooling' }),
+    ]);
+    const lifetimeOf = (result: unknown): Lifetime['processLifetime'] =>
+      (result as { structuredContent: Lifetime }).structuredContent.processLifetime;
+
+    // The generated worker increments and snapshots before `requestBindings`;
+    // the request that arrived first keeps hit 1 even though its state
+    // bindings resolved last.
+    expect(lifetimeOf(first).hits).toBe(1);
+    expect(lifetimeOf(second).hits).toBe(2);
+    expect(projectOpens).toBe(2);
   });
 
   it('gives every route-unit render a fresh process identity', async () => {

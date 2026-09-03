@@ -41,9 +41,15 @@ export const createProviderProcessLifetime = (): ProviderProcessLifetime => ({
 });
 
 /** The immutable snapshot of one process lifetime a request observes. */
+export interface ProviderProcessLifetimeValue {
+  readonly hits: number;
+  readonly instanceId: string;
+  readonly pid: number;
+}
+
 export const providerProcessLifetimeValue = (
   lifetime: ProviderProcessLifetime,
-): { readonly hits: number; readonly instanceId: string; readonly pid: number } => ({
+): ProviderProcessLifetimeValue => ({
   hits: lifetime.hits,
   instanceId: lifetime.instanceId,
   pid: lifetime.pid,
