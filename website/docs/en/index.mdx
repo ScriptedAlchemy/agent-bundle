@@ -224,9 +224,11 @@ from route-unit tests up to a bundle installed through the real host CLI — and
 | `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — Skills and MCP servers — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT. | The generated `install.mjs`. |
 | `plugin` | One multi-host bundle carrying the Claude, Codex, and Cursor manifests over shared component directories. | `install.mjs` or any of the host CLIs. |
 
-Hosts differ in what they can load, so the compiler says so at build time: a surface a target
-cannot express is a reported diagnostic, never a quiet omission. Every diagnostic has a stable
-`AB` code documented in the [diagnostics reference](/reference/diagnostics).
+Hosts differ in what they can load, so the compiler says so at build time: a surface you select
+for a target that cannot express it is a reported diagnostic, never a quiet omission. The one
+deliberate exception is a hook with no `targets` of its own, which inherits only the hosts that
+support hooks — as the `portable` tab above shows — rather than failing. Every diagnostic has a
+stable `AB` code documented in the [diagnostics reference](/reference/diagnostics).
 
 ## Start here
 

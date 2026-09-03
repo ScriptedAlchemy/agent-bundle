@@ -1,5 +1,5 @@
 ---
-description: 'Test agent-bundle routes through the framework harness: the rstest configuration helper, renderRoute, the six proof levels, and the generated-plugin contract matrix.'
+description: 'Test agent-bundle routes through the framework harness: the rstest configuration helper, renderRoute, the nine proof levels, and the generated-plugin contract matrix.'
 ---
 
 # Testing
@@ -77,12 +77,13 @@ and prints it in every failure, because a pass at one level is never a receipt f
 | --- | --- | --- |
 | `route-unit` | `renderRoute`, `renderRouteEvents` | A route module renders to the document — and render-event stream — it claims. |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | The real generated MCP server's protocol contract, over the SDK's in-memory transport. |
+| `dev-epoch` | `runDevEpochContractMatrix` | An epoch-pinned generated stdio process opened through the Workbench session service; the caller owns the epoch lease and process lifetime, and MCP App routes are covered (surface plus `ui://` sweep). |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | A plain or rendered argv vector resolved and run through the routed CLI's own shell — including rendered Markdown, explicit TTY, JSON, and NDJSON modes — in-process. |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | A built artifact's generated entry running as a real process over stdio. |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | The packed stdio process still runs after project source and configuration are removed and verified absent. |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | A built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout. |
 
-Two further levels sit alongside these six. `agent-bundle/test/browser` supplies `mountBrowserApp`
+Two further levels sit alongside these seven, for nine in all. `agent-bundle/test/browser` supplies `mountBrowserApp`
 for the browser-safe `browser-app` level — production-compiled MCP App HTML mounted over the
 product bridge in a real browser page — and `simulated` reuses the installed-host helper
 `openInstalledHostMcpServer` without `sessionEvidence`: an emitted bundle staged directly into
@@ -123,9 +124,11 @@ missing frame, a reordering, or a regressed ordinal still fails. `toHaveMonotoni
 
 ### Process evidence is deliberately expensive
 
-Only `packed-stdio` and its strictly stronger `packed-deleted-source` upgrade are process
-evidence: pack once, install once, build once, remove and verify source once, spawn once, and
-iterate every per-route assertion inside that one session. The deleted-source journey also reads
+Among the packed levels, only `packed-stdio` and its strictly stronger `packed-deleted-source`
+upgrade are process evidence: pack once, install once, build once, remove and verify source once,
+spawn once, and iterate every per-route assertion inside that one session. `dev-epoch` is process
+evidence of a different shape — the Workbench's own epoch-pinned generated stdio process, not a
+packed artifact — so a `dev-epoch` pass says nothing about what a pack ships. The deleted-source journey also reads
 the embedded MCP App resource from the generated server; it does not prove native-host install or
 dispatch, or an install mode that copies the artifact elsewhere.
 

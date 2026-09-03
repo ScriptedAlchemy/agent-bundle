@@ -1,5 +1,5 @@
 ---
-description: '通过框架 harness 测试 agent-bundle 路由：rstest 配置辅助函数、renderRoute、六个证明级别，以及生成式插件的契约矩阵。'
+description: '通过框架 harness 测试 agent-bundle 路由：rstest 配置辅助函数、renderRoute、九个证明级别，以及生成式插件的契约矩阵。'
 ---
 
 # 测试
@@ -68,12 +68,13 @@ export const summarizes = async (): Promise<void> => {
 | --- | --- | --- |
 | `route-unit` | `renderRoute`、`renderRouteEvents` | 一个路由模块渲染出了它所声称的文档——以及渲染事件流。 |
 | `mcp-in-memory` | `openInMemoryMcpServer`、`invokeMcpTool`、`readMcpResource`、`getMcpPrompt`、`listMcpSurface`、`runContractMatrix` | 真实生成式 MCP 服务器的协议契约，经由 SDK 的内存内传输。 |
+| `dev-epoch` | `runDevEpochContractMatrix` | 通过 Workbench 会话服务打开的、锁定到某个 epoch 的生成式 stdio 进程；调用方拥有 epoch 租约与进程生命周期，MCP App 路由被覆盖（表面加 `ui://` 扫描）。 |
 | `cli-dispatch` | `invokeCli`、`cliJson`、`cliNdjson` | 一个普通或渲染式 argv 向量在路由式 CLI 自己的 shell 中被解析并执行——包括渲染式 Markdown、显式 TTY、JSON 与 NDJSON 模式——全部在进程内完成。 |
 | `packed-stdio` | `openPackedMcpServer`、`runPackedContractMatrix` | 已构建产物的生成入口作为真实进程通过 stdio 运行。 |
 | `packed-deleted-source` | `removeProjectSource`、`openPackedMcpServer({ deletedSource })`、`runPackedContractMatrix` | 在项目源码与配置被移除并核实缺失之后，打包后的 stdio 进程仍然可以运行。 |
 | `host-install` | `openInstalledHostMcpServer`、`runInstalledHostContractMatrix` | 一份已构建的捆绑包被投放到隔离的宿主根目录、以输出的宿主格式被发现，并从已安装布局中启动。 |
 
-在这六个级别之外还有两个并列级别。`agent-bundle/test/browser` 为浏览器安全的 `browser-app` 级别
+在这七个级别之外还有两个并列级别，共九个。`agent-bundle/test/browser` 为浏览器安全的 `browser-app` 级别
 提供 `mountBrowserApp`，用于在真实浏览器页面中把生产编译的 MCP App HTML 挂载到产品桥接层之上；
 而 `simulated` 复用不带 `sessionEvidence` 的已安装宿主辅助函数 `openInstalledHostMcpServer`
 —— 一份输出的捆绑包被直接投放到隔离的宿主形状根目录并在没有宿主自有安装的情况下启动，它比
@@ -112,8 +113,10 @@ export const proofs = async (): Promise<Record<string, unknown>> => {
 
 ### 进程证据刻意很昂贵
 
-只有 `packed-stdio` 及其严格更强的升级版 `packed-deleted-source` 属于进程证据：打包一次、安装一次、
-构建一次、移除并核实源码缺失一次、启动一次，然后在这一个会话内遍历每个路由的断言。deleted-source 的
+在打包级别中，只有 `packed-stdio` 及其严格更强的升级版 `packed-deleted-source` 属于进程证据：打包一次、
+安装一次、构建一次、移除并核实源码缺失一次、启动一次，然后在这一个会话内遍历每个路由的断言。`dev-epoch`
+是另一种形态的进程证据——Workbench 自己的、锁定到 epoch 的生成式 stdio 进程，而非打包后的产物——因此
+`dev-epoch` 通过并不能说明打包会交付什么。deleted-source 的
 旅程还会从生成式服务器读取内嵌的 MCP App 资源；它不证明原生宿主的安装或派发，也不证明那种把产物复制
 到别处的安装方式。
 
