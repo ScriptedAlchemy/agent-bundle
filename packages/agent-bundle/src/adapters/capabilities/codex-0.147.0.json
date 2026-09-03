@@ -27,10 +27,19 @@
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
       "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
       "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
+      "permission/denied": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no permission-denied event.",
+        "state": "unavailable"
+      },
+      "permission/request": { "nativeEvent": "PermissionRequest", "state": "supported" },
       "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
       "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
+      "stop/failure": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no stop-failure event.",
+        "state": "unavailable"
+      },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
       "tool/failure": {
@@ -263,6 +272,8 @@
       "liveRevision": "codex-cli 0.147.0 app-server protocol",
       "matchingRelativePaths": [],
       "missingPinnedRelativePaths": [
+        "permission-request.command.input.schema.json",
+        "permission-request.command.output.schema.json",
         "post-compact.command.input.schema.json",
         "post-compact.command.output.schema.json",
         "pre-compact.command.input.schema.json",
@@ -276,6 +287,8 @@
         "user-prompt-submit.command.output.schema.json"
       ],
       "pinnedRepositorySha256": {
+        "permission-request.command.input.schema.json": "75c73d7a38cfc0e73ef06bd1fc506a44d25874522069ec4fb85e0bf1e7d6b8fb",
+        "permission-request.command.output.schema.json": "749c73245b4b6d43537c3049f76720ab1c2bd48d7e4752b744b376925b9d57a1",
         "post-compact.command.input.schema.json": "d5cecd14bd2ca18605ba8209108f76291f886ffe3cb4762d70e712c148836f31",
         "post-compact.command.output.schema.json": "811b7ae2a4b277cd51c9df989f347e494fa981d01e346bc2a757506e97734882",
         "pre-compact.command.input.schema.json": "5728b5da4c63e1e07f2d53ac8b2adc18306cd3dc8b01b556fc422e75b32a8734",

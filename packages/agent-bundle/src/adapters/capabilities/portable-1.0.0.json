@@ -20,6 +20,14 @@
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PreCompact/preCompact equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
     },
+    "permission/denied": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PermissionDenied equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "permission/request": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PermissionRequest equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "prompt/submit": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native UserPromptSubmit/beforeSubmitPrompt equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
@@ -30,6 +38,10 @@
     },
     "session/start": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "stop": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
+    "stop/failure": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native StopFailure equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "tool/after": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "tool/before": { "reason": "Agent Plugins 1.0.0 does not define hooks.", "state": "unavailable" },
     "tool/failure": {

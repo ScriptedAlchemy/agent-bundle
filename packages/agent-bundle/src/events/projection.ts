@@ -219,6 +219,33 @@ export const validateNativeEventEnvelope = (
     if (Object.hasOwn(native, 'is_interrupt')) requireNativeBoolean(native, 'is_interrupt');
     if (Object.hasOwn(native, 'duration_ms')) requireNativeNumber(native, 'duration_ms');
   }
+  if (canonicalEvent === 'permission/request') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    requirePermissionMode(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    }
+  }
+  if (canonicalEvent === 'permission/denied') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    if (Object.hasOwn(native, 'permission_decision')) requireNativeString(native, 'permission_decision');
+    if (Object.hasOwn(native, 'permission_decision_reason')) {
+      requireNativeStringValue(native, 'permission_decision_reason');
+    }
+  }
+  if (canonicalEvent === 'stop/failure') {
+    requireNativeStringValue(native, 'error');
+    if (Object.hasOwn(native, 'stop_hook_active') && typeof native.stop_hook_active !== 'boolean') {
+      return nativeEventError('native stop_hook_active must be a boolean');
+    }
+  }
   if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
     requireCompactTrigger(native);
     if (target === 'codex') {
@@ -497,6 +524,53 @@ export const projectEventDocument = (
     }
     if (additionalContext !== undefined) {
       throw new TypeError('compact/after is observation-only on every supported host and has no context/output channel.');
+    }
+    return undefined;
+  }
+  if (event === 'permission/request') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('permission/request input rewrite is reserved upstream and fails closed on both supported hosts; it is not projected.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('permission/request has no additional-context channel in the PermissionRequest output contract.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+      throw new TypeError('permission/request reason is only valid when outcome is deny.');
+    }
+    if (parsedValue?.outcome === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        decision: {
+          behavior: parsedValue.outcome === 'deny' ? 'deny' : 'allow',
+          ...(parsedValue.outcome === 'deny' ? { message: requireDenyReason() } : {}),
+        },
+        hookEventName: nativeEvent,
+      },
+    });
+  }
+  if (event === 'permission/denied') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('permission/denied observes an already-denied call and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('permission/denied retry signalling has no canonical vocabulary yet; no context/output channel is projected.');
+    }
+    return undefined;
+  }
+  if (event === 'stop/failure') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('stop/failure observes an API-error turn end and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('stop/failure has no documented context/output channel.');
     }
     return undefined;
   }

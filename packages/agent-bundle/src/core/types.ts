@@ -46,6 +46,9 @@ export const eventRouteOnlyHookEvents = Object.freeze([
   'toolFailure',
   'compactBefore',
   'compactAfter',
+  'permissionRequest',
+  'permissionDenied',
+  'stopFailure',
 ] as const);
 
 export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];
