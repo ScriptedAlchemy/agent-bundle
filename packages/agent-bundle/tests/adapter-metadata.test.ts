@@ -130,7 +130,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '2.1.250',
-        sha256: '1e6cdb535d1b954306bef1758b802e273ce390d308f78c470f90f5bb5a07fd67',
+        sha256: 'e8524e1b1bf9d72f6866c31b37b7312147fcf29d0504f7e5dce5719bc908830b',
       },
       {
         name: 'settings',

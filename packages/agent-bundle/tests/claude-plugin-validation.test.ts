@@ -100,13 +100,18 @@ it('accepts the documented additional hook config forms on the manifest hooks fi
       target: 'claude',
     })).resolves.toEqual([]);
   }
-  await expect(validateClaudePluginFiles({
-    pluginDirectory: await pluginWithHooksField('hooks/extra.json'),
-    target: 'claude',
-  })).resolves.toContainEqual(expect.objectContaining({
-    code: 'AB6012',
-    message: expect.stringContaining('at /hooks: must match pattern "^\\./"'),
-  }));
+  // No `./` prefix, and every alias of the auto-loaded file that a literal exclusion would miss: the
+  // pattern admits only normalized paths (no `.`/`..`/empty segments), so `./hooks/./hooks.json` and
+  // `./hooks/../hooks/hooks.json` cannot pass the schema and then be refused by Claude Code.
+  for (const alias of ['hooks/extra.json', './hooks/./hooks.json', './hooks/../hooks/hooks.json', './hooks//hooks.json', './hooks/hooks.json/']) {
+    await expect(validateClaudePluginFiles({
+      pluginDirectory: await pluginWithHooksField(alias),
+      target: 'claude',
+    }), alias).resolves.toContainEqual(expect.objectContaining({
+      code: 'AB6012',
+      message: expect.stringContaining('at /hooks: must match pattern'),
+    }));
+  }
 });
 
 it('rejects a numeric userConfig minimum greater than its maximum', async () => {

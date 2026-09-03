@@ -65,9 +65,18 @@ const cargoHaulerShape: NormalizedPlugin = {
   }],
 };
 
-const claudeAvailable = spawnSync('claude', ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0;
+const claudeVersionProbe = spawnSync('claude', ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 });
+const claudeAvailable = claudeVersionProbe.status === 0;
 const claudeIt = claudeAvailable ? it : it.skip;
 const missingClaude = ' [missing evidence: claude binary unavailable on PATH]';
+
+/** `claude --version` prints `<semver> (Claude Code)`; `plugin validate --json` exists from 2.1.259 (plugins reference, "plugin validate"). */
+const claudeVersion = /(\d+)\.(\d+)\.(\d+)/u.exec(claudeVersionProbe.stdout ?? '')?.slice(1, 4).map(Number) ?? [0, 0, 0];
+const claudeAtLeast = (major: number, minor: number, patch: number): boolean => {
+  const [actualMajor = 0, actualMinor = 0, actualPatch = 0] = claudeVersion;
+  return actualMajor !== major ? actualMajor > major : actualMinor !== minor ? actualMinor > minor : actualPatch >= patch;
+};
+const validateJsonSupported = claudeAtLeast(2, 1, 259);
 
 let root: string;
 let claudeConfigDir: string;
@@ -85,7 +94,7 @@ afterAll(async () => {
 });
 
 /** Runs the real Claude Code CLI against an isolated config dir so the user's plugin state is never read or written. */
-const runClaude = (args: readonly string[]): unknown => {
+const runClaude = (args: readonly string[]): string => {
   const result = spawnSync('claude', [...args], {
     encoding: 'utf8',
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir },
@@ -93,8 +102,10 @@ const runClaude = (args: readonly string[]): unknown => {
   });
   expect(result.error, `claude ${args.join(' ')} could not be started`).toBeUndefined();
   expect(result.status, `claude ${args.join(' ')} failed:\n${result.stderr}\n${result.stdout}`).toBe(0);
-  return JSON.parse(result.stdout) as unknown;
+  return result.stdout;
 };
+
+const runClaudeJson = (args: readonly string[]): unknown => JSON.parse(runClaude(args)) as unknown;
 
 it('emits the cargo-hauler shape at the default hook location with no manifest hooks key and a schema-valid manifest', async () => {
   const pluginRoot = join(root, 'plugin');
@@ -119,21 +130,29 @@ it('emits the cargo-hauler shape at the default hook location with no manifest h
 // load without `errors` in `claude --plugin-dir <root> plugin list --json`. The second check is the
 // one that matters for #462/#463: `plugin validate` accepted the duplicate-hooks manifest that Claude
 // Code then refused at load time, so validation alone is not proof the plugin reaches a session.
-claudeIt(`passes claude plugin validate --strict --json and loads without errors for the emitted claude artifact${claudeAvailable ? '' : missingClaude}`, () => {
+// `--json` on `plugin validate` exists from Claude Code 2.1.259; the CI host-install job runs the pinned
+// 2.1.250, which rejects the flag ("unknown option '--json'"), so older binaries take the textual form
+// and are held to its exit code and "Validation passed" line instead.
+claudeIt(`passes claude plugin validate --strict and loads without errors for the emitted claude artifact${claudeAvailable ? '' : missingClaude}`, () => {
   const pluginRoot = join(root, 'plugin');
 
-  const report = runClaude(['plugin', 'validate', pluginRoot, '--strict', '--json']) as {
-    readonly success: boolean;
-    readonly strict: boolean;
-    readonly manifest: { readonly errors: readonly unknown[]; readonly warnings: readonly unknown[] };
-    readonly contents: readonly { readonly file: string; readonly errors: readonly unknown[] }[];
-  };
-  expect(report, JSON.stringify(report, null, 2)).toMatchObject({ strict: true, success: true });
-  expect(report.manifest.errors).toEqual([]);
-  expect(report.manifest.warnings).toEqual([]);
-  expect(report.contents.flatMap((entry) => entry.errors)).toEqual([]);
+  if (validateJsonSupported) {
+    const report = runClaudeJson(['plugin', 'validate', pluginRoot, '--strict', '--json']) as {
+      readonly success: boolean;
+      readonly strict: boolean;
+      readonly manifest: { readonly errors: readonly unknown[]; readonly warnings: readonly unknown[] };
+      readonly contents: readonly { readonly file: string; readonly errors: readonly unknown[] }[];
+    };
+    expect(report, JSON.stringify(report, null, 2)).toMatchObject({ strict: true, success: true });
+    expect(report.manifest.errors).toEqual([]);
+    expect(report.manifest.warnings).toEqual([]);
+    expect(report.contents.flatMap((entry) => entry.errors)).toEqual([]);
+  } else {
+    const output = runClaude(['plugin', 'validate', pluginRoot, '--strict']);
+    expect(output, `claude ${claudeVersion.join('.')} plugin validate --strict output:\n${output}`).toContain('Validation passed');
+  }
 
-  const rows = runClaude(['--plugin-dir', pluginRoot, 'plugin', 'list', '--json']) as readonly Record<string, unknown>[];
+  const rows = runClaudeJson(['--plugin-dir', pluginRoot, 'plugin', 'list', '--json']) as readonly Record<string, unknown>[];
   const row = rows.find((candidate) => candidate['id'] === 'cargo-hauler@inline');
   expect(row, JSON.stringify(rows, null, 2)).toBeDefined();
   expect(row).toMatchObject({ enabled: true, installPath: pluginRoot, version: '0.4.1' });
