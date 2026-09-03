@@ -3,7 +3,7 @@ import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeMcpServerDescriptor,
 } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject } from '../../../../packages/agent-bundle/src/dev/types.ts';
+import type { JsonObject } from 'agent-bundle';
 
 export interface EditEvent {
   eventId: string;
