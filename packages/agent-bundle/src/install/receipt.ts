@@ -451,11 +451,12 @@ export const replaceInstalledTree = async (options: {
     }
     return ownedIdentities.some((metadata) => sameFile(metadata, candidate));
   };
-  // An existing directory at an incoming file path is fine only when everything beneath it is
-  // owned: those files leave as stale and the emptied directory is pruned before the rename.
+  // An existing directory at an incoming file path is fine only when it holds owned files and
+  // nothing else: those files leave as stale and the emptied directory is pruned before the
+  // rename. An empty directory (or one holding only empty directories) is no evidence of ownership.
   const isWhollyOwnedDirectory = async (file: string): Promise<boolean> => {
     const nested = await treeInventory(join(options.destination, file));
-    return nested.files.every((entry) => owned.has(`${file}/${entry}`));
+    return nested.files.length > 0 && nested.files.every((entry) => owned.has(`${file}/${entry}`));
   };
   const collisions: string[] = [];
   for (const file of options.staged.inventory.files) {

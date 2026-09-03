@@ -287,18 +287,18 @@ export const parsePublicHostInventory = (
       return { detail: 'claude plugin list --json did not return an array', status: 'unavailable' };
     }
     const rows = document.filter((candidate): candidate is Record<string, unknown> =>
-      isRecord(candidate) &&
-      candidate['id'] === id &&
-      (options.scope === undefined || candidate['scope'] === options.scope));
+      isRecord(candidate) && candidate['id'] === id);
     const entries: PublicHostInstalledEntry[] = [];
     for (const row of rows) {
-      // A matching row we cannot read is not "not installed": replacing on it would skip the uninstall.
-      if (typeof row['installPath'] !== 'string') {
-        return { detail: `claude plugin list --json row for ${id} carries no installPath`, status: 'unavailable' };
+      // Every row for this plugin must be readable before the scope filter runs: a matching row we
+      // cannot read is not "not installed", and replacing on it would skip the uninstall.
+      if (typeof row['installPath'] !== 'string' || typeof row['scope'] !== 'string') {
+        return { detail: `claude plugin list --json row for ${id} carries no installPath or scope`, status: 'unavailable' };
       }
+      if (options.scope !== undefined && row['scope'] !== options.scope) continue;
       entries.push({
         installPath: row['installPath'],
-        ...(typeof row['scope'] === 'string' ? { scope: row['scope'] } : {}),
+        scope: row['scope'],
         ...(typeof row['version'] === 'string' ? { version: row['version'] } : {}),
       });
     }

@@ -183,6 +183,21 @@ it('replaces a stale same-version Claude install through uninstall + install and
       `plugin marketplace add ${fixture.bundleRoot}`,
       'plugin install install-fixture@install-fixture-marketplace --scope user',
     ]);
+
+    // A matching row without a readable scope is an unusable inventory, not "not installed".
+    const scopeless = recordingRunner((call) => isInventoryCall(call)
+      ? JSON.stringify([{ id: 'install-fixture@install-fixture-marketplace', installPath: installed, version: '1.2.3' }])
+      : '');
+    const error = await installBundle({
+      commandRunner: scopeless.runner,
+      from: fixture.from,
+      host: 'claude',
+      replace: true,
+      scope: 'user',
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
+    expect(scopeless.calls).toHaveLength(1);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -514,6 +529,19 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(toFile).toMatchObject({ state: 'replaced' });
     expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
+
+    // An empty unowned directory at an incoming file path is a collision too (no ownership evidence).
+    await rm(join(fixture.bundleRoot, 'payload.txt'));
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    await mkdir(join(destination, 'empty-dir'));
+    await writeFile(join(fixture.bundleRoot, 'empty-dir'), 'now a file\n');
+    const emptyCollision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
+    expect((emptyCollision as DiagnosticError).diagnostics[0]?.message).toContain('empty-dir');
+    await rm(join(fixture.bundleRoot, 'empty-dir'));
+    await rm(join(destination, 'empty-dir'), { recursive: true });
 
     // A directory that also holds an unowned file is a collision, not a restructure.
     await rm(join(fixture.bundleRoot, 'payload.txt'));
