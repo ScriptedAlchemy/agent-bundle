@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it } from '@rstest/core';
 import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
 import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
@@ -280,6 +281,43 @@ describe('the in-memory MCP projection level', () => {
 
     expect((await listMcpSurface()).resources).not.toContain('agent-bundle://notices/inbox');
   });
+
+  // Issue #369: task-augmented tool calls are deferred until the MCP SDK ships
+  // a task runtime (docs/mcp-conformance.md). Until then the generated server
+  // must stay fail-closed — no `tasks` capability claim — and must process a
+  // task-augmented request as an ordinary one, which is what the 2025-11-25
+  // Tasks utility requires of a receiver that declared no task support.
+  it('never advertises the MCP Tasks capability', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const capabilities = session.client.getServerCapabilities();
+    expect(capabilities).toMatchObject({ tools: expect.any(Object) });
+    expect(Object.hasOwn(capabilities ?? {}, 'tasks')).toBe(false);
+  });
+
+  it('processes a task-augmented tools/call as an ordinary request', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const result = await session.client.request({
+      method: 'tools/call',
+      params: { arguments: { message: 'deferred' }, name: 'echo', task: { ttl: 60_000 } },
+    });
+
+    expect(result).toMatchObject({ structuredContent: { message: 'deferred' } });
+    for (const key of ['task', 'taskId', 'status', 'createdAt', 'ttl', 'pollInterval']) {
+      expect(Object.hasOwn(result, key)).toBe(false);
+    }
+  });
+
+  // Compile-time half of the #369 sentinel: the SDK's spec-method handler
+  // overload rejects task methods today. When a release admits them, this
+  // directive becomes unused, `pnpm typecheck` fails, and the deferral in
+  // docs/mcp-conformance.md must be re-audited. Never invoked at runtime.
+  const typedTaskSurfaceSentinel = (server: McpServer): void => {
+    // @ts-expect-error tasks/get is 2025-11-25 wire vocabulary without an SDK runtime.
+    server.server.setRequestHandler('tasks/get', async () => ({}));
+  };
+  void typedTaskSurfaceSentinel;
 
   it('leaves the browser App surface off the in-memory server', async () => {
     const surface = await listMcpSurface();
