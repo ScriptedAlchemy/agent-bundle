@@ -1,0 +1,120 @@
+---
+description: 'agent-bundle 的贡献者工作流：三道本地门禁、本地合并循环、Changesets、需要显式开启的原生宿主 smoke，以及文档站点。'
+---
+
+# 参与贡献
+
+这一页是给**改动 agent-bundle 本身**的人看的。其中没有任何一项是编写插件的前提——插件作者只需要
+`agent-bundle` 与 Node.js，本页内容一概不需要。
+
+仓库是一个 pnpm 工作区。这里以 Node.js 22.19 为下限，原因和框架本身以它为下限是同一个：
+
+```sh
+pnpm install
+pnpm build
+```
+
+`pnpm build` 会构建其余脚本与每个示例都依赖的工作区包，因此全新安装之后先跑它。
+
+## 三道门禁
+
+| 命令 | 证明什么 | 何时运行 |
+| --- | --- | --- |
+| `pnpm check` | 本地交付门禁：构建、单元、路由单元、投影与集成测试、lint、类型检查。 | 开发过程中，以及每次推送之前。 |
+| `pnpm check:release` | 在上面之外加上打包门禁：`npm pack` dry run、发布审计，以及含脚手架模板矩阵的打包测试池。 | 改动打包、导出或已发布表面之前。 |
+| `pnpm check:local-ci` | 完整的托管 CI 门禁——三个 Node 版本的 verify 矩阵，加上示例、发布与微 eval 作业——在并行的本地 worktree 中运行。 | 作为合并门禁。 |
+
+还有一些范围更小的脚本用于迭代：`pnpm test:unit`、`pnpm test:route-unit`、
+`pnpm test:projection`、`pnpm test:integration`、`pnpm lint` 与 `pnpm typecheck`。它们是更快的信号，
+不是门禁。
+
+## 本地合并循环
+
+`pnpm check:local-ci` 存在的原因是托管 verify 腿很慢，而且在这个仓库里，本地绿灯才是分支合并的依据。
+它把每条腿放进一个隔离的 git worktree，钉在分支的 HEAD 提交上，各自拥有自己的 `node_modules` 与自己的
+临时目录根：
+
+1. 在分支的 HEAD 提交上运行 `pnpm check:local-ci`——未提交的改动**不**在覆盖范围内，运行器发现它们时
+   会给出警告。
+2. 如果门禁是绿的，这个分支就可以合并。
+3. 托管 CI 仍会在合并后的提交上运行，并继续充当异步的合并后安全网。如果它与本地运行结论不一致，
+   以托管结果为准，并为这次合并补一个后续修复。
+
+想快速迭代，`pnpm check:local-ci --current-node-only` 会在当前激活的 Node 上运行一条等价于 verify 的
+腿。它跳过 Node 矩阵以及示例、发布与微 eval 门禁，因此是快速信号，而不是合并门禁。当怀疑复用的腿
+worktree 已经陈旧时，用 `--fresh` 重建它们。
+
+运行器按顺序从 `mise`、`~/.nvm`、当前进程，或显式的 `AGENT_BUNDLE_LOCAL_CI_NODE_22` / `_24` / `_26`
+覆盖项中解析每条托管 Node 线（22.19.x、24.x、26.x），并在使用前对每个二进制做版本校验。缺少某条线时
+它会带上确切的安装命令失败，而不是悄悄用错运行时。腿的 worktree、逐步骤日志，以及“腿 × 步骤 × 状态 ×
+时长”的汇总表都位于被 git 忽略的 `.worktrees/local-ci/` 目录下。
+
+[`docs/local-ci.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/local-ci.md)
+是完整契约，包括本地门禁刻意不覆盖的那些内容。
+
+## Changesets
+
+版本管理走 [Changesets](https://github.com/changesets/changesets)。对用户可见的改动，请在同一个提交里
+补上一条：
+
+```sh
+pnpm changeset
+```
+
+选择受影响的包与版本级别，并从读者的角度描述这次改动——changeset 是发布说明的文案，不是提交信息。
+`pnpm version-packages` 应用待处理的 changeset，而发布会在 `changeset publish` 之前先运行
+`pnpm check:release`。私有工作区包，包括示例与本站点，不参与版本管理，也不打标签。
+
+目前还没有任何东西发布到 npm。当前的发布通道是 pkg.pr.new 预览 tarball，见
+[预览包](../guide/distribution/preview-packages.mdx)。
+
+## 原生宿主 smoke 需要显式开启
+
+有些证据需要机器上已登录的 Claude 或 Codex CLI，因此它不可能成为门禁。这些 smoke 在本地需要显式开启，
+在 CI 中被刻意跳过；运行它们的托管工作流只能通过 `workflow_dispatch` 触发，并且要指明它演练哪个宿主。
+
+```sh
+pnpm test:packed:native:claude
+pnpm test:packed:native:codex
+pnpm test:host-install:session:claude
+```
+
+测试矩阵中的其余部分都不需要凭据。`host-install` 保留一条无条件的确定性适配器模拟通道，可用的宿主
+二进制还会额外证明它们各自的公开安装路径，而 Cursor 会显式记录它那条不可用的非交互宿主会话表面，
+而不是报告一个它没有挣到的通过。这条边界正是[测试](../guide/development/testing.mdx)中证明级别的全部
+意义所在：一个级别绝不会被当作更强级别的收据来报告。
+
+依赖审查、包预览与发布工作流出于结构性原因只在托管侧运行——第一项要针对 pull request 的 diff 查询
+GitHub 的安全公告数据库，另外两项是发布的副作用，而不是检查。
+
+## 文档站点
+
+本站点是一个私有工作区包。请在仓库根目录运行：
+
+```sh
+pnpm docs:dev       # 带热更新的本地开发服务器
+pnpm docs:check     # 类型检查、构建，并核实构建产物
+pnpm docs:preview   # 提供已构建的站点
+```
+
+`pnpm docs:check` 就是门禁。遇到失效的站内链接、失效的锚点、缺失的图片，或某个页面只在一个语言下存在
+时，构建都会失败——最后这一条正是 `guide/`、`reference/`、`examples/` 与 `contributing/` 下每个英文页面
+都有一个结构相同的中文对照页的原因。TypeScript 示例在两个语言下保持一致；散文与代码注释需要翻译。
+生成的类型 API 是镜像的，不翻译。
+
+## 仓库约定
+
+有两条规则值得单独写出来，因为它们很容易被无意破坏：
+
+- **`examples/*` 是面向用户的产品，不是测试夹具。** 它们只能使用公开的 `agent-bundle` 导出与
+  `workspace:*` 依赖，并在桌面视口下验收。开发者 Workbench 是一个仅面向桌面的应用。
+- **`repos/` 下随仓库携带的参考材料是只读的。** 不要编辑、格式化或从中导入。应用代码导入的是已发布的
+  包。
+
+框架自身的契约与代码一起放在仓库中：
+[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md)
+讲编写模型，
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)
+讲包构建，
+[Diagnostics](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md)
+是 `AB` 代码目录。
