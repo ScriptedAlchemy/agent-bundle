@@ -1,7 +1,7 @@
 /**
  * `agent-bundle/test` — the consumer test harness helpers.
  *
- * Eight Node proof levels ship here, and the browser-safe ninth level ships
+ * Ten Node proof levels ship here, and the browser-safe eleventh level ships
  * from `agent-bundle/test/browser`. The repository's real-host install proof
  * uses the same level convention. Each helper names the level it supplies,
  * stamps it into its provenance, and prints it in every failure:
@@ -12,6 +12,8 @@
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport; MCP App routes are not registered and report `not-applicable` |
  * | `dev-epoch` | `runDevEpochContractMatrix` | an epoch-pinned generated stdio process opened through the Workbench session service; MCP App routes are covered (surface + `ui://` sweep) and auto-covered without a fixture |
  * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
+ * | `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract — the rendered-script shell with its four output modes in this process, or the plain `main` envelope as a Node process of its own over the source — without bundling |
+ * | `workbench-surface` | `inspectWorkbenchSurface` | the compiled route graph projected exactly as the dev server serves it to the Workbench: route catalog, state, lifecycle fixtures, page availability, without a browser or dev server |
  * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio; MCP App routes are covered (surface + `ui://` sweep) and auto-covered without a fixture |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent; MCP App routes are covered as at `packed-stdio` |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
@@ -36,7 +38,9 @@ export {
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
   PACKED_STDIO_PROOF_LEVEL,
   ROUTE_UNIT_PROOF_LEVEL,
+  SCRIPT_DISPATCH_PROOF_LEVEL,
   SIMULATED_PROOF_LEVEL,
+  WORKBENCH_SURFACE_PROOF_LEVEL,
   compileTestManifest,
   proofLevelLabel,
   testManifestFromRouteGraph,
@@ -50,6 +54,7 @@ export type {
   TestableProviderDescriptor,
   TestableLayoutDescriptor,
   TestableRouteDescriptor,
+  TestableScriptDescriptor,
   TestableStateDescriptor,
 } from './manifest.ts';
 export { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes, testManifest } from './registry.ts';
@@ -144,6 +149,34 @@ export type {
 } from './mcp.ts';
 export { cliJson, cliNdjson, invokeCli } from './cli.ts';
 export type { CliDispatchProvenance, CliInvocation, CliRenderedEvent, InvokeCliOptions, InvokeCliOptionsBase } from './cli.ts';
+export { runScript, scriptJson, scriptNdjson } from './script.ts';
+export type {
+  RunScriptOptions,
+  RunScriptOptionsBase,
+  ScriptDispatchProvenance,
+  ScriptExecution,
+  ScriptInvocation,
+} from './script.ts';
+export {
+  inspectWorkbenchSurface,
+  workbenchCommandUsage,
+  workbenchPageLabel,
+  workbenchPagesFor,
+  workbenchRouteCatalog,
+  workbenchSurfaceFromRouteGraph,
+} from './workbench.ts';
+export type {
+  InspectWorkbenchSurfaceOptions,
+  WorkbenchCapabilityCounts,
+  WorkbenchPageName,
+  WorkbenchRouteCatalog,
+  WorkbenchRouteCatalogEntry,
+  WorkbenchRouteCatalogGroup,
+  WorkbenchRouteCatalogServer,
+  WorkbenchSurface,
+  WorkbenchSurfaceFromGraphInput,
+  WorkbenchSurfaceProvenance,
+} from './workbench.ts';
 export { openPackedMcpServer, removeProjectSource } from './packed.ts';
 export type {
   DeletedSourceReceipt,

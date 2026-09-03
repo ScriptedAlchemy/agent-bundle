@@ -40,20 +40,22 @@ scripted and asks nothing — the remaining values fall back to their defaults.
 | --- | --- |
 | `minimal` | A skills-only plugin: one `src/skills/<name>/SKILL.md` directory and nothing else. |
 | `mcp-server` | A stdio MCP server from one `src/mcp/<server>/tools/<name>.tsx` route module plus one artifact script, with the framework test harness wired up. |
-| `cli-tool` | An installable CLI through the `src/cli.ts` bin convention plus a `src/index.ts` library export with declarations. |
+| `cli-tool` | An installable routed CLI from one `src/cli/<command>.ts` route module (generated executable, help, argv grammar, validation), a conventional `src/scripts/<name>.ts` artifact script, and a `src/index.ts` library export with declarations, with the framework test harness wired up. |
 
 Every template ships a `check` script (validate + build + typecheck + tests)
 and validates with zero diagnostics — including the `AB473x` migration
 nudges, because the templates are written against the entry conventions from
 the start.
 
-The `mcp-server` template also starts with the consumer test harness: a
-route-unit pool (`agentBundleRstest()` from `agent-bundle/rstest`, `renderRoute`
-and `expectDocument` from `agent-bundle/test`) and a separate in-memory MCP
-projection pool, each labeled with the proof level it carries and run by
-`check`. The `minimal` and `cli-tool` templates compile no route modules, so
-neither ships a harness pool that would pass without addressing anything; their
-READMEs document the wiring to add with the first route.
+The `mcp-server` and `cli-tool` templates also start with the consumer test
+harness. `mcp-server` ships a route-unit pool (`agentBundleRstest()` from
+`agent-bundle/rstest`, `renderRoute` and `expectDocument` from
+`agent-bundle/test`) and a separate in-memory MCP projection pool; `cli-tool`
+ships one projection pool at the `cli-dispatch` (`invokeCli`, `cliJson`) and
+`script-dispatch` (`runScript`) levels. Each pool is labeled with the proof
+level it carries and run by `check`. The `minimal` template compiles no route
+modules, so it ships no harness pool that would pass without addressing
+anything; its README documents the wiring to add with the first route.
 
 ## The framework dependency
 

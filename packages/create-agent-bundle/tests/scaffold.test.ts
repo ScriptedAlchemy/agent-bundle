@@ -89,9 +89,13 @@ describe('scaffold', () => {
         'README.md',
         'agent-bundle.config.ts',
         'package.json',
-        'src/cli.ts',
+        'rstest.projection.config.ts',
+        'src/cli/greet.ts',
         'src/index.ts',
-        'tests/cli.test.ts',
+        'src/scripts/hello.ts',
+        'tests/greet.test.ts',
+        'tests/projection/cli-dispatch.test.ts',
+        'tests/projection/script-dispatch.test.ts',
         'tsconfig.json',
       ]);
     } finally {
@@ -248,19 +252,32 @@ describe('scaffold', () => {
     }
   });
 
-  for (const template of ['minimal', 'cli-tool'] as const) {
-    it(`scaffolds the ${template} template without a runtime tarball`, async () => {
-      const { root } = await scaffoldTemplate(template, { withRuntimeTarball: false });
-      try {
-        const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
-          readonly devDependencies: Record<string, string>;
-        };
-        expect(manifest.devDependencies['agent-bundle']).toMatch(/^file:/u);
-      } finally {
-        await rm(root, { force: true, recursive: true });
-      }
-    });
-  }
+  it('scaffolds the minimal template without a runtime tarball', async () => {
+    const { root } = await scaffoldTemplate('minimal', { withRuntimeTarball: false });
+    try {
+      const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+        readonly devDependencies: Record<string, string>;
+      };
+      expect(manifest.devDependencies['agent-bundle']).toMatch(/^file:/u);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  // Routed commands execute inside the typed Agent request context, so the
+  // cli-tool template now pairs the runtime package like mcp-server does.
+  it('pins the paired runtime for the routed cli-tool template', async () => {
+    const { frameworkSpec, root } = await scaffoldTemplate('cli-tool', { pluginName: 'greeter' });
+    try {
+      const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+        readonly dependencies: Record<string, string>;
+      };
+      expect(manifest.dependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
+      expect(manifest.dependencies['zod']).toBeDefined();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 
   it('replaces every placeholder and pins the framework spec', async () => {
     const { files, frameworkSpec, root } = await scaffoldTemplate('cli-tool', {
@@ -281,16 +298,22 @@ describe('scaffold', () => {
       };
       expect(manifest.name).toBe('@scope/status-plugin');
       expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
-      if (files.includes('src/mcp/status/tools/report-status.tsx')) {
-        expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
-      }
+      expect(files).toContain('src/cli/greet.ts');
+      expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
       expect(manifest.bin).toEqual({
         'status-plugin': './dist/bin/status-plugin.js',
         'status-plugin-install': './dist/bin/status-plugin-install.js',
       });
       const config = await readFile(join(root, 'agent-bundle.config.ts'), 'utf8');
       expect(config).toContain("name: 'status-plugin'");
-      expect(config).toContain("'status-plugin': './src/cli.ts'");
+      // Routed CLI: no `scripts` or `bin` entry names the executable; the
+      // command graph compiles from src/cli/** by convention.
+      expect(config).not.toMatch(/\bscripts:/u);
+      expect(config).not.toMatch(/\bbin:/u);
+      // The generated help names the scaffolded plugin, and the template's own
+      // proof asserts that exact text, so the rename must reach the test.
+      expect(await readFile(join(root, 'tests/projection/cli-dispatch.test.ts'), 'utf8'))
+        .toContain("Run 'status-plugin greet --help' for usage.");
     } finally {
       await rm(root, { force: true, recursive: true });
     }

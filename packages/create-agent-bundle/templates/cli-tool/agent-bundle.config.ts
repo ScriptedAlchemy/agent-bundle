@@ -9,12 +9,10 @@ export default defineConfig({
   // Optional: move the build artifact root (default `dist`); the CLI
   // `--output` flag still wins.
   // output: { distPath: 'artifact' },
-  // One CLI bundle, two destinations: `src/cli.ts` is the package bin by
-  // convention, and declaring it as a script also ships it inside every
-  // host artifact. `src/index.ts` becomes the library export with
-  // declarations, also by convention.
-  scripts: {
-    'my-agent-plugin': './src/cli.ts',
-  },
+  // No `bin` or `scripts` fields needed: the routed `src/cli/**` commands
+  // compile into the package executable (dist/bin/my-agent-plugin.js), the
+  // conventional `src/scripts/hello.ts` ships as `scripts/hello.mjs` inside
+  // every host artifact, and `src/index.ts` becomes the library export with
+  // declarations — all by convention.
   targets: ['portable', 'codex', 'claude'],
 });

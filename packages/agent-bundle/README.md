@@ -482,13 +482,15 @@ kind, and the module provenance.
 Conventional request context providers (`src/providers/*`, see
 [entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
 are mounted automatically for every manifest-backed helper — `renderRoute`,
-`renderRouteEvents`, `invokeCli`, and the in-memory MCP helpers — exactly as the
+`renderRouteEvents`, `invokeCli`, `runScript` (rendered scripts), and the
+in-memory MCP helpers — exactly as the
 generated request scopes mount them: discovered from the compiled manifest,
 executed once per request in the same deterministic key order, handed the same
 surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
 request closed when a factory throws. `providers.processLifetime` is scoped the
-way the artifact scopes it: each `invokeCli` call and each `renderRoute` render
-is a fresh simulated executable (hit 1, new `instanceId`), while one open
+way the artifact scopes it: each `invokeCli` call, each `runScript` run, and
+each `renderRoute` render is a fresh simulated executable (hit 1, new
+`instanceId`), while one open
 `openInMemoryMcpServer` session shares a single identity across every request
 it handles, like the artifact's warm Flight worker. Pass `context.providers` to opt out: an explicit map is mounted
 verbatim and no conventional provider runs, which is how a test stubs a provider
@@ -539,6 +541,8 @@ is never a receipt for another.
 | `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
+| `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, explicit TTY, `--json`, `--ndjson`), a plain `.ts` script through the `main` process envelope as a Node process of its own over the source — fresh module state, real `process.exit`, its own argv, exit code, and streams — without bundling |
+| `workbench-surface` | `inspectWorkbenchSurface`, `workbenchSurfaceFromRouteGraph` | what the dev server would hand the Workbench for this project — the route manifest, the grouped route catalog, the state declaration, lifecycle-replay fixtures per host, and page availability — from the same compiler pass and projection functions, with no browser and no dev server |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout |
@@ -563,6 +567,106 @@ expect(events.at(-1)?.type).toBe('complete');
 const tty = await invokeCli(['library', 'report', './books'], { tty: true });
 expect(tty.stdout).toContain('\r\u001B[2K');
 ```
+
+`runScript` is the same idea for the `src/scripts/*` convention. The manifest
+carries every conventional script with its extension contract
+(`testManifest().scripts`), and the helper runs the module through what its
+generated `scripts/<name>.mjs` would do — never by bundling it: a rendered
+`.tsx` script runs in-process through the same shell the executable uses,
+and a plain `.ts` script runs as a Node process of its own, as the
+executable does (see below):
+
+```ts
+import { runScript, scriptJson, scriptNdjson } from 'agent-bundle/test';
+
+// script-dispatch, rendered .tsx script: `--json` / `--ndjson` are reserved by
+// the framework, everything else reaches the component's `argv` prop.
+const summary = await runScript('summary', ['./books', '--json']);
+expect(summary.exitCode).toBe(0);
+expect(scriptJson(summary)).toMatchObject({ arguments: ['./books'] });
+expect(scriptNdjson(await runScript('summary', ['./books', '--ndjson'])).at(-1)?.type).toBe('complete');
+
+// script-dispatch, plain .ts script exporting main(argv): the envelope adopts
+// a numeric return as the exit code; stdout and stderr are captured.
+const checksum = await runScript('checksum', ['./books']);
+expect(checksum.exitCode).toBe(0);
+expect(checksum.stdout).toBe('Fixture checksum: 7\n');
+```
+
+A plain script runs as a Node process of its own over the source module, so
+the process contract is Node's rather than a simulation of it: every run
+evaluates the module afresh (module-level state never survives between runs,
+as it never survives between processes), `process.argv` is
+`[node, <source>, ...argv]`, `process.exit` ends the script for real — work
+queued after it never runs, whether or not the script caught the call —
+process-level APIs such as `process.chdir` work and affect only the script, a
+numeric `main` return goes through the real `process.exitCode` setter (`300`
+reports `44`; `1.5` exits 1 with the setter's `RangeError`), a signal that
+ends the process reports as `128 +` its number, and the test process's own
+argv, exit code, cwd, and streams are never touched, so plain runs may overlap
+each other and any other test. The builder's static export scan decides
+between the `main` envelope and a self-executing module, and a non-callable
+`main` fails the way the generated executable fails. The process resolves
+relative `.js` specifiers to their TypeScript sources, transforms `.ts` with
+Node's own type transform, lowers the `.tsx` and `.jsx` helpers a plain
+script imports with the bundler's SWC — the same lowering the generated
+executable was built with — and serves `agent-bundle/meta` as the identity the build stamps from the
+manifest's `plugin`. Explicit `scripts:` configuration entries are bundled
+entries rather than routes and stay with the packed level. A rendered script
+composes the project's root layout (a script belongs to no server, so no
+server layout applies) and mounts the project's conventional providers with the `script` invocation the
+generated executable passes (`context.providers` substitutes a fixture map, as
+everywhere); a plain script opens no request scope, so it accepts no `context`
+at all. A rendered script's declared state mounts on a disposable root for
+the run, as at every harness level (`renderRoute`, `invokeCli`): the
+`AGENT_BUNDLE_PLUGIN_ROOT` / `.agent-bundle` anchor a `workspace-durable`
+store keeps between executable runs is the packed artifact's, and the packed
+level proves it; a test that needs one store across several rendered runs
+passes the same `context.state` and `context.noticeLedger` bindings to each.
+`stdin` pipes input to a plain script (omitted,
+it reads end-of-file at once); `process.execArgv` is empty as under plain
+`node`; an aborted `signal` sends SIGTERM and, should the script trap it,
+kills the process after a one-second grace before the run rejects. A rendered
+script's own `console` and stream writes during the run land on the
+invocation's `stderr` — the generated executable forwards its render worker's
+stdout and stderr there — so `stdout` holds machine output only and nothing
+escapes into the test runner. `process.exit` from rendered code is that
+worker's exit, never the test process's: the run fails as the executable's
+shell reports it (`Generated render worker exited with code N.` on `stderr`,
+exit code 1, `0` included), the call unwinds the caller, and whatever code
+that catches it writes afterwards is discarded, as a worker that has exited
+writes nothing. Once a rendered run's `signal` aborts, no state mount or
+module load that has not begun is started on its behalf. Every `ScriptInvocation` carries
+`provenance.execution` (`rendered-shell`, `main-envelope`, or
+`self-executing`) beside the level.
+
+`inspectWorkbenchSurface` answers "what would the Workbench show for this
+project?" without a browser. It runs the dev server's own preparation as the
+Workbench server constructs it — `development` mode for a configuration
+factory that branches on `context.mode`, the selected `configPath` for both
+the compiler pass and eval-suite discovery — and the same projection functions
+the dev server serves — `GET /api/routes/manifest` and `GET /api/lifecycles`
+byte for byte — then applies the Workbench's own grouping and navigation
+rules:
+
+```ts
+import { inspectWorkbenchSurface, workbenchPageLabel } from 'agent-bundle/test';
+
+const surface = await inspectWorkbenchSurface({ root: projectRoot });
+expect(surface.catalog.groups.map((group) => group.label)).toContain('curator · Tools');
+expect(surface.catalog.stateDefinition).toMatchObject({ driver: 'sqlite', lifetime: 'workspace-durable' });
+expect(surface.lifecycles[0]?.targets.map((target) => target.target)).toEqual(['claude', 'codex']);
+expect(surface.pages.map(workbenchPageLabel)).not.toContain('Playground');
+```
+
+`counts` are the artifact inventory the Workbench counts, derived without a
+build: one instance per hook, MCP server, or script declaration per selected
+target it names (a declaration whose `targets` select none of the project's
+targets is emitted nowhere and counts nothing), plus the declared Skills, eval
+suites, and targets. Page availability depends only on whether each count is
+zero and on what the compiled graph declares. Host discovery, live MCP probes, published epochs,
+and the RSC runtime page are artifact- or process-bound and are not projected
+here.
 
 `expectEvents` asserts over a render-event stream. `toContainSequence` is
 sequence-tolerant — an extra `progress` or `replace` frame is legal and cannot

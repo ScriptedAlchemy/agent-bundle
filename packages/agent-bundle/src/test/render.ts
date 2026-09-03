@@ -37,6 +37,7 @@ import {
   registeredRouteLoader,
   registeredStateLoader,
   testManifest,
+  type AgentStateModuleLoader,
 } from './registry.ts';
 import type {
   AgentRouteModule,
@@ -522,23 +523,25 @@ const noMountedState: AutoMountedState = Object.freeze({
   close: async () => undefined,
 });
 
+type StateMount = (renderer: Renderer, signal: AbortSignal) => Promise<AutoMountedState>;
+
 /**
- * Mounts one fresh state owner for a manifest render. Durable definitions use
- * a disposable sqlite root so repeated route-unit renders are deterministic.
+ * Resolves how a manifest render mounts its state, without mounting it: the
+ * loader lookup is harness wiring and fails here, while loading the state
+ * module and opening its driver — user code and a filesystem root — wait for
+ * the returned mount to be called.
  */
-const mountManifestState = async (
+const manifestStateMount = (
   manifest: AgentBundleTestManifest | undefined,
   provenance: RenderedRouteProvenance,
   context: RenderRouteContext,
-  renderer: Renderer,
-  signal: AbortSignal,
-): Promise<AutoMountedState> => {
+): StateMount => {
   const descriptor = manifest?.state;
   if (
     manifest === undefined
     || descriptor === undefined
     || (context.state !== undefined && context.noticeLedger !== undefined)
-  ) return noMountedState;
+  ) return async () => noMountedState;
   const loader = registeredStateLoader(manifest);
   if (loader === undefined) {
     throw new AgentTestError(
@@ -550,6 +553,28 @@ const mountManifestState = async (
       },
     );
   }
+  return (renderer, signal) => mountState(descriptor, loader, context, renderer, signal);
+};
+
+/**
+ * Mounts one fresh state owner for a manifest render. Durable definitions use
+ * a disposable sqlite root so repeated route-unit renders are deterministic.
+ */
+const mountManifestState = async (
+  manifest: AgentBundleTestManifest | undefined,
+  provenance: RenderedRouteProvenance,
+  context: RenderRouteContext,
+  renderer: Renderer,
+  signal: AbortSignal,
+): Promise<AutoMountedState> => manifestStateMount(manifest, provenance, context)(renderer, signal);
+
+const mountState = async (
+  descriptor: NonNullable<AgentBundleTestManifest['state']>,
+  loader: AgentStateModuleLoader,
+  context: RenderRouteContext,
+  renderer: Renderer,
+  signal: AbortSignal,
+): Promise<AutoMountedState> => {
   const definition = (await loader()).default;
   let root: string | undefined;
   let driver: AgentState.AgentStateDriver;
@@ -794,6 +819,216 @@ export const prepareCliRenderHost = async (
         },
       });
     },
+  });
+};
+
+export interface PrepareScriptRenderHostOptions {
+  readonly context?: RenderRouteContext;
+  /**
+   * Loads the script module. It is called only when the shell opens a
+   * session — after its own argv checks — and its failure, like a module
+   * without a default component, reaches the shell through the event stream,
+   * exactly as the generated executable's render worker reports it.
+   */
+  readonly loadModule: () => Promise<AgentRouteModule>;
+  readonly manifest: AgentBundleTestManifest;
+  /** The path-derived script name the generated executable reports as its surface. */
+  readonly name: string;
+  /** Receives the completed document's value, exactly what the rendered-script shell validated. */
+  readonly onComplete: (value: unknown) => void;
+  /** The script executable's process identity; a generated `scripts/<name>.mjs` is a fresh process per run. */
+  readonly processLifetime: ProviderProcessLifetime;
+  readonly provenance: RenderedRouteProvenance;
+  readonly signal: AbortSignal;
+}
+
+export interface PreparedScriptRenderHost {
+  readonly close: () => Promise<void>;
+  readonly createSession: (
+    argv: readonly string[],
+    context: { readonly signal: AbortSignal },
+  ) => GeneratedCliRenderSession;
+  /**
+   * Ends the render the way the generated executable's render worker ending
+   * does: every session's event stream fails with `reason`, nothing further
+   * starts, and the shell reports the failure. The harness calls this when
+   * rendered user code calls `process.exit`, which in that worker ends the
+   * worker — never the executable's own shell.
+   */
+  readonly terminate: (reason: Error) => void;
+}
+
+/**
+ * Settles with `pending`, or rejects with the signal's reason as soon as it
+ * aborts: the pending work is abandoned, the way the generated executable
+ * abandons its render worker.
+ */
+const settledBeforeAbort = <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(signal.reason); };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    pending.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
+  });
+
+/**
+ * The render host behind the script-dispatch level for rendered scripts. It
+ * mirrors the generated `scripts/<name>.mjs` executable exactly: the
+ * component receives `{ argv, signal }`, the request scope opens with the
+ * `script` invocation naming the route and the script surface, and — like
+ * that executable — the completed value passes through unvalidated; rendered
+ * scripts carry no `resultSchema` contract.
+ */
+export const prepareScriptRenderHost = async (
+  options: PrepareScriptRenderHostOptions,
+): Promise<PreparedScriptRenderHost> => {
+  const context = options.context ?? {};
+  // Resolving the state loader is harness wiring and happens now. Loading the
+  // renderer (React, the runtime, the Flight server) and mounting the state —
+  // loading its module, opening a driver root — is the render worker's work:
+  // the generated executable starts that worker only once the shell has
+  // accepted argv, so both wait, like the module, for the shell to open a
+  // session.
+  const mount = manifestStateMount(options.manifest, options.provenance, context);
+  // The render worker's lifetime: `terminate` ends it, as `process.exit` in
+  // worker code ends the generated executable's worker, and every step and
+  // stream of the host observes that end alongside the caller's own signal.
+  const termination = new AbortController();
+  const terminate = (reason: Error): void => { termination.abort(reason); };
+  const ended = (signal: AbortSignal): AbortSignal => AbortSignal.any([signal, termination.signal]);
+  let rendering: Promise<Renderer> | undefined;
+  let mounting: Promise<AutoMountedState> | undefined;
+  let mounted: AutoMountedState | undefined;
+  const close = async (): Promise<void> => {
+    if (mounting === undefined) return;
+    if (mounted === undefined && ended(options.signal).aborted) {
+      // The executable terminates its render worker on abort; here a mount
+      // still pending may never settle, so closing waits for nothing and
+      // whatever the mount does produce later is closed on arrival.
+      void mounting.then((state) => state.close(), () => undefined);
+      return;
+    }
+    const state = await mounting.catch(() => undefined);
+    await state?.close();
+  };
+  return Object.freeze({
+    close,
+    createSession: (argv: readonly string[], execution: { readonly signal: AbortSignal }): GeneratedCliRenderSession => {
+      const invocation: AgentRenderInvocation = {
+        kind: 'script',
+        props: { input: argv as never, name: options.name },
+      };
+      const collected: AgentProgressUpdate[] = [];
+      // State and module are user code: they load when the shell asks for
+      // events, and a load or shape failure is the stream's failure, never
+      // the harness's.
+      // Once the signal aborts, the executable's render worker is gone: no
+      // state is mounted and no module is loaded after it. A load already in
+      // flight cannot be recalled, but each step that has not begun checks
+      // the signal before it starts rather than running on behind a run that
+      // has already reported its cancellation.
+      const hostSignal = ended(options.signal);
+      const signal = ended(execution.signal);
+      rendering ??= loadRenderer();
+      mounting ??= rendering
+        .then((renderer) => {
+          hostSignal.throwIfAborted();
+          return mount(renderer, hostSignal);
+        })
+        .then((state) => { mounted = state; return state; });
+      // The generated worker composes the project's root layout around a
+      // rendered script (a script belongs to no server, so no server layout
+      // applies); the layout modules are user code and load with the script's.
+      const layoutRoute: LayoutChainTarget = { id: options.provenance.routeId, kind: 'script' };
+      const pending = Promise.all([rendering, mounting]).then(async ([renderer, state]) => {
+        signal.throwIfAborted();
+        const [module, layouts] = await Promise.all([
+          options.loadModule(),
+          loadLayoutChain(options.manifest, layoutRoute, options.provenance),
+        ]);
+        signal.throwIfAborted();
+        return createFlightDispatcher({
+          collected,
+          component: componentOf(module, options.provenance),
+          componentProps: (request) => ({ argv, signal: request.signal }),
+          contextProgress: context.progress,
+          layoutRoute,
+          layouts,
+          renderer,
+          requestInit: async (request) => {
+            const root = process.cwd();
+            // The generated script's render worker hands its providers the
+            // `script` invocation with the path-derived name, never the route id.
+            const providers = await mountProviders({
+              explicit: context.providers,
+              invocation,
+              manifest: options.manifest,
+              processHit: claimProcessHit(options.processLifetime),
+              provenance: options.provenance,
+              signal: request.signal,
+            });
+            return {
+              capabilities: {
+                command: renderer.unavailable(),
+                filesystem: renderer.unavailable(),
+                network: renderer.unavailable(),
+                projectRoot: renderer.available({ root }, 'derived'),
+              },
+              host: renderer.unavailable('unsupported-surface'),
+              workspace: renderer.available({ root }, 'derived'),
+              ...context,
+              ...state.context,
+              providers,
+              invocation: {
+                kind: 'script',
+                operationId: options.provenance.routeId,
+                surface: options.name,
+                ...context.invocation,
+              },
+              signal: request.signal,
+            };
+          },
+        });
+      });
+      void pending.catch(() => undefined);
+      let inner: ReadableStreamDefaultReader<CliRenderedEvent> | undefined;
+      return Object.freeze({
+        close,
+        events: (): ReadableStream<CliRenderedEvent> => new ReadableStream<CliRenderedEvent>({
+          cancel: async (reason) => { await inner?.cancel(reason); },
+          start: async (controller) => {
+            try {
+              // The executable fails its parent stream the moment the signal
+              // aborts and terminates the worker, however far along the
+              // module or state load is; the stream here fails the same way
+              // rather than waiting for a load that may never settle.
+              const dispatcher = await settledBeforeAbort(pending, signal);
+              inner = dispatcher.stream({ invocation, signal }).getReader();
+              for (;;) {
+                const next = await inner.read();
+                if (next.done) break;
+                termination.signal.throwIfAborted();
+                controller.enqueue(next.value);
+              }
+              termination.signal.throwIfAborted();
+              controller.close();
+            } catch (error) {
+              // A worker that exited fails the executable's pending render
+              // with the exit, whatever the render itself was doing.
+              controller.error(termination.signal.aborted ? termination.signal.reason : error);
+            }
+          },
+        }),
+        validate: (value: unknown) => {
+          options.onComplete(value);
+          return value;
+        },
+      });
+    },
+    terminate,
   });
 };
 

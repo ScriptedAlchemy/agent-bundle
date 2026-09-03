@@ -44,6 +44,7 @@ export type {
   RouteSchema,
   RouteSchemaOutput,
   RouteUiMeta,
+  ScriptRouteProps,
   ToolConfig,
   ToolRouteProps,
 } from './routes/public.ts';

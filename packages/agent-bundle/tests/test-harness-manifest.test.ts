@@ -72,6 +72,15 @@ describe('the compiled test manifest', () => {
       'event:tool/after',
       'prompt:harness/summarize',
       'resource:harness/notes',
+      'script:badge',
+      'script:banner',
+      'script:blank',
+      'script:broken',
+      'script:checksum',
+      'script:constant',
+      'script:identity',
+      'script:stalled',
+      'script:summary',
       'script:tooling-summary',
       'tool:harness/catalog',
       'tool:harness/context',
@@ -132,6 +141,80 @@ describe('the compiled test manifest', () => {
       source: resolve(fixtureRoot, 'src/state.ts'),
     });
     expect(manifest.targets).toEqual(['claude']);
+    // Script descriptors carry the extension contract: `.tsx` renders, `.ts`
+    // is a plain executable module; the name is the path-derived identity.
+    expect(manifest.scripts).toEqual([
+      {
+        name: 'badge',
+        relativePath: 'src/scripts/badge.ts',
+        rendered: false,
+        routeId: 'script:badge',
+        source: resolve(fixtureRoot, 'src/scripts/badge.ts'),
+      },
+      {
+        name: 'banner',
+        relativePath: 'src/scripts/banner.ts',
+        rendered: false,
+        routeId: 'script:banner',
+        source: resolve(fixtureRoot, 'src/scripts/banner.ts'),
+      },
+      {
+        name: 'blank',
+        relativePath: 'src/scripts/blank.tsx',
+        rendered: true,
+        routeId: 'script:blank',
+        source: resolve(fixtureRoot, 'src/scripts/blank.tsx'),
+      },
+      {
+        name: 'broken',
+        relativePath: 'src/scripts/broken.tsx',
+        rendered: true,
+        routeId: 'script:broken',
+        source: resolve(fixtureRoot, 'src/scripts/broken.tsx'),
+      },
+      {
+        name: 'checksum',
+        relativePath: 'src/scripts/checksum.ts',
+        rendered: false,
+        routeId: 'script:checksum',
+        source: resolve(fixtureRoot, 'src/scripts/checksum.ts'),
+      },
+      {
+        name: 'constant',
+        relativePath: 'src/scripts/constant.ts',
+        rendered: false,
+        routeId: 'script:constant',
+        source: resolve(fixtureRoot, 'src/scripts/constant.ts'),
+      },
+      {
+        name: 'identity',
+        relativePath: 'src/scripts/identity.ts',
+        rendered: false,
+        routeId: 'script:identity',
+        source: resolve(fixtureRoot, 'src/scripts/identity.ts'),
+      },
+      {
+        name: 'stalled',
+        relativePath: 'src/scripts/stalled.tsx',
+        rendered: true,
+        routeId: 'script:stalled',
+        source: resolve(fixtureRoot, 'src/scripts/stalled.tsx'),
+      },
+      {
+        name: 'summary',
+        relativePath: 'src/scripts/summary.tsx',
+        rendered: true,
+        routeId: 'script:summary',
+        source: resolve(fixtureRoot, 'src/scripts/summary.tsx'),
+      },
+      {
+        name: 'tooling-summary',
+        relativePath: 'src/scripts/tooling-summary.tsx',
+        rendered: true,
+        routeId: 'script:tooling-summary',
+        source: resolve(fixtureRoot, 'src/scripts/tooling-summary.tsx'),
+      },
+    ]);
     expect(manifest.apps).toEqual({
       panel: {
         id: 'mcp-app:harness:panel',
@@ -304,6 +387,36 @@ describe('the compiled test manifest', () => {
     });
     expect(Object.isFrozen(projected.apps.panel)).toBe(true);
     expect(Object.isFrozen(projected.routes)).toBe(true);
+  });
+
+  it('lists only the conventional scripts normalization ships, never a nested or configuration-conflicting route', async () => {
+    const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
+    const checksum = graph.scripts.find((route) => route.id === 'script:checksum');
+    if (checksum === undefined) throw new Error('fixture must compile script:checksum');
+    const nested = {
+      ...checksum,
+      id: 'script:release/verify',
+      provenance: { ...checksum.provenance, relativePath: 'src/scripts/release/verify.ts' },
+      source: resolve(fixtureRoot, 'src/scripts/release/verify.ts'),
+    };
+    const projected = testManifestFromRouteGraph({
+      graph: { ...graph, scripts: [...graph.scripts, nested] },
+      projectRoot: fixtureRoot,
+      scripts: [{
+        id: 'script:banner',
+        mode: 'bundle',
+        name: 'banner',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        source: resolve(fixtureRoot, 'tools/banner.ts'),
+        targets: ['claude'],
+      }],
+    });
+
+    // `banner` is claimed by configuration (AB4809) and `release/verify` is
+    // nested (AB4808): neither becomes a scripts/<name>.mjs executable, so
+    // neither is a script-dispatch target.
+    expect(projected.scripts.map((script) => script.name)).toEqual(['badge', 'blank', 'broken', 'checksum', 'constant', 'identity', 'stalled', 'summary', 'tooling-summary']);
+    expect(manifest.scripts.map((script) => script.name)).toEqual(['badge', 'banner', 'blank', 'broken', 'checksum', 'constant', 'identity', 'stalled', 'summary', 'tooling-summary']);
   });
 
   it('rejects a shared app name whose compile-relevant declaration differs', async () => {
