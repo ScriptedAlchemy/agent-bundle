@@ -245,6 +245,21 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               inputSchema: { type: 'object' as const },
               name: 'url-with-backslash-in-userinfo',
             },
+            {
+              description: 'Glued id_https://dave:pw1@example.test/private and ref9https://gwen:pw2@example.test/',
+              inputSchema: { type: 'object' as const },
+              name: 'url-userinfo-after-identifier',
+            },
+            {
+              description: 'Glued sock_unix:///home/frank/private.sock',
+              inputSchema: { type: 'object' as const },
+              name: 'local-uri-after-identifier',
+            },
+            {
+              description: 'Glued ref9https://example.test/docs and x_wss://relay.example.test/feed survive',
+              inputSchema: { type: 'object' as const },
+              name: 'network-url-after-identifier',
+            },
           ],
         }),
       }),
@@ -290,9 +305,16 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       'Raw @ in the password https://[REDACTED]@example.test/private?next=me@x and quote https://[REDACTED]@example.test/#top',
       // A backslash inside userinfo is masked with the rest of the credential.
       'Backslash in the password https://[REDACTED]@example.test/ and ws://[REDACTED]@example.test/feed',
+      // Neither rule is anchored to a word boundary: a URL glued to a preceding
+      // identifier (`_` or a digit in front of the scheme) is still masked...
+      'Glued id_https://[REDACTED]@example.test/private and ref9https://[REDACTED]@example.test/',
+      // ...a glued local-resource URI still fails closed...
+      '[REDACTED]',
+      // ...and a glued network link is still exempt from the path rule.
+      'Glued ref9https://example.test/docs and x_wss://relay.example.test/feed survive',
     ]);
     const serialized = JSON.stringify(report);
-    for (const secret of ['hunter2', 'pa55', 'alice', 'pa@ss', '@ss@', 's3cret', 'bob', 'carol']) {
+    for (const secret of ['hunter2', 'pa55', 'alice', 'pa@ss', '@ss@', 's3cret', 'bob', 'carol', 'dave', 'gwen', 'frank', 'pw1', 'pw2']) {
       expect(serialized).not.toContain(secret);
     }
   } finally {

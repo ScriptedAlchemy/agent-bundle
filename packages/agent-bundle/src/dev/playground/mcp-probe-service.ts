@@ -149,9 +149,13 @@ const bundlePathPattern = (bundleRoot: string): RegExp => {
  * That exemption is limited to network schemes (`http`, `https`, `ws`,
  * `wss`): any other `scheme://…/…` — `unix:///home/…`, `vscode://file/home/…`,
  * `file:` — may carry a machine-local path in its authority or path and fails
- * closed like a bare absolute path.
+ * closed like a bare absolute path. The scheme is anchored to the start of its
+ * own character run, not to a word boundary, so an identifier glued in front
+ * of it (`_unix:///home/…`, `id9unix:///home/…`) cannot hide the URI; the
+ * exemption looks through any such prefix to the network scheme that ends the
+ * run, so a glued `id9https://…` link still survives.
  */
-const localUriPathPattern = /\b(?!(?:https?|wss?):\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s/]*\//iu;
+const localUriPathPattern = /(?<![a-z0-9+.-])(?![a-z0-9+.-]*(?:https?|wss?):\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s/]*\//iu;
 
 const hasAbsolutePath = (value: string): boolean =>
   localUriPathPattern.test(value) ||
@@ -170,8 +174,11 @@ const hasAbsolutePath = (value: string): boolean =>
  * schemes and whitespace is encoded rather than rejected — so a path-less URL
  * followed on the same text by an `@` before any `/`, `?`, or `#` is masked
  * as well: for a browser-facing report that over-redaction is the safe side.
+ * Like the local-URI rule, the scheme is anchored to the start of its own
+ * character run rather than to a word boundary, so a URL glued to a preceding
+ * identifier (`_https://user:secret@…`) is masked too.
  */
-const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/giu;
+const urlUserinfoPattern = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/giu;
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
