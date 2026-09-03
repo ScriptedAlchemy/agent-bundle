@@ -180,6 +180,68 @@ it('reports Claude plugin settings support and honest unavailable composite cove
   expect(registry.supports('plugin', 'settings')).toBe(false);
 });
 
+const claudeAgentCapabilityRows = {
+  background: 'agents.background',
+  component: 'agents',
+  description: 'agents.description',
+  disallowedTools: 'agents.disallowedTools',
+  effort: 'agents.effort',
+  hooks: 'agents.hooks',
+  isolationWorktree: 'agents.isolationWorktree',
+  maxTurns: 'agents.maxTurns',
+  mcpServers: 'agents.mcpServers',
+  memory: 'agents.memory',
+  model: 'agents.model',
+  name: 'agents.name',
+  permissionMode: 'agents.permissionMode',
+  skills: 'agents.skills',
+  tools: 'agents.tools',
+} as const;
+
+it('records dated unavailable Claude agent rows and mirrors them through the unified adapter', () => {
+  const registry = createDefaultRegistry();
+  const agents = (
+    claudeCapabilityTable.plugin as unknown as {
+      readonly agents?: Readonly<Record<
+        keyof typeof claudeAgentCapabilityRows,
+        {
+          readonly evidence: readonly string[];
+          readonly reason: string;
+          readonly state: string;
+        }
+      >>;
+    }
+  ).agents;
+
+  expect(agents).toBeDefined();
+  if (agents === undefined) return;
+  expect(Object.keys(agents).sort()).toEqual(Object.keys(claudeAgentCapabilityRows).sort());
+
+  for (const [rowName, capability] of Object.entries(claudeAgentCapabilityRows)) {
+    const row = agents[rowName as keyof typeof claudeAgentCapabilityRows];
+    expect(row).toMatchObject({
+      reason: expect.stringMatching(/#100 stage-2 G5|#100 stage 2 G5/u),
+      state: 'unavailable',
+    });
+    expect(row.reason).toContain('PR #220');
+    expect(row.reason).toContain('#107 revision 3');
+    expect(row.evidence.length).toBeGreaterThan(0);
+    expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+    expect(registry.get('claude').capabilities[capability]).toEqual({
+      reason: row.reason,
+      state: 'unavailable',
+    });
+    expect(registry.get('plugin').capabilities[capability]).toEqual(intersectCapabilityStates(
+      registry.get('claude').capabilities[capability]!,
+      unavailableCapability(
+        'The pinned Codex and Cursor plugin contracts publish no shared plugin agents component or agent-frontmatter surface.',
+      ),
+    ));
+    expect(registry.supports('claude', capability)).toBe(false);
+    expect(registry.supports('plugin', capability)).toBe(false);
+  }
+});
+
 it('reports Claude userConfig support and honest unavailable composite coverage', () => {
   const registry = createDefaultRegistry();
 

@@ -47,6 +47,131 @@
   },
   "observedCliVersion": "2.1.250",
   "plugin": {
+    "agents": {
+      "component": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers Agent Bundle's authored plugin agents/ component until a separate evidence-backed increment.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents plugin agents as Markdown files in the plugin-root agents/ directory, recursively scanned and registered under plugin-scoped identifiers.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 record the #100 stage-2 G5 narrowing: re-admitting agents requires its own evidence-backed increment, so this compiler emits no agents/ directory."
+        ]
+      },
+      "name": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent name field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents name as the agent identifier using lowercase letters and hyphens, while https://code.claude.com/docs/en/plugins-reference documents that a plugin agent without name falls back to its filename.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "description": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent description field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents description as the delegation signal that tells Claude when to invoke the subagent.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "model": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent model field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents model as sonnet, opus, haiku, fable, a full model ID, or inherit, with host model-order selection when omitted.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "effort": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent effort field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents effort as a per-agent override of the session effort level with low, medium, high, xhigh, and max values subject to model availability.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "maxTurns": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent maxTurns field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents maxTurns as the maximum agentic turns before the subagent stops and returns partial output that can be resumed.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "tools": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent tools field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents tools as an allowlist, with all tools available to subagents inherited when the field is omitted.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "disallowedTools": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent disallowedTools field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents disallowedTools as a denylist removed from the inherited or explicitly selected tool pool.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "skills": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent skills field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents skills as startup preloads whose full content is injected into the subagent context without preventing invocation of other discoverable skills.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "memory": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent memory field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents memory as persistent cross-session learning scoped to user, project, or local storage.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "background": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent background field together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents background: true as forcing the subagent to remain in the background even when Claude requests a foreground run.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "isolationWorktree": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds authored plugin-agent isolation: worktree together with agents/ emission.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference documents worktree as the only valid isolation value for plugin agents, and https://code.claude.com/docs/en/sub-agents documents that it runs the subagent in a temporary isolated git worktree.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "hooks": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit hooks under the host security contract.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that hooks is unsupported and ignored when an agent is loaded from a plugin.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring hooks without warning, proving the validator does not enforce the loader's ignore contract.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "mcpServers": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit mcpServers under the host security contract.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that mcpServers is unsupported and ignored when an agent is loaded from a plugin.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring mcpServers without warning, proving the validator does not enforce the loader's ignore contract.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "permissionMode": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit permissionMode under the host security contract.",
+        "evidence": [
+          "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that permissionMode is unsupported and ignored when an agent is loaded from a plugin.",
+          "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring permissionMode: bypassPermissions without warning, proving the validator does not enforce the loader's ignore contract.",
+          "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
+        ]
+      }
+    },
     "bin": {
       "bareCommands": true,
       "bashPath": true,
