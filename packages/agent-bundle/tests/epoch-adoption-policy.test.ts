@@ -248,6 +248,42 @@ it('does not adopt an epoch it cannot lease and reports the failure as contract 
   await policy.close();
 });
 
+it('drains an epoch that arrives while the previous drain is finishing, at every microtask depth of the handoff', async () => {
+  // The drain's completion handler runs a few microtasks after its loop last
+  // saw an empty queue. Publish the next epoch from each depth inside that
+  // window (from the adoption listener) and require that it is still adopted.
+  for (let depth = 0; depth <= 8; depth += 1) {
+    const eventHub = new ProjectEventHub();
+    const adopted: string[] = [];
+    const policy = new EpochAdoptionPolicy({
+      contracts: () => undefined,
+      eventHub,
+      lease: async () => ({ close: async () => undefined }),
+      run: async () => { throw new Error('disabled contracts must not run'); },
+    });
+    policy.subscribe((epochId) => {
+      adopted.push(epochId);
+      if (epochId !== 'epoch-1') return;
+      let publishLate = (): void => publish(eventHub, 'epoch-2');
+      for (let hop = 0; hop < depth; hop += 1) {
+        const next = publishLate;
+        publishLate = () => queueMicrotask(next);
+      }
+      publishLate();
+    });
+
+    publish(eventHub, 'epoch-1');
+    await policy.settled();
+    // Let the deepest publish land (it may fall just after the first settle), then settle again.
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 0); });
+    await policy.settled();
+
+    expect(adopted, `microtask depth ${String(depth)}`).toEqual(['epoch-1', 'epoch-2']);
+    expect(policy.currentEpochId).toBe('epoch-2');
+    await policy.close();
+  }
+});
+
 it('discards a superseded contract result and evaluates only the latest pending epoch', async () => {
   const eventHub = new ProjectEventHub();
   const first = Promise.withResolvers<EpochContractEvaluation>();

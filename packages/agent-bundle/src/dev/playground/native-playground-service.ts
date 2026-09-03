@@ -1162,13 +1162,14 @@ export class NativePlaygroundService {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let created = false;
     let publicationIdentity: string | undefined;
+    let staged: Stats | undefined;
     let primary: unknown;
     const cleanupFailures: unknown[] = [];
     try {
       handle = await this.#catalogStorage.open(temporary, 'wx', 0o600);
       await handle.writeFile(contents, 'utf8');
       await handle.sync();
-      const staged = await handle.stat();
+      staged = await handle.stat();
       if (!staged.isFile() || staged.nlink !== 1) {
         throw new Error('Native Playground catalog staging file is invalid.');
       }
@@ -1193,14 +1194,19 @@ export class NativePlaygroundService {
       // A failed publication withdraws its sidecar while the staging link still
       // exists: concurrent readers keep seeing an in-progress (doubly linked)
       // publication until the path is gone, never a settled singly linked file
-      // that is about to be rolled back.
+      // that is about to be rolled back. If the rollback could not withdraw the
+      // sidecar, the staging link stays in place for the same reason.
+      let releaseStaging = true;
       if (primary !== undefined && created && publicationIdentity !== undefined) {
         try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }
         catch (error) { cleanupFailures.push(error); }
         created = false;
+        releaseStaging = staged === undefined || !(await this.#sidecarStillLinked(path, staged));
       }
-      try { await this.#catalogStorage.remove(temporary, { force: true }); }
-      catch (error) { cleanupFailures.push(error); }
+      if (releaseStaging) {
+        try { await this.#catalogStorage.remove(temporary, { force: true }); }
+        catch (error) { cleanupFailures.push(error); }
+      }
     }
     if (primary === undefined && cleanupFailures.length > 0 && created && publicationIdentity !== undefined) {
       try { await this.#publicationReceipt(path, publicationIdentity, true, true).rollback(); }

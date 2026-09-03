@@ -155,8 +155,19 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
       epochId,
       sequence: this.#sequence,
     });
+    this.#schedule();
+  }
+
+  /**
+   * Starts a drain unless one is running. A candidate that arrives after the
+   * running drain saw an empty queue but before its completion handler clears
+   * `#processing` would otherwise sit in `#pending` until the next rebuild, so
+   * the handler restarts the drain when it finds work left behind.
+   */
+  #schedule(): void {
     this.#processing ??= this.#drain().finally(() => {
       this.#processing = undefined;
+      if (!this.#closed && this.#pending !== undefined) this.#schedule();
     });
   }
 
@@ -168,8 +179,9 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
     });
   }
 
-  settled(): Promise<void> {
-    return this.#processing ?? Promise.resolve();
+  /** Resolves once no drain is running, including any drain restarted during a handoff. */
+  async settled(): Promise<void> {
+    while (this.#processing !== undefined) await this.#processing;
   }
 
   async close(): Promise<void> {

@@ -1669,6 +1669,64 @@ it('withdraws a sidecar whose directory fsync fails before releasing its staging
   }
 });
 
+it('keeps the staging link when a failed publication cannot roll its sidecar back, so readers never see it as settled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-rollback-failed-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-rollback-failed', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const directoryFailure = new Error('directory sync failed');
+  const moveFailure = Object.assign(new Error('rename busy'), { code: 'EBUSY' });
+  const storage: NativePlaygroundCatalogStorage = {
+    link,
+    mkdir,
+    move: async () => { throw moveFailure; },
+    open: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === 'sync' && String(path) === catalogDirectory) {
+            return async () => { throw directoryFailure; };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+    remove: rm,
+  } as NativePlaygroundCatalogStorage;
+  const serviceFor = (
+    discover: () => Promise<readonly DiscoveredEvalSuite[]>,
+    catalogStorage?: NativePlaygroundCatalogStorage,
+  ): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    catalogStagingSettleDeadlineMs: 50,
+    ...(catalogStorage === undefined ? {} : { catalogStorage }),
+    discover,
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    const winner = serviceFor(async () => suite(), storage);
+    await expect(winner.catalog(reference)).rejects.toMatchObject({
+      errors: [directoryFailure, moveFailure],
+    });
+    await winner.close();
+    // The sidecar survived its failed rollback, so its staging link survives with
+    // it: the publication still reads as in progress, never as settled.
+    expect((await stat(sidecar)).nlink).toBe(2);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toHaveLength(1);
+    const reader = serviceFor(async () => { throw new Error('An unsettled catalog must not fall back to discovery.'); });
+    await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await reader.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 const exitedPid = (): number => {
   for (let pid = 4_194_000; pid > 1_000; pid -= 1) {
     try {
