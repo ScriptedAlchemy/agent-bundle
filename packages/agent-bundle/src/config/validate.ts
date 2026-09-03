@@ -18,6 +18,7 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -1894,6 +1895,19 @@ const scriptEntryExports = (source: string): EntryExportScan | undefined => {
   }
 };
 
+/**
+ * The route compiler's static export scan of one rendered script, which
+ * judges the default export's component shape (an async function) rather
+ * than its mere presence. Undefined when the module is unreadable.
+ */
+const renderedScriptExports = (source: string, relativePath: string): RouteModuleExports | undefined => {
+  try {
+    return scanRouteModuleExports(readFileSync(source, 'utf8'), relativePath);
+  } catch {
+    return undefined;
+  }
+};
+
 const validateConventionalScripts = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1935,17 +1949,20 @@ const validateConventionalScripts = (
         // one module exactly when it exports both; the detection is the
         // build's own export scan, so the gate and the envelope always agree.
         if (binNames === undefined) break;
-        const exports = scriptEntryExports(route.source);
-        const hasMain = exports?.hasMainExport === true;
-        const hasDefault = exports?.hasDefaultExport === true;
-        if (hasMain && hasDefault) break;
-        const missing = !hasMain && !hasDefault
-          ? 'neither a default Server Component nor a named main'
-          : hasMain ? 'no default Server Component' : 'no named main';
+        // The component contract is the same static scan the route compiler
+        // applies (an async default function), not mere default-export
+        // presence: `export default {}` would build and fail at run time.
+        const exports = renderedScriptExports(route.source, relativePath);
+        const hasMain = exports?.named.has('main') === true;
+        const hasComponent = exports?.asyncDefault === true;
+        if (hasMain && hasComponent) break;
+        const missing = !hasMain && !hasComponent
+          ? 'neither an async default Server Component nor a named main'
+          : hasMain ? 'no async default Server Component' : 'no named main';
         diagnostics.push({
           code: 'AB4737',
           message: `Rendered script ${relativePath} is also the entry of bin ${binList} but exports ${missing}; the artifact script renders the default component and the bin envelope calls main(argv).`,
-          recovery: 'Export both a default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+          recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
           severity: 'error',
           sourcePath: route.source,
         });

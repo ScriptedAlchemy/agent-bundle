@@ -299,6 +299,7 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       'export default {',
       '  bin: {',
       "    notes: './src/scripts/render-notes.tsx',",
+      "    object: './src/scripts/render-object.tsx',",
       "    poster: './src/scripts/render-poster.tsx',",
       "    tool: './src/scripts/render-tool.tsx',",
       '  },',
@@ -314,6 +315,13 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       'export default async () => undefined;',
       '',
     ].join('\n'),
+    // A default export that is not a component: present, but the rendered
+    // script would fail at run time, so presence alone is not enough.
+    'src/scripts/render-object.tsx': [
+      'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
+      'export default {};',
+      '',
+    ].join('\n'),
     // Component only: the bin envelope would call it as main(argv).
     'src/scripts/render-poster.tsx': 'export default async () => undefined;\n',
     // main only: the bin works, but the rendered script has no component to render.
@@ -323,22 +331,30 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
   const result = await validate({ root: project });
   const gate = result.diagnostics.filter(({ code }) => code === 'AB4737');
   expect(gate.map((diagnostic) => diagnostic.sourcePath)).toEqual([
+    join(project, 'src/scripts/render-object.tsx'),
     join(project, 'src/scripts/render-poster.tsx'),
     join(project, 'src/scripts/render-tool.tsx'),
   ]);
-  expect(gate[0]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
-  expect(gate[1]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no default Server Component');
+  expect(gate[0]!.message).toContain('render-object.tsx is also the entry of bin "object" but exports no async default Server Component');
+  expect(gate[1]!.message).toContain('render-poster.tsx is also the entry of bin "poster" but exports no named main');
+  expect(gate[2]!.message).toContain('render-tool.tsx is also the entry of bin "tool" but exports no async default Server Component');
   expect(gate.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
   // Every rendered script stays discovered beside its bin: the gate names
   // the conflict instead of dropping a route.
   const graph = await compileRouteGraph(project, fixtureConfig({
     bin: {
       notes: './src/scripts/render-notes.tsx',
+      object: './src/scripts/render-object.tsx',
       poster: './src/scripts/render-poster.tsx',
       tool: './src/scripts/render-tool.tsx',
     },
   }));
-  expect(graph.scripts.map((route) => route.id)).toEqual(['script:render-notes', 'script:render-poster', 'script:render-tool']);
+  expect(graph.scripts.map((route) => route.id)).toEqual([
+    'script:render-notes',
+    'script:render-object',
+    'script:render-poster',
+    'script:render-tool',
+  ]);
 });
 
 it('gates a bin-claimed plain script with AB4738 only when its bin would run a default export the script ignores (#389)', async () => {

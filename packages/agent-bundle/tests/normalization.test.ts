@@ -1205,8 +1205,8 @@ it('ships a bin-claimed plain conventional script as both surfaces and refuses a
   expect(gate).toEqual([
     {
       code: 'AB4737',
-      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports neither a default Server Component nor a named main; the artifact script renders the default component and the bin envelope calls main(argv).',
-      recovery: 'Export both a default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports neither an async default Server Component nor a named main; the artifact script renders the default component and the bin envelope calls main(argv).',
+      recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
       severity: 'error',
       sourcePath: `${root}/src/scripts/render-notes.tsx`,
     },
