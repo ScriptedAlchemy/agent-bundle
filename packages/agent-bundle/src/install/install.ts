@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { Effect, Predicate } from 'effect';
 
@@ -242,7 +242,7 @@ export interface PublicHostInstalledEntry {
   readonly installPath: string;
   /** Claude only: the scope this copy is installed at. */
   readonly scope?: string;
-  readonly version?: string;
+  readonly version: string;
 }
 
 /**
@@ -292,15 +292,18 @@ export const parsePublicHostInventory = (
     for (const row of rows) {
       // Every row for this plugin must be readable before the scope filter runs: a matching row we
       // cannot read is not "not installed", and replacing on it would skip the uninstall.
-      if (typeof row['installPath'] !== 'string' || typeof row['scope'] !== 'string') {
-        return { detail: `claude plugin list --json row for ${id} carries no installPath or scope`, status: 'unavailable' };
+      if (
+        typeof row['installPath'] !== 'string' ||
+        typeof row['scope'] !== 'string' ||
+        typeof row['version'] !== 'string'
+      ) {
+        return {
+          detail: `claude plugin list --json row for ${id} carries no installPath, scope, or version`,
+          status: 'unavailable',
+        };
       }
       if (options.scope !== undefined && row['scope'] !== options.scope) continue;
-      entries.push({
-        installPath: row['installPath'],
-        scope: row['scope'],
-        ...(typeof row['version'] === 'string' ? { version: row['version'] } : {}),
-      });
+      entries.push({ installPath: row['installPath'], scope: row['scope'], version: row['version'] });
     }
     return { entries, status: 'available' };
   }
@@ -395,8 +398,12 @@ const installPublicCli = async (
   } as const;
   let replaced = false;
   let previousContentHash: string | undefined;
+  // Both hosts cache at `<root>/<marketplace>/<plugin>/<version>` (pinned by the real-host proofs), so a
+  // reported copy locates where the reinstalled version lands.
+  let destination: string | undefined;
   const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
   if (entry !== undefined) {
+    destination = join(dirname(entry.installPath), identity.version);
     let installed: TreeInventory | undefined;
     try {
       installed = await treeInventory(entry.installPath);
@@ -416,7 +423,7 @@ const installPublicCli = async (
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
       return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
-    if (entry.version !== undefined && !sameVersion && options.replace !== true) {
+    if (!sameVersion && options.replace !== true) {
       const detail = describeContentComparison(identity.plugin, identity.version, {
         artifactContentHash: artifact.hash,
         installedContentHash: installed?.hash ?? 'unknown',
@@ -449,6 +456,7 @@ const installPublicCli = async (
     : ['plugin', 'add', id]);
   return {
     ...base,
+    ...(destination === undefined ? {} : { destination }),
     ...(previousContentHash === undefined ? {} : { previousContentHash }),
     state: replaced ? 'replaced' : 'installed',
   };

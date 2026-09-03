@@ -889,7 +889,7 @@ const publicHostInstallComparison = async (
       comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,
         installedPath: entry.installPath,
-        ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+        installedVersion: entry.version,
         ownership: 'host',
         status: 'unknown',
       }));
@@ -906,14 +906,14 @@ const publicHostInstallComparison = async (
     const status: 'current' | 'stale' | 'version-mismatch' =
       installed.hash === artifact.hash && entry.version === identity.version
         ? 'current'
-        : entry.version !== undefined && entry.version !== identity.version
+        : entry.version !== identity.version
           ? 'version-mismatch'
           : 'stale';
     comparisons.push(Object.freeze({
       artifactContentHash: artifact.hash,
       installedContentHash: installed.hash,
       installedPath: entry.installPath,
-      ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+      installedVersion: entry.version,
       ownership: 'host',
       status,
     }));
@@ -921,7 +921,7 @@ const publicHostInstallComparison = async (
       artifactContentHash: artifact.hash,
       installedContentHash: installed.hash,
       installedName: identity.name,
-      ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+      installedVersion: entry.version,
       status,
     });
     switch (status) {

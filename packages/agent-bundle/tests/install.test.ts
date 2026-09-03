@@ -174,6 +174,7 @@ it('replaces a stale same-version Claude install through uninstall + install and
     const replaced = await installBundle({ commandRunner: runner, from: fixture.from, host: 'claude', scope: 'user' });
     expect(replaced).toMatchObject({
       contentHash: (await treeInventory(fixture.bundleRoot)).hash,
+      destination: installed,
       previousContentHash: (await treeInventory(installed)).hash,
       state: 'replaced',
     });
@@ -198,20 +199,23 @@ it('replaces a stale same-version Claude install through uninstall + install and
     expect(reinstalled).toMatchObject({ state: 'replaced' });
     expect(reinstalled.previousContentHash).toBeUndefined();
 
-    // A matching row without a readable scope is an unusable inventory, not "not installed".
-    const scopeless = recordingRunner((call) => isInventoryCall(call)
-      ? JSON.stringify([{ id: 'install-fixture@install-fixture-marketplace', installPath: installed, version: '1.2.3' }])
-      : '');
-    const error = await installBundle({
-      commandRunner: scopeless.runner,
-      from: fixture.from,
-      host: 'claude',
-      replace: true,
-      scope: 'user',
-    }).catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(DiagnosticError);
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
-    expect(scopeless.calls).toHaveLength(1);
+    // A matching row without a readable scope or version is an unusable inventory, not "not installed".
+    for (const row of [
+      { id: 'install-fixture@install-fixture-marketplace', installPath: installed, version: '1.2.3' },
+      { id: 'install-fixture@install-fixture-marketplace', installPath: installed, scope: 'user' },
+    ]) {
+      const malformed = recordingRunner((call) => isInventoryCall(call) ? JSON.stringify([row]) : '');
+      const error = await installBundle({
+        commandRunner: malformed.runner,
+        from: fixture.from,
+        host: 'claude',
+        replace: true,
+        scope: 'user',
+      }).catch((failure: unknown) => failure);
+      expect(error, JSON.stringify(row)).toBeInstanceOf(DiagnosticError);
+      expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
+      expect(malformed.calls).toHaveLength(1);
+    }
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -246,6 +250,7 @@ it('honours --replace for Codex through remove + add and fails closed without a 
     calls.length = 0;
     const forced = await installBundle({ ...options, replace: true });
     expect(forced).toMatchObject({
+      destination: join(codexHome, 'plugins', 'cache', 'install-fixture-marketplace', 'install-fixture', '1.2.3'),
       host: 'codex',
       previousContentHash: (await treeInventory(installed)).hash,
       state: 'replaced',
