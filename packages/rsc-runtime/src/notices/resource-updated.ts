@@ -13,6 +13,15 @@ import { recipientMatchesPrincipal } from './state.js';
 /** Consecutive compare-and-swap losses tolerated before a reservation reports failure. */
 const MAX_CLAIM_ATTEMPTS = 4;
 
+/** How long `close()` waits on the store for the owed-receipt drain and the store close by default. */
+const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
+
+/** Marks a store or wire wait that shutdown abandoned rather than awaited. */
+const CLOSED: unique symbol = Symbol('agent-notices:signaller-closed');
+
+/** Bounds one wait by a promise that settles when the wait must be given up. */
+type Bound = <T>(pending: Promise<T>) => Promise<T | typeof CLOSED>;
+
 const isRevisionConflict = (error: unknown): boolean =>
   error instanceof AgentStateError && error.code === 'revision-conflict';
 
@@ -26,6 +35,13 @@ export interface AgentNoticeInboxStore {
 }
 
 export interface CreateNoticeInboxSignallerOptions {
+  /**
+   * Upper bound on how long `close()` waits on the store to commit owed
+   * receipts and to close. A store that never answers cannot pin server
+   * teardown; a receipt still owed past the bound is lost with the process and
+   * its hold lapses after the reservation TTL. Defaults to 5 seconds.
+   */
+  readonly closeTimeoutMs?: number;
   /** Clock injection for deterministic tests. */
   readonly now?: () => Date;
   /**
@@ -67,9 +83,12 @@ export interface AgentNoticeInboxSignaller {
   readonly subscribed: boolean;
   /**
    * Commits any receipt still owed for a send that reached the wire, then
-   * closes the store. Never waits on a client's wire: a `resources/updated`
-   * write still pending is abandoned with its outcome unknown, and the hold
-   * it took lapses after the reservation TTL like any holder gone mid-send.
+   * closes the store. Never waits on a client's wire, and never waits on the
+   * store past `closeTimeoutMs`: a `resources/updated` write or ledger call
+   * still pending is abandoned with its outcome unknown — an owed receipt gets
+   * one bounded chance to land and is otherwise lost with the process — and
+   * the hold it took lapses after the reservation TTL like any holder gone
+   * mid-send.
    */
   close(): Promise<void>;
   /**
@@ -169,6 +188,15 @@ export const createNoticeInboxSignaller = (
   const closing = new Promise<void>((resolve) => {
     resolveClosing = resolve;
   });
+  const closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+  // Every wait on the store or the wire inside an observation is raced against
+  // shutdown: a ledger call that never answers must not pin the queue and, with
+  // it, the server's teardown. The abandoned call's outcome is unknown, so
+  // nothing is inferred from it — an owed receipt stays owed, a hold lapses.
+  const untilClosed = <T>(pending: Promise<T>): Promise<T | typeof CLOSED> =>
+    Promise.race([pending, closing.then((): typeof CLOSED => CLOSED)]);
+  const abandoned = (what: string): AgentNoticeError =>
+    new AgentNoticeError('aborted', `Notice inbox signaller closed while ${what} was pending`);
   // Observations and subscription changes serialize on one queue: two renders
   // completing together cannot both select the same notice and send two
   // signals for one revision, and an unsubscribe (or re-subscribe) that
@@ -211,13 +239,14 @@ export const createNoticeInboxSignaller = (
     | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' }
   > => {
     for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
-      let snapshot: Awaited<ReturnType<AgentNoticeLedger['read']>>;
+      let snapshot: Awaited<ReturnType<AgentNoticeLedger['read']>> | typeof CLOSED;
       try {
-        snapshot = await ledger.read();
+        snapshot = await untilClosed(ledger.read());
       } catch (error) {
         return { error, kind: 'failed', stage: 'read' };
       }
-      if (pendingUnsubscribes > 0 || subscription !== current) return { kind: 'unsubscribed' };
+      // Shutdown ends the subscription; nothing is claimed or sent for it.
+      if (snapshot === CLOSED || pendingUnsubscribes > 0 || subscription !== current) return { kind: 'unsubscribed' };
       const at = now().toISOString();
       const nowMs = Date.parse(at);
       const noticeIds = Object.freeze(snapshot.notices
@@ -228,13 +257,15 @@ export const createNoticeInboxSignaller = (
       signalSequence += 1;
       const reservationKey = `${current.id}:${String(signalSequence)}`;
       try {
-        const committed = await ledger.reserveAvailability({
+        const committed = await untilClosed(ledger.reserveAvailability({
           at,
           expectedRevision: snapshot.revision,
           idempotencyKey: `agent-notices:availability:reserve:${reservationKey}`,
           noticeIds,
           reservationKey,
-        });
+        }));
+        // Whether the hold landed is unknown; if it did, it lapses after the TTL.
+        if (committed === CLOSED) return { kind: 'unsubscribed' };
         return { at, kind: 'claimed', noticeIds, reservationKey, revision: committed.revision };
       } catch (error) {
         if (!isRevisionConflict(error)) return { error, kind: 'failed', stage: 'record' };
@@ -270,24 +301,26 @@ export const createNoticeInboxSignaller = (
    * not be reached for a whole TTL and another signaller took over) can never
    * be recorded — the takeover's send is the one the budget counts — so it is
    * dropped and reported once. The first failure is returned so the caller
-   * reports it.
+   * reports it. Every wait is bounded by `bound`: a commit the ledger never
+   * answers is abandoned with the receipt still owed, never inferred either way.
    */
-  const drainPendingReceipts = async (ledger: AgentNoticeLedger): Promise<unknown> => {
+  const drainPendingReceipts = async (ledger: AgentNoticeLedger, bound: Bound): Promise<unknown> => {
     for (const receipt of [...pendingReceipts.values()]) {
       renewalSequence += 1;
       try {
-        await ledger.reserveAvailability({
+        await bound(ledger.reserveAvailability({
           at: now().toISOString(),
           idempotencyKey: `agent-notices:availability:renew:${receipt.reservationKey}:owed:${String(renewalSequence)}`,
           noticeIds: receipt.noticeIds,
           reservationKey: receipt.reservationKey,
-        });
+        }));
       } catch {
         // The commit below is the write that matters; a failed renewal only
         // shortens how long the hold survives a longer outage.
       }
       try {
-        await commitReceipt(ledger, receipt);
+        const committed = await bound(commitReceipt(ledger, receipt));
+        if (committed === CLOSED) return abandoned('an owed availability receipt');
         pendingReceipts.delete(receipt.reservationKey);
       } catch (error) {
         if (isReservationLost(error)) pendingReceipts.delete(receipt.reservationKey);
@@ -310,7 +343,8 @@ export const createNoticeInboxSignaller = (
       void serialized(async () => {
         if (closed || pendingReceipts.size === 0) return;
         try {
-          await drainPendingReceipts(await options.store.noticeLedger());
+          const ledger = await untilClosed(options.store.noticeLedger());
+          if (ledger !== CLOSED) await drainPendingReceipts(ledger, untilClosed);
         } catch {
           // Retried on the next tick.
         }
@@ -367,32 +401,21 @@ export const createNoticeInboxSignaller = (
     }
   };
 
-  /**
-   * Races one protocol write against the signaller closing. The wire is the
-   * one dependency the signaller cannot bound — a subscriber that stops
-   * reading leaves the write pending forever — so shutdown must not wait on
-   * it: the send is abandoned with its outcome unknown and its hold is left to
-   * lapse after the TTL, exactly as for a holder that vanished mid-send.
-   */
-  const sendUntilClosed = (send: () => Promise<void>): Promise<'closed' | 'sent'> => Promise.race([
-    send().then((): 'sent' => 'sent'),
-    closing.then((): 'closed' => 'closed'),
-  ]);
-
   const observeOnce = async (send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> => {
     const current = subscription;
     if (current === undefined && pendingReceipts.size === 0) {
       return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
     }
-    let ledger: AgentNoticeLedger;
+    let ledger: AgentNoticeLedger | typeof CLOSED;
     try {
-      ledger = await options.store.noticeLedger();
+      ledger = await untilClosed(options.store.noticeLedger());
     } catch (error) {
       return Object.freeze({ error, kind: 'failed' as const, stage: 'read' as const });
     }
+    if (ledger === CLOSED) return Object.freeze({ kind: 'idle', reason: 'no-subscription', revision: undefined });
     // Receipts owed from earlier sends come first: they are facts about the
     // wire, and a ledger that cannot take them is not one to spend against.
-    const owed = await drainPendingReceipts(ledger);
+    const owed = await drainPendingReceipts(ledger, untilClosed);
     if (owed !== undefined) {
       scheduleReceiptRetry();
       return Object.freeze({ error: owed, kind: 'failed' as const, stage: 'record' as const });
@@ -420,27 +443,32 @@ export const createNoticeInboxSignaller = (
     // the notice stays eligible for the next observation, while a successful
     // send finalizes the hold into the availability receipt. Only the receipt
     // means the protocol write succeeded.
-    let wire: 'closed' | 'sent';
+    // The wire is the one dependency the signaller cannot bound — a subscriber
+    // that stops reading leaves the write pending forever — so shutdown does
+    // not wait on it: the send is abandoned with its outcome unknown and its
+    // hold is left to lapse after the TTL, exactly as for a holder that
+    // vanished mid-send.
+    let wire: void | typeof CLOSED;
     try {
-      wire = await renewWhile(ledger, claimed, sendUntilClosed(send));
+      wire = await renewWhile(ledger, claimed, untilClosed(send()));
     } catch (error) {
       try {
-        await ledger.releaseAvailability({
+        await untilClosed(ledger.releaseAvailability({
           idempotencyKey: `agent-notices:availability:release:${claimed.reservationKey}`,
           noticeIds: claimed.noticeIds,
           reservationKey: claimed.reservationKey,
-        });
+        }));
       } catch {
         // The hold expires on its own after the reservation TTL; the send
         // failure is the outcome worth reporting.
       }
       return Object.freeze({ error, kind: 'failed' as const, stage: 'send' as const });
     }
-    if (wire === 'closed') {
+    if (wire === CLOSED) {
       // Whether the write reached the client is unknowable now, so neither a
       // receipt nor a release would be honest; the hold lapses on its own.
       return Object.freeze({
-        error: new AgentNoticeError('aborted', 'Notice inbox signaller closed while a resources/updated write was pending'),
+        error: abandoned('a resources/updated write'),
         kind: 'failed' as const,
         stage: 'send' as const,
       });
@@ -455,7 +483,15 @@ export const createNoticeInboxSignaller = (
     });
     pendingReceipts.set(receipt.reservationKey, receipt);
     try {
-      const committed = await commitReceipt(ledger, receipt);
+      const committed = await untilClosed(commitReceipt(ledger, receipt));
+      if (committed === CLOSED) {
+        // Still owed: the close-time drain gets one bounded chance to land it.
+        return Object.freeze({
+          error: abandoned('an availability receipt commit'),
+          kind: 'failed' as const,
+          stage: 'record' as const,
+        });
+      }
       pendingReceipts.delete(receipt.reservationKey);
       return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: committed.revision });
     } catch (error) {
@@ -484,15 +520,28 @@ export const createNoticeInboxSignaller = (
       }
       return serialized(async () => {
         subscription = undefined;
-        if (pendingReceipts.size > 0) {
-          try {
-            await drainPendingReceipts(await options.store.noticeLedger());
-          } catch {
-            // A receipt still owed at close is lost with the process; the hold
-            // it left behind lapses after the TTL.
+        // The drain and the store close get one bounded chance: a store that
+        // never answers must not pin teardown, and a receipt still owed past
+        // the bound is lost with the process; its hold lapses after the TTL.
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<typeof CLOSED>((resolve) => {
+          deadlineTimer = setTimeout(() => resolve(CLOSED), closeTimeoutMs);
+          deadlineTimer.unref?.();
+        });
+        const untilDeadline: Bound = (pending) => Promise.race([pending, deadline]);
+        try {
+          if (pendingReceipts.size > 0) {
+            try {
+              const ledger = await untilDeadline(options.store.noticeLedger());
+              if (ledger !== CLOSED) await drainPendingReceipts(ledger, untilDeadline);
+            } catch {
+              // Reported by the observation that owed it; nothing more to do here.
+            }
           }
+          await untilDeadline(options.store.close());
+        } finally {
+          if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
         }
-        await options.store.close();
       });
     },
     observe(send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> {
@@ -500,8 +549,10 @@ export const createNoticeInboxSignaller = (
     },
     subscribe(principal: AgentNoticePrincipal): Promise<void> {
       return serialized(async () => {
-        const ledger = await options.store.noticeLedger();
-        await ledger.read();
+        const ledger = await untilClosed(options.store.noticeLedger());
+        if (ledger === CLOSED || await untilClosed(ledger.read()) === CLOSED) {
+          throw abandoned('a resources/subscribe');
+        }
         // A client that repeats resources/subscribe without unsubscribing is
         // still the same continuously subscribed connection: keeping its
         // signalled set means a notice with retryBudget > 1 is not re-sent

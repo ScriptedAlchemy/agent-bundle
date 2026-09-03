@@ -938,6 +938,59 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('closes within its bound when the receipt commit never settles, keeping the receipt owed rather than inferred', async () => {
+    const { driver, ledger } = await openLedger();
+    // The wire write succeeds; the ledger then stops answering receipt commits.
+    let commits = 0;
+    const stuckCommits: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      signalAvailability: () => {
+        commits += 1;
+        return new Promise(() => undefined);
+      },
+    });
+    let storeClosed = 0;
+    const signaller = createNoticeInboxSignaller({
+      closeTimeoutMs: 50,
+      now: () => new Date(T1),
+      store: {
+        close: async () => {
+          storeClosed += 1;
+        },
+        noticeLedger: async () => stuckCommits,
+      },
+    });
+    await signaller.subscribe(principal('s1'));
+    await publish(ledger, { sessionId: 's1' });
+    const { send, sends } = sender();
+    const observing = signaller.observe(send);
+    for (let i = 0; i < 200 && commits === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(sends).toHaveLength(1);
+
+    // The observation at the head of the queue is abandoned by shutdown, the
+    // close-time drain retries the owed receipt once within the bound, and the
+    // store still closes when that retry never answers either.
+    let closed = false;
+    const closing = signaller.close().then(() => {
+      closed = true;
+    });
+    await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+    expect(closed).toBe(true);
+    expect(storeClosed).toBe(1);
+    expect(commits).toBe(2);
+    const outcome = await observing;
+    expect(outcome).toMatchObject({ kind: 'failed', stage: 'record' });
+    expect((outcome as { error: AgentNoticeError }).error.code).toBe('aborted');
+    // Nothing is inferred from a commit that never answered: no receipt was
+    // recorded, and the hold is left to lapse.
+    const notice = (await ledger.read()).notices[0];
+    expect(notice).not.toHaveProperty('availability');
+    expect(notice?.availabilityReservation).toMatchObject({ at: T1 });
+    await driver.close();
+  });
+
   it('treats a reservation as held until its TTL elapses, then as abandoned', async () => {
     const { driver, ledger } = await openLedger();
     const published = await publish(ledger, { sessionId: 's1' });

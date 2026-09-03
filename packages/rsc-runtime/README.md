@@ -297,11 +297,13 @@ cannot lose a send the wire already carried; only a process that dies while the
 ledger is refusing writes leaves an unrecorded send, and its hold then lapses
 after the TTL. A renewal still awaiting the ledger when a send settles is
 awaited before the hold is released or finalized, so no orphan hold is
-re-created behind a release. Shutdown never waits on the wire, nor on a renewal
-the ledger has not answered: `close()` abandons a `resources/updated` write that
-has not settled (its outcome is unknown, so it is neither recorded nor released
-and its hold lapses after the TTL), commits any owed receipt, and closes the
-store, so a subscriber that stopped reading cannot wedge server teardown. The generated
+re-created behind a release. Shutdown never waits on the wire, nor on a ledger
+call that has not answered: `close()` abandons a `resources/updated` write or
+ledger call still pending (its outcome is unknown, so nothing is inferred from
+it — no receipt, no release — and its hold lapses after the TTL), then gives
+owed receipts and the store close one chance bounded by `closeTimeoutMs`
+(default 5 s), so neither a subscriber that stopped reading nor a store that
+stopped answering can wedge server teardown. The generated
 server coalesces observations — one in flight, at most one owed — because every
 observation reads the whole ledger, so renders completing behind a pending
 write never queue per-render work. Exposure and availability
