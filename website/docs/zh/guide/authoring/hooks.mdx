@@ -222,8 +222,15 @@ Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的
 npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact dist --target claude
 npx agent-bundle hooks simulate --artifact dist --target claude \
-  --hook session-start --input '{"sessionId":"local"}'
+  --hook session-start-session-start-1a2b3c4d \
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
 ```
+
+`--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为
+`<event>-<handler>-<hash>`，因此像 `session-start` 这样的裸事件名不会匹配任何钩子。
+载荷是**规范**输入；包装层会把它转换为宿主的原生信封并按宿主的方式校验，所以 Claude 的
+`sessionStart` 模拟需要 `sessionId`、`transcriptPath`、`cwd` 与 `source`（工具事件还需要
+`toolName`、`toolInput` 与 `toolUseId`）。
 
 `hooks simulate` 运行的是真实输出的包装层——正是宿主将要执行的那个文件——所以你看到的结果就是宿主
 会得到的结果。开发者 Workbench 提供同样的 playground，并展示每次运行的原始 stdout、stderr 与结果。

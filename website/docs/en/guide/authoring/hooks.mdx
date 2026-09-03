@@ -246,8 +246,16 @@ directly:
 npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact dist --target claude
 npx agent-bundle hooks simulate --artifact dist --target claude \
-  --hook session-start --input '{"sessionId":"local"}'
+  --hook session-start-session-start-1a2b3c4d \
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
 ```
+
+`--hook` must be the exact `name` (or `id`) that `hooks list` printed — normalization derives it
+as `<event>-<handler>-<hash>`, so a bare event name such as `session-start` matches nothing.
+The payload is the **canonical** input; the wrapper converts it to the host's native envelope and
+validates it as the host would, so a Claude `sessionStart` simulation needs `sessionId`,
+`transcriptPath`, `cwd`, and `source` (tool events additionally need `toolName`, `toolInput`, and
+`toolUseId`).
 
 `hooks simulate` runs the real emitted wrapper — the same file the host will execute — so the
 result you see is the result the host would get. The developer Workbench exposes the same
