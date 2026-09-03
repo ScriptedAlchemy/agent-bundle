@@ -4,6 +4,11 @@ import { pluginLlms } from '@rspress/plugin-llms';
 import { pluginSitemap } from '@rspress/plugin-sitemap';
 import { pluginTwoslash } from '@rspress/plugin-twoslash';
 import { pluginTypeDoc } from '@rspress/plugin-typedoc';
+import {
+  transformerNotationDiff,
+  transformerNotationFocus,
+  transformerNotationHighlight,
+} from '@shikijs/transformers';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
 
 const websiteDir = import.meta.dirname;
@@ -73,6 +78,13 @@ export default defineConfig({
     localeRedirect: 'never',
   },
   markdown: {
+    shiki: {
+      transformers: [
+        transformerNotationDiff(),
+        transformerNotationHighlight(),
+        transformerNotationFocus(),
+      ],
+    },
     link: {
       checkDeadLinks: { excludes: isGeneratedLlmsTarget },
       checkAnchors: true,

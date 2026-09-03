@@ -1,10 +1,15 @@
 ---
 pageType: home
+description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into installable Claude Code, Codex, and Cursor artifacts.'
+titleSuffix: ' - Agent plugin compiler for Claude Code, Codex, and Cursor'
 
 hero:
   name: agent-bundle
   text: One typed config, every agent host
   tagline: Describe skills, hooks, MCP servers, and scripts once. Compile installable artifacts for Claude Code, Codex, and Cursor.
+  image:
+    src: /logo.svg
+    alt: agent-bundle logo
   actions:
     - theme: brand
       text: Type API
