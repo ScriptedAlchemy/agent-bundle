@@ -614,8 +614,21 @@ async function renderDiagnostics(repoRoot: string, m: Messages): Promise<string>
   if (headingIndex === -1) {
     throw new Error('docs/diagnostics.md has no top-level heading.');
   }
-  const body = lines.slice(headingIndex + 1).join('\n').trim();
+  const body = rewriteRepoDocLinks(lines.slice(headingIndex + 1).join('\n').trim());
   return `${frontmatter(m.diagnosticsTitle, m.diagnosticsDescription)}\n# ${m.diagnosticsTitle}\n\n${m.generatedFromDiagnostics}\n\n${body}\n`;
+}
+
+/**
+ * `docs/diagnostics.md` links to sibling repository docs by relative path.
+ * Those siblings are not site pages, so the copy points them at GitHub
+ * instead of leaving dead links for Rspress to reject.
+ */
+function rewriteRepoDocLinks(markdown: string): string {
+  return markdown.replaceAll(
+    /\]\(([\w./-]+\.md)(#[\w-]*)?\)/g,
+    (_match, target: string, fragment: string | undefined) =>
+      `](${new URL(target, `${repositoryUrl}/docs/`).href}${fragment ?? ''})`,
+  );
 }
 
 /** Render every generated reference page for one locale into `targetDir`. */
