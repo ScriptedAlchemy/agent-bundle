@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Bump the published `open` dependency from 11.0.1 to 11.0.2. (#303)
+Open the Workbench from `agent-bundle dev --open` through `open` 11.0.2 instead of 11.0.1; `agent-bundle` installs pull the updated dependency. (#303)

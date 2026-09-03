@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Bump the published `@rslint/core` dependency from 0.8.0 to 0.8.1. (#7)
+Run the Workbench lint diagnostics service (`dev/diagnostic-service`) on `@rslint/core` 0.8.1 instead of 0.8.0; `agent-bundle` installs pull the updated dependency. (#7)
