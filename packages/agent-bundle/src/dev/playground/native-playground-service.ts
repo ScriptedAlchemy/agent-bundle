@@ -1,6 +1,6 @@
-import { constants } from 'node:fs';
-import { link, lstat, mkdir, mkdtemp, open, realpath, rename, rm } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { constants, type Stats } from 'node:fs';
+import { link, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { digest, stableJson } from '../../core/digest.ts';
 import { hasExactOwnKeys, isJsonRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
@@ -24,7 +24,7 @@ import { safeDevWireText } from '../logs/dev-log-service.ts';
 import type { ArtifactEpoch } from '../types.ts';
 import { workspaceDiff, type WorkspaceDiff } from '../../eval/workspace-diff.ts';
 import { isErrno } from '../../core/errors.ts';
-import { isInsideOrEqual } from '../../core/paths.ts';
+import { isInsideOrEqual, sameFile } from '../../core/paths.ts';
 
 export type { NativePlaygroundHost } from './native-playground-types.ts';
 
@@ -1017,12 +1017,10 @@ export class NativePlaygroundService {
       const file = await open(path, catalogOpenFlags);
       try {
         const metadata = await file.stat();
-        if (
-          !metadata.isFile() ||
-          metadata.nlink < 1 ||
-          (!allowMultipleLinks && metadata.nlink !== 1) ||
-          metadata.size > maximumCatalogSnapshotBytes
-        ) {
+        if (!metadata.isFile() || metadata.nlink < 1 || metadata.size > maximumCatalogSnapshotBytes) {
+          throw new Error('Native Playground catalog snapshot is invalid.');
+        }
+        if (!allowMultipleLinks && metadata.nlink !== 1 && !(await this.#stagingLinkAccountsFor(file, path, metadata))) {
           throw new Error('Native Playground catalog snapshot is invalid.');
         }
         const buffer = Buffer.allocUnsafe(maximumCatalogSnapshotBytes + 1);
@@ -1046,6 +1044,31 @@ export class NativePlaygroundService {
       if (error instanceof Error && error.message === 'Native Playground catalog snapshot is invalid.') throw error;
       throw new Error('Native Playground catalog snapshot could not be read.', { cause: error });
     }
+  }
+
+  /**
+   * Hard-link publication leaves a freshly linked sidecar doubly linked until
+   * the winner releases its staging file. A concurrent reader must adopt that
+   * winner rather than reject it, so the extra link is accounted for by
+   * identity: exactly one staging sibling of this epoch shares the sidecar's
+   * dev/ino, or the staging link was released while the directory was being
+   * listed and the still-open handle now reports a single link. Any other
+   * extra link is hostile aliasing and stays rejected.
+   */
+  async #stagingLinkAccountsFor(file: FileHandle, path: string, metadata: Stats): Promise<boolean> {
+    if (metadata.nlink !== 2) return false;
+    const directory = dirname(path);
+    const stagingPrefix = `.${basename(path, '.json')}.stage-`;
+    for (const entry of await readdir(directory)) {
+      if (!entry.startsWith(stagingPrefix)) continue;
+      try {
+        const staged = await lstat(join(directory, entry));
+        if (staged.isFile() && sameFile(staged, metadata)) return true;
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      }
+    }
+    return (await file.stat()).nlink === 1;
   }
 
   async #persistSnapshot(
