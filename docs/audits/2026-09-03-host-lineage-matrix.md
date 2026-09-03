@@ -3,8 +3,8 @@
 Date: 2026-09-03. Probe: `examples/host-test` (this repository, built from the
 same commit as this document) installed into isolated homes under
 `/tmp/host-test/<host>-home` through `agent-bundle install <host>`; the real
-`~/.claude`, `~/.codex`, and `~/.cursor` were never opened (Claude's sign-in
-was transplanted read-only into the isolated home; see the Claude row). Every
+`~/.claude`, `~/.codex`, and `~/.cursor` were never written (Claude's sign-in
+was seeded into the isolated home by hand; see the Claude row). Every
 number below comes from the redacted capture logs checked in under
 `fixtures/host-lineage/` (`claude-2.1.257.ndjson`,
 `claude-2.1.257-foreground.ndjson`, `codex-0.147.0.ndjson`,
@@ -13,7 +13,7 @@ operator home directory are redacted, and long tool payloads are clipped.
 
 | Host | Binary observed | Session driver | Subagent mechanism exercised | Depth reached |
 | --- | --- | --- | --- | --- |
-| Claude Code | 2.1.257 (`claude -p`, `--dangerously-skip-permissions`, `--model sonnet` → `claude-sonnet-5`) | **Live model, 2026-09-03, Claude Code 2.1.257.** The isolated `CLAUDE_CONFIG_DIR` authenticated with the operator's long-lived `claude setup-token` (`~/.claude/.claude_code_oauth_token`, copied into the isolated `.credentials.json` by `probe:install`; the interactive session file had expired — `claude auth status` on the real home → `loggedIn: false`, "OAuth session expired and could not be refreshed"). `claude auth status` in the isolated home → `loggedIn: true`, `authMethod: claude.ai`, `subscriptionType: max`. Two sessions were captured: the primary fixture, where Claude Code ran the root's `Agent` in the background, and `-foreground`, where both spawns blocked. An earlier capture on the same day used a scripted Messages-API stand-in (PR #421); its findings are re-verified against the live runs in §8. | `Agent` tool (`subagent_type: general-purpose`), subagent spawned a nested `Agent` | 2 (`subagent_stats.max_depth: 2`, `spawned_by_subagents: 1`) |
+| Claude Code | 2.1.257 (`claude -p`, `--dangerously-skip-permissions`, `--model sonnet` → `claude-sonnet-5`) | **Live model, 2026-09-03, Claude Code 2.1.257.** `probe:install claude` copied the operator's `~/.claude/.credentials.json` byte-for-byte as documented, but that interactive session had expired (`claude auth status` on the real home → `loggedIn: false`; a turn in the isolated home → "Failed to authenticate: OAuth session expired and could not be refreshed"), so the isolated `CLAUDE_CONFIG_DIR`'s `.credentials.json` was re-seeded **by hand, outside the checked-in harness**, with the operator's long-lived `claude setup-token` token. The harness itself is unchanged and reads no sign-in state beyond that copy; the real `~/.claude` was never written. `claude auth status` in the isolated home → `loggedIn: true`, `authMethod: claude.ai`, `subscriptionType: max`. Two sessions were captured: the primary fixture, where Claude Code ran the root's `Agent` in the background, and `-foreground`, where both spawns blocked. An earlier capture on the same day used a scripted Messages-API stand-in (PR #421); its findings are re-verified against the live runs in §8. | `Agent` tool (`subagent_type: general-purpose`), subagent spawned a nested `Agent` | 2 (`subagent_stats.max_depth: 2`, `spawned_by_subagents: 1`) |
 | Codex CLI | 0.147.0 (`codex exec --json --dangerously-bypass-hook-trust`, `[features] multi_agent`, `[agents] max_depth = 3`) | Real model (`gpt-5.6-sol`) with the operator's `auth.json` copied byte-for-byte into the isolated `CODEX_HOME` | `collaborationspawn_agent` (`fork_turns: all`), the spawned thread spawned a nested thread | 2 |
 | Cursor IDE | 3.18.25 desktop, isolated `--user-data-dir` on Xvfb, `cursorAuth/*` profile rows transplanted, driven over CDP in the Agents pane (`Auto` model) | Real model | `Task` tool (`subagent_type: general-purpose`), the subagent spawned a nested `Task` | 2 |
 | Cursor CLI (`cursor-agent`) | 2026.08.31 build present | **Not driven**: `cursor-agent status` → `Not logged in`, and logging in requires a browser flow. | — | — |
@@ -44,7 +44,7 @@ their caller; row numbers below are the primary fixture's unless marked *fg*.
 | PreToolUse / PostToolUse (inside the nested agent) | **root** | **nested's** (`a9bc7270b816a535e`) | `general-purpose` | | root's | root | no reference to `aebe9…` |
 | PostToolUse of the spawning `Agent` call (on the parent) | parent's | parent's (absent on the root) | | the spawn's | | | `tool_response.agentId` **= the child's `agent_id`**, `resolvedModel`; background spawn (row 17, right after SubagentStart): `status: "async_launched"`, `isAsync: true`, `outputFile`, `canReadOutputFile`, `description`, `prompt`; foreground spawn (row 41; *fg* rows 47/49, after the child's SubagentStop): `status: "completed"`, `agentType`, `content[]`, `totalDurationMs`, `totalTokens`, `totalToolUseCount`, `usage`, `toolStats`, `harness*` |
 | SubagentStart | root | the new agent | `general-purpose` | — | yes | root transcript | **no parent agent id**; no `permission_mode`, no `effort` |
-| SubagentStop | root | the stopping agent | `general-purpose` | — | yes | root transcript + `agent_transcript_path` = `<session>/subagents/agent-<id>.jsonl` (flat; nested agent's path does not name its parent) | `permission_mode`, `effort`, `stop_hook_active`, `last_assistant_message`, `background_tasks[]` (every subagent the host is running in the background — `id`, `type: subagent`, `status: running`, `agent_type`, `description` — **including the stopping agent itself** when it was backgrounded, row 45; empty for foreground children, *fg* rows 46/48), `session_crons` |
+| SubagentStop | root | the stopping agent | `general-purpose` | — | yes | root transcript + `agent_transcript_path` = `<session>/subagents/agent-<id>.jsonl` (flat; nested agent's path does not name its parent) | `permission_mode`, `effort`, `stop_hook_active`, `last_assistant_message`, `background_tasks[]` (every subagent the host is running in the background — `id`, `type: subagent`, `status: running`, `agent_type`, `description` — **including the stopping agent itself** when it was backgrounded, row 45; empty for foreground children, *fg* rows 46/48). Row 40, the nested agent's SubagentStop, lists `aebe95…` — which happens to be its parent — only because that parent was still running in the background; nothing marks the entry as a parent. `session_crons` |
 | Stop | root | — | — | — | yes | root | `permission_mode`, `effort`, `stop_hook_active`, `last_assistant_message`, `background_tasks[]` (row 18 lists the still-running background subagent; row 47 and *fg* row 50 are empty), `session_crons` |
 | SessionEnd | root | — | — | — | yes | root | `reason: "other"`; no `effort` |
 
@@ -59,8 +59,10 @@ The `Agent` tool's `run_in_background` was **unset** on the root's spawn in
 the primary run and the host chose to background it; it was `false` on the
 nested spawn and on both *fg* spawns, which blocked. The result document
 counts the choice: primary `subagent_stats.requested: {background: 0,
-foreground: 1, unset: 1}`, `started_in_background: 1`; *fg* `{background: 0,
-foreground: 2, unset: 0}`, `started_in_background: 0`.
+foreground: 1, unset: 1}`, `started_in_background: 1`, and its final `result`
+document carries `origin: {"kind": "task-notification"}` because the last turn
+was the host's own re-prompt; *fg* `{background: 0, foreground: 2, unset: 0}`,
+`started_in_background: 0`.
 
 Not observed in either scenario (the host did not emit them): `Notification`,
 `PermissionRequest`/`PermissionDenied` (permissions were bypassed),
@@ -159,7 +161,7 @@ open at once; `claudecode/toolUseId` names the right one regardless.
 
 | Host | Pre-tool hook `tool_name` for an MCP call | `tool_use_id` | MCP `tools/call` `_meta` | Client info | MCP session id | Can the server correlate without hooks? |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude | `mcp__plugin_host-test_host-test__dump` | `toolu_…` | `{ progressToken, "claudecode/toolUseId": "<the same toolu_ id>" }` (live: rows 10↔12 `toolu_01BBNfLZrRqRXfVbbLRzaKQf`, 25↔26 `toolu_01Hojb1ZwFe73yWWxFcnGo4W`, 37↔38 `toolu_01Ga8ivarupF77BLsip9NMuH`, one per depth) | `claude-code` 2.1.257 | none (stdio) | **Yes** — `claudecode/toolUseId` equals the hook's `tool_use_id`; the hook supplies `session_id`/`agent_id`. The generated `dump` tool's `request.lineage` resolved through the registry at depth 0 and depth 1 (rows 11, 29) with `generation` = the root turn's `prompt_id` |
+| Claude | `mcp__plugin_host-test_host-test__dump` | `toolu_…` | `{ progressToken, "claudecode/toolUseId": "<the same toolu_ id>" }` (live: rows 10↔12 `toolu_01BBNfLZrRqRXfVbbLRzaKQf`, 25↔26 `toolu_01Hojb1ZwFe73yWWxFcnGo4W`, 37↔38 `toolu_01Ga8ivarupF77BLsip9NMuH`, one per depth) | `claude-code` 2.1.257 | none (stdio) | **Yes** — `claudecode/toolUseId` equals the hook's `tool_use_id`; the hook supplies `session_id`/`agent_id`. The generated `dump` tool's `request.lineage` resolved through the registry at depth 0 and depth 1 (rows 11, 29, 43; *fg* 10, 26) with `generation` = the root turn's `prompt_id`; neither live nested agent called `dump`, so depth 2 is resolved only in the replay test |
 | Codex | `mcp__host_test__dump` | `exec-<uuid>` | `{ progressToken, plugin_id, threadId, "x-codex-turn-metadata": { session_id, thread_id, turn_id, parent_thread_id?, forked_from_thread_id?, thread_source: "user"|"subagent", subagent_kind?, sandbox, workspaces{…git commit…}, model, reasoning_effort, turn_started_at_unix_ms } }` | `codex-mcp-client` 0.147.0 | none | **Yes, fully** — lineage (thread, parent, root) is in `_meta` itself |
 | Cursor | `MCP:dump` | plain uuid | `{ progressToken }` only | `cursor-vscode` 1.0.0 | none | **No** — only the pre-tool hook (tool name + ordering) can attach a conversation |
 
@@ -169,11 +171,11 @@ object; the framework's pinned validator rejected every such event (`native
 tool_response must be an object`, confirmed in the host's `--debug hooks` log
 and by a raw user-level hook that captured the payload verbatim). Fixed in PR
 #421: presence is now the only host-independent rule, matching Codex. The live
-model confirms the split — all 6 MCP PostToolUse payloads carry a string, all
-10 built-in-tool PostToolUse payloads (`Bash`, `Write`, `ToolSearch`, `Skill`,
-`Agent`) carry an object — and every one of the 19 (*fg*) / 16 `tool_use`
-blocks in the host's own transcripts has a matching PreToolUse and PostToolUse
-record, so no live payload was rejected.
+model confirms the split — all 6 (*fg*: 5) MCP PostToolUse payloads carry a
+string, all 10 (*fg*: 14) built-in-tool PostToolUse payloads (`Bash`, `Write`,
+`ToolSearch`, `Skill`, `Agent`) carry an object — and every one of the 16
+(*fg*: 19) `tool_use` blocks in the host's own transcripts has a matching
+PreToolUse and PostToolUse record, so no live payload was rejected.
 
 ## 4. Environment variable names seen by plugin processes (names only)
 
@@ -202,7 +204,7 @@ gives shell commands the agent runs `CURSOR_CONVERSATION_ID`/`CURSOR_REQUEST_ID`
 
 | Host | Root | Parent |
 | --- | --- | --- |
-| Claude | Yes — `session_id` on every event is the root session (re-verified live: all 42 + 45 hook payloads across both runs carry the root id, `CLAUDE_CODE_SESSION_ID` in every plugin process is the root id) | Only through the runtime's registry (inferred at `SubagentStart`); nothing in the child's payload |
+| Claude | Yes — `session_id` on every event is the root session (re-verified live: all 42 + 46 hook payloads across both runs carry the root id, `CLAUDE_CODE_SESSION_ID` in every plugin process is the root id) | Only through the runtime's registry (inferred at `SubagentStart`); nothing in the child's payload |
 | Codex | Yes — `session_id` is the root thread on every event, and `_meta.x-codex-turn-metadata.session_id` on MCP calls | Yes on MCP calls (`parent_thread_id`); on hooks only through the registry (or the parent rollout at `SubagentStop`) |
 | Cursor | Only through the registry — a child's payload carries neither root nor parent | Only through the registry (ordering-bound) |
 
@@ -233,14 +235,15 @@ deliver no user identity to hooks or MCP servers.
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
 | Claude `PostToolUse(Agent).tool_response.agentId` not consumed by the registry | Claude | §1, §2 | The registry claims the newest unclaimed spawn under the root at `SubagentStart` and marks same-parent sibling cohorts `siblingsUncertain`; the parent's `Agent` PostToolUse could later firm those up. Not needed for either live run (spawns were sequential); left as an improvement |
-| Claude interactive OAuth session expired; refresh fails | Claude | header table | `probe:install claude` now falls back to the `claude setup-token` long-lived token when the copied session has expired; the opt-in proofs run with `HOME` pointed at an isolated home seeded the same way (`docs/audits/2026-09-03-claude-live-session-proofs.md`) |
+| Claude interactive OAuth session expired; refresh fails | Claude | header table | The checked-in harness only copies `~/.claude/.credentials.json` byte-for-byte, so `probe:install claude` cannot start a signed-in isolated session until the operator signs in again. For the live runs the isolated `.credentials.json` was re-seeded by hand with the operator's long-lived `claude setup-token` token; the opt-in proofs ran with `HOME` pointed at an isolated home seeded the same way (`docs/audits/2026-09-03-claude-live-session-proofs.md`). No credential-handling code was added to the harness |
 
 ## 8. Stand-in versus live model (Claude, 2026-09-03)
 
 PR #421 captured Claude Code 2.1.257 with a scripted Anthropic Messages API
 behind `ANTHROPIC_BASE_URL` because the OAuth session on this machine had
 expired. The two live sessions above were driven by the real model
-(`claude-sonnet-5`) through the same probe. What changed and what did not:
+(`claude-sonnet-5`) through the same probe, authenticated as described in the
+header table. What changed and what did not:
 
 | Claim from the stand-in run | Live result | Verdict |
 | --- | --- | --- |
@@ -248,7 +251,7 @@ expired. The two live sessions above were driven by the real model
 | Child events carry the root `session_id` and their own `agent_id`, never a parent | Every subagent and nested hook payload in both runs | Held |
 | MCP correlation via `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` | Three probes per run, one per depth, all equal; still exact when two MCP calls ran in parallel | Held, strengthened |
 | Depth 2 reachable; `subagent_stats.max_depth: 2` | Both runs | Held |
-| `PostToolUse` `tool_response` is a string for MCP tools, an object otherwise | 6 strings / 10 objects (primary), 6 / 13 (*fg*) | Held |
+| `PostToolUse` `tool_response` is a string for MCP tools, an object otherwise | 6 strings / 10 objects (primary), 5 / 14 (*fg*) | Held |
 | `SubagentStart` has no `permission_mode` | Held; **new**: `permission_mode` is on everything else except SessionStart/SessionEnd, and `effort: {"level":"high"}` is on every PreToolUse/PostToolUse/SubagentStop/Stop | Corrected (fields the stand-in never showed; both already lifted by the framework) |
 | `background_tasks[]` "lists every running subagent" | Lists **background** subagents only (`status: running`), including the stopping agent on its own `SubagentStop`; empty when children run in the foreground | Corrected |
 | Spawns return `status: "async_launched"`, the root `Stop` fires while children run, and `<task-notification>` prompts re-enter the root | Reproduced by the live host when `run_in_background` was unset (primary run); with `run_in_background: false` the `Agent` call blocks and returns `status: "completed"` with `agentType`, `content[]`, `usage`, `toolStats` (nested spawn; both *fg* spawns) | Held for the background path; the foreground path is new |

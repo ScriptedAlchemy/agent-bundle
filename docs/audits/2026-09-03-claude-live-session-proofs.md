@@ -4,21 +4,25 @@ The three Claude proofs CI cannot run (they need a signed-in Claude Code) were
 run by hand against Claude Code 2.1.257 on this machine, the same day the
 live host-lineage capture replaced the scripted stand-in
 (`docs/audits/2026-09-03-host-lineage-matrix.md` §8). This note records how
-authentication was transplanted, exactly what each proof asserted, and what
-failed. Raw logs stayed under `/tmp/claude-recapture/`; nothing from them is
-reproduced here beyond counts, codes, and field names.
+the isolated home was authenticated, exactly what each proof asserted, and
+what failed. Raw logs stayed under `/tmp/claude-recapture/`; nothing from them
+is reproduced here beyond counts, codes, and field names.
 
-## Authentication: isolated home, transplanted sign-in
+## Authentication: isolated home, sign-in seeded by hand
 
 - The real `~/.claude` was opened **read-only**. Its `.credentials.json`
   (interactive OAuth session) had expired and could not be refreshed:
   `claude auth status` on the real home reported `loggedIn: false`, and a
-  turn in an isolated home seeded with a byte-for-byte copy failed with
-  `Failed to authenticate: OAuth session expired and could not be refreshed`.
-- The operator's long-lived `claude setup-token` token
-  (`~/.claude/.claude_code_oauth_token`) was valid. `probe:install claude`
-  now writes it into the isolated `.credentials.json` when the copied session
-  is absent or its `expiresAt` has passed (`examples/host-test/README.md`).
+  turn in an isolated home seeded with the harness's byte-for-byte copy failed
+  with `Failed to authenticate: OAuth session expired and could not be
+  refreshed`. The same turn with the operator's normal configuration failed
+  the same way, so the documented fallback (normal configuration, temporary
+  project directory) was not available either.
+- The operator's long-lived `claude setup-token` token was still valid. The
+  isolated home's `.claude/.credentials.json` was therefore re-seeded **by
+  hand, outside the checked-in harness**, with that token; no code that reads
+  or copies sign-in state was added to `examples/host-test` or to the test
+  support, which still only copy `.credentials.json` byte-for-byte.
   `claude auth status` in that home: `loggedIn: true`, `authMethod:
   claude.ai`, `apiProvider: firstParty`, `subscriptionType: max`.
 - The proofs below ran with `HOME=/tmp/claude-recapture/proof-home`, a
@@ -28,7 +32,8 @@ reproduced here beyond counts, codes, and field names.
   real `~/.claude/.credentials.json`, `~/.claude/settings.json`,
   `~/.claude/plugins/installed_plugins.json`, and `~/.claude.json` mtimes were
   unchanged after every run (05:34, 08:12, 08:12, and 08:23 UTC respectively,
-  all earlier than the first isolated turn of the day at 16:55 UTC).
+  all earlier than the first isolated turn of the day at 16:55 UTC). The
+  isolated home was removed after the runs.
 - The `packedNativeEnvironment` allowlist strips every credential-shaped
   variable name (`*TOKEN*`, `*KEY*`, …), so a `CLAUDE_CODE_OAUTH_TOKEN`
   environment transplant would not reach the host; the on-disk credentials
@@ -84,7 +89,8 @@ reproduced here beyond counts, codes, and field names.
    (`native-claude-contract.test.ts`) asserts the opposite and must change
    with it. That test file is owned by the concurrent test-determinism lane
    (#432 landed its home-directory injection while this note was written), so
-   the change is deferred to a follow-up rather than edited here. Until then
+   the change is deferred to a follow-up rather than edited here: filed as
+   [#439](https://github.com/ScriptedAlchemy/agent-bundle/issues/439). Until then
    the `native-host-smoke` workflow's Claude source leg will report
    `harness-failure` on every run against 2.1.257.
 
@@ -92,7 +98,10 @@ reproduced here beyond counts, codes, and field names.
 
 The two lineage captures reported `total_cost_usd` of roughly $0.44 and
 $0.36; the session, packed-Eval (repeated while diagnosing defects 1–2), and
-contract turns were each cheaper, all on the operator's Max subscription. Every isolated home used here is under `/tmp/claude-recapture/`
-or `/tmp/host-test/` and holds a copy of the long-lived token; `probe:uninstall
-claude` removed the probe's home and `rm -rf /tmp/claude-recapture/proof-home`
-removes the proofs' home.
+contract turns were each cheaper, all on the operator's Max subscription. Every
+isolated home used here was under `/tmp/claude-recapture/` or
+`/tmp/host-test/` and held a copy of the long-lived token; `probe:uninstall
+claude` removed the probe's home (`/tmp/host-test/claude-home` and
+`/tmp/host-test/claude-workspace` are gone; the captures under
+`/tmp/host-test/claude/` remain) and `rm -rf /tmp/claude-recapture/proof-home`
+removed the proofs' home.
