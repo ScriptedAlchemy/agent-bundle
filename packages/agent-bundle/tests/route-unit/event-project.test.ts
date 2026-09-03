@@ -595,20 +595,36 @@ it('projects permission/request decisions through the pinned PermissionRequest o
     });
   }
 
+  // Only an explicit allow answers on the user's behalf; `continue` and an
+  // empty result leave the prompt to the user (#461).
   const allowed = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'allow' } }),
+  }, routeInput);
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventDocument(allowed.document, 'permission/request', target, 'PermissionRequest')).toEqual({
+      hookSpecificOutput: {
+        decision: { behavior: 'allow' },
+        hookEventName: 'PermissionRequest',
+      },
+    });
+  }
+
+  const continued = await renderRoute({
     default: async () => createElement(Agent.Result, { value: { outcome: 'continue' } }),
   }, routeInput);
-  expect(projectEventDocument(allowed.document, 'permission/request', 'claude', 'PermissionRequest')).toEqual({
-    hookSpecificOutput: {
-      decision: { behavior: 'allow' },
-      hookEventName: 'PermissionRequest',
-    },
-  });
-
   const observed = await renderRoute({
     default: async () => createElement(Agent.Result),
   }, routeInput);
-  expect(projectEventDocument(observed.document, 'permission/request', 'codex', 'PermissionRequest')).toBeUndefined();
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventDocument(continued.document, 'permission/request', target, 'PermissionRequest')).toBeUndefined();
+    expect(projectEventDocument(observed.document, 'permission/request', target, 'PermissionRequest')).toBeUndefined();
+  }
+
+  const asked = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'ask' } }),
+  }, routeInput);
+  expect(() => projectEventDocument(asked.document, 'permission/request', 'claude', 'PermissionRequest'))
+    .toThrow(/permission\/request does not accept outcome "ask"/u);
 
   const rewritten = await renderRoute({
     default: async () => createElement(Agent.Result, { value: { updatedInput: { command: 'rm -r build' } } }),
@@ -819,4 +835,150 @@ it('projects the stage-4 Claude-only families with their documented decision cha
   const idleContextual = await render('agent/idle', idleNative, 'TeammateIdle', undefined, 'Context.');
   expect(() => projectEventDocument(idleContextual.document, 'agent/idle', 'claude', 'TeammateIdle'))
     .toThrow(/no documented additional-context channel/u);
+});
+
+it('projects tool/before pass-through as no decision and only explicit allow/ask/deny as one (#461)', async () => {
+  // Native envelopes are the captured host-test PreToolUse/preToolUse
+  // records in fixtures/host-lineage (Claude 2.1.257, Codex 0.147.0,
+  // Cursor 3.18.25), trimmed to the validated fields.
+  const claudeNative = {
+    cwd: '/tmp/host-test/claude-workspace',
+    hook_event_name: 'PreToolUse',
+    permission_mode: 'default',
+    session_id: '7f7a50ca-3609-4612-8db1-a34c8985088a',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    tool_use_id: 'toolu_01Nj8kitmmxAGYiCXF5NA9ZB',
+    transcript_path: '/tmp/host-test/claude-home/.claude/projects/-tmp-host-test-claude-workspace/7f7a50ca.jsonl',
+  };
+  const codexNative = {
+    cwd: '/tmp/host-test/codex-workspace',
+    hook_event_name: 'PreToolUse',
+    model: 'gpt-5.6-sol',
+    permission_mode: 'default',
+    session_id: '01a06660-110e-7290-8d1c-8ef1b2b68fc2',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    tool_use_id: 'exec-95e92c51-9373-4a8e-9cc1-5f2bf32efee1',
+    transcript_path: null,
+    turn_id: '01a06660-1179-7bd2-bb02-d4cac726b2a0',
+  };
+  const cursorNative = {
+    conversation_id: 'b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c',
+    cursor_version: '3.18.25',
+    cwd: '/tmp/host-test/cursor-workspace',
+    hook_event_name: 'preToolUse',
+    session_id: 'b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Shell',
+    tool_use_id: 'call-130a53a3-5718-473b-8101-a9c73231b7be-0',
+  };
+  const hosts = [
+    { native: claudeNative, nativeEvent: 'PreToolUse', revision: '2.1.250', target: 'claude' },
+    { native: codexNative, nativeEvent: 'PreToolUse', revision: '0.147.0', target: 'codex' },
+    { native: cursorNative, nativeEvent: 'preToolUse', revision: '2026-08-28', target: 'cursor' },
+  ] as const;
+  const render = async (host: (typeof hosts)[number], value?: JsonValue, context?: string) => {
+    const native = validateNativeEventEnvelope(host.native, { canonicalEvent: 'tool/before', nativeEvent: host.nativeEvent, target: host.target });
+    const props = createCanonicalEventProps('tool/before', native, host.target, host.nativeEvent, host.revision, new AbortController().signal);
+    const rendered = await renderRoute({
+      default: async () => createElement(
+        Agent.Result,
+        value === undefined ? null : { value },
+        context === undefined ? null : createElement(Agent.Context, null, context),
+      ),
+    }, {
+      input: { canonical: props.canonical, native: props.native },
+      kind: 'event-route',
+      routeId: 'event:tool/before',
+    });
+    return projectEventDocument(rendered.document, 'tool/before', host.target, host.nativeEvent, native);
+  };
+  const rewrite = { command: 'rm -r build' };
+
+  for (const host of hosts) {
+    // Pass-through: an empty result, `continue`, and an unrelated value all
+    // leave the host's own permission flow untouched — nothing is written.
+    expect(await render(host)).toBeUndefined();
+    expect(await render(host, { outcome: 'continue' })).toBeUndefined();
+    // A reason has no channel without a decision.
+    await expect(render(host, { outcome: 'continue', reason: 'Looks fine.' })).rejects
+      .toThrow(/tool\/before reason is only valid when outcome is allow, ask, or deny/u);
+  }
+
+  for (const host of hosts.filter((candidate) => candidate.target !== 'cursor')) {
+    // Context alone rides the context channel with no permissionDecision.
+    expect(await render(host, undefined, 'Build tree is dirty.')).toEqual({
+      hookSpecificOutput: { additionalContext: 'Build tree is dirty.', hookEventName: 'PreToolUse' },
+    });
+    expect(await render(host, { outcome: 'continue' }, 'Build tree is dirty.')).toEqual({
+      hookSpecificOutput: { additionalContext: 'Build tree is dirty.', hookEventName: 'PreToolUse' },
+    });
+    // A rewrite without a decision is evaluated by the host's permission
+    // rules against the rewritten input; it does not imply approval.
+    expect(await render(host, { outcome: 'continue', updatedInput: rewrite })).toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewrite },
+    });
+    // Explicit decisions project exactly the host field.
+    expect(await render(host, { outcome: 'allow' })).toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
+    });
+    expect(await render(host, { outcome: 'allow', reason: 'Trusted build script.', updatedInput: rewrite }, 'Rewritten.')).toEqual({
+      hookSpecificOutput: {
+        additionalContext: 'Rewritten.',
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: 'Trusted build script.',
+        updatedInput: rewrite,
+      },
+    });
+    expect(await render(host, { outcome: 'ask', reason: 'Confirm the rewritten command.', updatedInput: rewrite })).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'ask',
+        permissionDecisionReason: 'Confirm the rewritten command.',
+        updatedInput: rewrite,
+      },
+    });
+    expect(await render(host, { outcome: 'deny', reason: 'Destructive command blocked.' })).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Destructive command blocked.',
+      },
+    });
+  }
+
+  // Cursor: https://cursor.com/docs/hooks#pretooluse documents permission
+  // allow|deny with updated_input; "ask" is accepted by the schema but not
+  // enforced, so it fails closed instead of being silently downgraded.
+  const cursor = hosts[2];
+  expect(await render(cursor, { outcome: 'allow' })).toEqual({ permission: 'allow' });
+  expect(await render(cursor, { outcome: 'allow', updatedInput: rewrite })).toEqual({ permission: 'allow', updated_input: rewrite });
+  expect(await render(cursor, { outcome: 'continue', updatedInput: rewrite })).toEqual({ permission: 'allow', updated_input: rewrite });
+  expect(await render(cursor, { outcome: 'deny', reason: 'Destructive command blocked.' })).toEqual({
+    agent_message: 'Destructive command blocked.',
+    permission: 'deny',
+    user_message: 'Destructive command blocked.',
+  });
+  await expect(render(cursor, { outcome: 'ask', reason: 'Confirm.' })).rejects
+    .toThrow(/Cursor preToolUse accepts permission "ask" in its schema but does not enforce it/u);
+
+  // allow and ask are tool/before decisions; every other family rejects them
+  // instead of treating them as continue.
+  const stopProps = createCanonicalEventProps(
+    'stop',
+    { cwd: '/workspace', hook_event_name: 'Stop', session_id: 'session-1', stop_hook_active: false, transcript_path: '/workspace/transcript.jsonl' },
+    'claude',
+    'Stop',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  for (const outcome of ['allow', 'ask']) {
+    const rendered = await renderRoute({
+      default: async () => createElement(Agent.Result, { value: { outcome } }),
+    }, { input: { canonical: stopProps.canonical, native: stopProps.native }, kind: 'event-route', routeId: 'event:stop' });
+    expect(() => projectEventDocument(rendered.document, 'stop', 'claude', 'Stop'))
+      .toThrow(new RegExp(`stop does not accept outcome "${outcome}"`, 'u'));
+  }
 });

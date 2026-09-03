@@ -10,8 +10,15 @@ import type {
   CanonicalAgentEvent,
 } from '../routes/public.ts';
 
+/**
+ * The route result vocabulary. `continue` (or no value at all) is the
+ * pass-through answer: the route has no opinion, so no decision reaches the
+ * host and its normal permission flow applies. `allow` and `ask` are explicit
+ * `tool/before` decisions (`allow` also answers `permission/request`); `deny`
+ * blocks. Only an explicit decision is ever projected as one (#461).
+ */
 const resultValueSchema = z.object({
-  outcome: z.enum(['continue', 'deny']).optional(),
+  outcome: z.enum(['continue', 'allow', 'ask', 'deny']).optional(),
   reason: z.string().min(1).optional(),
   updatedInput: z.record(z.string(), z.unknown()).optional(),
 }).strict();
@@ -451,6 +458,14 @@ export const projectEventDocument = (
   appendContext(document.root, contexts);
   const additionalContext = contexts.length === 0 ? undefined : contexts.join('');
   const parsedValue = document.value === undefined ? undefined : resultValueSchema.parse(document.value);
+  if (
+    (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request')
+    || (parsedValue?.outcome === 'ask' && event !== 'tool/before')
+  ) {
+    throw new TypeError(
+      `${event} does not accept outcome "${parsedValue.outcome}": allow is a tool/before or permission/request decision and ask is a tool/before decision; continue leaves the host's own flow untouched.`,
+    );
+  }
   const requireDenyReason = (): string => {
     if (parsedValue?.outcome !== 'deny') {
       throw new TypeError(`${event} did not request a blocking outcome.`);
@@ -648,7 +663,11 @@ export const projectEventDocument = (
     if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
       throw new TypeError('permission/request reason is only valid when outcome is deny.');
     }
-    if (parsedValue?.outcome === undefined) return undefined;
+    // https://code.claude.com/docs/en/hooks#permissionrequest-decision-control:
+    // a hook that returns no decision leaves the prompt to the user, so
+    // `continue` (and an empty result) project nothing. Only an explicit
+    // `allow` answers on the user's behalf (#461).
+    if (parsedValue?.outcome === undefined || parsedValue.outcome === 'continue') return undefined;
     return deepFreeze({
       hookSpecificOutput: {
         decision: {
@@ -740,26 +759,48 @@ export const projectEventDocument = (
       : undefined;
   }
   if (event === 'tool/before') {
+    // A pass-through result (`continue` or no value) carries no decision: the
+    // host keeps its own permission flow, and a rewrite is evaluated by that
+    // flow against the rewritten input. Only an explicit allow/ask/deny is
+    // projected as one (#461). `reason` has no channel without a decision.
+    const decision = parsedValue?.outcome === undefined || parsedValue.outcome === 'continue'
+      ? undefined
+      : parsedValue.outcome;
+    if (parsedValue?.reason !== undefined && decision === undefined) {
+      throw new TypeError('tool/before reason is only valid when outcome is allow, ask, or deny.');
+    }
     if (target === 'cursor') {
-      if (parsedValue?.outcome === 'deny') {
+      // https://cursor.com/docs/hooks#pretooluse (retrieved 2026-09-03):
+      // output is { permission: allow | deny, user_message?, agent_message?,
+      // updated_input? }; "ask" is accepted by the schema but not enforced,
+      // and the messages are shown only when denied.
+      if (decision === 'ask') {
+        throw new TypeError('Cursor preToolUse accepts permission "ask" in its schema but does not enforce it; ask is not projected on Cursor.');
+      }
+      if (decision === 'deny') {
         return Object.freeze({
-          agent_message: parsedValue.reason,
+          agent_message: parsedValue?.reason,
           permission: 'deny',
-          user_message: parsedValue.reason,
+          user_message: parsedValue?.reason,
         });
       }
-      return parsedValue?.updatedInput === undefined
-        ? undefined
-        : Object.freeze({ permission: 'allow', updated_input: parsedValue.updatedInput });
+      // Cursor documents updated_input only alongside a permission, so a
+      // rewrite without an explicit decision is delivered as allow here; on
+      // Claude and Codex the same rewrite carries no decision.
+      if (decision === undefined && parsedValue?.updatedInput === undefined) return undefined;
+      return Object.freeze({
+        permission: 'allow',
+        ...(parsedValue?.updatedInput === undefined ? {} : { updated_input: parsedValue.updatedInput }),
+      });
     }
     const output = {
       ...(additionalContext === undefined ? {} : { additionalContext }),
       hookEventName: nativeEvent,
-      permissionDecision: parsedValue?.outcome === 'deny' ? 'deny' : 'allow',
+      ...(decision === undefined ? {} : { permissionDecision: decision }),
       ...(parsedValue?.reason === undefined ? {} : { permissionDecisionReason: parsedValue.reason }),
       ...(parsedValue?.updatedInput === undefined ? {} : { updatedInput: parsedValue.updatedInput }),
     };
-    return deepFreeze({ hookSpecificOutput: output });
+    return Object.keys(output).length === 1 ? undefined : deepFreeze({ hookSpecificOutput: output });
   }
   if (event === 'session/start' || event === 'tool/after') {
     if (additionalContext === undefined) return undefined;

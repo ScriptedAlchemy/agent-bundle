@@ -428,11 +428,12 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
         tool_use_id: 'use-1',
         transcript_path: '/workspace/transcript.json',
       },
+      // A continuing handler carries no permissionDecision (#461): the rewrite
+      // reaches the host, and the host's own permission flow evaluates it.
       nativeOutput: {
         hookSpecificOutput: {
           additionalContext: 'checked:one',
           hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
           updatedInput: { command: 'rewritten' },
         },
       },

@@ -119,7 +119,11 @@ four keys are accepted, and each one is checked:
 Per-event restrictions are enforced, not documented-and-hoped:
 
 - `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input.
-- `beforeTool` cannot stop, and cannot replace input while denying.
+- `beforeTool` cannot stop, and cannot replace input while denying. A continuing `beforeTool`
+  handler makes **no** permission decision: nothing is written to the host's decision field, so
+  its normal permission prompt still applies, and a `updatedInput` rewrite is evaluated by that
+  flow against the rewritten input. Only `deny` is projected as a decision. To approve a call
+  explicitly, use an [event route](#event-routes) and return `outcome: 'allow'`.
 - `stop` accepts only `continue`, or `deny` with a reason.
 - `agentStop` cannot stop the parent flow or replace input, and on Codex it cannot add context.
 
@@ -191,13 +195,25 @@ axis leaves it unavailable.
 
 The route answers through its rendered document. `Agent.Context` text becomes the host's
 additional-context channel, and `Agent.Result`'s `value` may carry
-`{ outcome: 'continue' | 'deny', reason?, updatedInput? }`. The projection is per event and per
-host, and illegal combinations throw before anything reaches the host: `session/end`,
-`compact/after`, `tool/failure`, and `workspace/open` are observation-only everywhere; a denied
-`tool/before` becomes `hookSpecificOutput.permissionDecision` on Claude and Codex but
-`{ permission: 'deny', … }` on Cursor; a denied `stop` becomes `{ decision: 'block', reason }` or
-Cursor's `followup_message`. Which families each host supports is the generated
-[Event and hook matrix](../../reference/events.md).
+`{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`. `continue` — or
+no `value` at all — is the pass-through answer: the route has no opinion, so **no decision** is
+written and the host's normal permission flow applies. Only an explicit `allow`, `ask`, or
+`deny` is projected as one. The projection is per event and per host, and illegal combinations
+throw before anything reaches the host: `session/end`, `compact/after`, `tool/failure`, and
+`workspace/open` are observation-only everywhere; a decided `tool/before` becomes
+`hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'` on Claude and Codex but
+`{ permission: 'allow' | 'deny', … }` on Cursor, which documents `ask` as unenforced and
+therefore rejects it; a denied `stop` becomes `{ decision: 'block', reason }` or Cursor's
+`followup_message`. `allow` and `ask` are `tool/before` decisions (`allow` also answers
+`permission/request` on the user's behalf); every other family rejects them. Which families each
+host supports is the generated [Event and hook matrix](../../reference/events.md).
+
+`updatedInput` on `tool/before` rewrites the pending call and is independent of the decision. On
+Claude and Codex a rewrite returned with `continue` carries no `permissionDecision`, so the host
+evaluates its permission rules against the rewritten input; pair it with `allow` to auto-approve
+the rewrite or with `ask` to show the rewritten input to the user. Cursor documents
+`updated_input` only alongside a `permission`, so a rewrite is delivered as `permission: 'allow'`
+there.
 
 Event routes reach the twenty canonical families (`session/end`, `prompt/submit`,
 `compact/before`, `permission/request`, …); config-declared `hooks` cover only the seven
@@ -230,10 +246,10 @@ process, so hooks share state with tools:
 4. **Runtime → wrapper.** One JSON reply: `{ status: 'ok', output }`, or
    `{ status: 'error', code }` where `code` is `epoch-mismatch`, `invalid-message`, or
    `runtime-failed`.
-5. **Wrapper → host (stdout).** The host-native response. On `tool/before` the wrapper always
-   answers with an explicit allow-or-deny decision in the host's own field names (`allow` unless
-   the route denied) even when the route renders no decision; silence is reserved for
-   observation-only families.
+5. **Wrapper → host (stdout).** The host-native response, or nothing at all. A route that
+   renders no decision and no context writes no output and exits 0, so the host proceeds
+   exactly as it would without the hook; on `tool/before` that means its own permission prompt.
+   A decision field is written only when the route returned `allow`, `ask`, or `deny`.
 
 Failure is closed by default. The only fallback is `fallback: 'standalone'` on a route that
 also compiled its standalone form, and it fires **only** for `runtime-unavailable` (no live
