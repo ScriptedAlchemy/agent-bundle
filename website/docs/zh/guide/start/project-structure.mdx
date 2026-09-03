@@ -95,10 +95,11 @@ export default defineConfig({
 
 ### 宿主产物
 
-在产物根目录（默认 `dist`）下，每个所选 target 一个目录：
+在产物根目录下，每个所选 target 一个目录。快速开始传入了 `--output dist`；若既没有 `--output`
+也没有 `output.distPath`，CLI 会把产物写入 `artifact/`，因为同一次运行还会把包构建写入 `dist/`：
 
 ```text
-dist/
+dist/                          # `--output dist`；CLI 默认目录是 `artifact/`
 ├── agent-bundle.manifest.json # 每个产出文件及其 SHA-256
 └── plugin/                    # targets: ['plugin'] — 一个多宿主捆绑包
     ├── .claude-plugin/
@@ -117,8 +118,9 @@ dist/
 `agent-bundle.manifest.json` 位于输出根目录、与各 target 目录并列，记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
 
 `output.distPath` 只移动产物根目录；它从不改变每个 target 内部由框架拥有的布局。优先级是 CLI
-`--output`，然后 `output.distPath`，最后是 `dist`。取值必须是非空、限定在项目根目录内的相对 POSIX
-路径。
+`--output`，然后 `output.distPath`，最后是默认值——对同时输出包构建的 `agent-bundle build` 是
+`artifact`，对不带 `packageOutputs` 的编程式 `build()` 是 `dist`。取值必须是非空、限定在项目根目录内的
+相对 POSIX 路径。
 
 ### npm 包构建
 

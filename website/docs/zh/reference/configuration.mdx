@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | `src/cli.ts` 约定。 |
 | `lib` | `false \| string \| { entry, dts? }` | `src/index.ts` 约定。 |
 | `routes` | 路由图策略 | 由约定推导。 |
-| `output` | `{ distPath? }` | `dist`。 |
+| `output` | `{ distPath? }` | CLI 构建为 `artifact`，不带包输出的 `build()` 为 `dist`。 |
 | `runtime` | `{ node }` | Node 22.12。 |
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
@@ -86,7 +86,9 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 
 ## output 与 runtime
 
-`output.distPath` 是相对项目根目录的产物输出目录，默认为 `dist`。逐次调用的 `--output` 标志优先，但同样
+`output.distPath` 是相对项目根目录的产物输出目录。未设置时，`agent-bundle build` 会把产物写入
+`artifact/`（同一次运行还会把包构建——若有——写入 `dist/`，与项目包构建重叠的产物输出会以 `AB4706`
+被拒绝），而不带 `packageOutputs` 的编程式 `build()` 则默认为 `dist`。逐次调用的 `--output` 标志优先，但同样
 受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径
 均不受支持（`AB4707`–`AB4709`）。
 
