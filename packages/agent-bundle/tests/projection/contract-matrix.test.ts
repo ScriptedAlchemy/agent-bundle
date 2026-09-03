@@ -72,7 +72,11 @@ const PANEL_MIME = 'text/html;profile=mcp-app';
  * call, and the progress-handler map the lifecycle replay composes, delegates
  * to the real client.
  */
-const withAppSurface = (client: Client): Client => {
+const withAppSurface = (client: Client): Client => appSurface(client, 'serves');
+
+const withRejectingAppSurface = (client: Client): Client => appSurface(client, 'rejects');
+
+const appSurface = (client: Client, read: 'rejects' | 'serves'): Client => {
   const panelListing = { mimeType: PANEL_MIME, name: 'panel', uri: PANEL_URI };
   const wrapper = {
     _notificationHandlers: (client as unknown as { readonly _notificationHandlers: unknown })
@@ -88,6 +92,7 @@ const withAppSurface = (client: Client): Client => {
     readResource: async (...arguments_: Parameters<Client['readResource']>) => {
       const [params] = arguments_;
       if (params.uri !== PANEL_URI) return client.readResource(...arguments_);
+      if (read === 'rejects') throw new Error('panel resource handler exploded');
       return { contents: [{ mimeType: PANEL_MIME, text: '<!doctype html><span>route-harness panel</span>', uri: PANEL_URI }] };
     },
   };
@@ -633,6 +638,24 @@ describe('the generated-plugin contract matrix', () => {
       coverage: { status: 'passed' },
       sweep: { status: 'passed' },
     });
+  }, 30_000);
+
+  it('records a rejected auto-covered app read as a sweep failure inside the aggregated violation', async () => {
+    const error = await withPackedShapedSession(
+      { decorate: withRejectingAppSurface, entry: 'in-memory rejecting app read fixture', includeApps: true },
+      (session, manifest) => runPackedContractMatrix({
+        fixtures: routeHarnessContractFixtures(),
+        manifest,
+        server: 'harness',
+        session,
+      }).catch((thrown: unknown) => thrown),
+    );
+
+    expect(error).toBeInstanceOf(AgentTestError);
+    expect((error as AgentTestError).code).toBe('contract-violation');
+    expect((error as AgentTestError).message).toContain('app:harness/panel / sweep');
+    expect((error as AgentTestError).message).toContain('readResource threw for "ui://harness/panel"');
+    expect((error as AgentTestError).message).toContain('panel resource handler exploded');
   }, 30_000);
 
   it('requires an app fixture entry only when apps: "explicit" is requested', async () => {

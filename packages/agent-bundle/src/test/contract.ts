@@ -918,7 +918,12 @@ const runSweep = async (
       if (uri === undefined) {
         return failed(`${descriptor.kind} route config exports no uri to read`);
       }
-      const read = await client.readResource({ uri }) as { contents?: unknown };
+      let read: { contents?: unknown };
+      try {
+        read = await client.readResource({ uri }) as { contents?: unknown };
+      } catch (error) {
+        return failed(`readResource threw for ${JSON.stringify(uri)}: ${error instanceof Error ? error.message : captured(error)}`);
+      }
       const contents = Array.isArray(read.contents) ? read.contents : [];
       return contents.length === 0
         ? failed(`readResource returned no contents for ${JSON.stringify(uri)}`)
