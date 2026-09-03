@@ -296,18 +296,26 @@ it('provides a valid built App resource without imposing the runtime message-siz
 });
 
 it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification methods', async () => {
-  const proxy = await createMcpAppSandboxProxy({
-    hostOrigin: 'http://127.0.0.1:43123',
-    maxMessageBytes: 1_024,
-    port: 0,
-  });
-  const frame = createMcpAppSandboxFrame({
-    consent,
-    declaration,
-    hostOrigin: 'http://127.0.0.1:43123',
-    proxy,
-  });
+  const host = createServer();
+  host.listen({ host: '127.0.0.1', port: 0 });
+  await once(host, 'listening');
+  const address = host.address();
+  if (address === null || typeof address === 'string') throw new Error('The MCP App sandbox test host did not receive a TCP address.');
+  const hostOrigin = `http://127.0.0.1:${address.port}`;
+  let proxy: Awaited<ReturnType<typeof createMcpAppSandboxProxy>> | undefined;
+
   try {
+    proxy = await createMcpAppSandboxProxy({
+      hostOrigin,
+      maxMessageBytes: 1_024,
+      port: 0,
+    });
+    const frame = createMcpAppSandboxFrame({
+      consent,
+      declaration,
+      hostOrigin,
+      proxy,
+    });
     const shell = await fetch(proxy.url).then((response) => response.text());
     expect(shell).toContain('sandbox="allow-scripts"');
     expect(shell).toContain("event.origin !== 'null'");
@@ -318,7 +326,8 @@ it('uses an opaque child relay shell with real MCP Apps JSON-RPC notification me
     expect(shell).not.toContain('byteLength(message) > maxMessageBytes');
     expect(new URL(frame.src).hash).toContain('maxMessageBytes');
   } finally {
-    await proxy.close();
+    await proxy?.close();
+    await new Promise<void>((resolve, reject) => host.close((error) => error === undefined ? resolve() : reject(error)));
   }
 });
 
