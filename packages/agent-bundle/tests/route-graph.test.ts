@@ -265,17 +265,25 @@ it('keeps a bin- or lib-claimed src/scripts module in script discovery (#389)', 
     'src/cli.ts': moduleSource,
     'src/index.ts': moduleSource,
     'src/scripts/hauler.ts': moduleSource,
+    'src/scripts/internal/tool.ts': moduleSource,
     'src/scripts/shared.ts': moduleSource,
   });
   const graph = await compileRouteGraph(root, fixtureConfig({
     // The #389 shape: one entry is the npm bin and the artifact hook target.
-    bin: { doctor: './src/cli/doctor.ts', hauler: './src/scripts/hauler.ts', main: './src/cli.ts' },
+    bin: {
+      doctor: './src/cli/doctor.ts',
+      hauler: './src/scripts/hauler.ts',
+      main: './src/cli.ts',
+      tool: './src/scripts/internal/tool.ts',
+    },
     lib: { entry: './src/scripts/shared.ts' },
   }));
 
   expect(graph.diagnostics).toEqual([]);
-  // Package-build claims never remove a scripts-directory module: the bin and
-  // the artifact script are disjoint outputs, so both surfaces ship.
+  // Package-build claims never remove a direct src/scripts/<name> child: the
+  // bin and the artifact script are disjoint outputs, so both surfaces ship.
+  // The nested module stays claimed — discovering it would only turn a valid
+  // package-only configuration into AB4808.
   expect(graph.scripts.map((route) => route.id)).toEqual(['script:hauler', 'script:shared']);
   // Every other route kind still belongs to the claiming declaration.
   expect(graph.cli).toBeUndefined();

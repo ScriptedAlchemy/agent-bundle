@@ -212,10 +212,10 @@ interface ConfigClaimedSources {
   readonly artifact: ReadonlySet<string>;
   /**
    * Modules the package build (`bin`, `lib`) compiles. They leave route
-   * discovery too, except under `src/scripts/`: `dist/bin/<name>.js` and
-   * `<target>/scripts/<name>.mjs` are disjoint outputs, so one entry ships as
-   * both an npm bin and an artifact script instead of silently losing the
-   * script (#389).
+   * discovery too, except a direct `src/scripts/<name>` child:
+   * `dist/bin/<name>.js` and `<target>/scripts/<name>.mjs` are disjoint
+   * outputs, so one entry ships as both an npm bin and an artifact script
+   * instead of silently losing the script (#389).
    */
   readonly packageBuild: ReadonlySet<string>;
 }
@@ -272,8 +272,14 @@ const configClaimedSources = (
   return { artifact, packageBuild };
 };
 
-/** True for a module under the conventional scripts root, before privacy or identity checks. */
-const isScriptsDirectoryPath = (relativePath: string): boolean => relativePath.startsWith('src/scripts/');
+/**
+ * True for a direct child of the conventional scripts root — the only shape
+ * the flat scripts artifact can ship. A nested module a package-build entry
+ * names stays claimed: keeping it discovered would only turn a valid
+ * package-only configuration into an AB4808 error.
+ */
+const isConventionalScriptPath = (relativePath: string): boolean =>
+  /^src\/scripts\/[^/]+$/u.test(relativePath);
 
 interface RouteModeOverrides {
   readonly cli?: 'generated' | 'conventional';
@@ -555,7 +561,7 @@ export const compileRouteGraph = async (
   for (const source of sources) {
     if (claimed.artifact.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
-    if (claimed.packageBuild.has(source) && !isScriptsDirectoryPath(relativePath)) continue;
+    if (claimed.packageBuild.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
     if (
