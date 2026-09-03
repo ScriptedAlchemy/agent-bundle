@@ -113,9 +113,11 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       'export const wrong = async (): Promise<number> => (await agent()).providers.library;',
       '',
     ].join('\n')),
-    // Contexts that do not run src/providers/* — a custom runAgentRequest host
-    // or a route-unit fixture — must supply the declared keys, or the handler's
-    // typed `providers.library` would dereference undefined at runtime.
+    // A custom runAgentRequest host runs no src/providers/*, so it must supply
+    // the declared keys, or the handler's typed `providers.library` would
+    // dereference undefined at runtime. The harness mounts the project's
+    // providers itself, so a call without `context` is legal and observes the
+    // real values; an explicit `context.providers` fixture must be complete.
     writeProjectFile(root, 'custom-scope.ts', [
       "import { runAgentRequest } from '@agent-bundle/runtime';",
       "import { renderRoute } from 'agent-bundle/test';",
@@ -125,6 +127,8 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       'export const complete = async (): Promise<void> => {',
       "  await runAgentRequest({ invocation: { kind: 'tool' }, providers: { buildNumber: 7, library } }, async () => undefined);",
       "  await renderRoute('tool:curator/status', { context: { providers: { buildNumber: 7, library } } });",
+      "  await renderRoute('tool:curator/status');",
+      "  await renderRoute('tool:curator/status', { input: {} });",
       '};',
       '',
     ].join('\n')),
@@ -138,7 +142,6 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       "import type { LibraryContext } from './src/providers/library.js';",
       "const library: LibraryContext = { stages: ['discover'], surface: 'tool' };",
       "export const partial = renderRoute('tool:curator/status', { context: { providers: { library } } });",
-      "export const absent = renderRoute('tool:curator/status');",
       '',
     ].join('\n')),
   ]);
@@ -160,7 +163,6 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
   expect(missingProviders).toHaveLength(1);
   expect(missingProviders[0]).toContain("Property 'providers' is missing");
   const missingFixture = typecheck(root, 'missing-fixture.ts');
-  expect(missingFixture).toHaveLength(2);
+  expect(missingFixture).toHaveLength(1);
   expect(missingFixture[0]).toContain("Property '\"buildNumber\"' is missing");
-  expect(missingFixture[1]).toContain('Expected 2 arguments, but got 1.');
 });
