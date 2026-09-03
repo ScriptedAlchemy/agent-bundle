@@ -548,25 +548,21 @@ export const createAgentNoticeLedger = (
         return snapshotFrom(committed.revision, committed.state);
       }
       // A reserved receipt is judged against the exact state it commits over:
-      // the dispatch is guarded by the revision just read, so the ownership
-      // check and the reducer see the same holds. Unrelated writers move the
-      // revision too, hence the bounded re-read. An idempotent replay of an
-      // already-committed receipt short-circuits the guard inside the store
-      // and is never mistaken for a lost hold.
+      // the dispatch is guarded by the revision just read (or the caller's own
+      // pin), so the ownership check and the reducer see the same holds.
+      // Unrelated writers move the revision too, hence the bounded re-read
+      // when the caller did not pin one. The guard is only ever applied by the
+      // store, which resolves the idempotency key first: a retry of a receipt
+      // whose commit landed but whose response was lost replays that commit
+      // instead of failing a revision precheck it could never satisfy.
       for (let attempt = 0; attempt < MAX_RESERVED_RECEIPT_ATTEMPTS; attempt += 1) {
         const before = yield* storeEffect(() => store.read());
-        if (expectedRevision !== undefined && expectedRevision !== before.revision) {
-          return yield* storeEffect(() => Promise.reject(new AgentStateError(
-            'revision-conflict',
-            `Notice availability expected revision ${String(expectedRevision)} but the head is ${String(before.revision)}`,
-          )));
-        }
         const committed = yield* storeEffect(() => store.dispatch(
           'availability-signalled',
           payload,
-          { expectedRevision: before.revision, idempotencyKey },
+          { expectedRevision: expectedRevision ?? before.revision, idempotencyKey },
         )).pipe(Effect.catch((error) =>
-          error instanceof AgentStateError && error.code === 'revision-conflict'
+          error instanceof AgentStateError && error.code === 'revision-conflict' && expectedRevision === undefined
             ? Effect.succeed(undefined)
             : Effect.fail(error)));
         if (committed === undefined) continue;

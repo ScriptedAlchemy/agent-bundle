@@ -740,11 +740,14 @@ export const createGeneratedRouteMcpServer = async (
     // fails on the way, the protocol and its transport are always closed;
     // the teardown error surfaces once they are.
     try {
-      await events?.close();
       try {
-        await options.notices?.close();
+        await events?.close();
       } finally {
-        await options.host.close();
+        try {
+          await options.notices?.close();
+        } finally {
+          await options.host.close();
+        }
       }
     } finally {
       await close();

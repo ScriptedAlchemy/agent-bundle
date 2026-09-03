@@ -1105,6 +1105,37 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     await driver.close();
   });
 
+  it('replays a pinned reserved receipt whose commit landed but whose response was lost', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    const reserved = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:pinned',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    const receipt = {
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: reserved.revision,
+      idempotencyKey: 'signal:pinned',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    };
+    const committed = await ledger.signalAvailability(receipt);
+    expect(committed.notices[0]?.availability).toMatchObject({ count: 1 });
+    // The head has moved past the pin; the same key must replay the commit
+    // rather than fail a revision check the store never got to judge.
+    const replayed = await ledger.signalAvailability(receipt);
+    expect(replayed.revision).toBe(committed.revision);
+    expect(replayed.notices[0]?.availability).toMatchObject({ count: 1 });
+    // A genuinely new receipt against a stale pin is still refused.
+    await expect(ledger.signalAvailability({ ...receipt, idempotencyKey: 'signal:pinned-stale' }))
+      .rejects.toMatchObject({ code: 'revision-conflict' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
+
   it('records the receipt of a send that raced an acknowledgement instead of discarding it as a no-op', async () => {
     const { driver, ledger } = await openLedger();
     const published = await publishTo(ledger);

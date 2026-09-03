@@ -139,6 +139,37 @@ describe('generated server teardown', () => {
     expect(order).toEqual(['notices', 'host']);
   });
 
+  it('still drains the signaller and closes the host when the event runtime close fails', async () => {
+    const { host, notices, order } = stubs();
+    const server = await createGeneratedRouteMcpServer({
+      artifactEpoch: 'epoch',
+      events: {
+        allowedTargets: ['claude'],
+        artifactEpoch: 'epoch',
+        createCanonicalEventProps: (() => {
+          throw new Error('not invoked');
+        }) as never,
+        createEventRuntimeServer: (async () => ({
+          close: async () => {
+            order.push('events');
+            throw new Error('socket teardown failed');
+          },
+        })) as never,
+        endpointId: 'teardown-test',
+        projectEventDocument: (() => {
+          throw new Error('not invoked');
+        }) as never,
+        target: 'claude',
+      },
+      host,
+      notices,
+      plugin: { name: 'teardown', version: '0.0.0' },
+      routes: {},
+    });
+    await expect(server.close()).rejects.toThrow('socket teardown failed');
+    expect(order).toEqual(['events', 'notices', 'host']);
+  });
+
   it('still closes the host and the protocol transport when the signaller close fails', async () => {
     const { host, notices, order } = stubs({
       noticesClose: async () => {
