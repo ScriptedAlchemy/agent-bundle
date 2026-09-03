@@ -97,6 +97,8 @@ export interface NativePlaygroundServiceOptions {
   readonly catalogDirectory?: string;
   /** @internal Fault-injection seam for durable epoch-sidecar publication. */
   readonly catalogStorage?: NativePlaygroundCatalogStorage;
+  /** @internal How long a reader waits for a concurrent hard-link publisher before recovering an abandoned staging link. */
+  readonly catalogStagingSettleDeadlineMs?: number;
   /** Test seams preserve the same production discovery and harness contracts. */
   readonly discover?: (projectRoot: string) => Promise<readonly DiscoveredEvalSuite[]>;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
@@ -204,9 +206,25 @@ const nativeHosts = new Set<NativePlaygroundHost>(NATIVE_HOSTS);
 const catalogDurabilityPlatformKey = Symbol.for('agent-bundle.native-playground-service.catalog-durability-platform');
 const maximumCatalogSelections = 256;
 const maximumCatalogSnapshotBytes = 8 * 1_024 * 1_024;
-/** How long a reader waits for a hard-link publisher to release its staging link before rejecting the sidecar. */
+/** How long a reader waits for a hard-link publisher to release its staging link before treating it as abandoned. */
 const stagingPublicationSettleDeadlineMs = 5_000;
 const stagingPublicationPollMs = 10;
+
+/**
+ * Whether the publisher named by a `.<epoch>.stage-<pid>-<nonce>` entry is
+ * gone. The current process and any pid that still answers signal 0 (or that
+ * this user may not signal) count as alive; only a missing process is exited.
+ */
+const stagingPublisherExited = (stagingEntry: string): boolean => {
+  const pid = Number(/\.stage-(\d+)-/u.exec(stagingEntry)?.[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return isErrno(error, 'ESRCH');
+  }
+};
 const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotDepth = 16;
@@ -601,6 +619,7 @@ export class NativePlaygroundService {
   readonly #planFixture: NonNullable<NativePlaygroundServiceOptions['planFixture']>;
   readonly #projectRoot: string;
   readonly #removeWorkspace: NonNullable<NativePlaygroundServiceOptions['removeWorkspace']>;
+  readonly #stagingSettleDeadlineMs: number;
   #abortDispatchDepth = 0;
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -608,6 +627,7 @@ export class NativePlaygroundService {
   constructor(options: NativePlaygroundServiceOptions) {
     this.#catalogDirectory = options.catalogDirectory;
     this.#catalogStorage = options.catalogStorage ?? Object.freeze({ link, mkdir, open, remove: rm });
+    this.#stagingSettleDeadlineMs = options.catalogStagingSettleDeadlineMs ?? stagingPublicationSettleDeadlineMs;
     this.#catalogMove = options.catalogStorage?.move ?? rename;
     this.#projectRoot = options.projectRoot;
     this.#removeWorkspace = options.removeWorkspace ?? (async (root) => rm(root, { force: true, recursive: true }));
@@ -1059,40 +1079,58 @@ export class NativePlaygroundService {
    * the sidecar path still naming this inode (`settled`), or until the sidecar
    * was withdrawn or replaced (`withdrawn`). The extra link is accounted for by
    * identity — exactly one staging sibling of this epoch shares the sidecar's
-   * dev/ino; any other extra link is hostile aliasing and stays rejected, as
-   * does a staging link that never settles within the deadline.
+   * dev/ino; any other extra link is hostile aliasing and stays rejected.
+   *
+   * A publisher that dies between `link()` and its staging cleanup leaves the
+   * sidecar doubly linked forever. Once the deadline passes, a matching staging
+   * link whose publisher pid (embedded in its name) is no longer running is an
+   * abandoned publication: the sidecar was fsynced before it was linked, so the
+   * reader withdraws the orphaned staging link and adopts it. A staging link
+   * whose publisher is still alive keeps being rejected rather than yanked.
    */
   async #awaitStagedPublication(file: FileHandle, path: string, metadata: Stats): Promise<'settled' | 'withdrawn'> {
     const invalid = () => new Error('Native Playground catalog snapshot is invalid.');
-    if (metadata.nlink !== 2 || !(await this.#stagingLinkAccountsFor(path, metadata))) {
-      if ((await file.stat()).nlink === 1) return (await this.#sidecarStillLinked(path, metadata)) ? 'settled' : 'withdrawn';
+    const settledOrWithdrawn = async () => ((await this.#sidecarStillLinked(path, metadata)) ? 'settled' as const : 'withdrawn' as const);
+    if (metadata.nlink !== 2 || (await this.#stagingLinksFor(path, metadata)).length === 0) {
+      if ((await file.stat()).nlink === 1) return settledOrWithdrawn();
       throw invalid();
     }
-    const deadline = Date.now() + stagingPublicationSettleDeadlineMs;
+    const deadline = Date.now() + this.#stagingSettleDeadlineMs;
     for (;;) {
       await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, stagingPublicationPollMs); });
       const current = await file.stat();
       if (current.nlink < 1) return 'withdrawn';
-      if (current.nlink === 1) return (await this.#sidecarStillLinked(path, metadata)) ? 'settled' : 'withdrawn';
-      if (current.nlink !== 2 || !(await this.#stagingLinkAccountsFor(path, metadata))) throw invalid();
+      if (current.nlink === 1) return settledOrWithdrawn();
+      if (current.nlink !== 2) throw invalid();
+      const staging = await this.#stagingLinksFor(path, metadata);
+      if (staging.length === 0) {
+        if ((await file.stat()).nlink === 1) return settledOrWithdrawn();
+        throw invalid();
+      }
       if (!(await this.#sidecarStillLinked(path, metadata))) return 'withdrawn';
-      if (Date.now() >= deadline) throw invalid();
+      if (Date.now() < deadline) continue;
+      if (!staging.every((entry) => stagingPublisherExited(entry))) throw invalid();
+      for (const entry of staging) await this.#catalogStorage.remove(join(dirname(path), entry), { force: true });
+      if ((await file.stat()).nlink === 1) return settledOrWithdrawn();
+      throw invalid();
     }
   }
 
-  async #stagingLinkAccountsFor(path: string, metadata: Stats): Promise<boolean> {
+  /** The epoch's own staging entries that alias this sidecar's inode. */
+  async #stagingLinksFor(path: string, metadata: Stats): Promise<readonly string[]> {
     const directory = dirname(path);
     const stagingPrefix = `.${basename(path, '.json')}.stage-`;
+    const matches: string[] = [];
     for (const entry of await readdir(directory)) {
       if (!entry.startsWith(stagingPrefix)) continue;
       try {
         const staged = await lstat(join(directory, entry));
-        if (staged.isFile() && sameFile(staged, metadata)) return true;
+        if (staged.isFile() && sameFile(staged, metadata)) matches.push(entry);
       } catch (error) {
         if (!isErrno(error, 'ENOENT')) throw error;
       }
     }
-    return false;
+    return matches;
   }
 
   async #sidecarStillLinked(path: string, metadata: Stats): Promise<boolean> {

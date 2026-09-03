@@ -1669,6 +1669,60 @@ it('withdraws a sidecar whose directory fsync fails before releasing its staging
   }
 });
 
+const exitedPid = (): number => {
+  for (let pid = 4_194_000; pid > 1_000; pid -= 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+    }
+  }
+  throw new Error('No exited pid was available for the abandoned-staging fixture.');
+};
+
+it('recovers a staging link abandoned by an exited publisher after the settle deadline, but never one whose publisher is alive', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-abandoned-staging-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-abandoned-staging', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const serviceFor = (discover: () => Promise<readonly DiscoveredEvalSuite[]>): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    catalogStagingSettleDeadlineMs: 50,
+    discover,
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    const writer = serviceFor(async () => suite());
+    const published = await writer.catalog(reference);
+    await writer.close();
+
+    // A publisher that is still running owns its staging link: the reader waits out the deadline and rejects.
+    const live = join(catalogDirectory, `.${reference.epoch.id}.stage-${String(process.pid)}-live`);
+    await link(sidecar, live);
+    const blocked = serviceFor(async () => { throw new Error('A blocked catalog must not fall back to discovery.'); });
+    await expect(blocked.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+    await blocked.close();
+    expect((await stat(sidecar)).nlink).toBe(2);
+    await rm(live);
+
+    // A publisher that exited after link() but before cleanup left a complete,
+    // fsynced sidecar behind: the reader withdraws the orphan and adopts it.
+    await link(sidecar, join(catalogDirectory, `.${reference.epoch.id}.stage-${String(exitedPid())}-orphan`));
+    const reader = serviceFor(async () => { throw new Error('A recovered catalog must not fall back to discovery.'); });
+    expect(await reader.catalog(reference)).toEqual(published);
+    await reader.close();
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('still rejects a persisted catalog aliased by a hard link that is not an epoch staging file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-aliased-catalog-'));
   const catalogDirectory = join(root, 'catalog');
