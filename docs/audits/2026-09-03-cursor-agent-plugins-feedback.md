@@ -41,17 +41,24 @@ the display).
 Skills and MCP servers in Customize, and spawns the configured stdio
 servers — but the spawn ignores every path rule in Agent Plugins §7.2.1 and
 §9 (<https://agent-plugins.org/specification>). As a result **no
-spec-conformant stdio server can start on Cursor**, while the same server
-starts as soon as the spec placeholder is replaced by Cursor's proprietary
-`${CURSOR_PLUGIN_ROOT}`. The standard's own stdio example (`"cwd":
-"${PLUGIN_ROOT}"`) fails. Six concrete observations follow; 1–3 were first
-recorded on 2026-09-02 and re-verified today, 4–6 were found while widening
-the probe.
+spec-conformant stdio server that refers to a file shipped in the plugin can
+start on Cursor** — every such reference goes through `cwd`, `args`, `env`,
+or a plugin-relative `command`, and none of those is resolved against the
+plugin root. Only a server that names a globally installed executable and
+needs nothing from the package (item 3's inline `node -e` probe) starts; it
+still runs from the wrong directory without the §9.1 variables. The same
+bundled server starts as soon as the spec placeholder is replaced by Cursor's
+proprietary `${CURSOR_PLUGIN_ROOT}`. The standard's own stdio example
+(`"cwd": "${PLUGIN_ROOT}"`) fails. Six concrete observations follow; 1–3 were
+first recorded on 2026-09-02 and re-verified today, 4–6 were found while
+widening the probe.
 
 **Steps to reproduce (all items).**
 
-1. Create `~/.cursor/plugins/local/ap-probe/` with the three files in
-   "Minimal repro" below (adjust the `mcp.json` variant per item).
+1. Create `~/.cursor/plugins/local/ap-probe/` with the files in "Minimal
+   repro" below: `plugin.json`, `mcp.json`, and `mcp/report.mjs` cover items
+   1–5; item 6 additionally needs the executable `mcp/launch.sh` listed
+   there. Swap the `probe` entry in `mcp.json` for the item's payload.
 2. Reload the window (`Developer: Reload Window`) — local plugins are read on
    reload, not on first boot.
 3. Open Customize → Plugins → "Ap Probe" (badge `Local`) → MCPs → `probe`
@@ -138,7 +145,8 @@ the probe.
   applies to `command`, so this is the only portable way to launch a bundled
   executable.)
 - **Payload:** `{"type":"stdio","command":"./mcp/launch.sh","args":[]}` with
-  an executable `mcp/launch.sh` in the plugin.
+  the executable `mcp/launch.sh` from "Minimal repro" in the plugin
+  (`chmod +x`).
 - **Observed:** `Connection failed: spawn /home/<user>/<workspace>/mcp/launch.sh ENOENT`
   (isolated instance: `spawn /tmp/w426/iso/ws/mcp/launch.sh ENOENT`) — the
   path is joined to the open workspace folder.
@@ -161,13 +169,18 @@ serves `${CURSOR_PLUGIN_ROOT}` when the package is an Agent Plugins package
 Any tool that emits spec-conformant Agent Plugins packages (this project's
 `portable` target, and any other publisher following
 <https://agent-plugins.org>) produces packs whose Skills load in Cursor but
-whose MCP servers can never start there, with a misleading `spawn node
-ENOENT`. Publishers cannot work around it without shipping a Cursor-specific
-copy, which defeats the portable format.
+whose bundled MCP servers — anything that ships its own script or binary and
+therefore addresses it through `cwd`, `args`, `env`, or a `./` command —
+cannot start there, with a misleading `spawn node ENOENT`. Publishers cannot
+work around it without shipping a Cursor-specific copy, which defeats the
+portable format.
 
 ---
 
 ## Minimal repro plugin
+
+Four files, no dependencies beyond `node` on `PATH`; `mcp/launch.sh` is only
+needed for item 6.
 
 `~/.cursor/plugins/local/ap-probe/plugin.json`
 
@@ -196,6 +209,21 @@ appendFileSync('/tmp/ap-probe-launch.jsonl', JSON.stringify({
 }) + '\n');
 process.stdin.resume(); // stay alive like a stdio server; the handshake time-out is expected
 ```
+
+`~/.cursor/plugins/local/ap-probe/mcp/launch.sh` (item 6 only; `chmod +x mcp/launch.sh`)
+
+```sh
+#!/usr/bin/env bash
+# Records where the client started us, then runs the reporter next to this script.
+export PROBE_LAUNCH_PWD="$PWD"
+exec node "$(dirname "$0")/report.mjs"
+```
+
+A conformant client resolves `./mcp/launch.sh` against the plugin root and the
+marker line appears; Cursor 3.18.25 reports
+`spawn <workspace>/mcp/launch.sh ENOENT` and no line is written. (To confirm
+the file itself is fine, `cd ~/.cursor/plugins/local/ap-probe && ./mcp/launch.sh`
+writes the marker from a shell.)
 
 `~/.cursor/plugins/local/ap-probe/mcp.json` — the specification's shape
 (item 1); swap the `probe` entry for the payload of any other item.
