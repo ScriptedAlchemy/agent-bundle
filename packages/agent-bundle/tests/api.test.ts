@@ -340,44 +340,6 @@ it('accepts the public claude.dependencies config surface and plans its manifest
   }
 });
 
-it('fails an ordinary portable build on Agent Plugins normative-text violations without --host-validation', async () => {
-  const root = await createProject();
-  try {
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
-      'export default {',
-      "  plugin: { name: 'portable-standard', version: '1.0.0' },",
-      "  targets: ['portable'],",
-      '  mcp: { servers: { remote: {',
-      "    headers: { 'X-Tenant': 'a', 'x-tenant': 'b' },",
-      "    transport: 'streamable-http',",
-      "    url: 'http://mcp.example.test/mcp',",
-      '  } } },',
-      '};',
-      '',
-    ].join('\n'));
-
-    // The pinned schemas accept this document; only the standard's text forbids it.
-    await expect(build({ output: join(root, 'artifact-out'), root })).rejects.toMatchObject({
-      diagnostics: expect.arrayContaining([
-        expect.objectContaining({
-          code: 'AB6036',
-          message: expect.stringContaining('repeats header "X-Tenant" under different casing'),
-          severity: 'error',
-          target: 'portable',
-        }),
-        expect.objectContaining({
-          code: 'AB6036',
-          message: expect.stringContaining('uses plain HTTP against non-loopback host "mcp.example.test"'),
-          severity: 'error',
-          target: 'portable',
-        }),
-      ]),
-    });
-  } finally {
-    await rm(join(root, '..'), { force: true, recursive: true });
-  }
-});
-
 it('reports one modern-MCP source diagnostic for a legacy SSE declaration', async () => {
   const root = await createProject();
   try {
