@@ -81,8 +81,8 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 匹配器，见生成的[事件与钩子矩阵](./events.md)。
 
 **钩子结果**契约完整地记录在[钩子](../guide/authoring/hooks.mdx)中。有一个字段值得在此重复，因为它很
-容易搞错：`reason` 是一个非空字符串，**仅**在拒绝 `beforeTool` 或 `stop` 钩子时有效，而拒绝这两者之一
-却不给出 reason 会失败。`agentStop` 不在其列。
+容易搞错：`reason` 是一个非空字符串，**仅**在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效，而拒绝
+其中之一却不给出 reason 会失败。
 
 ## output 与 runtime
 

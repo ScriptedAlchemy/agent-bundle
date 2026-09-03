@@ -108,15 +108,16 @@ four keys are accepted, and each one is checked:
 | Key | Contract |
 | --- | --- |
 | `outcome` | `continue`, `deny`, or `stop`. |
-| `reason` | A non-empty string, valid only when denying a `beforeTool` or `stop` hook. Denying one of those without a reason fails. |
+| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook. Denying one of those without a reason fails. |
 | `additionalContext` | A string appended to the agent's context. |
 | `updatedInput` | Replacement input for the pending call. |
 
 Per-event restrictions are enforced, not documented-and-hoped:
 
-- `sessionStart` and `afterTool` cannot deny, stop, or replace input.
+- `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input.
 - `beforeTool` cannot stop, and cannot replace input while denying.
 - `stop` accepts only `continue`, or `deny` with a reason.
+- `agentStop` cannot stop the parent flow or replace input, and on Codex it cannot add context.
 
 An unknown key, a wrong type, or a violation of any rule above fails the hook with a clear
 message instead of being projected into a host document that would misbehave silently.

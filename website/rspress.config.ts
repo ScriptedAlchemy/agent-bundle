@@ -100,9 +100,10 @@ export default defineConfig({
       checkDeadImages: true,
     },
   },
+  // `include` entries are directories, so listing the homepage there would
+  // silently drop it from the check. The default walks each locale root.
   languageParity: {
     enabled: true,
-    include: ['index.mdx', 'guide', 'reference', 'examples', 'contributing'],
     exclude: ['api'],
   },
   themeConfig: {
@@ -113,6 +114,11 @@ export default defineConfig({
     socialLinks: [{ icon: 'github', mode: 'link', content: repositoryUrl }],
   },
   plugins: [
+    // TypeDoc and twoslash compile packages/agent-bundle/src with the
+    // `typescript` pinned in website/package.json. That pin is TypeScript 6
+    // because typedoc 0.28 peers on `<= 6.0.x` while the repo root is on
+    // TypeScript 7, so TS7-only syntax in the package fails here first, with
+    // an error that names the docsite rather than the cause.
     pluginTypeDoc({
       entryPoints: publicApiEntryPoints,
       outDir: generatedApiDir,
@@ -160,6 +166,8 @@ export default defineConfig({
       {
         llmsTxt: { name: 'llms.txt' },
         llmsFullTxt: { name: 'llms-full.txt' },
+        // Strip theme imports and unwrap JSX so the homepage ships as Markdown.
+        mdFiles: { mdxToMd: true },
         include: ({ page }) => page.lang === 'en',
         exclude: ({ page }) => page.routePath.includes('/api/'),
       },
@@ -171,6 +179,7 @@ export default defineConfig({
           onTitleGenerate: () => `# ${siteTitle}\n\n> ${siteDescriptionZh}`,
         },
         llmsFullTxt: { name: 'zh/llms-full.txt' },
+        mdFiles: { mdxToMd: true },
         include: ({ page }) => page.lang === 'zh',
         exclude: ({ page }) => page.routePath.includes('/api/'),
       },

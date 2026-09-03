@@ -175,9 +175,9 @@ this target instead of being silently dropped.
 </Tab>
 </Tabs>
 
-Generated wrapper names carry a content hash. `dist/agent-bundle.manifest.json` records every
-emitted file with its SHA-256, so later validation compares real bytes rather than checking that
-a path exists.
+Generated wrapper names end in a short digest of the declaration they were compiled from, not of
+their contents. `dist/agent-bundle.manifest.json` records every emitted file with its SHA-256, so
+later validation compares real bytes rather than checking that a path exists.
 
 </div>
 </div>

@@ -225,8 +225,8 @@ npx agent-bundle mcp invoke --artifact dist --target claude --server curator \
 npx agent-bundle mcp run --artifact dist --target claude --server curator
 ```
 
-`mcp run` executes one built stdio server in the foreground: it resolves the content-hashed
-generated entry from the target's MCP manifest, expands path tokens through the target adapter,
+`mcp run` executes one built stdio server in the foreground: it resolves the generated entry
+(named with a digest of the server name) from the target's MCP manifest, expands path tokens through the target adapter,
 loads the project-root `.env` set, and forwards the child's exit code. Without `--artifact`, a
 temporary artifact is built first.
 

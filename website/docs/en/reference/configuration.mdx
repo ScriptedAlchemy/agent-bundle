@@ -87,8 +87,8 @@ event and tool selector lowers to a host-native event and matcher is the generat
 
 The **hook result** contract is documented in full in [Hooks](../guide/authoring/hooks.mdx). One
 field is worth repeating because it is easy to get wrong: `reason` is a non-empty string that is
-valid **only** when denying a `beforeTool` or `stop` hook, and denying one of those without a
-reason fails. `agentStop` is not one of them.
+valid **only** when denying a `beforeTool`, `stop`, or `agentStop` hook, and denying one of those
+without a reason fails.
 
 ## output and runtime
 

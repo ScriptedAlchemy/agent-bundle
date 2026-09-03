@@ -102,15 +102,16 @@ export default (event: SessionStartEvent) => ({
 | 键 | 契约 |
 | --- | --- |
 | `outcome` | `continue`、`deny` 或 `stop`。 |
-| `reason` | 非空字符串，仅在拒绝 `beforeTool` 或 `stop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
+| `reason` | 非空字符串，仅在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
 | `additionalContext` | 追加到智能体上下文的字符串。 |
 | `updatedInput` | 用于替换待执行调用的输入。 |
 
 逐事件的限制是被强制执行的，而不是「写在文档里、希望有人遵守」：
 
-- `sessionStart` 与 `afterTool` 不能拒绝、停止或替换输入。
+- `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。
 - `beforeTool` 不能停止，也不能在拒绝的同时替换输入。
 - `stop` 只接受 `continue`，或带原因的 `deny`。
+- `agentStop` 不能停止父流程或替换输入；在 Codex 上也不能追加上下文。
 
 未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
 异常却毫无声响的宿主文档。
