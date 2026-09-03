@@ -1,6 +1,4 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
-
-import { isInsideOrEqual } from '../core/paths.ts';
+import { posix, win32 } from 'node:path';
 
 /**
  * Agent Plugins 1.0.0 normative MCP rules that the pinned `mcp.schema.json`
@@ -36,6 +34,23 @@ const isLoopbackHost = (hostname: string): boolean =>
   hostname === '::1' ||
   loopbackIpv4Pattern.test(hostname);
 
+/**
+ * Platform-independent §4.1 containment. The emitted value is interpreted by
+ * the consuming host, not the build host, so backslashes and NULs are refused
+ * outright (a POSIX build would otherwise accept `./safe\..\..\outside` that
+ * Windows resolves outside the root) and the remainder is normalized with
+ * POSIX semantics only.
+ */
+const hasForbiddenPathBytes = (value: string): boolean => value.includes('\\') || value.includes('\0');
+
+const staysInsidePosixRoot = (relativePath: string): boolean => {
+  const root = '/plugin/anchor';
+  const resolved = posix.normalize(posix.join(root, relativePath));
+  return resolved === root || resolved.startsWith(`${root}/`);
+};
+
+const isAnyPlatformAbsolute = (value: string): boolean => posix.isAbsolute(value) || win32.isAbsolute(value);
+
 /** §7.2.1: a stdio command is a bare executable name or a plugin-relative `./` path. */
 export const portableCommandIssues = (command: unknown): readonly PortableMcpRuleIssue[] => {
   if (typeof command !== 'string') return Object.freeze([]);
@@ -46,12 +61,12 @@ export const portableCommandIssues = (command: unknown): readonly PortableMcpRul
     )]);
   }
   if (command.startsWith('./')) {
-    if (command.includes('\\') || command.includes('\0') || !isInsideOrEqual('/plugin', resolve('/plugin', normalize(command)))) {
+    if (hasForbiddenPathBytes(command) || !staysInsidePosixRoot(command)) {
       return Object.freeze([issue('command', `${JSON.stringify(command)} escapes the plugin root (Agent Plugins 1.0.0 §4.1)`)]);
     }
     return Object.freeze([]);
   }
-  if (command.length === 0 || /[\s/\\\0]/u.test(command) || isAbsolute(command) || command.startsWith('.')) {
+  if (command.length === 0 || /[\s/\\\0]/u.test(command) || isAnyPlatformAbsolute(command) || command.startsWith('.')) {
     return Object.freeze([issue(
       'command',
       `${JSON.stringify(command)} is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1)`,
@@ -71,9 +86,13 @@ export const portableCwdIssues = (cwd: unknown): readonly PortableMcpRuleIssue[]
         ? `.${cwd.slice('${PLUGIN_DATA}'.length)}`
         : undefined;
   if (relativePart === undefined) return Object.freeze([]);
-  const anchor = join('/plugin', 'anchor');
-  const candidate = resolve(anchor, normalize(relativePart === '.' ? './' : relativePart));
-  if (isInsideOrEqual(anchor, candidate)) return Object.freeze([]);
+  if (hasForbiddenPathBytes(relativePart)) {
+    return Object.freeze([issue(
+      'cwd',
+      `${JSON.stringify(cwd)} must use forward-slash separators without backslashes or NUL so every consuming platform resolves it identically (Agent Plugins 1.0.0 §4.1)`,
+    )]);
+  }
+  if (staysInsidePosixRoot(relativePart)) return Object.freeze([]);
   const scope = cwd.startsWith('${PLUGIN_DATA}') ? 'plugin data directory' : 'plugin root';
   return Object.freeze([issue('cwd', `${JSON.stringify(cwd)} escapes its ${scope} after resolution (Agent Plugins 1.0.0 §7.2.1)`)]);
 };
