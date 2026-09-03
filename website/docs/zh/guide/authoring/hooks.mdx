@@ -191,9 +191,12 @@ Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的
 两种形态共享输出的 `hooks/hooks.json` 接线，并且都编译成宿主以
 `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用的包装层。统一 `plugin`
 target 还会为 Cursor 写出 `hooks/hooks-cursor.json` 与 `hooks/<name>.cursor.mjs`（`preToolUse` /
-`postToolUse` 小驼峰）。`.claude-plugin/plugin.json` 会写明 `./hooks/hooks.json`，这样 Claude Code
-只加载 Claude/Codex 文档，而不会用 PascalCase 的 `hook_event_name`（`PreToolUse` / `PostToolUse`）
-去调用那些 Cursor 包装层。配置声明的处理器
+`postToolUse` 小驼峰）。Claude Code 与 Codex 按约定加载 `hooks/hooks.json`，且从不扫描 `hooks/`
+下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针报告为重复的
+hooks 文件（`manifest.hooks` 只用于额外文档）。每个包装层都拿信封里的 `hook_event_name` 与为
+自己宿主烘焙的拼写比较（Claude 与 Codex 为 `PreToolUse` / `PostToolUse`），所以 Claude 会话里出现
+`native hook_event_name must equal postToolUse`，说明 Claude 插件根目录下装的是为 Cursor 构建的
+包装层，而不是 Claude 发送了小驼峰。配置声明的处理器
 在该包装层进程内运行。`runtime: 'shared'` 的事件路由则转发给生成的 MCP 服务器进程内的常驻运行时，
 因此钩子与工具共享状态：
 
