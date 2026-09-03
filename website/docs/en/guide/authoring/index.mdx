@@ -69,7 +69,7 @@ standard only through CLI translation, which is why its dedicated target remains
 | `runtime` | `node` — the minimum Node.js version for generated executables. |
 | `payload` | Prebuilt directory trees packaged byte-for-byte. |
 | `state` | `false` to disable the `src/state.ts` convention. |
-| `marketplace` | Whether to emit local marketplace manifests. |
+| `marketplace` | `true` adds Cursor's optional `.cursor-plugin/marketplace.json`. Claude Code and Codex always emit their local marketplace manifests regardless. |
 | `evals` | Eval suite discovery (`include`), the run directory (`runsDir`), and the optional `semanticGrader`. See [Evaluations](../development/evaluations.mdx). |
 | `dev` | Development-only settings that never reach an artifact, such as `agentApi`. |
 | `tools` | The single bundler escape hatch. |
