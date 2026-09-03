@@ -19,6 +19,7 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   supportedEventRouteNamesFrom,
@@ -427,7 +428,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.22.0',
+  adapterRevision: '1.23.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -3383,6 +3384,11 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude contract does not support both required modern MCP transports.',
     ),
+    // Canonical component kinds the pinned Claude contract does not document
+    // (#100): diagnostics reach Claude only as an LSP server option, and no
+    // editor/native extension component exists.
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     monitors: capabilityStateFromSupport(
       capabilityTable.plugin.monitors.commandTokens.length === 4 &&
         ['${CLAUDE_PLUGIN_ROOT}', '${CLAUDE_PLUGIN_DATA}', '${CLAUDE_PROJECT_DIR}', '${ENV_VAR}']

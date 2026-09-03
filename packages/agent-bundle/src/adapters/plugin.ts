@@ -1,4 +1,5 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../core/types.ts';
@@ -234,7 +235,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.25.0',
+  adapterRevision: '1.26.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -625,18 +626,18 @@ const compositeEventCapabilities = Object.freeze(Object.fromEntries(
     }),
 ));
 
-const componentCapabilities = Object.freeze(Object.fromEntries(
-  [cliBinCapability, 'commands', 'hooks', 'mcp', 'rules', 'skills'].map((capability) => [
-    capability,
-    unionCapabilityStates(
-      unionCapabilityStates(
-        claudeAdapter.capabilities[capability]!,
-        codexAdapter.capabilities[capability]!,
-      ),
-      cursorAdapter.capabilities[capability]!,
-    ),
-  ]),
-));
+/** The composite emits a kind's surface when any host half does. */
+const compositeUnion = (capability: string): CapabilityState => unionCapabilityStates(
+  unionCapabilityStates(
+    claudeAdapter.capabilities[capability]!,
+    codexAdapter.capabilities[capability]!,
+  ),
+  cursorAdapter.capabilities[capability]!,
+);
+
+// One shared plugin root serves every host, so the routed CLI bin is hosted
+// exactly like the shared `scripts/` and `mcp/` surfaces (#387).
+const cliBinUnion = compositeUnion(cliBinCapability);
 
 const codexHookContractUnifiedCapabilities = Object.freeze(Object.fromEntries([
   ...codexHookContractCapabilities.map((capability) => [
@@ -702,337 +703,376 @@ const cursorOnlyCapabilities = Object.freeze(Object.fromEntries(
     ]),
 ));
 
+const pluginCapabilities: Readonly<Record<string, CapabilityState>> = Object.freeze({
+  ...cursorOnlyCapabilities,
+  ...agentCapabilities,
+  ...codexHookContractUnifiedCapabilities,
+  ...compositeEventCapabilities,
+  bin: unavailableCapability(
+    'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',
+  ),
+  // One shared plugin root serves every host, so the routed CLI bin is
+  // hosted exactly like the shared `scripts/` and `mcp/` surfaces (#387).
+  [cliBinCapability]: cliBinUnion,
+  channels: unavailableCapability(
+    'The unified bundle emits the Claude-only channels manifest field, but the pinned Codex and Cursor contracts declare no shared message-channel surface.',
+  ),
+  commands: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
+    cursorAdapter.capabilities.commands!,
+  ),
+  interfaceAssets: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceAssets!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceBrandColor: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceBrandColor!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceCategoryCapabilities: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceCategoryCapabilities!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceDescriptions: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceDescriptions!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceIdentity: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceIdentity!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceStarterPrompts: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceStarterPrompts!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  interfaceUrls: intersectCapabilityStates(
+    codexAdapter.capabilities.interfaceUrls!,
+    unavailableCapability(interfaceUnifiedReason),
+  ),
+  claudePluginDataEnvironment: intersectCapabilityStates(
+    codexAdapter.capabilities.claudePluginDataEnvironment!,
+    unavailableCapability(
+      'The pinned Cursor hook contract does not export the CLAUDE_PLUGIN_DATA compatibility variable, so the unified bundle cannot rely on it across hosts.',
+    ),
+  ),
+  claudePluginRootEnvironment: intersectCapabilityStates(
+    codexAdapter.capabilities.claudePluginRootEnvironment!,
+    unavailableCapability(
+      'The pinned Cursor hook contract does not export the CLAUDE_PLUGIN_ROOT compatibility variable, so the unified bundle cannot rely on it across hosts.',
+    ),
+  ),
+  // The Claude half emits the declaration, but neither pinned non-Claude
+  // manifest has a shared dependency-resolution surface.
+  dependencies: intersectCapabilityStates(
+    claudeAdapter.capabilities.dependencies!,
+    unavailableCapability(
+      'The pinned Codex and Cursor plugin contracts publish no dependency declaration or resolution surface; manifest dependencies reach Claude Code only.',
+    ),
+  ),
+  nodeDependencyInstall: intersectCapabilityStates(
+    claudeAdapter.capabilities.nodeDependencyInstall!,
+    unavailableCapability(
+      'The unified bundle emits compile-time host artifacts and has no shared host-owned Node dependency installation transaction.',
+    ),
+  ),
+  yarnPnpmInstallAlternative: intersectCapabilityStates(
+    claudeAdapter.capabilities.yarnPnpmInstallAlternative!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared Claude-style Yarn or pnpm persistent-data installation fallback.',
+    ),
+  ),
+  pluginCacheLifecycle: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginCacheLifecycle!,
+    unavailableCapability(
+      'The unified bundle does not own one cross-host plugin cache, version resolution, orphan sweep, or symlink materialization lifecycle.',
+    ),
+  ),
+  pluginPathSubstitution: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginPathSubstitution!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts do not share Claude path placeholders or their component-specific substitution field table.',
+    ),
+  ),
+  pluginDataLifecycle: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginDataLifecycle!,
+    unavailableCapability(
+      'The unified bundle cannot delete or preserve Claude persistent plugin data as one cross-host uninstall transaction.',
+    ),
+  ),
+  managedAllowManagedHooksOnly: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedAllowManagedHooksOnly!,
+    unavailableCapability(
+      'The unified bundle cannot configure a Claude-only managed hook policy, and the pinned Codex and Cursor contracts publish no shared allowManagedHooksOnly surface.',
+    ),
+  ),
+  managedBlockedMarketplaces: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedBlockedMarketplaces!,
+    unavailableCapability(
+      'The unified bundle cannot configure a Claude-only managed marketplace denylist, and the pinned Codex and Cursor contracts publish no shared blockedMarketplaces surface.',
+    ),
+  ),
+  managedDisableCommandPluginSources: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedDisableCommandPluginSources!,
+    unavailableCapability(
+      'The unified bundle cannot configure Claude-only command-source policy, and the pinned Codex and Cursor contracts publish no shared disableCommandPluginSources surface.',
+    ),
+  ),
+  managedDisableSideloadFlags: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedDisableSideloadFlags!,
+    unavailableCapability(
+      'The unified bundle cannot configure Claude-only sideload policy, and the pinned Codex and Cursor contracts publish no shared disableSideloadFlags surface.',
+    ),
+  ),
+  managedPluginScope: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedPluginScope!,
+    unavailableCapability(
+      'The unified bundle has no cross-host managed installation transaction, and the pinned Codex and Cursor contracts publish no shared managed plugin scope.',
+    ),
+  ),
+  managedPluginSuggestions: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedPluginSuggestions!,
+    unavailableCapability(
+      'The unified bundle cannot configure Claude-only contextual plugin suggestions, and the pinned Codex and Cursor contracts publish no shared pluginSuggestionMarketplaces surface.',
+    ),
+  ),
+  managedStrictKnownMarketplaces: intersectCapabilityStates(
+    claudeAdapter.capabilities.managedStrictKnownMarketplaces!,
+    unavailableCapability(
+      'The unified bundle cannot configure a Claude-only managed marketplace allowlist, and the pinned Codex and Cursor contracts publish no shared strictKnownMarketplaces surface.',
+    ),
+  ),
+  marketplaceCliLifecycle: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.marketplaceCliLifecycle!,
+      codexAdapter.capabilities.marketplaceCliLifecycle!,
+    ),
+    unavailableCapability(
+      'The unified bundle emits host marketplace documents but cannot add, list, remove, or update marketplaces as one cross-host lifecycle transaction.',
+    ),
+  ),
+  install: unavailableCapability(
+    'Plugin is a multi-host distribution profile, not one host runtime with a single installation transaction.',
+  ),
+  marketplace: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
+    cursorAdapter.capabilities.marketplace!,
+  ),
+  marketplaceManifest: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.marketplaceManifest!,
+      cursorAdapter.capabilities.marketplaceManifest!,
+    ),
+    unavailableCapability(
+      'The unified bundle emits the Claude marketplace overlay and the Cursor marketplace document, but the pinned Codex contract does not share a completed marketplace manifest surface.',
+    ),
+  ),
+  allowCrossMarketplaceDependenciesOn: intersectCapabilityStates(
+    claudeAdapter.capabilities.allowCrossMarketplaceDependenciesOn!,
+    unavailableCapability(
+      'The unified bundle emits Claude allowCrossMarketplaceDependenciesOn, but the pinned Codex and Cursor contracts declare no shared cross-marketplace dependency allowlist.',
+    ),
+  ),
+  hooks: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
+    cursorAdapter.capabilities.hooks!,
+  ),
+  // Cursor is excluded because it declares no LSP capability surface at all.
+  // Claude supports LSP and Codex has no LSP surface, so this intersection is
+  // honestly unavailable even though the Claude half still emits `.lsp.json`.
+  lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
+  // No pinned host documents a diagnostics-provider or native extension
+  // component, so both canonical kinds are honestly unavailable everywhere.
+  nativeDiagnostics: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.nativeDiagnostics!,
+      codexAdapter.capabilities.nativeDiagnostics!,
+    ),
+    cursorAdapter.capabilities.nativeDiagnostics!,
+  ),
+  nativeExtension: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.nativeExtension!,
+      codexAdapter.capabilities.nativeExtension!,
+    ),
+    cursorAdapter.capabilities.nativeExtension!,
+  ),
+  manifestMetadata: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.manifestMetadata!,
+      codexAdapter.capabilities.manifestMetadata!,
+    ),
+    cursorAdapter.capabilities.manifestMetadata!,
+  ),
+  manifestPaths: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.manifestPaths!,
+      codexAdapter.capabilities.manifestPaths!,
+    ),
+    unavailableCapability(
+      'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
+    ),
+  ),
+  mcp: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
+    cursorAdapter.capabilities.mcp!,
+  ),
+  pluginDataEnvironment: intersectCapabilityStates(
+    codexAdapter.capabilities.pluginDataEnvironment!,
+    unavailableCapability(
+      'The pinned Claude and Cursor hook contracts do not export the Codex-specific PLUGIN_DATA variable, so the unified bundle cannot rely on it across hosts.',
+    ),
+  ),
+  pluginMcpPolicyApprovalModes: intersectCapabilityStates(
+    codexAdapter.capabilities.pluginMcpPolicyApprovalModes!,
+    unavailableCapability(mcpPolicyUnifiedReason),
+  ),
+  pluginMcpPolicyEnabled: intersectCapabilityStates(
+    codexAdapter.capabilities.pluginMcpPolicyEnabled!,
+    unavailableCapability(mcpPolicyUnifiedReason),
+  ),
+  pluginMcpPolicyTools: intersectCapabilityStates(
+    codexAdapter.capabilities.pluginMcpPolicyTools!,
+    unavailableCapability(mcpPolicyUnifiedReason),
+  ),
+  pluginRootEnvironment: intersectCapabilityStates(
+    codexAdapter.capabilities.pluginRootEnvironment!,
+    unavailableCapability(
+      'The pinned Claude and Cursor hook contracts do not export the Codex-specific PLUGIN_ROOT variable, so the unified bundle cannot rely on it across hosts.',
+    ),
+  ),
+  registeredMcpApps: intersectCapabilityStates(
+    codexAdapter.capabilities.registeredMcpApps!,
+    unavailableCapability(
+      'The pinned Claude and Cursor plugin contracts publish no registered-MCP app mapping document; the emitted .app.json reaches Codex only.',
+    ),
+  ),
+  monitors: unavailableCapability(
+    'The unified bundle emits Claude-only experimental background monitors, but the pinned Codex and Cursor contracts declare no shared monitor surface.',
+  ),
+  outputStyles: unavailableCapability(
+    'The unified bundle emits Claude-only output styles, but the pinned Codex and Cursor contracts declare no shared output styles surface.',
+  ),
+  pluginCliLifecycle: intersectCapabilityStates(
+    intersectCapabilityStates(
+      claudeAdapter.capabilities.pluginCliLifecycle!,
+      codexAdapter.capabilities.pluginCliLifecycle!,
+    ),
+    unavailableCapability(
+      'The unified bundle emits host artifacts but cannot run Claude-only plugin creation, installation, state, inspection, update, or release commands.',
+    ),
+  ),
+  pluginInstallScopes: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginInstallScopes!,
+    unavailableCapability(
+      'The unified bundle has no shared user, project, local, or managed installation-scope transaction across its three hosts.',
+    ),
+  ),
+  pluginReload: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginReload!,
+    unavailableCapability(
+      'The unified bundle cannot reload or restart running host sessions, and the pinned hosts publish no shared plugin reload lifecycle.',
+    ),
+  ),
+  pluginTrustGates: intersectCapabilityStates(
+    claudeAdapter.capabilities.pluginTrustGates!,
+    unavailableCapability(
+      'The unified bundle cannot accept host trust or security prompts, and the pinned hosts publish no shared plugin trust-gate transaction.',
+    ),
+  ),
+  // The bundle exposes Cursor's real rules directory; the composite row is
+  // the honest three-host intersection, so it stays non-supported while
+  // Claude and Codex cannot consume rules.
+  rules: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
+    cursorAdapter.capabilities.rules!,
+  ),
+  // Neither pinned non-Claude contract declares a plugin settings-defaults
+  // surface at all, so this intersection is honestly unavailable even
+  // though the Claude half still emits `settings.json`.
+  settings: intersectCapabilityStates(
+    claudeAdapter.capabilities.settings!,
+    unavailableCapability(
+      'The pinned Codex and Cursor plugin contracts publish no plugin settings-defaults surface; plugin-root settings.json reaches Claude Code only.',
+    ),
+  ),
+  skills: intersectCapabilityStates(
+    intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
+    cursorAdapter.capabilities.skills!,
+  ),
+  skillsDirectoryLspTrust: intersectCapabilityStates(
+    claudeAdapter.capabilities.skillsDirectoryLspTrust!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared @skills-dir LSP trust gate.',
+    ),
+  ),
+  skillsDirectoryMcpApproval: intersectCapabilityStates(
+    claudeAdapter.capabilities.skillsDirectoryMcpApproval!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared @skills-dir per-server MCP approval gate.',
+    ),
+  ),
+  skillsDirectoryMonitors: intersectCapabilityStates(
+    claudeAdapter.capabilities.skillsDirectoryMonitors!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared project-scope @skills-dir monitor policy.',
+    ),
+  ),
+  skillsDirectoryPlugins: intersectCapabilityStates(
+    claudeAdapter.capabilities.skillsDirectoryPlugins!,
+    unavailableCapability(
+      'The unified bundle does not install into host skills directories, and the pinned Codex and Cursor contracts publish no shared @skills-dir identity.',
+    ),
+  ),
+  skillsDirectoryProjectTrust: intersectCapabilityStates(
+    claudeAdapter.capabilities.skillsDirectoryProjectTrust!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared project-scope @skills-dir workspace-trust gate.',
+    ),
+  ),
+  syncedPlugins: intersectCapabilityStates(
+    claudeAdapter.capabilities.syncedPlugins!,
+    unavailableCapability(
+      'The pinned Codex and Cursor contracts publish no shared claude.ai-style account plugin synchronization surface.',
+    ),
+  ),
+  themes: unavailableCapability(
+    'The unified bundle emits Claude-only experimental themes, but the pinned Codex and Cursor contracts declare no shared theme surface.',
+  ),
+  userConfig: unavailableCapability(
+    'The unified bundle emits the Claude-only userConfig manifest field, but the pinned Codex and Cursor contracts declare no shared enable-time option surface.',
+  ),
+  workflows: unavailableCapability(
+    'The unified bundle emits Claude-only workflows, but the pinned Codex and Cursor contracts declare no shared workflows surface.',
+  ),
+});
+
+/**
+ * Emission dispatch per canonical component kind (#100): every published
+ * intersection row stays visible to inspection (the `agents` G5 deferral keeps
+ * its reason), and the kinds the composite emits when any host half does
+ * (`lsp` rides the Claude half even though the three-host intersection stays
+ * unavailable) are overridden with the union so inspection reports what the
+ * bundle actually writes. Event routes lower through the shared bundle hook
+ * contract and keep the intersection judgment validation already applies.
+ */
+const componentCapabilities: Readonly<Record<string, CapabilityState>> = Object.freeze({
+  ...pluginCapabilities,
+  ...Object.fromEntries(
+    [cliBinCapability, 'commands', 'hooks', 'lsp', 'mcp', 'nativeDiagnostics', 'nativeExtension', 'rules', 'skills']
+      .map((capability) => [capability, compositeUnion(capability)]),
+  ),
+});
+
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
-  capabilities: Object.freeze({
-    ...cursorOnlyCapabilities,
-    ...agentCapabilities,
-    ...codexHookContractUnifiedCapabilities,
-    ...compositeEventCapabilities,
-    bin: unavailableCapability(
-      'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',
-    ),
-    // One shared plugin root serves every host, so the routed CLI bin is
-    // hosted exactly like the shared `scripts/` and `mcp/` surfaces (#387).
-    [cliBinCapability]: componentCapabilities[cliBinCapability]!,
-    channels: unavailableCapability(
-      'The unified bundle emits the Claude-only channels manifest field, but the pinned Codex and Cursor contracts declare no shared message-channel surface.',
-    ),
-    commands: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.commands!, codexAdapter.capabilities.commands!),
-      cursorAdapter.capabilities.commands!,
-    ),
-    interfaceAssets: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceAssets!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceBrandColor: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceBrandColor!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceCategoryCapabilities: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceCategoryCapabilities!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceDescriptions: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceDescriptions!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceIdentity: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceIdentity!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceStarterPrompts: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceStarterPrompts!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    interfaceUrls: intersectCapabilityStates(
-      codexAdapter.capabilities.interfaceUrls!,
-      unavailableCapability(interfaceUnifiedReason),
-    ),
-    claudePluginDataEnvironment: intersectCapabilityStates(
-      codexAdapter.capabilities.claudePluginDataEnvironment!,
-      unavailableCapability(
-        'The pinned Cursor hook contract does not export the CLAUDE_PLUGIN_DATA compatibility variable, so the unified bundle cannot rely on it across hosts.',
-      ),
-    ),
-    claudePluginRootEnvironment: intersectCapabilityStates(
-      codexAdapter.capabilities.claudePluginRootEnvironment!,
-      unavailableCapability(
-        'The pinned Cursor hook contract does not export the CLAUDE_PLUGIN_ROOT compatibility variable, so the unified bundle cannot rely on it across hosts.',
-      ),
-    ),
-    // The Claude half emits the declaration, but neither pinned non-Claude
-    // manifest has a shared dependency-resolution surface.
-    dependencies: intersectCapabilityStates(
-      claudeAdapter.capabilities.dependencies!,
-      unavailableCapability(
-        'The pinned Codex and Cursor plugin contracts publish no dependency declaration or resolution surface; manifest dependencies reach Claude Code only.',
-      ),
-    ),
-    nodeDependencyInstall: intersectCapabilityStates(
-      claudeAdapter.capabilities.nodeDependencyInstall!,
-      unavailableCapability(
-        'The unified bundle emits compile-time host artifacts and has no shared host-owned Node dependency installation transaction.',
-      ),
-    ),
-    yarnPnpmInstallAlternative: intersectCapabilityStates(
-      claudeAdapter.capabilities.yarnPnpmInstallAlternative!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared Claude-style Yarn or pnpm persistent-data installation fallback.',
-      ),
-    ),
-    pluginCacheLifecycle: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginCacheLifecycle!,
-      unavailableCapability(
-        'The unified bundle does not own one cross-host plugin cache, version resolution, orphan sweep, or symlink materialization lifecycle.',
-      ),
-    ),
-    pluginPathSubstitution: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginPathSubstitution!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts do not share Claude path placeholders or their component-specific substitution field table.',
-      ),
-    ),
-    pluginDataLifecycle: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginDataLifecycle!,
-      unavailableCapability(
-        'The unified bundle cannot delete or preserve Claude persistent plugin data as one cross-host uninstall transaction.',
-      ),
-    ),
-    managedAllowManagedHooksOnly: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedAllowManagedHooksOnly!,
-      unavailableCapability(
-        'The unified bundle cannot configure a Claude-only managed hook policy, and the pinned Codex and Cursor contracts publish no shared allowManagedHooksOnly surface.',
-      ),
-    ),
-    managedBlockedMarketplaces: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedBlockedMarketplaces!,
-      unavailableCapability(
-        'The unified bundle cannot configure a Claude-only managed marketplace denylist, and the pinned Codex and Cursor contracts publish no shared blockedMarketplaces surface.',
-      ),
-    ),
-    managedDisableCommandPluginSources: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedDisableCommandPluginSources!,
-      unavailableCapability(
-        'The unified bundle cannot configure Claude-only command-source policy, and the pinned Codex and Cursor contracts publish no shared disableCommandPluginSources surface.',
-      ),
-    ),
-    managedDisableSideloadFlags: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedDisableSideloadFlags!,
-      unavailableCapability(
-        'The unified bundle cannot configure Claude-only sideload policy, and the pinned Codex and Cursor contracts publish no shared disableSideloadFlags surface.',
-      ),
-    ),
-    managedPluginScope: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedPluginScope!,
-      unavailableCapability(
-        'The unified bundle has no cross-host managed installation transaction, and the pinned Codex and Cursor contracts publish no shared managed plugin scope.',
-      ),
-    ),
-    managedPluginSuggestions: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedPluginSuggestions!,
-      unavailableCapability(
-        'The unified bundle cannot configure Claude-only contextual plugin suggestions, and the pinned Codex and Cursor contracts publish no shared pluginSuggestionMarketplaces surface.',
-      ),
-    ),
-    managedStrictKnownMarketplaces: intersectCapabilityStates(
-      claudeAdapter.capabilities.managedStrictKnownMarketplaces!,
-      unavailableCapability(
-        'The unified bundle cannot configure a Claude-only managed marketplace allowlist, and the pinned Codex and Cursor contracts publish no shared strictKnownMarketplaces surface.',
-      ),
-    ),
-    marketplaceCliLifecycle: intersectCapabilityStates(
-      intersectCapabilityStates(
-        claudeAdapter.capabilities.marketplaceCliLifecycle!,
-        codexAdapter.capabilities.marketplaceCliLifecycle!,
-      ),
-      unavailableCapability(
-        'The unified bundle emits host marketplace documents but cannot add, list, remove, or update marketplaces as one cross-host lifecycle transaction.',
-      ),
-    ),
-    install: unavailableCapability(
-      'Plugin is a multi-host distribution profile, not one host runtime with a single installation transaction.',
-    ),
-    marketplace: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.marketplace!, codexAdapter.capabilities.marketplace!),
-      cursorAdapter.capabilities.marketplace!,
-    ),
-    marketplaceManifest: intersectCapabilityStates(
-      intersectCapabilityStates(
-        claudeAdapter.capabilities.marketplaceManifest!,
-        cursorAdapter.capabilities.marketplaceManifest!,
-      ),
-      unavailableCapability(
-        'The unified bundle emits the Claude marketplace overlay and the Cursor marketplace document, but the pinned Codex contract does not share a completed marketplace manifest surface.',
-      ),
-    ),
-    allowCrossMarketplaceDependenciesOn: intersectCapabilityStates(
-      claudeAdapter.capabilities.allowCrossMarketplaceDependenciesOn!,
-      unavailableCapability(
-        'The unified bundle emits Claude allowCrossMarketplaceDependenciesOn, but the pinned Codex and Cursor contracts declare no shared cross-marketplace dependency allowlist.',
-      ),
-    ),
-    hooks: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.hooks!, codexAdapter.capabilities.hooks!),
-      cursorAdapter.capabilities.hooks!,
-    ),
-    // Cursor is excluded because it declares no LSP capability surface at all.
-    // Claude supports LSP and Codex has no LSP surface, so this intersection is
-    // honestly unavailable even though the Claude half still emits `.lsp.json`.
-    lsp: intersectCapabilityStates(claudeAdapter.capabilities.lsp!, codexAdapter.capabilities.lsp!),
-    manifestMetadata: intersectCapabilityStates(
-      intersectCapabilityStates(
-        claudeAdapter.capabilities.manifestMetadata!,
-        codexAdapter.capabilities.manifestMetadata!,
-      ),
-      cursorAdapter.capabilities.manifestMetadata!,
-    ),
-    manifestPaths: intersectCapabilityStates(
-      intersectCapabilityStates(
-        claudeAdapter.capabilities.manifestPaths!,
-        codexAdapter.capabilities.manifestPaths!,
-      ),
-      unavailableCapability(
-        'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
-      ),
-    ),
-    mcp: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.mcp!, codexAdapter.capabilities.mcp!),
-      cursorAdapter.capabilities.mcp!,
-    ),
-    pluginDataEnvironment: intersectCapabilityStates(
-      codexAdapter.capabilities.pluginDataEnvironment!,
-      unavailableCapability(
-        'The pinned Claude and Cursor hook contracts do not export the Codex-specific PLUGIN_DATA variable, so the unified bundle cannot rely on it across hosts.',
-      ),
-    ),
-    pluginMcpPolicyApprovalModes: intersectCapabilityStates(
-      codexAdapter.capabilities.pluginMcpPolicyApprovalModes!,
-      unavailableCapability(mcpPolicyUnifiedReason),
-    ),
-    pluginMcpPolicyEnabled: intersectCapabilityStates(
-      codexAdapter.capabilities.pluginMcpPolicyEnabled!,
-      unavailableCapability(mcpPolicyUnifiedReason),
-    ),
-    pluginMcpPolicyTools: intersectCapabilityStates(
-      codexAdapter.capabilities.pluginMcpPolicyTools!,
-      unavailableCapability(mcpPolicyUnifiedReason),
-    ),
-    pluginRootEnvironment: intersectCapabilityStates(
-      codexAdapter.capabilities.pluginRootEnvironment!,
-      unavailableCapability(
-        'The pinned Claude and Cursor hook contracts do not export the Codex-specific PLUGIN_ROOT variable, so the unified bundle cannot rely on it across hosts.',
-      ),
-    ),
-    registeredMcpApps: intersectCapabilityStates(
-      codexAdapter.capabilities.registeredMcpApps!,
-      unavailableCapability(
-        'The pinned Claude and Cursor plugin contracts publish no registered-MCP app mapping document; the emitted .app.json reaches Codex only.',
-      ),
-    ),
-    monitors: unavailableCapability(
-      'The unified bundle emits Claude-only experimental background monitors, but the pinned Codex and Cursor contracts declare no shared monitor surface.',
-    ),
-    outputStyles: unavailableCapability(
-      'The unified bundle emits Claude-only output styles, but the pinned Codex and Cursor contracts declare no shared output styles surface.',
-    ),
-    pluginCliLifecycle: intersectCapabilityStates(
-      intersectCapabilityStates(
-        claudeAdapter.capabilities.pluginCliLifecycle!,
-        codexAdapter.capabilities.pluginCliLifecycle!,
-      ),
-      unavailableCapability(
-        'The unified bundle emits host artifacts but cannot run Claude-only plugin creation, installation, state, inspection, update, or release commands.',
-      ),
-    ),
-    pluginInstallScopes: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginInstallScopes!,
-      unavailableCapability(
-        'The unified bundle has no shared user, project, local, or managed installation-scope transaction across its three hosts.',
-      ),
-    ),
-    pluginReload: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginReload!,
-      unavailableCapability(
-        'The unified bundle cannot reload or restart running host sessions, and the pinned hosts publish no shared plugin reload lifecycle.',
-      ),
-    ),
-    pluginTrustGates: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginTrustGates!,
-      unavailableCapability(
-        'The unified bundle cannot accept host trust or security prompts, and the pinned hosts publish no shared plugin trust-gate transaction.',
-      ),
-    ),
-    // The bundle exposes Cursor's real rules directory; the composite row is
-    // the honest three-host intersection, so it stays non-supported while
-    // Claude and Codex cannot consume rules.
-    rules: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.rules!, codexAdapter.capabilities.rules!),
-      cursorAdapter.capabilities.rules!,
-    ),
-    // Neither pinned non-Claude contract declares a plugin settings-defaults
-    // surface at all, so this intersection is honestly unavailable even
-    // though the Claude half still emits `settings.json`.
-    settings: intersectCapabilityStates(
-      claudeAdapter.capabilities.settings!,
-      unavailableCapability(
-        'The pinned Codex and Cursor plugin contracts publish no plugin settings-defaults surface; plugin-root settings.json reaches Claude Code only.',
-      ),
-    ),
-    skills: intersectCapabilityStates(
-      intersectCapabilityStates(claudeAdapter.capabilities.skills!, codexAdapter.capabilities.skills!),
-      cursorAdapter.capabilities.skills!,
-    ),
-    skillsDirectoryLspTrust: intersectCapabilityStates(
-      claudeAdapter.capabilities.skillsDirectoryLspTrust!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared @skills-dir LSP trust gate.',
-      ),
-    ),
-    skillsDirectoryMcpApproval: intersectCapabilityStates(
-      claudeAdapter.capabilities.skillsDirectoryMcpApproval!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared @skills-dir per-server MCP approval gate.',
-      ),
-    ),
-    skillsDirectoryMonitors: intersectCapabilityStates(
-      claudeAdapter.capabilities.skillsDirectoryMonitors!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared project-scope @skills-dir monitor policy.',
-      ),
-    ),
-    skillsDirectoryPlugins: intersectCapabilityStates(
-      claudeAdapter.capabilities.skillsDirectoryPlugins!,
-      unavailableCapability(
-        'The unified bundle does not install into host skills directories, and the pinned Codex and Cursor contracts publish no shared @skills-dir identity.',
-      ),
-    ),
-    skillsDirectoryProjectTrust: intersectCapabilityStates(
-      claudeAdapter.capabilities.skillsDirectoryProjectTrust!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared project-scope @skills-dir workspace-trust gate.',
-      ),
-    ),
-    syncedPlugins: intersectCapabilityStates(
-      claudeAdapter.capabilities.syncedPlugins!,
-      unavailableCapability(
-        'The pinned Codex and Cursor contracts publish no shared claude.ai-style account plugin synchronization surface.',
-      ),
-    ),
-    themes: unavailableCapability(
-      'The unified bundle emits Claude-only experimental themes, but the pinned Codex and Cursor contracts declare no shared theme surface.',
-    ),
-    userConfig: unavailableCapability(
-      'The unified bundle emits the Claude-only userConfig manifest field, but the pinned Codex and Cursor contracts declare no shared enable-time option surface.',
-    ),
-    workflows: unavailableCapability(
-      'The unified bundle emits Claude-only workflows, but the pinned Codex and Cursor contracts declare no shared workflows surface.',
-    ),
-  }),
+  capabilities: pluginCapabilities,
   componentCapabilities,
   hookContract: bundleHookContract,
+  // The composite plans the Claude and Codex sides from their own config
+  // extensions, so host-scoped declarations under those keys (for example
+  // `claude.lspServers`) are eligible for emission here.
+  lowersConfigExtensions: Object.freeze([claudeAdapter.name, codexAdapter.name]),
   metadata,
   mcpRuntime,
   name: pluginName,

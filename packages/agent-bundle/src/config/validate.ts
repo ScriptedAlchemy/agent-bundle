@@ -1324,7 +1324,11 @@ const validateEventRoutes = (
         continue;
       }
       const capabilityName = `event:${route.event}`;
-      const capability = registry.capabilityState?.(target, capabilityName);
+      // Admission uses the same judgment that decides emission and that
+      // `inspect` reports: the adapter's component override when published,
+      // else its top-level row.
+      const capability = registry.componentCapabilityState?.(target, capabilityName)
+        ?? registry.capabilityState?.(target, capabilityName);
       if (capability === undefined) {
         if (registry.supports(target, capabilityName)) continue;
         diagnostics.push({
@@ -2229,6 +2233,7 @@ export const validateModel = (
     ...(model.commands ?? []),
     ...(model.rules ?? []),
     ...model.hooks,
+    ...(model.lspServers ?? []),
     ...model.mcpServers,
     ...(model.mcpApps ?? []),
     ...model.scripts,

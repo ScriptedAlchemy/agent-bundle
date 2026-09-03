@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import { TargetRegistry, build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { TargetRegistry, build, createDefaultRegistry, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
+import { unavailableCapability } from '../src/adapters/capability-state.ts';
 import {
   nativeHookWrapperSource,
   planHooks,
@@ -132,7 +133,9 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
 
 const readyInspection = async (options: Parameters<typeof inspect>[0]) => {
   const result = await inspect(options);
-  if (result.state !== 'ready') throw new Error('Expected a ready inspection.');
+  if (result.state !== 'ready') {
+    throw new Error(`Expected a ready inspection: ${result.diagnostics.map((entry) => `${entry.code} ${entry.message}`).join('; ')}`);
+  }
   return result;
 };
 
@@ -811,6 +814,359 @@ it('reports skipped target/component pairs against each target emission surface'
       expect.objectContaining({ relativePath: 'rules/shared.mdc' }),
     ]));
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('accounts lsp servers and event routes as distinct canonical kinds with a per-kind host matrix (#100)', async () => {
+  const root = await createProject();
+  try {
+    await mkdir(join(root, 'src', 'events', 'session'), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'src', 'events', 'session', 'start.tsx'), [
+        "export const config = { runtime: 'standalone', targets: ['claude', 'codex', 'cursor', 'plugin'] };",
+        'export default async function SessionStart() {',
+        '  return null;',
+        '}',
+        '',
+      ].join('\n')),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        '  claude: {',
+        '    lspServers: {',
+        "      typescript: { command: 'typescript-language-server', args: ['--stdio'], extensionToLanguage: { '.ts': 'typescript' } },",
+        '    },',
+        '  },',
+        "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        "  targets: ['portable', 'codex', 'claude', 'cursor', 'plugin'],",
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    const result = await readyInspection({ root });
+    const planFor = (target: string) => result.plans.find((plan) => plan.target === target)!;
+    const componentsOf = (target: string, kind: string) => [
+      ...planFor(target).selected.filter((component) => component.kind === kind).map((component) => ({ ...component, outcome: 'selected' })),
+      ...planFor(target).skipped.filter((component) => component.kind === kind).map((component) => ({ ...component, outcome: 'skipped' })),
+    ];
+
+    // The Claude-declared LSP server is one `lsp` component. Its declaration
+    // is host-scoped, so it targets only the adapters that lower `claude.*`
+    // (Claude and the composite, which plans the Claude side); every other
+    // host reads as excluded by the declaration and still carries its own
+    // dated `lsp` judgment so the omission is explained in the host's words.
+    expect(componentsOf('claude', 'lsp')).toEqual([expect.objectContaining({
+      capability: expect.objectContaining({ evidence: expect.objectContaining({ target: 'claude' }), name: 'lsp', state: 'supported' }),
+      id: 'lsp:claude:typescript',
+      name: 'typescript',
+      outcome: 'selected',
+    })]);
+    expect(planFor('claude').entries).toEqual(expect.arrayContaining([expect.objectContaining({ relativePath: '.lsp.json' })]));
+    expect(componentsOf('plugin', 'lsp')).toEqual([expect.objectContaining({
+      capability: expect.objectContaining({ name: 'lsp', state: 'supported' }),
+      outcome: 'selected',
+    })]);
+    expect(planFor('plugin').entries).toEqual(expect.arrayContaining([expect.objectContaining({ relativePath: '.lsp.json' })]));
+    for (const target of ['codex', 'cursor', 'portable']) {
+      expect(componentsOf(target, 'lsp')).toEqual([expect.objectContaining({
+        capability: { name: 'lsp', reason: expect.stringMatching(/no LSP server/u), state: 'unavailable' },
+        name: 'typescript',
+        outcome: 'skipped',
+        reason: 'excluded-by-targets',
+      })]);
+      expect(planFor(target).entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+    }
+    expect(result.model.lspServers).toEqual([{
+      declaredBy: 'claude',
+      id: 'lsp:claude:typescript',
+      name: 'typescript',
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+      targets: ['claude', 'plugin'],
+    }]);
+
+    // Filesystem event routes report separately from config-declared hooks,
+    // judged by the host's row for their canonical event (#258 matrix).
+    expect(componentsOf('claude', 'hook')).toEqual([expect.objectContaining({
+      capability: expect.objectContaining({ name: 'hooks', state: 'supported' }),
+      name: 'sessionStart',
+      outcome: 'selected',
+    })]);
+    for (const target of ['claude', 'codex', 'cursor', 'plugin']) {
+      expect(componentsOf(target, 'event-route')).toEqual([expect.objectContaining({
+        capability: expect.objectContaining({ name: 'event:session/start', state: 'supported' }),
+        id: 'hook:event-route:session-start',
+        name: 'session/start',
+        outcome: 'selected',
+      })]);
+    }
+    expect(componentsOf('portable', 'event-route')).toEqual([expect.objectContaining({
+      capability: { name: 'event:session/start', reason: expect.any(String), state: 'unavailable' },
+      name: 'session/start',
+      outcome: 'skipped',
+      reason: 'excluded-by-targets',
+    })]);
+
+    // Every plan carries the full canonical kind matrix in kind order, with
+    // the host's judgment even for kinds the project never declares.
+    const kindOrder = [
+      'agent', 'cli', 'command', 'event-route', 'hook', 'lsp', 'mcp-app', 'mcp-server',
+      'native-diagnostics', 'native-extension', 'rule', 'script', 'skill',
+    ];
+    for (const plan of result.plans) {
+      expect(plan.kinds.map((report) => report.kind)).toEqual(kindOrder);
+      expect(Object.isFrozen(plan.kinds)).toBe(true);
+      expect(plan.kinds.find((report) => report.kind === 'script')).not.toHaveProperty('capability');
+      expect(plan.kinds.find((report) => report.kind === 'event-route')).not.toHaveProperty('capability');
+      for (const kind of ['native-diagnostics', 'native-extension']) {
+        expect(plan.kinds.find((report) => report.kind === kind)).toEqual({
+          capability: { name: kind === 'native-diagnostics' ? 'nativeDiagnostics' : 'nativeExtension', reason: expect.any(String), state: 'unavailable' },
+          kind,
+          selected: 0,
+          skipped: 0,
+        });
+      }
+    }
+    expect(planFor('claude').kinds.find((report) => report.kind === 'lsp')).toEqual({
+      capability: { evidence: { observedVersion: '2.1.250', target: 'claude' }, name: 'lsp', state: 'supported' },
+      kind: 'lsp',
+      selected: 1,
+      skipped: 0,
+    });
+    expect(planFor('cursor').kinds.find((report) => report.kind === 'lsp')).toMatchObject({ capability: { state: 'unavailable' }, selected: 0, skipped: 1 });
+    expect(planFor('claude').kinds.find((report) => report.kind === 'agent')).toEqual({
+      capability: { name: 'agents', reason: expect.stringContaining('#220'), state: 'unavailable' },
+      kind: 'agent',
+      selected: 0,
+      skipped: 0,
+    });
+    expect(planFor('cursor').kinds.find((report) => report.kind === 'agent')).toMatchObject({
+      capability: { name: 'agents', reason: expect.stringContaining('#220'), state: 'unavailable' },
+    });
+    // A host that publishes no row at all reads as an honest unavailable, never a silent pass.
+    expect(planFor('portable').kinds.find((report) => report.kind === 'agent')).toMatchObject({
+      capability: { name: 'agents', reason: 'The portable adapter publishes no agents capability row.', state: 'unavailable' },
+    });
+    // The composite judges kinds by emission dispatch but keeps every published
+    // intersection row, so its G5 agents deferral reason survives into inspect.
+    expect(planFor('plugin').kinds.find((report) => report.kind === 'agent')).toMatchObject({
+      capability: { name: 'agents', reason: expect.stringContaining('#220'), state: 'unavailable' },
+    });
+    expect(planFor('portable').kinds.find((report) => report.kind === 'event-route')).toEqual({ kind: 'event-route', selected: 0, skipped: 1 });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('accounts an admitted degraded event route as selected, matching the validation rule (#100)', async () => {
+  const root = await createProject();
+  // An advanced adapter that lowers session/start with a documented
+  // limitation: validation admits the degraded row, the planner emits the
+  // route, so inspection must report it as selected with that judgment.
+  const degradedContract = { ...syntheticHookContract, eventRouteNames: { 'session/start': 'SessionStart' } } satisfies TargetHookContract;
+  const registry = new TargetRegistry().register({
+    ...syntheticAdapter,
+    capabilities: {
+      ...supportedCapabilities('hooks', 'mcp'),
+      'event:session/start': {
+        evidence: { observedVersion: 'test', target: syntheticTarget },
+        reason: 'The synthetic host delivers session/start without a transcript path.',
+        state: 'degraded',
+      },
+    },
+    hookContract: degradedContract,
+    plan: (model: NormalizedPlugin) => {
+      const hooks = planHooks(model, syntheticTarget, degradedContract);
+      return Object.freeze({ diagnostics: hooks.diagnostics, entries: Object.freeze([]), hookEntries: hooks.hookEntries });
+    },
+  }, { default: true });
+  try {
+    await mkdir(join(root, 'src', 'events', 'session'), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'src', 'events', 'session', 'start.tsx'), [
+        "export const config = { runtime: 'standalone' };",
+        'export default async function SessionStart() {',
+        '  return null;',
+        '}',
+        '',
+      ].join('\n')),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        `  targets: ['${syntheticTarget}'],`,
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    const result = await readyInspection({ registry, root });
+    const plan = result.plans[0]!;
+    expect(plan.hookEntries.some((entry) => entry.event === 'sessionStart')).toBe(true);
+    expect(plan.selected).toEqual(expect.arrayContaining([expect.objectContaining({
+      capability: { evidence: { observedVersion: 'test', target: syntheticTarget }, name: 'event:session/start', reason: expect.any(String), state: 'degraded' },
+      kind: 'event-route',
+      name: 'session/start',
+    })]));
+    expect(plan.skipped.some((component) => component.kind === 'event-route')).toBe(false);
+    expect(plan.kinds.find((report) => report.kind === 'event-route')).toEqual({ kind: 'event-route', selected: 1, skipped: 0 });
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('judges event-route admission and lsp inheritance by the component-emission override, not the top-level row (#100)', async () => {
+  const root = await createProject();
+  const degradedContract = { ...syntheticHookContract, eventRouteNames: { 'session/start': 'SessionStart' } } satisfies TargetHookContract;
+  // The declaring adapter follows the composite-emission pattern: its
+  // top-level rows are honest intersections, its component overrides decide
+  // emission. A second adapter that lowers the `synthetic` extension inherits
+  // the LSP declaration because the override, not the intersection, governs.
+  const registry = new TargetRegistry()
+    .register({
+      ...syntheticAdapter,
+      capabilities: {
+        ...supportedCapabilities('hooks', 'mcp'),
+        'event:session/start': unavailableCapability('intersection: one half lacks session/start'),
+        lsp: unavailableCapability('intersection: one half lacks LSP'),
+      },
+      componentCapabilities: supportedCapabilities('hooks', 'mcp', 'lsp', 'event:session/start'),
+      hookContract: degradedContract,
+      plan: (model: NormalizedPlugin) => {
+        const hooks = planHooks(model, syntheticTarget, degradedContract);
+        return Object.freeze({ diagnostics: hooks.diagnostics, entries: Object.freeze([]), hookEntries: hooks.hookEntries });
+      },
+    }, { default: true })
+    .register({
+      ...syntheticAdapter,
+      capabilities: supportedCapabilities('hooks', 'lsp', 'mcp'),
+      configExtension: undefined,
+      lowersConfigExtensions: ['synthetic'],
+      name: 'composite',
+      plan: () => Object.freeze({ diagnostics: [], entries: Object.freeze([]) }),
+    });
+  try {
+    await mkdir(join(root, 'src', 'events', 'session'), { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'src', 'events', 'session', 'start.tsx'), [
+        `export const config = { runtime: 'standalone', targets: ['${syntheticTarget}'] };`,
+        'export default async function SessionStart() {',
+        '  return null;',
+        '}',
+        '',
+      ].join('\n')),
+      writeFile(join(root, 'agent-bundle.config.ts'), [
+        'export default {',
+        "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
+        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+        `  targets: ['${syntheticTarget}', 'composite'],`,
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+
+    const result = await readyInspection({ registry, root });
+    const synthetic = result.plans.find((plan) => plan.target === syntheticTarget)!;
+    // Validation admitted the route on the component override (the top-level
+    // row is unavailable) and inspection reports it selected on the same judgment.
+    expect(synthetic.selected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'event:session/start', state: 'supported' }), kind: 'event-route' }),
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
+    ]));
+    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', targets: [syntheticTarget, 'composite'] })]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('never reports an lsp component as selected when the declaring planner rejects the servers (#100)', async () => {
+  const root = await createProject();
+  try {
+    // Two servers claiming one extension suppress the whole `.lsp.json`
+    // document with a plan error; the inspection is then invalid rather than
+    // a ready plan that counts unemitted lsp components as selected.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      '  claude: {',
+      '    lspServers: {',
+      "      first: { command: 'first-ls', extensionToLanguage: { '.ts': 'typescript' } },",
+      "      second: { command: 'second-ls', extensionToLanguage: { '.ts': 'typescript' } },",
+      '    },',
+      '  },',
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await inspect({ root });
+    expect(result.state).toBe('invalid');
+    expect(result.plans).toEqual([]);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'claude.lsp.extension.conflict', severity: 'error' }),
+    ]));
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('never counts an opaque third-party lspServers declaration as emitted by a host that does not lower it (#100)', async () => {
+  const root = await createProject();
+  const registry = createDefaultRegistry().register({
+    ...syntheticAdapter,
+    capabilities: supportedCapabilities('hooks', 'lsp', 'mcp'),
+  });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
+      "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['claude', 'synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ registry, root });
+    const planFor = (target: string) => result.plans.find((plan) => plan.target === target)!;
+    // Claude publishes `lsp: supported`, but its planner reads only
+    // `claude.lspServers`; the synthetic declaration is excluded for Claude
+    // and writes no `.lsp.json` there, while the declaring adapter selects it.
+    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: ['synthetic'] })]);
+    expect(planFor('claude').skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'lsp', name: 'rust', reason: 'excluded-by-targets' }),
+    ]));
+    expect(planFor('claude').selected.some((component) => component.kind === 'lsp')).toBe(false);
+    expect(planFor('claude').entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+    expect(planFor('synthetic').selected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
+    ]));
+
+    // A composite that lowers a host's extension inherits its LSP declaration
+    // only when that host can lower LSP servers: `codex.lspServers` reaches
+    // neither the Codex half (unavailable) nor the composite bundle.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  codex: { lspServers: { rust: { command: 'rust-analyzer' } } },",
+      "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['codex', 'plugin'],",
+      '};',
+      '',
+    ].join('\n'));
+    const codexDeclared = await readyInspection({ registry, root });
+    expect(codexDeclared.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'codex', targets: ['codex'] })]);
+    const codexPlan = codexDeclared.plans.find((plan) => plan.target === 'codex')!;
+    const compositePlan = codexDeclared.plans.find((plan) => plan.target === 'plugin')!;
+    expect(codexPlan.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'unavailable' }), kind: 'lsp', reason: 'unsupported-capability' }),
+    ]));
+    expect(compositePlan.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'lsp', name: 'rust', reason: 'excluded-by-targets' }),
+    ]));
+    expect(compositePlan.selected.some((component) => component.kind === 'lsp')).toBe(false);
+    expect(compositePlan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }

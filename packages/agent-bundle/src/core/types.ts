@@ -582,6 +582,24 @@ export interface NormalizedConfigExtension {
   readonly value: unknown;
 }
 
+/**
+ * One language-server component (`lsp` kind, #100). LSP servers are declared
+ * through a host config extension's `lspServers` record (today only Claude
+ * documents such a surface: `claude.lspServers` → plugin-root `.lsp.json`).
+ * The component is still accounted against every selected target so each
+ * host's `lsp` capability row explains emission or omission; the declaring
+ * host keeps lowering and validating the server configuration itself.
+ */
+export interface NormalizedLspServer {
+  /** The config extension key that declared the server (for example `claude`). */
+  readonly declaredBy: string;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  /** Selected targets whose adapter lowers the declaring extension; other hosts are excluded by the declaration. */
+  readonly targets: readonly string[];
+}
+
 /** The selected runtime floor for generated executables, written to artifact metadata. */
 export interface NormalizedRuntime {
   readonly node: string;
@@ -627,6 +645,12 @@ export interface NormalizedPlugin {
   /** Adapter-declared host-native workflow directories, enumerated during normalization. */
   readonly hostWorkflows?: readonly NormalizedHostPayloadDirectory[];
   readonly hooks: readonly NormalizedHook[];
+  /**
+   * Language-server components declared through host config extensions.
+   * Present only when a selected host extension declares `lspServers`;
+   * optional so hand-constructed models predating the kind remain valid.
+   */
+  readonly lspServers?: readonly NormalizedLspServer[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
@@ -717,6 +741,8 @@ export interface NormalizationTargetRegistry {
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
+  /** True when the target's adapter reads the config extension `key` (its own key or a declared composite side). */
+  lowersConfigExtension?(name: string, key: string): boolean;
   nativeHookSources?(
     config: Readonly<AgentBundleConfig>,
     targetNames: readonly string[],

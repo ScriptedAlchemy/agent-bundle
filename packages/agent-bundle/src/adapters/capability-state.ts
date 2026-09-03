@@ -71,6 +71,38 @@ export const supportedEventRouteNamesFrom = (
     .map(([event, capability]) => [event, capability.nativeEvent!]),
 ));
 
+/** A pinned capability-table row: JSON imports widen the state literal, so unknown states fail closed. */
+export interface CapabilityTableRow {
+  readonly reason?: string;
+  readonly state: string;
+}
+
+/**
+ * Converts one pinned table row into the shared capability-state namespace.
+ * `supported` and `degraded` carry the adapter's pinned evidence identity;
+ * `unavailable` and `prohibited` carry the table's dated reason.
+ */
+export const capabilityFromTableRow = (
+  row: CapabilityTableRow,
+  evidence: CapabilityEvidence,
+): CapabilityState => {
+  switch (row.state) {
+    case 'supported':
+      return supportedCapability(evidence);
+    case 'degraded':
+      return Object.freeze({ evidence, reason: row.reason ?? '', state: 'degraded' });
+    case 'unavailable':
+      return unavailableCapability(row.reason ?? `The pinned ${evidence.target} contract does not support this surface.`);
+    case 'prohibited':
+      return Object.freeze({
+        reason: row.reason ?? `The pinned ${evidence.target} contract prohibits this surface.`,
+        state: 'prohibited',
+      });
+    default:
+      throw new TypeError(`Unsupported ${evidence.target} capability-table state ${JSON.stringify(row.state)}.`);
+  }
+};
+
 export const capabilityStateFromSupport = (
   supported: boolean,
   evidence: CapabilityEvidence,
