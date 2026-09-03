@@ -535,6 +535,70 @@ it('settle() fences in-flight probes, not only already-registered teardowns (#39
   }
 });
 
+it('still closes the transport and removes plugin data when a close() throws synchronously (#397 review)', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  let transportClosed = false;
+  try {
+    const service = serviceFor(root, {
+      createClient: () => client({
+        close: () => {
+          // Not a rejection: a synchronous throw from the SDK client's close.
+          throw new Error('client close exploded synchronously');
+        },
+      }),
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      createStdioTransport: () => transport(async () => {
+        transportClosed = true;
+      }),
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(report.status).toBe('ok');
+    await service.settle();
+    expect(transportClosed).toBe(true);
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a timeout even when the timeout teardown throws synchronously', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  let ticks = 0;
+  try {
+    const service = serviceFor(root, {
+      // Budget already spent at the connect step, so its synchronous-throwing
+      // timeout teardown runs on the spent-budget path.
+      clock: () => (ticks++ === 0 ? 0 : 10_000),
+      createClient: () => client({ connect: () => new Promise(() => undefined) }),
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      createStdioTransport: () => transport(() => {
+        throw new Error('transport close exploded synchronously');
+      }),
+      timeoutMs: 10,
+    });
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(report.status).toBe('timed-out');
+    expect(report.failure?.kind).toBe('connect');
+    await service.settle();
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('removes the fresh plugin data directory after every probe', async () => {
   const root = await createBundle();
   let pluginData: string | undefined;

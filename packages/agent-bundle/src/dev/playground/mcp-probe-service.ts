@@ -243,6 +243,19 @@ const positiveTimeout = (value: number): number => {
   return value;
 };
 
+/**
+ * Invoke a close callback so that both a synchronous throw and a rejection
+ * become one settled promise; teardown chains must never depend on a close
+ * being well behaved.
+ */
+const settledClose = (close: () => Promise<void>): Promise<void> => {
+  try {
+    return Promise.resolve(close()).then(() => undefined, () => undefined);
+  } catch {
+    return Promise.resolve();
+  }
+};
+
 export class McpProbeService {
   readonly #clock: () => number;
   readonly #createClient: () => McpProbeClient;
@@ -543,7 +556,13 @@ export class McpProbeService {
       // allowing a stalled close to extend the probe's total time budget. The
       // plugin-data removal is chained behind that teardown, so a close that
       // outlives this wait detaches together with the removal it gates.
-      const teardown = Promise.allSettled([client.close(), transport.close()]);
+      // Each close is invoked in isolation: a synchronously throwing close
+      // must neither skip the other close nor abort before the plugin-data
+      // removal below is registered.
+      const teardown = Promise.allSettled([
+        settledClose(() => client.close()),
+        settledClose(() => transport.close()),
+      ]);
       const cleanup = this.#removePluginDataAfter(teardown, options.pluginData);
       const teardownWait = new Promise<void>((resolvePromise) => {
         timer = setTimeout(resolvePromise, mcpProbeTeardownWaitMs);
@@ -612,13 +631,13 @@ export class McpProbeService {
       // Same contract as the timer path below: the transport's own close
       // (TERM/KILL for stdio) keeps running, but a stalled close never holds
       // the timed-out report — #execute's bounded teardown owns that wait.
-      void onTimeout().catch(() => undefined);
+      void settledClose(onTimeout);
       throw new McpProbeTimeoutError(kind);
     }
     let timer: NodeJS.Timeout | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        void onTimeout().catch(() => undefined);
+        void settledClose(onTimeout);
         reject(new McpProbeTimeoutError(kind));
       }, remaining);
       timer.unref();

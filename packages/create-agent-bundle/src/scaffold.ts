@@ -133,17 +133,24 @@ const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]):
   const exampleBin = example[2] ?? '';
   const proseBin = prose[1] ?? '';
   if (hosts.length === 0) {
+    // The scaffold also dropped this bin mapping from package.json, and the
+    // build never restores manifest entries, so re-enabling installers needs
+    // both edits: the config target and the bin entry the npx command resolves.
+    const binEntry = `"${proseBin}": "./dist/bin/${proseBin}.js"`;
     return contents
       .replace(readmeInstallExample, [
         '# no installer bin is generated for these targets; add claude, codex, or cursor',
-        '# to `targets` in agent-bundle.config.ts to get one',
+        '# to `targets` in agent-bundle.config.ts and restore the package.json bin entry',
+        `# ${binEntry} to get one`,
         '',
       ].join('\n'))
       .replace(readmeInstallProse, [
         'Installing the npm package does not mutate any host. This project selects',
         `no installable host target (${renderTargets(targets)}), so no \`${proseBin} install\``,
-        'command is generated; add `claude`, `codex`, or `cursor` to `targets` in',
-        '`agent-bundle.config.ts` to generate one.',
+        'command is generated and its `bin` entry was dropped from `package.json`. To',
+        'generate one, add `claude`, `codex`, or `cursor` to `targets` in',
+        `\`agent-bundle.config.ts\` and restore \`${binEntry}\` under \`bin\` in`,
+        '`package.json`; the build emits the installer file but never edits the manifest.',
         '',
       ].join('\n'));
   }

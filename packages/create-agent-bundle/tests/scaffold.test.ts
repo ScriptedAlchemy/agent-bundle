@@ -208,6 +208,17 @@ describe('scaffold', () => {
       expect(portableReadme).not.toMatch(/^npx \S+ install /mu);
       expect(portableReadme).toContain("no installable host target ('portable')");
       expect(portableReadme).toContain('add `claude`, `codex`, or `cursor` to `targets`');
+      // Re-enabling installers needs the dropped package.json bin entry back too,
+      // and the README names exactly the mapping the template shipped.
+      const templateManifest = JSON.parse(
+        await readFile(join(templatesRoot, 'cli-tool', 'package_json'), 'utf8'),
+      ) as { readonly bin: Record<string, string> };
+      const installerBin = `${placeholderName}-install`;
+      expect(templateManifest.bin[installerBin]).toBeDefined();
+      const droppedEntry = `"greeter-install": "${templateManifest.bin[installerBin]?.replaceAll(placeholderName, 'greeter')}"`;
+      expect(portableReadme).toContain(`# ${droppedEntry} to get one`);
+      expect(portableReadme).toContain(`restore \`${droppedEntry}\` under \`bin\` in`);
+      expect(portableReadme).toContain('never edits the manifest');
 
       // The skills-only template has no install section and passes through.
       const minimalReadme = await readFile(join(minimal.root, 'README.md'), 'utf8');
