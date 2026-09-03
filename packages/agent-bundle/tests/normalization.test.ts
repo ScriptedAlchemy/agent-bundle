@@ -1185,6 +1185,38 @@ it('gates nested and conflicting conventional script routes as AB4808/AB4809 and
   ]);
 });
 
+it('ships a bin-claimed plain conventional script as both surfaces and refuses a bin-claimed rendered one with AB4737 (#389)', async () => {
+  const root = '/workspace/project';
+  const loaded = loadedProject({
+    bin: {
+      hauler: './src/scripts/hauler.ts',
+      notes: { entry: './src/scripts/render-notes.tsx' },
+      'notes-again': './src/scripts/render-notes.tsx',
+    },
+    plugin: { name: 'review-tools', version: '1.0.0' },
+  });
+  const discovered: DiscoveredProject = {
+    routeGraph: routeGraphWithScripts(root, ['src/scripts/hauler.ts', 'src/scripts/render-notes.tsx']),
+    skills: [],
+  };
+
+  const gate = validateSource(loaded, discovered, registry).filter(({ code }) => code === 'AB4737');
+  expect(gate).toEqual([
+    {
+      code: 'AB4737',
+      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again"; a rendered script\'s default Server Component cannot serve as a package bin entry.',
+      recovery: 'Point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+      severity: 'error',
+      sourcePath: `${root}/src/scripts/render-notes.tsx`,
+    },
+  ]);
+
+  // The plain script stays in the model beside its bin; nothing about it is gated.
+  const model = await normalizeProject(loaded, discovered, registry);
+  expect(model.scripts.map((script) => script.name)).toEqual(['hauler', 'render-notes']);
+  expect(model.packageBuild?.bins.map((bin) => bin.name)).toEqual(['hauler', 'notes', 'notes-again']);
+});
+
 it('normalizes rendered conventional script routes onto the renderer pipeline (#102 stage 3)', async () => {
   const root = '/workspace/project';
   const model = await normalizeProject(

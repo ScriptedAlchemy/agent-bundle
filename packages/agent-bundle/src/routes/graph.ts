@@ -203,23 +203,43 @@ const claimedModuleEntry = (value: unknown): string | undefined => {
   return undefined;
 };
 
+interface ConfigClaimedSources {
+  /**
+   * Modules an artifact-side declaration (`scripts`, `hooks`, `mcp`)
+   * references. They belong to that declaration and never become
+   * conventional routes.
+   */
+  readonly artifact: ReadonlySet<string>;
+  /**
+   * Modules the package build (`bin`, `lib`) compiles. They leave route
+   * discovery too, except under `src/scripts/`: `dist/bin/<name>.js` and
+   * `<target>/scripts/<name>.mjs` are disjoint outputs, so one entry ships as
+   * both an npm bin and an artifact script instead of silently losing the
+   * script (#389).
+   */
+  readonly packageBuild: ReadonlySet<string>;
+}
+
 /**
  * Absolute module paths explicit configuration already claims. Config always
  * wins — the rule the entry conventions established — so a module an explicit
- * `scripts`, `hooks`, `bin`, `lib`, or `mcp` declaration references belongs
- * to that declaration and never becomes a conventional route. Two shipped
- * examples declare `scripts` entries under `src/scripts/`; this rule keeps
- * their layouts route-free without a migration.
+ * `scripts`, `hooks`, or `mcp` declaration references belongs to that
+ * declaration and never becomes a conventional route. Two shipped examples
+ * declare `scripts` entries under `src/scripts/`; this rule keeps their
+ * layouts route-free without a migration. Package-build claims (`bin`, `lib`)
+ * are reported separately because they coexist with a conventional script.
  */
 const configClaimedSources = (
   projectRoot: string,
   config: Readonly<AgentBundleConfig>,
-): ReadonlySet<string> => {
-  const claimed = new Set<string>();
-  const claim = (value: unknown): void => {
+): ConfigClaimedSources => {
+  const artifact = new Set<string>();
+  const packageBuild = new Set<string>();
+  const claimInto = (claimed: Set<string>, value: unknown): void => {
     const entry = claimedModuleEntry(value);
     if (entry !== undefined && entry.trim().length > 0) claimed.add(resolve(projectRoot, entry));
   };
+  const claim = (value: unknown): void => claimInto(artifact, value);
   const scripts = configValue(config, 'scripts');
   if (isRecord(scripts)) {
     for (const value of Object.values(scripts)) claim(value);
@@ -234,9 +254,9 @@ const configClaimedSources = (
   }
   const bin = configValue(config, 'bin');
   if (isRecord(bin)) {
-    for (const value of Object.values(bin)) claim(value);
+    for (const value of Object.values(bin)) claimInto(packageBuild, value);
   }
-  claim(configValue(config, 'lib'));
+  claimInto(packageBuild, configValue(config, 'lib'));
   const mcp = configValue(config, 'mcp');
   const servers = isRecord(mcp) && isRecord(mcp.servers) ? mcp.servers : undefined;
   for (const server of Object.values(servers ?? {})) {
@@ -249,8 +269,11 @@ const configClaimedSources = (
       claim(app.template);
     }
   }
-  return claimed;
+  return { artifact, packageBuild };
 };
+
+/** True for a module under the conventional scripts root, before privacy or identity checks. */
+const isScriptsDirectoryPath = (relativePath: string): boolean => relativePath.startsWith('src/scripts/');
 
 interface RouteModeOverrides {
   readonly cli?: 'generated' | 'conventional';
@@ -530,8 +553,9 @@ export const compileRouteGraph = async (
   const modulesById = new Map<string, DiscoveredModule>();
   const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
   for (const source of sources) {
-    if (claimed.has(source)) continue;
+    if (claimed.artifact.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
+    if (claimed.packageBuild.has(source) && !isScriptsDirectoryPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
     if (

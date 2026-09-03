@@ -258,6 +258,29 @@ it('never compiles a module explicit configuration claims: config always wins', 
   expect('routeGraph' in discovered).toBe(false);
 });
 
+it('keeps a bin- or lib-claimed src/scripts module in script discovery (#389)', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/cli/doctor.ts': moduleSource,
+    'src/cli.ts': moduleSource,
+    'src/index.ts': moduleSource,
+    'src/scripts/hauler.ts': moduleSource,
+    'src/scripts/shared.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    // The #389 shape: one entry is the npm bin and the artifact hook target.
+    bin: { doctor: './src/cli/doctor.ts', hauler: './src/scripts/hauler.ts', main: './src/cli.ts' },
+    lib: { entry: './src/scripts/shared.ts' },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  // Package-build claims never remove a scripts-directory module: the bin and
+  // the artifact script are disjoint outputs, so both surfaces ship.
+  expect(graph.scripts.map((route) => route.id)).toEqual(['script:hauler', 'script:shared']);
+  // Every other route kind still belongs to the claiming declaration.
+  expect(graph.cli).toBeUndefined();
+});
+
 it('errors with AB4800 when a declared entry, command, or url claims a routed server', async () => {
   const root = await createRoot();
   await writeTree(root, { 'src/mcp/curator/tools/inspect.ts': moduleSource });

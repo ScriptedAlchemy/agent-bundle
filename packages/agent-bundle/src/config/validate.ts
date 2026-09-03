@@ -1865,21 +1865,55 @@ const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagno
  * resolution. Discovery is not a packaging choice - a route never
  * disappears silently.
  */
+/** The explicit `bin` names claiming each absolute entry source, tolerant of malformed config shapes. */
+const explicitBinNamesBySource = (loaded: LoadedConfig): ReadonlyMap<string, readonly string[]> => {
+  const bin = loaded.config.bin;
+  const names = new Map<string, string[]>();
+  if (!isRecord(bin)) return names;
+  for (const [name, declaration] of Object.entries(bin)) {
+    const entry = typeof declaration === 'string'
+      ? declaration
+      : isRecord(declaration) ? (declaration as AgentBundleBinEntry).entry : undefined;
+    if (!nonemptyString(entry)) continue;
+    const source = resolve(loaded.context.projectRoot, entry);
+    names.set(source, [...(names.get(source) ?? []), name]);
+  }
+  return names;
+};
+
 const validateConventionalScripts = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const configured = configuredScriptNames(loaded.config);
+  const binNamesBySource = explicitBinNamesBySource(loaded);
   for (const route of discovered.routeGraph?.scripts ?? []) {
     const relativePath = route.provenance.relativePath;
     const judgment = judgeScriptRoute(route, configured);
     switch (judgment) {
       case 'shippable':
+        // A plain script a `bin` entry also names ships as both surfaces:
+        // the npm bin and the artifact script are disjoint outputs (#389).
+        break;
       // Rendered scripts ship through the Agent renderer pipeline (#102
       // stage 3); AB4807 is retired and never reused.
-      case 'rendered':
+      case 'rendered': {
+        // The rendered-script default export is a Server Component the
+        // renderer drives; the bin envelope would call it as `main(argv)`, so
+        // the two surfaces cannot share one module.
+        const binNames = binNamesBySource.get(route.source);
+        if (binNames !== undefined) {
+          diagnostics.push({
+            code: 'AB4737',
+            message: `Rendered script ${relativePath} is also the entry of bin ${binNames.map((name) => JSON.stringify(name)).join(', ')}; a rendered script's default Server Component cannot serve as a package bin entry.`,
+            recovery: 'Point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+            severity: 'error',
+            sourcePath: route.source,
+          });
+        }
         break;
+      }
       case 'nested':
         diagnostics.push({
           code: 'AB4808',

@@ -115,6 +115,45 @@ describe('framework-owned package build', () => {
     expect(rebuilt.packageBuild?.files).toEqual(packageBuild!.files);
   }, 120_000);
 
+  it('ships a bin-claimed src/scripts module as both the npm bin and the artifact script (#389)', async () => {
+    const root = await fixtureRoot({
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  bin: { hauler: './src/scripts/hauler.ts' },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'src/scripts/hauler.ts': [
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`hauled:${argv.join(',')}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const result = await build({ output: 'artifact', packageOutputs: true, root });
+
+    // The same entry is visible on both surfaces of the inspect model, and
+    // the claim itself raises no diagnostic: this is the intended shape.
+    expect(result.diagnostics).toEqual([]);
+    expect(result.model.packageBuild).toMatchObject({
+      bins: [{ name: 'hauler', provenance: { kind: 'config' }, source: join(root, 'src/scripts/hauler.ts') }],
+    });
+    expect(result.model.scripts).toMatchObject([
+      { name: 'hauler', provenance: { kind: 'conventional' }, source: join(root, 'src/scripts/hauler.ts') },
+    ]);
+
+    // Both outputs exist and run.
+    expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/hauler.js');
+    await expect(execFile(join(root, 'dist', 'bin', 'hauler.js'), ['alpha'])).resolves.toMatchObject({ stdout: 'hauled:alpha\n' });
+    expect(result.build.outputProvenance.map((record) => record.path)).toContain('portable/scripts/hauler.mjs');
+    const script = join(root, 'artifact', 'portable', 'scripts', 'hauler.mjs');
+    await expect(execFile(process.execPath, [script, 'beta'])).resolves.toMatchObject({ stdout: 'hauled:beta\n' });
+  }, 120_000);
+
   it('wraps factory-exporting MCP entries in the lifecycle shell and leaves self-connecting entries alone', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
