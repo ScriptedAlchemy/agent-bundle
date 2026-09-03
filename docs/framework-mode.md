@@ -106,6 +106,19 @@ stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
 `renderRoute(id, { context: { providers: { library } } })`; the harness never
 executes provider modules on a test's behalf.
 
+### What reaches the MCP wire
+
+The final Agent Document of a tool route lowers to one `CallToolResult`:
+
+| Route surface | Wire effect |
+| --- | --- |
+| `Agent.Text`, `Agent.Markdown`, `Agent.Context`, `Agent.Json` children | Ordered `content` text blocks (`Agent.Json` as its JSON text). |
+| `Agent.Image`, `Agent.Audio`, `Agent.Resource` | Native `image`, `audio`, and `resource_link` blocks; a host without that capability fails the projection closed unless a text fallback is selected. |
+| `Agent.Result value` | `structuredContent` when the value is a JSON object; a non-object value emits none and is never wrapped. |
+| `Agent.Result metadata` | `CallToolResult._meta`. It must be a JSON object (snapshotted through the same wire boundary as `structuredContent`); anything else fails the projection closed with `McpProjectionError('invalid-result-metadata')`. Listing-level `_meta` still comes from static `config._meta`, so the MCP Apps convention stamps `_meta.ui.resourceUri` on both halves. |
+| `Agent.Error code message` | `isError: true` plus one text block `[<code>] <message>`. The wire has no error-code field, so the code is deliberately kept in the text (the routed CLI prints the same `**[code]** message` form); choose codes that read well to the model. |
+| `resultSchema` | `outputSchema` in `tools/list` **only when the schema describes an object** (`z.object`, `z.record`, a discriminated union of objects). The MCP specification requires every result of a tool that declares `outputSchema` to carry `structuredContent`, so a text-only route declares `resultSchema = z.undefined()` (or any non-object schema), advertises no `outputSchema`, and returns no `structuredContent`. An object schema keeps the SDK's fail-closed output validation on every call. |
+
 Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in

@@ -290,9 +290,6 @@ importers:
       open:
         specifier: 11.0.2
         version: 11.0.2
-      typescript-5:
-        specifier: npm:typescript@5.6.1-rc
-        version: typescript@5.6.1-rc
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -312,6 +309,9 @@ importers:
       react:
         specifier: 19.2.8
         version: 19.2.8
+      typescript-5:
+        specifier: npm:typescript@5.9.3
+        version: typescript@5.9.3
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -2607,6 +2607,11 @@ packages:
 
   typescript@5.6.1-rc:
     resolution: {integrity: sha512-E3b2+1zEFu84jB0YQi9BORDjz9+jGbwwy1Zi3G0LUNw7a7cePUrHMRNy8aPh53nXpkFGVHSxIZo5vKTfYaFiBQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -5053,6 +5058,8 @@ snapshots:
       mime-types: 3.0.2
 
   typescript@5.6.1-rc: {}
+
+  typescript@5.9.3: {}
 
   typescript@7.0.2:
     optionalDependencies:

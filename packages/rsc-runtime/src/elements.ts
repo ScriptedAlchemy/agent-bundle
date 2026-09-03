@@ -3,7 +3,12 @@ import { createElement, type PropsWithChildren, type ReactElement } from 'react'
 import type { JsonValue } from './lower-mcp.js';
 
 export interface AgentResultProps extends PropsWithChildren {
+  /**
+   * Result-level metadata. On MCP it is the `CallToolResult._meta` object,
+   * so it must be a JSON object there; the projection fails closed otherwise.
+   */
   readonly metadata?: JsonValue;
+  /** The document value; on MCP it is `structuredContent` when it is a JSON object. */
   readonly value?: JsonValue;
 }
 
