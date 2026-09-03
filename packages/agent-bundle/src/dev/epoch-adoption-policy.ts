@@ -184,64 +184,74 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
     await lease?.close();
   }
 
+  /**
+   * Evaluates, then leases, then publishes, then announces. Leasing before the
+   * status publish keeps "passed" synonymous with "adopted" for status readers,
+   * and announcing synchronously with the publish preserves the ordering hosts
+   * observed before leases existed.
+   */
   async #drain(): Promise<void> {
     while (!this.#closed && this.#pending !== undefined) {
       const candidate = this.#pending;
       this.#pending = undefined;
-      if (candidate.contracts === undefined) {
-        this.#latestEvaluation = undefined;
-        await this.#adopt(candidate);
-        continue;
+      let evaluation: EpochContractEvaluation | undefined;
+      if (candidate.contracts !== undefined) {
+        try {
+          evaluation = await this.#run(candidate.epochId, candidate.contracts);
+        } catch (error) {
+          evaluation = failedEvaluation(candidate.epochId, error);
+        }
+        if (this.#closed || candidate.sequence !== this.#sequence) continue;
       }
-      let evaluation: EpochContractEvaluation;
-      try {
-        evaluation = await this.#run(candidate.epochId, candidate.contracts);
-      } catch (error) {
-        evaluation = failedEvaluation(candidate.epochId, error);
+      let lease: EpochAdoptionLease | undefined;
+      if (evaluation === undefined || evaluation.state === 'passed') {
+        const leased = await this.#acquireLease(candidate);
+        if (leased === 'superseded') continue;
+        if (leased instanceof Error) evaluation = leaseFailedEvaluation(candidate.epochId, leased);
+        else lease = leased.lease;
       }
-      if (this.#closed || candidate.sequence !== this.#sequence) continue;
       this.#latestEvaluation = evaluation;
-      this.#eventHub.publish({
-        epochId: candidate.epochId,
-        payload: evaluation,
-        type: 'dev.contract.status',
-      });
-      if (evaluation.state === 'passed') await this.#adopt(candidate);
+      if (evaluation !== undefined) {
+        this.#eventHub.publish({
+          epochId: candidate.epochId,
+          payload: evaluation,
+          type: 'dev.contract.status',
+        });
+      }
+      if (evaluation === undefined || evaluation.state === 'passed') await this.#adopt(candidate.epochId, lease);
     }
+  }
+
+  async #acquireLease(
+    candidate: PendingEpoch,
+  ): Promise<Error | 'superseded' | { readonly lease: EpochAdoptionLease | undefined }> {
+    if (this.#lease === undefined) return { lease: undefined };
+    let lease: EpochAdoptionLease;
+    try {
+      lease = await this.#lease(candidate.epochId);
+    } catch (error) {
+      if (this.#closed || candidate.sequence !== this.#sequence) return 'superseded';
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    if (this.#closed || candidate.sequence !== this.#sequence) {
+      await lease.close().catch(() => undefined);
+      return 'superseded';
+    }
+    return { lease };
   }
 
   /**
    * Pins the candidate before announcing it and releases the previous pin only
    * afterwards, so there is never a moment where the advertised epoch is
-   * unleased. A candidate that cannot be leased is not adopted: hosts keep the
-   * previous epoch and the failure is published as contract status.
+   * unleased.
    */
-  async #adopt(candidate: PendingEpoch): Promise<void> {
-    let lease: EpochAdoptionLease | undefined;
-    if (this.#lease !== undefined) {
-      try {
-        lease = await this.#lease(candidate.epochId);
-      } catch (error) {
-        if (this.#closed || candidate.sequence !== this.#sequence) return;
-        this.#latestEvaluation = leaseFailedEvaluation(candidate.epochId, error);
-        this.#eventHub.publish({
-          epochId: candidate.epochId,
-          payload: this.#latestEvaluation,
-          type: 'dev.contract.status',
-        });
-        return;
-      }
-      if (this.#closed || candidate.sequence !== this.#sequence) {
-        await lease.close().catch(() => undefined);
-        return;
-      }
-    }
+  async #adopt(epochId: string, lease: EpochAdoptionLease | undefined): Promise<void> {
     const previous = this.#currentLease;
     this.#currentLease = lease;
-    this.#currentEpochId = candidate.epochId;
+    this.#currentEpochId = epochId;
     for (const listener of this.#listeners) {
       try {
-        listener(candidate.epochId);
+        listener(epochId);
       } catch {
         // Adoption consumers own their async failure reporting; one cannot starve its peers.
       }
