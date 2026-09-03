@@ -14,9 +14,18 @@ export const AGENT_NOTICE_STATES = Object.freeze([
   'expired',
   'unavailable',
   'withdrawn',
+  'acknowledged',
 ] as const);
 
-/** V1 contains only states the framework can evidence without host claims. */
+/**
+ * V1 contains only states the framework can evidence without host claims.
+ * Channel evidence that does not transfer ownership (inbox exposure, wire-level
+ * resource-updated signals) is recorded as receipts on the notice instead of a
+ * state: `available` and `read` from the #99 taxonomy map onto the
+ * `availability` and `exposure` receipts, and `delivered` is deliberately
+ * absent because no pinned host supplies cross-actor delivery evidence
+ * (2026-09-02 survey on #99).
+ */
 export type AgentNoticeState = (typeof AGENT_NOTICE_STATES)[number];
 
 export type AgentNoticePriority = 'low' | 'normal' | 'high';
@@ -50,10 +59,29 @@ export interface AgentNoticeExposure {
   readonly lastInvocationId: string;
 }
 
+/**
+ * Wire-level availability evidence: a `notifications/resources/updated` signal
+ * was sent for the inbox resource on a live session. Protocol write success is
+ * only availability, never delivery (#99).
+ */
+export interface AgentNoticeAvailability {
+  readonly channel: 'mcp-resource-updated';
+  readonly count: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+}
+
+export interface AgentNoticeAcknowledgement {
+  readonly acknowledgedAt: string;
+  readonly invocationId: string;
+}
+
 export type AgentNoticeUnavailableReason = 'delivery-authorization-unavailable';
 
 export interface AgentNotice {
+  readonly acknowledgement?: AgentNoticeAcknowledgement;
   readonly attempts: readonly AgentNoticeAttemptReceipt[];
+  readonly availability?: AgentNoticeAvailability;
   readonly content: AgentDocumentSnapshot;
   readonly createdAt: string;
   readonly dedupeKey?: string;
@@ -61,8 +89,12 @@ export interface AgentNotice {
   readonly expiresAt?: string;
   readonly exposure?: AgentNoticeExposure;
   readonly id: string;
+  /** Admissions before this instant leave the notice pending (V1: evaluated only on admitted events, never by an implied timer). */
+  readonly nextAttemptAt?: string;
   readonly priority: AgentNoticePriority;
   readonly recipient: AgentRecipient;
+  /** Maximum next-event attempt receipts before admission stops re-attempting; absent means 1. */
+  readonly retryBudget?: number;
   readonly state: AgentNoticeState;
   readonly unavailableAt?: string;
   readonly unavailableReason?: AgentNoticeUnavailableReason;
@@ -78,8 +110,11 @@ export interface AgentNoticePublishInput {
   readonly content: AgentDocumentSnapshot;
   readonly dedupeKey?: string;
   readonly expiresAt?: string;
+  readonly nextAttemptAt?: string;
   readonly priority: AgentNoticePriority;
   readonly recipient: AgentRecipient;
+  /** Defaults to 1 (single next-event attempt). */
+  readonly retryBudget?: number;
 }
 
 export interface AgentNoticePublishOptions {
@@ -109,7 +144,7 @@ export type AgentNoticeAuthorizationDecision =
 
 export interface AgentNoticeAuthorizationRequest {
   readonly noticeId?: string;
-  readonly phase: 'deliver' | 'publish' | 'read';
+  readonly phase: 'acknowledge' | 'deliver' | 'publish' | 'read';
   readonly principal: AgentNoticePrincipal;
   readonly recipient: AgentRecipient;
 }
@@ -124,6 +159,8 @@ export interface AgentNoticeDelivery {
 }
 
 export interface AgentNoticesHandle {
+  /** Recipient-scoped explicit acknowledgement; the strongest evidenced state. */
+  acknowledge(id: string): Promise<AgentNotice>;
   inbox(): Promise<readonly AgentNotice[]>;
   publish(input: AgentNoticePublishInput, options: AgentNoticePublishOptions): Promise<AgentNoticePublishResult>;
   read(): Promise<readonly AgentNoticeDelivery[]>;
@@ -140,10 +177,18 @@ export interface AgentNoticeRequestLease {
   close(): void;
 }
 
+export interface AgentNoticeAvailabilitySignalOptions {
+  readonly at: string;
+  readonly idempotencyKey: string;
+  readonly noticeIds: readonly string[];
+}
+
 export interface AgentNoticeLedger {
   expire(options: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot>;
   openRequest(request: AgentNoticeRequest): Promise<AgentNoticeRequestLease>;
   read(): Promise<AgentNoticeLedgerSnapshot>;
+  /** Records a wire-level resources/updated signal; availability, never delivery. */
+  signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot>;
   withdraw(id: string, options: AgentNoticeWithdrawOptions): Promise<AgentNoticeLedgerSnapshot>;
 }
 

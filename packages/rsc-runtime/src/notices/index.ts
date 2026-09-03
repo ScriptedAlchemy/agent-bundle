@@ -13,10 +13,13 @@ export {
 } from './contract.js';
 export type {
   AgentNotice,
+  AgentNoticeAcknowledgement,
   AgentNoticeAttemptReceipt,
   AgentNoticeAuthorizationDecision,
   AgentNoticeAuthorizationRequest,
   AgentNoticeAuthorizer,
+  AgentNoticeAvailability,
+  AgentNoticeAvailabilitySignalOptions,
   AgentNoticeDelivery,
   AgentNoticeErrorCode,
   AgentNoticeExposure,
@@ -35,6 +38,16 @@ export type {
   AgentNoticeWithdrawOptions,
   AgentRecipient,
 } from './contract.js';
+export {
+  AGENT_NOTICE_DELIVERY_ROUTES,
+  selectNoticeDeliveryRoutes,
+} from './router.js';
+export type {
+  AgentNoticeDeliveryAdvertisement,
+  AgentNoticeDeliveryRoute,
+  AgentNoticeDeliveryRouteState,
+  AgentNoticeRouteSelection,
+} from './router.js';
 export {
   createAgentNoticeLedger,
 } from './ledger.js';
