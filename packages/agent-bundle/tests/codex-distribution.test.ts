@@ -164,6 +164,9 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { source: 'url', url: 'git@[2001:db8::1]:team/codex-plugins.git' },
     { package: 'codex-plugin', registry: 'https://[2001:db8::1]:4873/', source: 'npm' },
     { package: 'codex-plugin', registry: 'https://[::1]/', source: 'npm' },
+    // Git refs follow git check-ref-format: branch, tag, and fully qualified forms.
+    ...['release/1.2', 'v1.2.3', 'refs/tags/v1.2.3', 'feature/foo.bar', 'HEAD', 'user/-dash', 'x.lockfile', 'a@b']
+      .map((ref) => ({ ref, source: 'url', url: 'https://github.com/example/codex-plugins.git' })),
     // npm version selectors: semver versions, ranges, and dist-tags (npm-package-arg rules), using
     // semver's whitespace grammar (any run of whitespace between comparators, trimmed at the ends).
     ...['1.2.3', '~1.2', '>=1.0.0 <2.0.0', '>=1.0.0  <2.0.0', '>=1.0.0\t<2.0.0', '>= 1.0.0', '~ 1.2', ' 1.2.3 ', '1.2.3 - 2.3.4', '1.0.0  -  2.0.0', '1.x', '*', '>=1.0.0-beta.1', '1.0.0+build.5', '^1 || ^2', '^1||^2', 'v1.2.3', '=1.2.3', 'next', 'beta-2', 'rc.1']
@@ -230,6 +233,14 @@ it('admits every documented marketplace source form and rejects escapes, credent
     // Selectors npm rejects with EINVALIDTAGNAME or as unparseable ranges.
     ...['foo bar', '%', '', '1.2.3 || foo bar', '>=1.0.0 <', 'latest@1', 'a/b', 'a:b', 'a#b', 'a?b', '1.0.0 -2.0.0']
       .map((version) => ({ package: '@example/codex-plugin', source: 'npm', version })),
+    // Dot-prefixed selectors are directory specs to npm-package-arg, not dist-tags.
+    ...['.', '..', '.foo', '.latest'].map((version) => ({ package: '@example/codex-plugin', source: 'npm', version })),
+    // Refs git check-ref-format refuses (control characters, "..", "@{", ".lock", leading "-", empty components).
+    ...['', 'foo bar', 'foo..bar', 'foo@{1}', '@', '-main', 'main.lock', 'a.lock/b', 'refs/heads/', '/main', 'a//b', 'main.', '.hidden', 'a/.b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', 'a\\b', 'a\tb', 'a\u007fb', 'a\nb']
+      .flatMap((ref) => [
+        { ref, source: 'url', url: 'https://github.com/example/codex-plugins.git' },
+        { path: './plugins/remote-helper', ref, source: 'git-subdir', url: 'https://github.com/example/codex-plugins.git' },
+      ]),
     { package: '@example/codex-plugin', registry: 'https://registry.example.test/a b', source: 'npm' },
     { package: '@example/codex-plugin', source: 'npm', version: 'file:../local' },
     { package: '@example/codex-plugin', source: 'npm', version: 'https://example.test/pkg.tgz' },
