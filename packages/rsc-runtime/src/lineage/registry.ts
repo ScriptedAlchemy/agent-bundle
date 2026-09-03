@@ -591,24 +591,30 @@ export const createAgentLineageRegistry = (
         if (event === 'tool/failure' && SPAWN_TOOLS[host](toolName)) {
           await dispatch('spawnFailed', { toolCallId }, keys);
         }
-        // The spawn's own post-tool hook names the child (Claude
-        // `tool_response.agentId`): the carrier is the parent, by the host's
-        // word. That places a start the claim window could not, confirms an
-        // edge it matched, or moves one it matched wrong — the same event in
-        // every case, so a redelivery is idempotent.
-        const confirmation = event === 'tool/after' && SPAWN_TOOLS[host](toolName)
-          ? SPAWN_CONFIRMATIONS[host](native)
-          : undefined;
-        if (confirmation !== undefined && confirmation.child !== carrier.conversation) {
-          await dispatch('spawnConfirmed', {
-            at: observedAt,
-            child: confirmation.child,
-            ...(confirmation.completed ? { completed: true } : {}),
-            parent: carrier.conversation,
-            toolCallId,
-          }, keys);
-        }
       }
+    }
+    // The spawn's own post-tool hook names the child (Claude
+    // `tool_response.agentId`): the carrier is the parent, by the host's word.
+    // That places a start the claim window could not, confirms an edge it
+    // matched, or moves one it matched wrong — the same event in every case,
+    // so a redelivery is idempotent. A carrier that is itself an unplaced
+    // start keeps the confirmation until its own edge is known.
+    const confirmation = event === 'tool/after' && toolName !== undefined && SPAWN_TOOLS[host](toolName)
+      ? SPAWN_CONFIRMATIONS[host](native)
+      : undefined;
+    if (
+      confirmation !== undefined
+      && carrier.conversation !== undefined
+      && confirmation.child !== carrier.conversation
+      && (carrierNode !== undefined || (state.unplacedStarts ?? []).some((start) => start.id === carrier.conversation))
+    ) {
+      await dispatch('spawnConfirmed', {
+        at: observedAt,
+        child: confirmation.child,
+        ...(confirmation.completed ? { completed: true } : {}),
+        parent: carrier.conversation,
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+      }, keys);
     }
     return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');
   };

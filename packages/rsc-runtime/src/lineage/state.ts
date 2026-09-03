@@ -58,7 +58,22 @@ export const OpenToolCallSchema = z.object({
  * later host confirmation of the edge (Claude's `Agent` PostToolUse naming the
  * child) materializes the node as it started, not as it was confirmed.
  */
+/** The host named a spawn edge: `parent` produced `child` through `toolCallId` (see `spawnConfirmed`). */
+export const SpawnConfirmationSchema = z.object({
+  at: timestamp,
+  child: id,
+  completed: z.boolean().optional(),
+  parent: id,
+  toolCallId: id.optional(),
+}).strict();
+
 export const UnplacedStartSchema = z.object({
+  /**
+   * Edges this start confirmed for its own children while it was still
+   * unplaced; applied the moment the start itself is placed, so a missed
+   * spawn hook at one level does not lose the subtree beneath it.
+   */
+  confirmations: z.array(SpawnConfirmationSchema).optional(),
   generation: id.optional(),
   id,
   root: id,
@@ -97,6 +112,7 @@ export const LineageStateSchema = z.object({
 export type LineageNode = z.output<typeof LineageNodeSchema>;
 export type OpenToolCall = z.output<typeof OpenToolCallSchema>;
 export type UnplacedStart = z.output<typeof UnplacedStartSchema>;
+export type SpawnConfirmation = z.output<typeof SpawnConfirmationSchema>;
 export type LineageState = z.output<typeof LineageStateSchema>;
 
 export const lineageEventSchemas = {
@@ -122,13 +138,7 @@ export const lineageEventSchemas = {
    * `confirmed`; a pending spawn call with that `toolCallId` is consumed.
    * `completed` says the child has already finished from the host's view.
    */
-  spawnConfirmed: z.object({
-    at: timestamp,
-    child: id,
-    completed: z.boolean().optional(),
-    parent: id,
-    toolCallId: id.optional(),
-  }).strict(),
+  spawnConfirmed: SpawnConfirmationSchema,
   /** A spawn call failed before any child started, so no later start may claim it. */
   spawnFailed: z.object({ toolCallId: id }).strict(),
   /** A subagent started but no single spawn call could be claimed for it; the edge waits for a host confirmation. */
@@ -311,14 +321,25 @@ export const reduceLineage = (
       };
     }
     case 'spawnConfirmed': {
-      const { at, child, completed, parent: parentId, toolCallId } = event.payload as {
-        at: string; child: string; completed?: boolean; parent: string; toolCallId?: string;
-      };
+      const confirmation = event.payload as SpawnConfirmation;
+      const { at, child, completed, parent: parentId, toolCallId } = confirmation;
       const parent = state.nodes[parentId];
       const existing = state.nodes[child];
+      if (child === parentId || existing?.depth === 0) return state;
+      if (parent === undefined) {
+        // The parent is itself waiting for its edge: keep the confirmation
+        // with it, to apply the moment the parent is placed.
+        const unplaced = state.unplacedStarts ?? [];
+        if (!unplaced.some((start) => start.id === parentId)) return state;
+        return {
+          ...state,
+          unplacedStarts: unplaced.map((start) => start.id === parentId
+            ? { ...start, confirmations: [...(start.confirmations ?? []).filter((kept) => kept.child !== child), confirmation] }
+            : start),
+        };
+      }
       // A root never becomes a child on a host's say-so, and no parent may be
       // made to descend from its own child; the confirmation is then noise.
-      if (parent === undefined || child === parentId || existing?.depth === 0) return state;
       const descendants = existing === undefined ? new Set<string>() : descendantsOf(state.nodes, child, existing.root);
       if (descendants.has(parentId)) return state;
       const waiting = (state.unplacedStarts ?? []).find((start) => start.id === child);
@@ -349,7 +370,7 @@ export const reduceLineage = (
         call.root !== placed.root && (call.conversation === child || descendants.has(call.conversation))
           ? { ...call, root: placed.root }
           : call;
-      return {
+      const placedState: LineageState = {
         ...state,
         nodes: pruneStopped({
           ...Object.fromEntries(Object.entries(state.nodes).map(([key, node]) => [key, moved(node)])),
@@ -367,6 +388,11 @@ export const reduceLineage = (
           ? {}
           : { unplacedStarts: (state.unplacedStarts ?? []).filter((start) => start.id !== child) }),
       };
+      // Edges the child confirmed for its own children while unplaced follow it into the tree.
+      return (waiting?.confirmations ?? []).reduce(
+        (next, kept) => reduceLineage(next, { name: 'spawnConfirmed', payload: kept }),
+        placedState,
+      );
     }
     case 'sessionRetired': {
       const { root } = event.payload as { root: string };

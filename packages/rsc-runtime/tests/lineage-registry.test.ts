@@ -185,22 +185,52 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
       { agentId: sequential, caller: undefined, status: 'completed' },
     ]);
     const spawnCall = new Map(spawnResults.map((result) => [result.agentId, result.toolUseId]));
+    // The fixture row (1-based) of the PostToolUse that named each child: rows 13 and 17
+    // for the background pair — row 13 fires before the Explore agent's own SubagentStart
+    // (row 14) — row 99 (the sequential agent's, after the nested child's SubagentStop at
+    // row 98) and row 101 (the root's, after the sequential agent's SubagentStop at row 100).
+    const confirmedAt = new Map<string, number>();
+    for (const [position, record] of records.entries()) {
+      const native = record.event?.native;
+      if (native?.['hook_event_name'] === 'PostToolUse' && native['tool_name'] === 'Agent') {
+        confirmedAt.set((native['tool_response'] as { agentId: string }).agentId, position + 1);
+      }
+    }
+    expect([explore, parallel, nested, sequential].map((id) => confirmedAt.get(id))).toEqual([13, 17, 99, 101]);
 
-    // Every child hook resolves to its own agent under the root; parents and depths follow the spawn tree.
+    // Every child hook resolves to its own agent under the root; parents and depths follow
+    // the spawn tree. The resolution says how much of that the host had vouched for by then:
+    // `confirmed` once the child's spawn PostToolUse and every ancestor's have fired,
+    // `registry` while any edge on the chain still rests on the spawn-window match — so the
+    // background pair's hooks are host-confirmed for their whole run, while the foreground
+    // sequential and nested agents (confirmed only after their SubagentStop) never are.
     const expectedParent: Record<string, { depth: number; parent: string }> = {
       [explore]: { depth: 1, parent: root },
       [nested]: { depth: 2, parent: sequential },
       [parallel]: { depth: 1, parent: root },
       [sequential]: { depth: 1, parent: root },
     };
+    const chain = (agentId: string): string[] => {
+      const parent = expectedParent[agentId]!.parent;
+      return parent === root ? [agentId] : [agentId, ...chain(parent)];
+    };
+    const expectedResolution = (agentId: string, row: number): string =>
+      chain(agentId).every((id) => confirmedAt.get(id)! < row) ? 'confirmed' : 'registry';
     let childEvents = 0;
+    const seenResolutions = new Map<string, Set<string>>();
     for (const entry of lineages) {
       const agentId = entry.native?.['agent_id'] as string | undefined;
       if (agentId === undefined) continue;
       childEvents += 1;
-      expect(value(entry.lineage)).toMatchObject({ conversation: agentId, resolution: 'registry', root, ...expectedParent[agentId]! });
+      const resolution = expectedResolution(agentId, entry.index);
+      seenResolutions.set(agentId, new Set([...(seenResolutions.get(agentId) ?? []), resolution]));
+      expect(value(entry.lineage), `row ${String(entry.index)}`).toMatchObject({ conversation: agentId, resolution, root, ...expectedParent[agentId]! });
     }
     expect(childEvents).toBe(natives.filter((native) => native['agent_id'] !== undefined).length);
+    expect([...seenResolutions.get(explore)!]).toEqual(['confirmed']);
+    expect([...seenResolutions.get(parallel)!].sort()).toEqual(['confirmed', 'registry']);
+    expect([...seenResolutions.get(sequential)!]).toEqual(['registry']);
+    expect([...seenResolutions.get(nested)!]).toEqual(['registry']);
     // Root-side hooks, including the resumed turns, the compact pair and the failed `dump` calls, stay at depth 0.
     for (const entry of lineages) {
       if (entry.native !== undefined && entry.native['agent_id'] === undefined) {
@@ -219,7 +249,9 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
 
     // MCP `probe` calls: `claudecode/toolUseId` names the open PreToolUse, so each resolves to the agent that made it.
     const probes = lineages.filter((entry) => entry.kind === 'mcp:probe').map((entry) => value(entry.lineage));
-    expect(probes.map((lineage) => [lineage.conversation, lineage.depth])).toEqual([[explore, 1], [parallel, 1], [sequential, 1], [nested, 2], [root, 0]]);
+    expect(probes.map((lineage) => [lineage.conversation, lineage.depth, lineage.resolution])).toEqual([
+      [explore, 1, 'confirmed'], [parallel, 1, 'confirmed'], [sequential, 1, 'registry'], [nested, 2, 'registry'], [root, 0, 'registry'],
+    ]);
 
     // PostToolUseFailure closes a window like PostToolUse; nothing stays open, all five nodes stopped.
     expect(natives.filter((native) => native['hook_event_name'] === 'PostToolUseFailure')).toHaveLength(3);
@@ -227,6 +259,14 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     expect(snapshot.openCalls).toEqual([]);
     expect(Object.keys(snapshot.nodes).sort()).toEqual([explore, nested, parallel, root, sequential].sort());
     expect(Object.values(snapshot.nodes).every((node) => node.stoppedAt !== undefined)).toBe(true);
+    // Every edge the spawn window matched was later named by the host, with the same spawn call.
+    for (const id of [explore, parallel, sequential, nested]) {
+      expect(snapshot.nodes[id], id).toMatchObject({ confirmed: true, toolCallId: spawnCall.get(id), ...expectedParent[id]! });
+    }
+    expect(snapshot.unplacedStarts ?? []).toEqual([]);
+    // The Explore agent was held from its PostToolUse (row 13) and completed by its SubagentStart (row 14):
+    // the start's time and agent_type, not the confirmation's.
+    expect(snapshot.nodes[explore]).toMatchObject({ startedAt: records[13]!.event!.canonical.observedAt, type: 'Explore' });
 
     // The model's own stream agrees: `task_started` names the same agent id (`task_id`) and
     // spawn call (`tool_use_id`) per child, with the depth the registry derived.
@@ -1141,27 +1181,79 @@ describe('lineage registry Claude spawn confirmation from the Agent PostToolUse 
     expect(registry.snapshot().nodes['p']?.confirmed).toBeUndefined();
   });
 
-  it('takes a confirmation that precedes the child\'s start, then lets the start add its type without claiming another spawn', async () => {
-    // Claude Code 2.1.259 (fixtures/host-lineage/claude-2.1.259-orchestration.ndjson
-    // rows 12–17, PR #455): for a background Explore spawn the `Agent`
-    // PostToolUse (`async_launched`, agentId) fires before that child's
-    // SubagentStart, and the root's next spawn follows at once.
+  // The live Claude Code 2.1.259 orchestration capture (PR #455) replayed with
+  // chosen hook rows withheld, the way a plugin whose PreToolUse hook was not
+  // yet installed, or a runtime that came up mid-turn, would have seen it.
+  const orchestration = fixture('claude-2.1.259-orchestration.ndjson');
+  const row = (index: number) => orchestration[index - 1]!;
+  const native = (index: number) => row(index).event!.native;
+  const agentOf = (index: number) => native(index)['agent_id'] as string;
+  const at = (index: number) => row(index).event!.canonical.observedAt;
+  const withoutRows = (...dropped: number[]) => orchestration.filter((_record, index) => !dropped.includes(index + 1));
+  /** Replays a filtered copy of the capture and keys each result by its original fixture row. */
+  const replayRows = async (records: readonly FixtureRecord[], registry: AgentLineageRegistry) => {
+    const lineages = await replay('claude', records, registry);
+    return new Map(lineages.map((entry) => [orchestration.indexOf(records[entry.index - 1]!) + 1, entry.lineage]));
+  };
+  const orchestrationRoot = native(1)['session_id'] as string;
+  // Row 14/16: the background Explore and general-purpose starts; 65: the
+  // sequential foreground start; 82: its nested child. Rows 64 and 81 are the
+  // root's and the sequential agent's `Agent` PreToolUse; 99 and 101 the
+  // PostToolUse that name the nested and the sequential child.
+  const [explore, parallel, sequential, nested] = [14, 16, 65, 82].map(agentOf) as [string, string, string, string];
+
+  it('holds the Explore child from the PostToolUse that precedes its SubagentStart (2.1.259 rows 12–17), and lets the start add its type without claiming the next spawn', async () => {
     const registry = createAgentLineageRegistry();
-    const observe = claude(registry);
-    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
-    await observe('tool/before', 'sp1', spawnBefore('sp1'));
-    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'explore', 'async_launched'), '2026-09-03T00:00:01.000Z');
-    expect(registry.snapshot().nodes['explore']).toMatchObject({ confirmed: true, depth: 1, parent: 'root', startedAt: '2026-09-03T00:00:01.000Z', toolCallId: 'sp1' });
+    await replay('claude', orchestration.slice(0, 13), registry);
+    expect(registry.snapshot().nodes[explore]).toMatchObject({ confirmed: true, depth: 1, parent: orchestrationRoot, startedAt: at(13), toolCallId: native(12)['tool_use_id'] });
+    expect(registry.snapshot().nodes[explore]?.type).toBeUndefined();
     expect(registry.snapshot().pendingSpawns).toEqual([]);
-    const started = await observe('agent/start', 'explore', { ...session('explore'), agent_type: 'Explore', hook_event_name: 'SubagentStart' }, '2026-09-03T00:00:02.000Z');
-    expect(value(started)).toMatchObject({ conversation: 'explore', depth: 1, parent: 'root', resolution: 'confirmed', subagent: { id: 'explore', toolCallId: 'sp1', type: 'Explore' } });
-    expect(registry.snapshot().nodes['explore']).toMatchObject({ confirmed: true, startedAt: '2026-09-03T00:00:02.000Z', type: 'Explore' });
-    // The redelivered start changes nothing.
-    await observe('agent/start', 'explore-again', { ...session('explore'), agent_type: 'Explore', hook_event_name: 'SubagentStart' }, '2026-09-03T00:00:09.000Z');
-    expect(registry.snapshot().nodes['explore']?.startedAt).toBe('2026-09-03T00:00:02.000Z');
-    // The root's second spawn is claimed by its own child, not by the one already placed.
-    await observe('tool/before', 'sp2', spawnBefore('sp2'));
-    expect(value(await observe('agent/start', 'gp', start('gp')))).toMatchObject({ depth: 1, parent: 'root', resolution: 'registry', subagent: { toolCallId: 'sp2' } });
+    const [started] = await replay('claude', orchestration.slice(13, 14), registry);
+    expect(value(started!.lineage)).toMatchObject({ conversation: explore, depth: 1, parent: orchestrationRoot, resolution: 'confirmed', subagent: { id: explore, toolCallId: native(12)['tool_use_id'], type: 'Explore' } });
+    expect(registry.snapshot().nodes[explore]).toMatchObject({ startedAt: at(14), type: 'Explore' });
+    // The same start redelivered under another key changes nothing.
+    await registry.observe({ event: 'agent/start', host: 'claude', idempotencyKey: 'redelivered-14', native: native(14), observedAt: '2026-09-04T00:00:00.000Z' });
+    expect(registry.snapshot().nodes[explore]?.startedAt).toBe(at(14));
+    // The root's second spawn (rows 15–17) is claimed by its own child, not by the one already placed.
+    const rest = await replay('claude', orchestration.slice(14, 17), registry);
+    expect(value(rest[1]!.lineage)).toMatchObject({ conversation: parallel, depth: 1, parent: orchestrationRoot, resolution: 'registry', subagent: { toolCallId: native(15)['tool_use_id'] } });
+    expect(registry.snapshot().nodes[parallel]).toMatchObject({ confirmed: true, toolCallId: native(15)['tool_use_id'] });
+  });
+
+  it('recovers the nested child when the sequential agent\'s spawn PreToolUse (2.1.259 row 81) was never seen', async () => {
+    const registry = createAgentLineageRegistry();
+    const byRow = await replayRows(withoutRows(81), registry);
+    // The nested start has no spawn to claim: unplaced, and unresolvable for its whole run.
+    expect(byRow.get(82)).toEqual(unavailable('id-not-resolvable'));
+    for (const index of [83, 85, 89, 98]) expect(byRow.get(index), `row ${String(index)}`).toEqual(unavailable('id-not-resolvable'));
+    // Row 99, the sequential agent's PostToolUse naming it, places it as it started and stopped.
+    expect(registry.snapshot().nodes[nested]).toMatchObject({
+      confirmed: true, depth: 2, parent: sequential, root: orchestrationRoot, startedAt: at(82), stoppedAt: at(98), toolCallId: native(99)['tool_use_id'], type: 'general-purpose',
+    });
+    expect(registry.snapshot().unplacedStarts ?? []).toEqual([]);
+  });
+
+  it('recovers the sequential agent and its nested child when the root\'s spawn PreToolUse (2.1.259 row 64) was never seen', async () => {
+    const registry = createAgentLineageRegistry();
+    const byRow = await replayRows(withoutRows(64), registry);
+    // Neither start can be placed: the sequential agent has no spawn to claim, and the
+    // nested child's spawn call opens no window because its carrier is unplaced.
+    expect(byRow.get(65)).toEqual(unavailable('id-not-resolvable'));
+    expect(byRow.get(82)).toEqual(unavailable('id-not-resolvable'));
+    // Before the root's PostToolUse (row 101) the nested confirmation (row 99) waits with its unplaced parent.
+    const partial = createAgentLineageRegistry();
+    await replay('claude', withoutRows(64).slice(0, 99), partial);
+    expect(partial.snapshot().unplacedStarts).toMatchObject([
+      { confirmations: [{ child: nested, parent: sequential, toolCallId: native(99)['tool_use_id'] }], id: sequential, stoppedAt: at(100) },
+      { id: nested, stoppedAt: at(98) },
+    ]);
+    // Row 101 places the sequential agent under the root and applies the parked confirmation beneath it.
+    expect(registry.snapshot().nodes[sequential]).toMatchObject({ confirmed: true, depth: 1, parent: orchestrationRoot, startedAt: at(65), stoppedAt: at(100), toolCallId: native(101)['tool_use_id'] });
+    expect(registry.snapshot().nodes[nested]).toMatchObject({ confirmed: true, depth: 2, parent: sequential, root: orchestrationRoot, startedAt: at(82), stoppedAt: at(98), toolCallId: native(99)['tool_use_id'] });
+    expect(registry.snapshot().unplacedStarts ?? []).toEqual([]);
+    // Nothing else moved: the background pair still hangs under the root.
+    expect(registry.snapshot().nodes[explore]).toMatchObject({ confirmed: true, depth: 1, parent: orchestrationRoot });
+    expect(registry.snapshot().nodes[parallel]).toMatchObject({ confirmed: true, depth: 1, parent: orchestrationRoot });
   });
 
   it('drops the unplaced starts of a session that ends', async () => {

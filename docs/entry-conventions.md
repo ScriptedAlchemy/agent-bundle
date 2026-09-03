@@ -463,7 +463,12 @@ as the host's word on the edge, whatever it believed before:
   parent were claimed blind, so `subagent.toolCallId` appears after the fact;
 - it places an unplaced start under the parent, as it started (time, type,
   and already stopped when its stop came first), and consumes the spawn call
-  so no later start can claim it;
+  so no later start can claim it; a confirmation an unplaced start issued
+  for its own children waits with it and is applied when it is placed, so a
+  missed spawn hook at one level does not lose the subtree beneath it
+  (replaying the 2.1.259 capture without the root's spawn `PreToolUse`
+  recovers both the sequential agent and its depth-2 child from the two
+  `PostToolUse` payloads alone);
 - it moves a child the window filed under the wrong parent (a missed spawn
   `PreToolUse` leaves another parent's open call as the only candidate) and
   re-bases everything the child spawned meanwhile;
