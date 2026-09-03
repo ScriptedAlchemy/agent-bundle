@@ -49,6 +49,14 @@ export interface PortablePluginValidationReport {
 }
 
 export interface ValidatePortablePluginFilesOptions {
+  /**
+   * Document text validated in place of the on-disk bytes, by plugin-relative
+   * path. Doctor passes the pre-expansion `mcp.json` an emitted `install.mjs`
+   * recorded for a Cursor copy, whose on-disk document carries the absolute
+   * paths Cursor needs and is Agent Plugins-conformant only in this form.
+   * The file must still exist as a regular file at the plugin root.
+   */
+  readonly documents?: Readonly<Partial<Record<DocumentPath, string>>>;
   readonly pluginDirectory: string;
   readonly target: string;
 }
@@ -146,6 +154,7 @@ const pluginRelativeTarget = (pluginDirectory: string, value: string): string | 
 const readDocuments = async (
   pluginDirectory: string,
   target: string,
+  overrides: Readonly<Partial<Record<DocumentPath, string>>>,
 ): Promise<Readonly<{
   readonly diagnostics: readonly Diagnostic[];
   readonly documents: readonly ParsedDocument[];
@@ -155,6 +164,7 @@ const readDocuments = async (
   for (const contract of pinnedDocumentContracts) {
     const file = join(pluginDirectory, contract.path);
     const kind = await fileKind(file);
+    const override = overrides[contract.path];
     if (kind === 'missing') {
       if (contract.required) {
         diagnostics.push(diagnostic(
@@ -176,16 +186,20 @@ const readDocuments = async (
       continue;
     }
     let source: string;
-    try {
-      source = await readFile(file, 'utf8');
-    } catch {
-      diagnostics.push(diagnostic(
-        'AB6035',
-        `${contract.path} could not be read for pinned-schema validation.`,
-        'error',
-        target,
-      ));
-      continue;
+    if (override !== undefined) {
+      source = override;
+    } else {
+      try {
+        source = await readFile(file, 'utf8');
+      } catch {
+        diagnostics.push(diagnostic(
+          'AB6035',
+          `${contract.path} could not be read for pinned-schema validation.`,
+          'error',
+          target,
+        ));
+        continue;
+      }
     }
     let value: unknown;
     try {
@@ -412,7 +426,7 @@ export const validatePortablePluginFiles = async (
 ): Promise<readonly Diagnostic[]> => {
   const pluginDirectory = resolve(options.pluginDirectory);
   const [documents, skills, symlinks] = await Promise.all([
-    readDocuments(pluginDirectory, options.target),
+    readDocuments(pluginDirectory, options.target, options.documents ?? {}),
     skillDiagnostics(pluginDirectory, options.target),
     symlinkDiagnostics(pluginDirectory, options.target),
   ]);
@@ -440,7 +454,11 @@ export const validatePortablePlugin = async (
   );
   const diagnostics = freezeDiagnostics([
     transparency,
-    ...await validatePortablePluginFiles({ pluginDirectory, target: options.target }),
+    ...await validatePortablePluginFiles({
+      ...(options.documents === undefined ? {} : { documents: options.documents }),
+      pluginDirectory,
+      target: options.target,
+    }),
   ]);
   return Object.freeze({
     diagnostics,

@@ -152,3 +152,37 @@ correct; only the §7.2.1/§9 path contract is missing.
   time-gated on a Cursor release; the harness above (`/tmp/w426/iso-setup.sh`
   shape: five probes + the emitted pack, reload, read the three log surfaces)
   is the procedure to repeat.
+
+## 5. Framework-side support landed after this run (install-time expansion)
+
+Recorded 2026-09-03 (later the same day; the observations above are unchanged).
+The maintainer's direction is that a host-side gap the framework can absorb
+without contacting the vendor is absorbed. Every failing item in §3 is a path
+Cursor hands to `spawn` verbatim, and the control run proved that verbatim
+absolute paths connect. The emitted portable `install.mjs` therefore performs
+the §7.2.1/§9 resolution itself, for the Cursor copy only:
+
+- Detection: root `plugin.json` with an `https://agent-plugins.org/schemas/`
+  `$schema` and no `.cursor-plugin/plugin.json`. A `cursor`-target bundle is
+  never rewritten.
+- Rewrite of `mcp.json` in `~/.cursor/plugins/local/<name>`, every `stdio`
+  server: `${PLUGIN_ROOT}` → the absolute plugin root; `${PLUGIN_DATA}` →
+  `~/.cursor/agent-bundle/plugin-data/<name>` (created before install, spec
+  §9.1); omitted `cwd` → the plugin root; `./` in `command` or `cwd` →
+  resolved against the plugin root; `PLUGIN_ROOT` / `PLUGIN_DATA` added to
+  `env`. Remote servers and skills-only packs are copied byte-identically.
+- The bundle stays as §4 says (spec shape, portable). The artifact inventory
+  hashes the expanded form so reruns are `Already installed`, same-version
+  rebuilds are `Replaced`, and an older unexpanded receipt-managed copy is
+  replaced on the next run. The receipt gains `cursorExpansion`
+  `{ pluginRoot, pluginData, documents: { "mcp.json": <shipped text> } }`.
+- `agent-bundle doctor --host cursor` validates the Agent Plugins contract
+  (`AB7320`) against the shipped document from the receipt and proves the
+  expansion (`AB7325`: `expanded`, `unexpanded` for a copy still in spec
+  shape, `drifted` for a moved/duplicated/edited copy).
+- Provenance is `derived` everywhere it is reported
+  (`portable-1.0.0.json` `plugin.cursorLocalInstall.placeholderExpansion`);
+  the `mcp.pathTokens` rows keep describing the bundle. The §4 re-run
+  procedure is unchanged: when a Cursor build expands the placeholders itself,
+  the installer's rewrite becomes redundant, not wrong, and the capability row
+  can then cite native expansion.

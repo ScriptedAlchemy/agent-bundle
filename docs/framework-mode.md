@@ -493,8 +493,19 @@ plus the `AB6038` provenance note), and by `doctor` for installed Cursor
 local plugins that declare the standard's `$schema` (`AB7320`; see
 `docs/diagnostics.md`). A dogfood proof
 against the real Cursor IDE plugin loader (discovery, skill listing, MCP
-launch, and three observed Cursor 3.18.25 placeholder-expansion conformance
-gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.
+launch, and the observed Cursor 3.18.25 placeholder-expansion conformance
+gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`
+and `docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md`. Because Cursor
+expands none of `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`, provides no §9.1
+variables, defaults an omitted `cwd` to the home directory and resolves `./`
+commands against the workspace, the emitted portable `install.mjs` performs
+that expansion itself in the `~/.cursor/plugins/local/<name>` copy of
+`mcp.json` (absolute plugin root, `~/.cursor/agent-bundle/plugin-data/<name>`
+as `PLUGIN_DATA`, plugin-root `cwd`, resolved `./` command, `PLUGIN_ROOT` /
+`PLUGIN_DATA` in each stdio server's `env`), keeps the shipped document in the
+install receipt (`cursorExpansion`), and `doctor` proves the expansion with
+`AB7325` while validating the Agent Plugins contract against the shipped
+document. The bundle stays spec-conformant; the provenance is `derived`.
 
 The framework CLI performs those same operations:
 
@@ -550,4 +561,7 @@ plugin's manifest hook registration as `registered`, `stale` (a
 `~/.cursor/hooks.json` also points into a plugin (duplicate delivery) or is
 unparsable; `AB7324` reports a staged marketplace as imported or still
 awaiting the Customize step, and `doctor --from` resolves a marketplace-mode
-bundle to that staged copy instead of reporting it missing.
+bundle to that staged copy instead of reporting it missing. For Agent Plugins
+installs, `AB7325` reports the installer's placeholder expansion as
+`expanded`, `unexpanded` (spec forms Cursor cannot launch), or `drifted`
+(moved, duplicated, or edited after the expansion was recorded).

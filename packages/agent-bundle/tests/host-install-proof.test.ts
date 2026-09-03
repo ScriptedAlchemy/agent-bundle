@@ -490,12 +490,18 @@ it(
       manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',
+        cursorExpansion: {
+          doctor: 'AB7325 expanded',
+          installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
+          pluginData: '.cursor/agent-bundle/plugin-data/host-install-portable-proof',
+          receipt: 'cursorExpansion records the bundle mcp.json verbatim',
+        },
         locations: [
           'mcp.json#/mcpServers/probe/cwd',
           'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
         ],
         reservedEnvKeys: 'absent',
-        resolvedAtInstall: false,
+        resolvedAtInstall: true,
         sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
       },
       proofLevel: 'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)',

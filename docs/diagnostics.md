@@ -36,7 +36,7 @@ even when no error diagnostic was reported.
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7325` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), and host load refusal (`AB7325`; see below). |
+| `AB7300`–`AB7326` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), and the Cursor Agent Plugins launch proof (`AB7326`; see below). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
@@ -878,3 +878,26 @@ The JSON report exposes the same facts: `hosts[].inventory.findings[].errors`,
 `hosts[].bundle.errors`, and `hosts[].bundle.comparison.errors`. The text
 report prints the comparison as `installed copy: load failed (installed
 <version>, refused by the host: <errors>)`.
+
+## Read-only Doctor Cursor Agent Plugins launch proof (`AB7325`)
+
+Cursor 3.18.25 loads Agent Plugins 1.0.0 packages from
+`~/.cursor/plugins/local/<name>` but spawns their stdio servers without
+expanding `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` in `args`, `env` values, or
+`cwd`, without providing the reserved `PLUGIN_ROOT` / `PLUGIN_DATA` variables
+(spec §9.1), with an omitted `cwd` defaulting to the home directory, and with
+plugin-relative `./` commands resolved against the workspace folder (spec
+§7.2.1); see `docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md`. The
+emitted portable `install.mjs` therefore rewrites `mcp.json` in the Cursor copy
+only — absolute plugin root, `~/.cursor/agent-bundle/plugin-data/<name>`
+(created) for the data directory, plugin-root `cwd`, resolved `./` command, and
+`PLUGIN_ROOT` / `PLUGIN_DATA` in every stdio server's environment — and records
+the substituted values plus the pre-expansion document in the install receipt
+(`cursorExpansion`). Doctor validates the Agent Plugins contract (`AB7320`)
+against that recorded document and proves the expansion against the installed
+bytes. Provenance is always `derived`: nothing here claims Cursor expands the
+placeholders itself.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB7325` | info / warning / error | Info (`launch.state = expanded`): the receipt's expansion still describes the installed copy — same plugin root, existing data directory, no placeholder left, absolute `cwd` and plugin-root `command`/`args` paths that exist, `PLUGIN_ROOT` / `PLUGIN_DATA` equal to the recorded values. Warning (`unexpanded`): an Agent Plugins install without a recorded expansion whose stdio servers still rely on the spec forms Cursor does not resolve (the message lists the forms per server); Cursor reports `spawn … ENOENT` / `MODULE_NOT_FOUND` for them. Error (`drifted`, entry `corrupt`): the recorded expansion names another plugin root (the copy was moved or duplicated), the data directory or an expanded path no longer exists, or the environment no longer carries the recorded values. Packages without stdio servers, and copies already carrying absolute paths with the §9.1 variables, produce no finding. | Reinstall with the bundle's emitted `install.mjs` at the copy's current location; the Cursor-target (`.cursor-plugin/plugin.json`) bundle is never rewritten and is not subject to this check. |

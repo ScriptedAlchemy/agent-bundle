@@ -42,7 +42,22 @@ node ./install.mjs
 ```
 
 Its staged copy is idempotent for identical content and refuses version or content collisions. It
-never invokes `sudo` and never changes `PATH`. Artifact validation rejects a built-in target
+never invokes `sudo` and never changes `PATH`.
+
+For a `portable` (Agent Plugins 1.0.0) bundle the installer also expands the standard's
+placeholders in the Cursor copy of `mcp.json`, because Cursor 3.18.25 does not: it leaves
+`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` unexpanded in `args`, `env` values, and `cwd`, provides no
+`PLUGIN_ROOT` / `PLUGIN_DATA` variables (spec §9.1), defaults an omitted `cwd` to the home
+directory, and resolves plugin-relative `./` commands against the workspace folder (spec §7.2.1),
+so every spec-shaped stdio server fails to spawn. The Cursor copy gets the absolute plugin root,
+`~/.cursor/agent-bundle/plugin-data/<name>` (created by the installer) as the data directory, a
+plugin-root `cwd`, resolved `./` commands, and `PLUGIN_ROOT` / `PLUGIN_DATA` in each stdio
+server's environment. The bundle itself is untouched and stays spec-conformant for other Agent
+Plugins clients; the pre-expansion document is kept in the install receipt (`cursorExpansion`),
+and `agent-bundle doctor --host cursor` proves the expansion with `AB7325`. Nothing here is
+Cursor behaviour: the provenance is `derived`, and a `cursor`-target bundle is never rewritten.
+
+Artifact validation rejects a built-in target
 whose required install surface is missing, so a bundle cannot ship without the installer it
 promises.
 
@@ -110,6 +125,7 @@ installed (or byte-identical existing) copy carries `errors`, instead of reporti
 | `AB7322` | info / error | Info when an installed Cursor plugin registers plugin-scoped hooks from its manifest and every command's script exists under the plugin root; error when the declared hooks file is missing or malformed, or an executed script is absent. |
 | `AB7323` | warning | `~/.cursor/hooks.json` registers a command that points into an installed plugin directory, so Cursor would deliver that hook twice; manifest registration alone is sufficient. |
 | `AB7324` | info / warning / error | A marketplace staged by `install cursor --mode marketplace` is imported (`registered`), still awaiting the Customize import step (`unregistered`), or incomplete (`corrupt`). |
+| `AB7325` | info / warning / error | An Agent Plugins install under `~/.cursor/plugins/local` had its `mcp.json` placeholders expanded by the emitted `install.mjs` and every expanded path still resolves (`expanded`); still carries the spec forms Cursor 3.18.25 does not resolve, so its stdio servers cannot spawn (`unexpanded`); or was moved, duplicated, or edited after the expansion was recorded (`drifted`, entry `corrupt`). Reinstall with the bundle's `install.mjs` at the current location. |
 | `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, so the unified `plugin` bundle's Claude-format `hooks/hooks.json` beside `hooks/hooks-cursor.json` is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
 
 ## Next

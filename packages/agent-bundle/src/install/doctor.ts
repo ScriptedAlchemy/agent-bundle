@@ -41,6 +41,11 @@ import {
   type TreeInventory,
 } from './receipt.ts';
 import {
+  inspectCursorAgentPluginsLaunch,
+  type CursorAgentPluginsLaunch,
+  type CursorAgentPluginsLaunchInspection,
+} from './cursor-agent-plugins-launch.ts';
+import {
   type CursorHooksRegistration,
   type CursorStagingGit,
   inspectCursorMarketplaceStaging,
@@ -103,6 +108,8 @@ export interface DoctorFinding {
   readonly errors?: readonly string[];
   /** Cursor plugin hook registration proof (`.cursor-plugin/plugin.json` installs only). */
   readonly hooks?: CursorHooksRegistration;
+  /** Agent Plugins stdio launch proof for Cursor (root `plugin.json` installs with stdio servers only). */
+  readonly launch?: CursorAgentPluginsLaunch;
   readonly marketplace?: string;
   readonly manifest?: string;
   readonly name?: string;
@@ -587,6 +594,7 @@ const installedCursorStaticIssues = async (
   installed: InstalledCursorManifest,
   path: string,
   installRoot: string,
+  launch: CursorAgentPluginsLaunchInspection | undefined,
 ): Promise<readonly DoctorStaticValidationIssue[]> => {
   if (installed.manifest === cursorManifestCandidates[0]) {
     return validateCursorPluginFiles({ containmentRoot: installRoot, pluginDirectory: path, target: 'cursor' });
@@ -597,8 +605,14 @@ const installedCursorStaticIssues = async (
     target: 'cursor',
   });
   if (!isAgentPluginsManifest(installed)) return symlinks;
+  // The Cursor copy of an expanded package is conformant only as the bundle shipped it (AB7325 proves the expansion).
+  const documents = launch?.documents;
   const [portable, containment] = await Promise.all([
-    validatePortablePluginFiles({ pluginDirectory: path, target: 'portable' }),
+    validatePortablePluginFiles({
+      ...(documents === undefined ? {} : { documents }),
+      pluginDirectory: path,
+      target: 'portable',
+    }),
     symlinks,
   ]);
   return Object.freeze([...portable, ...containment]);
@@ -753,7 +767,10 @@ const cursorInventory = async (
       ));
       continue;
     }
-    const staticIssues = await installedCursorStaticIssues(manifest, path, installRoot);
+    const launch = isAgentPluginsManifest(manifest)
+      ? await inspectCursorAgentPluginsLaunch(path, { caseInsensitivePaths: platform === 'win32' })
+      : undefined;
+    const staticIssues = await installedCursorStaticIssues(manifest, path, installRoot, launch);
     const staticDiagnostics = staticValidationDiagnostics(
       'AB7320',
       'cursor',
@@ -764,7 +781,8 @@ const cursorInventory = async (
       diagnostics.push(diagnostic(
         'AB7320',
         `Cursor plugin entry ${JSON.stringify(path)} is a root plugin.json declaring ${JSON.stringify(manifest.schema)}, ` +
-          'which Cursor loads as an Agent Plugins package; Doctor validated it against the pinned Agent Plugins 1.0.0 contract.',
+          'which Cursor loads as an Agent Plugins package; Doctor validated it against the pinned Agent Plugins 1.0.0 contract' +
+          (launch?.documents === undefined ? '.' : ' using the pre-expansion mcp.json its install receipt recorded.'),
         'Rebuild the portable bundle from valid source bytes if the Agent Plugins contract reports errors.',
         'info',
         'cursor',
@@ -781,6 +799,7 @@ const cursorInventory = async (
       ));
     }
     diagnostics.push(...staticDiagnostics);
+    if (launch !== undefined) diagnostics.push(...launch.diagnostics);
     const durableState = await inspectDurableState(path, 'cursor');
     if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
     const hooks = manifest.manifest === cursorManifestCandidates[0]
@@ -791,10 +810,14 @@ const cursorInventory = async (
       ...(durableState === undefined ? {} : { durableState }),
       entry,
       ...(hooks === undefined ? {} : { hooks: hooks.registration }),
+      ...(launch?.launch === undefined ? {} : { launch: launch.launch }),
       manifest: manifest.manifest,
       name: manifest.name,
       path,
-      state: staticDiagnostics.some((entry) => entry.severity === 'error') ? 'corrupt' : 'installed',
+      // A drifted expansion means Cursor spawns paths that no longer exist: the install is corrupt, not merely stale.
+      state: staticDiagnostics.some((entry) => entry.severity === 'error') || launch?.launch?.state === 'drifted'
+        ? 'corrupt'
+        : 'installed',
       ...(manifest.version === undefined ? {} : { version: manifest.version }),
     });
   }
