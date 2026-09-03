@@ -1,0 +1,165 @@
+---
+description: '完整的 agent-bundle 命令行表面：dev、build、prepack、install、doctor、validate、eval、inspect、mcp 与 hooks，及其全部选项与退出码。'
+---
+
+# 命令行
+
+```sh
+npx agent-bundle --help
+npx agent-bundle --version
+```
+
+## 命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `agent-bundle dev` | 在 loopback 上提供打包好的开发 workbench。 |
+| `agent-bundle dev proxy` | 把宿主的 stdio MCP 流量桥接到正在运行的开发服务器。 |
+| `agent-bundle build` | 构建一份已校验的 Agent Bundle 产物。 |
+| `agent-bundle prepack` | 构建并校验 npm pack 清单。 |
+| `agent-bundle install <host>` | 把已构建的捆绑包安装进受支持的宿主。 |
+| `agent-bundle doctor` | 在不做任何改动的前提下检查宿主安装与运行时端点。 |
+| `agent-bundle validate` | 校验项目源码或某一份产物。 |
+| `agent-bundle eval` | 针对已构建产物运行确定性或原生 eval 套件。 |
+| `agent-bundle eval compare` | 对比两次已持久化的 eval 运行。 |
+| `agent-bundle inspect` | 检查规范化后的 target 与适配器计划。 |
+| `agent-bundle mcp list` / `invoke` / `run` | 从产物中操作某个 MCP 服务器。 |
+| `agent-bundle hooks list` / `simulate` | 检查并模拟生成的钩子。 |
+
+## 共享选项组
+
+**源码命令** —— `build`、`prepack`、`validate`、`eval`：
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--root <root>` | `process.cwd()` | 项目根目录。 |
+| `--config <path>` | —— | 相对 `--root` 的配置文件。 |
+| `--mode <mode>` | `production` | 配置模式。 |
+| `--target <target>` | 全部已配置 | 要选择的 target。可重复。 |
+| `--json` | 关闭 | 写出一份机器可读的 JSON 文档。 |
+
+**产物命令** —— `mcp list`、`mcp invoke`、`mcp run`、`hooks list`、`hooks simulate`：同样的
+`--root`、`--config`、`--mode` 与 `--json`，外加 `--artifact <path>`（精确使用某一份已构建产物）与
+`--target <target>`（选择产物 target）。对 `mcp list`、`mcp invoke`、`mcp run` 与 `hooks simulate`
+来说，`--target` 是**必填**的。
+
+## dev
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--root <root>` | `process.cwd()` | 项目根目录。 |
+| `--port <port>` | 临时端口 | Loopback TCP 端口。 |
+| `--agent-api` / `--no-agent-api` | 配置中的 `dev.agentApi` | 启用或禁用 `/mcp` 上经过认证的 Agent API。 |
+| `--install-host <host>` | 无 | 安装并重新同步一个开发期宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
+| `--open` / `--no-open` | `--no-open` | 前台服务器启动后是否打开 workbench。 |
+
+`dev` 在前台运行，并在收到终止信号时关闭会话。见
+[开发者 Workbench](../guide/development/workbench.mdx)。
+
+### dev proxy
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--server <server>` | **必填** | 生成的 MCP 服务器名。 |
+| `--target <target>` | `portable` | 包含该 MCP 服务器的生成式 target。 |
+| `--url <url>` | 自动发现 | 显式指定 loopback 开发服务器 origin。 |
+
+proxy 从父命令 `dev` 继承 `--root`，并把诊断写到 stderr。
+
+## build 与 prepack
+
+两者都接受源码选项组，外加：
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--output <path>` | 配置中的 `output.distPath`，否则为 `dist` | 相对 `--root` 的产物输出路径。 |
+
+当项目声明了 `bin` 或 `lib` 时，两者都会构建包输出。
+
+## install
+
+```sh
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
+```
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
+| `--from <bundle-dir>` | `process.cwd()` | target 捆绑包目录或产物根目录。 |
+| `--scope <scope>` | `user` | `user`、`project` 或 `local`。Claude 接受全部三种；Codex 与 Cursor 是 user 作用域。 |
+
+## doctor
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--host <host>` | 全部受支持的宿主 | 要检查的宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
+| `--from <bundle-dir>` | —— | 用于比对的 target 捆绑包目录或产物根目录。 |
+
+当 Doctor 报告任何 error 级诊断时以 `1` 退出，并且绝不修改任何东西。
+
+## validate
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--artifact <path>` | —— | 精确校验这份已构建产物，而不是项目源码。 |
+| `--host-validation` / `--no-host-validation` | 开启 | 为兼容的已构建 target 运行已安装的宿主开发者工具。 |
+| `--strict` | 关闭 | 把宿主工具的 warning 提升为 error。 |
+
+## eval
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--artifact <path>` | 从源码构建 | 精确评测这份已构建产物。 |
+| `--case <case>` | 全部 | 要运行的 eval case id。可重复。 |
+| `--suite <suite>` | 全部 | 要运行的 eval 套件名。可重复。 |
+| `--harness <harness>` | `deterministic` | `deterministic`、`claude` 或 `codex`。 |
+| `--trials <count>` | 套件声明值 | 为每个所选 case 运行这么多次试验。正整数，最大 `100`。 |
+
+`eval compare <baseline> <candidate>` 接受两个已持久化的运行 id，并从 `eval` 继承源码选项。
+
+## inspect
+
+`inspect` 接受 `--root`、`--config`、`--mode`、`--json` 与单个 `--target <target>` 过滤器
+（不可重复），外加**至多一个**聚焦标志：
+
+| 标志 | 聚焦于 |
+| --- | --- |
+| `--bundler` | 合成出来的打包器配置。 |
+| `--hooks` | 钩子。 |
+| `--routes` | 编译后的路由图。 |
+| `--skills` | Skill。 |
+| `--state` | 状态生命期。 |
+
+传入多个聚焦标志是错误。当规范化模型无效时，`inspect` 以 `1` 退出。
+
+## mcp
+
+`mcp list` 需要 `--server <server>`。`mcp invoke` 需要 `--server` 与 `--tool <tool>`，并且只接受
+`--input <json>` 与 `--input-file <path>` 二者之一；解析出的值必须是 JSON 对象，而不是数组或标量。
+
+`mcp run` 需要 `--server`，并以继承的 stdio 在前台运行一个 stdio 服务器：
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--env-file <path>` | 约定集合 | 精确加载这个 `.env` 文件，替换项目根目录的那一组。可重复。 |
+| `--no-env` | 关闭 | 不加载任何 `.env` 文件即启动。与 `--env-file` 互斥。 |
+| `--plugin-root <path>` | 项目根目录 | 让 env 中的 plugin-root 锚点相对这个根展开。 |
+
+由于在整个前台运行期间由服务器持有 JSON-RPC 通道，`mcp run` 自身不向 stdout 写任何东西。`.env` 优先级
+规则，以及 plugin-root 锚点改变了什么，见[运行时环境](./runtime-environment.mdx)。
+
+## hooks
+
+`hooks list` 报告某份产物中的钩子。`hooks simulate` 需要 `--hook <hook>`（id 或名字），以及与
+`mcp invoke` 相同的 `--input` / `--input-file` 二选一。
+
+## 退出码
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功，包括 `--help` 与 `--version`。 |
+| `1` | 一次被报告的失败：一条 error 级诊断、`inspect` 得到的无效模型、失败或结论不明的 eval 运行，或者被作为一条 `AB5000` 诊断写到 stderr 的未捕获错误。 |
+| `2` | 来自命令行解析器的参数解析失败。 |
+
+当任何一次试验**失败或结论不明**时，eval 运行以 `1` 退出——结论不明的试验没有产生证据，因此它同样不能
+报告成功。

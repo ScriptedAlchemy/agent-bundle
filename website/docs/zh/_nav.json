@@ -5,6 +5,11 @@
     "activeMatch": "/zh/guide/"
   },
   {
+    "text": "参考",
+    "link": "/reference/",
+    "activeMatch": "/zh/reference/"
+  },
+  {
     "text": "类型 API",
     "link": "/api/",
     "activeMatch": "/zh/api/"

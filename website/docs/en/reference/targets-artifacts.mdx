@@ -1,0 +1,76 @@
+---
+description: 'What each agent-bundle target emits and the artifact manifest contract: file kinds, digests, source inputs, target schema pins, and recorded validation status.'
+---
+
+# Targets and artifacts
+
+The target table — which layout each target emits, and why the portable standard omits rules,
+commands, and hooks — is in [Configuration model](../guide/authoring/index.mdx). The directory
+layouts are in [Project structure](../guide/start/project-structure.mdx). This page is the
+artifact contract those layouts have to satisfy.
+
+## Every target directory is distributable
+
+A built target directory is the unit of distribution: no packaging step follows the build. Each
+one carries the components the host reads, a generated `INSTALL.md` written with the bundle's
+real plugin and marketplace names, and the install surface that target requires.
+
+| Target | Marketplace manifests | Install surface |
+| --- | --- | --- |
+| `claude` | Local marketplace manifest. | `claude plugin marketplace add` + `claude plugin install`. |
+| `codex` | Local marketplace manifest. | `codex plugin marketplace add` + `codex plugin add`. |
+| `cursor` | — | `install.mjs`. |
+| `portable` | — | `install.mjs`. |
+| `plugin` | Both Claude and Codex manifests, plus a generated `AGENTS.md`. | `install.mjs` and the host CLIs. |
+
+Artifact validation errors when a target is missing a required install-surface file, so a bundle
+cannot ship without the installer its `INSTALL.md` promises. The npm pack inventory checks the
+same paths (`AB7010`).
+
+## agent-bundle.manifest.json
+
+One manifest is emitted per artifact and is the input to every later integrity check —
+`validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
+
+| Field | Contents |
+| --- | --- |
+| `producer` | `{ name: 'agent-bundle', version }`. |
+| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
+| `files` | Every emitted file: `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
+| `runtime` | `{ node }` — the selected generated-executable floor. |
+| `targets` | Per target: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
+| `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
+| `validation` | Recorded status for `source`, `artifact`, and each target. |
+
+`kind` is one of `bundle`, `copy`, `generated`, or `prebuilt` — a bundled entry, a byte-for-byte
+copy, a compiler-generated document, or a prebuilt payload file. `sourceInputs` records each
+input path with its own SHA-256 and, where relevant, whether it was executable.
+
+Because every file carries a digest, validation compares **real bytes** rather than checking that
+a path exists, and a hand-edited generated file fails. That contract is what makes
+`validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources have been
+deleted.
+
+## Versions and revisions
+
+Four version axes are tracked separately and are expected to agree:
+
+- **Source** — the project's `package.json` release version.
+- **Built artifact** — `project.packageVersion` in the manifest.
+- **Installed artifact** — the manifest found under a host's installed root.
+- **Running process** — the version a live MCP `initialize` reports.
+
+The `host-install` proof level records all four and fails closed when any is missing or differs.
+`prepack` gates the first two plus normalized plugin metadata and host manifests (`AB7013`).
+
+Target rows also record an `adapterRevision` (monotonic, repository-owned) and an
+`observedVersion` (the host version the capability evidence was recorded against). Neither is
+hashed: Git already versions repository-owned content, and hashing it again inside the repository
+causes churn on every table edit. Hash pins are reserved for vendored external content — host
+document schemas under `src/adapters/schemas/*` with their `PROVENANCE.json`, the Agent Skills
+schema pin, and emitted files and source inputs.
+
+## Next
+
+- [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.
+- [Runtime environment](./runtime-environment.mdx) — what the emitted executables assume at run time.

@@ -5,6 +5,11 @@
     "activeMatch": "/guide/"
   },
   {
+    "text": "Reference",
+    "link": "/reference/",
+    "activeMatch": "/reference/"
+  },
+  {
     "text": "Type API",
     "link": "/api/",
     "activeMatch": "/api/"

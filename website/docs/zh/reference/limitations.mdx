@@ -1,0 +1,54 @@
+---
+description: 'agent-bundle 的已知限制：未迁移的 pre-0.1 持久记录、仅 loopback 的开发、原生 harness 的前提条件、被推断的 Codex 激活证据，以及未经核实的对比 facet。'
+---
+
+# 已知限制
+
+明确写出来，以免把缺口误当成缺陷。
+
+## 持久记录
+
+由 pre-0.1 构建——即无版本持久记录切换之前——写出的开发期快照与导出**不会被迁移**。升级之前请重新构建
+产物，并丢弃那些预览期的 Eval 与 Playground 记录。当前的读取器会拒绝这些被取代的形态，而不是去猜测
+兼容性。
+
+## 开发服务器
+
+Workbench 只绑定 loopback，并且是一个前台开发会话，而不是托管服务。
+
+## 原生 harness
+
+原生 Claude 与 Codex harness 要求那些 CLI 已安装并已登录。缺失、不兼容或未认证的 CLI 会被报告为
+**harness 失败**，这与插件失败是两回事。它们的实时冒烟测试是可选启用的，不属于日常测试运行。
+
+语义评分要求原生 Claude harness 与一个已登录的 Claude Code 会话；配置了它之后，确定性与 Codex 选择会被
+拒绝。
+
+## 无法被观察到的证据
+
+Codex 未暴露权威的 Skill 激活事件，因此 Codex 的激活证据是 `inferred`，绝不会被报告为 `observed`。
+
+某次运行没有记录的对比 facet —— 语义 grader 身份、宿主 CLI 版本、invocation —— 会被标记为**未经核实**，
+而不是被假定为已对齐。
+
+## 契约矩阵不能证明什么
+
+没有任何矩阵边界能证明浏览器 App 的 HTML，或产物重建后的重放。内存内运行，以及不含事件路由的已编译
+产物，都会诚实地把运行时身份报告为 `not-applicable`。
+
+packed 边界无法加载项目路由模块——源码可能已被删除并被核实为不存在——因此序列化往返、compat 探测与版本
+偏移检查会带着明确理由被报告为 `not-applicable`，而不是被无声跳过。`host-install` 以同样方式报告依赖
+模块的检查，因为加载项目模块会重新跨回源码与构建树。
+
+当被公布的输入 schema 声明了 `additionalProperties: false` 时，普通的 `z.object` 工具路由仍可能剥掉未知
+键而不产生协议失败。当其他生成的负面用例仍能证明拒绝路径时，负面输入检查会记录这一容忍。
+
+## 宿主校验
+
+Codex 与 Cursor 都没有发布插件校验的开发者动词，因此它们输出的文档是针对 vendored 的固定 schema 检查
+的，而宿主的 schema 生成器被视为漂移信号而不是替代契约。见
+[产物校验](../guide/distribution/validation.mdx)。
+
+## 渲染
+
+Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是惰性的。

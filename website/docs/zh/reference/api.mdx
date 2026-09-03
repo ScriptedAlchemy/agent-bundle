@@ -1,0 +1,36 @@
+---
+description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如何产生，以及为什么生成式符号文档与语言无关。'
+---
+
+# 类型 API
+
+符号级参考是**从源码生成的**，不是手写的。请在[类型 API](/zh/api/)中浏览，或从顶部导航进入。
+
+## 它覆盖什么
+
+每个公开入口点都由其声明生成文档：
+
+| 入口点 | 内容 |
+| --- | --- |
+| `agent-bundle` | 程序化编译器 API，包括 `build`、`validate`、`inspect`、`prepack` 与 `startDevServer`。 |
+| `agent-bundle/config` | `defineConfig` 与配置类型。 |
+| `agent-bundle/test` | 路由测试 harness、匹配器与契约矩阵。 |
+| `agent-bundle/eval` | eval 套件定义、断言与运行对比。 |
+| `agent-bundle/rstest` | Rstest 配置助手。 |
+
+因为它是生成的，所以它始终与已交付的类型一致：签名、联合类型、默认值，以及各表面可能抛出的错误类。
+当本参考章节与生成页面不一致时，以生成页面为准。
+
+## 生成页面与语言无关
+
+站点在两个语言下都镜像了这份生成式参考，因此[/api/](/api/)与[/zh/api/](/zh/api/)对两种语言的读者都能
+解析。但其**内容**未被翻译：符号文档提取自源码注释，并保持在其被编写时所用的语言。
+
+这是刻意的。生成输出的翻译副本会在第一次重构时就与源码脱节，而一份类型是最新的、散文却已过期的符号参考，
+比一份诚实地只用一种语言的参考更糟。手写页面——指南以及本参考的其余部分——则是完整翻译。
+
+## 从哪里开始
+
+- 从脚本中编译：`agent-bundle` 中的 `build` 与 `validate`。
+- 编写测试：`agent-bundle/test` 中的 `renderRoute`、`expectDocument` 与那些矩阵，在[测试](../guide/development/testing.mdx)中介绍。
+- 编写 eval：`agent-bundle/eval` 中的 `defineEvalSuite` 与那些断言，在[评测](../guide/development/evaluations.mdx)中介绍。

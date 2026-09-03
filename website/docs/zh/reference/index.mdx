@@ -1,0 +1,41 @@
+---
+description: 'agent-bundle 参考资料：命令行表面、配置字段、target 产物、运行时环境、安全边界、已知限制，以及生成的类型 API。'
+---
+
+# 参考
+
+指南讲的是如何构建并交付一份捆绑包。本章是查阅用的那一半：确切的标志、确切的字段名、确切的默认值，
+以及框架拒绝跨越的那些边界。
+
+这里不重复任何教程。凡是指南中已经解释过的概念——配置模型、七个钩子事件、证明级别——本章只链接过去，
+并仅记录契约本身。
+
+| 页面 | 回答什么 |
+| --- | --- |
+| [命令行](./cli.mdx) | 每条命令、参数、选项、默认值与退出码。 |
+| [配置](./configuration.mdx) | `agent-bundle.config.ts` 的每个字段、类型与校验规则。 |
+| [Target 与产物](./targets-artifacts.mdx) | 各 target 输出什么，以及产物清单契约。 |
+| [运行时环境](./runtime-environment.mdx) | Node 版本下限、路径 token、环境变量、`.env` 分层与持久状态位置。 |
+| [安全](./security.mdx) | 凭据、网络与信任边界。 |
+| [已知限制](./limitations.mdx) | 框架目前不做什么、不能证明什么。 |
+| [类型 API](./api.mdx) | 全部公开导出的生成式符号参考。 |
+
+## 如何读诊断
+
+每条命令报告的都是结构化诊断，而不是散文式错误。一条诊断包含稳定的 `AB` 代码、一个严重级别、一条消息，
+通常还有 `sourcePath` 与一条 `recovery` 提示。只有 **error** 级别才会让命令以非零退出；warning 与 info
+绝不会为构建、校验或 dev 重建把关。
+
+完整的代码目录位于仓库中的
+[`docs/diagnostics.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md)。
+
+| 家族 | 领域 |
+| --- | --- |
+| `AB30xx` | Skill 文档：Markdown 解析与渲染式 skill 编译。 |
+| `AB40xx`–`AB47xx` | 插件元数据、规范化模型不变式、钩子、MCP、脚本、资源、包构建，以及打包器逃生舱。 |
+| `AB5000` | 通用的命令行与适配器失败。 |
+| `AB60xx` | 已构建产物校验，包括宿主 schema 文档与被引用的文件。 |
+| `AB700x`–`AB7013` | 宿主安装与 npm prepack 门禁。 |
+| `AB7xxx` | 项目准备与开发期重建，其中 `AB7300`–`AB7320` 为只读 Doctor。 |
+| `AB8xxx` | 开发服务器配置与 Workbench 路由。 |
+| `AB9xxx` | eval 选择、harness 与持久化运行记录。 |

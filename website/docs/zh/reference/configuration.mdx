@@ -1,0 +1,128 @@
+---
+description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括已废弃的 plugin.version 字段。'
+---
+
+# 配置
+
+概念模型——配置拥有什么、`src/` 约定拥有什么——在[配置模型](../guide/authoring/index.mdx)中。本页是
+字段契约。
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+## 顶层字段
+
+| 字段 | 类型 | 默认值 |
+| --- | --- | --- |
+| `plugin` | `{ name, description?, logo?, ... }` | **必填。** |
+| `targets` | `string[]` | 由适配器选择。 |
+| `skills` | `string[]` | `src/skills/*` 约定。 |
+| `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | `src/hooks/*` 约定。 |
+| `mcp` | `{ servers: Record<string, ...> }` | `src/mcp/*` 约定。 |
+| `scripts` | `Record<string, string \| { entry, targets? }>` | `src/scripts/*` 约定。 |
+| `assets` | `string[]` | 根目录 `assets/` 约定。 |
+| `bin` | `false \| Record<string, string \| { entry }>` | `src/cli.ts` 约定。 |
+| `lib` | `false \| string \| { entry, dts? }` | `src/index.ts` 约定。 |
+| `routes` | 路由图策略 | 由约定推导。 |
+| `output` | `{ distPath? }` | `dist`。 |
+| `runtime` | `{ node }` | Node 22.12。 |
+| `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
+| `state` | `false` | `src/state.ts` 约定。 |
+| `marketplace` | `boolean` | 由适配器选择。 |
+| `dev` | `{ agentApi?, runtime? }` | 关闭。 |
+| `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
+| `tools` | `{ rsbuild?, rspack? }` | 无。 |
+
+宿主作用域的扩展键（`claude`、`codex`、`portable`）由各 target 适配器通过对
+`AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
+留在各自的适配器中，而不进入编译器核心。
+
+## plugin
+
+| 字段 | 规则 |
+| --- | --- |
+| `name` | 必填。宿主原生的插件 slug，绝不是 npm 包名。 |
+| `description` | 一句话，会写进生成的清单中。 |
+| `logo` | 项目相对的图片路径。缺失、不是文件或位于项目之外报告 `AB4012`；在已构建产物中缺失或逃逸出部署树报告 `AB6025`。 |
+| `version` | **已废弃。** |
+
+`package.json` 对发布标识具有权威性。发布版本只在那里声明：与 `package.json` 不一致的 `plugin.version`
+会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付
+`0.0.0-dev.<short-revision>` 这个开发期回退值。该字段仅为兼容而保留，并将按照正常的破坏性变更策略移除。
+
+## hooks
+
+键是七个标准事件：`sessionStart`、`beforeTool`、`afterTool`、`stop`、`agentStart`、`agentStop`、
+`workspaceOpen`。值是一个条目或条目数组，每个条目要么是模块路径，要么是
+`{ entry, tools?, targets? }`。
+
+**钩子结果**契约完整地记录在[钩子](../guide/authoring/hooks.mdx)中。有一个字段值得在此重复，因为它很
+容易搞错：`reason` 是一个非空字符串，**仅**在拒绝 `beforeTool` 或 `stop` 钩子时有效，而拒绝这两者之一
+却不给出 reason 会失败。`agentStop` 不在其列。
+
+## output 与 runtime
+
+`output.distPath` 是相对项目根目录的产物输出目录，默认为 `dist`。逐次调用的 `--output` 标志优先，但同样
+受相同的项目根包含性检查约束；不支持绝对路径与外部输出路径（`AB4707`–`AB4709`）。
+
+`runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
+绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在
+[配置模型](../guide/authoring/index.mdx)中介绍。
+
+## payload
+
+键是产物根目录下的目标目录——一个位于编译器自有命名空间之外的安全单路径段——值是已经构建好的源目录。
+payload 树按字节逐一复制，并且对编译器而言是**不透明的**：编译器无法改写其内部的同级引用，因此稳定的
+名字就是正确性契约。完整性仍然通过产物清单保持内容寻址。
+
+## evals
+
+只接受三个键；其他一律拒绝。
+
+| 字段 | 默认值 | 规则 |
+| --- | --- | --- |
+| `include` | `['evals/**/*.eval.ts']` | 非空的相对模式数组，且绝不逃逸出项目根目录。 |
+| `runsDir` | `.agent-bundle/runs` | 项目根目录下的相对子目录。 |
+| `semanticGrader` | 无 | 必须恰好包含 `harness` 与 `model`。`harness` 必须是 `'claude'`；`model` 必须是安全的模型标识符，而不是路径。 |
+
+`evals` 块中的提供方凭据材料会被直接拒绝（`EVAL_CREDENTIAL_REJECTED`）—— Agent Bundle 复用宿主 CLI 已有
+的已登录会话。见[安全](./security.mdx)。
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  evals: {
+    include: ['evals/**/*.eval.ts'],
+    runsDir: '.agent-bundle/runs',
+    semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+  },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+## dev
+
+仅用于开发、绝不会成为已构建产物一部分的设置。
+
+| 字段 | 含义 |
+| --- | --- |
+| `dev.agentApi` | 从 `agent-bundle dev` 暴露那个经过认证、仅 loopback 的 Agent API。`--agent-api` / `--no-agent-api` 标志会覆盖它。 |
+| `dev.runtime.provider` | 开发期运行时 provider 模块。 |
+
+## tools
+
+唯一的打包器逃生舱。两个片段都会以「最后但有界」的方式合并进框架合成的每一份打包器配置，并且产物不变式
+断言仍会在合并之后运行，因此破坏产物契约的逃生舱取值是一条硬性诊断，而不是一次无声的覆盖（`AB472x`）。
+
+逃生舱在两份打包器引擎副本下执行：产物脚本、MCP 入口、钩子与包构建通过 Rslib 内嵌的 Rsbuild/Rspack 编译，
+而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。绝不要基于导入的 `@rspack/core` 构造插件或执行
+`instanceof` 检查——请使用传给 `tools.rspack` 变更函数的 `utils` 参数
+（`(config, { rspack }) => ...`），它总会交给你当前执行引擎自己的 `rspack` 对象。

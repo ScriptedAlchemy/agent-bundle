@@ -1,0 +1,168 @@
+---
+description: 'The complete agent-bundle command-line surface: dev, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
+---
+
+# CLI
+
+```sh
+npx agent-bundle --help
+npx agent-bundle --version
+```
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `agent-bundle dev` | Serve the packaged development workbench on loopback. |
+| `agent-bundle dev proxy` | Bridge host stdio MCP traffic to a running development server. |
+| `agent-bundle build` | Build a validated Agent Bundle artifact. |
+| `agent-bundle prepack` | Build and validate the npm pack inventory. |
+| `agent-bundle install <host>` | Install a built bundle into a supported host. |
+| `agent-bundle doctor` | Inspect host installs and runtime endpoints without changing them. |
+| `agent-bundle validate` | Validate project source or one artifact. |
+| `agent-bundle eval` | Run deterministic or native eval suites against a built artifact. |
+| `agent-bundle eval compare` | Compare two persisted eval runs. |
+| `agent-bundle inspect` | Inspect normalized targets and adapter plans. |
+| `agent-bundle mcp list` / `invoke` / `run` | Operate an MCP server from an artifact. |
+| `agent-bundle hooks list` / `simulate` | Inspect and simulate generated hooks. |
+
+## Shared option groups
+
+**Source commands** — `build`, `prepack`, `validate`, `eval`:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--root <root>` | `process.cwd()` | Project root. |
+| `--config <path>` | — | Configuration file relative to `--root`. |
+| `--mode <mode>` | `production` | Configuration mode. |
+| `--target <target>` | all configured | Target to select. Repeatable. |
+| `--json` | off | Write one machine-readable JSON document. |
+
+**Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `hooks list`, `hooks simulate`:
+the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
+one built artifact and `--target <target>` to select the artifact target. `--target` is
+**required** for `mcp list`, `mcp invoke`, `mcp run`, and `hooks simulate`.
+
+## dev
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--root <root>` | `process.cwd()` | Project root. |
+| `--port <port>` | ephemeral | Loopback TCP port. |
+| `--agent-api` / `--no-agent-api` | config `dev.agentApi` | Enable or disable the authenticated Agent API on `/mcp`. |
+| `--install-host <host>` | none | Install and re-sync a development host. Repeatable; `claude`, `codex`, or `cursor`. |
+| `--open` / `--no-open` | `--no-open` | Open the workbench after the foreground server starts. |
+
+`dev` runs in the foreground and closes the session on a termination signal. See
+[Developer Workbench](../guide/development/workbench.mdx).
+
+### dev proxy
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--server <server>` | **required** | Generated MCP server name. |
+| `--target <target>` | `portable` | Generated target containing the MCP server. |
+| `--url <url>` | discovered | Explicit loopback development server origin. |
+
+The proxy inherits `--root` from the parent `dev` command and writes diagnostics to stderr.
+
+## build and prepack
+
+Both take the source option group plus:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--output <path>` | config `output.distPath`, else `dist` | Artifact output path relative to `--root`. |
+
+Both build package outputs when the project declares `bin` or `lib`.
+
+## install
+
+```sh
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `<host>` | **required** | `claude`, `codex`, or `cursor`. |
+| `--from <bundle-dir>` | `process.cwd()` | Target bundle directory or artifact root. |
+| `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
+
+## doctor
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
+| `--from <bundle-dir>` | — | Target bundle directory or artifact root to compare against. |
+
+Doctor exits `1` when it reports any error diagnostic, and never modifies anything.
+
+## validate
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--artifact <path>` | — | Validate exactly this built artifact instead of project source. |
+| `--host-validation` / `--no-host-validation` | on | Run installed host developer tools for compatible built targets. |
+| `--strict` | off | Promote host-tool warnings to errors. |
+
+## eval
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--artifact <path>` | built from source | Evaluate exactly this built artifact. |
+| `--case <case>` | all | Eval case id to run. Repeatable. |
+| `--suite <suite>` | all | Eval suite name to run. Repeatable. |
+| `--harness <harness>` | `deterministic` | `deterministic`, `claude`, or `codex`. |
+| `--trials <count>` | suite-declared | Run this many trials of every selected case. A positive integer, at most `100`. |
+
+`eval compare <baseline> <candidate>` takes two persisted run ids and inherits the source options
+from `eval`.
+
+## inspect
+
+`inspect` takes `--root`, `--config`, `--mode`, `--json`, and a single `--target <target>` filter
+(not repeatable), plus **at most one** focus flag:
+
+| Flag | Focus |
+| --- | --- |
+| `--bundler` | The synthesized bundler configuration. |
+| `--hooks` | Hooks. |
+| `--routes` | The compiled route graph. |
+| `--skills` | Skills. |
+| `--state` | State lifetimes. |
+
+Passing more than one focus is an error. `inspect` exits `1` when the normalized model is invalid.
+
+## mcp
+
+`mcp list` requires `--server <server>`. `mcp invoke` requires `--server` and `--tool <tool>`, and
+takes exactly one of `--input <json>` or `--input-file <path>`; the parsed value must be a JSON
+object, not an array or scalar.
+
+`mcp run` requires `--server` and runs one stdio server in the foreground with inherited stdio:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--env-file <path>` | conventional set | Load exactly this `.env` file, replacing the project-root set. Repeatable. |
+| `--no-env` | off | Launch without loading any `.env` files. Mutually exclusive with `--env-file`. |
+| `--plugin-root <path>` | project root | Expand env plugin-root anchors against this root. |
+
+Because the server owns the JSON-RPC channel for the whole foreground run, `mcp run` writes
+nothing of its own to stdout. See [Runtime environment](./runtime-environment.mdx) for the
+`.env` precedence rules and what the plugin-root anchor changes.
+
+## hooks
+
+`hooks list` reports the hooks in an artifact. `hooks simulate` requires `--hook <hook>` (an id or
+a name) and the same `--input` / `--input-file` pair as `mcp invoke`.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success, including `--help` and `--version`. |
+| `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. |
+| `2` | An argument-parsing failure from the command-line parser. |
+
+An eval run exits `1` when any trial **fails or is inconclusive** — an inconclusive trial produced
+no evidence, so it cannot report success either.

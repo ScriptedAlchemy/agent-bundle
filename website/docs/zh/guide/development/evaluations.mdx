@@ -34,8 +34,8 @@ export default defineEvalSuite({
 
 一个 case 声明它的 `id`、`prompt`、`fixture`、`hosts`（逐宿主固定模型）、`invocation` 模式——
 `automatic`、`explicit` 或 `none`——它的 `assertions`，以及要运行多少次 `trials`。同一套件内的 case id
-必须唯一。套件发现、运行记录目录与可选的语义 grader 都配置在顶层 `evals` 配置块中：`include` 默认为
-`evals/**/*.eval.ts`，`runsDir` 默认为 `.agent-bundle/runs`。
+必须唯一。套件发现、运行记录目录与可选的语义 grader 都配置在顶层 `evals` 配置块中；见
+[配置](../../reference/configuration.mdx)。
 
 ```sh
 npx agent-bundle eval --root . --suite mcp-app-status --trials 3
@@ -129,9 +129,10 @@ npx agent-bundle eval --harness codex --trials 1
 ```
 
 每次 Codex 试验都会设置一个临时的 `CODEX_HOME`，并只把已安装 CLI 的不透明 `auth.json` 复制进去。你
-常用的 Codex home、配置与已安装插件状态不会被用作试验状态，也不会被改动。
+常用的 Codex home、配置与已安装插件状态不会被用作试验状态，也不会被改动。完整的凭据契约见
+[安全](../../reference/security.mdx)。
 
 ## 下一步
 
-- [开发者 Workbench](./workbench.mdx) —— Eval 页面、Playground 证据与运行对比。
 - [分发](../distribution/index.mdx) —— 把一份已校验的产物变成可安装的捆绑包。
+- [已知限制](../../reference/limitations.mdx) —— eval 与 harness 目前不能证明什么。

@@ -37,8 +37,8 @@ export default defineEvalSuite({
 A case names its `id`, `prompt`, `fixture`, `hosts` (with a pinned model per host), `invocation`
 mode — `automatic`, `explicit`, or `none` — its `assertions`, and how many `trials` to run. Case
 ids must be unique within a suite. Suite discovery, the runs directory, and the optional semantic
-grader are configured under the top-level `evals` config block: `include` defaults to
-`evals/**/*.eval.ts` and `runsDir` defaults to `.agent-bundle/runs`.
+grader are configured under the top-level `evals` config block; see
+[Configuration](../../reference/configuration.mdx).
 
 ```sh
 npx agent-bundle eval --root . --suite mcp-app-status --trials 3
@@ -146,9 +146,10 @@ npx agent-bundle eval --harness codex --trials 1
 
 Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
 `auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not
-used as trial state and are left unchanged.
+used as trial state and are left unchanged. The full credential contract is in
+[Security](../../reference/security.mdx).
 
 ## Next
 
-- [Developer Workbench](./workbench.mdx) — the Eval page, Playground evidence, and run comparison.
 - [Distribution](../distribution/index.mdx) — turning a validated artifact into an installable bundle.
+- [Limitations](../../reference/limitations.mdx) — what evals and harnesses currently do not prove.
