@@ -1412,7 +1412,7 @@ it('rejects malformed event-specific native input before calling generated Codex
       // Codex pins tool_input/tool_response as any JSON value (presence only);
       // Claude documents both as objects.
       const toolInputError = target === 'codex' ? 'tool_input is required' : 'tool_input must be an object';
-      const toolResponseError = target === 'codex' ? 'tool_response is required' : 'tool_response must be an object';
+      const toolResponseError = 'tool_response is required';
       await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
         ...common, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'use-1',
         ...(target === 'codex' ? {} : { tool_input: [] }),
@@ -1423,7 +1423,6 @@ it('rejects malformed event-specific native input before calling generated Codex
       });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_use_id: 'use-2',
-        ...(target === 'codex' ? {} : { tool_response: 'observed' }),
       })).resolves.toEqual({
         code: 1,
         stderr: `Agent Bundle hook error: native PostToolUse ${toolResponseError}\n`,

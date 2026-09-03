@@ -156,6 +156,34 @@
       "state": "supported"
     }
   },
+  "lineage": {
+    "subagent-events": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03 live capture (docs/audits/2026-09-03-host-lineage-matrix.md): SubagentStart/SubagentStop carry agent_id and agent_type; every hook inside a subagent carries the subagent's agent_id and the root session_id."
+      ]
+    },
+    "root": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: session_id is the root session on every hook payload, including nested subagents."
+      ]
+    },
+    "parent": {
+      "state": "degraded",
+      "reason": "2026-09-03: no hook payload names a subagent's parent; the runtime registry infers it from the Agent/Task PreToolUse that is open when SubagentStart fires (resolution: registry)."
+    },
+    "depth": {
+      "state": "degraded",
+      "reason": "2026-09-03: no depth counter is delivered; the registry derives it from the inferred parent chain."
+    },
+    "mcp-correlation": {
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: tools/call _meta carries claudecode/toolUseId equal to the PreToolUse tool_use_id, so the generated server resolves the caller's conversation through the open pre-tool hook."
+      ]
+    }
+  },
   "observedCliVersion": "2.1.250",
   "plugin": {
     "agents": {

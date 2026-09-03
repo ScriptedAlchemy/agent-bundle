@@ -63,6 +63,10 @@
     "./mount": {
       "types": "./dist/mount/index.d.ts",
       "import": "./dist/mount.js"
+    },
+    "./lineage": {
+      "types": "./dist/lineage/index.d.ts",
+      "import": "./dist/lineage.js"
     }
   },
   "scripts": {

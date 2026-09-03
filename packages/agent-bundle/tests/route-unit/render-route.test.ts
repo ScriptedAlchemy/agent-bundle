@@ -75,16 +75,26 @@ describe('renderRoute through the real renderer', () => {
     expect(rendered.result).toEqual({
       actor: notProvided,
       host: notProvided,
+      lineage: notProvided,
       session: notProvided,
       workspace: notProvided,
     });
   });
 
   it('preserves injected identity values and their observation sources', async () => {
+    const lineage = {
+      conversation: 'agent-child',
+      depth: 1,
+      parent: 'route-unit-session',
+      resolution: 'registry',
+      root: 'route-unit-session',
+      subagent: { id: 'agent-child', toolCallId: 'toolu_spawn', type: 'general-purpose' },
+    } as const;
     const rendered = await renderRoute('tool:harness/context', {
       context: {
         actor: { source: 'receipt', state: 'available', value: { id: 'actor-route-unit' } },
         host: { source: 'native', state: 'available', value: { name: 'route-unit-host' } },
+        lineage: { source: 'derived', state: 'available', value: lineage },
         session: { source: 'native', state: 'available', value: { sessionId: 'route-unit-session' } },
         workspace: { source: 'derived', state: 'available', value: { root: '/tmp/route-unit' } },
       },
@@ -93,9 +103,18 @@ describe('renderRoute through the real renderer', () => {
     expect(rendered.result).toEqual({
       actor: { source: 'receipt', state: 'available', value: { id: 'actor-route-unit' } },
       host: { source: 'native', state: 'available', value: { name: 'route-unit-host' } },
+      lineage: { source: 'derived', state: 'available', value: lineage },
       session: { source: 'native', state: 'available', value: { sessionId: 'route-unit-session' } },
       workspace: { source: 'derived', state: 'available', value: { root: '/tmp/route-unit' } },
     });
+  });
+
+  it('pins the typed per-host lineage unavailability reasons', async () => {
+    const rendered = await renderRoute('tool:harness/context', {
+      context: { lineage: { reason: 'no-shared-runtime', state: 'unavailable' } },
+    });
+
+    expect(rendered.result).toMatchObject({ lineage: { reason: 'no-shared-runtime', state: 'unavailable' } });
   });
 
   it('does not treat lookalike business input as request identity', async () => {
@@ -106,6 +125,7 @@ describe('renderRoute through the real renderer', () => {
     expect(rendered.result).toEqual({
       actor: notProvided,
       host: notProvided,
+      lineage: notProvided,
       session: notProvided,
       workspace: notProvided,
     });

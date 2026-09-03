@@ -149,14 +149,13 @@ it('surfaces the real native envelope validator message as a malformed request',
       session_id: 'session-1',
       tool_input: {},
       tool_name: 'Write',
-      tool_response: 'invalid',
       tool_use_id: 'tool-1',
       transcript_path: '/tmp/lifecycle-replay/transcript.jsonl',
     },
     source: 'observed',
   })).rejects.toMatchObject({
     code: 'AB8211',
-    message: 'Agent Bundle event route error: native tool_response must be an object',
+    message: 'Agent Bundle event route error: native tool_response is required',
     status: 400,
   });
 });
@@ -207,6 +206,11 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: {
+      source: 'receipt',
+      state: 'available',
+      value: { conversation: 'session-1', depth: 0, resolution: 'native', root: 'session-1' },
+    },
     session: { source: 'receipt', state: 'available', value: { sessionId: 'session-1' } },
     workspace: { source: 'receipt', state: 'available', value: { root: '/tmp/lifecycle-replay' } },
   };
@@ -219,6 +223,7 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: requestContext.lineage,
     session: requestContext.session,
     workspace: requestContext.workspace,
   });

@@ -72,6 +72,7 @@ const replay: LifecycleReplay = {
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: { reason: 'not-provided', state: 'unavailable' },
     session: { reason: 'not-provided', state: 'unavailable' },
     workspace: { source: 'receipt', state: 'available', value: { root: '/workspace' } },
   },

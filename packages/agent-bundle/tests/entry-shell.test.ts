@@ -230,7 +230,17 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   expect(source).toContain('createFlightWorkerHost(new URL("./mcp-curator-flight.mjs", import.meta.url), ARTIFACT_EPOCH)');
   expect(source).toContain('artifactEpoch: ARTIFACT_EPOCH');
   expect(source).toContain('plugin: {"name":"route-fixture","version":"1.2.3"}');
-  expect(source).toContain('export default async () => createGeneratedRouteMcpServer(');
+  expect(source).toContain('export default async () => {');
+  expect(source).toContain('return createGeneratedRouteMcpServer({');
+  // The lineage registry journals through the sqlite kernel beside project
+  // state and degrades to memory when the store cannot open (#host-lineage).
+  expect(source).toContain("from '@agent-bundle/runtime/lineage'");
+  expect(source).toContain('lineage: lineage.registry,');
+  expect(source).toContain('disposeLineage: lineage.dispose,');
+  // A project without workspace-durable state keeps a process-lifetime
+  // registry: no sqlite import, no `state/` directory inside the artifact.
+  expect(source).not.toContain('node:sqlite');
+  expect(source).not.toContain('createSqliteStateDriver');
   // The event runtime's modules are aliased into the artifact, so the entry
   // imports them and hands them to the shared runtime; the wiring itself is
   // not re-templated here.
@@ -325,6 +335,33 @@ it('fails the build on an MCP route the generated server cannot register', () =>
 });
 
 
+it('journals the lineage registry through sqlite only for workspace-durable projects', () => {
+  const source = entryShellModule.generatedRouteMcpEntrySource({
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+    state: {
+      id: 'project/tasks',
+      lifetime: 'workspace-durable',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+      source: '/project/src/state.ts',
+    },
+    workerFile: 'mcp-curator-flight.mjs',
+  });
+  expect(source).toContain("import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage'");
+  expect(source).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite'");
+  expect(source).toContain("const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
+  expect(source).toContain("createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') })");
+  expect(source).toContain('agent-bundle lineage registry is in-memory only');
+  expect(source).toContain('disposeLineage: lineage.dispose,');
+});
+
 it('generates the warm react-server Flight worker separately from the MCP dispatcher', () => {
   const generate = (entryShellModule as unknown as {
     readonly generatedRouteFlightWorkerSource?: (options: Readonly<Record<string, unknown>>) => string;
@@ -365,8 +402,9 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain(
     '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
   );
+  expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    'e9126849e5ad955dbd1f3d56ccdcb0eabe1293d265f861dd5a10339c1e2a3bfb',
+    '7544ab8820a0784210464d71bb15f6de7999f521a6dc35a920136db613cbcd66',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -1012,14 +1050,18 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     workerFile: 'mcp-curator-flight.mjs',
   });
   expect(unsupportedEntry).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
+  // The sqlite driver itself stays: a workspace-durable project journals its
+  // lineage registry through it regardless of notice delivery. Only the notice
+  // runtime and its own durable store must be absent.
   for (const identifier of [
     'createGeneratedNoticeRuntime',
     'createNoticeInboxSignaller',
-    '@agent-bundle/runtime/state/sqlite',
+    'durableAnchor',
     'notices: noticeDelivery',
   ]) {
     expect(unsupportedEntry).not.toContain(identifier);
   }
+  expect(unsupportedEntry).toContain('agentLineageStateDefinition');
 
   // The inbox is a route of its own: a host that marks `mcp-inbox` unavailable,
   // or a target with no advertisement at all, exposes no inbox resource — and

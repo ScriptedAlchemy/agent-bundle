@@ -16,7 +16,8 @@ Agent Bundle has one newcomer model:
    Component. It does the work and returns `Agent.*`; there is no public
    `execute`/`render` split.
 4. **Opt in to context.** Call `await agent()` inside that component only when
-   host, session, actor, workspace, capability, or state context is needed.
+   host, session, actor, workspace, lineage, capability, or state context is
+   needed.
 5. **Share the shell once.** An optional `src/layout.tsx` (and
    `src/mcp/<server>/layout.tsx` for one server) default-exports a component
    receiving `{ children, route, signal }` (`AgentLayoutProps` from
@@ -104,11 +105,16 @@ public host wire protocol.
 Every generated request scope — MCP tools, resources, and prompts, event
 routes, plain and rendered routed CLI commands, rendered scripts, and Workbench
 replay — installs the same typed `AgentRequestContext`. `await agent()`
-returns the invocation plus `Observed` `host`, `session`, `actor`, and
-`workspace` axes (an `available` value with its provenance, or a typed
-`unavailable` reason — never a fabricated string), request capabilities,
-progress, the request signal, and the `state`, `notices`, and `providers`
-slots. The handle is request-scoped: it survives `await`, two concurrent
+returns the invocation plus `Observed` `host`, `session`, `actor`,
+`workspace`, and `lineage` axes (an `available` value with its provenance, or
+a typed `unavailable` reason — never a fabricated string), request
+capabilities, progress, the request signal, and the `state`, `notices`, and
+`providers` slots. `lineage` places the request in the host's conversation
+tree — `{ conversation, root, parent?, depth, generation?, subagent? }` —
+resolved by the warm runtime's registry that the subagent start/stop and
+pre-tool event families feed; see
+[Conversation lineage](entry-conventions.md#conversation-lineage-requestlineage)
+for the per-host vocabulary and the typed reasons it is unavailable. The handle is request-scoped: it survives `await`, two concurrent
 requests never observe each other, and reading a captured handle after the
 request closes throws a typed `AgentRequestError`. A synchronous Server
 Component or utility that cannot `await` calls `useAgent()` instead; it

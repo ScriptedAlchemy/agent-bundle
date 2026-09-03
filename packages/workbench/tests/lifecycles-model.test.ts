@@ -81,6 +81,7 @@ const replay: LifecycleReplay = {
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: { source: 'receipt', state: 'available', value: { conversation: 'session-1', depth: 0, resolution: 'native', root: 'session-1' } },
     session: { source: 'receipt', state: 'available', value: { sessionId: 'session-1' } },
     workspace: { source: 'receipt', state: 'available', value: { root: '/workspace' } },
   },
@@ -144,6 +145,7 @@ it('derives one correlated replay view with identity, context, and diagnostics',
     { label: 'Session', value: 'session-1 · receipt' },
     { label: 'Actor', value: 'Unavailable · not-provided' },
     { label: 'Workspace', value: '/workspace · receipt' },
+    { label: 'Lineage', value: 'session-1 · depth 0 · native · receipt' },
   ]);
   expect(view.resultDiagnostics).toEqual([
     { code: 'projection.partial', message: 'Optional host field was omitted.', source: 'projection' },

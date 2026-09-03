@@ -66,6 +66,24 @@ export default defineConfig({
     },
     {
       ...sharedLib,
+      // The lineage registry reuses the state entry's kernel (its durable
+      // journal is an ordinary state definition) and the package root's
+      // request-context helpers; stateless consumers never load it.
+      output: {
+        cleanDistPath: false,
+        externals: {
+          '../agent-request.js': './index.js',
+          '../lineage-native.js': './index.js',
+          '../state/contract.js': './state.js',
+          '../state/index.js': './state.js',
+        },
+      },
+      source: {
+        entry: { lineage: './src/lineage/index.ts' },
+      },
+    },
+    {
+      ...sharedLib,
       // The sqlite driver is its own entry so `node:sqlite` (and its
       // ExperimentalWarning) never loads for volatile-state or stateless
       // consumers. It imports the state entry's runtime instead of

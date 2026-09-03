@@ -338,14 +338,13 @@ export const validateNativeEventEnvelope = (
     }
     requireNativeString(native, 'tool_use_id');
     if (canonicalEvent === 'tool/after') {
-      if (target === 'codex') {
-        if (!Object.hasOwn(native, 'tool_response') || native.tool_response === undefined) {
-          return nativeEventError('native tool_response is required');
-        }
-      } else if (
-        typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response)
-      ) {
-        return nativeEventError('native tool_response must be an object');
+      // Codex pins tool_response as any JSON value. Claude documents an object
+      // for built-in tools but delivers the tool's text as a plain string for
+      // MCP tools (observed on Claude Code 2.1.257,
+      // docs/audits/2026-09-03-host-lineage-matrix.md §3), so presence is the
+      // only host-independent guarantee.
+      if (!Object.hasOwn(native, 'tool_response') || native.tool_response === undefined) {
+        return nativeEventError('native tool_response is required');
       }
     }
   }

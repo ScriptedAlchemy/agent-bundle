@@ -323,6 +323,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '    },',
     "    host: unavailable('unsupported-surface'),",
     "    invocation: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+    "    lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     `    providers: ${providerValuesExpression(providers)},`,
     '    signal: context.signal,',
@@ -518,6 +519,7 @@ export const generatedRenderedRouteWorkerSource = (
     '      },',
     "      host: unavailable('unsupported-surface'),",
     '      invocation: message.request,',
+    "      lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
     `      providers: ${providerValuesExpression(providers)},`,
@@ -805,7 +807,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { runAgentRequest } from '@agent-bundle/runtime';",
+    "import { runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...generatedStateImports(options.state, 'artifact'),
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
@@ -849,6 +851,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
     '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
+    "      lineage: message.lineage ?? unavailable('not-provided'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
     `      providers: ${providerValuesExpression(providers)},`,
@@ -949,8 +952,17 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     : [eventTarget];
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
+  // The lineage registry journals durably only where the project already
+  // accepted the sqlite kernel and its durable anchor (a workspace-durable
+  // `src/state.ts`); stateless and volatile projects keep a process-lifetime
+  // registry so `node:sqlite` never loads for them and no `state/` directory
+  // appears inside an artifact that declared none.
+  const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
-    ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
+    ...(hasEvents || durableLineage
+      ? [`import { ${[...(hasEvents ? ['dirname'] : []), ...(durableLineage ? ['join'] : []), 'resolve'].join(', ')} } from 'node:path';`]
+      : []),
+    ...(durableLineage ? ["import { fileURLToPath } from 'node:url';"] : []),
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
     ...(hasEvents
       ? [
@@ -958,12 +970,36 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           `import { createCanonicalEventProps, projectEventDocument } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
         ]
       : []),
+    `import { ${durableLineage ? 'agentLineageStateDefinition, ' : ''}createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';`,
+    ...(durableLineage ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"] : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
     ...noticeDeliveryImports(wiresResourceUpdated),
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
+    ...(durableLineage
+      ? [
+          // Beside the project's own durable state, so a restarted MCP process
+          // still knows which subagents are alive. A store that cannot open
+          // degrades to memory rather than failing the server: lineage is an
+          // observed axis, never a precondition.
+          "const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
+          'const openLineage = async () => {',
+          "  const driver = createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') });",
+          '  try {',
+          '    const store = await driver.open(agentLineageStateDefinition());',
+          '    return { dispose: async () => { await store.close(); await driver.close(); }, registry: createAgentLineageRegistry({ store }) };',
+          '  } catch (error) {',
+          "    process.stderr.write(`agent-bundle lineage registry is in-memory only: ${error instanceof Error ? error.message : String(error)}\\n`);",
+          '    await driver.close().catch(() => undefined);',
+          '    return { dispose: async () => undefined, registry: createAgentLineageRegistry() };',
+          '  }',
+          '};',
+        ]
+      : [
+          'const openLineage = async () => ({ dispose: async () => undefined, registry: createAgentLineageRegistry() });',
+        ]),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
     ...noticeInboxRecord(wiresInbox),
@@ -989,15 +1025,20 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           '',
         ]
       : []),
-    'export default async () => createGeneratedRouteMcpServer({',
-    '  apps: mcpApps,',
-    '  artifactEpoch: ARTIFACT_EPOCH,',
-    ...(hasEvents ? ['  events,'] : []),
-    `  host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
-    ...(wiresResourceUpdated ? ['  notices: noticeDelivery,'] : []),
-    `  plugin: ${stableJson(options.plugin)},`,
-    '  routes,',
-    '});',
+    'export default async () => {',
+    '  const lineage = await openLineage();',
+    '  return createGeneratedRouteMcpServer({',
+    '    apps: mcpApps,',
+    '    artifactEpoch: ARTIFACT_EPOCH,',
+    '    disposeLineage: lineage.dispose,',
+    ...(hasEvents ? ['    events,'] : []),
+    `    host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
+    '    lineage: lineage.registry,',
+    ...(wiresResourceUpdated ? ['    notices: noticeDelivery,'] : []),
+    `    plugin: ${stableJson(options.plugin)},`,
+    '    routes,',
+    '  });',
+    '};',
     '',
   ].join('\n');
 };

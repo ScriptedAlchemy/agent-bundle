@@ -151,6 +151,7 @@ it('serves compiled routes and durable state across packed process restarts', as
               state: 'available',
               value: { name: 'agent-bundle-packed-proof' },
             },
+            lineage: { reason: 'id-not-resolvable', state: 'unavailable' },
             session: { reason: 'not-provided', state: 'unavailable' },
             workspace: {
               source: 'derived',

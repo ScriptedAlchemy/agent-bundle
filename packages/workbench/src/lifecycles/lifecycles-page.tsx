@@ -16,9 +16,11 @@ import {
   type LifecycleReplayResult,
 } from './lifecycle-client.ts';
 import {
+  lineageChainFor,
   lifecycleReplaySourceFor,
   lifecyclesViewFor,
   type LifecycleDetailRow,
+  type LifecycleLineageNode,
   type LifecyclesView,
   type LifecycleSourceMode,
 } from './lifecycles-model.ts';
@@ -61,6 +63,37 @@ const DetailRows = ({ label, rows }: Readonly<{
   <dl className="lifecycle-detail-rows">
     {rows.map((detail) => <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}
   </dl>
+</section>;
+
+const roleLabel = (role: LifecycleLineageNode['role']): string => {
+  switch (role) {
+    case 'root':
+      return 'root';
+    case 'ancestor':
+      return 'parent';
+    case 'current':
+      return 'this request';
+    default: {
+      const unreachable: never = role;
+      return unreachable;
+    }
+  }
+};
+
+/** The root-to-current chain of the replayed request, one nested level per hop. */
+const LineageTree = ({ chain, reason }: Readonly<{
+  readonly chain: readonly LifecycleLineageNode[];
+  readonly reason: string | undefined;
+}>) => <section className="lifecycle-detail" aria-label="Conversation lineage">
+  <h2>Conversation lineage</h2>
+  {chain.length === 0
+    ? <p className="empty-row">Lineage unavailable · {reason ?? 'not-provided'}</p>
+    : <ul className="lifecycle-lineage-tree">
+        {chain.reduceRight<React.ReactNode>((child, node) => <li key={node.id} className={`lifecycle-lineage-node lifecycle-lineage-node--${node.role}`}>
+          <code>{node.id}</code> <span>{roleLabel(node.role)}</span>
+          {child === undefined ? undefined : <ul>{child}</ul>}
+        </li>, undefined)}
+      </ul>}
 </section>;
 
 const JsonBlock = ({ empty, label, value }: Readonly<{
@@ -116,6 +149,10 @@ export const LifecycleReplayView = ({ view }: LifecycleReplayViewProps) => {
       <DiagnosticList diagnostics={view.resultDiagnostics} label="Replay result diagnostics" />
       <DetailRows label="Canonical identity" rows={view.canonicalRows} />
       <DetailRows label="Request context" rows={view.requestRows} />
+      <LineageTree
+        chain={lineageChainFor(replay)}
+        reason={replay.requestContext.lineage.state === 'unavailable' ? replay.requestContext.lineage.reason : undefined}
+      />
       <JsonBlock empty="This replay carried no native input." label="Native input" value={replay.nativeInput} />
       <AgentDocumentStage events={replay.events} />
       <JsonBlock empty="This replay produced no native response." label="Native response" value={replay.nativeResponse} />

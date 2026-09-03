@@ -87,6 +87,13 @@ e2e(
       await expect(requestContext).toContainText('lifecycle-observed · receipt');
       await expect(requestContext).toContainText('/tmp · receipt');
       await expect(requestContext).toContainText('Unavailable · not-provided');
+      // A root Claude receipt proves its own depth-0 lineage; the chain renders the single root node.
+      await expect(requestContext).toContainText('lifecycle-observed · depth 0 · native · receipt');
+      const lineage = page.locator('.lifecycle-detail').filter({
+        has: page.getByRole('heading', { name: 'Conversation lineage' }),
+      });
+      await expect(lineage.locator('.lifecycle-lineage-node--current')).toContainText('lifecycle-observed');
+      await expect(lineage.locator('.lifecycle-lineage-node--current')).toContainText('this request');
 
       const sessionToken = await page.evaluate(async () => {
         const response = await fetch('/api/project/session', { credentials: 'same-origin' });

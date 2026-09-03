@@ -114,11 +114,11 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Inspect one source.' };",
       "export const inputSchema = z.object({ source: z.string() }).strict();",
-      "export const resultSchema = z.object({ actor: z.unknown(), host: z.unknown(), invocationKind: z.literal('tool'), session: z.unknown(), source: z.string(), workspace: z.unknown() }).strict();",
+      "export const resultSchema = z.object({ actor: z.unknown(), host: z.unknown(), invocationKind: z.literal('tool'), lineage: z.unknown(), session: z.unknown(), source: z.string(), workspace: z.unknown() }).strict();",
       'export default async function Inspect({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
-      '  const result = { actor: context.actor, host: context.host, invocationKind: context.invocation.kind, session: context.session, source: input.source, workspace: context.workspace };',
+      '  const result = { actor: context.actor, host: context.host, invocationKind: context.invocation.kind, lineage: context.lineage, session: context.session, source: input.source, workspace: context.workspace };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Markdown>{`Inspected **${input.source}**.`}</Agent.Markdown>',
@@ -178,6 +178,10 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
         state: 'available',
         value: { name: 'generated-route-test' },
       },
+      // The built entry mounts a process-lifetime registry, but a portable
+      // artifact has no subagent events to feed it and this client name maps
+      // to no host, so the call is honestly unplaceable.
+      lineage: { reason: 'id-not-resolvable', state: 'unavailable' },
       session: { reason: 'not-provided', state: 'unavailable' },
       workspace: {
         source: 'derived',

@@ -90,6 +90,7 @@ The [package README](packages/agent-bundle/README.md) is the full reference: con
 | [Hooks and Scripts](examples/hooks-and-scripts) | simulate a hook and inspect script traces | `pnpm example:hooks` |
 | [MCP App](examples/mcp-app) | an interactive MCP App with a deterministic eval | `pnpm example:mcp-app` |
 | [Audiobook Curator](examples/audiobook-curator) | a real media-management plugin for Claude or Codex | `pnpm example:audiobook` |
+| [Host Test](examples/host-test) | probe what Claude, Codex, and Cursor send to hooks and MCP calls | `pnpm example:host-test` |
 
 Run these from the repository root. `pnpm examples:check` validates and builds every example noninteractively.
 

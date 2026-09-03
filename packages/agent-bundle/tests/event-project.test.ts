@@ -39,8 +39,12 @@ it('validates native event envelopes with the generated wrapper error contract',
   };
 
   expect(validateNativeEventEnvelope(valid, options)).toBe(valid);
-  expect(() => validateNativeEventEnvelope({ ...valid, tool_response: 'not-an-object' }, options))
-    .toThrow('Agent Bundle event route error: native tool_response must be an object');
+  const { tool_response: _omitted, ...withoutResponse } = valid;
+  expect(() => validateNativeEventEnvelope(withoutResponse, options))
+    .toThrow('Agent Bundle event route error: native tool_response is required');
+  // Claude Code 2.1.257 delivers an MCP tool's result as a plain string (2026-09-03 capture).
+  expect(validateNativeEventEnvelope({ ...valid, tool_response: '{"ok":true}' }, options))
+    .toMatchObject({ tool_response: '{"ok":true}' });
   expect(() => validateNativeEventEnvelope({ ...valid, hook_event_name: 'BeforeToolUse' }, options))
     .toThrow('Agent Bundle event route error: native hook_event_name must equal PostToolUse');
   expect(() => validateNativeEventEnvelope([], options))

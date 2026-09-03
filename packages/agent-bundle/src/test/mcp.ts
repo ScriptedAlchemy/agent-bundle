@@ -20,6 +20,8 @@ import type {
   AgentStateDriver,
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
+import type { LineageHost } from '@agent-bundle/runtime';
+import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 import type { AgentNoticeInboxSignaller, AgentNoticePrincipal } from '@agent-bundle/runtime/notices';
 import type { ReactNode } from 'react';
@@ -66,6 +68,14 @@ export interface InMemoryMcpSessionOptionsBase<
   TState = unknown,
   TEvents extends AgentStateEventSchemas = AgentStateEventSchemas,
 > {
+  /**
+   * A lineage registry the generated server resolves tool calls through,
+   * exactly as the artifact does; omitted sessions observe `request.lineage`
+   * as `unavailable('not-provided')`.
+   */
+  readonly lineage?: AgentLineageRegistry;
+  /** The host vocabulary the registry applies when the in-memory client name maps to none. */
+  readonly lineageHost?: LineageHost;
   readonly manifest?: AgentBundleTestManifest;
   /** MCP server name. Optional when the project compiled exactly one server. */
   readonly server?: string;
@@ -386,6 +396,7 @@ export const openInMemoryMcpServer = async <
             // harness context seam to override forwarded transport identity.
             actor: transport.actor,
             host: transport.host,
+            lineage: transport.lineage,
             session: transport.session,
             workspace: transport.workspace,
             ...context,
@@ -436,6 +447,20 @@ export const openInMemoryMcpServer = async <
     artifactEpoch,
     host,
     ...(notices === undefined ? {} : { notices }),
+    ...(options.lineage === undefined ? {} : { lineage: options.lineage }),
+    ...(options.lineageHost === undefined
+      ? {}
+      : {
+          events: {
+            allowedTargets: [options.lineageHost],
+            artifactEpoch,
+            createCanonicalEventProps: (() => { throw new Error('in-memory lineage sessions dispatch no events'); }) as never,
+            createEventRuntimeServer: (async () => ({ close: async () => undefined })) as never,
+            endpointId: `${artifactEpoch}:in-memory`,
+            projectEventDocument: (() => undefined) as never,
+            target: options.lineageHost,
+          },
+        }),
     plugin: manifest.plugin,
     routes: routes as never,
   });

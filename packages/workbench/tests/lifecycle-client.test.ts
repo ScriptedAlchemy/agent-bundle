@@ -54,6 +54,7 @@ const replay = {
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: { reason: 'not-provided' as const, state: 'unavailable' as const },
     session: { reason: 'not-provided' as const, state: 'unavailable' as const },
     workspace: { reason: 'not-provided' as const, state: 'unavailable' as const },
   },
@@ -136,6 +137,7 @@ it('posts the exact replay binding, native receipt, and honest source', async ()
       requestContext: {
         actor: { reason: 'not-provided', state: 'unavailable' },
         host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
+        lineage: { reason: 'not-provided', state: 'unavailable' },
         session: { reason: 'not-provided', state: 'unavailable' },
         workspace: { reason: 'not-provided', state: 'unavailable' },
       },
