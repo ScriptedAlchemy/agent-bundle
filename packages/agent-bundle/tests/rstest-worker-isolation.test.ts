@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
@@ -42,13 +42,15 @@ it('stamps every worker root with the owner marker the local-CI runner cleans up
   // The setup file already isolated this worker, so TMPDIR points at the
   // root itself; the marker records the HOST temp root it was derived from
   // and the process that owns it.
-  expect(rstestWorkerRootOwner(root)).toMatchObject({
+  const owner = rstestWorkerRootOwner(root);
+  expect(owner).toMatchObject({
     cwd: process.cwd(),
     pid: process.pid,
-    temporaryRoot: expect.stringMatching(/^\//u),
     workerId: process.env['RSTEST_WORKER_ID'] ?? '0',
   });
-  expect(rstestWorkerRootOwner(root)?.temporaryRoot).not.toBe(root);
+  // Absolute in the platform's own shape (`/tmp`, `C:\Temp`, a UNC root).
+  expect(isAbsolute(owner?.temporaryRoot ?? '')).toBe(true);
+  expect(owner?.temporaryRoot).not.toBe(root);
 });
 
 it('removes only the finished roots owned by one host temporary root', async () => {

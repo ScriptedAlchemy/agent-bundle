@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -619,9 +619,10 @@ it('reports a timeout even when the timeout teardown throws synchronously', asyn
 
 it('retries plugin-data removal once a capped teardown finally settles (#397 review)', async () => {
   const root = await createBundle();
-  // The plugin-data directory lives under a parent made read-only while the
-  // transport is "alive": that stands in for the Windows EPERM a still-running
-  // child produces when the capped removal races it.
+  // While the transport is "alive" the injected removal rejects the way a
+  // still-running child makes `rm` fail on Windows (EPERM); once the transport
+  // has closed it delegates to the real removal. No mode bits are involved, so
+  // the failure is identical as root, in containers, and on Windows.
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-held-'));
   const pluginData = join(parent, 'plugin-data');
   let releaseClose!: () => void;
@@ -629,19 +630,27 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
     releaseClose = resolvePromise;
   });
   const events: string[] = [];
+  let transportAlive = true;
   try {
     const service = serviceFor(root, {
       createPluginData: async () => {
         await mkdir(pluginData);
         await writeFile(join(pluginData, 'proof.txt'), 'present');
-        await chmod(parent, 0o555);
         return pluginData;
       },
       createStdioTransport: () => transport(async () => {
         await closeReleased;
+        transportAlive = false;
         events.push('transport-closed');
       }),
       pluginDataTeardownCapMs: 100,
+      removePluginData: async (target) => {
+        if (transportAlive) {
+          events.push('removal-rejected');
+          throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        }
+        await rm(target, { force: true, recursive: true });
+      },
     });
 
     const report = await service.probe({ host: 'claude', serverName: 'timeline' });
@@ -665,7 +674,6 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
 
     // Once the transport finishes closing and releases the directory, the
     // best-effort retry chained to that settlement removes it.
-    await chmod(parent, 0o755);
     releaseClose();
     const deadline = Date.now() + 2_000;
     while (Date.now() < deadline) {
@@ -677,10 +685,9 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
     }
     events.push('plugin-data-removed');
-    expect(events).toEqual(['settled', 'transport-closed', 'plugin-data-removed']);
+    expect(events).toEqual(['removal-rejected', 'settled', 'transport-closed', 'plugin-data-removed']);
     await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await chmod(parent, 0o755).catch(() => undefined);
     await rm(parent, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }

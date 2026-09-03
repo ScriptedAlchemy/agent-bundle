@@ -89,6 +89,8 @@ export interface McpProbeServiceOptions {
   readonly now?: () => Date;
   /** Testing seam for the detached teardown cap; production keeps the named constant. */
   readonly pluginDataTeardownCapMs?: number;
+  /** Testing seam for plugin-data removal; production removes the directory recursively. */
+  readonly removePluginData?: (pluginData: string) => Promise<void>;
   readonly prepared: () => Readonly<{ readonly bundleSource: string }> | undefined;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
@@ -282,6 +284,7 @@ export class McpProbeService {
   readonly #prepared: McpProbeServiceOptions['prepared'];
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
+  readonly #removePluginData: (pluginData: string) => Promise<void>;
   readonly #timeoutMs: number;
 
   constructor(options: McpProbeServiceOptions) {
@@ -308,6 +311,7 @@ export class McpProbeService {
     this.#prepared = options.prepared;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#removePluginData = options.removePluginData ?? removePluginData;
     this.#timeoutMs = positiveTimeout(options.timeoutMs ?? mcpProbeTimeoutMs);
   }
 
@@ -430,11 +434,11 @@ export class McpProbeService {
     const pending = Promise.race([teardown, capped])
       .then(() => {
         if (cap !== undefined) clearTimeout(cap);
-        return removePluginData(pluginData);
+        return this.#removePluginData(pluginData);
       })
       .then(() => undefined, () => {
         if (!capWon) return;
-        void teardown.then(() => removePluginData(pluginData)).catch(() => undefined);
+        void teardown.then(() => this.#removePluginData(pluginData)).catch(() => undefined);
       });
     this.#pendingTeardowns.add(pending);
     void pending.then(() => this.#pendingTeardowns.delete(pending));
