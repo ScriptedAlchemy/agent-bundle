@@ -35,11 +35,12 @@ import type {
  *   the compiled command graph, in this process. It proves command
  *   resolution, argv projection, and exit codes, not a spawned binary.
  * - `script-dispatch` runs one conventional `src/scripts/*` module through the
- *   contract its generated `scripts/<name>.mjs` executable carries, in this
- *   process: a rendered `.tsx` script through the rendered-script shell and
- *   its four output modes, a plain `.ts` script through the `main` process
- *   envelope. It proves the script's behavior and output contract, not the
- *   bundled artifact or a spawned process.
+ *   contract its generated `scripts/<name>.mjs` executable carries: a rendered
+ *   `.tsx` script through the rendered-script shell and its four output modes
+ *   in this process, a plain `.ts` script as a Node child process of its own
+ *   over the source module with the `main` envelope. It proves the script's
+ *   behavior and output contract — process exit, streams, and signals
+ *   included for a plain script — not the bundled artifact.
  * - `workbench-surface` projects the compiled route graph the way the dev
  *   server serves it to the Workbench — route catalog, state, lifecycle
  *   fixtures, page availability — without a browser or a dev server. It

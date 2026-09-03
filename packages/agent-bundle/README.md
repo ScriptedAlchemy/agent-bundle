@@ -558,7 +558,13 @@ composes the project's root layout (a script belongs to no server, so no
 server layout applies) and mounts the project's conventional providers with the `script` invocation the
 generated executable passes (`context.providers` substitutes a fixture map, as
 everywhere); a plain script opens no request scope, so it accepts no `context`
-at all. `stdin` pipes input to a plain script (omitted,
+at all. A rendered script's declared state mounts on a disposable root for
+the run, as at every harness level (`renderRoute`, `invokeCli`): the
+`AGENT_BUNDLE_PLUGIN_ROOT` / `.agent-bundle` anchor a `workspace-durable`
+store keeps between executable runs is the packed artifact's, and the packed
+level proves it; a test that needs one store across several rendered runs
+passes the same `context.state` and `context.noticeLedger` bindings to each.
+`stdin` pipes input to a plain script (omitted,
 it reads end-of-file at once); `process.execArgv` is empty as under plain
 `node`; an aborted `signal` sends SIGTERM and, should the script trap it,
 kills the process after a one-second grace before the run rejects. A rendered
