@@ -84,6 +84,9 @@ export interface AgentBundleRstestConfig {
  * `agent-bundle/meta` to a generated module carrying exactly the
  * `{ name, packageName, packageVersion, version }` a build would stamp: any
  * source module importing it loads under the pool instead of raising `AB4760`.
+ * When preparation produced no plugin model there is no identity to stamp, and
+ * the aliased module throws `AB4760` naming the compiler diagnostics instead
+ * of serving the manifest placeholder.
  *
  * ```ts
  * import { defineConfig } from '@rstest/core';
@@ -104,7 +107,7 @@ export const agentBundleRstest = async (
     root,
   });
   const setup = await writeRouteTestSetup(root, manifest);
-  const metaModule = await writeTestMetaModule(root, manifest.plugin);
+  const metaModule = await writeTestMetaModule(root, manifest);
   const tsconfigPath = resolve(root, 'tsconfig.json');
   return {
     include: [...(options.include ?? [routeUnitInclude])],

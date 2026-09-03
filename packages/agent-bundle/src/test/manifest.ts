@@ -122,6 +122,28 @@ export interface TestManifestPluginIdentity {
   readonly version: string;
 }
 
+/**
+ * The identity a manifest carries when preparation produced no plugin model
+ * (the configuration could not be loaded or normalized). It is one frozen
+ * placeholder rather than a guess at the project, and {@link isFallbackPluginIdentity}
+ * recognizes it so no harness surface — the Rstest presets' `agent-bundle/meta`
+ * alias in particular — ever serves it as a real identity.
+ */
+export const FALLBACK_PLUGIN_IDENTITY: TestManifestPluginIdentity = Object.freeze({
+  name: 'unknown',
+  version: '0.0.0',
+});
+
+/** True when a manifest's identity is the model-less placeholder, by reference or by value. */
+export const isFallbackPluginIdentity = (plugin: TestManifestPluginIdentity): boolean =>
+  plugin === FALLBACK_PLUGIN_IDENTITY
+  || (
+    plugin.name === FALLBACK_PLUGIN_IDENTITY.name
+    && plugin.version === FALLBACK_PLUGIN_IDENTITY.version
+    && plugin.packageName === undefined
+    && plugin.packageVersion === undefined
+  );
+
 /** The conventional state module the generated route-unit registry can load. */
 export interface TestableStateDescriptor {
   readonly id: string;
@@ -277,7 +299,7 @@ export const testManifestFromRouteGraph = (input: {
     diagnostics: [...(input.diagnostics ?? input.graph.diagnostics)],
     digest: input.graph.digest,
     ...(eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId }),
-    plugin: input.plugin ?? { name: 'unknown', version: '0.0.0' },
+    plugin: input.plugin ?? FALLBACK_PLUGIN_IDENTITY,
     projectRoot: input.projectRoot,
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,
     routes,

@@ -312,7 +312,11 @@ imports a source module that imports `agent-bundle/meta`, no compiled surface
 replaced the specifier, and every test that touches that module fails at
 import. `agentBundleRstest()` and `agentBundleBrowserRstest()` prevent this by
 aliasing the specifier to `.agent-bundle/test/meta.mjs`, generated from the
-same compiler pass.
+same compiler pass. When that pass produced no plugin model (the configuration
+could not be loaded or normalized) there is no identity to stamp, so the
+aliased module throws the same `AB4760` naming the compiler diagnostics and
+the recovery "fix them, then rerun Rstest" — the manifest's placeholder
+identity is never served as a real one.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

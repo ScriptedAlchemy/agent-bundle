@@ -138,7 +138,7 @@ export const agentBundleBrowserRstest = async (
   const setup = await writeBrowserTestSetup(root, compiled);
   // The compiled app bundles already carry the stamped identity; the alias
   // covers test files and view helpers the browser pool bundles itself.
-  const metaModule = await writeTestMetaModule(root, manifest.plugin);
+  const metaModule = await writeTestMetaModule(root, manifest);
   const tsconfigPath = resolve(root, 'tsconfig.json');
   return {
     browser: {
