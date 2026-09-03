@@ -61,7 +61,7 @@ features:
     span: 4
   - icon: 📦
     title: Every target ships on its own
-    details: A built target directory is the unit you copy, publish, or hand to a host CLI. It carries a generated INSTALL.md and a manifest that records every file with its SHA-256.
+    details: A built target directory is the unit you install — it carries its host manifests and a generated INSTALL.md. The artifact root beside it holds agent-bundle.manifest.json, the SHA-256 record that validation, MCP, hooks, and evals read.
     link: /guide/distribution/
     span: 4
 ---
@@ -70,9 +70,10 @@ import { Steps, Tab, Tabs } from '@rspress/core/theme';
 
 ## What you write, and what you get
 
-The input is one config file and a conventional `src/` tree. The output is a ready-to-install
-directory per host, each with its own manifests, generated wrappers, and installation
-instructions written with the bundle's real names.
+The input is one config file and a conventional `src/` tree. The output is one artifact root
+holding a ready-to-install directory per host — each with its own host manifests, generated
+wrappers, and installation instructions written with the bundle's real names — plus the root
+`agent-bundle.manifest.json` that the whole artifact is validated against.
 
 <div className="ab-compare">
 <div>

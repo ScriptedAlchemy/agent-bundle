@@ -61,7 +61,7 @@ features:
     span: 4
   - icon: 📦
     title: 每个 target 都能独立交付
-    details: 已构建的 target 目录就是你复制、发布或交给宿主 CLI 的那个单位。它自带生成的 INSTALL.md，以及一份记录每个文件 SHA-256 的清单。
+    details: 已构建的 target 目录就是你安装的那个单位——它自带宿主清单与生成的 INSTALL.md。旁边的产物根目录保存着 agent-bundle.manifest.json，即校验、MCP、钩子与评测所读取的 SHA-256 记录。
     link: /zh/guide/distribution/
     span: 4
 ---
@@ -71,7 +71,8 @@ import { Steps, Tab, Tabs } from '@rspress/core/theme';
 ## 你写下什么，得到什么
 
 输入是一份配置文件加一棵按约定组织的 `src/` 目录树。输出是每个宿主各一个可直接安装的目录，
-各自带有自己的清单、生成的包装脚本，以及用捆绑包真实名称写成的安装说明。
+各自带有自己的宿主清单、生成的包装脚本，以及用捆绑包真实名称写成的安装说明——它们共同位于一个产物根目录之下，
+根目录还保存着整个产物据以校验的 `agent-bundle.manifest.json`。
 
 <div className="ab-compare">
 <div>
