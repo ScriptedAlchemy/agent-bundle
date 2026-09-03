@@ -12,5 +12,5 @@
     "target": "ES2024",
     "types": ["node", "react"]
   },
-  "include": ["rspress.config.ts", "plugins/**/*.ts"]
+  "include": ["rspress.config.ts", "plugins/**/*.ts", "theme/**/*.tsx"]
 }

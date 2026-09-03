@@ -53,3 +53,56 @@
 .rp-home-feature__card:hover {
   transform: translateY(-2px);
 }
+
+/*
+ * Home page body, rendered by the theme's `afterFeatures` slot. Width matches
+ * the feature grid container so the sections line up with the cards above.
+ */
+.ab-home-body {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 4rem;
+}
+
+.ab-home-body .rp-doc h2 {
+  margin-top: 3.5rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+}
+
+.ab-home-body .rp-doc h2 + p {
+  color: var(--rp-c-text-2);
+  font-size: 1.05rem;
+  max-width: 48rem;
+}
+
+/* Side-by-side "what you write / what you get" comparison. */
+.ab-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  margin-top: 1.5rem;
+}
+
+.ab-compare > div {
+  min-width: 0;
+  padding: 1.25rem 1.5rem 0.25rem;
+  border: 1px solid var(--rp-c-divider-light);
+  border-radius: 12px;
+  background: var(--rp-c-bg-soft);
+}
+
+.ab-compare > div > h3 {
+  margin-top: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--rp-c-brand);
+}
+
+.ab-compare .rp-doc pre,
+.ab-compare pre {
+  font-size: 0.82rem;
+}

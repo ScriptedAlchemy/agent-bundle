@@ -102,7 +102,7 @@ export default defineConfig({
   },
   languageParity: {
     enabled: true,
-    include: ['index.md', 'guide', 'reference', 'examples', 'contributing'],
+    include: ['index.mdx', 'guide', 'reference', 'examples', 'contributing'],
     exclude: ['api'],
   },
   themeConfig: {
