@@ -256,6 +256,10 @@ npx agent-bundle hooks simulate --artifact artifact --target claude \
 
 `--hook` must be the exact `name` (or `id`) that `hooks list` printed — normalization derives it
 as `<event>-<handler>-<hash>`, so a bare event name such as `session-start` matches nothing.
+`session-start-session-start-7ab7e8a5` is the name the declaration at the top of this page
+produces; the hash covers the event, handler path, targets, tools, timeout, and args, so any
+change to the declaration yields a new name, and the one to copy is always the one `hooks list`
+prints for your build.
 The payload is the **canonical** input; the wrapper converts it to the host's native envelope and
 validates it as the host would, so a Claude `sessionStart` simulation needs `sessionId`,
 `transcriptPath`, `cwd`, and `source` (tool events additionally need `toolName`, `toolInput`, and

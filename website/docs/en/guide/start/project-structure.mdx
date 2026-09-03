@@ -124,8 +124,10 @@ Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable
 every emitted file with its SHA-256, so artifact validation is content-addressed rather than a guess.
 
 `output.distPath` moves the artifact root; it never changes the framework-owned layout inside
-each target. Precedence is the CLI `--output`, then `output.distPath`, then `dist`. Values must
-be non-empty, project-root-contained relative POSIX paths.
+each target. Precedence is the CLI `--output`, then `output.distPath`, then the default —
+`artifact` for `agent-bundle build`, which also emits the package build, and `dist` for the
+programmatic `build()` without `packageOutputs`. Values must be non-empty, project-root-contained
+relative POSIX paths.
 
 ### The npm package build
 
