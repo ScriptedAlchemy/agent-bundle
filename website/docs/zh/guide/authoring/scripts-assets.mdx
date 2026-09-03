@@ -16,7 +16,10 @@ description: '在每个 agent-bundle 产物中发布可执行脚本与静态资�
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { description: 'Release preparation helpers.', name: 'hooks-and-scripts' },
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
   scripts: {
     'check-service-fixture': './src/scripts/check-service-fixture.ts',
     'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
@@ -79,7 +82,10 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   assets: ['release/*.json', 'evals/fixtures/status/result.json'],
-  plugin: { description: 'Release preparation helpers.', name: 'hooks-and-scripts' },
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
   targets: ['portable', 'codex', 'claude'],
 });
 ```

@@ -45,7 +45,11 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
   if (input.verbose) await agent();
   const result = { status: 'ready' as const };
-  return <Agent.Result value={result}><Agent.Text>Runtime is ready.</Agent.Text></Agent.Result>;
+  return (
+    <Agent.Result value={result}>
+      <Agent.Text>Runtime is ready.</Agent.Text>
+    </Agent.Result>
+  );
 }
 ```
 

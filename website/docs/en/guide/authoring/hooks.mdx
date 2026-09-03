@@ -17,7 +17,10 @@ export default defineConfig({
   hooks: {
     sessionStart: { handler: './src/hooks/session-start.ts' },
   },
-  plugin: { description: 'Release preparation helpers.', name: 'hooks-and-scripts' },
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
   targets: ['portable', 'codex', 'claude'],
 });
 ```

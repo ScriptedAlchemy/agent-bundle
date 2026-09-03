@@ -116,7 +116,20 @@ export default defineConfig({
     pluginTypeDoc({
       entryPoints: publicApiEntryPoints,
       outDir: generatedApiDir,
-      setup: () => cleanGeneratedApiMarkdown(path.join(docsDir, generatedApiDir)),
+      setup: async app => {
+        await cleanGeneratedApiMarkdown(path.join(docsDir, generatedApiDir));
+        // Rspress derives sidebar and prev/next labels from the raw `# ` line,
+        // so typedoc-plugin-markdown's escaped underscores (`FOO\_BAR`) would
+        // surface verbatim. Intraword underscores are not emphasis in
+        // CommonMark, so the member title is safe to emit unescaped.
+        app.options.setValue('pageTitleTemplates', {
+          index: '{projectName} {version}',
+          module: '{kind}: {name}',
+          member: ({ kind, name }: { kind: string; name: string }) =>
+            `${kind}: ${name.replace(/\\_/g, '_')}`,
+        });
+        return app;
+      },
     }),
     mirrorApiLocale({
       sourceDir: generatedApiDir,
