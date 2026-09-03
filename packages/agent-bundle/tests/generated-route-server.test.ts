@@ -283,6 +283,123 @@ const expectFailClosed = (outcome: unknown, message: RegExp): void => {
   expect(JSON.stringify(outcome)).toMatch(message);
 };
 
+it('augments a generated server from config and projects result _meta and text-only tools to the wire', { retry: 2, timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-augment-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        '@modelcontextprotocol/server': '2.0.0',
+        react: '19.2.8',
+        zod: '4.4.3',
+      },
+      name: 'generated-augment-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    // #380: the config block augments the route-generated server (env, args,
+    // targets, a config-side App) without redeclaring its entry.
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      'export default defineConfig({',
+      '  mcp: { servers: { curator: {',
+      "    apps: { panel: { entry: './views/panel.ts', resourceUri: 'ui://generated-augment-fixture/panel.html' } },",
+      "    args: ['--strict'],",
+      "    env: { CURATOR_MODE: 'strict' },",
+      '  } } },',
+      "  plugin: { name: 'generated-augment-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'views/panel.ts', "document.body.textContent = 'Curator panel';\n"),
+    // #383: `Agent.Result metadata` is the result-level `_meta`.
+    writeProjectFile(root, 'src/mcp/curator/tools/annotated.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { _meta: { ui: { resourceUri: 'ui://generated-augment-fixture/panel.html' } }, description: 'Annotated result.' };",
+      'export const inputSchema = z.object({}).strict();',
+      "export const resultSchema = z.object({ status: z.literal('ready') }).strict();",
+      'export default async function Annotated() {',
+      "  return createElement(Agent.Result, { metadata: { ui: { resourceUri: 'ui://generated-augment-fixture/panel.html' } }, value: { status: 'ready' } }, createElement(Agent.Text, null, 'ready'));",
+      '}',
+      '',
+    ].join('\n')),
+    // A text-only tool declares no object result, so it advertises no
+    // outputSchema and returns no structuredContent.
+    writeProjectFile(root, 'src/mcp/curator/tools/plain.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Text only.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.undefined();',
+      'export default async function Plain() {',
+      "  return createElement(Agent.Result, null, createElement(Agent.Text, null, 'plain text'));",
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['portable'] });
+  const server = compiled.model.mcpServers[0];
+  expect(server).toMatchObject({
+    args: [expect.stringMatching(/^mcp\/mcp-curator-[0-9a-f]+\.mjs$/u), '--strict'],
+    env: { CURATOR_MODE: 'strict' },
+    id: 'mcp:curator',
+  });
+  expect(compiled.model.mcpApps?.map((app) => app.id)).toEqual(['mcp-app:curator:panel']);
+  const manifest = JSON.parse(await readFile(join(output, 'portable', 'mcp.json'), 'utf8')) as {
+    readonly mcpServers: { readonly curator: { readonly args: readonly string[]; readonly env: Readonly<Record<string, string>> } };
+  };
+  expect(manifest.mcpServers.curator.args[1]).toBe('--strict');
+  expect(manifest.mcpServers.curator.env).toMatchObject({ CURATOR_MODE: 'strict' });
+
+  const client = new Client({ name: 'generated-augment-test', version: '0.0.0' });
+  const transport = new StdioClientTransport({
+    args: [join(output, 'portable', server!.args![0]!)],
+    command: process.execPath,
+    stderr: 'pipe',
+  });
+  let diagnostics = '';
+  transport.stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
+  try {
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      throw new Error(`Generated route server failed to connect: ${diagnostics}`, { cause: error });
+    }
+    const listed = await client.listTools();
+    const annotated = listed.tools.find((tool) => tool.name === 'annotated');
+    const plain = listed.tools.find((tool) => tool.name === 'plain');
+    expect(annotated).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://generated-augment-fixture/panel.html' } },
+      outputSchema: { type: 'object' },
+    });
+    expect(plain).toMatchObject({ description: 'Text only.' });
+    expect(plain).not.toHaveProperty('outputSchema');
+
+    const annotatedResult = await client.callTool({ arguments: {}, name: 'annotated' }, { signal: AbortSignal.timeout(10_000) });
+    expect(annotatedResult).toEqual({
+      _meta: { ui: { resourceUri: 'ui://generated-augment-fixture/panel.html' } },
+      content: [{ text: 'ready', type: 'text' }],
+      structuredContent: { status: 'ready' },
+    });
+    const plainResult = await client.callTool({ arguments: {}, name: 'plain' }, { signal: AbortSignal.timeout(10_000) });
+    expect(plainResult).toEqual({ content: [{ text: 'plain text', type: 'text' }] });
+
+    await expect(client.readResource({ uri: 'ui://generated-augment-fixture/panel.html' })).resolves.toMatchObject({
+      contents: [{ text: expect.stringContaining('Curator panel'), uri: 'ui://generated-augment-fixture/panel.html' }],
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 it('observes one process-lifetime provider across consecutive generated tool calls', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-warm-'));
   roots.push(root);

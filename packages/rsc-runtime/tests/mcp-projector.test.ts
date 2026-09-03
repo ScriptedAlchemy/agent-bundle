@@ -197,6 +197,42 @@ describe('projectMcpRenderStream', () => {
     });
   });
 
+  it('projects result metadata to _meta and fails closed on a non-object', async () => {
+    const withMetadata = await projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: {
+          children: [{ kind: 'text', text: 'Ready.' }],
+          kind: 'result',
+          metadata: { ui: { resourceUri: 'ui://demo/panel.html' }, 'vendor/trace': ['a', 1, null] },
+        },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]));
+    expect(withMetadata.result).toEqual({
+      _meta: { ui: { resourceUri: 'ui://demo/panel.html' }, 'vendor/trace': ['a', 1, null] },
+      content: [{ text: 'Ready.', type: 'text' }],
+      structuredContent: { ok: true },
+    });
+    expect(Object.isFrozen(withMetadata.result._meta)).toBe(true);
+
+    const scalar = projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: { children: [], kind: 'result', metadata: 'not an object' },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]));
+    await expect(scalar).rejects.toBeInstanceOf(McpProjectionError);
+    await expect(projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: { children: [], kind: 'result', metadata: ['not', 'an', 'object'] },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]))).rejects.toMatchObject({ code: 'invalid-result-metadata' });
+  });
+
   it('omits non-object structured content instead of fabricating an object', async () => {
     const projected = await projectMcpRenderStream(eventsOf([{
       document: document({ value: ['not', 'an', 'object'] }),

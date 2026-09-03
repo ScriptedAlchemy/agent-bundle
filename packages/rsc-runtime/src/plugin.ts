@@ -5,6 +5,7 @@ export {
   available,
   runAgentRequest,
   unavailable,
+  useAgent,
 } from './agent-request.js';
 export type {
   AgentActorIdentity,

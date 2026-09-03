@@ -95,6 +95,21 @@ describe('the in-memory MCP projection level', () => {
     });
   });
 
+  it('projects Agent.Result metadata to the result _meta beside the listing _meta', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const listed = await session.client.listTools();
+    expect(listed.tools.find((tool) => tool.name === 'strict-report')).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://route-harness/panel.html' } },
+      outputSchema: { type: 'object' },
+    });
+    const invocation = await invokeMcpTool('strict-report', { input: { reportId: 'meta-1' } });
+    expect(invocation._meta).toEqual({ ui: { resourceUri: 'ui://route-harness/panel.html' } });
+    expect(invocation.structuredContent).toEqual({ reportId: 'meta-1', summary: 'summary for meta-1' });
+    const echo = await invokeMcpTool('echo', { input: { message: 'no metadata' } });
+    expect(echo._meta).toBeUndefined();
+  });
+
   it('carries a represented error to the protocol as isError rather than a transport failure', async () => {
     const invocation = await invokeMcpTool('unavailable');
 

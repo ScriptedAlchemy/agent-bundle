@@ -87,6 +87,26 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
 
+### Config beside a route-generated MCP server
+
+A `mcp.servers.<server>` block whose `<server>` the route graph compiles in
+`generated` mode does not redeclare the server — its entry is the route
+modules — it **augments** it. This is the precedence table for one generated
+server (config wins, conventions fill):
+
+| Field | Source of truth | Config declaration |
+| --- | --- | --- |
+| Entry, transport (`stdio`), `cwd` (plugin root) | `src/mcp/<server>/{tools,resources,prompts}/*` and the generated stdio shell | `entry`, `command`, or `url` is `AB4340` under `routes.servers.<server>: 'generated'` and `AB4800` without an explicit mode; `transport: 'stdio'` is accepted, any other transport is `AB4308`; `cwd` is `AB4309`; `headers` is `AB4310`. |
+| `env` | — | Applied verbatim beneath the injected plugin-root anchor (`AB4312` shape rules). |
+| `args` | The content-hashed entry path | Appended after the entry path (`AB4311` shape rules). |
+| `targets` | The project's selected targets | Replaces the default selection (`AB4305` shape rules). |
+| `apps` | `src/mcp/<server>/apps/*` routes | Config-side Apps are compiled and registered on the generated server beside the route-declared ones (`AB432x` rules; `AB4334` checks App targets against the declared server targets). The route-declared Apps take part in the collision checks: reusing a route App's name is `AB4325`, reusing its `resourceUri` under another name is `AB4330`. |
+
+Provenance stays `conventional` (the first route module) because the routes
+supply the entry; `inspect` shows the merged `env`, `args`, and `targets`.
+Setting `routes.servers.<server>` to `custom`, `command`, or `remote` turns the
+same block back into an ordinary server declaration and omits the routes.
+
 ### Generated state mounting
 
 The compiler parses `src/state.ts` without executing it and requires one
@@ -163,7 +183,9 @@ modules, so a test chooses exactly the values a component observes.
 
 Conventional route components receive only their surface props, such as
 `{ input, signal }`. They read transport-owned request context with
-`await agent()` from `@agent-bundle/runtime`. The handle exposes the
+`await agent()` from `@agent-bundle/runtime` — or, in a synchronous component
+or utility, `useAgent()`, which returns the identical handle under the same
+lease rules without suspending. The handle exposes the
 invocation plus `host`, `session`, `actor`, and `workspace` identity axes.
 Each identity axis is `Observed`: transports publish an `available` value and
 source when they know it, or `unavailable` with a typed reason when they do

@@ -14,12 +14,14 @@ import {
   runAgentRequest,
   runRscCli,
   unavailable,
+  useAgent,
 } from '../src/index.js';
 import {
   AGENT_REQUEST_STORE_VERSION as pluginStoreVersion,
   AgentRequestError as PluginAgentRequestError,
   agent as pluginAgent,
   runAgentRequest as pluginRunAgentRequest,
+  useAgent as pluginUseAgent,
 } from '../src/plugin.js';
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
@@ -279,7 +281,38 @@ describe('agent request store', () => {
     await expect(agent()).rejects.toMatchObject({ code: 'outside-invocation' });
   });
 
+  it('returns the identical handle synchronously through useAgent() under the same lease rules', async () => {
+    let captured: ReturnType<typeof useAgent> | undefined;
+    await runAgentRequest(init('tool', 'sync'), async () => {
+      const synchronous = useAgent();
+      captured = synchronous;
+      expect(synchronous).toBe(await agent());
+      expect(synchronous.invocation.id).toBe('sync');
+      await Promise.resolve();
+      expect(useAgent()).toBe(synchronous);
+    });
+    // After runAgentRequest() settles the caller's async context is restored,
+    // so a fresh useAgent() call is `outside-invocation` — the same code
+    // agent() rejects with. Only the handle captured inside the request (or a
+    // continuation that retained its closed lease) reports `request-closed`.
+    expect(() => useAgent()).toThrow(AgentRequestError);
+    try {
+      useAgent();
+      throw new Error('expected useAgent() outside an invocation to throw');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'outside-invocation' });
+    }
+    expect(() => captured?.invocation).toThrow(AgentRequestError);
+    try {
+      void captured?.invocation;
+      throw new Error('expected the captured handle to be closed');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'request-closed' });
+    }
+  });
+
   it('re-exports the request store from the plugin entry', () => {
+    expect(pluginUseAgent).toBe(useAgent);
     expect(pluginAgent).toBe(agent);
     expect(pluginRunAgentRequest).toBe(runAgentRequest);
     expect(PluginAgentRequestError).toBe(AgentRequestError);

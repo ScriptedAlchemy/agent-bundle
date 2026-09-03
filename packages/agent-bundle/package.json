@@ -105,7 +105,6 @@
     "ignore": "7.0.7",
     "jiti": "2.7.0",
     "open": "11.0.2",
-    "typescript-5": "npm:typescript@5.6.1-rc",
     "ws": "8.21.3",
     "yaml": "2.9.0"
   },
@@ -115,6 +114,7 @@
     "@types/ws": "8.18.1",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
     "react": "19.2.8",
+    "typescript-5": "npm:typescript@5.9.3",
     "zod": "4.5.4"
   },
   "peerDependencies": {
