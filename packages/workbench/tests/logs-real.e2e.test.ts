@@ -1,11 +1,10 @@
-import { writeFile } from 'node:fs/promises';
-
 import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
+import { replaceWatchedSource } from '../../agent-bundle/tests/support/watched-files.ts';
 import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 12_000 * timeScale;
@@ -31,7 +30,9 @@ e2e('shows real producer logs with replay, filters, redaction, responsive layout
     const replay = await (await replayed).json() as { readonly replay: Readonly<{ readonly records: readonly unknown[] }> };
     expect(replay.replay.records.length).toBeGreaterThan(0);
 
-    await writeFile(project.skillSource, `${project.skillMarkdown}\nSource change for Logs E2E.\n`);
+    // One atomic replacement is one watcher invalidation; a truncating write
+    // can split into two under load and log "Project source changed." twice.
+    await replaceWatchedSource(project.root, project.skillSource, `${project.skillMarkdown}\nSource change for Logs E2E.\n`);
     await expect(page.getByText('Project source changed.')).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.logs-entries > li').first()).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.logs-entry-level').first()).toBeVisible();
