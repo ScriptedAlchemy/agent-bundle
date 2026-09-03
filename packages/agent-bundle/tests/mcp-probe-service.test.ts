@@ -210,6 +210,11 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               inputSchema: { type: 'object' as const },
               name: 'url-with-at-and-quote-in-userinfo',
             },
+            {
+              description: String.raw`Non-special scheme postgres://alice:se\cret@example.test/db and https://bob:pw\x@example.test/`,
+              inputSchema: { type: 'object' as const },
+              name: 'url-with-backslash-in-userinfo',
+            },
           ],
         }),
       }),
@@ -238,6 +243,9 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       // honour), so a raw `@` or quote inside the password leaves nothing behind,
       // while an `@` in the query is not userinfo.
       'Raw @ in the password https://[REDACTED]@example.test/private?next=me@x and quote https://[REDACTED]@example.test/#top',
+      // A backslash is userinfo for non-special schemes; masking treats it as
+      // such for every scheme rather than leaving a credential behind.
+      'Non-special scheme postgres://[REDACTED]@example.test/db and https://[REDACTED]@example.test/',
     ]);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('hunter2');
@@ -246,6 +254,8 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
     expect(serialized).not.toContain('pa@ss');
     expect(serialized).not.toContain('@ss@');
     expect(serialized).not.toContain('s3cret');
+    expect(serialized).not.toContain('cret');
+    expect(serialized).not.toContain('bob');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
