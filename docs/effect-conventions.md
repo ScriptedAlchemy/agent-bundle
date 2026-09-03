@@ -342,3 +342,18 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 4. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
 5. Re-verify every unstable-module row and the language-service diagnostics.
 6. Re-run the hook cold-start check.
+
+## Parked toolchain follow-ups
+
+Toolchain pins that are deliberately held back ride the same named chore as
+the Effect RC re-pin (see `AGENTS.md`). Each row records the pin, the exact
+registry state observed when the row was written (`npm view <pkg> dist-tags`
+/ `versions`), and the trigger that turns the row into a chore. Re-verify
+every row during a re-pin; when a trigger has fired, do the upgrade in its
+own chore PR and retire the row.
+
+| Recorded | Pin (where) | Observed registry state | Trigger / action |
+| --- | --- | --- | --- |
+| 2026-09-03 | `@rslib/core` **`0.23.2`** — root, `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies. Stays on `0.23.x` until rslib 1.0 leaves rc. | `npm view @rslib/core dist-tags`: `latest` `0.23.2`, `rc` `1.0.0-rc.2`, `beta` `1.0.0-beta.3`, `canary` `0.20.0-canary-202603101`. | `latest` becomes `1.x`. Bump all four pins in one chore; re-run `pnpm build`, `lint:package`, `check:release`, and the Rslib-driven compile tests. |
+| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`) — `packages/agent-bundle`, `packages/rsc-runtime` devDependencies. Needs a real release pin once published. | `npm view effect-rstest versions`: **E404 — not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace both preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
+| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
