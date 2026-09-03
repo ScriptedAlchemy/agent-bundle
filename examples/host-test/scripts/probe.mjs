@@ -24,12 +24,14 @@ const parseArgs = (argv) => {
   const flags = { auth: true, keepHome: false };
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
-    // A value flag with nothing (or another flag) after it must not fall back
-    // to the default silently: `--scenario` at the end would run the default
-    // scenario under the requested one's name.
+    // A value flag with nothing after it must not fall back to the default
+    // silently: `--scenario` at the end would run the default scenario under
+    // the requested one's name. Only absence is rejected — the next argument
+    // is the value whatever it looks like, so `--prompt "--help"` or a file
+    // named `--baseline.json` still work.
     const value = () => {
       const next = rest[index + 1];
-      if (next === undefined || next.startsWith('--')) throw new Error(`${flag} needs a value`);
+      if (next === undefined) throw new Error(`${flag} needs a value`);
       index += 1;
       return next;
     };
