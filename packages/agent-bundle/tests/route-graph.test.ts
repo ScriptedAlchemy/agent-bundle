@@ -780,6 +780,44 @@ it('diagnoses an appResourceUri() reference to an unknown App with AB4826 and ke
   expect(routes.find((route) => route.kind === 'app')!.config).toEqual({ resourceUri: 'ui://curator/dashboard.html' });
 });
 
+it('never resolves an appResourceUri() reference to an App whose server is not generated', async () => {
+  const tree = {
+    'src/mcp/curator/apps/dashboard.tsx': [
+      "export const config = { resourceUri: 'ui://curator/dashboard.html' };",
+      moduleSource,
+    ].join('\n'),
+    'src/mcp/reporter/tools/summarize.ts': [
+      "import { appResourceUri } from 'agent-bundle/routes';",
+      "export const config = { _meta: { ui: { resourceUri: appResourceUri('curator/dashboard') } } };",
+      moduleSource,
+    ].join('\n'),
+  };
+
+  // An override keeps the curator entry custom: its App is never built, so the
+  // cross-server reference has nothing to point at.
+  const custom = await createRoot();
+  await writeTree(custom, tree);
+  const customGraph = await compileRouteGraph(custom, fixtureConfig({ routes: { servers: { curator: 'custom' } } }));
+  expect(codesOf(customGraph.diagnostics)).toEqual(['AB4826']);
+  expect(customGraph.diagnostics[0]!.sourcePath).toBe(join(custom, 'src/mcp/reporter/tools/summarize.ts'));
+  expect(customGraph.diagnostics[0]!.message).toContain('no App route declares a static config.resourceUri');
+  expect(customGraph.servers.find((server) => server.name === 'reporter')!.routes[0]!.config).toBe(emptyRouteConfig);
+
+  // An unresolved entry conflict (AB4800) is not a generated server either.
+  const conflict = await createRoot();
+  await writeTree(conflict, { ...tree, 'src/mcp/curator.ts': moduleSource });
+  const conflictGraph = await compileRouteGraph(conflict, fixtureConfig());
+  expect(codesOf(conflictGraph.diagnostics).sort()).toEqual(['AB4800', 'AB4826']);
+
+  // The explicit generated override restores the target.
+  const generated = await createRoot();
+  await writeTree(generated, { ...tree, 'src/mcp/curator.ts': moduleSource });
+  const generatedGraph = await compileRouteGraph(generated, fixtureConfig({ routes: { servers: { curator: 'generated' } } }));
+  expect(generatedGraph.diagnostics).toEqual([]);
+  expect(generatedGraph.servers.find((server) => server.name === 'reporter')!.routes[0]!.config)
+    .toEqual({ _meta: { ui: { resourceUri: 'ui://curator/dashboard.html' } } });
+});
+
 it('resolves an App route template relative to the route module, accepting the legacy root-relative form only when unambiguous', async () => {
   const app = (template: string): string => [
     `export const config = { resourceUri: 'ui://curator/dashboard.html', template: '${template}' };`,
