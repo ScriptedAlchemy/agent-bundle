@@ -225,6 +225,17 @@ const stagingPublisherExited = (stagingEntry: string): boolean => {
     return isErrno(error, 'ESRCH');
   }
 };
+/**
+ * A staging entry this publisher would have written: `.<epoch>.stage-<pid>-<nonce>`
+ * (the nonce is hex, or `guard-<hex>` for a recovery guard).
+ */
+const stagingEntryPattern = /^\.(?<epoch>[a-z0-9][a-z0-9._-]*)\.stage-(?<pid>\d+)-[a-z0-9-]+$/iu;
+/**
+ * @internal Bounds of one publication's orphan-staging sweep: at most
+ * `candidates` matching directory entries are examined and at most `removals`
+ * removed per publish; anything beyond waits for the next publication.
+ */
+export const nativePlaygroundStagingSweepLimits = Object.freeze({ candidates: 64, removals: 16 });
 const maximumCatalogSnapshotNodes = 65_536;
 const maximumFixtureEntries = 4_096;
 const maximumSnapshotDepth = 16;
@@ -1284,6 +1295,7 @@ export class NativePlaygroundService {
         { cause: cleanupFailures[0] },
       );
     }
+    await this.#sweepAbandonedStaging(directory, reference.epoch.id);
     const receipt = created && publicationIdentity !== undefined
       ? this.#publicationReceipt(path, publicationIdentity, true)
       : await this.#snapshotReceipt(reference, false);
@@ -1297,6 +1309,53 @@ export class NativePlaygroundService {
         error,
         'Native Playground catalog validation and rollback both failed.',
       );
+    }
+  }
+
+  /**
+   * A publisher that dies before its staging cleanup leaves its
+   * `.<epoch>.stage-<pid>-<nonce>` entry behind (#377). One that still aliases
+   * its epoch's sidecar is a publication the next reader of that epoch adopts
+   * (`#awaitStagedPublication`); one that aliases nothing — the publisher died
+   * before `link()`, lost the `EEXIST` race, or its sidecar was withdrawn
+   * later — is never read again and would otherwise accumulate forever.
+   *
+   * Each successful publication therefore sweeps its own catalog directory
+   * once: no recursion, at most `candidates` matching entries examined and
+   * `removals` removed. An entry goes only when it carries this publisher's
+   * naming pattern for an epoch other than the one being published, its
+   * embedded publisher pid has exited, and it is a singly linked regular file
+   * that does not alias its epoch's sidecar inode — a live winner's staging
+   * link, a guard, a foreign file, or anything ambiguous stays. The sweep is
+   * hygiene: it never changes the outcome of the publication that ran it, so
+   * any filesystem failure ends the sweep quietly instead of failing the epoch.
+   */
+  async #sweepAbandonedStaging(directory: string, publishingEpochId: string): Promise<void> {
+    let entries: readonly string[];
+    try { entries = await readdir(directory); }
+    catch { return; }
+    const candidates: { readonly entry: string; readonly epochId: string }[] = [];
+    for (const entry of [...entries].sort()) {
+      if (candidates.length >= nativePlaygroundStagingSweepLimits.candidates) break;
+      const epochId = stagingEntryPattern.exec(entry)?.groups?.['epoch'];
+      if (epochId === undefined || epochId === publishingEpochId) continue;
+      candidates.push({ entry, epochId });
+    }
+    let removed = 0;
+    for (const { entry, epochId } of candidates) {
+      if (removed >= nativePlaygroundStagingSweepLimits.removals) return;
+      // Our own entries and those of any still-running publisher are theirs.
+      if (!stagingPublisherExited(entry)) continue;
+      const stagingPath = join(directory, entry);
+      try {
+        const staged = await lstat(stagingPath);
+        if (!staged.isFile() || staged.nlink !== 1) continue;
+        if (await this.#sidecarStillLinked(join(directory, `${epochId}.json`), staged)) continue;
+        await this.#catalogStorage.remove(stagingPath, { force: true });
+        removed += 1;
+      } catch (error) {
+        if (!isErrno(error, 'ENOENT')) return;
+      }
     }
   }
 

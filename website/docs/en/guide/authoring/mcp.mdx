@@ -218,7 +218,10 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 
 An MCP App is a browser surface compiled to self-contained HTML and registered as a resource on
 the generated server. The conventional location is `src/mcp/<server>/apps/*.{ts,tsx}`, where a
-static `config.resourceUri` is required. Prefix the file with `_` to opt out.
+static `config.resourceUri` is required. Two App routes of one server that declare the same
+`config.resourceUri` fail with `AB4829` naming both files; the same URI on App routes of different
+servers is fine, because each generated server registers only its own Apps. Prefix the file with
+`_` to opt out.
 
 Declaring an App in config gives it an explicit HTML template and target restriction:
 

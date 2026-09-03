@@ -197,8 +197,9 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 ## MCP App
 
 MCP App 是一个浏览器表面，编译为自包含 HTML 并作为资源注册到生成的服务器上。约定位置是
-`src/mcp/<server>/apps/*.{ts,tsx}`，其中必须提供静态 `config.resourceUri`。给文件名加 `_` 前缀即可
-退出。
+`src/mcp/<server>/apps/*.{ts,tsx}`，其中必须提供静态 `config.resourceUri`。同一服务器的两个 App 路由
+声明相同的 `config.resourceUri` 会以 `AB4829` 失败并点名两个文件；不同服务器的 App 路由使用相同 URI
+则没有问题，因为每个生成的服务器只注册自己的 App。给文件名加 `_` 前缀即可退出。
 
 在配置中声明 App 可以为它指定显式的 HTML 模板与 target 限制：
 

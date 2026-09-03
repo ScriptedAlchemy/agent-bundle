@@ -838,6 +838,11 @@ export const compileRouteGraph = async (
       ));
     }
     if (mode === 'generated') {
+      // A generated server registers each App under its resourceUri, so two
+      // App routes of one server claiming the same URI would otherwise
+      // resolve first-wins (AB4829). The same URI on another server is a
+      // different registry and never collides here.
+      const appRoutesByResourceUri = new Map<string, CompiledAgentRoute>();
       for (const route of routes) {
         if (route.kind === 'app') {
           const resourceUri = route.config['resourceUri'];
@@ -848,6 +853,18 @@ export const compileRouteGraph = async (
               'Export const config with the App resourceUri, then inspect again.',
               route.source,
             ));
+          } else {
+            const claimed = appRoutesByResourceUri.get(resourceUri);
+            if (claimed === undefined) {
+              appRoutesByResourceUri.set(resourceUri, route);
+            } else {
+              diagnostics.push(routeError(
+                'AB4829',
+                `MCP App routes ${claimed.provenance.relativePath} and ${route.provenance.relativePath} of MCP server ${JSON.stringify(name)} both declare config.resourceUri ${JSON.stringify(resourceUri)}; a generated server registers one App per resource URI and never chooses silently.`,
+                'Give each App route of the server a distinct config.resourceUri, or remove the duplicate route module, then inspect again.',
+                route.source,
+              ));
+            }
           }
           const template = route.config['template'];
           if (typeof template === 'string') {

@@ -8,6 +8,7 @@ import { expectExitCode } from '../src/eval/assertions.ts';
 import { digest } from '../src/core/digest.ts';
 import {
   NativePlaygroundService,
+  nativePlaygroundStagingSweepLimits,
   publishNativePlaygroundCatalogSnapshot,
   type NativePlaygroundCatalogStorage,
   type NativePlaygroundEpochReference,
@@ -1908,6 +1909,159 @@ it('still rejects a persisted catalog aliased by a hard link that is not an epoc
       await rm(join(catalogDirectory, alias));
     }
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+const sweepFixture = async (): Promise<{
+  readonly catalogDirectory: string;
+  readonly root: string;
+  readonly service: NativePlaygroundService;
+  readonly staging: (epochId: string, pid: number, nonce: string) => string;
+  readonly stagingEntries: () => Promise<string[]>;
+}> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-staging-sweep-'));
+  const catalogDirectory = join(root, 'catalog');
+  await mkdir(catalogDirectory, { recursive: true });
+  const service = new NativePlaygroundService({
+    catalogDirectory,
+    discover: async () => suite(),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  return {
+    catalogDirectory,
+    root,
+    service,
+    staging: (epochId, pid, nonce) => join(catalogDirectory, `.${epochId}.stage-${String(pid)}-${nonce}`),
+    stagingEntries: async () => (await readdir(catalogDirectory)).filter((name) => name.includes('.stage-')).sort(),
+  };
+};
+
+it('sweeps staging files orphaned by exited publishers of other epochs on the next publish', async () => {
+  const { catalogDirectory, root, service, staging, stagingEntries } = await sweepFixture();
+  const exited = exitedPid();
+  try {
+    // A publisher that died before link(), or that lost the EEXIST race, left
+    // a singly linked staging file; a recovery guard whose sidecar was later
+    // withdrawn is in the same position.
+    const orphan = staging('epoch-old', exited, 'deadbeef');
+    const guard = staging('epoch-old', exited, 'guard-cafe');
+    await writeFile(orphan, '{"stale":true}\n');
+    await writeFile(guard, '{"stale":true}\n');
+    // The epoch being published is never swept by its own publication, even
+    // when its orphan's publisher has exited: same-epoch links belong to the
+    // reader protocol of that epoch.
+    const sameEpoch = staging('epoch-new', exited, 'abandoned');
+    await writeFile(sameEpoch, '{"stale":true}\n');
+    expect(await stagingEntries()).toHaveLength(3);
+
+    await service.catalog(epoch('epoch-new', join(root, 'artifact-new')));
+    expect(await stagingEntries()).toEqual([`.epoch-new.stage-${String(exited)}-abandoned`]);
+    await expect(readFile(join(catalogDirectory, 'epoch-new.json'), 'utf8')).resolves.toContain('"epochId":"epoch-new"');
+
+    // The next epoch's publication sweeps what the previous one left alone.
+    await service.catalog(epoch('epoch-next', join(root, 'artifact-next')));
+    expect(await stagingEntries()).toEqual([]);
+    await expect(readFile(join(catalogDirectory, 'epoch-new.json'), 'utf8')).resolves.toContain('"epochId":"epoch-new"');
+    await expect(readFile(join(catalogDirectory, 'epoch-next.json'), 'utf8')).resolves.toContain('"epochId":"epoch-next"');
+  } finally {
+    await service.close();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps a live winner\'s staging link, live-publisher and foreign entries, and never leaves the catalog directory while sweeping', async () => {
+  const { catalogDirectory, root, service, staging, stagingEntries } = await sweepFixture();
+  const exited = exitedPid();
+  try {
+    // An older epoch whose publisher exited between link() and cleanup: its
+    // staging entry aliases the winner sidecar and stays for reader recovery.
+    await service.catalog(epoch('epoch-old', join(root, 'artifact-old')));
+    const oldSidecar = join(catalogDirectory, 'epoch-old.json');
+    const linked = staging('epoch-old', exited, 'linked');
+    await link(oldSidecar, linked);
+    // A publisher that is still running owns its staging file.
+    const live = staging('epoch-old', process.pid, 'live');
+    await writeFile(live, '{"live":true}\n');
+    // Foreign files that merely resemble the pattern are not this publisher's.
+    const foreign = [
+      join(catalogDirectory, `epoch-old.stage-${String(exited)}-nodot`),
+      join(catalogDirectory, `.epoch-old.staged-${String(exited)}-suffix`),
+      join(catalogDirectory, `.epoch-old.stage-${String(exited)}`),
+      join(catalogDirectory, '.epoch-old.stage-notapid-nonce'),
+      join(catalogDirectory, `.epoch-old.stage-${String(exited)}-bad nonce`),
+    ];
+    for (const path of foreign) await writeFile(path, '{"foreign":true}\n');
+    // A directory and a symlink under the pattern are not regular files; the
+    // symlink's target outside the catalog directory is never followed.
+    const nestedDirectory = staging('epoch-old', exited, 'directory');
+    await mkdir(nestedDirectory);
+    await writeFile(join(nestedDirectory, `.epoch-old.stage-${String(exited)}-nested`), '{"nested":true}\n');
+    const outside = join(root, 'outside.json');
+    await writeFile(outside, '{"outside":true}\n');
+    const symlinked = staging('epoch-old', exited, 'symlink');
+    await symlink(outside, symlinked);
+    // A staging entry whose sidecar exists but is a different inode aliases
+    // something unknown once doubly linked; it is left alone too.
+    const aliasedElsewhere = staging('epoch-old', exited, 'aliased');
+    await link(outside, aliasedElsewhere);
+    const before = await stagingEntries();
+
+    await service.catalog(epoch('epoch-new', join(root, 'artifact-new')));
+
+    expect(await stagingEntries()).toEqual(before);
+    expect((await stat(linked)).ino).toBe((await stat(oldSidecar)).ino);
+    expect((await stat(oldSidecar)).nlink).toBe(2);
+    await expect(readFile(live, 'utf8')).resolves.toBe('{"live":true}\n');
+    for (const path of foreign) await expect(readFile(path, 'utf8')).resolves.toBe('{"foreign":true}\n');
+    await expect(readFile(join(nestedDirectory, `.epoch-old.stage-${String(exited)}-nested`), 'utf8')).resolves.toBe('{"nested":true}\n');
+    await expect(readFile(outside, 'utf8')).resolves.toBe('{"outside":true}\n');
+    expect((await stat(outside)).nlink).toBe(2);
+    await expect(readFile(symlinked, 'utf8')).resolves.toBe('{"outside":true}\n');
+    // The kept, still-linked older epoch reads back through the recovery path.
+    const reader = new NativePlaygroundService({
+      catalogDirectory,
+      catalogStagingSettleDeadlineMs: 50,
+      discover: async () => { throw new Error('A recovered catalog must not fall back to discovery.'); },
+      planFixture: async () => fixturePlan,
+      projectRoot: '/project',
+    });
+    await expect(reader.catalog(epoch('epoch-old', join(root, 'artifact-old')))).resolves.toMatchObject({ epochId: 'epoch-old' });
+    await reader.close();
+  } finally {
+    await service.close();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('bounds the orphan sweep per publish and finishes on later publications', async () => {
+  const { root, service, staging, stagingEntries } = await sweepFixture();
+  const exited = exitedPid();
+  const { candidates, removals } = nativePlaygroundStagingSweepLimits;
+  try {
+    // More orphans than one publish removes: the cap's worth goes now, the rest next time.
+    const orphans = Array.from({ length: removals + 4 }, (_, index) => staging('epoch-bulk', exited, `orphan${String(index).padStart(2, '0')}`));
+    for (const path of orphans) await writeFile(path, '{"stale":true}\n');
+    await service.catalog(epoch('epoch-first', join(root, 'artifact-first')));
+    expect(await stagingEntries()).toHaveLength(4);
+    await service.catalog(epoch('epoch-second', join(root, 'artifact-second')));
+    expect(await stagingEntries()).toEqual([]);
+
+    // Examination is bounded too: when the cap's worth of candidates all belong
+    // to a live publisher, an orphan sorting after them waits for a later sweep.
+    const held = Array.from({ length: candidates }, (_, index) => staging('epoch-aaaa', process.pid, `held${String(index).padStart(3, '0')}`));
+    for (const path of held) await writeFile(path, '{"live":true}\n');
+    const trailing = staging('epoch-zzzz', exited, 'trailing');
+    await writeFile(trailing, '{"stale":true}\n');
+    await service.catalog(epoch('epoch-third', join(root, 'artifact-third')));
+    expect(await stagingEntries()).toHaveLength(candidates + 1);
+    await expect(readFile(trailing, 'utf8')).resolves.toBe('{"stale":true}\n');
+    for (const path of held) await rm(path);
+    await service.catalog(epoch('epoch-fourth', join(root, 'artifact-fourth')));
+    expect(await stagingEntries()).toEqual([]);
+  } finally {
+    await service.close();
     await rm(root, { force: true, recursive: true });
   }
 });
