@@ -3,29 +3,26 @@
 ---
 
 Address the post-merge review findings on the dev epoch gate, native catalog,
-portable validation, Codex hooks, and inspection:
+portable validation, and inspection (#408):
 
-- `EpochAdoptionPolicy` leases the adopted epoch until another epoch replaces
-  it or the policy closes, so store retention cannot delete the advertised
+- `agent-bundle dev` leases the adopted epoch until another epoch replaces it
+  or the server closes, so store retention cannot delete the advertised
   last-good build during a run of failing rebuilds; an epoch that cannot be
   leased is not adopted and the failure is published as `AB7211` status.
-- The dev contract matrix opens the configured server on a target whose
+- The `dev.contracts` matrix opens the configured server on a target whose
   manifest actually carries it, applies the session timeout per request instead
   of once for the whole matrix, and observes live progress through the session
   trace; lifecycle fixtures no longer depend on the SDK client's private
-  `_notificationHandlers` map (`ContractMatrixClient` gains an optional
-  `observeProgress` seam, exported as `ContractMatrixProgressSource`).
-- A Native Playground catalog reader now waits for a hard-link publisher to
-  release its staging link before adopting the sidecar, and returns to
-  discovery when that publication is rolled back instead of caching a withdrawn
-  epoch.
-- Ordinary `build`/`validate --artifact` runs the Agent Plugins byte lane over
-  the emitted `portable/` tree (`AB6035`–`AB6037`), so standard-invalid
+  `_notificationHandlers` map (`ContractMatrixClient` from `agent-bundle/test`
+  gains an optional `observeProgress` seam, exported as
+  `ContractMatrixProgressSource`).
+- A Native Playground catalog reader waits for a hard-link publisher to release
+  its staging link before adopting the sidecar, and returns to discovery when
+  that publication is rolled back instead of caching a withdrawn epoch.
+- `agent-bundle build` and `validate --artifact` run the Agent Plugins byte lane
+  over the emitted `portable/` tree (`AB6035`–`AB6037`), so standard-invalid
   documents fail before publication rather than only under `--host-validation`;
   header values reject every forbidden control character, not just CR/LF/NUL.
-- Codex `PostToolUse` accepts any present JSON `tool_response`, matching the
-  pinned `"tool_response": true` schema, in both the event projection and the
-  generated native hook wrapper; Claude keeps the object check.
-- `inspect` projects only the contract fields of an adapter capability row, so
-  extension fields on JavaScript adapters cannot shadow the capability name or
-  break `--json` serialization.
+- `agent-bundle inspect` projects only the contract fields of an adapter
+  capability row, so extension fields on JavaScript adapters cannot shadow the
+  capability name or break `--json` serialization.
