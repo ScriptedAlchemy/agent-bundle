@@ -3,9 +3,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
-import { describe, expect, it } from '@rstest/core';
+import { Effect } from 'effect';
+import { TestClock } from 'effect/testing';
+import { describe, expect, it } from 'effect-rstest';
 import { createElement } from 'react';
 
+import { createFlightDemand } from '../src/effect/render-stream.js';
 import {
   AgentContractError,
   createAgentRenderDispatcher,
@@ -14,6 +17,7 @@ import {
   type AgentProgressReporter,
   type AgentRenderEvent,
 } from '../src/index.js';
+import { createAgentRenderEventSession, toPublicEventStream } from '../src/reconciler.js';
 
 describe('decodeAgentDocument', () => {
   it('decodes protocol host elements into one immutable final document', () => {
@@ -436,6 +440,10 @@ const collectEvents = async (
   return events;
 };
 
+/** The rejection reason of `read`; fails the test effect with the value if it resolves instead. */
+const rejectionOf = (read: () => Promise<unknown>): Effect.Effect<unknown, unknown> =>
+  Effect.flip(Effect.tryPromise({ catch: (error) => error, try: read }));
+
 const eventTypes = (events: readonly AgentRenderEvent[]): readonly string[] =>
   events.map((event) => {
     switch (event.type) {
@@ -805,15 +813,37 @@ describe('AgentRenderDispatcher streaming', () => {
     expect(rest.at(-1)?.type).toBe('complete');
   });
 
-  it('fails a permanently pending boundary when the elapsed deadline expires', { retry: 2 }, async () => {
+  it.effect('fails a permanently pending boundary when the elapsed deadline expires', () => Effect.gen(function*() {
+    // The deadline runs on the injected TestClock, so the Flight worker may
+    // take any real time to deliver the shell under load; the boundary fails
+    // exactly when the test advances the clock past `maxElapsedMs`, whether
+    // the deadline sleep was already armed (it fires) or is armed afterwards
+    // (no time remains). This is the dispatcher's own `stream()` wiring with
+    // the clock injected at the session seam.
+    const clock = yield* TestClock.testClockWith(Effect.succeed);
     const host = createWorkerHost('single');
-    const dispatcher = createAgentRenderDispatcher(host, { limits: { maxElapsedMs: 150 } });
-    const reader = dispatcher.stream({ invocation, signal: new AbortController().signal }).getReader();
-    const shell = await reader.read();
+    const controller = new AbortController();
+    yield* Effect.addFinalizer(() => Effect.sync(() => {
+      controller.abort();
+    }));
+    const demand = createFlightDemand();
+    const session = createAgentRenderEventSession({
+      clock,
+      demand,
+      flight: host.execute({ invocation, signal: controller.signal }),
+      limits: { maxElapsedMs: 150 },
+      signal: controller.signal,
+    });
+    const reader = toPublicEventStream(session.events, demand, controller.signal).getReader();
+    const shell = yield* Effect.promise(() => reader.read());
     if (shell.value?.type !== 'shell') throw new Error('expected a shell event');
-    await expect(reader.read()).rejects.toBeInstanceOf(AgentContractError);
-    await expect(reader.read()).rejects.toMatchObject({ code: 'elapsed-time-exceeded' });
-  });
+
+    yield* TestClock.adjust(150);
+    const failure = yield* rejectionOf(() => reader.read());
+    expect(failure).toBeInstanceOf(AgentContractError);
+    expect(failure).toMatchObject({ code: 'elapsed-time-exceeded' });
+    expect(yield* rejectionOf(() => reader.read())).toMatchObject({ code: 'elapsed-time-exceeded' });
+  }));
 
   it('bounds Flight EOF for stream and dispatch and cancels the source', { retry: 2, timeout: 5_000 }, async () => {
     const finiteReader = (

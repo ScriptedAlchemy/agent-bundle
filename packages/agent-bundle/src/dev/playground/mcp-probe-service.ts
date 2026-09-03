@@ -46,7 +46,7 @@ export const mcpProbeFailureTextLimit = 2_048;
 const mcpProbeCapabilityLimit = 32;
 const mcpProbeNameTextLimit = 256;
 /** How long a probe response waits for transport teardown before detaching it. */
-const mcpProbeTeardownWaitMs = 50;
+export const mcpProbeTeardownWaitMs = 50;
 /**
  * Upper bound a detached teardown may hold the plugin-data directory. The
  * stdio transport's close runs its own TERM/KILL sequence, so this only guards
@@ -71,6 +71,33 @@ const connectionErrorCodes = new Set([
 ]);
 
 export type McpProbeTransport = Transport;
+
+/**
+ * Timer seam behind every probe delay — the total-budget timeout, the bounded
+ * teardown wait, the detached plugin-data cap, and the removal retry. Production
+ * uses Node timers; tests inject a manual scheduler and fire timers in event
+ * order so no wall-clock time is involved. `schedule` returns the cancel.
+ */
+export interface McpProbeTimers {
+  readonly schedule: (
+    callback: () => void,
+    delayMs: number,
+    options: Readonly<{
+      /** A timer that must not keep the process alive on its own (`timer.unref()`). */
+      readonly unref: boolean;
+    }>,
+  ) => () => void;
+}
+
+const nodeTimers: McpProbeTimers = {
+  schedule: (callback, delayMs, options) => {
+    const timer = setTimeout(callback, delayMs);
+    if (options.unref) timer.unref();
+    return () => {
+      clearTimeout(timer);
+    };
+  },
+};
 
 export interface McpProbeClient {
   close(): Promise<void>;
@@ -100,6 +127,8 @@ export interface McpProbeServiceOptions {
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
   readonly timeoutMs?: number;
+  /** Testing seam for every probe delay; production keeps Node timers. */
+  readonly timers?: McpProbeTimers;
 }
 
 export class McpProbeTargetNotFoundError extends Error {
@@ -314,6 +343,7 @@ export class McpProbeService {
   readonly #registry: TargetRegistry;
   readonly #removePluginData: (pluginData: string) => Promise<void>;
   readonly #timeoutMs: number;
+  readonly #timers: McpProbeTimers;
 
   constructor(options: McpProbeServiceOptions) {
     this.#clock = options.clock ?? (() => performance.now());
@@ -341,6 +371,7 @@ export class McpProbeService {
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#removePluginData = options.removePluginData ?? removePluginData;
     this.#timeoutMs = positiveTimeout(options.timeoutMs ?? mcpProbeTimeoutMs);
+    this.#timers = options.timers ?? nodeTimers;
   }
 
   probe(options: {
@@ -448,20 +479,20 @@ export class McpProbeService {
    * very case the cap bounds.
    */
   #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
-    let cap: NodeJS.Timeout | undefined;
+    let cancelCap: (() => void) | undefined;
     let capWon = false;
     // The cap stays referenced on purpose: it is the only handle guaranteeing
     // the removal runs when a stalled teardown outlives Workbench shutdown,
     // and it is cleared the moment the teardown settles.
     const capped = new Promise<void>((resolvePromise) => {
-      cap = setTimeout(() => {
+      cancelCap = this.#timers.schedule(() => {
         capWon = true;
         resolvePromise();
-      }, this.#pluginDataTeardownCapMs);
+      }, this.#pluginDataTeardownCapMs, { unref: false });
     });
     const pending = Promise.race([teardown, capped])
       .then(() => {
-        if (cap !== undefined) clearTimeout(cap);
+        cancelCap?.();
         return this.#removePluginData(pluginData);
       })
       .then(() => undefined, () => {
@@ -472,7 +503,9 @@ export class McpProbeService {
         // The teardown settled (a close may have failed fast) but the child
         // still held the directory for a moment: one bounded, fenced retry.
         this.#track(
-          new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, mcpProbePluginDataRetryDelayMs); })
+          new Promise<void>((resolvePromise) => {
+            this.#timers.schedule(resolvePromise, mcpProbePluginDataRetryDelayMs, { unref: false });
+          })
             .then(() => this.#removePluginData(pluginData))
             .then(() => undefined, () => undefined),
         );
@@ -636,7 +669,7 @@ export class McpProbeService {
       });
       return report;
     } finally {
-      let timer: NodeJS.Timeout | undefined;
+      let cancelWait: (() => void) | undefined;
       // Keep transport teardown running through its TERM/KILL path without
       // allowing a stalled close to extend the probe's total time budget. The
       // plugin-data removal is chained behind that teardown, so a close that
@@ -651,13 +684,12 @@ export class McpProbeService {
       ]);
       const cleanup = this.#removePluginDataAfter(teardown, options.pluginData);
       const teardownWait = new Promise<void>((resolvePromise) => {
-        timer = setTimeout(resolvePromise, mcpProbeTeardownWaitMs);
-        timer.unref();
+        cancelWait = this.#timers.schedule(resolvePromise, mcpProbeTeardownWaitMs, { unref: true });
       });
       try {
         await Promise.race([cleanup, teardownWait]);
       } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        cancelWait?.();
       }
     }
   }
@@ -720,18 +752,17 @@ export class McpProbeService {
       void settledClose(onTimeout);
       throw new McpProbeTimeoutError(kind);
     }
-    let timer: NodeJS.Timeout | undefined;
+    let cancelTimeout: (() => void) | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
+      cancelTimeout = this.#timers.schedule(() => {
         void settledClose(onTimeout);
         reject(new McpProbeTimeoutError(kind));
-      }, remaining);
-      timer.unref();
+      }, remaining, { unref: true });
     });
     try {
       return await Promise.race([operation, timedOut]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      cancelTimeout?.();
     }
   }
 }

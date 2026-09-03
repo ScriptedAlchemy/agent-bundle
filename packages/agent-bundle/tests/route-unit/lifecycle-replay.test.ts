@@ -10,6 +10,7 @@ import type { LifecycleReplay } from '../../src/contracts/lifecycles.ts';
 import { LifecycleReplayService } from '../../src/dev/playground/lifecycle-replay-service.ts';
 import { projectEventDocument } from '../../src/events/project.ts';
 import { compileRouteGraph } from '../../src/routes/graph.ts';
+import { renderRouteEvents } from '../../src/test/render.ts';
 import type { AgentRouteModule } from '../../src/test/types.ts';
 
 const roots: string[] = [];
@@ -104,8 +105,13 @@ const createFixtureProject = async () => {
 
 it('replays Claude and Codex PostToolUse through decode, route execution, render, and encode', async () => {
   const { graph } = await createFixtureProject();
+  // This pool already runs under the `react-server` condition, so the route
+  // renders in-process through the same renderer the dev server's render child
+  // uses; the child fork itself (a jiti-transpiled Node process per replay) is
+  // covered by the captured-fixture replays below.
   const service = new LifecycleReplayService({
     prepared: () => ({ graph, targets: ['claude', 'codex'] }),
+    render: renderRouteEvents,
   });
   const fixtures = [
     {
@@ -350,6 +356,7 @@ it('replays the Cursor workspaceOpen starter as an observation with no native re
   const graph = await compileRouteGraph(root, { targets: ['cursor'] } as never);
   const service = new LifecycleReplayService({
     prepared: () => ({ graph, targets: ['cursor'] }),
+    render: renderRouteEvents,
   });
   const lifecycle = service.list().lifecycles.find((candidate) => candidate.routeId === 'event:workspace/open');
   const target = lifecycle?.targets.find((candidate) => candidate.target === 'cursor');
