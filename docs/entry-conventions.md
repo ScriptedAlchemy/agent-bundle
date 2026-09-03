@@ -83,6 +83,8 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
 | `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
+| `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
@@ -226,6 +228,85 @@ worker, so module-level provider state is shared across the simulated
 executables of that worker and is only proven cold by the proof levels that
 spawn the artifact.
 
+### Shared layouts
+
+A layout is the conventional composition point around every rendered route
+of a project — the `layout.tsx` idea from page frameworks, applied to Agent
+Documents. `src/layout.{ts,tsx}` wraps every rendered route (generated MCP
+tools, resources, and prompts; rendered `src/cli/**` commands; projected MCP
+commands; rendered `src/scripts/*.tsx`), and `src/mcp/<server>/layout.{ts,tsx}`
+nests inside it for one generated server. Composition order is root layout,
+then server layout, then the route. Event routes are host protocol responses
+rather than documents for a reader, so no layout applies to them; browser
+App routes are browser builds and are likewise untouched.
+
+```tsx
+// src/layout.tsx — the whole layout a consumer writes
+import { Agent, type AgentLayoutProps } from '@agent-bundle/runtime';
+import React from 'react';
+
+export default function Layout({ children, route }: AgentLayoutProps) {
+  return (
+    <Agent.Result metadata={{ route: route.id }}>
+      {children}
+    </Agent.Result>
+  );
+}
+```
+
+The layout renders `Agent.Result` around `children`, the route's rendered
+element. An `Agent.Result` that declares no `value` is a **container**: when
+it directly holds a result that does carry a value — the route's own
+`<Agent.Result value={...}>` — the runtime merges the two while decoding the
+document. The route's value becomes the document value, its children take the
+inner result's place, and `metadata` combines: two JSON objects merge key by
+key with the container winning conflicts, any other shape lets the container
+win outright, and a container without metadata adopts the inner one. A route
+therefore keeps its result value, its `structuredContent`, and its rendered
+content whether or not a layout exists; what the layout adds is the shared
+shell around it — a heading, a trailing `Agent.Context` note, document
+metadata. Because the MCP projector exposes root metadata as the result's
+`_meta`, a layout that declares metadata does change the MCP response there;
+a layout without metadata leaves `_meta` exactly as the route authored it.
+Nested layouts merge bottom-up the same way. Metadata on either side must be
+plain JSON: a `Date`, class instance, accessor, or cyclic value fails the
+document contract under a layout exactly as it does without one.
+
+The generated worker resolves the route's element **before** the layout chain
+renders, then wraps it. That keeps failure semantics identical with and
+without a layout — a route that throws rejects the whole render (CLI exit 1
+with the route's message, MCP transport failure) instead of being downgraded
+to a represented `boundary` error beneath the layout's shell. The trade-off is
+deliberate: a layout cannot stream a `Suspense` fallback around `children`
+while the route is still running, because the route is never a lazily
+resolved Flight chunk under the layout. A `Suspense` boundary a layout places
+around its **own** content streams as usual.
+
+`route` is the stable identity baked at compile time: `id` (`tool:curator/
+inspect_sources`), `kind` (`tool`, `resource`, `prompt`, `cli`, `script`),
+`name` (the protocol-facing tool/resource/prompt name, the space-joined
+command path, or the script name), and `serverId` for MCP kinds. `signal` is
+the request abort signal. Layouts render inside the same request scope as the
+route, so `await agent()` exposes the invocation, host, session, actor,
+workspace, state, and provider axes exactly as it does in a route. The props
+type `AgentLayoutProps` ships from `@agent-bundle/runtime` (it carries React's
+`ReactNode` children); `agent-bundle` exports the React-free `AgentLayoutRoute`
+and `AgentLayoutRouteKind` identity types.
+
+The compiler validates layouts statically: a layout whose default export is
+not a function, or that carries the route contract's `config`/`inputSchema`/
+`resultSchema` exports, fails with `AB4830`; `.ts` and `.tsx` siblings for
+one scope fail with `AB4831`; a server layout whose server declares no tool,
+resource, or prompt route modules (a missing server, or one with only `apps/`)
+fails with `AB4832`, while a server pinned to `custom`, `command`, or `remote`
+via `routes.servers.<server>` skips its layout entirely. At run time a layout module that resolves to a
+non-function default export fails the request closed before rendering. The
+route-unit and projection levels of `agent-bundle/test` compose the same
+layout chain the generated workers bake, so `renderRoute('tool:...')` and
+`invokeMcpTool(...)` prove the composed document; rendering a module passed
+directly to `renderRoute()` composes no layout, because layouts are a compiler
+convention rather than a property of the module.
+
 ### Handler request context
 
 Conventional route components receive only their surface props, such as
@@ -353,7 +434,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
-[Diagnostics](diagnostics.md#route-graph-state-and-provider-conventions-ab4800ab4822-ab4940ab4942)), generates nested
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4832-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
 `dist/bin/<plugin-name>.js` with the shebang and executable bit through the
 same Rslib synthesis as every other bin. At run time the shell resolves the

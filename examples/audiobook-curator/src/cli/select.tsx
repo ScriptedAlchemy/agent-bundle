@@ -1,8 +1,8 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { CuratorDocument } from '../components/curator-document.js';
 import { selectionHeadline } from '../components/headlines.js';
 import { SelectionShelf } from '../components/library-shelf.js';
 import type { SelectionReceipt } from '../library.js';
@@ -24,11 +24,9 @@ export const resultSchema = operation.resultSchema;
 export default async function select({ input, signal }: CliRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as SelectionReceipt;
   return (
-    <CuratorDocument
-      headline={selectionHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{selectionHeadline(receipt)}</Agent.Text>
       <SelectionShelf receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

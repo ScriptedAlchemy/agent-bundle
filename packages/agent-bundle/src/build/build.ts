@@ -410,6 +410,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           options.model.scripts.filter((script) => script.targets.includes(target.name)),
           {
             cwd: options.projectRoot,
+            layouts: options.model.layouts ?? [],
             meta,
             outDir: target.root,
             providers: options.model.providers ?? [],
@@ -435,6 +436,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         eventHooks: target.hookEntries
           .filter((entry) => entry.hook.eventRoute !== undefined)
           .map((entry) => entry.hook),
+        layouts: options.model.layouts ?? [],
         meta,
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },

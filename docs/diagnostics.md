@@ -29,6 +29,7 @@ even when no error diagnostic was reported.
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
@@ -453,11 +454,12 @@ canonicalized so the model digest is root-independent.
 | `AB4925` | error | A command explicitly targets a host whose `commands` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the command's `targets`; Cursor and Claude publish command surfaces, Codex and portable do not. |
 | `AB4926` | error | Two command files share a name. | Rename one file so every command name is unique. |
 
-## Route graph, state, and provider conventions (`AB4800`–`AB4825`, `AB4940`–`AB4942`)
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4832`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
-`src/providers/*`, `src/cli/**`, `src/scripts/**`) into one immutable IR.
+`src/providers/*`, `src/cli/**`, `src/scripts/**`) and the shared layout
+modules (`src/layout.*`, `src/mcp/<server>/layout.*`) into one immutable IR.
 Discovery is not a packaging choice, so every collision is a hard **error**
 and the compiler never silently picks a side. Modules that explicit
 `scripts`, `hooks`, `bin`, `lib`, or `mcp` configuration references are
@@ -643,6 +645,9 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of the route's own generated server with a static `config.resourceUri`: an unknown name, another server's App (a generated server registers only its own Apps), or a reference from a non-MCP route. The message names the cause and lists the server's known App route ids; reference the App as `'<app>'`, `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
 | `AB4827` | error | An MCP App route's `config.template` is ambiguous or missing: both the route-relative and the project-root-relative interpretation name different existing files, or neither exists. The message names both candidate paths; templates resolve relative to the route module, so rewrite the path as `'./<file>.html'` beside the route. |
 | `AB4828` | error | A generated MCP route advertises `_meta.ui.resourceUri` of an App on its server (through `appResourceUri()` or a literal) that is not built for every target the server ships to, because the App's `config.targets` (or a config-declared App's `targets`) is narrower. Widen the App's targets or restrict `mcp.servers.<server>.targets`. |
+| `AB4830` | error | A conventional layout module (`src/layout.*`, `src/mcp/<server>/layout.*`) does not satisfy the layout contract: its default export is not a function component, it exports the route-only `config`/`inputSchema`/`resultSchema`, or it exports `execute`/`render`. Default-export one component receiving `{ children, route, signal }` that renders `Agent.Result` around `children`. |
+| `AB4831` | error | Two layout modules declare one layout scope (for example `src/layout.ts` beside `src/layout.tsx`). Keep exactly one module per scope. |
+| `AB4832` | error | A server layout (`src/mcp/<server>/layout.*`) names an MCP server that declares no tool, resource, or prompt route modules — the server directory is missing or holds only `apps/` routes, which never take a layout. Add routes under that server directory, move the layout, or rename it `_layout.*` to opt out. A server pinned to `custom`, `command`, or `remote` via `routes.servers.<server>` is skipped entirely: its layout is neither validated (`AB4830`) nor retained, because no generated worker composes it. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

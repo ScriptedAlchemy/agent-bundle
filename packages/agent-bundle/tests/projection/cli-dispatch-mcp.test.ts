@@ -31,6 +31,21 @@ describe('projected MCP tools at the CLI dispatch level', () => {
     expect(run.routeId).toBe('tool:harness/echo');
   });
 
+  it('composes the projected tool through its server layout chain, exactly like the MCP server', async () => {
+    const run = await invokeCli([
+      'harness',
+      'layout-probe',
+      '--input',
+      '{"label":"projected"}',
+    ]);
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stderr).toBe('');
+    expect(run.stdout).toBe('probe: projected\n\nlayout: tool layout-probe via mcp:harness\n');
+    expect(run.routeId).toBe('tool:harness/layout-probe');
+    expect(run.value).toEqual({ label: 'projected' });
+  });
+
   it('emits the canonical tool result under --json', async () => {
     const run = await invokeCli([
       'harness',

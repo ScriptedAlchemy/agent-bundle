@@ -3,7 +3,6 @@ import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-import { CuratorDocument } from '../components/curator-document.js';
 import { libraryAuditCliHeadline } from '../components/headlines.js';
 import { LibraryAnalysis } from '../components/library-analysis.js';
 import { DataList } from '../components/primitives.js';
@@ -45,10 +44,8 @@ export default async function LibraryAudit({ input, signal }: CliRouteProps<type
     summary.missingAlbum + summary.missingArtwork + summary.missingAuthor +
     summary.missingChapters + summary.missingTitle + summary.probeFailures;
   return (
-    <CuratorDocument
-      headline={libraryAuditCliHeadline(receipt, total)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{libraryAuditCliHeadline(receipt, total)}</Agent.Text>
       <Agent.Markdown>## Library audit</Agent.Markdown>
       <DataList fields={[
         { label: 'Files', value: summary.files },
@@ -61,6 +58,6 @@ export default async function LibraryAudit({ input, signal }: CliRouteProps<type
       <Suspense fallback={<Agent.Progress completed={0} message="Analyzing duplicate and multipart groups" />}>
         <LibraryAnalysis receipt={receipt} signal={signal} />
       </Suspense>
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

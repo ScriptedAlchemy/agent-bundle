@@ -1,7 +1,7 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { PrepareMutation } from '../../../components/mutation-receipt.js';
 import type { PrepareReceipt } from '../../../curator-core.js';
 import { defaultOutputOperations, outputOperations } from '../../../operations/output.js';
@@ -21,8 +21,9 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
     ? `Prepared audiobook output at ${receipt.output}.`
     : `Planned audiobook output at ${receipt.output}; no media was changed.`;
   return (
-    <CuratorDocument headline={headline} receipt={receipt}>
+    <Agent.Result value={receipt}>
+      <Agent.Text>{headline}</Agent.Text>
       <PrepareMutation receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

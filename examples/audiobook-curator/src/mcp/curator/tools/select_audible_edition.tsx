@@ -1,10 +1,9 @@
-import { agent } from '@agent-bundle/runtime';
+import { Agent, agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleSelectionReceipt } from '../../../audible.js';
 import { SelectionRanking } from '../../../components/candidate-ranking.js';
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { CurationShelf, ShelfUnavailable } from '../../../components/curation-shelf.js';
 import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
 import { CurationShelfStateSchema } from '../../../state.js';
@@ -37,12 +36,10 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
         />
       );
   return (
-    <CuratorDocument
-      headline={`Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{`Recorded human-reviewed Audible candidate ${receipt.candidateNumber}.`}</Agent.Text>
       <SelectionRanking receipt={receipt} />
       {shelf}
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

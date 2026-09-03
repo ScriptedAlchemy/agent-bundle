@@ -5,8 +5,9 @@ import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapt
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
+import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
+import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 
 /**
  * Generated-entry templates: the framework-provided entry files consumers
@@ -379,12 +380,83 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
 };
 
 export interface GeneratedRenderedRouteWorkerOptions {
+  readonly layouts?: readonly CompiledLayout[];
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
   readonly stateFallback?: GeneratedStateFallback;
 }
+
+/**
+ * The layouts one worker imports: only those some route of this worker
+ * composes through, ordered by id. A server layout for a server this worker
+ * never renders is left out entirely, so its module-level initialization
+ * cannot run in — or break — an unrelated CLI, script, or server process.
+ */
+const workerLayouts = (
+  layouts: readonly CompiledLayout[],
+  routes: readonly Pick<CompiledAgentRoute, 'kind' | 'serverId'>[],
+): readonly CompiledLayout[] => {
+  const applicable = new Set(routes.flatMap((route) => layoutChainFor(route, layouts)));
+  return layouts.filter((layout) => applicable.has(layout)).sort((left, right) => left.id.localeCompare(right.id));
+};
+
+const layoutImports = (layouts: readonly CompiledLayout[]): readonly string[] =>
+  layouts.map((layout, index) => `import * as layout${String(index)} from ${JSON.stringify(layout.source)};`);
+
+const layoutRecords = (layouts: readonly CompiledLayout[]): readonly string[] =>
+  layouts.map((layout, index) =>
+    `  Object.freeze({ id: ${JSON.stringify(layout.id)}, module: layout${String(index)}, source: ${JSON.stringify(layout.provenance.relativePath)} }),`);
+
+/** The generated `layouts: [...]` record field: indices into the worker's layout table, outermost first. */
+const layoutChainField = (route: CompiledAgentRoute, layouts: readonly CompiledLayout[]): string => {
+  const chain = layoutChainFor(route, layouts).map((layout) => layouts.indexOf(layout));
+  return chain.length === 0 ? '' : `, layouts: Object.freeze(${JSON.stringify(chain)})`;
+};
+
+const layoutRouteFields = (route: CompiledAgentRoute): string => [
+  `id: ${JSON.stringify(route.id)}`,
+  `kind: ${JSON.stringify(route.kind)}`,
+  `name: ${JSON.stringify(layoutRouteName(route))}`,
+  ...(route.serverId === undefined ? [] : [`serverId: ${JSON.stringify(route.serverId)}`]),
+].join(', ');
+
+/**
+ * The generated layout composition. Without layouts the route component is
+ * the Flight root, so a layout-free project renders exactly the element it
+ * rendered before this convention existed (the emitted worker source itself
+ * changes with every release and is not a compatibility surface). With
+ * layouts, one root component awaits the route's element first and then
+ * wraps it in the chain from the
+ * innermost (server) layout outward — so a throwing route still rejects the
+ * root and fails the render exactly as it does without a layout, instead of
+ * degrading into a represented boundary error below the layout's shell. Every
+ * layout receives the route's stable identity and the request signal; a
+ * layout module without a function default export fails the request closed.
+ */
+const composeLayoutsSource = (layouts: readonly CompiledLayout[]): readonly string[] => layouts.length === 0
+  ? ['const composeLayouts = (route, props) => createElement(route.module.default, props);']
+  : [
+    'const layouts = Object.freeze([',
+    ...layoutRecords(layouts),
+    ']);',
+    'const composeLayouts = (route, props, signal) => {',
+    '  const chain = route.layouts ?? [];',
+    '  if (chain.length === 0) return createElement(route.module.default, props);',
+    '  return createElement(async () => {',
+    '    let composed = await route.module.default(props);',
+    '    for (const index of [...chain].reverse()) {',
+    '      const layout = layouts[index];',
+    "      if (typeof layout.module.default !== 'function') {",
+    '        throw new TypeError(`Layout "${layout.id}" (${layout.source}) must default-export a function component.`);',
+    '      }',
+    "      composed = createElement(layout.module.default, { children: composed, route: { id: route.id, kind: route.kind, name: route.name, ...(route.serverId === undefined ? {} : { serverId: route.serverId }) }, signal });",
+    '    }',
+    '    return composed;',
+    '  });',
+    '};',
+  ];
 
 /**
  * The react-server worker behind generated CLI executables and rendered
@@ -397,6 +469,7 @@ export const generatedRenderedRouteWorkerSource = (
 ): string => {
   const providers = orderedProviders(options.providers ?? []);
   const stateFallback = options.stateFallback ?? 'cwd';
+  const layouts = workerLayouts(options.layouts ?? [], options.routes);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
@@ -405,6 +478,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...generatedStateImports(options.state, stateFallback),
     ...routeImports(options.routes),
     ...providerImports(providers),
+    ...layoutImports(layouts),
     '',
     ...generatedStateOwner(options.state, stateFallback),
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
@@ -414,9 +488,10 @@ export const generatedRenderedRouteWorkerSource = (
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
+    ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
     ...options.routes.map((route, index) =>
-      `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+      `  ${JSON.stringify(route.id)}: Object.freeze({ ${layoutRouteFields(route)}, module: route${String(index)}${layoutChainField(route, layouts)} }),`),
     '});',
     'const requests = new Map();',
     '',
@@ -449,7 +524,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     "      workspace: available({ root: cwd }, 'derived'),",
     '    }, async () => {',
-    '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
+    '      const flight = renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
     '      const reader = flight.getReader();',
     '      while (true) {',
     '        const next = await reader.read();',
@@ -528,6 +603,7 @@ export interface GeneratedRouteMcpEntryOptions {
 export interface GeneratedRouteFlightWorkerOptions {
   readonly artifactEpoch: string;
   readonly eventRoutes?: readonly NormalizedHook[];
+  readonly layouts?: readonly CompiledLayout[];
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
@@ -548,9 +624,20 @@ const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly Co
 const routeImports = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
   routes.map((route, index) => `import * as route${String(index)} from ${JSON.stringify(route.source)};`);
 
-const routeRecords = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
-  routes.map((route, index) =>
-    `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))} }),`);
+/**
+ * The compiled route table. The entry-side table registers routes; the
+ * worker-side table (`worker` set) additionally carries each route's layout
+ * chain and owning server so layouts receive stable route identity.
+ */
+const routeRecords = (
+  routes: readonly CompiledAgentRoute[],
+  worker?: { readonly layouts: readonly CompiledLayout[] },
+): readonly string[] =>
+  routes.map((route, index) => {
+    const layoutFields = worker === undefined ? '' : layoutChainField(route, worker.layouts);
+    const serverField = worker === undefined || route.serverId === undefined ? '' : `, serverId: ${JSON.stringify(route.serverId)}`;
+    return `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}${layoutFields}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))}${serverField} }),`;
+  });
 
 const noticeInboxImport = (state: NormalizedStateDefinition | undefined): readonly string[] =>
   state === undefined
@@ -648,6 +735,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
   const routes = executableMcpRoutes(options.routes);
   const eventRoutes = options.eventRoutes ?? [];
   const providers = orderedProviders(options.providers ?? []);
+  const layouts = workerLayouts(options.layouts ?? [], routes);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
@@ -658,6 +746,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
     ...providerImports(providers),
+    ...layoutImports(layouts),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
@@ -667,8 +756,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...generatedStateOwner(options.state, 'artifact'),
     ...providerRegistrySource(providers),
+    ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
-    ...routeRecords(routes),
+    ...routeRecords(routes, { layouts }),
     ...noticeInboxRecord(options.state),
     ...eventRouteRecords(eventRoutes, routes.length),
     '});',
@@ -705,7 +795,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
     '        : { input: message.invocation.props.input, signal: controller.signal };',
-    '      const flight = renderAgentFlight(createElement(route.module.default, props), { signal: controller.signal });',
+    '      const flight = renderAgentFlight(composeLayouts(route, props, controller.signal), { signal: controller.signal });',
     '      return new Uint8Array(await new Response(flight).arrayBuffer());',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',

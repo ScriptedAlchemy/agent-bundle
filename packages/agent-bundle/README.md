@@ -18,6 +18,8 @@ agent-bundle dev --root .
 
 `inspect` reads source configuration; use `validate --artifact artifact` for source-free artifact validation. `dev.runtime.provider` is an advanced optional extension: a normal project starts the dev server and Workbench without loading an RSC provider.
 
+The artifact root defaults to `artifact` for the `agent-bundle build` and `agent-bundle prepack` commands (they also emit the npm package build into `dist/`) and to `dist` for the programmatic `build()` API; set `output: { distPath: '<path>' }` in `agent-bundle.config.ts` to relocate it (Rsbuild/Rslib naming, string shorthand only) — `--output` still wins per invocation. See [Framework mode](../../docs/framework-mode.md#output).
+
 Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }` raises
 that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
 artifact manifest.

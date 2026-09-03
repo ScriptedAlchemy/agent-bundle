@@ -38,7 +38,7 @@ import {
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
 } from './entry-shell.ts';
-import { emptyRouteConfig, type CompiledProvider } from '../routes/types.ts';
+import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import { buildWithRslib } from './rslib.ts';
@@ -158,6 +158,7 @@ export const compileEntries = async (
   entries: readonly NormalizedScript[],
   options: {
     readonly cwd: string;
+    readonly layouts?: readonly CompiledLayout[];
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly providers?: readonly CompiledProvider[];
@@ -178,6 +179,7 @@ export const compileEntries = async (
         const workerSourceInputs = Object.freeze([...new Set([
           ...sourceInputs,
           ...(options.providers ?? []).map((provider) => provider.source),
+          ...(options.layouts ?? []).map((layout) => layout.source),
         ])]);
         // A rendered script route (#102 stage 3): the entry projects the
         // dispatcher's render-event stream onto the CLI output contract and
@@ -205,6 +207,7 @@ export const compileEntries = async (
             source,
             sourceInputs: workerSourceInputs,
             virtualSource: generatedRenderedRouteWorkerSource({
+              ...(options.layouts === undefined ? {} : { layouts: options.layouts }),
               ...(options.providers === undefined ? {} : { providers: options.providers }),
               routes: [{
                 config: emptyRouteConfig,
@@ -317,6 +320,7 @@ export const compileMcpEntries = async (
     readonly artifactEpoch: string;
     readonly cwd: string;
     readonly eventHooks: readonly NormalizedHook[];
+    readonly layouts?: readonly CompiledLayout[];
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
@@ -369,6 +373,7 @@ export const compileMcpEntries = async (
       : generatedRouteFlightWorkerSource({
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
         eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        layouts: options.layouts ?? [],
         providers: options.providers ?? [],
         routes: server.generatedRoutes,
         serverName: server.name,

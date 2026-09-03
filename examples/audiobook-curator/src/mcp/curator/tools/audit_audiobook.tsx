@@ -1,8 +1,8 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
 import { ChapterOutline, chaptersFromAuditReceipt } from '../../../components/chapter-outline.js';
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { integrityAuditHeadline } from '../../../components/headlines.js';
 import { IntegrityAuditReport } from '../../../components/integrity-report.js';
 import type { IntegrityAuditReceipt } from '../../../integrity-audit.js';
@@ -21,12 +21,10 @@ export const resultSchema = operation.resultSchema;
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as IntegrityAuditReceipt;
   return (
-    <CuratorDocument
-      headline={integrityAuditHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{integrityAuditHeadline(receipt)}</Agent.Text>
       <IntegrityAuditReport receipt={receipt} />
       <ChapterOutline chapters={chaptersFromAuditReceipt(receipt)} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

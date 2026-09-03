@@ -21,6 +21,7 @@ export { appRouteTemplatePath, resolveAppRouteTemplate } from './app-template.ts
 export type { AppRouteTemplateResolution } from './app-template.ts';
 export { inspectRouteGraph } from './inspect.ts';
 export type { RouteGraphInspection } from './inspect.ts';
+export { isLayoutRouteKind, layoutChainFor, layoutRouteName } from './layouts.ts';
 export { emptyRouteConfig } from './types.ts';
 export type {
   CapabilityEvidence,
@@ -30,6 +31,8 @@ export type {
   CompiledCliMode,
   CompiledCliOption,
   CompiledCliSurface,
+  CompiledLayout,
+  CompiledLayoutScope,
   CompiledProvider,
   CompiledRouteGraph,
   CompiledRouteKind,
@@ -41,6 +44,7 @@ export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './t
 export {
   scanRouteModuleExports,
   validateEventRouteModuleContract,
+  validateLayoutModuleContract,
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
@@ -55,6 +59,8 @@ export type {
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
   AppRouteConfig,
