@@ -95,4 +95,10 @@ Run these from the repository root. `pnpm examples:check` validates and builds e
 
 ## Status
 
-Pre-release. The final npm package name and license are not yet chosen; pkg.pr.new previews are the release channel until then.
+Pre-release. The final npm package name is not yet chosen; pkg.pr.new previews are the release channel until then.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party material in this
+repository (the Workbench MCP App renderer derived from the MIT-licensed MCP Inspector) is covered by
+its own notices in [packages/workbench/THIRD_PARTY_NOTICES](packages/workbench/THIRD_PARTY_NOTICES).

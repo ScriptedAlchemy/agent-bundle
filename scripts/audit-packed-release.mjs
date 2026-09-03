@@ -7,10 +7,12 @@ import { promisify } from 'node:util';
 
 import { npmCliInvocation } from './npm-cli.mjs';
 import { packOutputFromJson as sharedPackOutputFromJson } from './npm-pack-json.mjs';
+import { licenseFiles, publishablePackageDirectories } from './sync-license-files.mjs';
 
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageRoot = join(repositoryRoot, 'packages', 'agent-bundle');
+const projectLicense = 'Apache-2.0';
 const { NODE_PATH: _nodePath, ...productionEnvironment } = process.env;
 const npmCli = npmCliInvocation(productionEnvironment);
 const execNpm = (args, options) => execFile(npmCli.command, [...npmCli.args, ...args], options);
@@ -147,7 +149,40 @@ const validateSbom = (sbom, productManifest, installedPackages) => {
   }
 };
 
+/**
+ * Every publishable tarball must declare the project license and carry the
+ * root LICENSE and NOTICE byte-for-byte; npm's implicit inclusion is not
+ * trusted because the package copies are build outputs that may be stale.
+ */
+const validateLicenseFiles = async (packOutput, packageDirectory) => {
+  const manifest = JSON.parse(await readFile(join(repositoryRoot, packageDirectory, 'package.json'), 'utf8'));
+  if (manifest.license !== projectLicense) {
+    fail(`${packageDirectory} package.json must declare "license": "${projectLicense}"`);
+  }
+  if (!Array.isArray(packOutput.files)) fail(`${packageDirectory} npm pack did not list tarball files`);
+  const packedPaths = new Set(packOutput.files.map((file) => asRecord(file, 'pack file must be an object').path));
+  for (const file of licenseFiles) {
+    if (!packedPaths.has(file)) fail(`${packageDirectory} tarball is missing ${file}`);
+    const [expected, actual] = await Promise.all([
+      readFile(join(repositoryRoot, file), 'utf8'),
+      readFile(join(repositoryRoot, packageDirectory, file), 'utf8').catch(() => fail(`${packageDirectory}/${file} is not readable`)),
+    ]);
+    if (expected !== actual) fail(`${packageDirectory}/${file} differs from the repository root ${file}`);
+  }
+};
+
+const auditLicenseFiles = async () => {
+  for (const packageDirectory of publishablePackageDirectories) {
+    const packOutput = packOutputFromJson((await execNpm(['pack', '--dry-run', '--json'], {
+      cwd: join(repositoryRoot, packageDirectory),
+      env: productionEnvironment,
+    })).stdout);
+    await validateLicenseFiles(packOutput, packageDirectory);
+  }
+};
+
 const auditPackedRelease = async () => {
+  await auditLicenseFiles();
   const auditRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-release-audit-'));
 
   try {

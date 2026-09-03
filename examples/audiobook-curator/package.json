@@ -2,6 +2,7 @@
   "name": "@agent-bundle-example/audiobook-curator",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "A complete framework-mode Claude and Codex audiobook-curation plugin, CLI, Skill, and MCP server.",
   "type": "module",
   "engines": {
