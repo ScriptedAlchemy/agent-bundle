@@ -410,7 +410,10 @@ export class McpProbeService {
    * When the cap wins the race and the removal then fails — the transport is
    * still alive and holds the directory, which on Windows is an `EPERM` — one
    * more removal is chained to the teardown's eventual settlement instead of
-   * swallowing the failure for good; `settle()` fences that retry too.
+   * swallowing the failure for good. That retry is best-effort and stays
+   * outside the `settle()` fence on purpose: a transport that never settles
+   * would otherwise hold Workbench shutdown open indefinitely, which is the
+   * very case the cap bounds.
    */
   #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
     let cap: NodeJS.Timeout | undefined;
@@ -431,15 +434,11 @@ export class McpProbeService {
       })
       .then(() => undefined, () => {
         if (!capWon) return;
-        this.#track(teardown.then(() => removePluginData(pluginData)).then(() => undefined, () => undefined));
+        void teardown.then(() => removePluginData(pluginData)).catch(() => undefined);
       });
-    this.#track(pending);
-    return pending;
-  }
-
-  #track(pending: Promise<void>): void {
     this.#pendingTeardowns.add(pending);
     void pending.then(() => this.#pendingTeardowns.delete(pending));
+    return pending;
   }
 
   #runtime(host: McpProbeHost): TargetMcpRuntimeContract {

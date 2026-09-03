@@ -650,19 +650,34 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
     await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).resolves.toBe('present');
 
-    let settled = false;
-    const settle = service.settle().then(() => { settled = true; });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
-    // A capped-and-failed removal is not "done": shutdown still waits on the retry.
-    expect(settled).toBe(false);
+    // The fence stays bounded by the cap: a transport that never settles must
+    // not hold Workbench shutdown open, so settle() resolves with the retry
+    // still outstanding.
+    await Promise.race([
+      service.settle(),
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error('settle() waited on the stalled transport past the cap.')),
+        500,
+      ).unref()),
+    ]);
+    events.push('settled');
+    await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).resolves.toBe('present');
 
-    // The transport finishes closing and releases the directory; the chained
-    // retry removes it and only then does the fence resolve.
+    // Once the transport finishes closing and releases the directory, the
+    // best-effort retry chained to that settlement removes it.
     await chmod(parent, 0o755);
     releaseClose();
-    await settle;
-    events.push('settled');
-    expect(events).toEqual(['transport-closed', 'settled']);
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      try {
+        await readFile(join(pluginData, 'proof.txt'), 'utf8');
+      } catch {
+        break;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    }
+    events.push('plugin-data-removed');
+    expect(events).toEqual(['settled', 'transport-closed', 'plugin-data-removed']);
     await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await chmod(parent, 0o755).catch(() => undefined);
