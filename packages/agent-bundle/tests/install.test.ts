@@ -713,6 +713,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
     for (const files of [
       ['..\\outside'], ['../outside'], ['/etc/passwd'], ['a//b'], ['./x'], ['C:/x'], [installReceiptFile],
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
+      ['state/plugin.sqlite'], ['state'],
     ]) {
       await writeJson(join(root, installReceiptFile), {
         contentHash: 'abc',

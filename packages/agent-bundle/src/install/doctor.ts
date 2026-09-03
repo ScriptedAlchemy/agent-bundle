@@ -829,12 +829,13 @@ const publicHostInventory = (
         !isRecord(row) ||
         typeof row['id'] !== 'string' ||
         typeof row['installPath'] !== 'string' ||
+        typeof row['scope'] !== 'string' ||
         typeof row['version'] !== 'string'
       ) {
-        return unknown('a row lacks id, installPath, or version');
+        return unknown('a row lacks id, installPath, scope, or version');
       }
       findings.push({
-        entry: typeof row['scope'] === 'string' ? `${row['id']} (${row['scope']})` : row['id'],
+        entry: `${row['id']} (${row['scope']})`,
         name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
         path: row['installPath'],
         state: 'installed',

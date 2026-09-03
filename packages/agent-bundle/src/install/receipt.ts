@@ -132,8 +132,8 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
   };
   for (const name of sortNames(await readdir(root))) {
     if (name === installReceiptFile) {
-      // The receipt is deletion authority; it is skipped from the hash but may never be a link.
-      if ((await lstat(join(root, name))).isSymbolicLink()) throw unsupportedEntry(name);
+      // The receipt is deletion authority; it is skipped from the hash but must be a regular file.
+      if (!(await lstat(join(root, name))).isFile()) throw unsupportedEntry(name);
       continue;
     }
     // Runtime-owned roots (`state/`) are never plugin content: not hashed, not installed, not owned,
@@ -247,6 +247,8 @@ export const isReceiptPath = (value: unknown): value is string =>
   value !== installReceiptFile &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
+  // Runtime roots are never installer-owned, whatever a receipt claims.
+  !preservedRuntimeEntries.includes(value.split('/')[0] ?? '') &&
   value.split('/').every((segment) =>
     segment !== '' &&
     segment !== '.' &&
@@ -261,14 +263,15 @@ const isReceiptFileList = (value: unknown): value is readonly string[] =>
 
 /**
  * Reads the receipt at a plugin root; malformed or unsafe receipts read as
- * absent. A receipt that is a symbolic link is refused outright: it would let
- * another file supply the owned-file list that drives deletions.
+ * absent. A receipt that is not a regular file (a symbolic link, a FIFO, a
+ * device) is refused outright before it is read: it would let another file
+ * supply the owned-file list that drives deletions, or block the read.
  */
 export const readInstallReceipt = async (destination: string): Promise<InstallReceipt | undefined> => {
   const path = join(destination, installReceiptFile);
   let value: unknown;
   try {
-    if ((await lstat(path)).isSymbolicLink()) throw unsupportedEntry(installReceiptFile);
+    if (!(await lstat(path)).isFile()) throw unsupportedEntry(installReceiptFile);
     value = JSON.parse(await readFile(path, 'utf8')) as unknown;
   } catch (error) {
     if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
