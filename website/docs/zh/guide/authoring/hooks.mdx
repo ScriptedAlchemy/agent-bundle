@@ -224,12 +224,15 @@ Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的
 npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact dist --target claude
 npx agent-bundle hooks simulate --artifact dist --target claude \
-  --hook session-start-session-start-1a2b3c4d \
+  --hook session-start-session-start-7ab7e8a5 \
   --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
 ```
 
 `--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为
 `<event>-<handler>-<hash>`，因此像 `session-start` 这样的裸事件名不会匹配任何钩子。
+`session-start-session-start-7ab7e8a5` 正是本页开头那段声明所产生的名称；哈希覆盖事件、处理器路径、
+targets、tools、timeout 与 args，因此声明的任何改动都会得到新名称——要复制的永远是 `hooks list`
+为你的构建打印出的那一个。
 载荷是**规范**输入；包装层会把它转换为宿主的原生信封并按宿主的方式校验，所以 Claude 的
 `sessionStart` 模拟需要 `sessionId`、`transcriptPath`、`cwd` 与 `source`（工具事件还需要
 `toolName`、`toolInput` 与 `toolUseId`）。
