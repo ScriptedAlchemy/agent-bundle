@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@rstest/core';
 
 import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AGENT_NOTICE_INBOX_URI,
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
@@ -108,7 +109,8 @@ describe('notice inbox resources/updated signaller', () => {
 
     const published = await publish(ledger, { sessionId: 's1' });
     const first = await signaller.observe(send);
-    expect(first).toEqual({ kind: 'signalled', noticeIds: [published.notice.id], revision: 2 });
+    // Two commits per signal: the reservation, then the receipt after the send.
+    expect(first).toEqual({ kind: 'signalled', noticeIds: [published.notice.id], revision: 3 });
     expect(sends).toHaveLength(1);
 
     const afterSignal = (await ledger.read()).notices.find((notice) => notice.id === published.notice.id);
@@ -364,27 +366,70 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
-  it('claims the durable budget before the wire write, so a failed send never frees a second signal', async () => {
+  it('records availability only after the wire write succeeds and releases a failed send', async () => {
     const { driver, ledger } = await openLedger();
     const signaller = signallerOver(ledger);
     await signaller.subscribe(principal('s1'));
     await publish(ledger, { sessionId: 's1' });
 
     let sends = 0;
+    let transportUp = false;
     const send = async (): Promise<void> => {
       sends += 1;
-      throw new Error('transport closed');
+      // The slot is held, not spent, while the write is in flight.
+      const held = (await ledger.read()).notices[0];
+      expect(held).not.toHaveProperty('availability');
+      expect(held?.availabilityReservation).toMatchObject({ at: T1 });
+      if (!transportUp) throw new Error('transport closed');
     };
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'failed', stage: 'send' });
     expect(sends).toBe(1);
-    // The receipt records the attempt this connection made; the notice stays
-    // pending and readable through the inbox, and the default budget is spent.
-    expect((await ledger.read()).notices[0]).toMatchObject({ availability: { count: 1 }, state: 'pending' });
+    // A failed protocol write is not availability: no receipt, no budget spent,
+    // and the reservation is released so the notice is eligible again.
+    const afterFailure = (await ledger.read()).notices[0];
+    expect(afterFailure).toMatchObject({ state: 'pending' });
+    expect(afterFailure).not.toHaveProperty('availability');
+    expect(afterFailure).not.toHaveProperty('availabilityReservation');
+
+    transportUp = true;
+    await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
+    expect(sends).toBe(2);
+    const afterSuccess = (await ledger.read()).notices[0];
+    expect(afterSuccess).toMatchObject({ availability: { channel: 'mcp-resource-updated', count: 1, firstAt: T1, lastAt: T1 } });
+    expect(afterSuccess).not.toHaveProperty('availabilityReservation');
+    // The default budget of one is now spent, durably, across restarts.
     await expect(signaller.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
     const restarted = signallerOver(ledger);
     await restarted.subscribe(principal('s1'));
     await expect(restarted.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
-    expect(sends).toBe(1);
+    expect(sends).toBe(2);
+    await driver.close();
+  });
+
+  it('treats a reservation as held until its TTL elapses, then as abandoned', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publish(ledger, { sessionId: 's1' });
+    // A holder that reserved and then crashed before finalizing or releasing.
+    await ledger.reserveAvailability({
+      at: T1,
+      idempotencyKey: 'reserve:crashed',
+      noticeIds: [published.notice.id],
+      reservationKey: 'crashed-holder:1',
+    });
+    const { send, sends } = sender();
+    const withinTtl = signallerOver(ledger, () => new Date(Date.parse(T1) + 1_000));
+    await withinTtl.subscribe(principal('s1'));
+    await expect(withinTtl.observe(send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(sends).toEqual([]);
+
+    const afterTtl = signallerOver(ledger, () => new Date(Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS));
+    await afterTtl.subscribe(principal('s1'));
+    await expect(afterTtl.observe(send)).resolves.toMatchObject({ kind: 'signalled' });
+    expect(sends).toHaveLength(1);
+    const notice = (await ledger.read()).notices[0];
+    expect(notice?.availability).toMatchObject({ count: 1 });
+    // The stale hold was superseded and cleared by the successful signal.
+    expect(notice).not.toHaveProperty('availabilityReservation');
     await driver.close();
   });
 
@@ -393,9 +438,9 @@ describe('notice inbox resources/updated signaller', () => {
     await publish(ledger, { sessionId: 's1' });
     const { send, sends } = sender();
 
-    // Process B reads the ledger before process A claims, then stalls until
+    // Process B reads the ledger before process A reserves, then stalls until
     // A has committed: its compare-and-swap must lose and its re-read must
-    // find the budget already spent.
+    // find the slot spent (A's receipt) or still held (A's reservation).
     let releaseB: () => void = () => undefined;
     const aDone = new Promise<void>((resolve) => {
       releaseB = resolve;
@@ -463,6 +508,8 @@ describe('notice inbox resources/updated signaller', () => {
       expire: reject,
       openRequest: reject,
       read: reject,
+      releaseAvailability: reject,
+      reserveAvailability: reject,
       signalAvailability: reject,
       withdraw: reject,
     });

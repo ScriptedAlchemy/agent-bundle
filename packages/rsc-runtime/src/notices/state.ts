@@ -76,6 +76,11 @@ const availabilitySchema = z.object({
   lastAt: z.string().min(1),
 }).strict().readonly();
 
+const availabilityReservationSchema = z.object({
+  at: z.string().min(1),
+  key: z.string().min(1),
+}).strict().readonly();
+
 const acknowledgementSchema = z.object({
   acknowledgedAt: z.string().min(1),
   invocationId: z.string().min(1),
@@ -85,6 +90,7 @@ const noticeSchema = z.object({
   acknowledgement: acknowledgementSchema.optional(),
   attempts: z.array(attemptSchema).readonly(),
   availability: availabilitySchema.optional(),
+  availabilityReservation: availabilityReservationSchema.optional(),
   content: documentSchema,
   createdAt: z.string().min(1),
   dedupeKey: z.string().min(1).optional(),
@@ -122,10 +128,20 @@ export const agentNoticeEventSchemas = {
     principal: principalSchema,
     unavailableIds: z.array(z.string().min(1)),
   }).strict(),
+  'availability-released': z.object({
+    noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1),
+  }).strict(),
+  'availability-reserved': z.object({
+    at: z.string().min(1),
+    noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1),
+  }).strict(),
   'availability-signalled': z.object({
     at: z.string().min(1),
     channel: z.literal('mcp-resource-updated'),
     noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1).optional(),
   }).strict(),
   exposed: z.object({
     at: z.string().min(1),
@@ -245,9 +261,52 @@ const transitionAcknowledgement = (
   }
 };
 
+/** Strips the reservation when `reservationKey` is absent or matches the holder's key. */
+const withoutReservation = (notice: AgentNotice, reservationKey: string | undefined): AgentNotice => {
+  if (notice.availabilityReservation === undefined) return notice;
+  if (reservationKey !== undefined && notice.availabilityReservation.key !== reservationKey) return notice;
+  const { availabilityReservation: _released, ...rest } = notice;
+  return Object.freeze(rest);
+};
+
 const transitionAvailability = (
   notice: AgentNotice,
-  input: { readonly at: string; readonly noticeIds: ReadonlySet<string> },
+  input: { readonly at: string; readonly noticeIds: ReadonlySet<string>; readonly reservationKey: string | undefined },
+): AgentNotice => {
+  if (!input.noticeIds.has(notice.id)) return notice;
+  switch (notice.state) {
+    case 'pending':
+    case 'attempted':
+      return Object.freeze({
+        ...withoutReservation(notice, input.reservationKey),
+        availability: Object.freeze({
+          channel: 'mcp-resource-updated' as const,
+          count: (notice.availability?.count ?? 0) + 1,
+          firstAt: notice.availability?.firstAt ?? input.at,
+          lastAt: input.at,
+        }),
+      });
+    case 'expired':
+    case 'unavailable':
+    case 'withdrawn':
+    case 'acknowledged':
+      return notice;
+    default: {
+      const exhaustive: never = notice.state;
+      return exhaustive;
+    }
+  }
+};
+
+/**
+ * Holds a budget slot without spending it. A live notice may carry one
+ * reservation; a newer reserver replaces an older one outright because the
+ * ledger cannot tell abandoned from slow, so the signaller decides staleness
+ * by `at` against the reservation TTL before it ever reserves.
+ */
+const transitionAvailabilityReservation = (
+  notice: AgentNotice,
+  input: { readonly at: string; readonly noticeIds: ReadonlySet<string>; readonly reservationKey: string },
 ): AgentNotice => {
   if (!input.noticeIds.has(notice.id)) return notice;
   switch (notice.state) {
@@ -255,12 +314,7 @@ const transitionAvailability = (
     case 'attempted':
       return Object.freeze({
         ...notice,
-        availability: Object.freeze({
-          channel: 'mcp-resource-updated' as const,
-          count: (notice.availability?.count ?? 0) + 1,
-          firstAt: notice.availability?.firstAt ?? input.at,
-          lastAt: input.at,
-        }),
+        availabilityReservation: Object.freeze({ at: input.at, key: input.reservationKey }),
       });
     case 'expired':
     case 'unavailable':
@@ -425,7 +479,26 @@ export const agentNoticeStateDefinition = (
             notices: state.notices.map((notice) => transitionAvailability(notice, {
               at: event.payload.at,
               noticeIds,
+              reservationKey: event.payload.reservationKey,
             })),
+          };
+        }
+        case 'availability-reserved': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => transitionAvailabilityReservation(notice, {
+              at: event.payload.at,
+              noticeIds,
+              reservationKey: event.payload.reservationKey,
+            })),
+          };
+        }
+        case 'availability-released': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => noticeIds.has(notice.id)
+              ? withoutReservation(notice, event.payload.reservationKey)
+              : notice),
           };
         }
         default: {

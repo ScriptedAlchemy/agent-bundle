@@ -8,6 +8,7 @@
  * transactions, revisions, and idempotency.
  */
 export {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
 } from './contract.js';
@@ -19,6 +20,9 @@ export type {
   AgentNoticeAuthorizationRequest,
   AgentNoticeAuthorizer,
   AgentNoticeAvailability,
+  AgentNoticeAvailabilityReleaseOptions,
+  AgentNoticeAvailabilityReservation,
+  AgentNoticeAvailabilityReservationOptions,
   AgentNoticeAvailabilitySignalOptions,
   AgentNoticeDelivery,
   AgentNoticeErrorCode,

@@ -858,6 +858,71 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
     await driver.close();
   });
+
+  it('holds a budget slot with a reservation that finalizes into a receipt or releases without one', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    const revision = (await ledger.read()).revision;
+    const reserved = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      expectedRevision: revision,
+      idempotencyKey: 'reserve:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    // Reserving spends nothing and is guarded by the same compare-and-swap.
+    expect(reserved.notices[0]).toMatchObject({ availabilityReservation: { at: '2026-09-01T19:04:00.000Z', key: 'holder-a:1' } });
+    expect(reserved.notices[0]).not.toHaveProperty('availability');
+    await expect(ledger.reserveAvailability({
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: revision,
+      idempotencyKey: 'reserve:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    })).rejects.toMatchObject({ code: 'revision-conflict' });
+
+    // Releasing with another holder's key leaves the hold intact; the owner's key clears it.
+    const foreignRelease = await ledger.releaseAvailability({
+      idempotencyKey: 'release:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(foreignRelease.notices[0]?.availabilityReservation).toMatchObject({ key: 'holder-a:1' });
+    const released = await ledger.releaseAvailability({
+      idempotencyKey: 'release:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(released.notices[0]).not.toHaveProperty('availabilityReservation');
+    expect(released.notices[0]).not.toHaveProperty('availability');
+
+    // A successful send finalizes: the receipt lands and the hold is cleared together.
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'reserve:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    const signalled = await ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    expect(signalled.notices[0]?.availability).toMatchObject({ count: 1, firstAt: '2026-09-01T19:05:00.000Z' });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    for (const invalid of [
+      () => ledger.reserveAvailability({ at: 'never', idempotencyKey: 'x', noticeIds: [id], reservationKey: 'k' }),
+      () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'y', noticeIds: [], reservationKey: 'k' }),
+      () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'z', noticeIds: [id], reservationKey: ' ' }),
+      () => ledger.releaseAvailability({ idempotencyKey: 'w', noticeIds: [id], reservationKey: '' }),
+    ]) {
+      await expect(invalid()).rejects.toMatchObject({ code: 'invalid-input' });
+    }
+    await driver.close();
+  });
 });
 
 describe('notice delivery route selection', () => {

@@ -92,6 +92,8 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
       }),
     }),
     read: reject,
+    releaseAvailability: reject,
+    reserveAvailability: reject,
     signalAvailability: reject,
     withdraw: reject,
   });

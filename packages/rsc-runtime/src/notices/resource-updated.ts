@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { AgentStateError } from '../state/index.js';
 import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AgentNoticeError,
   type AgentNotice,
   type AgentNoticeLedger,
@@ -9,7 +10,7 @@ import {
 } from './contract.js';
 import { recipientMatchesPrincipal } from './state.js';
 
-/** Consecutive compare-and-swap losses tolerated before a claim reports failure. */
+/** Consecutive compare-and-swap losses tolerated before a reservation reports failure. */
 const MAX_CLAIM_ATTEMPTS = 4;
 
 const isRevisionConflict = (error: unknown): boolean =>
@@ -112,6 +113,13 @@ const eligibleForSignal = (
   // Not due yet: evaluated only on completed renders; V1 never implies a timer.
   if (notice.nextAttemptAt !== undefined && Date.parse(notice.nextAttemptAt) > nowMs) return false;
   if ((notice.availability?.count ?? 0) >= (notice.retryBudget ?? 1)) return false;
+  // Another signaller holds the slot for a send in progress. A hold older than
+  // the TTL belongs to a holder that never finalized or released (crashed
+  // mid-send) and no longer blocks anyone.
+  const reservation = notice.availabilityReservation;
+  if (reservation !== undefined && Date.parse(reservation.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > nowMs) {
+    return false;
+  }
   return recipientMatchesPrincipal(notice.recipient, principal);
 };
 
@@ -138,18 +146,26 @@ export const createNoticeInboxSignaller = (
   };
 
   /**
-   * Claims the budget for every newly eligible notice as one compare-and-swap
-   * against the revision the eligibility was computed from. Two server
-   * processes over one durable store therefore cannot both spend a notice's
-   * single signal: the loser sees `revision-conflict`, re-reads, and finds the
-   * count already at budget. A bounded number of conflicts is retried because
-   * unrelated writers (publishes, exposures) also move the revision.
+   * Reserves the budget slot of every newly eligible notice as one
+   * compare-and-swap against the revision the eligibility was computed from.
+   * Two server processes over one durable store therefore cannot both send for
+   * a notice's single slot: the loser sees `revision-conflict`, re-reads, and
+   * finds the slot reserved. The reservation spends nothing; the receipt is
+   * recorded only after the protocol write succeeds. A bounded number of
+   * conflicts is retried because unrelated writers (publishes, exposures) also
+   * move the revision.
    */
   const claim = async (
     ledger: AgentNoticeLedger,
     current: InboxSubscription,
   ): Promise<
-    | { readonly at: string; readonly kind: 'claimed'; readonly noticeIds: readonly string[]; readonly revision: number }
+    | {
+      readonly at: string;
+      readonly kind: 'claimed';
+      readonly noticeIds: readonly string[];
+      readonly reservationKey: string;
+      readonly revision: number;
+    }
     | { readonly kind: 'nothing-eligible'; readonly revision: number }
     | { readonly kind: 'unsubscribed' }
     | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' }
@@ -170,14 +186,16 @@ export const createNoticeInboxSignaller = (
         .toSorted((left, right) => left.localeCompare(right)));
       if (noticeIds.length === 0) return { kind: 'nothing-eligible', revision: snapshot.revision };
       signalSequence += 1;
+      const reservationKey = `${current.id}:${String(signalSequence)}`;
       try {
-        const committed = await ledger.signalAvailability({
+        const committed = await ledger.reserveAvailability({
           at,
           expectedRevision: snapshot.revision,
-          idempotencyKey: `agent-notices:availability:${current.id}:${String(signalSequence)}`,
+          idempotencyKey: `agent-notices:availability:reserve:${reservationKey}`,
           noticeIds,
+          reservationKey,
         });
-        return { at, kind: 'claimed', noticeIds, revision: committed.revision };
+        return { at, kind: 'claimed', noticeIds, reservationKey, revision: committed.revision };
       } catch (error) {
         if (!isRevisionConflict(error)) return { error, kind: 'failed', stage: 'record' };
       }
@@ -185,7 +203,7 @@ export const createNoticeInboxSignaller = (
     return {
       error: new AgentNoticeError(
         'invalid-input',
-        `Notice availability claim lost ${String(MAX_CLAIM_ATTEMPTS)} consecutive revision races`,
+        `Notice availability reservation lost ${String(MAX_CLAIM_ATTEMPTS)} consecutive revision races`,
       ),
       kind: 'failed',
       stage: 'record',
@@ -221,17 +239,38 @@ export const createNoticeInboxSignaller = (
         return exhaustive;
       }
     }
-    // The budget is spent durably before the wire write so no other process
-    // can spend it too; a transport failure here leaves the notice pending and
-    // readable through the inbox, and the receipt honestly records that this
-    // connection attempted the signal.
-    for (const id of claimed.noticeIds) current.signalled.add(id);
+    // The slot is held durably before the wire write so no other process sends
+    // for it too, but nothing is spent yet: a failed send releases the hold and
+    // the notice stays eligible for the next observation, while a successful
+    // send finalizes the hold into the availability receipt. Only the receipt
+    // means the protocol write succeeded.
     try {
       await send();
     } catch (error) {
+      try {
+        await ledger.releaseAvailability({
+          idempotencyKey: `agent-notices:availability:release:${claimed.reservationKey}`,
+          noticeIds: claimed.noticeIds,
+          reservationKey: claimed.reservationKey,
+        });
+      } catch {
+        // The hold expires on its own after the reservation TTL; the send
+        // failure is the outcome worth reporting.
+      }
       return Object.freeze({ error, kind: 'failed' as const, stage: 'send' as const });
     }
-    return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: claimed.revision });
+    for (const id of claimed.noticeIds) current.signalled.add(id);
+    try {
+      const committed = await ledger.signalAvailability({
+        at: claimed.at,
+        idempotencyKey: `agent-notices:availability:signal:${claimed.reservationKey}`,
+        noticeIds: claimed.noticeIds,
+        reservationKey: claimed.reservationKey,
+      });
+      return Object.freeze({ kind: 'signalled', noticeIds: claimed.noticeIds, revision: committed.revision });
+    } catch (error) {
+      return Object.freeze({ error, kind: 'failed' as const, stage: 'record' as const });
+    }
   };
 
   return Object.freeze({

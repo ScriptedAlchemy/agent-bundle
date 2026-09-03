@@ -18,6 +18,8 @@ import {
   type AgentNoticeAuthorizationDecision,
   type AgentNoticeAuthorizationRequest,
   type AgentNoticeAuthorizer,
+  type AgentNoticeAvailabilityReleaseOptions,
+  type AgentNoticeAvailabilityReservationOptions,
   type AgentNoticeAvailabilitySignalOptions,
   type AgentNoticeDelivery,
   type AgentNoticeExpiryOptions,
@@ -76,6 +78,20 @@ const timestamp = (value: string, label: string): string => {
     throw new AgentNoticeError('invalid-input', `${label} must be an ISO-8601 timestamp`);
   }
   return value;
+};
+
+const availabilityNoticeIds = (noticeIds: readonly string[]): string[] => {
+  if (noticeIds.length === 0) {
+    throw new AgentNoticeError('invalid-input', 'Notice availability requires at least one notice id');
+  }
+  return noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
+};
+
+const availabilityExpectedRevision = (expectedRevision: number | undefined): number | undefined => {
+  if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) {
+    throw new AgentNoticeError('invalid-input', 'Notice availability expectedRevision must be a non-negative integer');
+  }
+  return expectedRevision;
 };
 
 const priority = (value: AgentNoticePublishInput['priority']): AgentNoticePublishInput['priority'] => {
@@ -470,27 +486,58 @@ export const createAgentNoticeLedger = (
     return snapshotFrom(snapshot.revision, snapshot.state);
   },
 
+  releaseAvailability(options: AgentNoticeAvailabilityReleaseOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() =>
+        nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const committed = yield* storeEffect(() => store.dispatch(
+        'availability-released',
+        { noticeIds, reservationKey },
+        { idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
+  },
+
+  reserveAvailability(options: AgentNoticeAvailabilityReservationOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const at = yield* noticeEffect(() => timestamp(options.at, 'Notice availability time'));
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() =>
+        nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const expectedRevision = yield* noticeEffect(() => availabilityExpectedRevision(options.expectedRevision));
+      const committed = yield* storeEffect(() => store.dispatch(
+        'availability-reserved',
+        { at, noticeIds, reservationKey },
+        { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
+  },
+
   signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot> {
     return runPromise(Effect.gen(function*() {
       const at = yield* noticeEffect(() => timestamp(options.at, 'Notice availability time'));
       const idempotencyKey = yield* noticeEffect(() =>
         nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
-      const noticeIds = yield* noticeEffect(() => {
-        if (options.noticeIds.length === 0) {
-          throw new AgentNoticeError('invalid-input', 'Notice availability requires at least one notice id');
-        }
-        return options.noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
-      });
-      const expectedRevision = yield* noticeEffect(() => {
-        if (options.expectedRevision !== undefined
-          && (!Number.isInteger(options.expectedRevision) || options.expectedRevision < 0)) {
-          throw new AgentNoticeError('invalid-input', 'Notice availability expectedRevision must be a non-negative integer');
-        }
-        return options.expectedRevision;
-      });
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() => options.reservationKey === undefined
+        ? undefined
+        : nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const expectedRevision = yield* noticeEffect(() => availabilityExpectedRevision(options.expectedRevision));
       const committed = yield* storeEffect(() => store.dispatch(
         'availability-signalled',
-        { at, channel: 'mcp-resource-updated', noticeIds },
+        {
+          at,
+          channel: 'mcp-resource-updated',
+          noticeIds,
+          ...(reservationKey === undefined ? {} : { reservationKey }),
+        },
         { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
       ));
       return snapshotFrom(committed.revision, committed.state);

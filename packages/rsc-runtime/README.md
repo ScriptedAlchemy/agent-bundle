@@ -262,18 +262,23 @@ itself: one long-lived MCP connection's subscription to the reserved inbox
 resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
 own handle on the workspace-durable store its Flight worker mounts
 (`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
-after every completed render `observe(send)` reads the ledger, claims the
-availability receipt for the subscriber's newly eligible pending notices as
-one compare-and-swap against the revision it read (`expectedRevision`), and
-only then sends at most one `notifications/resources/updated`. Eligibility is
-recipient-matched against the subscriber's observed identity, respects
-`nextAttemptAt`, and is bounded by `retryBudget` (availability signals per
-notice, durable across restarts); because the budget is spent before the wire
-write, two server processes over one store can never both signal the same
-notice, and a transport failure after the claim leaves the notice pending and
-readable rather than freeing a duplicate. Exposure and availability receipts
-never re-trigger a signal, so a subscribed client cannot be driven into a
-refetch loop. Subscribing fails closed when the store is unreadable, and only the
+after every completed render `observe(send)` reads the ledger, reserves the
+budget slot of the subscriber's newly eligible pending notices as one
+compare-and-swap against the revision it read (`reserveAvailability()` with
+`expectedRevision`), sends at most one `notifications/resources/updated`, and
+then finalizes the reservation into the availability receipt
+(`signalAvailability()`) — or releases it (`releaseAvailability()`) when the
+protocol write failed, so the receipt only ever means the write succeeded and
+a failed send costs no budget. Eligibility is recipient-matched against the
+subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
+slot another signaller currently holds (a hold older than
+`AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned), and is
+bounded by `retryBudget` (availability receipts per notice, durable across
+restarts); because the slot is held before the wire write, two server processes
+over one store can never both signal the same notice. Exposure and availability
+receipts never re-trigger a signal, so a subscribed client cannot be driven into
+a refetch loop. Subscribing fails closed when the store is unreadable,
+`unsubscribe()` resolves only after in-flight observations settle, and only the
 workspace-durable lifetime is wired — volatile stores live in the worker's
 heap, so those servers honestly advertise no `resources.subscribe`.
 
