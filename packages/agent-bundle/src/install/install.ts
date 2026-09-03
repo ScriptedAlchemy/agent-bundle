@@ -407,6 +407,21 @@ const installPublicCli = async (
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
       return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
+    if (entry.version !== undefined && !sameVersion && options.replace !== true) {
+      const detail = describeContentComparison(identity.plugin, identity.version, {
+        artifactContentHash: artifact.hash,
+        installedContentHash: installed?.hash ?? 'unknown',
+        installedName: identity.plugin,
+        installedVersion: entry.version,
+        status: 'version-mismatch',
+      });
+      throw failure(
+        'AB7005',
+        `Refusing version collision for ${host} ${id} at ${entry.installPath}: ${detail}. ` +
+          'Re-run with --replace to replace the installed version.',
+        host,
+      );
+    }
     const contentDrift = installed !== undefined && sameVersion && installed.hash !== artifact.hash;
     if (options.replace === true || contentDrift) {
       await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');

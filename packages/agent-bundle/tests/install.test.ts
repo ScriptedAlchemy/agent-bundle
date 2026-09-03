@@ -220,13 +220,14 @@ it('honours --replace for Codex through remove + add and fails closed without a 
     scope: 'user' as const,
   };
   try {
-    const plain = await installBundle(options);
-    expect(plain).toMatchObject({ host: 'codex', state: 'installed' });
-    expect(calls.map((call) => call.args.join(' '))).toEqual([
-      'plugin list --json',
-      `plugin marketplace add ${fixture.bundleRoot}`,
-      'plugin add install-fixture@install-fixture-marketplace',
-    ]);
+    // A different installed version is a collision without --replace: nothing runs after the inventory read.
+    const plain = await installBundle(options).catch((failure: unknown) => failure);
+    expect(plain).toBeInstanceOf(DiagnosticError);
+    expect((plain as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7005', target: 'codex' });
+    expect((plain as DiagnosticError).diagnostics[0]?.message).toContain('Refusing version collision');
+    expect((plain as DiagnosticError).diagnostics[0]?.message).toContain('installed install-fixture@1.0.0');
+    expect((plain as DiagnosticError).diagnostics[0]?.message).toContain('(same content, different version)');
+    expect(calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
 
     calls.length = 0;
     const forced = await installBundle({ ...options, replace: true });
@@ -722,12 +723,16 @@ it('refuses foreign Cursor directories even with --replace and gates version col
     }
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('someone else\n');
 
-    // A different plugin's receipt-managed install at this path is foreign as well.
+    // A different plugin's receipt-managed install at this path is foreign as well, even byte-identical.
     await rm(destination, { force: true, recursive: true });
     await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
-    await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'other-plugin', version: '1.2.3' });
     const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
     await writeJson(join(destination, installReceiptFile), { ...receipt, plugin: 'other-plugin' });
+    const identicalForeign = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((identicalForeign as DiagnosticError).diagnostics[0]?.message).toContain('Refusing foreign install');
+    expect((identicalForeign as DiagnosticError).diagnostics[0]?.message).toContain('(same content)');
+    await writeJson(join(destination, '.cursor-plugin/plugin.json'), { name: 'other-plugin', version: '1.2.3' });
     const otherError = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' })
       .catch((failure: unknown) => failure);
     expect((otherError as DiagnosticError).diagnostics[0]?.message).toContain('Refusing foreign install');

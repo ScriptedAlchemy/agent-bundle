@@ -354,10 +354,11 @@ export const compareInstalledTree = async (options: {
     (receipt !== undefined &&
       receipt.files.length === options.artifact.files.length &&
       receipt.files.every((file, index) => file === options.artifact.files[index]));
-  const status: InstalledTreeStatus = installedContentHash === options.artifact.hash && inventoryMatches
-    ? 'current'
-    : ownership === 'foreign'
-      ? 'foreign'
+  // Foreign ownership wins over byte equality: a directory that is not ours is never "current".
+  const status: InstalledTreeStatus = ownership === 'foreign'
+    ? 'foreign'
+    : installedContentHash === options.artifact.hash && inventoryMatches
+      ? 'current'
       : installedVersion !== undefined && installedVersion !== options.version
         ? 'version-mismatch'
         : 'stale';
@@ -385,13 +386,12 @@ export const describeContentComparison = (
   >,
 ): string => {
   const installedVersion = comparison.installedVersion ?? 'unknown version';
-  const verdict = comparison.status === 'current'
-    ? 'same content'
-    : comparison.installedVersion === undefined
-      ? 'different content, installed version unknown'
-      : comparison.installedVersion === version
-        ? 'same version, different content'
-        : 'different version';
+  const sameContent = comparison.installedContentHash === comparison.artifactContentHash;
+  const verdict = comparison.installedVersion === undefined
+    ? sameContent ? 'same content, installed version unknown' : 'different content, installed version unknown'
+    : comparison.installedVersion === version
+      ? sameContent ? 'same content' : 'same version, different content'
+      : sameContent ? 'same content, different version' : 'different version';
   return `installed ${comparison.installedName ?? plugin}@${installedVersion} ` +
     `content ${shortHash(comparison.installedContentHash)} vs artifact ${plugin}@${version} ` +
     `content ${shortHash(comparison.artifactContentHash)} (${verdict})`;
