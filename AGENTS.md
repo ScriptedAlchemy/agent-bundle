@@ -119,11 +119,9 @@
   the PR description under a "Self-review" section (reviewer model, findings,
   disposition), run the reviewer once more after fixes, then merge on green
   CI.
-- Never solicit external reviews: no `@codex review` comments, no waiting for
-  the connector, no unreviewed-SHA bookkeeping. Review comments that arrive
-  on their own (Codex or human) are still addressed — fix in the same PR or
-  reply with a precise reason — and re-checked after each push until none
-  remain.
+- CI green first. Address every review thread, whoever opened it — fix it in
+  the same PR or reply with a precise reason — and re-check for new threads
+  after each push until none remain. Only then merge.
 - PRs are squash-merged. Review threads left on an already-merged PR must
   still be answered, in a follow-up PR.
 
