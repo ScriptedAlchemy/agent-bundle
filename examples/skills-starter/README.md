@@ -64,6 +64,6 @@ pnpm dev
 
 Use `pnpm check` when you want validation and a build without starting the
 Workbench; run the deterministic eval command separately when you need the
-release-readiness verdict. Generated output is written to `dist/`; its root
-contract is `dist/agent-bundle.manifest.json`. The `.agent-bundle/` directory
+release-readiness verdict. Generated output is written to `artifact/`; its root
+contract is `artifact/agent-bundle.manifest.json`. The `.agent-bundle/` directory
 contains development state and is not source material.
