@@ -79,7 +79,7 @@ Both build package outputs when the project declares `bin` or `lib`.
 ## install
 
 ```sh
-agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--replace] [--json]
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] [--replace] [--json]
 ```
 
 | Option | Default | Meaning |
@@ -87,6 +87,7 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--replace] 
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
 | `--from <bundle-dir>` | `process.cwd()` | Target bundle directory or artifact root. |
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
+| `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
 
 The emitted standalone `install.mjs` and the package-relative installer bin accept the same
@@ -105,7 +106,10 @@ before `add`.
 
 Doctor exits `1` when it reports any error diagnostic, and never modifies anything. With `--from`,
 it reports the installed copy per host as `current`, `stale` (same version, different content —
-`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or `not-installed` (`AB7307`).
+`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or `not-installed` (`AB7307`). For
+Cursor it also proves plugin-scoped hook registration from the installed manifest (`AB7322`), warns
+when `~/.cursor/hooks.json` would deliver a plugin hook a second time (`AB7323`), and tracks a
+staged marketplace from `unregistered` to `registered` once Cursor imports it (`AB7324`).
 
 ## validate
 

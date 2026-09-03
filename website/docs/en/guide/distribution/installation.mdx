@@ -22,7 +22,7 @@ the root contains the selected host's target directory.
 | --- | --- | --- |
 | Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. | `user`, `project`, `local` |
 | Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. | `user` |
-| Cursor | Copies the bundle into `~/.cursor/plugins/local/<name>`, because Cursor publishes no non-interactive install verb. | `user` |
+| Cursor | Copies the bundle into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the plugin's `hooks/hooks.json` from its manifest, so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
 
 Because Claude and Codex targets always ship local marketplace manifests, their public CLIs can
 install the emitted directory directly. The installer fails with a typed diagnostic when the
@@ -103,6 +103,9 @@ installed bytes. It never repairs anything. With `--from`, it reports the instal
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules; the message retains the originating build-validator code. |
+| `AB7322` | info / error | Info when an installed Cursor plugin registers plugin-scoped hooks from its manifest and every command's script exists under the plugin root; error when the declared hooks file is missing or malformed, or an executed script is absent. |
+| `AB7323` | warning | `~/.cursor/hooks.json` registers a command that points into an installed plugin directory, so Cursor would deliver that hook twice; manifest registration alone is sufficient. |
+| `AB7324` | info / warning / error | A marketplace staged by `install cursor --mode marketplace` is imported (`registered`), still awaiting the Customize import step (`unregistered`), or incomplete (`corrupt`). |
 | `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
 
 ## Next
