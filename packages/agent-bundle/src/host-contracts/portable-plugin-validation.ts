@@ -1,8 +1,9 @@
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { join, normalize, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 import capabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import {
+  containedPortableRelativePath,
   portableCommandIssues,
   portableCwdIssues,
   portableEnvKeyIssues,
@@ -132,14 +133,14 @@ const fileKind = async (path: string): Promise<'directory' | 'file' | 'missing' 
 };
 
 /**
- * §4.1 plugin-relative path: begins with `./`, resolves against the plugin
- * root, and stays inside it after lexical normalization. Filesystem symlink
- * containment is the separate §4.1 symlink lane.
+ * §4.1 plugin-relative path: begins with `./` and stays inside the plugin root
+ * after platform-independent lexical normalization (shared with the planner).
+ * Filesystem symlink containment is the separate §4.1 symlink lane.
  */
 const pluginRelativeTarget = (pluginDirectory: string, value: string): string | undefined => {
-  if (!value.startsWith('./') || value.includes('\\') || value.includes('\0')) return undefined;
-  const candidate = resolve(pluginDirectory, normalize(value));
-  return isInsideOrEqual(pluginDirectory, candidate) ? candidate : undefined;
+  if (!value.startsWith('./')) return undefined;
+  const contained = containedPortableRelativePath(value);
+  return contained === undefined ? undefined : join(pluginDirectory, contained);
 };
 
 const readDocuments = async (

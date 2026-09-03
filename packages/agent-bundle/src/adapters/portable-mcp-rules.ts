@@ -43,11 +43,20 @@ const isLoopbackHost = (hostname: string): boolean =>
  */
 const hasForbiddenPathBytes = (value: string): boolean => value.includes('\\') || value.includes('\0');
 
-const staysInsidePosixRoot = (relativePath: string): boolean => {
-  const root = '/plugin/anchor';
-  const resolved = posix.normalize(posix.join(root, relativePath));
-  return resolved === root || resolved.startsWith(`${root}/`);
+/**
+ * Lexically normalized plugin-relative path, or `undefined` when the value
+ * climbs above its root or is not relative. Checks the normalized path itself
+ * for a leading `..` rather than resolving against a fixed synthetic root:
+ * `./../anchor/server` must escape regardless of what the root is named.
+ */
+export const containedPortableRelativePath = (relativePath: string): string | undefined => {
+  if (hasForbiddenPathBytes(relativePath) || posix.isAbsolute(relativePath)) return undefined;
+  const normalized = posix.normalize(relativePath);
+  if (normalized === '..' || normalized.startsWith('../')) return undefined;
+  return normalized;
 };
+
+const staysInsidePosixRoot = (relativePath: string): boolean => containedPortableRelativePath(relativePath) !== undefined;
 
 const isAnyPlatformAbsolute = (value: string): boolean => posix.isAbsolute(value) || win32.isAbsolute(value);
 

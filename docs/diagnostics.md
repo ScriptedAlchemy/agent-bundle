@@ -103,8 +103,10 @@ Validation happens at three moments, all fail-closed:
 2. **Artifact time** (`agent-bundle build`, `validate --artifact`): the generic
    target-contract pass reports a missing required document as `AB6011` and a
    pinned-schema rejection as `AB6012`, and the Agent Plugins byte lane below
-   (`AB6035`–`AB6037`) runs over every emitted `portable/` tree, so a
-   standard-invalid layout fails the ordinary build before publication.
+   (`AB6035`–`AB6037`) runs over every tree emitted by the built-in portable
+   adapter, so a standard-invalid layout fails the ordinary build before
+   publication (a tree already carrying a symlink or other unsupported entry
+   is reported as `AB6013` and never read by this lane).
    `validate --artifact --host-validation` additionally returns the same lane
    as a `portable` host validation report with the `AB6038` provenance note.
 3. **Installed bytes** (`agent-bundle doctor`): a Cursor local plugin whose root

@@ -901,6 +901,39 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
   }
 });
 
+it('does not follow a symlinked portable document into the byte lane once the inspection refused it', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const root = await writeArtifact([
+    { contents: '# Install portable-test\n', kind: 'generated', path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated', path: 'portable/install.mjs' },
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated',
+      path: 'portable/plugin.json',
+    },
+  ], true, [portable]);
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-mcp-'));
+
+  try {
+    await writeFile(join(outside, 'forged-mcp.json'), JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: { forged: { command: 'bin/server', type: 'stdio' } },
+    }));
+    await symlink(join(outside, 'forged-mcp.json'), join(root, 'portable', 'mcp.json'));
+
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'portable/mcp.json' }),
+    ]));
+    // The forged content was never read: no schema or normative finding from behind the link.
+    expect(diagnostics.filter((entry) => ['AB6035', 'AB6036', 'AB6037'].includes(entry.code))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
+  }
+});
+
 it('leaves an advanced registry adapter that reuses the portable name to its own artifact contract', async () => {
   const registry = new TargetRegistry().register({
     artifactValidation: {

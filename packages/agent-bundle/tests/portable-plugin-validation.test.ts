@@ -146,6 +146,8 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
   await writeJson(join(root, 'mcp.json'), {
     $schema: mcpSchema,
     mcpServers: {
+      anchorCommand: { command: './../anchor/server', type: 'stdio' },
+      anchorCwd: { command: 'node', cwd: '${PLUGIN_ROOT}/../anchor', type: 'stdio' },
       backslashCommand: { command: './bin\\..\\..\\outside', type: 'stdio' },
       backslashCwd: { command: 'node', cwd: './safe\\..\\..\\outside', type: 'stdio' },
       escapingCommand: { command: './../outside', type: 'stdio' },
@@ -171,6 +173,8 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
 
   expect(new Set(codes(diagnostics))).toEqual(new Set(['AB6036']));
   expect(messages(diagnostics)).toEqual([
+    'mcp.json/mcpServers/anchorCommand/command "./../anchor/server" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',
+    'mcp.json/mcpServers/anchorCwd/cwd "${PLUGIN_ROOT}/../anchor" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/backslashCommand/command "./bin\\\\..\\\\..\\\\outside" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',
     'mcp.json/mcpServers/backslashCwd/cwd "./safe\\\\..\\\\..\\\\outside" must use forward-slash separators without backslashes or NUL so every consuming platform resolves it identically (Agent Plugins 1.0.0 §4.1).',
     'mcp.json/mcpServers/escapingCommand/command "./../outside" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',

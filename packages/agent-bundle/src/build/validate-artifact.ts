@@ -442,10 +442,14 @@ const validateTargetContracts = async (options: {
  * `--host-validation`. The lane keys on the registered adapter identity, not
  * the name: an advanced registry may bind `portable` to its own adapter and
  * contract, and that output is validated by its own `artifactValidation`.
+ * A tree that already holds a symlink or other unsupported entry (AB6013) is
+ * skipped: the byte lane follows `plugin.json`/`mcp.json`/`skills` with
+ * `stat`/`readFile`/`readdir`, so it must not touch paths whose containment
+ * the filesystem inspection has already refused.
  */
 const validatePortableTargets = async (options: {
   readonly artifactRoot: string;
-  readonly files: readonly ArtifactFile[];
+  readonly filesystem: ArtifactFilesystemSnapshot;
   readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
@@ -453,7 +457,12 @@ const validatePortableTargets = async (options: {
   for (const target of options.manifest.targets) {
     if (!options.registry.has(target.name) || options.registry.get(target.name) !== portableAdapter) continue;
     const prefix = `${target.name}/`;
-    if (!options.files.some((file) => file.path.startsWith(prefix))) continue;
+    if (!options.filesystem.files.some((file) => file.path.startsWith(prefix))) continue;
+    const unsupported = options.filesystem.entries.some((entry) =>
+      (entry.path === target.name || entry.path.startsWith(prefix)) &&
+      entry.kind !== 'directory' &&
+      entry.kind !== 'file');
+    if (unsupported) continue;
     for (const entry of await validatePortablePluginFiles({
       pluginDirectory: resolve(options.artifactRoot, target.name),
       target: target.name,
@@ -774,7 +783,7 @@ export const validateArtifactWithSnapshot = async (
     }),
     validatePortableTargets({
       artifactRoot,
-      files: inspection.files,
+      filesystem: inspection.filesystem,
       manifest,
       registry,
     }),
