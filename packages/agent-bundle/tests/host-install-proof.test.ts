@@ -9,6 +9,7 @@ import {
   buildHostInstallFixture,
   buildPortableHostInstallFixture,
   disposeHostInstallFixture,
+  expectedCodexInterfaceFields,
   runInstalledHostContractMatrixProof,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
@@ -355,18 +356,10 @@ codexPluginIt(
       install: { state: 'installed', version: '1.0.0' },
       manifest: {
         interfaceCapabilities: ['hooks', 'mcp', 'skills'],
-        interfaceFields: [
-          'capabilities',
-          'category',
-          'defaultPrompt',
-          'developerName',
-          'displayName',
-          // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
-          'logo',
-          'longDescription',
-          'shortDescription',
-        ],
+        interfaceFields: [...expectedCodexInterfaceFields],
+        matchesBuiltArtifact: true,
         path: '.codex-plugin/plugin.json',
+        schema: 'schema-valid',
       },
       proofLevel: proofLabel,
       registration: {

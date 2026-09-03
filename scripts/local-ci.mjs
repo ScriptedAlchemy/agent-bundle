@@ -16,8 +16,10 @@
  *   `pnpm build`, so folding three hosted checkouts into one worktree keeps
  *   every artifact expectation they have.
  * - dependency-review (GitHub-side action), package-preview and the release
- *   publish (publish-side), native-host-smoke (opt-in, needs signed-in host
- *   CLIs) are intentionally not mirrored — see docs/local-ci.md.
+ *   publish (publish-side), host-install-proofs (needs the pinned claude and
+ *   codex CLIs on PATH; `pnpm check:host-cli` + the test:host-install
+ *   scripts run it by hand), and native-host-smoke (opt-in, needs signed-in
+ *   host CLIs) are intentionally not mirrored — see docs/local-ci.md.
  *
  * Isolation model: every leg gets its own git worktree pinned to HEAD with
  * its own node_modules — node_modules trees with native modules must never

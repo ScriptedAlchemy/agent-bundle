@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit && tsc --project packages/workbench/tsconfig.json && tsc --project packages/create-agent-bundle/tsconfig.json",
     "check": "pnpm build && pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration:run && pnpm lint && pnpm typecheck",
     "check:local-ci": "node scripts/local-ci.mjs",
+    "check:host-cli": "node scripts/host-cli-pins.mjs verify",
     "docs:site:build": "pnpm --filter @agent-bundle/docs check",
     "docs:site:dev": "pnpm --filter @agent-bundle/docs dev",
     "docs:site:preview": "pnpm --filter @agent-bundle/docs preview",
