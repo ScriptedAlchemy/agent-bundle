@@ -260,6 +260,30 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
       plugin: 'install-fixture',
     });
 
+    // Owned file -> directory restructure is a replacement, not a collision.
+    await rm(join(bundle, 'payload.txt'));
+    await mkdir(join(bundle, 'payload.txt'));
+    await writeFile(join(bundle, 'payload.txt', 'nested.md'), '# nested\n');
+    const restructured = await run(installer, [], home);
+    expect(restructured).toMatchObject({ code: 0, stderr: '' });
+    expect(restructured.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(await readFile(join(destination, 'payload.txt', 'nested.md'), 'utf8')).toBe('# nested\n');
+    await rm(join(bundle, 'payload.txt'), { recursive: true });
+    await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    const flattened = await run(installer, [], home);
+    expect(flattened).toMatchObject({ code: 0, stderr: '' });
+    expect(flattened.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('rebuilt\n');
+
+    // A receipt whose inventory drifted is refreshed even when the owned bytes hash equal.
+    await writeFile(join(bundle, 'transient.txt'), 'transient\n');
+    await run(installer, [], home);
+    await rm(join(bundle, 'transient.txt'));
+    await rm(join(destination, 'transient.txt'));
+    const refreshed = await run(installer, [], home);
+    expect(refreshed.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect((await readInstallReceipt(destination))?.files).not.toContain('transient.txt');
+
     // A receipt missing a field reads as absent, exactly like the core reader: the legacy gate applies.
     const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
     const { host: _host, ...partialReceipt } = receipt;

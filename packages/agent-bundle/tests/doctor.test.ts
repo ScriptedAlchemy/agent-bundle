@@ -1179,6 +1179,19 @@ it('compares the Claude cache copy reported by plugin list --json against the ar
     expect(mismatch.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB7309', severity: 'warning', target: 'claude' }),
     ]));
+
+    // A current user-scoped copy never masks a stale copy at another scope.
+    const currentCache = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', 'current');
+    await cp(bundle, currentCache, { recursive: true });
+    inventory = [
+      { enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: currentCache, scope: 'user', version: '1.2.3' },
+      { enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'project', version: '1.2.3' },
+    ];
+    const scoped = hostReport(await doctor(), 'claude');
+    expect(scoped.bundle?.comparison).toMatchObject({ installedPath: installed, status: 'stale' });
+    const scopedDiagnostic = scoped.diagnostics.find((entry) => entry.code === 'AB7308');
+    expect(scopedDiagnostic?.message).toContain('(scope project)');
+    expect(scopedDiagnostic?.recovery).toContain('--scope project');
   } finally {
     await fixture.cleanup();
   }

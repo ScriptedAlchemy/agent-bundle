@@ -840,8 +840,8 @@ const readPublicHostInventory = async (
   });
 };
 
-const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>): string => host === 'claude'
-  ? 'Rerun `agent-bundle install claude --from <bundle-dir>`; same-version content drift is replaced through ' +
+const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>, scopeArguments = ''): string => host === 'claude'
+  ? `Rerun \`agent-bundle install claude --from <bundle-dir>${scopeArguments}\`; same-version content drift is replaced through ` +
     '`claude plugin uninstall --keep-data` + `claude plugin install` because Claude\'s `plugin update` is version-gated.'
   : 'Rerun `agent-bundle install codex --from <bundle-dir>`; same-version content drift is replaced through ' +
     '`codex plugin remove` + `codex plugin add`.';
@@ -863,8 +863,7 @@ const publicHostInstallComparison = async (
       diagnostics: Object.freeze([]),
     };
   }
-  const entry = inventory.entry;
-  if (entry === undefined) {
+  if (inventory.entries.length === 0) {
     return {
       comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' }),
       diagnostics: freezeDiagnostics([diagnostic(
@@ -876,80 +875,93 @@ const publicHostInstallComparison = async (
       )]),
     };
   }
-  let installed: TreeInventory;
-  try {
-    installed = await treeInventory(entry.installPath);
-  } catch (error) {
-    return {
-      comparison: Object.freeze({
+  // Claude may hold one copy per scope; every copy is compared and the worst one is summarised,
+  // so a current user-scoped copy never masks a stale project- or local-scoped one.
+  const diagnostics: Diagnostic[] = [];
+  const comparisons: DoctorInstallComparison[] = [];
+  for (const entry of inventory.entries) {
+    const scoped = entry.scope === undefined ? '' : ` (scope ${entry.scope})`;
+    const replaceHint = entry.scope === undefined ? '' : ` --scope ${entry.scope}`;
+    let installed: TreeInventory;
+    try {
+      installed = await treeInventory(entry.installPath);
+    } catch (error) {
+      comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,
         installedPath: entry.installPath,
         ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
         ownership: 'host',
         status: 'unknown',
-      }),
-      diagnostics: freezeDiagnostics([diagnostic(
+      }));
+      diagnostics.push(diagnostic(
         'AB7310',
-        `${host} installed copy at ${JSON.stringify(entry.installPath)} could not be compared: ` +
+        `${host} installed copy at ${JSON.stringify(entry.installPath)}${scoped} could not be compared: ` +
           `${error instanceof Error ? error.message : String(error)}`,
-        `Reinstall the ${host} plugin with \`agent-bundle install ${host} --from <bundle-dir> --replace\`.`,
+        `Reinstall the ${host} plugin with \`agent-bundle install ${host} --from <bundle-dir>${replaceHint} --replace\`.`,
         'error',
         host,
-      )]),
-    };
-  }
-  const status: 'current' | 'stale' | 'version-mismatch' =
-    installed.hash === artifact.hash && entry.version === identity.version
-      ? 'current'
-      : entry.version !== undefined && entry.version !== identity.version
-        ? 'version-mismatch'
-        : 'stale';
-  const comparison: DoctorInstallComparison = Object.freeze({
-    artifactContentHash: artifact.hash,
-    installedContentHash: installed.hash,
-    installedPath: entry.installPath,
-    ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
-    ownership: 'host',
-    status,
-  });
-  const detail = describeContentComparison(identity.name, identity.version, {
-    artifactContentHash: artifact.hash,
-    installedContentHash: installed.hash,
-    installedName: identity.name,
-    ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
-    status,
-  });
-  switch (status) {
-    case 'current':
-      return { comparison, diagnostics: Object.freeze([]) };
-    case 'stale':
-      return {
-        comparison,
-        diagnostics: freezeDiagnostics([diagnostic(
+      ));
+      continue;
+    }
+    const status: 'current' | 'stale' | 'version-mismatch' =
+      installed.hash === artifact.hash && entry.version === identity.version
+        ? 'current'
+        : entry.version !== undefined && entry.version !== identity.version
+          ? 'version-mismatch'
+          : 'stale';
+    comparisons.push(Object.freeze({
+      artifactContentHash: artifact.hash,
+      installedContentHash: installed.hash,
+      installedPath: entry.installPath,
+      ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+      ownership: 'host',
+      status,
+    }));
+    const detail = describeContentComparison(identity.name, identity.version, {
+      artifactContentHash: artifact.hash,
+      installedContentHash: installed.hash,
+      installedName: identity.name,
+      ...(entry.version === undefined ? {} : { installedVersion: entry.version }),
+      status,
+    });
+    switch (status) {
+      case 'current':
+        break;
+      case 'stale':
+        diagnostics.push(diagnostic(
           'AB7308',
-          `${host} plugin ${identity.name}@${identity.version} at ${entry.installPath} is stale ` +
+          `${host} plugin ${identity.name}@${identity.version} at ${entry.installPath}${scoped} is stale ` +
             `(same version, different content): ${detail}.`,
-          publicHostReplaceRecipe(host),
+          publicHostReplaceRecipe(host, replaceHint),
           'warning',
           host,
-        )]),
-      };
-    case 'version-mismatch':
-      return {
-        comparison,
-        diagnostics: freezeDiagnostics([diagnostic(
+        ));
+        break;
+      case 'version-mismatch':
+        diagnostics.push(diagnostic(
           'AB7309',
-          `${host} version collision at ${entry.installPath}: ${detail}.`,
-          `Rerun \`agent-bundle install ${host} --from <bundle-dir> --replace\` to replace the installed version.`,
+          `${host} version collision at ${entry.installPath}${scoped}: ${detail}.`,
+          `Rerun \`agent-bundle install ${host} --from <bundle-dir>${replaceHint} --replace\` to replace the installed version.`,
           'warning',
           host,
-        )]),
-      };
-    default: {
-      const exhaustive: never = status;
-      throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+        ));
+        break;
+      default: {
+        const exhaustive: never = status;
+        throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
+      }
     }
   }
+  const severity: Record<DoctorInstallComparisonStatus, number> = {
+    current: 0,
+    'not-installed': 1,
+    unknown: 2,
+    stale: 3,
+    'version-mismatch': 4,
+    foreign: 5,
+  };
+  const worst = comparisons.reduce((left, right) => severity[right.status] > severity[left.status] ? right : left);
+  return { comparison: worst, diagnostics: freezeDiagnostics(diagnostics) };
 };
 
 const cursorBundle = async (
@@ -1237,7 +1249,7 @@ const codexBundle = async (
     finding: Object.freeze({
       ...base,
       comparison: compared.comparison,
-      state: inventory.entry === undefined ? 'missing' : 'installed',
+      state: inventory.entries.length === 0 ? 'missing' : 'installed',
     }),
   };
 };

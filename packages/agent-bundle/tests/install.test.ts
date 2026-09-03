@@ -479,6 +479,62 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
   }
 });
 
+it('refreshes a receipt whose inventory drifted even when the owned bytes hash equal, and restructures owned paths', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  try {
+    await writeFile(join(fixture.bundleRoot, 'removed-later.txt'), 'old\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+
+    // The owned file vanished and the rebuild dropped it too: bytes hash equal, inventory does not.
+    await rm(join(destination, 'removed-later.txt'));
+    await rm(join(fixture.bundleRoot, 'removed-later.txt'));
+    const refreshed = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(refreshed).toMatchObject({ state: 'replaced' });
+    expect((await readInstallReceipt(destination))?.files).toEqual(['.cursor-plugin/plugin.json', 'payload.txt']);
+    // A later unowned file at that path is never mistaken for stale owned content.
+    await writeFile(join(destination, 'removed-later.txt'), 'operator\n');
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(await readFile(join(destination, 'removed-later.txt'), 'utf8')).toBe('operator\n');
+    await rm(join(destination, 'removed-later.txt'));
+
+    // Owned file -> directory, then directory -> file.
+    await rm(join(fixture.bundleRoot, 'payload.txt'));
+    await mkdir(join(fixture.bundleRoot, 'payload.txt'));
+    await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    const toDirectory = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(toDirectory).toMatchObject({ state: 'replaced' });
+    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt/nested.md']);
+    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
+    const toFile = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(toFile).toMatchObject({ state: 'replaced' });
+    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
+
+    // A directory that also holds an unowned file is a collision, not a restructure.
+    await rm(join(fixture.bundleRoot, 'payload.txt'));
+    await mkdir(join(fixture.bundleRoot, 'payload.txt'));
+    await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
+    await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    await writeFile(join(destination, 'payload.txt', 'operator.md'), 'mine\n');
+    await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat\n');
+    const collision = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((collision as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
+    expect(await readFile(join(destination, 'payload.txt', 'operator.md'), 'utf8')).toBe('mine\n');
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('refuses to hash or write through a symlinked directory inside a receipt-managed Cursor install', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));

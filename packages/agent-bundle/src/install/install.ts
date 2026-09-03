@@ -240,12 +240,18 @@ export const publicHostCacheRoot = (
 
 export interface PublicHostInstalledEntry {
   readonly installPath: string;
+  /** Claude only: the scope this copy is installed at. */
+  readonly scope?: string;
   readonly version?: string;
 }
 
-/** The host's own answer to "is this plugin installed, and where": usable, or not, never guessed. */
+/**
+ * The host's own answer to "is this plugin installed, and where": usable, or
+ * not, never guessed. Claude can hold one copy per scope, so an unscoped read
+ * returns every matching copy; a scoped read returns at most one.
+ */
 export type PublicHostInventory =
-  | { readonly entry?: PublicHostInstalledEntry; readonly status: 'available' }
+  | { readonly entries: readonly PublicHostInstalledEntry[]; readonly status: 'available' }
   | { readonly detail: string; readonly status: 'unavailable' };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -280,37 +286,38 @@ export const parsePublicHostInventory = (
     if (!Array.isArray(document)) {
       return { detail: 'claude plugin list --json did not return an array', status: 'unavailable' };
     }
-    const row = document.find((candidate) =>
+    const rows = document.filter((candidate): candidate is Record<string, unknown> =>
       isRecord(candidate) &&
       candidate['id'] === id &&
       (options.scope === undefined || candidate['scope'] === options.scope));
-    if (row === undefined) return { status: 'available' };
-    // A matching row we cannot read is not "not installed": replacing on it would skip the uninstall.
-    if (!isRecord(row) || typeof row['installPath'] !== 'string') {
-      return { detail: `claude plugin list --json row for ${id} carries no installPath`, status: 'unavailable' };
-    }
-    return {
-      entry: {
+    const entries: PublicHostInstalledEntry[] = [];
+    for (const row of rows) {
+      // A matching row we cannot read is not "not installed": replacing on it would skip the uninstall.
+      if (typeof row['installPath'] !== 'string') {
+        return { detail: `claude plugin list --json row for ${id} carries no installPath`, status: 'unavailable' };
+      }
+      entries.push({
         installPath: row['installPath'],
+        ...(typeof row['scope'] === 'string' ? { scope: row['scope'] } : {}),
         ...(typeof row['version'] === 'string' ? { version: row['version'] } : {}),
-      },
-      status: 'available',
-    };
+      });
+    }
+    return { entries, status: 'available' };
   }
   if (!isRecord(document) || !Array.isArray(document['installed'])) {
     return { detail: 'codex plugin list --json did not return an installed array', status: 'unavailable' };
   }
   const row = document['installed'].find((candidate) =>
     isRecord(candidate) && candidate['pluginId'] === id && candidate['installed'] !== false);
-  if (row === undefined) return { status: 'available' };
+  if (row === undefined) return { entries: [], status: 'available' };
   if (!isRecord(row) || typeof row['version'] !== 'string') {
     return { detail: `codex plugin list --json row for ${id} carries no version`, status: 'unavailable' };
   }
   return {
-    entry: {
+    entries: [{
       installPath: join(options.cacheRoot, options.marketplace, options.plugin, row['version']),
       version: row['version'],
-    },
+    }],
     status: 'available',
   };
 };
@@ -388,16 +395,17 @@ const installPublicCli = async (
   } as const;
   let replaced = false;
   let previousContentHash: string | undefined;
-  if (inventory.status === 'available' && inventory.entry !== undefined) {
+  const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
+  if (entry !== undefined) {
     let installed: TreeInventory | undefined;
     try {
-      installed = await treeInventory(inventory.entry.installPath);
+      installed = await treeInventory(entry.installPath);
     } catch {
       installed = undefined;
     }
-    const sameVersion = inventory.entry.version === identity.version;
+    const sameVersion = entry.version === identity.version;
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
-      return { ...base, destination: inventory.entry.installPath, state: 'already-installed' };
+      return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
     const contentDrift = installed !== undefined && sameVersion && installed.hash !== artifact.hash;
     if (options.replace === true || contentDrift) {

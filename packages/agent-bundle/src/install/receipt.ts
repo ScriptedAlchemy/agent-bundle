@@ -127,9 +127,15 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
  * Every directory on the way to a listed path must be a real directory: a
  * symlinked ancestor would let a leaf-only check read, hash, delete, or write
  * outside the plugin root (development installs point top-level directories
- * at generation folders, for example). Missing ancestors are fine.
+ * at generation folders, for example). Missing ancestors are fine, and so is
+ * an owned regular file that a rebuild turns into a directory: it leaves as
+ * stale before anything is written beneath it.
  */
-const assertRealAncestors = async (root: string, files: readonly string[]): Promise<void> => {
+const assertRealAncestors = async (
+  root: string,
+  files: readonly string[],
+  ownedFiles: ReadonlySet<string> = new Set(),
+): Promise<void> => {
   const checked = new Set<string>();
   for (const file of files) {
     let directory = dirname(file);
@@ -138,7 +144,10 @@ const assertRealAncestors = async (root: string, files: readonly string[]): Prom
         checked.add(directory);
         try {
           const metadata = await lstat(join(root, directory));
-          if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw unsupportedEntry(directory);
+          if (metadata.isSymbolicLink()) throw unsupportedEntry(directory);
+          if (!metadata.isDirectory() && !(metadata.isFile() && ownedFiles.has(directory))) {
+            throw unsupportedEntry(directory);
+          }
         } catch (error) {
           if (!isErrno(error, 'ENOENT')) throw error;
         }
@@ -287,7 +296,14 @@ export const compareInstalledTree = async (options: {
   }
   const installedVersion = manifest?.version ?? (ownership === 'receipt' ? receipt?.version : undefined);
   const installedName = manifest?.name ?? (ownership === 'receipt' ? receipt?.plugin : undefined);
-  const status: InstalledTreeStatus = installedContentHash === options.artifact.hash
+  // A receipt-managed tree is current only when its recorded inventory matches too: an owned file
+  // that vanished while the rebuild dropped it hashes equal, but the receipt must still be refreshed
+  // so a later unowned file at that path is never mistaken for stale owned content.
+  const inventoryMatches = ownership !== 'receipt' ||
+    (receipt !== undefined &&
+      receipt.files.length === options.artifact.files.length &&
+      receipt.files.every((file, index) => file === options.artifact.files[index]));
+  const status: InstalledTreeStatus = installedContentHash === options.artifact.hash && inventoryMatches
     ? 'current'
     : ownership === 'foreign'
       ? 'foreign'
@@ -414,8 +430,9 @@ export const replaceInstalledTree = async (options: {
   }
   const incoming = new Set(options.staged.inventory.files);
   const previouslyOwned = await previouslyOwnedFiles(options.destination, options.comparison);
-  await assertRealAncestors(options.destination, [...previouslyOwned, ...options.staged.inventory.files]);
   const owned = new Set(previouslyOwned);
+  await assertRealAncestors(options.destination, previouslyOwned);
+  await assertRealAncestors(options.destination, options.staged.inventory.files, owned);
   // On case-insensitive filesystems a case-only rename of an owned path resolves to the same
   // inode, so ownership is decided by file identity, not by name alone.
   let ownedIdentities: readonly Stats[] | undefined;
@@ -434,11 +451,28 @@ export const replaceInstalledTree = async (options: {
     }
     return ownedIdentities.some((metadata) => sameFile(metadata, candidate));
   };
+  // An existing directory at an incoming file path is fine only when everything beneath it is
+  // owned: those files leave as stale and the emptied directory is pruned before the rename.
+  const isWhollyOwnedDirectory = async (file: string): Promise<boolean> => {
+    const nested = await treeInventory(join(options.destination, file));
+    return nested.files.every((entry) => owned.has(`${file}/${entry}`));
+  };
   const collisions: string[] = [];
   for (const file of options.staged.inventory.files) {
     if (owned.has(file)) continue;
     const target = join(options.destination, file);
-    if (await exists(target) && !await isOwnedIdentity(target)) collisions.push(file);
+    let metadata: Stats;
+    try {
+      metadata = await lstat(target);
+    } catch (error) {
+      // ENOTDIR: an owned file stands where the rebuild wants a directory; it leaves as stale first.
+      if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR')) continue;
+      throw error;
+    }
+    const tolerated = metadata.isDirectory() && !metadata.isSymbolicLink()
+      ? await isWhollyOwnedDirectory(file)
+      : await isOwnedIdentity(target);
+    if (!tolerated) collisions.push(file);
   }
   if (collisions.length > 0) {
     throw new Error(
