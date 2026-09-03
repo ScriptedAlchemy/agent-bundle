@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   available,
   unavailable,
@@ -7,6 +9,7 @@ import {
 } from '../agent-request.js';
 import { lineageCarrier, type LineageHost } from '../lineage-native.js';
 import type { AgentStateStore } from '../state/contract.js';
+import { canonicalJson } from '../state/index.js';
 import {
   initialLineageState,
   reduceLineage,
@@ -86,6 +89,23 @@ const lineageOf = (node: LineageNode, generation: string | undefined, resolution
       }),
 });
 
+/**
+ * Deterministic journal keys for one observation: the caller's key, the event
+ * name, and a digest of the canonical payload. A duplicate delivery produces
+ * the same payloads and therefore the same keys, whatever the registry already
+ * knew when it arrived.
+ */
+interface JournalKeys {
+  next(name: keyof LineageEvents, payload: unknown): string;
+}
+
+const journalKeys = (idempotencyKey: string): JournalKeys => ({
+  next(name, payload) {
+    const digest = createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex').slice(0, 16);
+    return `lineage:${idempotencyKey}:${name}:${digest}`;
+  },
+});
+
 const rootNode = (conversation: string, generation: string | undefined, startedAt: string): LineageNode => ({
   depth: 0,
   ...(generation === undefined ? {} : { generation }),
@@ -100,7 +120,6 @@ export const createAgentLineageRegistry = (
   const { store } = options;
   let state: LineageState = initialLineageState;
   let hydrated = store === undefined;
-  let sequence = 0;
 
   const hydrate = async (): Promise<void> => {
     if (hydrated || store === undefined) return;
@@ -112,21 +131,27 @@ export const createAgentLineageRegistry = (
     }
   };
 
+  /**
+   * Journal keys derive from the caller's idempotency key plus the mutation's
+   * canonical payload, so a host that delivers the same event twice (Cursor
+   * repeats some `preToolUse` payloads) replays the same committed journal
+   * entries instead of appending fresh ones. A replayed commit reports the
+   * historical snapshot, so the head is re-read instead of rewinding the
+   * in-memory tree to it.
+   */
   const dispatch = async <TName extends keyof LineageEvents>(
     name: TName,
     payload: Parameters<typeof reduceLineage>[1]['payload'],
-    idempotencyKey: string,
+    keys: JournalKeys,
   ): Promise<void> => {
-    sequence += 1;
+    const idempotencyKey = keys.next(name, payload);
     if (store === undefined) {
       state = reduceLineage(state, { name, payload });
       return;
     }
     try {
-      const committed = await store.dispatch(name, payload as never, {
-        idempotencyKey: `lineage:${idempotencyKey}:${String(sequence)}`,
-      });
-      state = committed.state;
+      const committed = await store.dispatch(name, payload as never, { idempotencyKey });
+      state = committed.replayed ? (await store.read()).state : committed.state;
     } catch {
       state = reduceLineage(state, { name, payload });
     }
@@ -137,15 +162,18 @@ export const createAgentLineageRegistry = (
 
   /**
    * The spawn call that produced the subagent starting now: the most recent
-   * unclaimed one. Claude keeps the call open across `SubagentStart`; Codex
-   * closes it first, so the claim window is independent of `openCalls`.
+   * unclaimed one *under the same root*, so two sessions sharing one durable
+   * registry never claim each other's spawns. Claude keeps the call open
+   * across `SubagentStart`; Codex closes it first, so the claim window is
+   * independent of `openCalls`.
    */
-  const claimSpawn = async (host: LineageHost, key: string): Promise<OpenToolCall | undefined> => {
+  const claimSpawn = async (host: LineageHost, root: string, keys: JournalKeys): Promise<OpenToolCall | undefined> => {
     const spawn = SPAWN_TOOLS[host];
     for (let index = state.pendingSpawns.length - 1; index >= 0; index -= 1) {
       const call = state.pendingSpawns[index]!;
       if (!spawn(call.toolName)) continue;
-      await dispatch('spawnClaimed', { toolCallId: call.toolCallId }, `${key}:claim`);
+      if ((nodeFor(call.conversation)?.root ?? call.conversation) !== root) continue;
+      await dispatch('spawnClaimed', { toolCallId: call.toolCallId }, keys);
       return call;
     }
     return undefined;
@@ -156,7 +184,7 @@ export const createAgentLineageRegistry = (
     conversation: string,
     generation: string | undefined,
     observedAt: string,
-    key: string,
+    keys: JournalKeys,
   ): Promise<LineageNode> => {
     const existing = state.nodes[conversation];
     if (existing !== undefined) return existing;
@@ -164,12 +192,12 @@ export const createAgentLineageRegistry = (
       // A never-seen Cursor conversation while a subagentStart is pending is
       // that child speaking for the first time.
       const subagentId = state.pendingChildren[0]!;
-      await dispatch('childBound', { conversation, subagentId }, key);
+      await dispatch('childBound', { conversation, subagentId }, keys);
       const bound = state.nodes[conversation];
       if (bound !== undefined) return bound;
     }
     const node = rootNode(conversation, generation, observedAt);
-    await dispatch('nodeStarted', node, key);
+    await dispatch('nodeStarted', node, keys);
     return node;
   };
 
@@ -188,15 +216,14 @@ export const createAgentLineageRegistry = (
     return available(lineageOf(node, carrier.generation, resolution), resolution === 'native' ? 'native' : 'derived');
   };
 
-  const observeStart = async (observation: LineageObservation, observedAt: string): Promise<void> => {
+  const observeStart = async (observation: LineageObservation, observedAt: string, keys: JournalKeys): Promise<void> => {
     const { host, native } = observation;
     const carrier = lineageCarrier(host, native);
-    const key = observation.idempotencyKey;
     if (host === 'cursor') {
       const subagentId = nativeString(native, 'subagent_id') ?? nativeString(native, 'tool_call_id');
       const parentId = nativeString(native, 'parent_conversation_id') ?? carrier.conversation;
       if (subagentId === undefined || parentId === undefined) return;
-      const parent = await ensureRoot(host, parentId, undefined, observedAt, `${key}:parent`);
+      const parent = await ensureRoot(host, parentId, undefined, observedAt, keys);
       await dispatch('nodeStarted', {
         depth: parent.depth + 1,
         id: subagentId,
@@ -207,14 +234,14 @@ export const createAgentLineageRegistry = (
         subagentId,
         ...(nativeString(native, 'tool_call_id') === undefined ? {} : { toolCallId: nativeString(native, 'tool_call_id')! }),
         ...(nativeString(native, 'subagent_type') === undefined ? {} : { type: nativeString(native, 'subagent_type')! }),
-      }, key);
+      }, keys);
       return;
     }
     const agentId = nativeString(native, 'agent_id');
     const root = carrier.root;
     if (agentId === undefined || root === undefined) return;
-    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, `${key}:root`);
-    const spawn = await claimSpawn(host, key);
+    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys);
+    const spawn = await claimSpawn(host, rootNodeValue.root, keys);
     const parent = (spawn === undefined ? undefined : nodeFor(spawn.conversation)) ?? rootNodeValue;
     await dispatch('nodeStarted', {
       depth: parent.depth + 1,
@@ -225,10 +252,10 @@ export const createAgentLineageRegistry = (
       startedAt: observedAt,
       ...(spawn === undefined ? {} : { toolCallId: spawn.toolCallId }),
       ...(nativeString(native, 'agent_type') === undefined ? {} : { type: nativeString(native, 'agent_type')! }),
-    }, key);
+    }, keys);
   };
 
-  const observeStop = async (observation: LineageObservation, observedAt: string): Promise<void> => {
+  const observeStop = async (observation: LineageObservation, observedAt: string, keys: JournalKeys): Promise<void> => {
     const { host, native } = observation;
     const stopped = host === 'cursor'
       ? (() => {
@@ -239,21 +266,22 @@ export const createAgentLineageRegistry = (
         })()
       : nativeString(native, 'agent_id');
     if (stopped === undefined || state.nodes[stopped] === undefined) return;
-    await dispatch('nodeStopped', { id: stopped, stoppedAt: observedAt }, observation.idempotencyKey);
+    await dispatch('nodeStopped', { id: stopped, stoppedAt: observedAt }, keys);
   };
 
   const registry: AgentLineageRegistry = {
     async observe(observation) {
       await hydrate();
+      const keys = journalKeys(observation.idempotencyKey);
       const observedAt = observation.observedAt ?? new Date().toISOString();
       const { event, host, native } = observation;
       const carrier = lineageCarrier(host, native);
       switch (event) {
         case 'agent/start':
-          await observeStart(observation, observedAt);
+          await observeStart(observation, observedAt, keys);
           break;
         case 'agent/stop':
-          await observeStop(observation, observedAt);
+          await observeStop(observation, observedAt, keys);
           break;
         default:
           break;
@@ -261,7 +289,7 @@ export const createAgentLineageRegistry = (
       // Every other carrier is known or becomes a root; Cursor children bind here.
       if (carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
         const rootLike = host === 'cursor' || carrier.conversation === carrier.root;
-        if (rootLike) await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, `${observation.idempotencyKey}:carrier`);
+        if (rootLike) await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys);
       }
       const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');
       const toolName = nativeString(native, 'tool_name');
@@ -273,9 +301,9 @@ export const createAgentLineageRegistry = (
             ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
             toolCallId,
             toolName,
-          }, observation.idempotencyKey);
+          }, keys);
         } else if (event === 'tool/after' || event === 'tool/failure') {
-          await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, observation.idempotencyKey);
+          await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
         }
       }
       return resolve(host, native, host === 'cursor' ? 'inferred' : 'registry');

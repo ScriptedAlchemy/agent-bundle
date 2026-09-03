@@ -196,6 +196,51 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
     await driver.close();
   });
 
+  it('replays a duplicate delivery through the same journal keys without rewinding the tree', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const registry = createAgentLineageRegistry({ store });
+    const before = {
+      hook_event_name: 'preToolUse', conversation_id: 'root-c', tool_input: {}, tool_name: 'Read', tool_use_id: 'call-1',
+    };
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'dup', native: before, observedAt: '2026-09-03T00:00:00.000Z' });
+    const revisionAfterFirst = (await store.read()).revision;
+    // A later, unrelated event advances the journal.
+    await registry.observe({ event: 'tool/after', host: 'cursor', idempotencyKey: 'after', native: { ...before, hook_event_name: 'postToolUse', tool_output: '{}' }, observedAt: '2026-09-03T00:00:01.000Z' });
+    const head = (await store.read()).revision;
+    // Cursor 3.18.25 delivers some preToolUse payloads twice with the same canonical key.
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'dup', native: before, observedAt: '2026-09-03T00:00:00.000Z' });
+    expect((await store.read()).revision).toBe(head);
+    expect(revisionAfterFirst).toBeLessThan(head);
+    // The in-memory tree stayed at the head: the window that closed stays closed.
+    expect(registry.snapshot().openCalls).toEqual([]);
+    await store.close();
+    await driver.close();
+  });
+
+  it('scopes spawn claims to the starting subagent\'s root when two sessions share one registry', async () => {
+    const registry = createAgentLineageRegistry();
+    const spawn = (session: string, id: string) => registry.observe({
+      event: 'tool/before',
+      host: 'claude',
+      idempotencyKey: `${session}:${id}`,
+      native: { hook_event_name: 'PreToolUse', session_id: session, tool_input: {}, tool_name: 'Agent', tool_use_id: id },
+    });
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 'a', native: { hook_event_name: 'SessionStart', session_id: 'session-a' } });
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 'b', native: { hook_event_name: 'SessionStart', session_id: 'session-b' } });
+    await spawn('session-a', 'spawn-a');
+    await spawn('session-b', 'spawn-b');
+    // Session A's child starts after B opened its own spawn: it must claim A's call, not the newest one.
+    const child = await registry.observe({
+      event: 'agent/start',
+      host: 'claude',
+      idempotencyKey: 'a:start',
+      native: { agent_id: 'child-a', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'session-a' },
+    });
+    expect(value(child)).toMatchObject({ parent: 'session-a', root: 'session-a', subagent: { toolCallId: 'spawn-a' } });
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-b']);
+  });
+
   it('answers honestly when the registry never saw the subagent start', async () => {
     const registry = createAgentLineageRegistry();
     const lineage = await registry.observe({
