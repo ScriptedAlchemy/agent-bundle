@@ -276,8 +276,11 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
  * emits: POSIX-relative, no backslashes (a Windows `..\outside` must not slip
  * past POSIX normalization), no empty, `.`, or `..` segments, no drive letter,
  * and no segment Windows would normalise onto another entry (reserved
- * characters, alternate-stream colons, trailing dots or spaces).
+ * characters, alternate-stream colons, trailing dots or spaces) or resolve as
+ * a DOS device (`NUL`, `CON.txt`, `COM1`, `LPT1.json`, ...).
  */
+const windowsDeviceName = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu;
+
 export const isReceiptPath = (value: unknown): value is string =>
   typeof value === 'string' &&
   value.length > 0 &&
@@ -294,6 +297,7 @@ export const isReceiptPath = (value: unknown): value is string =>
     segment !== '.' &&
     segment !== '..' &&
     !/[<>:"|?*]/u.test(segment) &&
+    !windowsDeviceName.test(segment) &&
     [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
     !segment.endsWith('.') &&
     !segment.endsWith(' '));

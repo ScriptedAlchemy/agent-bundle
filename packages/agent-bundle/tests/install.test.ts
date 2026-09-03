@@ -753,6 +753,7 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       [installReceiptFile.toUpperCase()], ['.Agent-Bundle-Install.json'], [`${installReceiptFile}/nested`],
       ['.Agent-Bundle-Install.json/payload'],
       ['notes.md:stream'], ['trailing.'], ['trailing '], ['bad<name'], ['tab\tname'],
+      ['NUL'], ['nul'], ['CON.txt'], ['skills/COM1'], ['LPT1.json'], ['aux.md'], ['prn'],
       ['state/plugin.sqlite'], ['state'], ['State/plugin.sqlite'], ['STATE'],
     ]) {
       // The same rules gate the owned-directory list: it drives `rmdir`, exactly like files drive `rm`.
@@ -804,7 +805,7 @@ it('refuses artifact paths that could not round-trip through a receipt', async (
   const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
   try {
     // Includes a case alias of the receipt filename: on a case-insensitive filesystem it is the receipt.
-    for (const name of ['back\\slash.txt', 'notes.md:stream', 'trailing.', 'trailing ', 'bad<name', '.Agent-Bundle-Install.json']) {
+    for (const name of ['back\\slash.txt', 'notes.md:stream', 'trailing.', 'trailing ', 'bad<name', 'CON.txt', '.Agent-Bundle-Install.json']) {
       await writeFile(join(fixture.bundleRoot, name), 'odd\n');
       await expect(treeInventory(fixture.bundleRoot), name).rejects.toThrow(
         `Refusing unsupported filesystem entry ${JSON.stringify(name)}`,
