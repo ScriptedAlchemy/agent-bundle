@@ -133,7 +133,7 @@
         {
           "oneOf": [
             {
-              "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./",
+              "pattern": "^\\./(?!(?:.*[\\\\/])?\\.\\.?(?:[\\\\/]|$))",
               "type": "string"
             },
             {
@@ -157,7 +157,7 @@
         "source": { "const": "archive" },
         "url": {
           "format": "uri",
-          "pattern": "^https://(?!(?:localhost|[^/]+\\.localhost|127(?:\\.[0-9]{1,3}){3}|169\\.254(?:\\.[0-9]{1,3}){2}|metadata(?:\\.google(?:\\.internal)?)?|metadata\\.azure\\.internal|instance-data\\.ec2\\.internal)(?::[0-9]+)?/)",
+          "pattern": "^https://(?!(?:localhost|[^/]+\\.localhost|127(?:\\.[0-9]{1,3}){3}|169\\.254(?:\\.[0-9]{1,3}){2}|metadata(?:\\.google(?:\\.internal)?)?|metadata\\.azure\\.internal|instance-data\\.ec2\\.internal)(?::[0-9]+)?(?:/|$))",
           "type": "string"
         }
       },
@@ -302,7 +302,7 @@
       "properties": {
         "description": { "minLength": 1, "type": "string" },
         "pluginRoot": {
-          "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))\\./.+",
+          "pattern": "^\\./(?!(?:.*[\\\\/])?\\.\\.?(?:[\\\\/]|$)).+",
           "type": "string"
         },
         "version": { "minLength": 1, "type": "string" }

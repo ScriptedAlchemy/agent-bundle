@@ -168,7 +168,11 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
   expect(renderedContext).toEqual({
     actor: requestContext.actor,
     host: requestContext.host,
-    invocation: { hostContractRevision: '2.1.250' },
+    invocation: {
+      hostContractRevision: '2.1.250',
+      operationId: 'event:tool/after',
+      surface: 'tool/after',
+    },
     session: requestContext.session,
     workspace: requestContext.workspace,
   });
