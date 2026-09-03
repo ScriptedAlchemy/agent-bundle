@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: 类型 API
-      link: /api/
+      link: /zh/api/
     - theme: alt
       text: GitHub
       link: https://github.com/ScriptedAlchemy/agent-bundle
