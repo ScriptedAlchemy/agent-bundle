@@ -1,10 +1,10 @@
 import { defineConfig } from 'agent-bundle';
 
 export default defineConfig({
+  // No `version` field: package.json is the single release-version source.
   plugin: {
     description: 'A command-line tool scaffolded from the cli-tool template.',
     name: 'my-agent-plugin',
-    version: '0.1.0',
   },
   // Optional: move the build artifact root (default `dist`); the CLI
   // `--output` flag still wins.

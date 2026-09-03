@@ -3,6 +3,7 @@ import { posix } from 'node:path';
 import type { ValidateFunction } from 'ajv/dist/2020.js';
 
 import { createTargetDiagnostics } from './diagnostics.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { dataArrayValues } from '../core/strict-json.ts';
@@ -30,6 +31,7 @@ import {
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
   nativeHookWrapperSource,
+  nativeHooksFor,
   planHooks,
   readStandardNativeHookCommands,
   validatedNativeHookDocument,
@@ -157,11 +159,38 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.6.0',
+  adapterRevision: '1.7.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
 const evidence = capabilityEvidence(codexName, metadata);
+
+/** Lifts a pinned four-state capability-table row into the shared capability namespace. */
+const tableCapability = (row: { readonly reason?: string; readonly state: string }): CapabilityState => {
+  switch (row.state) {
+    case 'supported':
+      return supportedCapability(evidence);
+    case 'degraded':
+      return Object.freeze({ evidence, reason: row.reason ?? '', state: 'degraded' });
+    case 'unavailable':
+      return unavailableCapability(row.reason ?? '');
+    default:
+      throw new TypeError(`Unsupported Codex capability-table state ${JSON.stringify(row.state)}.`);
+  }
+};
+
+const hookContractTable = capabilityTable.hooks.contract;
+const codexReleaseHookEvents: readonly string[] = capabilityTable.hooks.releaseEvents;
+const codexHookRules = Object.freeze({
+  additionalContextEvents: hookContractTable.additionalContextLimit.additionalContextEvents as readonly string[],
+  hostedToolExclusions: hookContractTable.matcherSemantics.hostedToolExclusions as readonly string[],
+  ignoredMatcherEvents: hookContractTable.matcherSemantics.ignoredMatcherEvents as readonly string[],
+  mcpToolUnsupportedEvents: hookContractTable.mcpToolExecution.unsupportedEvents as readonly string[],
+  shortTimeoutEvents: hookContractTable.timeoutRules.shortTimeoutEvents as Readonly<
+    Record<string, { readonly defaultSeconds: number; readonly maximumSeconds: number } | undefined>
+  >,
+  synchronousEvents: hookContractTable.asyncCommandHooks.synchronousEvents as readonly string[],
+});
 
 const artifactValidation = deepFreeze({
   documents: [
@@ -233,6 +262,155 @@ const codexInterfaceFields = Object.freeze([
 
 const isEmail = (value: unknown): value is string =>
   isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+
+const hookHandlersOf = (
+  hooks: Readonly<Record<string, unknown>>,
+): readonly {
+  readonly event: string;
+  readonly group: Readonly<Record<string, unknown>>;
+  readonly groupIndex: number;
+  readonly handler: Readonly<Record<string, unknown>>;
+  readonly handlerIndex: number;
+}[] => {
+  const handlers = [];
+  for (const [event, groups] of Object.entries(hooks)) {
+    for (const [groupIndex, group] of (dataArrayValues(groups) ?? []).entries()) {
+      if (!isPlainDataRecord(group)) continue;
+      for (const [handlerIndex, handler] of (dataArrayValues(group['hooks']) ?? []).entries()) {
+        if (!isPlainDataRecord(handler)) continue;
+        handlers.push({ event, group, groupIndex, handler, handlerIndex });
+      }
+    }
+  }
+  return handlers;
+};
+
+/**
+ * Names the documented-but-unsupported surfaces in an authored native hook
+ * document before schema validation, so the closed schema's generic rejection
+ * does not hide why Codex would skip the entry.
+ */
+const scanCodexNativeHookDocument = (document: unknown, source: string): readonly Diagnostic[] => {
+  if (!isPlainDataRecord(document) || !isPlainDataRecord(document['hooks'])) return [];
+  const diagnostics: Diagnostic[] = [];
+  for (const event of Object.keys(document['hooks'])) {
+    if (codexReleaseHookEvents.includes(event)) continue;
+    diagnostics.push(event === 'Interrupt'
+      ? {
+          ...errorDiagnostic(
+            'codex.native-hooks.event.deferred',
+            `Codex native hooks file ${JSON.stringify(source)} declares the Interrupt event, which is deferred: the pinned rust-v0.147.0 generated hook schemas publish no Interrupt contract.`,
+          ),
+          recovery: 'Remove the Interrupt group until the Codex pin moves to a release that ships the generated Interrupt schemas.',
+        }
+      : {
+          ...errorDiagnostic(
+            'codex.native-hooks.event.unknown',
+            `Codex native hooks file ${JSON.stringify(source)} declares ${JSON.stringify(event)}, which is not one of the eleven release-documented Codex hook events.`,
+          ),
+          recovery: `Use one of ${codexReleaseHookEvents.join(', ')}.`,
+        });
+  }
+  for (const { event, groupIndex, handler, handlerIndex } of hookHandlersOf(document['hooks'])) {
+    const type = handler['type'];
+    if (type !== 'prompt' && type !== 'agent') continue;
+    diagnostics.push({
+      ...errorDiagnostic(
+        'codex.native-hooks.handler.skipped',
+        `Codex native hooks file ${JSON.stringify(source)} ${event}[${groupIndex}].hooks[${handlerIndex}] uses handler type ${JSON.stringify(type)}, which Codex 0.147.0 parses but skips.`,
+      ),
+      recovery: 'Use a command or mcp_tool handler; Codex runs no prompt or agent handlers.',
+    });
+  }
+  return diagnostics;
+};
+
+/**
+ * Applies the per-event rules from https://learn.chatgpt.com/docs/hooks that
+ * the closed hooks schema cannot express, to generated and native handlers
+ * alike, so no handler field the host would ignore or reject is published.
+ */
+const codexHookDocumentDiagnostics = (document: Readonly<Record<string, unknown>>): readonly Diagnostic[] => {
+  const hooks = document['hooks'];
+  if (!isPlainDataRecord(hooks)) return [];
+  const diagnostics: Diagnostic[] = [];
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!codexHookRules.ignoredMatcherEvents.includes(event)) continue;
+    for (const [groupIndex, group] of (dataArrayValues(groups) ?? []).entries()) {
+      if (!isPlainDataRecord(group) || typeof group['matcher'] !== 'string') continue;
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hooks.matcher.ignored',
+          `Codex ignores any matcher on ${event}; ${event}[${groupIndex}] declares matcher ${JSON.stringify(group['matcher'])}.`,
+        ),
+        recovery: `Remove the matcher from the ${event} group; the hook already runs on every ${event} event.`,
+      });
+    }
+  }
+  for (const { event, groupIndex, handler, handlerIndex } of hookHandlersOf(hooks)) {
+    const location = `${event}[${groupIndex}].hooks[${handlerIndex}]`;
+    if (handler['type'] === 'mcp_tool' && codexHookRules.mcpToolUnsupportedEvents.includes(event)) {
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hooks.session-end.mcp-tool',
+          `Codex ${event} does not support mcp_tool handlers; ${location} declares one.`,
+        ),
+        recovery: `Use a command handler for ${event}, or move the mcp_tool handler to a supported event.`,
+      });
+    }
+    if (handler['async'] === true && codexHookRules.synchronousEvents.includes(event)) {
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hooks.session-end.async',
+          `Codex always runs ${event} hooks synchronously; ${location} sets async to true, which the host would ignore.`,
+        ),
+        recovery: `Remove async from the ${event} handler.`,
+      });
+    }
+    const shortTimeout = codexHookRules.shortTimeoutEvents[event];
+    if (shortTimeout !== undefined && typeof handler['timeout'] === 'number' && handler['timeout'] > shortTimeout.maximumSeconds) {
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hooks.session-end.timeout',
+          `Codex ${event} hooks support at most ${shortTimeout.maximumSeconds} seconds (default ${shortTimeout.defaultSeconds}); ${location} declares ${handler['timeout']}.`,
+        ),
+        recovery: `Set the ${event} handler timeout to ${shortTimeout.maximumSeconds} seconds or less.`,
+      });
+    }
+    if (handler['additionalContextLimit'] !== undefined && !codexHookRules.additionalContextEvents.includes(event)) {
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hooks.additional-context-limit.event',
+          `Codex ${event} hooks cannot return additionalContext, so ${location} additionalContextLimit would be ignored with a host configuration warning.`,
+        ),
+        recovery: `Remove additionalContextLimit from the ${event} handler; it applies only to ${codexHookRules.additionalContextEvents.join(', ')}.`,
+      });
+    }
+  }
+  return diagnostics;
+};
+
+/** Rejects codex-scoped native selectors that name hosted tools outside the local function-tool hook path. */
+const codexHostedToolDiagnostics = (
+  model: NormalizedPlugin,
+  isSelected: (targets: readonly string[]) => boolean,
+): readonly Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  for (const hook of model.hooks) {
+    if (!isSelected(hook.targets)) continue;
+    for (const nativeTool of hook.nativeTools ?? []) {
+      if (nativeTool.target !== codexName || !codexHookRules.hostedToolExclusions.includes(nativeTool.name)) continue;
+      diagnostics.push({
+        ...errorDiagnostic(
+          'codex.hook.tool.hosted',
+          `Codex hosted tool ${JSON.stringify(nativeTool.name)} never reaches the local function-tool hook path, so hook ${JSON.stringify(hook.name)} cannot select it.`,
+        ),
+        recovery: 'Select a shell, apply_patch, MCP, or local function tool instead; hosted tools such as WebSearch are not hookable in Codex.',
+      });
+    }
+  }
+  return diagnostics;
+};
 
 interface CodexManifestMetadataPlan {
   readonly diagnostics: readonly Diagnostic[];
@@ -806,15 +984,27 @@ export const planCodexArtifacts = (
   const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
+  diagnostics.push(...codexHostedToolDiagnostics(model, isSelected));
   const generatedHooks = planHooks(model, targetName, hookContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
   }
-  const nativeHooks = validatedNativeHookDocument(model, codexName, 'Codex', validateHooks, errorDiagnostic);
+  const declaredNativeHooks = nativeHooksFor(model, codexName);
+  const nativeScan = declaredNativeHooks?.document === undefined
+    ? []
+    : scanCodexNativeHookDocument(declaredNativeHooks.document, declaredNativeHooks.source);
+  diagnostics.push(...nativeScan);
+  // A scan finding already names the exact unsupported surface; the closed
+  // schema would only add a generic rejection of the same entry.
+  const nativeHooks = nativeScan.length > 0
+    ? { diagnostics: [] }
+    : validatedNativeHookDocument(model, codexName, 'Codex', validateHooks, errorDiagnostic);
   diagnostics.push(...nativeHooks.diagnostics);
   const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
-  const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
+  const hookSemantics = hookDocument === undefined ? [] : codexHookDocumentDiagnostics(hookDocument);
+  diagnostics.push(...hookSemantics);
+  const hookDocumentValid = hookDocument !== undefined && hookSemantics.length === 0 && validateHooks(hookDocument);
   const manifestMetadata = planCodexManifestMetadata(model);
   diagnostics.push(...manifestMetadata.diagnostics);
   const appsPlan = planCodexApps(model);
@@ -969,6 +1159,19 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
     hooks: supportedCapability(evidence),
+    hookAdditionalContextLimit: tableCapability(hookContractTable.additionalContextLimit),
+    hookAsyncCommands: tableCapability(hookContractTable.asyncCommandHooks),
+    hookCommandWindows: tableCapability(hookContractTable.commandWindows),
+    hookGeneratedSchemas: tableCapability(hookContractTable.generatedSchemaValidation),
+    hookHandlerCommand: tableCapability(hookContractTable.handlerCommand),
+    hookHandlerMcpTool: tableCapability(hookContractTable.handlerMcpTool),
+    hookHandlerPromptAgent: tableCapability(hookContractTable.handlerPromptAgent),
+    hookMatcherSemantics: tableCapability(hookContractTable.matcherSemantics),
+    hookMcpToolExecution: tableCapability(hookContractTable.mcpToolExecution),
+    hookReleaseEvents: tableCapability(hookContractTable.releaseEvents),
+    hookStatusMessage: tableCapability(hookContractTable.statusMessage),
+    hookTimeoutRules: tableCapability(hookContractTable.timeoutRules),
+    hookTrustReview: tableCapability(hookContractTable.trustReview),
     // The pinned Codex plugin contract documents no LSP surface at all, so
     // this is an absent host capability rather than a degraded one: nothing
     // of Claude's `.lsp.json` is copied to the Codex manifest.

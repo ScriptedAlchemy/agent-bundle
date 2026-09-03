@@ -80,8 +80,9 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
+| `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly;
 the state convention is specifically `src/state.ts`.
@@ -141,13 +142,22 @@ with the contract `(context: { invocation, signal }) => value |
 Promise<value>`, where `invocation` is the current route invocation and
 `signal` is its request abort signal.
 
-The generated shared Flight worker executes providers once per request,
-sequentially in deterministic key order, before entering `runAgentRequest`.
-The returned values join the request's provider map. A thrown or rejected
-factory fails the request closed; expected degradation should return an honest
-unavailable-shaped value instead of throwing. `processLifetime` is reserved
-for the framework-owned process identity and hit counter, so provider filenames
-must not derive that key.
+Every generated request scope — the shared Flight worker behind generated MCP
+and event routes, the react-server worker behind rendered routed CLI commands
+and rendered scripts, and the routed-CLI executable itself for plain `.ts`
+commands — executes providers once per request, sequentially in deterministic
+key order, before entering `runAgentRequest`. The returned values join the
+request's provider map. A thrown or rejected factory fails the request closed;
+expected degradation should return an honest unavailable-shaped value instead
+of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
+`script`), so a provider can branch on the entry surface deliberately.
+`processLifetime` is reserved for the framework-owned process identity and hit
+counter, so provider filenames must not derive that key.
+
+Route-unit and CLI-dispatch tests inject provider values through the same
+`context` seam as identity axes (`renderRoute(id, { context: { providers:
+{ library: fixture } } })`); the harness never executes conventional provider
+modules, so a test chooses exactly the values a component observes.
 
 ### Handler request context
 
@@ -536,6 +546,28 @@ engine executes the config. Use instead the utils argument Rslib/Rsbuild pass
 to `tools.rspack` mutator functions —
 `tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
 engine's own `rspack` object.
+
+### `agent-bundle inspect` component accounting
+
+```sh
+agent-bundle inspect [--target <t>] [--json]
+```
+
+Every inspection plan accounts for each host component the project declares
+— skills, commands, rules, hooks, MCP servers, MCP Apps, and scripts — as
+either `selected` (emitted for that target) or `skipped` (omitted), in one
+deterministic order. A skipped component names its cause: `excluded-by-targets`
+when the author's `targets` left the host out, or `unsupported-capability` when
+the host's pinned capability table does not support the surface. Components
+that need a host capability carry that target's own four-state judgment as
+`capability` — `{ name, state: 'supported', evidence }` for emitted surfaces,
+or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
+the JSON explains why a Cursor rule is absent from a Claude bundle in the
+host's words rather than the compiler's. An adapter that publishes no row for
+a needed capability reads as an honest `unavailable`, never a silent pass.
+Scripts need no host capability and carry none. The human output prints one
+line per target (`<target>: N component(s) selected, M omitted`) followed by
+each omission and its reason.
 
 ### `agent-bundle inspect --bundler`
 

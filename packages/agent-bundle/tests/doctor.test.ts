@@ -243,6 +243,64 @@ it('inventories all pinned Cursor manifest candidates in loader order', async ()
   }
 });
 
+it('validates root plugin.json installs that declare an Agent Plugins schema against the pinned 1.0.0 contract', async () => {
+  const fixture = await temporaryDoctor();
+  const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
+  const pluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+  const mcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+  try {
+    await writeJson(join(installRoot, 'conformant', 'plugin.json'), {
+      $schema: pluginSchema,
+      name: 'conformant',
+      version: '1.0.0',
+    });
+    await writeJson(join(installRoot, 'conformant', 'mcp.json'), {
+      $schema: mcpSchema,
+      mcpServers: { tool: { args: ['${PLUGIN_ROOT}/mcp/tool.mjs'], command: 'node', type: 'stdio' } },
+    });
+    await mkdir(join(installRoot, 'conformant', 'mcp'), { recursive: true });
+    await writeFile(join(installRoot, 'conformant', 'mcp', 'tool.mjs'), 'export {};\n');
+    await writeJson(join(installRoot, 'broken', 'plugin.json'), {
+      $schema: pluginSchema,
+      name: 'broken',
+      unknownField: true,
+      version: '1.0.0',
+    });
+    await writeJson(join(installRoot, 'broken', 'mcp.json'), {
+      $schema: mcpSchema,
+      mcpServers: { remote: { type: 'streamable-http', url: 'http://mcp.example.test/mcp' } },
+    });
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').inventory).toMatchObject({
+      findings: [
+        { manifest: 'plugin.json', name: 'broken', state: 'corrupt' },
+        { manifest: 'plugin.json', name: 'conformant', state: 'installed' },
+      ],
+      status: 'known',
+    });
+    const staticDiagnostics = report.diagnostics.filter((entry) => entry.code === 'AB7320');
+    expect(staticDiagnostics.filter((entry) => entry.severity === 'info')).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('/broken" is a root plugin.json') }),
+      expect.objectContaining({ message: expect.stringContaining('/conformant" is a root plugin.json') }),
+    ]);
+    for (const info of staticDiagnostics.filter((entry) => entry.severity === 'info')) {
+      expect(info.message).toContain('Agent Plugins package');
+      expect(info.message).toContain(pluginSchema);
+    }
+    expect(staticDiagnostics.filter((entry) => entry.severity === 'error').map((entry) => entry.message)).toEqual([
+      expect.stringMatching(/reported AB6035: plugin\.json\/: must NOT have additional properties/u),
+      expect.stringMatching(/reported AB6036: mcp\.json\/mcpServers\/remote\/url uses plain HTTP against non-loopback host/u),
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('accepts a versionless Cursor inventory manifest as installed', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');

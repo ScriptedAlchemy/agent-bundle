@@ -125,10 +125,13 @@ const runtimeProxyShellHarness = async (
     timers.clear();
     for (const callback of pending) callback();
   };
-  const appPosts: unknown[] = [];
+  const appPosts: Array<Readonly<{ readonly message: unknown; readonly targetOrigin: string }>> = [];
   const parentPosts: Array<Readonly<{ readonly message: unknown; readonly targetOrigin: string }>> = [];
   const child = Object.freeze({
     postMessage: (message: unknown, targetOrigin: string) => { appPosts.push(Object.freeze({ message, targetOrigin })); },
+  });
+  const parentWindow = Object.freeze({
+    postMessage: (message: unknown, targetOrigin: string) => { parentPosts.push(Object.freeze({ message, targetOrigin })); },
   });
   const entries: string[] = [];
   const app = Object.create(null) as { readonly contentWindow: typeof child; srcdoc: string };
@@ -181,7 +184,7 @@ const runtimeProxyShellHarness = async (
   ) => void;
   execute(
     Object.freeze({ getElementById: () => app }),
-    Object.freeze({ postMessage: (message, targetOrigin) => { parentPosts.push(Object.freeze({ message, targetOrigin })); } }),
+    parentWindow,
     Object.freeze({ origin: binding.origin }),
     FakeWebSocket,
     TextEncoder,
@@ -195,6 +198,9 @@ const runtimeProxyShellHarness = async (
   return Object.freeze({
     appPosts,
     emitChild: (data: unknown) => { emit('message', Object.freeze({ data, origin: 'null', ports: Object.freeze([]), source: child })); },
+    emitParent: (data: unknown, origin = foregroundOrigin) => {
+      emit('message', Object.freeze({ data, origin, ports: Object.freeze([]), source: parentWindow }));
+    },
     entries,
     pagehide: () => { emit('pagehide'); },
     parentPosts,
@@ -258,6 +264,75 @@ it('keeps malformed opaque-child initialize messages from advancing the trusted 
       },
       targetOrigin: foregroundOrigin,
     }]);
+  } finally {
+    await binding.close();
+    upstream.closeAllConnections();
+    await close(upstream);
+  }
+});
+
+it('queues host requests relayed during the App handshake and flushes them once the App reports initialized', async () => {
+  // Regression for #23: a ui/resource-teardown relayed between the initialize
+  // response and ui/notifications/initialized used to be dropped, so the host
+  // burned its bounded teardown grace waiting for an acknowledgement that could
+  // never arrive. The shell must queue (bounded) instead of dropping.
+  const upstream = createServer((request, response) => {
+    if (serveBootstrapEntry(request, response)) return;
+    response.writeHead(404).end();
+  });
+  const origin = await listen(upstream);
+  const binding = await RuntimeClientSurfaceProxy.open({
+    entryPath: '/app/index.html',
+    httpOrigin: origin,
+    httpPathPrefixes: ['/app/'],
+    surfaceId: 'app.weather',
+    subscribeReload: noopSubscribeReload,
+  }, () => undefined);
+  try {
+    const shell = await runtimeProxyShellHarness(binding);
+    const initialize = {
+      id: 'init', jsonrpc: '2.0', method: 'ui/initialize',
+      params: { appCapabilities: {}, appInfo: { name: 'app', version: '1' }, protocolVersion: '2026-01-26' },
+    };
+    const initializeResponse = { id: 'init', jsonrpc: '2.0', result: { hostContext: {} } };
+    const teardown = { id: 'teardown', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} };
+    const initialized = { jsonrpc: '2.0', method: 'ui/notifications/initialized' };
+
+    // Host traffic before the App has even asked to initialize is queued too.
+    shell.emitParent({ id: 'early', jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: {} });
+    shell.emitChild(initialize);
+    expect(shell.parentPosts.map((entry) => entry.message)).toEqual([initialize]);
+    shell.emitParent(initializeResponse);
+    expect(shell.appPosts.map((entry) => entry.message)).toEqual([initializeResponse]);
+
+    // The race from #23: a teardown request lands inside the handshake window.
+    shell.emitParent(teardown);
+    // Foreign-origin and malformed host traffic is still rejected, never queued.
+    shell.emitParent({ id: 'foreign', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }, 'http://evil.example');
+    shell.emitParent({ id: 'not-rpc', method: 'ui/resource-teardown' });
+    // The queue is bounded: the 32-entry window already holds `early` and
+    // `teardown`, so exactly 30 more fit and the rest are dropped.
+    const filler = Array.from({ length: 40 }, (_, index) => ({ id: `fill-${String(index)}`, jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { index } }));
+    for (const message of filler) shell.emitParent(message);
+    expect(shell.appPosts).toHaveLength(1);
+
+    shell.emitChild(initialized);
+    expect(shell.parentPosts.map((entry) => entry.message)).toEqual([initialize, initialized]);
+    const flushed = shell.appPosts.slice(1).map((entry) => entry.message);
+    expect(flushed).toHaveLength(32);
+    expect(flushed[0]).toEqual({ id: 'early', jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: {} });
+    expect(flushed[1]).toEqual(teardown);
+    expect(flushed.slice(2)).toEqual(filler.slice(0, 30));
+    expect(shell.appPosts.every((entry) => entry.targetOrigin === '*')).toBe(true);
+
+    // Once initialized, host traffic relays immediately and nothing is replayed twice.
+    const late = { id: 'late', jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} };
+    shell.emitParent(late);
+    expect(shell.appPosts).toHaveLength(34);
+    expect(shell.appPosts.at(-1)?.message).toEqual(late);
+    const acknowledgement = { id: 'teardown', jsonrpc: '2.0', result: {} };
+    shell.emitChild(acknowledgement);
+    expect(shell.parentPosts.at(-1)?.message).toEqual(acknowledgement);
   } finally {
     await binding.close();
     upstream.closeAllConnections();

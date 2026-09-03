@@ -32,9 +32,11 @@ against the entry's plugin-root `cwd`. Codex has no path-token interpolation, so
 server without a plugin-root working directory omits the anchor; source-built (`entry:`) servers
 always have one on every target. Server runtime code should resolve persistent state and bundled
 assets against this anchor rather than the process working directory: Claude Code currently
-launches stdio servers from the host's own working directory and ignores the emitted `cwd` field
-(the Claude adapter still emits `cwd: "${CLAUDE_PLUGIN_ROOT}"` as documented, schema-valid
-future-proofing). A server's own `env` entries win over the injected value, so declaring
+launches stdio servers from the host's own working directory and ignores stdio `cwd` at runtime,
+and its placeholder-substitution table excludes `cwd`, so the Claude adapter emits no `cwd` for a
+plugin-root working directory (the absolute `${CLAUDE_PLUGIN_ROOT}/mcp/...` entry path plus this
+env anchor carry the guarantee) and rejects token-bearing `cwd` values outright. A server's own
+`env` entries win over the injected value, so declaring
 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The `pluginRootEnvAnchor` export
 names the variable for consumer code.
 
@@ -42,6 +44,19 @@ Hook `tools` accept the canonical selectors (`shell`, `file.read`, `file.write`,
 plus explicit host-native selectors such as `claude:WebSearch` or `codex:view_image`, which
 contribute only to that host's native matcher. A hook that selects tools must leave every selected
 target with at least one applicable selector, otherwise the build fails.
+
+Codex hooks follow the release contract pinned in `codex-0.147.0.json` (`hooks.contract`). The
+emitted and authored (`codex.nativeHooks`) `hooks/hooks.json` is closed to the eleven
+release-documented events; `Interrupt` stays deferred until the pin moves to a release that ships
+its generated schema. Native documents may use every documented `command` handler field
+(`commandWindows`, `timeout`, `statusMessage`, `additionalContextLimit`, `async`) and `mcp_tool`
+handlers (`server`, `tool`, `input`, `timeout`, `statusMessage`); `prompt` and `agent` handlers,
+which Codex parses but skips, fail with `codex.native-hooks.handler.skipped`. Rules the host would
+otherwise apply silently fail the build instead: `mcp_tool`, `async`, or a timeout above three
+seconds on `SessionEnd`, `additionalContextLimit` on an event that returns no `additionalContext`,
+a `matcher` on `UserPromptSubmit` or `Stop`, and a `codex:WebSearch`-style hosted-tool selector.
+Hook trust (review by current hash in `/hooks`, plugin hooks skipped until trusted, managed hooks
+immutable) is host-owned and is recorded as unavailable rather than claimed.
 
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
@@ -70,7 +85,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
 | `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
-| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
+| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
@@ -202,6 +217,46 @@ Workbench MCP sessions bind `{ epochId, target, serverName }` when opened and ne
 epoch automatically. Use **Restart MCP session** to respawn that generated server on its selected
 epoch; open a new session to use a newly published epoch. Compatible MCP Apps preview through the
 same bound session.
+
+### Development contract matrix
+
+Projects can opt host-facing rebuild adoption into the generated contract matrix by pointing
+`dev.contracts.fixtures` at a project-local module:
+
+```ts
+// agent-bundle.config.ts
+export default {
+  dev: {
+    contracts: {
+      fixtures: './contract-fixtures.ts',
+      server: 'tools', // optional when the project has exactly one MCP server
+    },
+  },
+};
+```
+
+The module default-exports the same `Record<routeId, ContractRouteFixture>` consumed by
+`runContractMatrix`. Agent Bundle reloads and validates it for every prepared epoch. An invalid
+module does not fail compilation: it fails that epoch's contract run with an `AB7210` diagnostic
+instead. Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available`
+adoption.
+
+For an enabled project, each published epoch is exercised through an already-open, epoch-pinned
+generated stdio session at the `dev-epoch` proof level. Passing epochs atomically replace the server
+behind existing live host MCP connections and refresh opted-in development host installs. Failing or
+timed-out epochs remain inactive on those host-facing surfaces (`AB7211`), leaving the last passing
+epoch connected and installed. On a cold start whose initial build fails, the last-good epoch the
+epoch store restored is seeded through the same gate before hosts serve it; when the project no
+longer prepares at all, the `dev.contracts` declaration cannot be read and the restored epoch is
+adopted directly, exactly as an undeclared project would be.
+
+The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
+carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
+and the latest `contracts` evaluation. The Overview page renders it as **Host adoption**: a failed
+gate names the published build, the build hosts kept, and the failed check names grouped by route,
+and folds the gate diagnostics into the Diagnostics table; the Logs page carries the same records.
+A later passing rebuild is adopted normally. Workbench playground sessions remain independently
+epoch-pinned and are not gated by this matrix.
 
 ### Live host MCP proxy
 

@@ -63,7 +63,7 @@ import {
 import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
-import { BundleWorkflow } from './overview-page.tsx';
+import { BundleWorkflow, HostAdoptionSection } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
@@ -428,6 +428,8 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
             </button>
           </section>
           {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
+
+          <HostAdoptionSection hostAdoption={overview.hostAdoption} publishedEpochId={overview.epoch.id} />
 
           <section aria-labelledby="diagnostics-heading" className="section">
             <h2 id="diagnostics-heading">Diagnostics ({overview.diagnostics.length})</h2>

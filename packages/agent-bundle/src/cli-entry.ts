@@ -89,6 +89,8 @@ export class CliInputError extends Error {
 }
 
 export interface GeneratedCliExecuteContext {
+  /** The raw argv the command consumed, for the provider invocation's `args`. */
+  readonly args: readonly string[];
   /** True when `--json` was passed; plain commands already emit canonical JSON. */
   readonly json: boolean;
   readonly signal: AbortSignal;
@@ -669,7 +671,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       }
     }
     if (parsed.ndjson) throw new CliUsageError('--ndjson requires a rendered command.');
-    const result = await options.execute(command, parsed.input, { json: parsed.json, signal });
+    const result = await options.execute(command, parsed.input, { args: rest, json: parsed.json, signal });
     signal.throwIfAborted();
     const exitCode = resultExitCode(command.exitCode, result);
     writeOut(`${stableJson(result === undefined ? null : result)}\n`);

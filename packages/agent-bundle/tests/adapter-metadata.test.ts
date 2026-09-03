@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
+import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { createDraft7AdapterValidator } from '../src/adapters/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
@@ -51,7 +52,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.6.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -67,7 +68,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.6.0',
+    adapterRevision: '1.7.0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -78,7 +79,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'hooks',
         revision: '0.147.0',
-        sha256: 'e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff',
+        sha256: '175b859eb8e85bd287d85ee840d97c3f5c2d0dda3223507a796d158e3770eeba',
       },
       {
         name: 'marketplace',
@@ -93,7 +94,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: 'decee14ec76a602701f3c312aee135a0983c1ce95fa89dafc588ebb5c968843b',
+        sha256: '986bcafa6ef46f9dc4558f05781f53400b3d75533a075068184ba8d43670d4ec',
       },
     ],
   });
@@ -169,7 +170,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.21.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.22.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -236,6 +237,21 @@ it('records observed capability versions and rehashes schema snapshots against p
         committedAt: '2026-08-19T16:34:23Z',
         url: 'https://github.com/agentplugins/agent-plugins-spec',
       });
+      expect(provenance.reverifiedAt).toBe('2026-09-02');
+      expect(provenance.reverification).toEqual(expect.stringContaining('a2afd7ec7edb916da638fc5c94640d4a7ba4480f'));
+      // Every Agent Plugins 1.0.0 feature carries an honest, dated capability row.
+      const plugin = capabilityTable.plugin as Record<string, unknown>;
+      const mcp = capabilityTable.mcp as Record<string, unknown>;
+      expect(plugin.manifestMetadata).toMatchObject({
+        fields: ['author', 'homepage', 'keywords', 'license', 'repository'],
+        state: 'supported',
+      });
+      expect(plugin.extensions).toMatchObject({ configKey: 'portable.extensions', state: 'supported' });
+      expect(plugin.extensionDirectories).toMatchObject({
+        reason: expect.stringContaining('2026-09-02'),
+        state: 'unavailable',
+      });
+      expect(mcp.legacySse).toMatchObject({ reason: expect.stringContaining('AB4339'), state: 'unavailable' });
     }
   }
 });
@@ -325,7 +341,134 @@ it('pins and validates the Codex 0.147.0 event wire schemas', async () => {
       output: {},
       sha256: '48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed',
     },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PermissionRequest',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        session_id: 'session-codex-1',
+        tool_input: { command: 'rm -rf build', description: null },
+        tool_name: 'Bash',
+        transcript_path: null,
+        turn_id: 'turn-codex-1',
+      },
+      name: 'permission-request.command.input.schema.json',
+      sha256: '75c73d7a38cfc0e73ef06bd1fc506a44d25874522069ec4fb85e0bf1e7d6b8fb',
+    },
+    {
+      name: 'permission-request.command.output.schema.json',
+      output: {
+        hookSpecificOutput: {
+          decision: { behavior: 'deny', message: 'Blocked by repository policy.' },
+          hookEventName: 'PermissionRequest',
+        },
+      },
+      sha256: '749c73245b4b6d43537c3049f76720ab1c2bd48d7e4752b744b376925b9d57a1',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'SessionStart',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        session_id: 'session-codex-1',
+        source: 'startup',
+        transcript_path: null,
+      },
+      name: 'session-start.command.input.schema.json',
+      sha256: '690c0eef7c9f3ddcd41e24207b81b362101a300b4abec076b990a1cd79a66e20',
+    },
+    {
+      name: 'session-start.command.output.schema.json',
+      output: {
+        hookSpecificOutput: {
+          additionalContext: 'Load the workspace conventions before editing.',
+          hookEventName: 'SessionStart',
+        },
+      },
+      sha256: 'f375e6de1c59ecbabd8c1aff05a67976d0f3aa2ef061808838de4c7c20be1c71',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PreToolUse',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        session_id: 'session-codex-1',
+        tool_input: { command: 'git status' },
+        tool_name: 'Bash',
+        tool_use_id: 'call-codex-1',
+        transcript_path: null,
+        turn_id: 'turn-codex-1',
+      },
+      name: 'pre-tool-use.command.input.schema.json',
+      sha256: 'fabed428f0fe75767c5700208b166da5faef4e031d601dfc8bff2f96d340c682',
+    },
+    {
+      name: 'pre-tool-use.command.output.schema.json',
+      output: {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { command: 'echo rewritten' },
+        },
+      },
+      sha256: 'e684f81c63fbb5972892f6a848b49fec68c8ce137931651093d2dd1da56a1dd6',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'PostToolUse',
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        session_id: 'session-codex-1',
+        tool_input: { command: 'git status' },
+        tool_name: 'Bash',
+        tool_response: 'On branch main',
+        tool_use_id: 'call-codex-1',
+        transcript_path: null,
+        turn_id: 'turn-codex-1',
+      },
+      name: 'post-tool-use.command.input.schema.json',
+      sha256: '8ea1e4bccb262fad05b85c300d562d2653c5a64118d6a2c5704468fc4ea836a9',
+    },
+    {
+      name: 'post-tool-use.command.output.schema.json',
+      output: {
+        decision: 'block',
+        hookSpecificOutput: {
+          additionalContext: 'The command updated generated files.',
+          hookEventName: 'PostToolUse',
+        },
+        reason: 'The Bash output needs review before continuing.',
+      },
+      sha256: 'a823d0e2c941e98d7d3af825dfdb0b1dfa6a935696ff8b8529e8e83232a1b0c8',
+    },
+    {
+      input: {
+        cwd: '/workspace',
+        hook_event_name: 'Stop',
+        last_assistant_message: null,
+        model: 'gpt-5.6-sol',
+        permission_mode: 'default',
+        session_id: 'session-codex-1',
+        stop_hook_active: false,
+        transcript_path: null,
+        turn_id: 'turn-codex-1',
+      },
+      name: 'stop.command.input.schema.json',
+      sha256: '7db4793c404b5c46b230c27b9507eb1a558fd958689d8715221c5dd81351a06a',
+    },
+    {
+      name: 'stop.command.output.schema.json',
+      output: { decision: 'block', reason: 'Run one more pass over the failing tests.' },
+      sha256: 'dc2b30e84c97beca5825aa64ca46e1337e402781dc5a9142b67111d10523f15c',
+    },
   ] as const;
+  expect(schemas.map((schema) => schema.name).sort()).toEqual(
+    Object.keys(codexCapabilityTable.validation.pinnedGeneratedComparison.pinnedRepositorySha256).sort(),
+  );
   const validator = createDraft7AdapterValidator();
 
   for (const schema of schemas) {

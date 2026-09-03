@@ -17,6 +17,7 @@ import type {
   runEvals,
   startDevServer,
   validate,
+  InspectionSkippedComponent,
   ProjectOptions,
 } from './api.ts';
 import type {
@@ -362,6 +363,42 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
   if (result.model.state !== undefined) {
     const driver = result.model.state.lifetime === 'workspace-durable' ? 'sqlite' : 'memory';
     output.write(`state: ${result.model.state.id} (${result.model.state.lifetime}, ${driver} driver)\n`);
+  }
+  // Per-target component accounting: what each host emits and, for every
+  // omission, whether the author excluded it or the host's pinned capability
+  // judgment (degraded/unavailable/prohibited, with its reason) ruled it out.
+  for (const plan of result.plans) {
+    output.write(`${plan.target}: ${plan.selected.length} component(s) selected, ${plan.skipped.length} omitted\n`);
+    for (const component of plan.skipped) {
+      output.write(`  omitted ${component.kind} ${component.name}: ${formatInspectionOmission(component)}\n`);
+    }
+  }
+};
+
+const formatInspectionOmission = (component: InspectionSkippedComponent): string => {
+  switch (component.reason) {
+    case 'excluded-by-targets':
+      return 'excluded by targets';
+    case 'unsupported-capability': {
+      const capability = component.capability;
+      if (capability === undefined) return 'unsupported capability';
+      switch (capability.state) {
+        case 'supported':
+          return `${capability.name} supported`;
+        case 'degraded':
+        case 'unavailable':
+        case 'prohibited':
+          return `${capability.name} ${capability.state} — ${capability.reason}`;
+        default: {
+          const exhaustive: never = capability;
+          throw new TypeError(`Unhandled capability state ${JSON.stringify(exhaustive)}.`);
+        }
+      }
+    }
+    default: {
+      const exhaustive: never = component.reason;
+      throw new TypeError(`Unhandled inspection skip reason ${String(exhaustive)}.`);
+    }
   }
 };
 

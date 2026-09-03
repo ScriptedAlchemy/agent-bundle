@@ -68,6 +68,30 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    // A conventional request context provider (#313): every generated request
+    // scope — plain CLI, rendered CLI, rendered script — mounts the same value.
+    writeProjectFile(root, 'src/providers/library-tooling.ts', [
+      'export default async function libraryTooling({ invocation, signal }) {',
+      "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
+      "  return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/cli/tooling.ts', [
+      "import { agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Report the mounted request providers.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({',
+      '  hits: z.number().int().min(1),',
+      "  libraryTooling: z.object({ kind: z.literal('cli'), tool: z.string() }).strict(),",
+      '}).strict();',
+      'export default async function tooling() {',
+      '  const context = await agent();',
+      '  return { hits: context.providers.processLifetime.hits, libraryTooling: context.providers.libraryTooling };',
+      '}',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/cli/library/audit.ts', [
       "import { z } from 'zod';",
       "export const config = { description: 'Audit sources.', exitCode: 'result', positionals: ['sources'] };",
@@ -91,12 +115,12 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { description: 'Render a library report.', positionals: ['root'] };",
       'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
-      'export const resultSchema = z.object({ books: z.number(), root: z.string() }).strict();',
+      'export const resultSchema = z.object({ books: z.number(), root: z.string(), tooling: z.string() }).strict();',
       'export default async function Report({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'scanning', total: 2 });",
-      '  const result = { books: 2, root: input.root };',
+      '  const result = { books: 2, root: input.root, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Markdown>{`Found **2** books under ${input.root}.`}</Agent.Markdown>',
@@ -152,10 +176,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     ].join('\n')),
     writeProjectFile(root, 'src/scripts/summarize.tsx', [
       "import React from 'react';",
-      "import { Agent } from '@agent-bundle/runtime';",
+      "import { Agent, agent } from '@agent-bundle/runtime';",
       'export default async function Summarize({ argv, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
-      '  const result = { arguments: argv.length };',
+      '  const context = await agent();',
+      '  const result = { arguments: argv.length, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Text>{`Summarized ${String(argv.length)} arguments.`}</Agent.Text>',
@@ -180,8 +205,10 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(binEvidence?.sourceInputs).toEqual(expect.arrayContaining([
     'src/cli/doctor.ts',
     'src/cli/library/audit.ts',
+    'src/cli/tooling.ts',
     'src/mcp/harness/tools/apply.tsx',
     'src/mcp/harness/tools/lookup.tsx',
+    'src/providers/library-tooling.ts',
   ]));
 
   // Help and version come from the compiled command graph.
@@ -200,6 +227,10 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(JSON.parse(doctor.stdout)).toEqual({ invocation: 'cli', status: 'ready', surface: 'doctor' });
   const aliased = await execFile(binPath, ['health', '--verbose', '--json']);
   expect(JSON.parse(aliased.stdout)).toEqual({ invocation: 'cli', status: 'ready', surface: 'doctor (verbose)' });
+  // Plain .ts commands mount conventional providers once per request (#313),
+  // with the framework-owned processLifetime value beside them.
+  const tooling = await execFile(binPath, ['tooling']);
+  expect(JSON.parse(tooling.stdout)).toEqual({ hits: 1, libraryTooling: { kind: 'cli', tool: 'ffprobe 6.1' } });
 
   // Nested commands parse positionals/options and honor the result exit-code policy.
   const audit = await execFile(binPath, ['library', 'audit', 'a', 'b']);
@@ -220,9 +251,10 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // Piped output is exactly one final Markdown document, no partial fallbacks.
   const piped = await execFile(binPath, ['report', '/library']);
   expect(piped.stdout).toBe('Found **2** books under /library.\n');
-  // --json returns the canonical validated final value.
+  // --json returns the canonical validated final value; the rendered command
+  // observed the same conventional provider as the plain command (#313).
   const reportJson = await execFile(binPath, ['report', '/library', '--json']);
-  expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library' });
+  expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library', tooling: 'cli:ffprobe 6.1' });
   // --ndjson exposes the sequence-numbered render-event stream, including
   // the progress the component reported through the request context.
   const reportEvents = await execFile(binPath, ['report', '/library', '--ndjson']);
@@ -282,8 +314,9 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
+  // The rendered script's provider sees `invocation.kind === 'script'` (#313).
   const scriptJson = await execFile(process.execPath, [scriptPath, 'alpha', '--json']);
-  expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1 });
+  expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1, tooling: 'script:ffprobe 6.1' });
 
   // #102 acceptance: one build ships custom, MCP-generated, plain, and rendered commands/scripts.
   const plainScriptPath = join(root, 'artifact', 'portable', 'scripts', 'checksum.mjs');

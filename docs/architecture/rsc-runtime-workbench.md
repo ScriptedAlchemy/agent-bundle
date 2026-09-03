@@ -227,6 +227,19 @@ available for a selected run. Failed preparation retains the last good active
 generation. Static MCP definitions and the broker survive independently of
 generation-pinned invocations and binding authority.
 
+Host-facing adoption is a further, separately gated axis (#179 / #218 stage 4).
+`EpochAdoptionPolicy` sits between `artifact.available` and the two surfaces a
+real host holds: `HostMcpRoutes` (the stable `/mcp/host/<server>` endpoint the
+`dev proxy` stdio process forwards) and `DevHostInstallManager` (the
+`--install-host` generations). Without `dev.contracts` it forwards every
+published epoch; with it, `runDevEpochContracts` opens an epoch-pinned generated
+stdio session through `McpSessionService`, runs the shared contract matrix at
+the `dev-epoch` proof level, publishes `dev.contract.status`, and adopts only a
+passing epoch. Workbench playground sessions stay epoch-pinned on their own and
+are never gated. `ProjectStatus.hostAdoption` exposes the adopted epoch and the
+latest evaluation, and the Overview renders it as **Host adoption** beside the
+published build, so a rejected epoch is visible rather than silently skipped.
+
 The RSC result tree is not the MCP App document. A current preview moves through
 `McpAppPreview`, `SecureAppRenderer`, the official App renderer, the
 generation-bound bridge, and the runtime client-surface proxy to an opaque-origin

@@ -49,6 +49,7 @@ import {
 } from '../events/ipc.ts';
 import { AgentTestError, captured } from './errors.ts';
 import {
+  DEV_EPOCH_PROOF_LEVEL,
   MCP_IN_MEMORY_PROOF_LEVEL,
   proofLevelLabel,
   type AgentBundleTestManifest,
@@ -145,6 +146,11 @@ export interface ContractRouteFixture {
   readonly lifecycle?: ContractLifecycleFixture;
 }
 
+export type ContractMatrixClient = Pick<
+  Client,
+  'callTool' | 'getPrompt' | 'listPrompts' | 'listResources' | 'listTools' | 'readResource'
+>;
+
 export interface ContractMatrixRestartSession {
   readonly client: Client;
 }
@@ -170,6 +176,7 @@ export interface ContractRouteReport {
 }
 
 export type ContractMatrixProvenance =
+  | DevEpochMcpProvenance
   | InstalledHostMcpProvenance
   | McpProjectionProvenance
   | PackedMcpProvenance;
@@ -194,6 +201,27 @@ export interface PackedContractMatrixOptions {
   readonly session: PackedMcpSession;
   /** Caller-owned packed restart; it must close the initial session and reopen the same artifact/store. */
   readonly restart?: () => Promise<ContractMatrixRestartSession>;
+}
+
+export interface DevEpochMcpProvenance {
+  readonly epochId: string;
+  readonly proofLevel: typeof DEV_EPOCH_PROOF_LEVEL;
+  readonly serverName: string;
+  readonly target: string;
+}
+
+export interface DevEpochContractMatrixSession {
+  readonly client: ContractMatrixClient;
+  readonly provenance: DevEpochMcpProvenance;
+  readonly stderr: () => string;
+}
+
+export interface DevEpochContractMatrixOptions {
+  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly manifest: AgentBundleTestManifest;
+  readonly server?: string;
+  /** An already-open epoch-pinned generated stdio session; this entry point never opens or closes it. */
+  readonly session: DevEpochContractMatrixSession;
 }
 
 export interface InstalledHostContractMatrixOptions {
@@ -231,6 +259,9 @@ const PACKED_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
 
 const INSTALLED_HOST_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
   'installed-host sessions cannot load project route modules without crossing back into the source/build tree; the installed server validates every tool result through its bundled resultSchema before returning — a successful sweep invocation is that evidence.';
+
+const DEV_EPOCH_MODULE_SCHEMA_NOT_APPLICABLE_REASON =
+  'dev-epoch sessions run the generated server process and cannot load project route modules without crossing back into source; the generated server validates every tool result through its bundled resultSchema before returning — a successful sweep invocation is that evidence.';
 
 const IN_MEMORY_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
   canLoadRouteModules: true,
@@ -274,6 +305,16 @@ const installedHostBoundaryFromSession = (
     recovery: 'Fix the installed layout, route, or fixture; reinstall and re-run runInstalledHostContractMatrix.',
   });
 
+const DEV_EPOCH_BOUNDARY: MatrixBoundaryCapabilities = Object.freeze({
+  canLoadRouteModules: false,
+  eventRuntimeNotApplicableReason:
+    'the dev-epoch MCP session does not expose a generated event runtime endpoint.',
+  moduleSchemaNotApplicableReason: DEV_EPOCH_MODULE_SCHEMA_NOT_APPLICABLE_REASON,
+  proofLevel: DEV_EPOCH_PROOF_LEVEL,
+  registersAppResources: true,
+  recovery: 'Fix the failing route or fixture; rebuild so runDevEpochContractMatrix can prove the next epoch.',
+});
+
 const COMPAT_PROBE_KEY = '__agentBundleContractProbe';
 
 const CHECK_SURFACE = 'surface-completeness';
@@ -296,10 +337,26 @@ const CHECK_STATE_CATALOG = 'state-catalog';
 const CHECK_RESTART_DURABILITY = 'restart-durability';
 const CHECK_RUNTIME_INSTANCE_IDENTITY = 'runtime-instance-identity';
 
-interface MatrixFailure {
+export interface ContractMatrixFailure {
   readonly check: string;
   readonly reason: string;
   readonly routeId: string;
+}
+
+export class ContractMatrixViolationError extends AgentTestError {
+  readonly failures: readonly ContractMatrixFailure[];
+  readonly report: ContractMatrixReport;
+
+  constructor(
+    message: string,
+    failures: readonly ContractMatrixFailure[],
+    report: ContractMatrixReport,
+    options: { readonly details: readonly string[]; readonly recovery: string },
+  ) {
+    super('contract-violation', message, options);
+    this.failures = Object.freeze(failures.map((failure) => Object.freeze({ ...failure })));
+    this.report = report;
+  }
 }
 
 interface ToolListingEntry {
@@ -484,7 +541,7 @@ const createRuntimeIdentityTracker = (
 };
 
 const recordFailure = (
-  failures: MatrixFailure[],
+  failures: ContractMatrixFailure[],
   routeId: string,
   check: string,
   reason: string,
@@ -493,7 +550,7 @@ const recordFailure = (
 };
 
 const outcomeFromCheck = (
-  failures: MatrixFailure[],
+  failures: ContractMatrixFailure[],
   routeId: string,
   check: string,
   outcome: ContractCheckOutcome,
@@ -534,7 +591,7 @@ const loadRouteModule = async (
   return { ...module, resultSchema: module.resultSchema };
 };
 
-const listLiveSurface = async (client: Client): Promise<LiveSurface> => {
+const listLiveSurface = async (client: ContractMatrixClient): Promise<LiveSurface> => {
   const [tools, resources, prompts] = await Promise.all([
     client.listTools(),
     client.listResources(),
@@ -558,7 +615,7 @@ const invocationCacheKey = (name: string, input: unknown): string =>
   `${name}\0${JSON.stringify(input ?? {})}`;
 
 const callToolResult = async (
-  client: Client,
+  client: ContractMatrixClient,
   name: string,
   input: unknown,
   options?: {
@@ -774,7 +831,7 @@ const checkSurfaceCompleteness = (
 };
 
 const runSweep = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   fixture: ContractRouteFixture,
   manifest: AgentBundleTestManifest,
@@ -826,7 +883,7 @@ const runSweep = async (
 };
 
 const runSerializedRoundTrip = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   fixture: ContractRouteFixture,
   module: AgentRouteModule & { readonly resultSchema: { parse: (value: unknown) => unknown } },
@@ -858,7 +915,7 @@ const runSerializedRoundTrip = async (
 };
 
 const runCompatProbe = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   fixture: ContractRouteFixture,
   module: AgentRouteModule & { readonly resultSchema: { parse: (value: unknown) => unknown } },
@@ -911,7 +968,7 @@ const runVersionSkew = (
 };
 
 const runNegativeInputs = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   surface: LiveSurface,
 ): Promise<ContractCheckOutcome> => {
@@ -951,7 +1008,7 @@ const runNegativeInputs = async (
 };
 
 const runCancellation = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   fixture: ContractRouteFixture,
   cache: Map<string, ToolInvocationResult>,
@@ -1051,7 +1108,7 @@ type ClientNotificationHandler = (
 ) => void | Promise<void>;
 
 const executeLifecycleTransitions = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   lifecycle: ContractLifecycleFixture,
   runtimeIdentity: RuntimeIdentityTracker,
@@ -1246,7 +1303,7 @@ const checkStateCatalog = (
 };
 
 const runStateIdempotency = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   evidence: LifecycleEvidence,
   assertion: NonNullable<NonNullable<ContractLifecycleFixture['state']>['idempotency']>,
@@ -1270,7 +1327,7 @@ const runStateIdempotency = async (
 };
 
 const runStateBudget = async (
-  client: Client,
+  client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
   evidence: LifecycleEvidence,
   assertion: NonNullable<NonNullable<ContractLifecycleFixture['state']>['budget']>,
@@ -1303,7 +1360,7 @@ const matrixRouteDescriptors = (
 ].sort((left, right) => left.id.localeCompare(right.id));
 
 const finalizeContractMatrixReport = (
-  failures: MatrixFailure[],
+  failures: ContractMatrixFailure[],
   boundary: MatrixBoundaryCapabilities,
   checks: Readonly<Record<string, ContractCheckOutcome>>,
   provenance: ContractMatrixProvenance,
@@ -1319,9 +1376,10 @@ const finalizeContractMatrixReport = (
   const proofLabel = proofLevelLabel(boundary.proofLevel);
   const details = failures.map((entry) =>
     `- ${entry.routeId} / ${entry.check}: ${entry.reason} (${proofLabel})`);
-  throw new AgentTestError(
-    'contract-violation',
+  throw new ContractMatrixViolationError(
     `Contract matrix reported ${String(failures.length)} violation(s) at the ${boundary.proofLevel} proof level.`,
+    failures,
+    report,
     {
       details,
       recovery: boundary.recovery,
@@ -1331,14 +1389,14 @@ const finalizeContractMatrixReport = (
 
 const executeContractMatrix = async (options: {
   readonly boundary: MatrixBoundaryCapabilities;
-  readonly client: Client;
+  readonly client: ContractMatrixClient;
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
   readonly manifest: AgentBundleTestManifest;
   readonly provenance: ContractMatrixProvenance;
   readonly serverName: string;
 }): Promise<ContractMatrixReport> => {
   const { boundary, client, fixtures, manifest, provenance, serverName } = options;
-  const failures: MatrixFailure[] = [];
+  const failures: ContractMatrixFailure[] = [];
   const matrixChecks: Record<string, ContractCheckOutcome> = {};
   const routeReports: Record<string, ContractRouteReport> = {};
   const runtimeIdentity = createRuntimeIdentityTracker(boundary, manifest, serverName);
@@ -1683,6 +1741,25 @@ export const runContractMatrix = async (
   } finally {
     await session.close();
   }
+};
+
+/**
+ * Runs #218 stage 4's shared matrix against an already-open dev epoch session.
+ * The caller owns the epoch lease and process lifetime so host adoption can
+ * settle without replacing or dropping an existing live host connection.
+ */
+export const runDevEpochContractMatrix = async (
+  options: DevEpochContractMatrixOptions,
+): Promise<ContractMatrixReport> => {
+  const serverName = resolveServerName(options.manifest, options.server);
+  return executeContractMatrix({
+    boundary: DEV_EPOCH_BOUNDARY,
+    client: options.session.client,
+    fixtures: options.fixtures,
+    manifest: options.manifest,
+    provenance: options.session.provenance,
+    serverName,
+  });
 };
 
 /**

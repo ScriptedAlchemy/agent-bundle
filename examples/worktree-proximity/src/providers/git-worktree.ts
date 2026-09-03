@@ -2,22 +2,19 @@ import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import type { WorktreeProviderValue } from '../api.js';
+import type { AgentProviderContext } from 'agent-bundle';
 
-interface ProviderContext {
-  readonly invocation: {
-    readonly kind: string;
-    readonly props: Readonly<Record<string, unknown>>;
-  };
-  readonly signal: AbortSignal;
-}
+import type { WorktreeProviderValue } from '../api.js';
 
 const execFileAsync = promisify(execFile);
 
-const eventCwd = (context: ProviderContext): string | undefined => {
+// Providers receive the surface-specific invocation, so an event-route
+// request can anchor discovery at the host-reported cwd while tool, CLI, and
+// script requests fall back to the process cwd.
+const eventCwd = (context: AgentProviderContext): string | undefined => {
   if (context.invocation.kind !== 'event') return undefined;
   const payload = context.invocation.props.payload;
-  if (payload === null || typeof payload !== 'object') return undefined;
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const native = (payload as { readonly native?: unknown }).native;
   if (native === null || typeof native !== 'object') return undefined;
   const cwd = (native as { readonly cwd?: unknown }).cwd;
@@ -28,7 +25,7 @@ const absoluteGitPath = (cwd: string, value: string): string =>
   resolve(cwd, value);
 
 export default async function gitWorktreeProvider(
-  context: ProviderContext,
+  context: AgentProviderContext,
 ): Promise<WorktreeProviderValue> {
   const nativeCwd = eventCwd(context);
   const cwd = nativeCwd ?? process.cwd();

@@ -22,6 +22,10 @@ import {
   type InstallResult,
 } from '../install/install.ts';
 import { devProxyServerCommand } from './dev-proxy-command.ts';
+import {
+  subscribeToEpochAdoption,
+  type EpochAdoptionSource,
+} from './epoch-adoption-policy.ts';
 import type { EpochReference, EpochStore } from './epoch-store.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 
@@ -32,6 +36,7 @@ interface EpochReferenceSource {
 }
 
 export interface DevHostInstallManagerOptions {
+  readonly adoption?: EpochAdoptionSource;
   readonly environment?: Readonly<NodeJS.ProcessEnv>;
   readonly epochStore: EpochReferenceSource | Pick<EpochStore, 'acquireEpochReference'>;
   readonly eventHub: ProjectEventHub;
@@ -282,6 +287,7 @@ const syncDiagnostic = (host: InstallHost, epochId: string, error: unknown): Dia
 
 /** Owns opt-in host development installs for one foreground dev session. */
 export class DevHostInstallManager {
+  readonly #adoption: EpochAdoptionSource | undefined;
   readonly #epochStore: EpochReferenceSource;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #eventHub: ProjectEventHub;
@@ -295,6 +301,7 @@ export class DevHostInstallManager {
   #subscription: ProjectEventSubscription | undefined;
 
   constructor(options: DevHostInstallManagerOptions) {
+    this.#adoption = options.adoption;
     this.#epochStore = options.epochStore;
     this.#environment = options.environment ?? process.env;
     this.#eventHub = options.eventHub;
@@ -306,11 +313,10 @@ export class DevHostInstallManager {
 
   start(): void {
     if (this.#subscription !== undefined || this.#closed) return;
-    this.#subscription = this.#eventHub.subscribe(
-      { afterSequence: this.#eventHub.latestSequence },
-      (event) => {
-        if (event.type === 'artifact.available') this.sync(event.epochId);
-      },
+    this.#subscription = subscribeToEpochAdoption(
+      this.#adoption,
+      this.#eventHub,
+      (epochId) => this.sync(epochId),
     );
   }
 

@@ -9,7 +9,9 @@ Agent Bundle has one newcomer model:
    `src/commands/*.md`, and `src/rules/*.mdc`. Top-level `assets/` holds
    static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
-   targets, and policy that no route file can own.
+   targets, and policy that no route file can own. The release version is
+   not repeated there: `package.json` is the single version source
+   (`plugin.version` is deprecated; see [Diagnostics](diagnostics.md#release-identity-ab4001-ab4008ab4011-ab4013)).
 3. **JSX = rendering.** An executable route is one async default Server
    Component. It does the work and returns `Agent.*`; there is no public
    `execute`/`render` split.
@@ -22,7 +24,7 @@ The complete conventional config is usually:
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin', version: '0.1.0' },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
   targets: ['portable', 'codex', 'claude'],
 });
 ```
@@ -58,6 +60,52 @@ Flight dispatcher and lowers the final Agent Document to legal MCP output.
 Flight is an implementation transport inside the generated runtime, never a
 public host wire protocol.
 
+## Request context and providers
+
+Every generated request scope — MCP tools, resources, and prompts, event
+routes, plain and rendered routed CLI commands, rendered scripts, and Workbench
+replay — installs the same typed `AgentRequestContext`. `await agent()`
+returns the invocation plus `Observed` `host`, `session`, `actor`, and
+`workspace` axes (an `available` value with its provenance, or a typed
+`unavailable` reason — never a fabricated string), request capabilities,
+progress, the request signal, and the `state`, `notices`, and `providers`
+slots. The handle is request-scoped: it survives `await`, two concurrent
+requests never observe each other, and reading a captured handle after the
+request closes throws a typed `AgentRequestError`.
+
+A **context provider** contributes one request-scoped value without touching
+the compiler. Each `src/providers/<name>.{ts,tsx}` module default-exports a
+factory receiving the public `AgentProviderContext` (`{ invocation, signal }`
+from `agent-bundle`) and its value mounts at
+`(await agent()).providers.<camelCaseName>`:
+
+```ts
+// src/providers/library.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export interface LibraryContext { readonly stages: readonly string[]; readonly surface: string }
+
+export default async function library({ invocation }: AgentProviderContext): Promise<LibraryContext> {
+  return { stages: ['discover', 'curate'], surface: invocation.kind };
+}
+```
+
+Providers run once per request in deterministic key order before the request
+scope opens; a thrown factory fails that request closed, so return an honest
+unavailable-shaped value for expected degradation. The compiler validates the
+default export (`AB4940`), unique keys (`AB4941`), and the reserved
+framework-owned `processLifetime` key (`AB4942`).
+
+The generated `.agent-bundle/routes.d.ts` declares `AgentBundleProviders`
+(`ProviderKey`, `ProviderValue<Key>`) from each factory's resolved return type
+and augments `@agent-bundle/runtime`'s `AgentProviderValues`, so
+`(await agent()).providers.library` is a `LibraryContext` with no cast once
+the file is part of the project's TypeScript program (add
+`".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
+stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
+`renderRoute(id, { context: { providers: { library } } })`; the harness never
+executes provider modules on a test's behalf.
+
 Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in
@@ -68,6 +116,45 @@ results and never renders JSX. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
+
+## Skills: convention, override, and rendered documents
+
+`src/skills/<name>/SKILL.md` ships with no declaration. Config wins,
+conventions fill: declaring `skills:` replaces the directory convention
+entirely, and validation reports `AB4734` for any conventional skill directory
+the explicit list leaves uncovered. Skills at the removed top-level
+`skills/<name>/` location are an `AB4736` error unless explicit `skills`
+config claims them.
+
+A skill whose document is generated (power tier, never required) puts
+`SKILL.tsx` (or `SKILL.ts`) in the skill directory instead of `SKILL.md`. The
+module default-exports a component (sync or async) and exports a `frontmatter`
+record; the build renders the tree to Markdown and emits the same
+`skills/<name>/SKILL.md` artifact every host consumes.
+
+```tsx
+// src/skills/deploy-checklist/SKILL.tsx
+export const frontmatter = {
+  description: 'Deployment checklist.',
+  name: 'deploy-checklist',
+};
+
+export default () => (
+  <>
+    <h1>Deploy checklist</h1>
+    <p>Verify each step <strong>in order</strong>.</p>
+  </>
+);
+```
+
+The renderer supports a documented element subset (`h1`–`h6`, `p`,
+`ul`/`ol`/`li`, `strong`/`b`, `em`/`i`, `code`, `pre`, `blockquote`, `a`,
+`hr`, `br`, fragments, strings and numbers) and rejects anything outside it by
+name (`AB3005`), never a silent approximation; a module that fails to load or
+lacks the two exports reports `AB3003`/`AB3004`. Components may import
+project code, so the document can be computed from the same sources the
+plugin ships. A hand-authored `SKILL.md` in the same directory always wins
+(`AB4735`).
 
 ## Config reference
 
@@ -112,6 +199,41 @@ release-identity config rejects absolute paths. The per-invocation CLI
 subject to the same project-root containment check; absolute and external
 output roots are unsupported.
 
+## Live development into hosts
+
+`agent-bundle dev` is the webpack-HMR analog for plugins that are installed
+and in use in a real host. Three pieces make a rebuild reach the host without
+the host ever seeing a disconnect:
+
+1. **A stable host-facing proxy.** `agent-bundle dev proxy --root <project>
+   --server <name> [--target <host>]` is the thin stdio process a host spawns
+   and holds. It forwards the developed plugin's MCP surface from the dev
+   server's `/mcp/host/<serverName>` endpoint. On every adopted epoch the dev
+   server opens and primes a session on the new generated server, promotes it
+   behind the same connection, emits `notifications/tools/list_changed` (and
+   the resources/prompts equivalents the catalog advertises), lets in-flight
+   calls finish against the epoch they started on, then drains the old
+   session. A failed build changes nothing; a vanished epoch or stopped dev
+   server fails closed (`AB8024` / `AB8025`).
+2. **Installed-host re-sync.** `agent-bundle dev --install-host <claude|codex|cursor>`
+   installs a marked development variant through the ordinary installer once,
+   pointing the host's MCP document at the proxy, then re-syncs hooks, Skills,
+   and MCP Apps into the host's own layout on every adopted epoch with atomic
+   generation swaps and rollback (`AB7202`). Hooks are spawned per event, so
+   they pick up the new epoch on their next invocation.
+3. **A contract gate on adoption.** Declaring `dev.contracts` in
+   `agent-bundle.config.ts` runs the generated contract matrix against each
+   published epoch through an epoch-pinned generated stdio session before any
+   host-facing surface adopts it. A failing epoch stays inactive for hosts,
+   is reported on the `dev.contract.status` project event (`AB7210` for an
+   invalid declaration, `AB7211` for violations), and appears in the
+   Workbench Overview's **Host adoption** section beside the published
+   build. Playground sessions stay independently epoch-pinned.
+
+The package README's [Developer workbench](../packages/agent-bundle/README.md#developer-workbench)
+section carries the exact commands, install layouts, and event payloads;
+[Diagnostics](diagnostics.md) lists every code on this path.
+
 ## Distribution
 
 `agent-bundle build` makes each target directory independently distributable.
@@ -128,10 +250,18 @@ this format natively alongside Cursor Plugins; Codex, VS Code, GitHub Copilot,
 Kiro, and ChatGPT are native clients too. Claude Code consumes the standard
 only through CLI translation, so its dedicated target remains necessary. The
 standard packages only skills and MCP servers, leaving rules, commands, and
-hooks honestly unavailable on the portable target. A dogfood proof against the
-real Cursor IDE plugin loader (discovery, skill listing, MCP launch, and three
-observed Cursor 3.18.25 placeholder-expansion conformance gaps) is recorded in
-`docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.
+hooks honestly unavailable on the portable target. The standard's manifest
+metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and
+reverse-domain `extensions` are authored under the `portable` config key and
+land in the root `plugin.json`; omitting them leaves the manifest exactly as
+before. Emitted bytes are validated against the pinned schemas and the
+normative text at plan time, after every build, under
+`validate --artifact --host-validation`, and by `doctor` for installed Cursor
+local plugins that declare the standard's `$schema`
+(`AB6035`–`AB6038`, `AB7320`; see `docs/diagnostics.md`). A dogfood proof
+against the real Cursor IDE plugin loader (discovery, skill listing, MCP
+launch, and three observed Cursor 3.18.25 placeholder-expansion conformance
+gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.
 
 The framework CLI performs those same operations:
 

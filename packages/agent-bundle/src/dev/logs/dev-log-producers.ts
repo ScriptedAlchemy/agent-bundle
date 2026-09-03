@@ -17,14 +17,15 @@ const contextFor = (event: ProjectEvent): Readonly<Record<string, string>> => {
   if (event.type === 'build.started' || event.type === 'build.failed') {
     return buildId === undefined ? Object.freeze({}) : Object.freeze({ buildId });
   }
-  if (event.type === 'artifact.available' || event.type === 'dev.host.sync' || event.type === 'runtime.event') {
+  if (event.type === 'artifact.available' || event.type === 'dev.contract.status' || event.type === 'dev.host.sync' || event.type === 'runtime.event') {
     return event.epochId === undefined ? Object.freeze({}) : Object.freeze({ epochId: event.epochId });
   }
   return Object.freeze({});
 };
 
 const levelFor = (event: ProjectEvent): DevLogInput['level'] =>
-  event.type === 'build.failed' || event.type === 'dev.host.sync' && stringAt(event.payload, 'state') === 'failed'
+  event.type === 'build.failed' ||
+  (event.type === 'dev.contract.status' || event.type === 'dev.host.sync') && stringAt(event.payload, 'state') === 'failed'
     ? 'error'
     : event.type === 'source.status' && stringAt(event.payload, 'state') === 'invalid'
       ? 'warning'
@@ -38,6 +39,7 @@ const summaryFor = (event: ProjectEvent): string => {
   if (event.type === 'build.failed') return 'Project build failed.';
   if (event.type === 'artifact.available') return 'Project artifact became available.';
   if (event.type === 'artifact.status') return 'Project artifact status was updated.';
+  if (event.type === 'dev.contract.status') return 'Development contract matrix settled.';
   if (event.type === 'dev.host.sync') return 'Development host install was synchronized.';
   return 'Project runtime event was published.';
 };
@@ -99,6 +101,7 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
       write(sink, { ...shared, kind: message.type, producer: 'build' });
       break;
     case 'artifact.status':
+    case 'dev.contract.status':
     case 'dev.host.sync':
     case 'invalidation':
     case 'runtime.event':

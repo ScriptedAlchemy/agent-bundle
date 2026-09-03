@@ -1,6 +1,8 @@
 {
   "normativeTextWinsOnConflict": true,
   "retrievedAt": "2026-09-01",
+  "reverifiedAt": "2026-09-02",
+  "reverification": "2026-09-02: live https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json bytes rehashed to the pinned sha256 values; specification repository HEAD unchanged at the pinned commit; a 1.1.0 working draft was started upstream on 2026-08-15 (commit a2afd7ec7edb916da638fc5c94640d4a7ba4480f) without published 1.1.0 schemas, so the 1.0.0 pin stands.",
   "schemas": {
     "mcp.schema.json": {
       "bytes": 3408,

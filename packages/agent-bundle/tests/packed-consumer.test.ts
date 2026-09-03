@@ -234,13 +234,18 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation.map((report) => report.host).sort()).toEqual(['claude', 'codex']);
-    for (const host of ['claude', 'codex'] as const) {
+    expect(validationDocument.hostValidation.map((report) => report.host).sort()).toEqual(['claude', 'codex', 'portable']);
+    for (const host of ['claude', 'codex', 'portable'] as const) {
       const report = validationDocument.hostValidation.find((candidate) => candidate.host === host)!;
       expect(report.target).toBe(host);
       expect(report.diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
       if (host === 'claude' && report.status === 'passed') {
         expect(report.diagnostics).toEqual([]);
+      }
+      if (host === 'portable') {
+        // The pinned Agent Plugins byte lane spawns no client; it passes from the installed tarball alone.
+        expect(report.status).toBe('passed');
+        expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['AB6038']);
       }
       if (report.status === 'unavailable') expect(report.diagnostics.length).toBeGreaterThan(0);
     }

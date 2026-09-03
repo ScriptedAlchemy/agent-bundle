@@ -4,17 +4,15 @@ import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   validateCodexPlugin,
   type CodexPluginCommandRunner,
 } from '../src/host-contracts/codex-plugin-validation.ts';
 
-const generatedSchemaNames = Object.freeze([
-  'subagent-start.command.input.schema.json',
-  'subagent-start.command.output.schema.json',
-  'subagent-stop.command.input.schema.json',
-  'subagent-stop.command.output.schema.json',
-]);
+const generatedSchemaNames = Object.freeze(
+  Object.keys(codexCapabilityTable.validation.pinnedGeneratedComparison.pinnedRepositorySha256).sort(),
+);
 
 const validDocuments = Object.freeze({
   '.agents/plugins/marketplace.json': {

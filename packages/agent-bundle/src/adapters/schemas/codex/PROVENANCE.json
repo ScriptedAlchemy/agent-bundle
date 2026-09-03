@@ -2,16 +2,21 @@
   "observedCliVersion": "0.147.0",
   "retrievedAt": "2026-09-02",
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
-  "notes": "plugin.schema.json transcribes the 2026-09-02 documented package manifest rather than a host-exported schema because Codex 0.147.0 publishes no plugin validate command. Skills stays optional so MCP-only plugins admitted by the documented packaging and submission flows validate. The generated subagent-{start,stop}.command.{input,output}.schema.json, user-prompt-submit.command.{input,output}.schema.json, session-end.command.input.schema.json, {pre,post}-compact.command.{input,output}.schema.json, and permission-request.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. That tag has no session-end.command.output.schema.json and no tool-failure, permission-denied, or stop-failure schema. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
+  "notes": "plugin.schema.json transcribes the 2026-09-02 documented package manifest rather than a host-exported schema because Codex 0.147.0 publishes no plugin validate command. Skills stays optional so MCP-only plugins admitted by the documented packaging and submission flows validate. All 21 generated command schemas published at the rust-v0.147.0 tag (https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated) are byte-pinned under generated/: input and output for permission-request, post-compact, post-tool-use, pre-compact, pre-tool-use, session-start, stop, subagent-start, subagent-stop, and user-prompt-submit, plus session-end input. That tag has no session-end.command.output.schema.json, no interrupt schema (interrupt.command.{input,output}.schema.json exist only on main as of 2026-09-02), and no tool-failure, permission-denied, or stop-failure schema. hooks.schema.json transcribes the 2026-09-02 release hook contract from https://learn.chatgpt.com/docs/hooks: the eleven release events, command handlers (command, commandWindows, timeout, statusMessage, additionalContextLimit, async) and mcp_tool handlers (server, tool, input, timeout, statusMessage); prompt and agent handlers are documented as parsed-but-skipped and are excluded so they fail before publication. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
   "schemaTightenings": {
     "plugin.schema.json": [
       "Top-level and author objects are closed; author admits only the documented name, email, and url fields.",
       "Documented URL and email fields use JSON Schema uri and email formats, and authored discovery strings must be nonempty.",
       "Component paths must begin with ./ and must not contain a parent-directory segment so they remain inside the plugin root.",
-      "Inline mcpServers values must be objects; inline hook documents use the same closed command-hook shape as hooks.schema.json.",
+      "Inline mcpServers values must be objects; inline hook documents use the same closed eleven-event, command-or-mcp_tool handler shape as hooks.schema.json.",
       "The closed interface object admits every documented install-surface field; brandColor requires a six-digit hexadecimal value, external links require http(s), asset paths must stay inside the plugin root, and screenshots must be ./assets/-relative PNG paths.",
       "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id.",
       "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization."
+    ],
+    "hooks.schema.json": [
+      "The hooks object is closed to the eleven release-documented events; Interrupt is excluded because rust-v0.147.0 ships no generated Interrupt schema.",
+      "Handlers are a closed oneOf of command and mcp_tool shapes; prompt and agent handlers are excluded because Codex parses but skips them.",
+      "Per-event rules the schema cannot express (SessionEnd rejects mcp_tool, async, and timeouts above 3 seconds; additionalContextLimit only on events that return additionalContext; matchers ignored on UserPromptSubmit and Stop) are enforced by codex.hooks.* diagnostics in the adapter."
     ]
   },
   "schemas": {
@@ -21,8 +26,8 @@
       "url": "https://developers.openai.com/plugins/build/plugins"
     },
     "hooks.schema.json": {
-      "bytes": 1107,
-      "sha256": "e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff",
+      "bytes": 2596,
+      "sha256": "175b859eb8e85bd287d85ee840d97c3f5c2d0dda3223507a796d158e3770eeba",
       "url": "https://learn.chatgpt.com/docs/hooks"
     },
     "marketplace.schema.json": {
@@ -36,8 +41,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 4962,
-      "sha256": "decee14ec76a602701f3c312aee135a0983c1ce95fa89dafc588ebb5c968843b",
+      "bytes": 6454,
+      "sha256": "986bcafa6ef46f9dc4558f05781f53400b3d75533a075068184ba8d43670d4ec",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

@@ -77,6 +77,10 @@
       "2026-09-02: Cursor 3.18.25 does not expand ${PLUGIN_ROOT} in cwd or args and does not default an omitted cwd to the plugin root (spec 7.2.1/9.2 MUSTs), so spec-conformant stdio servers fail to launch there; its proprietary ${CURSOR_PLUGIN_ROOT} expands and connects.",
       "2026-09-02: With a launchable configuration the Cursor IDE completed the stdio handshake (connect_success with stable heartbeat), so the launch pipeline itself consumes this format."
     ],
+    "legacySse": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 §7.2.1 defines the deprecated HTTP+SSE variant as OPTIONAL for clients; the compiler emits only the required modern transports and rejects a legacy transport with AB4339 (https://agent-plugins.org/specification).",
+      "state": "unavailable"
+    },
     "pathTokens": {
       "args": [
         "${PLUGIN_DATA}",
@@ -120,7 +124,41 @@
   },
   "observedSpecificationVersion": "1.0.0",
   "plugin": {
+    "extensionDirectories": {
+      "reason": "2026-09-02: Agent Plugins 1.0.0 §8.2 reserves top-level reverse-domain directories for client-owned files; the compiler emits no client extension directory because no pinned client publishes a file-based namespace contract for this format (https://agent-plugins.org/specification).",
+      "state": "unavailable"
+    },
+    "extensions": {
+      "configKey": "portable.extensions",
+      "evidence": [
+        "2026-09-02: Agent Plugins 1.0.0 §5.6/§8.1 — `extensions` maps reverse-domain client namespaces to opaque objects; clients ignore unimplemented namespaces without validating their contents (https://agent-plugins.org/specification)."
+      ],
+      "state": "supported"
+    },
     "manifest": "plugin.json",
+    "manifestMetadata": {
+      "configKey": "portable",
+      "evidence": [
+        "2026-09-02: Agent Plugins 1.0.0 §5.4 metadata fields author, homepage, repository, license, and keywords are validated only by JSON type by clients; the compiler additionally refuses malformed URLs, emails, and empty strings before emission (https://agent-plugins.org/specification)."
+      ],
+      "fields": [
+        "author",
+        "homepage",
+        "keywords",
+        "license",
+        "repository"
+      ],
+      "state": "supported"
+    },
     "skills": true
+  },
+  "specificationSections": {
+    "clientExtensions": "8",
+    "componentDiscovery": "6",
+    "componentTypes": "7",
+    "manifest": "5",
+    "packageModel": "4",
+    "placeholderExpansion": "9",
+    "versioning": "10"
   }
 }

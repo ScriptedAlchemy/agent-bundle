@@ -361,6 +361,8 @@ codexPluginIt(
           'defaultPrompt',
           'developerName',
           'displayName',
+          // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
+          'logo',
           'longDescription',
           'shortDescription',
         ],
@@ -467,6 +469,7 @@ it(
     );
 
     expect(report, proofLabel).toEqual({
+      contract: 'agent-plugins-1.0.0 byte lane clean (AB6035–AB6037)',
       destination: '.cursor/plugins/local/host-install-portable-proof',
       documents: {
         mcp: 'schema-valid',
@@ -475,6 +478,7 @@ it(
       hooks: 'not-emitted',
       host: 'cursor',
       install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+      manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',
         locations: [

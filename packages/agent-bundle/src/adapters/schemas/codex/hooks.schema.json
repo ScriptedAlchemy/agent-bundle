@@ -1,36 +1,75 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/hooks.schema.json",
+  "$defs": {
+    "commandHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "additionalContextLimit": { "type": "integer", "minimum": 0 },
+        "async": { "type": "boolean" },
+        "command": { "type": "string", "minLength": 1 },
+        "commandWindows": { "type": "string", "minLength": 1 },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "type": { "const": "command" }
+      },
+      "required": ["type", "command"]
+    },
+    "mcpToolHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "object" },
+        "server": { "type": "string", "minLength": 1 },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "type": { "const": "mcp_tool" }
+      },
+      "required": ["type", "server", "tool"]
+    },
+    "matcherGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matcher": { "type": "string" },
+          "hooks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/commandHandler" },
+                { "$ref": "#/$defs/mcpToolHandler" }
+              ]
+            }
+          }
+        },
+        "required": ["hooks"]
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "description": { "type": "string" },
     "hooks": {
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "matcher": { "type": "string" },
-            "hooks": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "command": { "type": "string", "minLength": 1 },
-                  "timeout": { "type": "integer", "minimum": 1 },
-                  "type": { "const": "command" }
-                },
-                "required": ["type", "command"]
-              }
-            }
-          },
-          "required": ["hooks"]
-        }
+      "additionalProperties": false,
+      "properties": {
+        "PermissionRequest": { "$ref": "#/$defs/matcherGroups" },
+        "PostCompact": { "$ref": "#/$defs/matcherGroups" },
+        "PostToolUse": { "$ref": "#/$defs/matcherGroups" },
+        "PreCompact": { "$ref": "#/$defs/matcherGroups" },
+        "PreToolUse": { "$ref": "#/$defs/matcherGroups" },
+        "SessionEnd": { "$ref": "#/$defs/matcherGroups" },
+        "SessionStart": { "$ref": "#/$defs/matcherGroups" },
+        "Stop": { "$ref": "#/$defs/matcherGroups" },
+        "SubagentStart": { "$ref": "#/$defs/matcherGroups" },
+        "SubagentStop": { "$ref": "#/$defs/matcherGroups" },
+        "UserPromptSubmit": { "$ref": "#/$defs/matcherGroups" }
       }
     }
   },

@@ -201,6 +201,7 @@ codexPluginIt(
           'defaultPrompt',
           'developerName',
           'displayName',
+          'logo',
           'longDescription',
           'shortDescription',
         ],

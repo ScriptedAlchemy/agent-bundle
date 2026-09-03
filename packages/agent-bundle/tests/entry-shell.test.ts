@@ -453,6 +453,73 @@ it('generates deterministic per-request provider execution in the shared Flight 
   expect(source).toContain('providers: providerValues');
 });
 
+it('mounts deterministic per-request providers for plain routed CLI commands (#313)', () => {
+  const route = {
+    config: {},
+    id: 'cli:doctor',
+    kind: 'cli' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/cli/doctor.ts' },
+    source: '/project/src/cli/doctor.ts',
+  };
+  const command = {
+    aliases: [],
+    exitCode: 'zero' as const,
+    options: [],
+    path: ['doctor'],
+    rendered: false,
+    routeId: route.id,
+  };
+  const withProviders = entryShellModule.generatedCliBinEntrySource({
+    commands: [command],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    providers: [
+      {
+        id: 'provider:zeta',
+        name: 'zeta',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/zeta.ts' },
+        source: '/project/src/providers/zeta.ts',
+      },
+      {
+        id: 'provider:alpha-value',
+        name: 'alpha-value',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/alpha-value.ts' },
+        source: '/project/src/providers/alpha-value.ts',
+      },
+    ],
+    routes: [route],
+  });
+
+  // Same registry, ordering, invocation contract, and fail-closed wrapping as the Flight workers.
+  expect(withProviders).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(withProviders).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(withProviders.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
+    withProviders.indexOf('/project/src/providers/zeta.ts'),
+  );
+  expect(withProviders).toContain('key: "alphaValue"');
+  expect(withProviders).toContain(
+    "await provider.module.default({ invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }, signal: context.signal })",
+  );
+  expect(withProviders).toContain('must default-export a factory.');
+  expect(withProviders).toContain('failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })');
+  expect(withProviders).toContain('providers: providerValues,');
+  // Providers run once per request, before the request scope opens.
+  expect(withProviders.indexOf('for (const provider of providers)')).toBeLessThan(
+    withProviders.indexOf('const result = await runAgentRequest({'),
+  );
+
+  // A project without providers still mounts only the framework-owned process identity.
+  const withoutProviders = entryShellModule.generatedCliBinEntrySource({
+    commands: [command],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [route],
+  });
+  expect(withoutProviders).not.toContain('const providers = Object.freeze([');
+  expect(withoutProviders).toContain(
+    'providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },',
+  );
+  expect(withoutProviders).not.toContain('import * as provider0');
+});
+
 it('mounts deterministic per-request providers in rendered route workers', () => {
   const source = entryShellModule.generatedRenderedRouteWorkerSource({
     providers: [
@@ -486,6 +553,15 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
   expect(source).toContain('await provider.module.default({ invocation: message.invocation, signal: controller.signal })');
   expect(source).toContain('providers: providerValues');
   expect(source).toContain('processLifetime');
+
+  // The rendered-session bridge must post the invocation the worker's
+  // providers read; without it every rendered provider saw `undefined` (#313).
+  const bridge = entryShellModule.generatedRenderedScriptEntrySource({
+    name: 'report',
+    routeId: 'script:report',
+    workerFile: 'report-flight.mjs',
+  });
+  expect(bridge).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {
