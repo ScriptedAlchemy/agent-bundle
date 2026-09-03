@@ -168,4 +168,32 @@ describe('optional identity evidence parity', () => {
     expect(receipt).toMatchObject({ exitCode: 0, operation: 'whisper-identity', status: 'transcript-ready', usableWindows: 5 });
     expect(whisperCalls).toBe(5);
   });
+
+
+  it('stages acoustic-identify candidate work beside the receipt when one is requested', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'curator-identify-receipt-'));
+    roots.push(root);
+    const file = join(root, 'library', 'book.m4b');
+    const receiptPath = join(root, 'receipts', 'identify.json');
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, 'book');
+    const sampleDirs: string[] = [];
+    const matcher: AcousticMatcher = async (_source, sample) => {
+      sampleDirs.push(dirname(sample));
+      return { found: true };
+    };
+    const http: CuratorHttpClient = async (url, options) => {
+      if (options?.binary === true) return Buffer.from(url);
+      throw new Error('unexpected product request');
+    };
+    await identifyAudibleSample({
+      candidates: [{ asin: 'MATCH', evidence: { score: 90 }, region: 'us', sample_url: 'https://samples/match.mp3' }],
+      candidatesReport: join(root, 'candidates.json'),
+      file,
+      receipt: receiptPath,
+      top: 1,
+    }, { http, matcher });
+    expect(sampleDirs).toHaveLength(1);
+    expect(sampleDirs[0]!.startsWith(join(dirname(receiptPath), '.audiobook-curator-acoustic-'))).toBe(true);
+  });
 });
