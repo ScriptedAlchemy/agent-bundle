@@ -481,12 +481,27 @@ it('explains selected and omitted components per target on human inspect output'
     expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
     expect(human.stdout).not.toContain('omitted skill review');
+    // The canonical kind matrix names every kind a host cannot emit, even
+    // kinds this project never declares (#100).
+    expect(human.stdout).toContain(
+      '  kinds this host cannot emit: agent (unavailable), command (unavailable), hook (unavailable), lsp (unavailable), '
+      + 'native-diagnostics (unavailable), native-extension (unavailable), rule (unavailable)\n',
+    );
+    expect(human.stdout).toMatch(
+      /^ {2}kinds this host cannot emit: agent \(unavailable\), command \(unavailable\), lsp \(unavailable\), native-diagnostics \(unavailable\), native-extension \(unavailable\), rule \(unavailable\)$/mu,
+    );
 
     // The JSON form carries the same accounting with the full judgment.
     const json = await runSourceCliWithOutput(['inspect', '--root', project.root, '--target', 'codex', '--json']);
     expect(json).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(json.stdout)).toMatchObject({
       plans: [{
+        kinds: expect.arrayContaining([
+          { capability: { evidence: { observedVersion: '0.147.0', target: 'codex' }, name: 'skills', state: 'supported' }, kind: 'skill', selected: 1, skipped: 0 },
+          { capability: { name: 'rules', reason: expect.any(String), state: 'unavailable' }, kind: 'rule', selected: 0, skipped: 1 },
+          { capability: { name: 'lsp', reason: expect.stringContaining('no LSP server surface'), state: 'unavailable' }, kind: 'lsp', selected: 0, skipped: 0 },
+          { capability: { name: 'nativeExtension', reason: expect.any(String), state: 'unavailable' }, kind: 'native-extension', selected: 0, skipped: 0 },
+        ]),
         selected: [expect.objectContaining({ capability: expect.objectContaining({ name: 'skills', state: 'supported' }), kind: 'skill', name: 'review' })],
         skipped: [expect.objectContaining({
           capability: { name: 'rules', reason: expect.any(String), state: 'unavailable' },
@@ -697,6 +712,7 @@ it('dispatches the install command through the native installer surface', async 
   expect(calls).toEqual([{
     from: '/tmp/example bundle',
     host: 'claude',
+    replace: false,
     scope: 'project',
   }]);
   expect(JSON.parse(stdout.join(''))).toMatchObject({

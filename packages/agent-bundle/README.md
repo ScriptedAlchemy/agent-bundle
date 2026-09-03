@@ -117,7 +117,8 @@ manifests at files inside those payloads without compiling them. Payload files c
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
-| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
+| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
+| `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
@@ -178,11 +179,67 @@ Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. A source-free artifact root is accepted
 by `--from` when it contains the selected host target directory.
 
+### Reinstall after a same-version rebuild
+
+Rebuilding a plugin without bumping its `version` is the normal local loop, and
+every host treats it differently. `agent-bundle install` and the emitted
+`install.mjs` share one replace policy:
+
+- **Receipt.** Every Cursor copy an agent-bundle installer places carries
+  `.agent-bundle-install.json` beside the plugin manifest: the plugin name,
+  version, host, the sha256 content hash of the artifact tree, when it was
+  installed, the exact list of files the installer owns, and the directories
+  it created (the only ones it will ever prune). The receipt never
+  participates in the content hash, so an installed copy hashes like the
+  artifact it came from.
+- **No-op.** Re-running install on an identical artifact reports
+  `already-installed` and changes nothing, even with `--replace`.
+- **Automatic same-version replace.** When the installed copy is an
+  agent-bundle install of the same plugin at the same version but its content
+  hash differs (a stale copy), install replaces it without a flag. Cursor
+  replacement is in place and touches owned files only: stale owned files are
+  removed, new files are renamed over their predecessors, and unowned entries
+  such as workspace-durable `state/` stores survive; if a rebuilt artifact
+  introduces a path an existing unowned file already occupies, replacement
+  aborts before any change and names it. Claude replacement runs
+  `claude plugin uninstall <plugin>@<marketplace> --scope <scope> --keep-data`
+  before `marketplace add` + `install`, because Claude's `plugin update` is
+  version-gated and a plain reinstall reports "already installed" while the
+  cache stays stale. Codex replacement runs `codex plugin remove` before
+  `marketplace add` + `add`, so files a rebuild removed do not linger.
+- **`--replace` (alias `--force`).** Also replaces an agent-bundle install of
+  the same plugin at a *different* version, and adopts a Cursor copy that was
+  installed before receipts existed (recognised by its emitted `INSTALL.md` +
+  `install.mjs` and matching manifest name). A legacy copy has no owned-file
+  inventory, so adoption rewrites the files the new artifact ships and leaves
+  every other file in place (operator files, files an earlier rebuild dropped,
+  `state/`); those leftovers stay unowned under the new receipt, and later
+  same-version rebuilds replace automatically. A byte-identical legacy copy
+  under `--replace` reports `adopted` and changes no plugin file.
+- **Foreign installs are always refused.** A directory under the plugin name
+  that is not an agent-bundle install of this plugin fails with `AB7005` and a
+  content-hash comparison (`installed <name>@<version> content <hash> vs
+  artifact <name>@<version> content <hash> (same version, different content)`),
+  even with `--replace`. Remove it manually.
+
+For Claude and Codex the installed copy is located through the host's own
+`plugin list --json` inventory (Claude reports the cache path; Codex confirms
+the install and its pinned `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>`
+layout supplies the path). When that inventory is unusable, a plain install
+proceeds as before and `--replace` fails closed rather than guessing.
+
+`agent-bundle doctor --from <bundle-dir>` reports the same comparison per host
+without changing anything: the installed version and content hash versus the
+built artifact, summarised as `current`, `stale (same version, different
+content)` (`AB7308`), `version mismatch` (`AB7309`), `foreign install`
+(`AB7321`), `not installed` (`AB7307`), or `unknown` when the host inventory
+could not be read.
+
 When package outputs ship one of those host packs, the build also emits a
 package-relative installer bin. It uses the plugin name when no configured bin
 claims it and `<plugin-name>-install` otherwise. Map that name to the generated
 `dist/bin/*.js` file in `package.json`; consumers run
-`<bin> install <host> [--scope <scope>] [--json]`. The executable locates the
+`<bin> install <host> [--scope <scope>] [--replace|--force] [--json]`. The executable locates the
 artifact directory beside the installed package, so it works from
 `node_modules` regardless of the current directory. No npm lifecycle performs
 an installation.

@@ -206,6 +206,68 @@ it('reports Claude LSP support and honest unavailable composite coverage', () =>
   expect(registry.supports('plugin', 'lsp')).toBe(false);
 });
 
+it('publishes a dated four-state lsp row on every adapter so no host is judged by silence (#100)', () => {
+  const registry = createDefaultRegistry();
+  expect(registry.get('cursor').capabilities.lsp).toEqual({
+    reason: cursorCapabilityTable.plugin.lsp.reason,
+    state: 'unavailable',
+  });
+  expect(cursorCapabilityTable.plugin.lsp.evidence[0]).toMatch(/^2026-09-03: .*plugin\.schema\.json/u);
+  expect(registry.get('portable').capabilities.lsp).toEqual({
+    reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no LSP server surface.',
+    state: 'unavailable',
+  });
+  expect(registry.get('codex').capabilities.lsp).toEqual({
+    reason: codexCapabilityTable.plugin.components.lsp.reason,
+    state: 'unavailable',
+  });
+  // Emission dispatch: the composite still writes Claude's `.lsp.json`, so
+  // inspection judges the `lsp` kind by the union while the three-host
+  // intersection above stays honestly unavailable.
+  expect(registry.get('plugin').componentCapabilities?.lsp).toMatchObject({
+    evidence: { target: 'claude' },
+    state: 'supported',
+  });
+});
+
+it('records dated unavailable native-diagnostics and native-extension rows on every host and the composite (#100)', () => {
+  const registry = createDefaultRegistry();
+  const tables = {
+    claude: claudeCapabilityTable.plugin,
+    codex: codexCapabilityTable.plugin.components,
+    cursor: cursorCapabilityTable.plugin,
+  } as const;
+  for (const capability of ['nativeDiagnostics', 'nativeExtension'] as const) {
+    for (const [target, table] of Object.entries(tables)) {
+      const row = table[capability];
+      expect(row.state).toBe('unavailable');
+      expect(row.evidence.length).toBeGreaterThan(0);
+      for (const entry of row.evidence) expect(entry).toMatch(/^2026-09-03: /u);
+      expect(registry.get(target).capabilities[capability]).toEqual({ reason: row.reason, state: 'unavailable' });
+      expect(registry.supports(target, capability)).toBe(false);
+    }
+    expect(registry.get('portable').capabilities[capability]).toMatchObject({
+      reason: expect.stringContaining('Agent Plugin contract (1.0.0)'),
+      state: 'unavailable',
+    });
+    expect(registry.get('plugin').capabilities[capability]).toMatchObject({ state: 'unavailable' });
+    expect(registry.get('plugin').componentCapabilities?.[capability]).toMatchObject({ state: 'unavailable' });
+  }
+  // Claude's row points at the LSP `diagnostics` option rather than inventing a component.
+  expect(claudeCapabilityTable.plugin.nativeDiagnostics.reason).toContain('`lsp` kind');
+  expect(claudeCapabilityTable.plugin.lsp.optionalFields).toContain('diagnostics');
+});
+
+it('judges composite event routes by the same intersection validation applies (#100 event-route kind)', () => {
+  const registry = createDefaultRegistry();
+  const plugin = registry.get('plugin');
+  for (const [capability, state] of Object.entries(plugin.capabilities)) {
+    if (!capability.startsWith('event:')) continue;
+    expect(plugin.componentCapabilities?.[capability]).toEqual(state);
+  }
+  expect(plugin.componentCapabilities?.['event:session/start']).toMatchObject({ state: 'supported' });
+});
+
 it('reports Claude bin support without inventing coverage on other native hosts', () => {
   const registry = createDefaultRegistry();
 
@@ -1008,6 +1070,31 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   })).toThrow(/supported cli capability without a routed CLI bin layout/u);
   expect(registry.hostsComponent('cursor', 'cli')).toBe(true);
   expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
+});
+
+it('validates lowersConfigExtensions at registration and answers extension lowering per target (#100)', () => {
+  const source = createDefaultRegistry().get('cursor');
+  for (const malformedValue of ['claude', ['claude', 42], [' ']]) {
+    expect(() => new TargetRegistry().register({
+      ...source,
+      lowersConfigExtensions: malformedValue as never,
+    })).toThrow(/lowersConfigExtensions must be an array of nonempty extension keys/u);
+  }
+  const registry = createDefaultRegistry();
+  // Own key, declared composite sides, and nothing else.
+  expect(registry.lowersConfigExtension('claude', 'claude')).toBe(true);
+  expect(registry.lowersConfigExtension('plugin', 'claude')).toBe(true);
+  expect(registry.lowersConfigExtension('plugin', 'codex')).toBe(true);
+  expect(registry.lowersConfigExtension('cursor', 'claude')).toBe(false);
+  expect(registry.lowersConfigExtension('portable', 'claude')).toBe(false);
+  expect(registry.lowersConfigExtension('missing', 'claude')).toBe(false);
+  // Ownership is answered from the registration snapshot: mutating a live
+  // adapter's configExtension afterwards changes nothing.
+  const mutable = { ...createDefaultRegistry().get('cursor'), configExtension: { key: 'mutable' }, name: 'mutable-host' };
+  const snapshotted = new TargetRegistry().register(mutable);
+  mutable.configExtension.key = 'renamed';
+  expect(snapshotted.lowersConfigExtension('mutable-host', 'mutable')).toBe(true);
+  expect(snapshotted.lowersConfigExtension('mutable-host', 'renamed')).toBe(false);
 });
 
 it('rejects a malformed inspection component capability when the adapter registers', () => {

@@ -416,6 +416,29 @@
         "state": "supported"
       }
     },
+    "components": {
+      "lsp": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/codex/plugin.schema.json is closed to apps, author, description, homepage, hooks, interface, keywords, license, mcpServers, name, repository, skills, and version; the 2026-09-02/03 https://developers.openai.com/plugins/build/plugins evidence in this table documents skills, MCP servers, hooks, and apps as the plugin parts and no language-server component."
+        ],
+        "reason": "The pinned Codex plugin contract publishes no LSP server surface; language-server configuration reaches Claude Code only.",
+        "state": "unavailable"
+      },
+      "nativeDiagnostics": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/codex/plugin.schema.json is closed to apps, author, description, homepage, hooks, interface, keywords, license, mcpServers, name, repository, skills, and version; no property or documented plugin part carries a diagnostics provider."
+        ],
+        "reason": "The pinned Codex plugin contract publishes no diagnostics-provider component; plugin-shipped diagnostics have no schema-backed authoring field, so the compiler emits none.",
+        "state": "unavailable"
+      },
+      "nativeExtension": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/codex/plugin.schema.json has no extension property; the plugins-overview 'browser extensions' part recorded under plugin.overviewSurfaces.browserExtensions is host-managed with no authoring field, and no pinned Codex contract documents a plugin-shipped editor or native extension."
+        ],
+        "reason": "The pinned Codex plugin contract publishes no plugin-shipped editor or native extension component; the host-managed browser-extension part has no authoring field, so the compiler emits none.",
+        "state": "unavailable"
+      }
+    },
     "overviewSurfaces": {
       "mcpUi": {
         "evidence": [

@@ -432,6 +432,27 @@
         "state": "supported"
       }
     },
+    "lsp": {
+      "evidence": [
+        "2026-09-03: the pinned cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines component pointers for commands, agents, skills, rules, hooks, and mcpServers only; no property names a language-server configuration, and the 2026-09-01 https://cursor.com/docs/plugins evidence above documents the same component set."
+      ],
+      "reason": "The pinned Cursor Plugin contract publishes no LSP server component; language intelligence is editor-owned and not a plugin component pointer, so language-server configuration reaches Claude Code only.",
+      "state": "unavailable"
+    },
+    "nativeDiagnostics": {
+      "evidence": [
+        "2026-09-03: the pinned cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines component pointers for commands, agents, skills, rules, hooks, and mcpServers only; no property or documented plugin component carries a diagnostics provider."
+      ],
+      "reason": "The pinned Cursor Plugin contract publishes no diagnostics-provider component, so the compiler emits none.",
+      "state": "unavailable"
+    },
+    "nativeExtension": {
+      "evidence": [
+        "2026-09-03: the pinned cursor/plugins@070189284e702e8a4d2e3cc8913994b204c5337a schemas/plugin.schema.json defines component pointers for commands, agents, skills, rules, hooks, and mcpServers only; no property registers or vendors an editor extension, and the documented physical install root ~/.cursor/plugins/local/<name> is a plugin tree, not an extension install path."
+      ],
+      "reason": "The pinned Cursor Plugin contract publishes no plugin-shipped editor extension component; editor extensions are outside the plugin manifest at this pin, so a plugin cannot vendor or register one.",
+      "state": "unavailable"
+    },
     "localInstall": {
       "method": "copy",
       "root": "~/.cursor/plugins/local/<name>"

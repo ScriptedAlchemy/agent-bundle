@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { capabilityIsSupported, cliBinCapability, unavailableCapability } from './adapters/capability-state.ts';
+import { unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
@@ -15,6 +15,11 @@ import {
   type PackOutput,
 } from './build/pack-inventory.ts';
 import type { CapabilityEvidence, CapabilityState } from './core/capabilities.ts';
+import {
+  agentComponentKinds,
+  componentKindCapabilityName,
+  type AgentComponentKind,
+} from './core/components.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -275,7 +280,15 @@ export interface ValidateResult {
 
 export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capability';
 
-export type InspectionComponentKind = 'cli' | 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+export type { AgentComponentKind } from './core/components.ts';
+export { agentComponentKinds, componentKindCapability, componentKindCapabilityName } from './core/components.ts';
+
+/**
+ * The canonical component kinds inspection accounts for (#100). `hook` is a
+ * config-declared hook escape hatch; `event-route` is a filesystem
+ * `src/events` route judged per canonical event (`event:<name>` rows).
+ */
+export type InspectionComponentKind = AgentComponentKind;
 
 /**
  * The target's own four-state judgment of the capability a component needs,
@@ -307,10 +320,27 @@ export interface InspectionSkippedComponent {
   readonly reason: InspectionSkipReason;
 }
 
+/**
+ * The target's judgment of one canonical component kind, whether or not the
+ * project declares a component of that kind: `capability` is the host's own
+ * four-state row for the kind (absent for `script`, which needs no host
+ * surface, and for `event-route`, whose rows are per canonical event and
+ * travel on each component instead), and the counts are this target's
+ * selected and omitted components of the kind.
+ */
+export interface InspectionComponentKindReport {
+  readonly capability?: InspectionComponentCapability;
+  readonly kind: InspectionComponentKind;
+  readonly selected: number;
+  readonly skipped: number;
+}
+
 export interface InspectionPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
+  /** Every canonical component kind with this target's judgment and counts, in kind order. */
+  readonly kinds: readonly InspectionComponentKindReport[];
   /** Components this target emits, in the same deterministic order as `skipped`. */
   readonly selected: readonly InspectionSelectedComponent[];
   readonly skipped: readonly InspectionSkippedComponent[];
@@ -596,23 +626,51 @@ interface InspectableComponent {
   readonly targets: readonly string[];
 }
 
+const fixedKindComponent = (
+  kind: Exclude<InspectionComponentKind, 'event-route'>,
+  component: { readonly id: string; readonly name: string; readonly targets: readonly string[] },
+): InspectableComponent => {
+  const capability = componentKindCapabilityName(kind);
+  return {
+    ...(capability === undefined ? {} : { capability }),
+    id: component.id,
+    kind,
+    name: component.name,
+    targets: component.targets,
+  };
+};
+
+/**
+ * Every project component in canonical-kind terms. Config-declared hooks stay
+ * `hook` (judged by the host's `hooks` row); filesystem event routes are the
+ * distinct `event-route` kind, judged by the host's row for their canonical
+ * event (#258 matrix) so `inspect` reports them separately. The `agent` kind
+ * has no producer while the G5 deferral (#220) holds.
+ */
 const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
   // The routed CLI bin is offered to every selected target; the host's `cli`
   // capability row decides whether the artifact hosts it (#387).
-  ...routedCliBins(model).map((bin) => ({
-    capability: cliBinCapability,
+  ...routedCliBins(model).map((bin) => fixedKindComponent('cli', {
     id: bin.id,
-    kind: 'cli' as const,
     name: bin.name,
     targets: model.targets.map((target) => target.name),
   })),
-  ...(model.commands ?? []).map((command) => ({ capability: 'commands', id: command.id, kind: 'command' as const, name: command.name, targets: command.targets })),
-  ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
-  ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
-  ...model.mcpServers.map((server) => ({ capability: 'mcp', id: server.id, kind: 'mcp-server' as const, name: server.name, targets: server.targets })),
-  ...(model.rules ?? []).map((rule) => ({ capability: 'rules', id: rule.id, kind: 'rule' as const, name: rule.name, targets: rule.targets })),
-  ...model.scripts.map((script) => ({ id: script.id, kind: 'script' as const, name: script.name, targets: script.targets })),
-  ...model.skills.map((skill) => ({ capability: 'skills', id: skill.id, kind: 'skill' as const, name: skill.name, targets: skill.targets })),
+  ...(model.commands ?? []).map((command) => fixedKindComponent('command', command)),
+  ...model.hooks.map((hook) => hook.eventRoute === undefined
+    ? fixedKindComponent('hook', { id: hook.id, name: hook.event, targets: hook.targets })
+    : {
+      capability: `event:${hook.eventRoute.event}`,
+      id: hook.id,
+      kind: 'event-route' as const,
+      name: hook.eventRoute.event,
+      targets: hook.targets,
+    }),
+  ...(model.lspServers ?? []).map((server) => fixedKindComponent('lsp', server)),
+  ...(model.mcpApps ?? []).map((app) => fixedKindComponent('mcp-app', app)),
+  ...model.mcpServers.map((server) => fixedKindComponent('mcp-server', server)),
+  ...(model.rules ?? []).map((rule) => fixedKindComponent('rule', rule)),
+  ...model.scripts.map((script) => fixedKindComponent('script', script)),
+  ...model.skills.map((skill) => fixedKindComponent('skill', skill)),
 ];
 
 /**
@@ -662,10 +720,59 @@ const capabilityContract = (state: CapabilityState): CapabilityState => {
 const capabilityEvidenceContract = (evidence: CapabilityEvidence): CapabilityEvidence =>
   Object.freeze({ observedVersion: evidence.observedVersion, target: evidence.target });
 
+/**
+ * Whether the target's judgment lets a component ship. Event routes follow the
+ * validation rule in `config/validate.ts`, which admits a `degraded` `event:*`
+ * row (the route lowers with a documented limitation), so an emitted degraded
+ * route is accounted as selected rather than omitted; every other kind ships
+ * only on a `supported` row.
+ */
+const admitsComponent = (kind: InspectionComponentKind, capability: CapabilityState): boolean => {
+  switch (capability.state) {
+    case 'supported':
+      return true;
+    case 'degraded':
+      return kind === 'event-route';
+    case 'unavailable':
+    case 'prohibited':
+      return false;
+    default: {
+      const exhaustive: never = capability;
+      throw new Error(`Unhandled capability state ${JSON.stringify(exhaustive)}`);
+    }
+  }
+};
+
 interface AccountedComponents {
+  readonly kinds: readonly InspectionComponentKindReport[];
   readonly selected: readonly InspectionSelectedComponent[];
   readonly skipped: readonly InspectionSkippedComponent[];
 }
+
+/**
+ * The per-kind matrix: every canonical kind, the target's row for it, and how
+ * many components of the kind this target selected and omitted. Kinds the
+ * project never declares still report the host's judgment, so a host with no
+ * `lsp`, `native-diagnostics`, or `native-extension` surface says so in its
+ * own words rather than by silence.
+ */
+const componentKindReports = (
+  target: string,
+  capabilities: Readonly<Record<string, CapabilityState>>,
+  selected: readonly InspectionSelectedComponent[],
+  skipped: readonly InspectionSkippedComponent[],
+): readonly InspectionComponentKindReport[] => Object.freeze(agentComponentKinds.map((kind) => {
+  const capabilityName = componentKindCapabilityName(kind);
+  const capability = capabilityName === undefined
+    ? undefined
+    : componentCapabilityFor({ capability: capabilityName, id: kind, kind, name: kind, targets: [] }, target, capabilities);
+  return Object.freeze({
+    ...(capability === undefined ? {} : { capability }),
+    kind,
+    selected: selected.filter((component) => component.kind === kind).length,
+    skipped: skipped.filter((component) => component.kind === kind).length,
+  });
+}));
 
 /**
  * Splits the project's components into the ones this target emits and the
@@ -690,13 +797,17 @@ const accountComponentsFor = (
     };
     if (!component.targets.includes(target)) {
       skipped.push(Object.freeze({ ...identity, reason: 'excluded-by-targets' satisfies InspectionSkipReason }));
-    } else if (capability !== undefined && !capabilityIsSupported(capability)) {
+    } else if (capability !== undefined && !admitsComponent(component.kind, capability)) {
       skipped.push(Object.freeze({ ...identity, reason: 'unsupported-capability' satisfies InspectionSkipReason }));
     } else {
       selected.push(Object.freeze(identity));
     }
   }
-  return { selected: Object.freeze(selected), skipped: Object.freeze(skipped) };
+  return {
+    kinds: componentKindReports(target, capabilities, selected, skipped),
+    selected: Object.freeze(selected),
+    skipped: Object.freeze(skipped),
+  };
 };
 
 const inspectState = (model: NormalizedPlugin): StateInspection => {
@@ -747,6 +858,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
           diagnostics: freezeDiagnostics(plan.diagnostics),
           entries: Object.freeze([...plan.entries]),
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
+          kinds: accounted.kinds,
           selected: accounted.selected,
           skipped: accounted.skipped,
           target: target.name,

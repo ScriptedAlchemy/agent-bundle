@@ -1,5 +1,4 @@
 import { createTargetDiagnostics } from './diagnostics.ts';
-import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readMcpTransport, unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import { isPlainDataRecord, ownDataValue } from '../core/strict-json.ts';
@@ -16,12 +15,13 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   cliBinCapability,
   supportedEventRouteNamesFrom,
   supportedCapability,
-  unavailableCapability,
+  type CapabilityTableRow,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
@@ -461,30 +461,8 @@ export const cursorManifest = (
   version: model.metadata.version,
 });
 
-interface CapabilityTableRow {
-  readonly reason?: string;
-  /** JSON imports widen literals; unsupported table states fail closed below. */
-  readonly state: string;
-}
-
-/** Converts one dated capability-table row into the shared four-state contract. */
-const rowCapability = (row: CapabilityTableRow, evidence: CapabilityEvidence): CapabilityState => {
-  switch (row.state) {
-    case 'supported':
-      return supportedCapability(evidence);
-    case 'degraded':
-      return Object.freeze({ evidence, reason: row.reason ?? 'The pinned Cursor contract degrades this surface.', state: 'degraded' });
-    case 'unavailable':
-      return unavailableCapability(row.reason ?? 'The pinned Cursor contract does not support this surface.');
-    case 'prohibited':
-      return Object.freeze({ reason: row.reason ?? 'The pinned Cursor contract prohibits this surface.', state: 'prohibited' });
-    default:
-      throw new TypeError(`Unsupported Cursor capability table state ${JSON.stringify(row.state)}.`);
-  }
-};
-
 const metadata = Object.freeze({
-  adapterRevision: '1.9.0',
+  adapterRevision: '1.10.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -692,7 +670,7 @@ export const cursorContractCapabilityRows = Object.freeze({
 } satisfies Readonly<Record<string, CapabilityTableRow>>);
 
 const contractCapabilities = Object.freeze(Object.fromEntries(
-  Object.entries(cursorContractCapabilityRows).map(([capability, row]) => [capability, rowCapability(row, evidence)]),
+  Object.entries(cursorContractCapabilityRows).map(([capability, row]) => [capability, capabilityFromTableRow(row, evidence)]),
 ));
 
 export const cursorAdapter: TargetAdapter = Object.freeze({
@@ -711,12 +689,17 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
     ),
     hooks: supportedCapability(evidence),
     install: supportedCapability(evidence),
+    // Canonical component kinds with no Cursor Plugin surface (#100): the
+    // pinned schema has no LSP, diagnostics-provider, or extension pointer.
+    lsp: capabilityFromTableRow(capabilityTable.plugin.lsp, evidence),
     marketplace: supportedCapability(evidence),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
       'The pinned Cursor Plugin contract does not support both required modern MCP transports.',
     ),
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     rules: capabilityStateFromSupport(
       capabilityTable.plugin.rules,
       evidence,

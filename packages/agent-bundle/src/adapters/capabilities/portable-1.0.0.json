@@ -135,6 +135,13 @@
       ],
       "state": "supported"
     },
+    "lsp": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only (https://agent-plugins.org/specification); the pinned schemas/portable/plugin.schema.json is closed to $schema, name, version, description, author, homepage, repository, license, keywords, and extensions, so no manifest field or conventional directory carries a language-server configuration."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no LSP server surface.",
+      "state": "unavailable"
+    },
     "manifest": "plugin.json",
     "manifestMetadata": {
       "configKey": "portable",
@@ -149,6 +156,20 @@
         "repository"
       ],
       "state": "supported"
+    },
+    "nativeDiagnostics": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only (https://agent-plugins.org/specification); no section documents a diagnostics-provider component, and §8.2 client-owned reverse-domain directories are opaque to the format, so the compiler cannot claim any client consumes plugin-shipped diagnostics."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no native diagnostics surface.",
+      "state": "unavailable"
+    },
+    "nativeExtension": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only, and §8.2 reserves top-level reverse-domain directories for client-owned files without any pinned client publishing a native-extension contract for them (https://agent-plugins.org/specification); the manifest `extensions` field (§5.6) is opaque metadata, not an installable editor extension."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no native extension surface, and its reverse-domain `extensions` metadata is not one.",
+      "state": "unavailable"
     },
     "skills": true
   },

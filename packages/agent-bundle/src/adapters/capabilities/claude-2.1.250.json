@@ -554,6 +554,20 @@
       "transports": ["socket", "stdio"],
       "vendorsServerBinary": false
     },
+    "nativeDiagnostics": {
+      "evidence": [
+        "2026-09-03: the pinned plugins-reference component set recorded in this table (agents, bin, channels, commands, hooks, LSP servers, MCP servers, monitors, output styles, settings, skills, themes, userConfig, workflows) includes no standalone diagnostics-provider component; `diagnostics` appears only as an optional per-server field of the .lsp.json LSP surface (plugin.lsp.optionalFields), which the `lsp` component kind models."
+      ],
+      "reason": "The pinned Claude plugin contract (2.1.250) documents no standalone diagnostics-provider component; diagnostics reach Claude Code only through the `diagnostics` option of an `.lsp.json` language server, which is the `lsp` kind.",
+      "state": "unavailable"
+    },
+    "nativeExtension": {
+      "evidence": [
+        "2026-09-03: the pinned plugins-reference component set recorded in this table (agents, bin, channels, commands, hooks, LSP servers, MCP servers, monitors, output styles, settings, skills, themes, userConfig, workflows) contains no editor or native extension component; the pinned schemas/claude/plugin.schema.json is closed to author, channels, defaultEnabled, description, dependencies, displayName, hooks, lspServers, metadata, name, userConfig, and version, so a plugin cannot vendor or register an IDE extension."
+      ],
+      "reason": "The pinned Claude plugin contract (2.1.250) documents no editor or native extension component; Claude Code plugins are CLI-loaded component trees, and IDE integrations ship separately from the plugin manifest.",
+      "state": "unavailable"
+    },
     "metadata": {
       "defaultEnabled": {
         "default": true,

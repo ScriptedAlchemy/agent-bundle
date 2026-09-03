@@ -176,7 +176,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.9.0',
+  adapterRevision: '1.10.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -199,6 +199,7 @@ const tableCapability = (row: { readonly reason?: string; readonly state: string
 const hookContractTable = capabilityTable.hooks.contract;
 const distributionTable = capabilityTable.distribution;
 const overviewSurfacesTable = capabilityTable.plugin.overviewSurfaces;
+const componentsTable = capabilityTable.plugin.components;
 const codexReleaseHookEvents: readonly string[] = capabilityTable.hooks.releaseEvents;
 const codexHookRules = Object.freeze({
   additionalContextEvents: hookContractTable.additionalContextLimit.additionalContextEvents as readonly string[],
@@ -1350,10 +1351,11 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     hookTrustReview: tableCapability(hookContractTable.trustReview),
     // The pinned Codex plugin contract documents no LSP surface at all, so
     // this is an absent host capability rather than a degraded one: nothing
-    // of Claude's `.lsp.json` is copied to the Codex manifest.
-    lsp: unavailableCapability(
-      'The pinned Codex plugin contract publishes no LSP server surface; language-server configuration reaches Claude Code only.',
-    ),
+    // of Claude's `.lsp.json` is copied to the Codex manifest. The same
+    // closed manifest schema rules out the other canonical native kinds (#100).
+    lsp: tableCapability(componentsTable.lsp),
+    nativeDiagnostics: tableCapability(componentsTable.nativeDiagnostics),
+    nativeExtension: tableCapability(componentsTable.nativeExtension),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,

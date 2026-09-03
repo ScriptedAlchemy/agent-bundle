@@ -525,6 +525,14 @@ export interface TargetAdapter {
   /** Per-component-kind emission dispatch used by inspect skip accounting; defaults to `capabilities`. */
   readonly componentCapabilities?: Readonly<Record<string, CapabilityState>>;
   readonly configExtension?: TargetConfigExtension;
+  /**
+   * Config extension keys this adapter lowers besides its own (a composite
+   * that plans other hosts' sides). Host-scoped declarations such as
+   * `<key>.lspServers` are eligible for emission only on adapters that lower
+   * that key, so an opaque declaration never counts as emitted by a host whose
+   * planner never reads it.
+   */
+  readonly lowersConfigExtensions?: readonly string[];
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
   readonly mcpRuntime?: TargetMcpRuntimeContract;

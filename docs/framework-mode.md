@@ -330,6 +330,46 @@ The package README's [Developer workbench](../packages/agent-bundle/README.md#de
 section carries the exact commands, install layouts, and event payloads;
 [Diagnostics](diagnostics.md) lists every code on this path.
 
+## Host components
+
+Every project component belongs to one canonical kind (`AgentComponentKind`,
+exported from `agent-bundle/api`), and every kind that needs a host surface
+names the capability row a target adapter must publish for it. Adapters judge
+each row with the shared four-state contract — `supported` with pinned
+evidence, or `degraded` / `unavailable` / `prohibited` with a dated reason —
+and `agent-bundle inspect` reports the judgment per target (see
+[component accounting](entry-conventions.md#agent-bundle-inspect-component-accounting)).
+A host with no row for a kind reads as an honest `unavailable`, never a silent
+pass. The matrix below is the state of the pinned tables (Claude Code
+2.1.250, Codex 0.147.0, Cursor 2026-08-28, Agent Plugins 1.0.0); the JSON
+tables under `packages/agent-bundle/src/adapters/capabilities/` carry the
+evidence strings themselves.
+
+| Kind | Source | Capability row | Claude | Codex | Cursor | portable | `plugin` (composite) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `skill` | `src/skills/<name>/SKILL.{md,ts,tsx}` | `skills` | supported | supported | supported | supported | supported |
+| `command` | `src/commands/*.md` | `commands` | supported | unavailable | supported | unavailable | emitted (Claude format; Cursor pointer omitted) |
+| `rule` | `src/rules/*.mdc` | `rules` | unavailable | unavailable | supported | unavailable | emitted (Cursor half) |
+| `hook` | `hooks` config block | `hooks` | supported | supported | supported | unavailable | supported |
+| `event-route` | `src/events/<family>/<event>.tsx` | `event:<canonical event>` per route | per host `hooks.eventRoutes` table (#258) | per table | per table | unavailable (no hooks) | three-host intersection |
+| `mcp-server` | `src/mcp/<server>/**` or `mcp.servers` | `mcp` | supported | supported | supported | supported | supported |
+| `mcp-app` | `src/mcp/<server>/apps/*` or `mcp.servers.*.apps` | `mcp` | supported | supported | supported | supported | supported |
+| `lsp` | `claude.lspServers` (plugin-root `.lsp.json`) | `lsp` | supported | unavailable | unavailable | unavailable | emitted (Claude half); intersection unavailable |
+| `native-diagnostics` | none | `nativeDiagnostics` | unavailable (LSP `diagnostics` option only) | unavailable | unavailable | unavailable | unavailable |
+| `native-extension` | none | `nativeExtension` | unavailable | unavailable | unavailable | unavailable | unavailable |
+| `agent` | `src/agents` (deferred) | `agents` | unavailable — G5 deferral ([#220](https://github.com/ScriptedAlchemy/agent-bundle/pull/220)) | no row | unavailable (G5) | no row | unavailable (G5) |
+| `script` | `src/scripts/**`, `scripts` config | none | emitted | emitted | emitted | emitted | emitted |
+| `cli` | routed `src/cli/**` bin (#387) | `cli` | supported | supported | supported | supported | supported |
+
+"Emitted" in the composite column means the multi-host `plugin` bundle writes
+the surface for the hosts that support it while its own capability row stays
+the honest three-host intersection; inspection judges the composite by what it
+emits. `native-diagnostics` and `native-extension` have no authoring surface
+at all: the rows exist so the compiler's answer to "can this bundle ship a
+diagnostics provider or an editor extension?" is a dated *no* per host rather
+than silence. The `agent` kind has no producer until the G5 gate admits it;
+Claude's `agents` row and its per-field `agents.*` rows record the deferral.
+
 ## Distribution
 
 `agent-bundle build` makes each target directory independently distributable.
@@ -371,6 +411,14 @@ agent-bundle install cursor --from artifact/cursor
 
 Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
 include a standalone `install.mjs`. Its staged copy is idempotent for identical
-content and refuses version or content collisions. It never invokes sudo or
-changes PATH. Artifact validation rejects a built-in target whose required
-install surface is missing.
+content, records an install receipt (`.agent-bundle-install.json`: plugin,
+version, content hash, owned files and directories), replaces a same-version stale copy of its
+own plugin in place (owned files only; `state/` survives), and accepts
+`--replace` (alias `--force`) to replace a different installed version or adopt
+a pre-receipt copy. Foreign directories are refused with a content-hash
+comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
+[--replace]` applies the same policy for every host, and `agent-bundle doctor
+--from` reports the installed copy versus the artifact as `current`, `stale`,
+`version-mismatch`, `foreign`, or `not-installed` (see the package README's
+"Reinstall after a same-version rebuild"). Artifact validation rejects a
+built-in target whose required install surface is missing.
