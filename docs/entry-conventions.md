@@ -547,6 +547,28 @@ to `tools.rspack` mutator functions —
 `tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
 engine's own `rspack` object.
 
+### `agent-bundle inspect` component accounting
+
+```sh
+agent-bundle inspect [--target <t>] [--json]
+```
+
+Every inspection plan accounts for each host component the project declares
+— skills, commands, rules, hooks, MCP servers, MCP Apps, and scripts — as
+either `selected` (emitted for that target) or `skipped` (omitted), in one
+deterministic order. A skipped component names its cause: `excluded-by-targets`
+when the author's `targets` left the host out, or `unsupported-capability` when
+the host's pinned capability table does not support the surface. Components
+that need a host capability carry that target's own four-state judgment as
+`capability` — `{ name, state: 'supported', evidence }` for emitted surfaces,
+or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
+the JSON explains why a Cursor rule is absent from a Claude bundle in the
+host's words rather than the compiler's. An adapter that publishes no row for
+a needed capability reads as an honest `unavailable`, never a silent pass.
+Scripts need no host capability and carry none. The human output prints one
+line per target (`<target>: N component(s) selected, M omitted`) followed by
+each omission and its reason.
+
 ### `agent-bundle inspect --bundler`
 
 ```sh

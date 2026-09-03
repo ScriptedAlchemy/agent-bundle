@@ -85,7 +85,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
 | `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
-| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
+| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
