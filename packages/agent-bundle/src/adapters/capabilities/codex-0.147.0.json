@@ -12,6 +12,152 @@
     "source": "https://developers.openai.com/codex/cli/reference",
     "state": "supported"
   },
+  "marketplace": {
+    "policy": {
+      "authentication": ["ON_INSTALL", "ON_USE"],
+      "installation": ["AVAILABLE", "INSTALLED_BY_DEFAULT", "NOT_AVAILABLE"]
+    }
+  },
+  "distribution": {
+    "repoMarketplaceDiscovery": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents repo marketplaces at $REPO_ROOT/.agents/plugins/marketplace.json, resolves each entry's ./-prefixed source.path relative to the marketplace root (not the .agents/plugins folder), and lets codex plugin marketplace add register a local marketplace root directory.",
+        "retrieved 2026-09-02: the Codex adapter emits .agents/plugins/marketplace.json at the artifact root with one local entry whose source.path is ./, so the artifact is both the marketplace root and the plugin root; live codex-cli 0.147.0 registered such an artifact with codex plugin marketplace add <root> and installed it with codex plugin add <plugin>@<plugin>-marketplace in isolated CODEX_HOME probes."
+      ],
+      "path": ".agents/plugins/marketplace.json",
+      "state": "supported"
+    },
+    "personalMarketplaceDiscovery": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents the personal marketplace at ~/.agents/plugins/marketplace.json with plugin folders commonly under ./.codex/plugins/<name>; live codex-cli 0.147.0 lists it as the implicit marketplace named personal rooted at $HOME in codex plugin marketplace list --json."
+      ],
+      "path": "~/.agents/plugins/marketplace.json",
+      "reason": "The personal marketplace is a user-owned file in the home directory; the compiler emits artifacts only and the installer registers the artifact root through codex plugin marketplace add instead of editing ~/.agents/plugins/marketplace.json.",
+      "state": "unavailable"
+    },
+    "legacyClaudeMarketplaceCompatibility": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins lists a legacy-compatible marketplace at $REPO_ROOT/.claude-plugin/marketplace.json alongside the repo and personal marketplace locations."
+      ],
+      "path": ".claude-plugin/marketplace.json",
+      "reason": "The Codex adapter emits the Codex-native .agents/plugins/marketplace.json and never a .claude-plugin/marketplace.json; the legacy path is a host-side reading convenience for Claude-authored repositories, and the unified plugin target's Claude marketplace is emitted by the Claude adapter, not as a Codex compatibility artifact.",
+      "state": "unavailable"
+    },
+    "marketplaceSources": {
+      "admitted": ["local", "local-string", "url", "git-subdir", "npm"],
+      "emitted": "local",
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents local entries as { source: \"local\", path: \"./...\" } or a plain ./-prefixed string, Git root entries as source \"url\" with url plus optional ref or sha, Git subdirectory entries as source \"git-subdir\" with url, ./-prefixed path, and ref or sha, and npm entries with required package (scope allowed), optional version (versions, dist-tags, ranges; no path or URL selectors), and optional registry (HTTPS without credentials, query, or fragment).",
+        "retrieved 2026-09-02: the same page states source.path must stay inside the marketplace root, Codex downloads npm packages without running lifecycle scripts, the npm CLI must be installed with registry authentication from its own configuration, and an unresolvable entry is skipped instead of failing the whole marketplace.",
+        "retrieved 2026-09-02: the pinned marketplace.schema.json admits every documented source form with root-contained paths, Git URL shapes, hexadecimal sha selectors, and credential-free HTTPS registries; the adapter emits only the local ./ entry that points at the plugin itself."
+      ],
+      "reason": "The emitted marketplace always describes the artifact's own plugin root as a local source; Git, git-subdir, and npm sources are validated for real-world marketplaces but not authored, and lifecycle-script prohibition plus unresolved-entry skipping are Codex install-time behavior.",
+      "state": "degraded"
+    },
+    "marketplaceInterface": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents top-level name as the marketplace identifier and interface.displayName as the marketplace title shown in the picker; the adapter emits <plugin>-marketplace with a displayName that defaults to the plugin name and is authorable through codex.marketplace.displayName."
+      ],
+      "state": "supported"
+    },
+    "marketplacePolicy": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins requires policy.installation (AVAILABLE, INSTALLED_BY_DEFAULT, or NOT_AVAILABLE) and policy.authentication (install-time or first-use) on every entry; the adapter defaults to AVAILABLE and ON_INSTALL and accepts codex.marketplace.policy overrides validated against the documented values.",
+        "retrieved 2026-09-02: live codex-cli 0.147.0 echoed an authored INSTALLED_BY_DEFAULT/ON_USE entry back as installPolicy and authPolicy in codex plugin list --json and authPolicy in codex plugin add --json inside an isolated CODEX_HOME."
+      ],
+      "state": "supported"
+    },
+    "marketplaceCategory": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins requires category on every marketplace entry and does not enumerate values; the adapter emits the plugin's interface category (generated Productivity or the authored codex.interface.category) and accepts a codex.marketplace.category override."
+      ],
+      "state": "supported"
+    },
+    "installCacheLayout": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents installs under ~/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$VERSION/ with $VERSION equal to local for local plugins and the installed copy loaded from that cache path.",
+        "2026-09-02: live codex-cli 0.147.0 installed a local-marketplace plugin to $CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<manifest version>/ and reported that path as installedPath; the observed segment was the manifest version (1.0.0), not the documented literal local."
+      ],
+      "path": "~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/",
+      "reason": "The install cache is created and loaded by the host; the compiler neither writes it nor relies on the documented local version segment, which the pinned 0.147.0 CLI replaces with the manifest version.",
+      "state": "unavailable"
+    },
+    "pluginEnableState": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins states each plugin's on or off state is stored in ~/.codex/config.toml; live codex-cli 0.147.0 wrote [plugins.\"<plugin>@<marketplace>\"] enabled = true and a [marketplaces.<name>] table with source_type, source, and last_updated on add, and removed both on codex plugin remove and codex plugin marketplace remove."
+      ],
+      "reason": "Enable state lives in the user's config.toml and is toggled by the host (/plugins, codex plugin add and remove); the compiler never writes config.toml.",
+      "state": "unavailable"
+    },
+    "pluginCliLifecycle": {
+      "commands": ["add", "list", "remove"],
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/developer-commands?surface=cli documents codex plugin add <plugin[@marketplace]> [--marketplace NAME] [--json], list [--marketplace NAME] [--available --json] [--json], and remove <plugin[@marketplace]> [--json]; add JSON prints pluginId, name, marketplaceName, version, installedPath, and authPolicy; list JSON prints installed and available arrays whose entries include pluginId, name, marketplaceName, version, installed, enabled, source, installPolicy, authPolicy, and optional marketplaceSource; remove JSON prints pluginId, name, and marketplaceName.",
+        "2026-09-02: live codex-cli 0.147.0 in an isolated CODEX_HOME matched every documented JSON field for add, list, list --available, and remove; agent-bundle install codex runs codex plugin marketplace add <root> followed by codex plugin add <plugin>@<marketplace>."
+      ],
+      "reason": "The installer drives codex plugin add after registering the artifact marketplace, but list and remove remain user-driven and the read-only Doctor pins no Codex inventory verb yet.",
+      "state": "degraded"
+    },
+    "marketplaceCliLifecycle": {
+      "commands": ["add", "list", "upgrade", "remove"],
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/developer-commands?surface=cli documents codex plugin marketplace add <source> [--ref REF] [--sparse PATH] [--json] for GitHub shorthand, Git HTTP(S) or SSH URLs, and local roots, list [--json], remove <name> [--json], and upgrade [name] [--json] for Git marketplaces; add JSON prints marketplaceName, installedRoot, and alreadyAdded; list JSON prints marketplaces with name, root, and optional marketplaceSource; upgrade JSON prints selectedMarketplaces, upgradedRoots, and errors; remove JSON prints marketplaceName and installedRoot.",
+        "2026-09-02: live codex-cli 0.147.0 in an isolated CODEX_HOME matched every documented JSON field; a second add of the same root returned alreadyAdded true, upgrade of a local marketplace exited 1 with `is not configured as a Git marketplace`, and remove of a local marketplace returned installedRoot null."
+      ],
+      "reason": "The installer drives codex plugin marketplace add for the artifact root, but list, upgrade, and remove remain user-driven and Git-backed marketplace sources are never emitted.",
+      "state": "degraded"
+    },
+    "featurePlugins": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/enterprise/managed-configuration documents features.plugins = false in requirements.toml to turn plugins off in supported local clients, including API-key sign-in, and https://developers.openai.com/plugins/build/plugins documents features.plugin_sharing = false to disable workspace plugin publishing."
+      ],
+      "reason": "features.plugins is user or admin configuration in config.toml or requirements.toml; the compiler emits plugin artifacts and cannot enable plugins where policy disables them.",
+      "state": "unavailable"
+    },
+    "featureHooks": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents hooks as enabled by default, turned off with [features] hooks = false, codex_hooks as a deprecated alias, and admins forcing hooks off or pinning them on with [features].hooks in requirements.toml."
+      ],
+      "reason": "features.hooks and its deprecated codex_hooks alias are host feature flags in config.toml or requirements.toml; emitted plugin hooks load only where the flag is on.",
+      "state": "unavailable"
+    },
+    "inlineHooksToml": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks documents inline [hooks] tables in config.toml as an alternative to hooks.json per config layer, merged with a startup warning when one layer defines both, and states plugins bundle hooks through the manifest or hooks/hooks.json instead."
+      ],
+      "reason": "Inline [hooks] TOML belongs to user, project, and managed config layers; plugins deliver hooks only through hooks/hooks.json or manifest hook entries, which the adapter emits.",
+      "state": "unavailable"
+    },
+    "managedRequirements": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/enterprise/managed-configuration composes requirements.toml from /etc/codex/requirements.toml (or %ProgramData%\\OpenAI\\Codex), cloud-managed bundles, legacy managed_config.toml, and macOS MDM com.openai.codex:requirements_toml_base64, and lets admins define managed hooks under [hooks] with managed_dir and windows_managed_dir plus command_windows overrides while scripts are distributed by MDM.",
+        "retrieved 2026-09-02: managed hooks are trusted by policy, cannot be disabled from the user hook browser, and must reference absolute script paths under the managed directory."
+      ],
+      "reason": "requirements.toml is admin-owned enterprise policy delivered outside the plugin package; the compiler cannot author managed hooks, managed_dir, or MDM payloads.",
+      "state": "unavailable"
+    },
+    "allowManagedHooksOnly": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks and https://learn.chatgpt.com/docs/enterprise/managed-configuration document allow_managed_hooks_only = true as skipping user, project, session, and plugin hooks while still loading requirements.toml and other managed-layer hooks."
+      ],
+      "reason": "allow_managed_hooks_only is an admin requirement that disables plugin-bundled hooks outright; emitted hooks cannot opt out of or satisfy it.",
+      "state": "unavailable"
+    },
+    "restrictToAllowedSources": {
+      "evidence": [
+        "retrieved 2026-09-02: https://learn.chatgpt.com/docs/enterprise/managed-configuration documents [marketplaces] restrict_to_allowed_sources = true with allowed_sources rules of source git (normalized url plus optional exact ref), host_pattern (regex over the lowercase Git host), or local (absolute normalized path); unmatched marketplace add, plugin install, and Git refresh operations are rejected while already configured marketplaces are not filtered at runtime and Codex-managed OpenAI marketplaces stay available."
+      ],
+      "reason": "Marketplace source restriction is admin-owned requirements policy applied at add, install, and refresh time; a local artifact marketplace is admitted only if an allowed_sources local rule names its absolute path.",
+      "state": "unavailable"
+    },
+    "workspacePublishing": {
+      "evidence": [
+        "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents workspace admins publishing a personal plugin to selected workspace roles from ChatGPT Plugins, scoped to the workspace boundary and separate from the universal public directory, and features.plugin_sharing = false in cloud-managed requirements to disable it."
+      ],
+      "reason": "Workspace publishing is a ChatGPT admin surface with no local artifact or CLI contract; public directory submission is recorded separately as submissionPolicy.",
+      "state": "unavailable"
+    }
+  },
   "deferredNativeEvents": {
     "Interrupt": {
       "reason": "retrieved 2026-09-02: https://learn.chatgpt.com/docs/hooks now documents Interrupt (main-thread turn interruption; matcher ignored; one-second default and three-second maximum timeout; systemMessage-only output), but the pinned rust-v0.147.0 generated hook schema directory has no interrupt.command.{input,output}.schema.json (those files exist only on main), and Agent Bundle has no canonical interrupt event route (#97 owns route expansion). Deferred until the Codex pin moves to a release that ships the generated Interrupt schemas; authored native Interrupt hooks fail closed with codex.native-hooks.event.deferred.",

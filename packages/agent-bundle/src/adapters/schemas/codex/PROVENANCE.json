@@ -13,6 +13,12 @@
       "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id.",
       "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization."
     ],
+    "marketplace.schema.json": [
+      "Transcribed 2026-09-02 from the Marketplace metadata section of https://developers.openai.com/plugins/build/plugins: top-level name, interface.displayName, and plugins[] entries with name, source, policy, and category.",
+      "interface is required even though one documented example omits it: the adapter always emits a displayName, and the marketplace picker shows that title.",
+      "source admits every documented form: a plain ./-prefixed string, { source: local, path }, { source: url, url, ref?, sha? }, { source: git-subdir, url, path, ref?, sha? }, and { source: npm, package, version?, registry? }; paths are root-contained with backslashes rejected, Git URLs must be HTTP(S), ssh://, or scp-style, sha selectors are 7-64 hexadecimal digits, npm versions reject path and URL selectors, and registries must be credential-, query-, and fragment-free HTTPS URLs.",
+      "policy.installation and policy.authentication are closed to the documented AVAILABLE|INSTALLED_BY_DEFAULT|NOT_AVAILABLE and ON_INSTALL|ON_USE values, and both are required alongside category as the page instructs."
+    ],
     "hooks.schema.json": [
       "The hooks object is closed to the eleven release-documented events; Interrupt is excluded because rust-v0.147.0 ships no generated Interrupt schema.",
       "Handlers are a closed oneOf of command and mcp_tool shapes; prompt and agent handlers are excluded because Codex parses but skips them.",
@@ -31,9 +37,9 @@
       "url": "https://learn.chatgpt.com/docs/hooks"
     },
     "marketplace.schema.json": {
-      "bytes": 1671,
-      "sha256": "1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8",
-      "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
+      "bytes": 3671,
+      "sha256": "0c8f05730a602ed4d7dfd4b8bb8091b251deb3f002bf6b0c89e9b64eac349f61",
+      "url": "https://developers.openai.com/plugins/build/plugins"
     },
     "mcp.schema.json": {
       "bytes": 1267,

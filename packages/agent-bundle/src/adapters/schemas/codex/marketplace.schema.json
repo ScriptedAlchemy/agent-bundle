@@ -1,6 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/marketplace.schema.json",
+  "$defs": {
+    "containedPath": {
+      "pattern": "^\\./(?!(?:.*[\\/\\\\])?\\.\\.(?:[\\/\\\\]|$))[^\\\\]*$",
+      "type": "string"
+    },
+    "gitUrl": {
+      "minLength": 1,
+      "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]?://|[Ss][Ss][Hh]://|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:)\\S+$",
+      "type": "string"
+    },
+    "gitRef": { "minLength": 1, "type": "string" },
+    "gitSha": { "minLength": 1, "pattern": "^[0-9A-Fa-f]{7,64}$", "type": "string" },
+    "localSource": {
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/containedPath" },
+        "source": { "const": "local", "type": "string" }
+      },
+      "required": ["source", "path"],
+      "type": "object"
+    },
+    "gitRootSource": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/gitRef" },
+        "sha": { "$ref": "#/$defs/gitSha" },
+        "source": { "const": "url", "type": "string" },
+        "url": { "$ref": "#/$defs/gitUrl" }
+      },
+      "required": ["source", "url"],
+      "type": "object"
+    },
+    "gitSubdirSource": {
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/containedPath" },
+        "ref": { "$ref": "#/$defs/gitRef" },
+        "sha": { "$ref": "#/$defs/gitSha" },
+        "source": { "const": "git-subdir", "type": "string" },
+        "url": { "$ref": "#/$defs/gitUrl" }
+      },
+      "required": ["source", "url", "path"],
+      "type": "object"
+    },
+    "npmSource": {
+      "additionalProperties": false,
+      "properties": {
+        "package": { "minLength": 1, "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$", "type": "string" },
+        "registry": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]://[^@?#\\s]+$", "type": "string" },
+        "source": { "const": "npm", "type": "string" },
+        "version": { "minLength": 1, "pattern": "^[^/\\\\:@]+$", "type": "string" }
+      },
+      "required": ["source", "package"],
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "interface": {
@@ -26,13 +82,13 @@
             "type": "object"
           },
           "source": {
-            "additionalProperties": false,
-            "properties": {
-              "path": { "pattern": "^\\./", "type": "string" },
-              "source": { "const": "local", "type": "string" }
-            },
-            "required": ["source", "path"],
-            "type": "object"
+            "oneOf": [
+              { "$ref": "#/$defs/containedPath" },
+              { "$ref": "#/$defs/localSource" },
+              { "$ref": "#/$defs/gitRootSource" },
+              { "$ref": "#/$defs/gitSubdirSource" },
+              { "$ref": "#/$defs/npmSource" }
+            ]
           }
         },
         "required": ["name", "source", "policy", "category"],

@@ -112,6 +112,26 @@ const mcpPolicyUnifiedReason =
   'The MCP approval policy is enforced by the Codex host at install time; the pinned Claude and Cursor contracts publish no shared per-plugin MCP policy surface.';
 const hookContractUnifiedReason =
   'The unified bundle emits the Codex-only hook handler contract, but the pinned Claude and Cursor hook contracts declare no shared handler-type, timeout, matcher, or trust surface.';
+const distributionUnifiedReason =
+  'The unified bundle emits the Codex-only marketplace and install-policy surface, but the pinned Claude and Cursor contracts declare no shared marketplace source, cache, enable-state, feature-flag, or managed-requirements surface.';
+const codexDistributionCapabilities = [
+  'allowManagedHooksOnly',
+  'featureHooks',
+  'featurePlugins',
+  'inlineHooksToml',
+  'installCacheLayout',
+  'legacyClaudeMarketplaceCompatibility',
+  'managedRequirements',
+  'marketplaceCategory',
+  'marketplaceInterface',
+  'marketplacePolicy',
+  'marketplaceSources',
+  'personalMarketplaceDiscovery',
+  'pluginEnableState',
+  'repoMarketplaceDiscovery',
+  'restrictToAllowedSources',
+  'workspacePublishing',
+] as const;
 const codexHookContractCapabilities = [
   'hookAdditionalContextLimit',
   'hookAsyncCommands',
@@ -208,7 +228,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.22.0',
+  adapterRevision: '1.23.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -601,15 +621,22 @@ const componentCapabilities = Object.freeze(Object.fromEntries(
   ]),
 ));
 
-const codexHookContractUnifiedCapabilities = Object.freeze(Object.fromEntries(
-  codexHookContractCapabilities.map((capability) => [
+const codexHookContractUnifiedCapabilities = Object.freeze(Object.fromEntries([
+  ...codexHookContractCapabilities.map((capability) => [
     capability,
     intersectCapabilityStates(
       codexAdapter.capabilities[capability]!,
       unavailableCapability(hookContractUnifiedReason),
     ),
   ]),
-));
+  ...codexDistributionCapabilities.map((capability) => [
+    capability,
+    intersectCapabilityStates(
+      codexAdapter.capabilities[capability]!,
+      unavailableCapability(distributionUnifiedReason),
+    ),
+  ]),
+]));
 
 const agentCapabilities = Object.freeze(Object.fromEntries(
   Object.keys(claudeCapabilityTable.plugin.agents).map((rowName) => {
@@ -764,7 +791,10 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       ),
     ),
     marketplaceCliLifecycle: intersectCapabilityStates(
-      claudeAdapter.capabilities.marketplaceCliLifecycle!,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities.marketplaceCliLifecycle!,
+        codexAdapter.capabilities.marketplaceCliLifecycle!,
+      ),
       unavailableCapability(
         'The unified bundle emits host marketplace documents but cannot add, list, remove, or update marketplaces as one cross-host lifecycle transaction.',
       ),
@@ -855,7 +885,10 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
       'The unified bundle emits Claude-only output styles, but the pinned Codex and Cursor contracts declare no shared output styles surface.',
     ),
     pluginCliLifecycle: intersectCapabilityStates(
-      claudeAdapter.capabilities.pluginCliLifecycle!,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities.pluginCliLifecycle!,
+        codexAdapter.capabilities.pluginCliLifecycle!,
+      ),
       unavailableCapability(
         'The unified bundle emits host artifacts but cannot run Claude-only plugin creation, installation, state, inspection, update, or release commands.',
       ),
