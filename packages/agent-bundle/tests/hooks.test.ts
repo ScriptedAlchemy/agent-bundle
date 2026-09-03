@@ -1262,7 +1262,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(
         join(sourceRoot, 'subagent-start.ts'),
-        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.toolUseId)}` });\n",
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.toolUseId)}:${String(event.model)}` });\n",
       ),
       writeFile(
         join(sourceRoot, 'subagent-stop.ts'),
@@ -1293,7 +1293,9 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       stderr: '',
       stdout: JSON.stringify({
         permission: 'deny',
-        user_message: `${String(startInput.conversation_id)}:${String(startInput.subagent_id)}:${String(startInput.subagent_type)}:${String(startInput.tool_call_id)}`,
+        // subagent_model is the model the subagent will use; it decodes to the
+        // canonical `model` field so handlers can see it.
+        user_message: `${String(startInput.conversation_id)}:${String(startInput.subagent_id)}:${String(startInput.subagent_type)}:${String(startInput.tool_call_id)}:${String(startInput.subagent_model)}`,
       }),
     });
     // https://cursor.com/docs/hooks#subagentstop: { followup_message }.

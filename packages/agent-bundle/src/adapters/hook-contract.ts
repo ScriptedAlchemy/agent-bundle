@@ -769,6 +769,7 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  cwd: nativeInput.cwd,',
   '  hookEventName: nativeInput.hook_event_name,',
   '  lastAssistantMessage: canonicalEvent === "agentStop" ? nativeInput.summary : undefined,',
+  '  model: canonicalEvent === "agentStart" ? nativeInput.subagent_model : undefined,',
   '  sessionId: nativeInput.session_id ?? nativeInput.conversation_id,',
   '  stopHookActive: canonicalEvent === "stop" || canonicalEvent === "agentStop" ? nativeInput.loop_count > 0 : undefined,',
   '  toolInput: nativeInput.tool_input,',
