@@ -1,0 +1,9 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Reply with hi.",
+  "prompt_id": "prompt-claude-1",
+  "session_id": "session-claude-1",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}
