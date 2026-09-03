@@ -11,6 +11,7 @@ import { parse as parseYaml } from 'yaml';
 
 import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
 import portablePluginSchema from '../../src/adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
+import { codexArtifactPaths, codexInterfaceFields, codexPluginDocumentValidator } from '../../src/adapters/codex.ts';
 import {
   cursorHooksValidator,
   cursorMcpValidator,
@@ -63,7 +64,32 @@ const portableMcpSchemaIdentifier =
 const portablePluginSchemaIdentifier =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const skillSidecarPath = join('skills', 'probe', 'agents', 'openai.yaml');
+const codexManifestPath = codexArtifactPaths.plugin;
+const validateCodexPluginManifest = codexPluginDocumentValidator(codexArtifactPaths.mcp);
 const portableSchemaValidator = createAdapterValidator();
+
+/**
+ * The `interface` fields the host-install fixture is pinned to emit for Codex,
+ * shared by the source-built and packed-tarball proofs so an emission change
+ * is re-pinned in exactly one place (#364 changed `logo` and only the proof a
+ * lane happened to run locally caught it; #367 repaired the second copy).
+ *
+ * The proof also checks the installed set against the adapter's own declared
+ * `codexInterfaceFields`, so an undeclared field fails before this snapshot
+ * does, and against the built artifact, so install fidelity and emission are
+ * reported separately.
+ */
+export const expectedCodexInterfaceFields = Object.freeze([
+  'capabilities',
+  'category',
+  'defaultPrompt',
+  'developerName',
+  'displayName',
+  // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
+  'logo',
+  'longDescription',
+  'shortDescription',
+]);
 const portableMcpValidator = portableSchemaValidator.compile(portableMcpSchema);
 const portablePluginValidator = portableSchemaValidator.compile(portablePluginSchema);
 
@@ -188,8 +214,11 @@ export interface CodexHostInstallReport {
   readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
   readonly manifest: {
     readonly interfaceCapabilities: readonly string[];
+    /** Sorted installed `interface` keys; every one is in the adapter's declared `codexInterfaceFields`. */
     readonly interfaceFields: readonly string[];
+    readonly matchesBuiltArtifact: true;
     readonly path: string;
+    readonly schema: 'schema-valid';
   };
   readonly proofLevel: string;
   readonly registration: {
@@ -905,11 +934,32 @@ export const runCodexHostInstallProof = async (
     );
     const sidecarSections = Object.keys(sidecar).sort();
 
-    const manifestPath = join(cachePath, '.codex-plugin', 'plugin.json');
-    const manifest = record(await readJson(manifestPath, 'Codex installed plugin manifest'));
+    const manifestPath = join(cachePath, codexManifestPath);
+    const installedManifestText = await readText(manifestPath, 'Codex installed plugin manifest');
+    const builtManifestText = await readText(
+      join(fixture.bundles.codex, codexManifestPath),
+      'Codex built plugin manifest',
+    );
+    assertProof(
+      installedManifestText === builtManifestText,
+      `Codex install did not copy ${codexManifestPath} byte-identically from the built bundle.`,
+    );
+    const manifestDocument = parseJson<unknown>(installedManifestText, 'Codex installed plugin manifest');
+    const manifest = record(manifestDocument);
     assertProof(manifest !== undefined, 'Codex installed plugin manifest was not a JSON object.');
+    const manifestIssues = validateCodexPluginManifest(manifestDocument);
+    assertProof(
+      manifestIssues.length === 0,
+      `Codex installed plugin manifest failed its pinned schema: ${JSON.stringify(manifestIssues)}`,
+    );
     const manifestInterface = record(manifest.interface);
     assertProof(manifestInterface !== undefined, 'Codex installed plugin manifest carried no interface block.');
+    const interfaceFields = Object.keys(manifestInterface).sort();
+    const undeclaredFields = interfaceFields.filter((field) => !codexInterfaceFields.includes(field));
+    assertProof(
+      undeclaredFields.length === 0,
+      `Codex installed plugin manifest interface carried fields the adapter does not declare: ${undeclaredFields.join(', ')}.`,
+    );
     assertProof(
       manifestInterface.displayName === plugin,
       'Codex installed plugin manifest interface did not carry the plugin display name.',
@@ -932,8 +982,10 @@ export const runCodexHostInstallProof = async (
       install: Object.freeze({ state: 'installed', version }),
       manifest: Object.freeze({
         interfaceCapabilities: Object.freeze(interfaceCapabilities),
-        interfaceFields: Object.freeze(Object.keys(manifestInterface).sort()),
+        interfaceFields: Object.freeze(interfaceFields),
+        matchesBuiltArtifact: true,
         path: normalizedRelative(cachePath, manifestPath),
+        schema: 'schema-valid',
       }),
       proofLevel,
       registration: Object.freeze({

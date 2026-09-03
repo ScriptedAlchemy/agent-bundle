@@ -20,6 +20,10 @@ concurrency:
 jobs:
   native-host-smoke:
     # This runs only on a trusted runner with existing CLI login state; no workflow secrets are passed.
+    # The login-free subset (host install proofs, packed host install proofs, packed Claude plugin
+    # validation) also runs on every PR and main push in ci.yml's host-install-proofs job against the
+    # CLI versions pinned in the adapter schema PROVENANCE files; this workflow adds the signed-in
+    # `claude -p` / `codex exec` evidence on top, against whatever CLI the trusted runner has.
     runs-on: self-hosted
     strategy:
       fail-fast: false
