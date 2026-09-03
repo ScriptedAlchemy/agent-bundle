@@ -44,6 +44,24 @@ const requireNativeStringValue = (input: Readonly<Record<string, unknown>>, fiel
   }
 };
 
+const requireNativeNumber = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'number') {
+    nativeEventError(`native ${field} must be a number`);
+  }
+};
+
+const requireNativeBoolean = (input: Readonly<Record<string, unknown>>, field: string): void => {
+  if (typeof input[field] !== 'boolean') {
+    nativeEventError(`native ${field} must be a boolean`);
+  }
+};
+
+const requireCompactTrigger = (native: Readonly<Record<string, unknown>>): void => {
+  if (native.trigger !== 'manual' && native.trigger !== 'auto') {
+    nativeEventError('native trigger must equal manual or auto');
+  }
+};
+
 const requirePermissionMode = (native: Readonly<Record<string, unknown>>): void => {
   requireNativeString(native, 'permission_mode');
   if (!['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'].includes(String(native.permission_mode))) {
@@ -125,6 +143,35 @@ export const validateNativeEventEnvelope = (
       }
       return native;
     }
+    if (canonicalEvent === 'tool/failure') {
+      requireNativeString(native, 'tool_name');
+      if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+        return nativeEventError('native tool_input must be an object');
+      }
+      requireNativeString(native, 'tool_use_id');
+      requireNativeString(native, 'cwd');
+      requireNativeStringValue(native, 'error_message');
+      if (!['timeout', 'error', 'permission_denied'].includes(String(native.failure_type))) {
+        return nativeEventError('native failure_type is invalid');
+      }
+      requireNativeNumber(native, 'duration');
+      requireNativeBoolean(native, 'is_interrupt');
+      return native;
+    }
+    if (canonicalEvent === 'compact/before') {
+      requireCompactTrigger(native);
+      for (const field of [
+        'context_usage_percent',
+        'context_tokens',
+        'context_window_size',
+        'message_count',
+        'messages_to_compact',
+      ]) {
+        requireNativeNumber(native, field);
+      }
+      requireNativeBoolean(native, 'is_first_compaction');
+      return native;
+    }
     if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
       requireNativeString(native, 'tool_name');
       if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
@@ -160,6 +207,29 @@ export const validateNativeEventEnvelope = (
     if (target === 'codex') {
       requireNativeString(native, 'turn_id');
       requireNativeString(native, 'model');
+    }
+  }
+  if (canonicalEvent === 'tool/failure') {
+    requireNativeString(native, 'tool_name');
+    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+      return nativeEventError('native tool_input must be an object');
+    }
+    requireNativeString(native, 'tool_use_id');
+    requireNativeStringValue(native, 'error');
+    if (Object.hasOwn(native, 'is_interrupt')) requireNativeBoolean(native, 'is_interrupt');
+    if (Object.hasOwn(native, 'duration_ms')) requireNativeNumber(native, 'duration_ms');
+  }
+  if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
+    requireCompactTrigger(native);
+    if (target === 'codex') {
+      requireNativeString(native, 'turn_id');
+      requireNativeString(native, 'model');
+    } else if (canonicalEvent === 'compact/before') {
+      if (native.custom_instructions !== null && typeof native.custom_instructions !== 'string') {
+        return nativeEventError('native custom_instructions must be a string or null');
+      }
+    } else {
+      requireNativeStringValue(native, 'compact_summary');
     }
   }
   if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
@@ -365,6 +435,70 @@ export const projectEventDocument = (
             },
           }),
     });
+  }
+  if (event === 'tool/failure') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('tool/failure cannot deny or replace native input; the tool has already failed.');
+    }
+    if (target !== 'claude' && additionalContext !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor postToolUseFailure has no context/output channel.'
+          : 'tool/failure additional context is supported only by Claude PostToolUseFailure.',
+      );
+    }
+    if (additionalContext === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
+  }
+  if (event === 'compact/before') {
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('compact/before cannot replace native input on any supported host.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor preCompact user_message is user-facing and cannot be represented by Agent.Context.'
+          : `${target === 'codex' ? 'Codex PreCompact' : 'Claude PreCompact'} has no additional-context channel.`,
+      );
+    }
+    if (target === 'claude') {
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('compact/before reason is only valid when outcome is deny on Claude.');
+      }
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ decision: 'block', reason: requireDenyReason() })
+        : undefined;
+    }
+    if (parsedValue?.outcome === 'deny' || parsedValue?.reason !== undefined) {
+      throw new TypeError(
+        target === 'cursor'
+          ? 'Cursor preCompact is observational and cannot block compaction.'
+          : 'Codex PreCompact common-control runtime semantics are unproven and are not projected.',
+      );
+    }
+    return undefined;
+  }
+  if (event === 'compact/after') {
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('compact/after is observation-only on every supported host and cannot deny or replace native input.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('compact/after is observation-only on every supported host and has no context/output channel.');
+    }
+    return undefined;
   }
   if (event === 'tool/before') {
     if (target === 'cursor') {

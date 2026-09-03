@@ -30,6 +30,22 @@ const createFixtureProject = async () => {
   await symlink(join(process.cwd(), 'node_modules'), join(root, 'node_modules'), 'dir');
   await Promise.all([
     writeProjectFile(root, 'package.json', JSON.stringify({ name: 'lifecycle-replay-fixture', type: 'module' })),
+    writeProjectFile(root, 'src/events/compact/after.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function CompactAfter() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/compact/before.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      'export default async function CompactBefore() {',
+      '  return createElement(Agent.Result);',
+      '}',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/events/prompt/submit.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
@@ -60,12 +76,28 @@ const createFixtureProject = async () => {
       '}',
       '',
     ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/failure.tsx', [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['claude'] };",
+      'export default async function ToolFailure() {',
+      '  return createElement(',
+      '    Agent.Result,',
+      '    null,',
+      "    createElement(Agent.Context, null, 'Lifecycle failure context.'),",
+      '  );',
+      '}',
+      '',
+    ].join('\n')),
   ]);
   const graph = await compileRouteGraph(root, { targets: ['claude', 'codex'] } as never);
   expect(graph.events.map((route) => route.id)).toEqual([
+    'event:compact/after',
+    'event:compact/before',
     'event:prompt/submit',
     'event:session/end',
     'event:tool/after',
+    'event:tool/failure',
   ]);
   return { graph, root };
 };
@@ -239,6 +271,65 @@ it('preserves replay invocation provenance for an in-process route observing age
       hookEventName: 'PostToolUse',
     },
   });
+});
+
+it('replays captured failure and compact envelopes through native projection', { timeout: 30_000 }, async () => {
+  const { graph } = await createFixtureProject();
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude', 'codex'] }),
+  });
+  const failureNative = JSON.parse(await readFile(
+    new URL('../fixtures/events/claude-post-tool-use-failure.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+  const failure = await service.replay({
+    binding: {
+      manifestDigest: graph.digest,
+      routeId: 'event:tool/failure',
+      target: 'claude',
+    },
+    native: failureNative,
+    source: 'fixture',
+  });
+  expect('diagnostics' in failure).toBe(false);
+  expect((failure as LifecycleReplay).nativeResponse).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'Lifecycle failure context.',
+      hookEventName: 'PostToolUseFailure',
+    },
+  });
+
+  for (const phase of ['before', 'after'] as const) {
+    const claudeNative = JSON.parse(await readFile(
+      new URL(`../fixtures/events/claude-${phase === 'before' ? 'pre' : 'post'}-compact.json`, import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const claude = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: `event:compact/${phase}`,
+        target: 'claude',
+      },
+      native: claudeNative,
+      source: 'fixture',
+    });
+    expect('diagnostics' in claude).toBe(false);
+    expect((claude as LifecycleReplay).nativeResponse).toBeUndefined();
+
+    const lifecycle = service.list().lifecycles.find((candidate) => candidate.routeId === `event:compact/${phase}`);
+    const codexTarget = lifecycle?.targets.find((candidate) => candidate.target === 'codex');
+    const codex = await service.replay({
+      binding: {
+        manifestDigest: graph.digest,
+        routeId: `event:compact/${phase}`,
+        target: 'codex',
+      },
+      native: codexTarget!.fixture!.native,
+      source: 'fixture',
+    });
+    expect('diagnostics' in codex).toBe(false);
+    expect((codex as LifecycleReplay).nativeResponse).toBeUndefined();
+  }
 });
 
 it('replays the Cursor workspaceOpen starter as an observation with no native response', async () => {

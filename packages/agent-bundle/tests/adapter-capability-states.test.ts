@@ -914,9 +914,10 @@ it('surfaces built-in adapter metadata as immutable capability evidence', () => 
 
 it('reports the evidence-backed G10 event family matrix without inferred support', () => {
   const registry = createDefaultRegistry();
-  const allNativeHosts = [
+  const sharedNativeHosts = [
     'event:agent/start',
     'event:agent/stop',
+    'event:compact/before',
     'event:prompt/submit',
     'event:session/end',
     'event:session/start',
@@ -925,7 +926,7 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     'event:tool/before',
   ];
 
-  for (const capability of allNativeHosts) {
+  for (const capability of [...sharedNativeHosts, 'event:tool/failure']) {
     expect(registry.get('cursor').capabilities[capability]).toMatchObject({
       evidence: { observedVersion: '2026-08-28', target: 'cursor' },
       state: 'supported',
@@ -942,8 +943,28 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     },
     desktop: { state: 'supported' },
   });
+  expect(registry.get('cursor').capabilities['event:compact/after']).toMatchObject({
+    reason: expect.stringContaining('no postCompact'),
+    state: 'unavailable',
+  });
+  for (const capability of [...sharedNativeHosts, 'event:compact/after', 'event:tool/failure']) {
+    expect(registry.get('claude').capabilities[capability]).toMatchObject({
+      evidence: { target: 'claude' },
+      state: 'supported',
+    });
+  }
+  for (const capability of [...sharedNativeHosts, 'event:compact/after']) {
+    expect(registry.get('codex').capabilities[capability]).toMatchObject({
+      evidence: { target: 'codex' },
+      state: 'supported',
+    });
+  }
+  expect(registry.get('codex').capabilities['event:tool/failure']).toMatchObject({
+    reason: expect.stringContaining('no tool-failure'),
+    state: 'unavailable',
+  });
   for (const target of ['claude', 'codex'] as const) {
-    for (const capability of allNativeHosts) {
+    for (const capability of sharedNativeHosts) {
       expect(registry.get(target).capabilities[capability]).toMatchObject({
         evidence: { target },
         state: 'supported',
@@ -957,6 +978,7 @@ it('reports the evidence-backed G10 event family matrix without inferred support
   for (const capability of [
     'event:agent/start',
     'event:agent/stop',
+    'event:compact/before',
     'event:prompt/submit',
     'event:session/end',
   ]) {
@@ -965,16 +987,21 @@ it('reports the evidence-backed G10 event family matrix without inferred support
       state: 'supported',
     });
   }
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
+  expect(registry.get('plugin').capabilities['event:tool/failure']).toMatchObject({
+    reason: expect.stringContaining('no tool-failure'),
+    state: 'unavailable',
+  });
+  expect(registry.get('plugin').capabilities['event:compact/after']).toMatchObject({
+    reason: expect.stringContaining('no postCompact'),
+    state: 'unavailable',
+  });
+  const workspaceOpen = registry.get('plugin').capabilities['event:workspace/open'];
+  expect(workspaceOpen).toMatchObject({
     reason: expect.not.stringContaining('pluginPaths'),
     state: 'unavailable',
   });
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('Claude Code 2.1.250'),
-  });
-  expect(registry.get('plugin').capabilities['event:workspace/open']).toMatchObject({
-    reason: expect.stringContaining('Codex 0.147.0'),
-  });
+  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Claude Code 2.1.250') });
+  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Codex 0.147.0') });
 });
 
 it('reports evidence-backed installation support only for real host targets', () => {

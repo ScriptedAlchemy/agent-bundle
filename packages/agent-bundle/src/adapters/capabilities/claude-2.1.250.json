@@ -25,12 +25,15 @@
     "eventRoutes": {
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
+      "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
+      "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
       "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
       "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
+      "tool/failure": { "nativeEvent": "PostToolUseFailure", "state": "supported" },
       "workspace/open": {
         "reason": "The pinned Claude Code 2.1.250 hooks contract has no workspace-open event.",
         "state": "unavailable"
@@ -631,6 +634,10 @@
       "2026-09-02: live Claude Code 2.1.257 non-interactive capture recorded UserPromptSubmit with session_id, transcript_path, cwd, prompt_id, permission_mode, hook_event_name, and prompt; the scrubbed envelope is tests/fixtures/events/claude-user-prompt-submit.json.",
       "retrieved 2026-09-02: https://code.claude.com/docs/en/hooks documents SessionEnd input as the common hook envelope plus reason, with matcher filtering by reason; SessionEnd has no decision control, discards JSON output, and does not honor exit code 2 as a block.",
       "2026-09-02: live Claude Code 2.1.257 non-interactive capture recorded SessionEnd with session_id, transcript_path, cwd, prompt_id, hook_event_name, and reason; the scrubbed envelope is tests/fixtures/events/claude-session-end.json.",
+      "retrieved 2026-09-02: https://code.claude.com/docs/en/hooks documents PostToolUseFailure input as tool_name, tool_input, tool_use_id, error, optional is_interrupt, and optional duration_ms. It can add hookSpecificOutput.additionalContext after the failure but cannot deny or rewrite the completed tool call.",
+      "2026-09-02: live Claude Code 2.1.257 non-interactive captures recorded PostToolUseFailure for failed Write, Read, and Bash calls; the scrubbed Bash envelope is tests/fixtures/events/claude-post-tool-use-failure.json.",
+      "retrieved 2026-09-02: https://code.claude.com/docs/en/hooks documents PreCompact input as trigger plus nullable custom_instructions and allows decision:block with reason, while discarding continue and systemMessage. PostCompact adds compact_summary, has no decision control, and discards continue and systemMessage.",
+      "2026-09-02: live Claude Code 2.1.257 non-interactive captures recorded PreCompact and PostCompact for manual compaction; scrubbed envelopes are tests/fixtures/events/claude-pre-compact.json and tests/fixtures/events/claude-post-compact.json.",
       "The hooks reference states prompt_id requires Claude Code 2.1.196 or later; the pinned 2.1.250 release covers that input field without a version bump.",
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents an agents/ component with name, description, model, effort, maxTurns, tools, disallowedTools, skills, memory, background, and isolation: worktree; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it.",
       "2026-09-01: https://code.claude.com/docs/en/plugins \"Ship default settings with your plugin\": a plugin may include settings.json at the plugin root \"to apply default configuration when the plugin is enabled. Currently, only the `agent` and `subagentStatusLine` keys are supported.\" The file-locations table of https://code.claude.com/docs/en/plugins-reference repeats the same bound: \"Settings | settings.json | Default configuration applied when the plugin is enabled. Only the agent and subagentStatusLine keys are supported\".",

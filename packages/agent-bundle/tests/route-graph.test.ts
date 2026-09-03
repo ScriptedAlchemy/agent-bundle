@@ -764,6 +764,8 @@ it('discovers the canonical event families and validates their component contrac
   await writeTree(root, {
     'src/events/agent/start.tsx': eventSource,
     'src/events/agent/stop.tsx': eventSource,
+    'src/events/compact/after.tsx': eventSource,
+    'src/events/compact/before.tsx': eventSource,
     'src/events/message/receive.tsx': eventSource,
     'src/events/prompt/submit.tsx': eventSource,
     'src/events/session/end.tsx': eventSource,
@@ -771,6 +773,7 @@ it('discovers the canonical event families and validates their component contrac
     'src/events/stop.tsx': eventSource,
     'src/events/tool/after.tsx': eventSource,
     'src/events/tool/before.tsx': 'export default function BeforeTool() { return undefined; }\n',
+    'src/events/tool/failure.tsx': eventSource,
     'src/events/workspace/open.tsx': eventSource,
   });
 
@@ -779,23 +782,29 @@ it('discovers the canonical event families and validates their component contrac
   expect(graph.events.map((route) => route.id)).toEqual([
     'event:agent/start',
     'event:agent/stop',
+    'event:compact/after',
+    'event:compact/before',
     'event:prompt/submit',
     'event:session/end',
     'event:session/start',
     'event:stop',
     'event:tool/after',
     'event:tool/before',
+    'event:tool/failure',
     'event:workspace/open',
   ]);
   expect(graph.events.map((route) => route.event)).toEqual([
     'agent/start',
     'agent/stop',
+    'compact/after',
+    'compact/before',
     'prompt/submit',
     'session/end',
     'session/start',
     'stop',
     'tool/after',
     'tool/before',
+    'tool/failure',
     'workspace/open',
   ]);
   expect(graph.diagnostics.map(({ code }) => code)).toEqual(['AB4823', 'AB4810']);

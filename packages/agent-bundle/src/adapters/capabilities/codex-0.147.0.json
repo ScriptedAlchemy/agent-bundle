@@ -25,12 +25,18 @@
     "eventRoutes": {
       "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
+      "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
+      "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
       "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
       "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
       "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
       "stop": { "nativeEvent": "Stop", "state": "supported" },
       "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
+      "tool/failure": {
+        "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and native event inventory contain no tool-failure event.",
+        "state": "unavailable"
+      },
       "workspace/open": {
         "reason": "The pinned Codex 0.147.0 hooks contract has no workspace-open event.",
         "state": "unavailable"
@@ -257,6 +263,10 @@
       "liveRevision": "codex-cli 0.147.0 app-server protocol",
       "matchingRelativePaths": [],
       "missingPinnedRelativePaths": [
+        "post-compact.command.input.schema.json",
+        "post-compact.command.output.schema.json",
+        "pre-compact.command.input.schema.json",
+        "pre-compact.command.output.schema.json",
         "session-end.command.input.schema.json",
         "subagent-start.command.input.schema.json",
         "subagent-start.command.output.schema.json",
@@ -266,6 +276,10 @@
         "user-prompt-submit.command.output.schema.json"
       ],
       "pinnedRepositorySha256": {
+        "post-compact.command.input.schema.json": "d5cecd14bd2ca18605ba8209108f76291f886ffe3cb4762d70e712c148836f31",
+        "post-compact.command.output.schema.json": "811b7ae2a4b277cd51c9df989f347e494fa981d01e346bc2a757506e97734882",
+        "pre-compact.command.input.schema.json": "5728b5da4c63e1e07f2d53ac8b2adc18306cd3dc8b01b556fc422e75b32a8734",
+        "pre-compact.command.output.schema.json": "98ba0dbf0848d8283cfe48a85122f4d9122baae1b457f50e239504864900247e",
         "session-end.command.input.schema.json": "99bf6e75091525b96926dd85a0adf6589dea93fe0d181394027fabda8139402e",
         "subagent-start.command.input.schema.json": "e1cacc5cd92217e96e327cf182038fa93099d194c3107439b4dad4b806d414cc",
         "subagent-start.command.output.schema.json": "531f7a457ad8430de82388319ff2bf030fd3a1dc0e9a0d4078447bc30948448b",
@@ -300,7 +314,11 @@
       "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.input.schema.json pins UserPromptSubmit input (sha256 e6b923bc519896197c44c4fc267a9d115cef24ac418dde9c27db699f4e3b65fd).",
       "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/user-prompt-submit.command.output.schema.json pins decision:block plus reason and hookSpecificOutput.additionalContext, with no prompt-rewrite field (sha256 5e290303db710f3ccc12f4a2744e8586e7749b3ca2b6bf9f57781ed75bf17b2b).",
       "retrieved 2026-09-02: https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/hooks/schema/generated/session-end.command.input.schema.json pins observe-only SessionEnd input with reason const other (sha256 23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c); the same generated directory has no session-end.command.output.schema.json (GitHub contents API returned 404), so no output is projected.",
-      "2026-09-02: live codex-cli 0.147.0 non-interactive capture recorded UserPromptSubmit and SessionEnd; the scrubbed envelopes are tests/fixtures/events/codex-user-prompt-submit.json and tests/fixtures/events/codex-session-end.json."
+      "2026-09-02: live codex-cli 0.147.0 non-interactive capture recorded UserPromptSubmit and SessionEnd; the scrubbed envelopes are tests/fixtures/events/codex-user-prompt-submit.json and tests/fixtures/events/codex-session-end.json.",
+      "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and hooks/src/lib.rs inventory contain no tool-failure event, so tool/failure is unavailable rather than inferred from PostToolUse.",
+      "retrieved 2026-09-02: rust-v0.147.0 pre-compact.command.input.schema.json pins PreCompact trigger, model, turn_id, session, cwd, and nullable transcript input (sha256 065f0ae3cd628ac9af8c0cf9bd1d5a673bcbd5ea1d7dcdc0c6437f34dd0189d9); its output schema accepts only common continue, stopReason, suppressOutput, and systemMessage fields (sha256 c392f3054ae6750f427d4dec07380fd67e8c58a7939a35d5c69bfa070c7ca032).",
+      "retrieved 2026-09-02: rust-v0.147.0 post-compact.command.input.schema.json pins PostCompact with the same input fields and no compact summary field (sha256 4a4b3f3022c939a15ab12e95f5c5c17b18bb20f74fe962ae0a51b2a3e76e63f9); its output schema accepts only the same common fields (sha256 48355bfcb568259cf396beb6ade2ac32827f50bf6a3c20b395c337dce184cbed).",
+      "2026-09-02: the generated compact output schemas do not document event-level runtime effects for continue:false or the other common fields, so Agent Bundle exposes no canonical compact result channel until runtime evidence pins those semantics."
     ]
   }
 }

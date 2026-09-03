@@ -309,3 +309,148 @@ it('projects session/end as observation-only on every host', async () => {
   expect(() => projectEventDocument(context.document, 'session/end', 'claude', 'SessionEnd'))
     .toThrow(/session\/end is observation-only.*no context\/output channel/u);
 });
+
+it('projects tool/failure context only through Claude PostToolUseFailure', async () => {
+  const props = createCanonicalEventProps(
+    'tool/failure',
+    {
+      cwd: '/workspace',
+      error: 'Exit code 9\nfailure',
+      hook_event_name: 'PostToolUseFailure',
+      session_id: 'session-1',
+      tool_input: { command: 'exit 9' },
+      tool_name: 'Bash',
+      tool_use_id: 'tool-1',
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'PostToolUseFailure',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const routeInput = {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:tool/failure',
+  } as const;
+  const context = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      null,
+      createElement(Agent.Context, null, 'Inspect the failed command output.'),
+    ),
+  }, routeInput);
+  expect(projectEventDocument(context.document, 'tool/failure', 'claude', 'PostToolUseFailure')).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'Inspect the failed command output.',
+      hookEventName: 'PostToolUseFailure',
+    },
+  });
+  expect(() => projectEventDocument(context.document, 'tool/failure', 'cursor', 'postToolUseFailure'))
+    .toThrow(/Cursor postToolUseFailure has no context\/output channel/u);
+
+  const denied = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: 'Undo the failure.' } },
+    ),
+  }, routeInput);
+  expect(() => projectEventDocument(denied.document, 'tool/failure', 'claude', 'PostToolUseFailure'))
+    .toThrow(/tool\/failure cannot deny or replace native input/u);
+});
+
+it('projects compact/before only through Claude blocking control', async () => {
+  const props = createCanonicalEventProps(
+    'compact/before',
+    {
+      custom_instructions: null,
+      cwd: '/workspace',
+      hook_event_name: 'PreCompact',
+      session_id: 'session-1',
+      transcript_path: '/workspace/transcript.jsonl',
+      trigger: 'manual',
+    },
+    'claude',
+    'PreCompact',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const routeInput = {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:compact/before',
+  } as const;
+  const observed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, routeInput);
+  for (const target of ['claude', 'codex', 'cursor']) {
+    expect(projectEventDocument(observed.document, 'compact/before', target, target === 'cursor' ? 'preCompact' : 'PreCompact'))
+      .toBeUndefined();
+  }
+
+  const denied = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: 'Preserve the current context.' } },
+    ),
+  }, routeInput);
+  expect(projectEventDocument(denied.document, 'compact/before', 'claude', 'PreCompact')).toEqual({
+    decision: 'block',
+    reason: 'Preserve the current context.',
+  });
+  expect(() => projectEventDocument(denied.document, 'compact/before', 'codex', 'PreCompact'))
+    .toThrow(/Codex PreCompact common-control runtime semantics are unproven/u);
+  expect(() => projectEventDocument(denied.document, 'compact/before', 'cursor', 'preCompact'))
+    .toThrow(/Cursor preCompact is observational/u);
+
+  const context = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      null,
+      createElement(Agent.Context, null, 'Compaction notice.'),
+    ),
+  }, routeInput);
+  expect(() => projectEventDocument(context.document, 'compact/before', 'cursor', 'preCompact'))
+    .toThrow(/user_message is user-facing.*cannot be represented by Agent.Context/u);
+});
+
+it('projects compact/after as observation-only on supported hosts', async () => {
+  const props = createCanonicalEventProps(
+    'compact/after',
+    {
+      compact_summary: 'Summary of the compacted conversation.',
+      cwd: '/workspace',
+      hook_event_name: 'PostCompact',
+      session_id: 'session-1',
+      transcript_path: '/workspace/transcript.jsonl',
+      trigger: 'manual',
+    },
+    'claude',
+    'PostCompact',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const routeInput = {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:compact/after',
+  } as const;
+  const observed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, routeInput);
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventDocument(observed.document, 'compact/after', target, 'PostCompact')).toBeUndefined();
+  }
+
+  const rejectedValues: readonly JsonValue[] = [
+    { outcome: 'deny', reason: 'Restore the previous context.' },
+    { updatedInput: { compact_summary: 'Replacement.' } },
+  ];
+  for (const value of rejectedValues) {
+    const rejected = await renderRoute({
+      default: async () => createElement(Agent.Result, { value }),
+    }, routeInput);
+    expect(() => projectEventDocument(rejected.document, 'compact/after', 'claude', 'PostCompact'))
+      .toThrow(/compact\/after is observation-only/u);
+  }
+});

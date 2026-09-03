@@ -25,6 +25,11 @@
     "eventRoutes": {
       "agent/start": { "nativeEvent": "subagentStart", "state": "supported" },
       "agent/stop": { "nativeEvent": "subagentStop", "state": "supported" },
+      "compact/after": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no postCompact event.",
+        "state": "unavailable"
+      },
+      "compact/before": { "nativeEvent": "preCompact", "state": "supported" },
       "prompt/submit": { "nativeEvent": "beforeSubmitPrompt", "state": "supported" },
       "session/end": {
         "availability": {
@@ -41,6 +46,7 @@
       "stop": { "nativeEvent": "stop", "state": "supported" },
       "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
+      "tool/failure": { "nativeEvent": "postToolUseFailure", "state": "supported" },
       "workspace/open": { "nativeEvent": "workspaceOpen", "state": "supported" }
     },
     "matchers": {
@@ -108,6 +114,10 @@
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents beforeSubmitPrompt input as prompt plus file/rule attachments, matcher evaluation against the literal UserPromptSubmit, and output as continue plus optional user_message. continue:false blocks submission; no additional-context or prompt-rewrite channel is documented.",
       "retrieved 2026-09-02: https://cursor.com/docs/hooks documents sessionEnd input as session_id, reason, duration_ms, is_background_agent, final_status, and optional error_message. It is fire-and-forget; output is logged but unused. The same source states cloud agents have no sessionEnd because they lack an editor-lifetime session boundary.",
       "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture was attempted with trusted project hooks, but the binary required Cursor authentication unavailable in the capture environment; the pinned official contract is the evidence source for beforeSubmitPrompt and sessionEnd.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents postToolUseFailure input as tool_name, tool_input, tool_use_id, cwd, error_message, failure_type, duration, and is_interrupt, with no supported output fields. Unlike Claude PostToolUseFailure, failure_type includes permission_denied.",
+      "retrieved 2026-09-02: https://cursor.com/docs/hooks documents preCompact as observational and unable to block or modify compaction. Its optional user_message is user-facing rather than agent context, so the canonical Agent.Result and Agent.Context vocabulary exposes no output channel for it.",
+      "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks Agent and cloud event inventories document no postCompact event, so compact/after is unavailable rather than inferred from preCompact.",
+      "2026-09-02: local cursor-agent 2026.08.31-4057e58 capture attempts for postToolUseFailure and preCompact could not dispatch because the binary required unavailable authentication; the pinned official contract is the evidence source.",
       "2026-09-01: https://cursor.com/docs/plugins and https://prod.cursor.com/docs/reference/plugins document agents as a full Cursor Plugin component alongside rules and commands; #100 stage 2 defers the agents component per the G5 narrowing in #107, so no agents capability row is published until a later stage admits it."
     ]
   }
