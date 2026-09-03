@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import {
   cp,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rename,
@@ -124,6 +125,32 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
 };
 
 /**
+ * Whether an existing entry at `relativePath` is one of the previously owned
+ * files: the exact recorded name, or — on case-insensitive filesystems — a
+ * case alias of a recorded name that resolves to the same inode. Inode
+ * equality alone is not enough: an operator hard link to an owned file under
+ * an unrelated name is not ours.
+ */
+const isOwnedEntry = async (
+  root: string,
+  owned: ReadonlySet<string>,
+  relativePath: string,
+  metadata: Stats,
+): Promise<boolean> => {
+  if (owned.has(relativePath)) return true;
+  const alias = relativePath.toLowerCase();
+  for (const candidate of owned) {
+    if (candidate.toLowerCase() !== alias) continue;
+    try {
+      if (sameFile(await lstat(join(root, candidate)), metadata)) return true;
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+  }
+  return false;
+};
+
+/**
  * Every directory on the way to a listed path must be a real directory: a
  * symlinked ancestor would let a leaf-only check read, hash, delete, or write
  * outside the plugin root (development installs point top-level directories
@@ -145,7 +172,10 @@ const assertRealAncestors = async (
         try {
           const metadata = await lstat(join(root, directory));
           if (metadata.isSymbolicLink()) throw unsupportedEntry(directory);
-          if (!metadata.isDirectory() && !(metadata.isFile() && ownedFiles.has(directory))) {
+          if (
+            !metadata.isDirectory() &&
+            !(metadata.isFile() && await isOwnedEntry(root, ownedFiles, directory, metadata))
+          ) {
             throw unsupportedEntry(directory);
           }
         } catch (error) {
@@ -248,11 +278,17 @@ export const createInstallReceipt = (options: {
 
 const receiptDocument = (receipt: InstallReceipt): string => `${stableJson(receipt)}\n`;
 
-/** Lands a receipt at a plugin root atomically (sibling temp file + rename). */
+/**
+ * Lands a receipt at a plugin root atomically: an exclusively created,
+ * randomly named sibling (`wx` never follows an existing link or overwrites
+ * a file) renamed into place.
+ */
 export const writeInstallReceipt = async (destination: string, receipt: InstallReceipt): Promise<void> => {
-  const temporary = join(destination, `${installReceiptFile}.${process.pid}.tmp`);
-  await writeFile(temporary, receiptDocument(receipt), 'utf8');
+  const temporary = join(destination, `${installReceiptFile}.${randomUUID()}.tmp`);
+  const handle = await open(temporary, 'wx');
   try {
+    await handle.writeFile(receiptDocument(receipt), 'utf8');
+    await handle.close();
     await rename(temporary, join(destination, installReceiptFile));
   } finally {
     await rm(temporary, { force: true });
@@ -471,26 +507,9 @@ export const replaceInstalledTree = async (options: {
   const owned = new Set(previouslyOwned);
   await assertRealAncestors(options.destination, previouslyOwned);
   await assertRealAncestors(options.destination, options.staged.inventory.files, owned);
-  // On case-insensitive filesystems a case-only rename of an owned path resolves to the same
-  // inode, so ownership is decided by file identity, not by name alone.
-  let ownedIdentities: readonly Stats[] | undefined;
-  const isOwnedIdentity = async (path: string): Promise<boolean> => {
-    const candidate = await lstat(path);
-    if (ownedIdentities === undefined) {
-      const identities: Stats[] = [];
-      for (const file of previouslyOwned) {
-        try {
-          identities.push(await lstat(join(options.destination, file)));
-        } catch (error) {
-          if (!isErrno(error, 'ENOENT')) throw error;
-        }
-      }
-      ownedIdentities = identities;
-    }
-    return ownedIdentities.some((metadata) => sameFile(metadata, candidate));
-  };
-  // An existing directory at an incoming file path is fine only when it is wholly owned: its
-  // files leave as stale and the emptied directories are pruned before the rename.
+  // An existing entry at an incoming path is fine when it is the owned file itself (exact name, or
+  // a case alias on case-insensitive filesystems) or a wholly owned directory whose files leave as
+  // stale and whose emptied directories are pruned before the rename.
   const collisions: string[] = [];
   for (const file of options.staged.inventory.files) {
     if (owned.has(file)) continue;
@@ -505,7 +524,7 @@ export const replaceInstalledTree = async (options: {
     }
     const tolerated = metadata.isDirectory() && !metadata.isSymbolicLink()
       ? await isWhollyOwnedDirectory(options.destination, file, owned)
-      : await isOwnedIdentity(target);
+      : metadata.isFile() && await isOwnedEntry(options.destination, owned, file, metadata);
     if (!tolerated) collisions.push(file);
   }
   if (collisions.length > 0) {

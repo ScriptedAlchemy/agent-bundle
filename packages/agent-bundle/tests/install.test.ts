@@ -1,4 +1,4 @@
-import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -540,6 +540,16 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     expect(toFile).toMatchObject({ state: 'replaced' });
     expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
+
+    // An operator hard link to an owned file under an unrelated name is not ours: incoming path → collision.
+    await link(join(destination, 'payload.txt'), join(destination, 'hard-linked.txt'));
+    await writeFile(join(fixture.bundleRoot, 'hard-linked.txt'), 'from the artifact\n');
+    const hardLink = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' })
+      .catch((failure: unknown) => failure);
+    expect((hardLink as DiagnosticError).diagnostics[0]?.message).toContain('Refusing to overwrite unowned files');
+    expect((hardLink as DiagnosticError).diagnostics[0]?.message).toContain('hard-linked.txt');
+    await rm(join(fixture.bundleRoot, 'hard-linked.txt'));
+    await rm(join(destination, 'hard-linked.txt'));
 
     // An empty unowned directory at an incoming file path is a collision too (no ownership evidence).
     await rm(join(fixture.bundleRoot, 'payload.txt'));
