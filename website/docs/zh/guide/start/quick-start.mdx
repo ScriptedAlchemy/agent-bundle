@@ -74,8 +74,8 @@ export default defineConfig({
 ## 构建，或交互式开发
 
 ```sh
-npx agent-bundle build --root . --output dist   # write installable artifacts
-npx agent-bundle dev --root .                   # local workbench with live rebuilds
+npx agent-bundle build --root . --output dist   # 写出可安装产物
+npx agent-bundle dev --root .                   # 带实时重建的本地 Workbench
 ```
 
 `build` 会校验项目并写出产物；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
@@ -86,9 +86,9 @@ eval 运行。
 ## 查看编译器的判断
 
 ```sh
-npx agent-bundle inspect --root .            # normalized config and per-target plans
-npx agent-bundle inspect --root . --skills   # add the skill focus
-npx agent-bundle validate --root .           # check project source
+npx agent-bundle inspect --root .            # 规范化配置与逐 target 计划
+npx agent-bundle inspect --root . --skills   # 加上 skill focus
+npx agent-bundle validate --root .           # 检查项目源码
 ```
 
 `inspect` 读取源码配置并展示规范化后的模型——这正是确认某个约定是否真的被识别的地方。

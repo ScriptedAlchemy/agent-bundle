@@ -11,26 +11,26 @@ description: 'agent-bundle 识别的约定 src/ 根目录、配置与约定之�
 
 ```text
 my-plugin/
-├── agent-bundle.config.ts     # project identity, targets, and policy
-├── package.json               # authoritative release version and package identity
-├── assets/                    # static files copied byte-for-byte into every artifact
+├── agent-bundle.config.ts     # 项目标识、targets 与策略
+├── package.json               # 权威的发布版本号与包标识
+├── assets/                    # 按字节复制到每个产物中的静态文件
 └── src/
-    ├── skills/<name>/SKILL.md # one Skill per directory, with its own resources
-    ├── commands/*.md          # host slash-command documents
-    ├── rules/*.mdc            # host rule documents
-    ├── hooks/*.ts             # lifecycle hook handlers referenced from config
-    ├── mcp/<server-id>.ts     # a handwritten stdio MCP server entry
-    ├── mcp/<server>/          # or a generated server, one module per route
+    ├── skills/<name>/SKILL.md # 每个目录一个 Skill，并带有自己的资源
+    ├── commands/*.md          # 宿主斜杠命令文档
+    ├── rules/*.mdc            # 宿主规则文档
+    ├── hooks/*.ts             # 由配置引用的生命周期钩子处理器
+    ├── mcp/<server-id>.ts     # 手写的 stdio MCP 服务器入口
+    ├── mcp/<server>/          # 或生成式服务器，每个路由一个模块
     │   ├── tools/*.tsx
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
-    │   └── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
-    ├── scripts/<name>.ts      # artifact scripts (.tsx renders through the Agent renderer)
-    ├── cli.ts                 # a single package bin
-    ├── cli/**/*.ts            # or a routed CLI, where nesting is the command path
-    ├── index.ts               # the library entry
-    ├── state.ts               # project state definition
-    └── providers/<name>.ts    # request-context providers
+    │   └── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
+    ├── scripts/<name>.ts      # 产物脚本（.tsx 通过 Agent 渲染器渲染）
+    ├── cli.ts                 # 单个包 bin
+    ├── cli/**/*.ts            # 或路由式 CLI，嵌套即命令路径
+    ├── index.ts               # 库入口
+    ├── state.ts               # 项目状态定义
+    └── providers/<name>.ts    # 请求上下文 provider
 ```
 
 ## 各个根目录的含义
@@ -99,7 +99,7 @@ export default defineConfig({
 
 ```text
 dist/
-└── plugin/                    # targets: ['plugin'] — one multi-host bundle
+└── plugin/                    # targets: ['plugin'] — 一个多宿主捆绑包
     ├── .claude-plugin/
     ├── .codex-plugin/
     ├── .cursor-plugin/
@@ -127,9 +127,9 @@ dist/
 
 ```text
 dist/
-├── bin/<name>.js              # self-executing ESM, shebang, executable bit
-├── <stem>.js                  # the library entry
-└── **/*.d.ts                  # declarations, when lib.dts is on
+├── bin/<name>.js              # 自执行 ESM、shebang、可执行位
+├── <stem>.js                  # 库入口
+└── **/*.d.ts                  # 声明文件，当 lib.dts 开启时
 ```
 
 `dist` 是强制忽略的目录：包输出永远不会进入项目源码快照，也不会进入 Skill 与资源发现。由于两类输出

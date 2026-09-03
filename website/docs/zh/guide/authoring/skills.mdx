@@ -120,9 +120,9 @@ export default () => (
 );
 ```
 
-`Skill.*` 组件输出规范 token：`Skill.Arguments`、`Skill.PluginData`、`Skill.PluginRoot`、
-`Skill.ProjectRoot`、`Skill.Resource`、`Skill.SessionIdentity` 与 `Skill.SkillRoot`。宿主语法在降级
-阶段应用，绝不在组件里应用。
+六个 `Skill.*` 成员会输出规范 token：`Skill.Arguments`、`Skill.PluginData`、`Skill.PluginRoot`、
+`Skill.ProjectRoot`、`Skill.SessionIdentity` 与 `Skill.SkillRoot`。`Skill.Resource` 渲染的是
+Markdown 链接（`[path](path)`），不是 token。宿主语法在降级阶段应用，绝不在组件里应用。
 
 同目录下手写的 `SKILL.md` 总是胜出——手写文件胜过生成文件——被遮蔽的组件会报告信息级的 `AB4735`
 提示。渲染模块加载失败报告 `AB3003`；未默认导出组件函数、或未导出 `frontmatter` 记录，则报告

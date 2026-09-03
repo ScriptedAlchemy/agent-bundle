@@ -99,7 +99,7 @@ export default (event: SessionStartEvent) => ({
 | 键 | 契约 |
 | --- | --- |
 | `outcome` | `continue`、`deny` 或 `stop`。 |
-| `reason` | 非空字符串，仅在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
+| `reason` | 非空字符串，仅在拒绝 `beforeTool` 或 `stop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
 | `additionalContext` | 追加到智能体上下文的字符串。 |
 | `updatedInput` | 用于替换待执行调用的输入。 |
 

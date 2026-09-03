@@ -126,9 +126,10 @@ export default () => (
 );
 ```
 
-The `Skill.*` components emit canonical tokens: `Skill.Arguments`, `Skill.PluginData`,
-`Skill.PluginRoot`, `Skill.ProjectRoot`, `Skill.Resource`, `Skill.SessionIdentity`, and
-`Skill.SkillRoot`. Host syntax is applied during lowering, never in the component.
+Six `Skill.*` members emit canonical tokens: `Skill.Arguments`, `Skill.PluginData`,
+`Skill.PluginRoot`, `Skill.ProjectRoot`, `Skill.SessionIdentity`, and `Skill.SkillRoot`.
+`Skill.Resource` renders a Markdown link (`[path](path)`), not a token. Host syntax is
+applied during lowering, never in the component.
 
 A hand-authored `SKILL.md` in the same directory always wins — an authored file beats a
 generated one — and the shadowed component reports the informational `AB4735` nudge. A rendered
