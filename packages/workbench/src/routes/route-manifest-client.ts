@@ -18,6 +18,7 @@ import type {
   RouteInputSchemaLiteral,
 } from '../../../agent-bundle/src/contracts/routes.ts';
 import type { ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
+import { diagnosticSchema } from '../project-client.ts';
 
 export interface RouteManifestClientOptions {
   readonly foreground: ForegroundRequestAuthority;
@@ -35,16 +36,6 @@ export class RouteManifestClientError extends Error {
     this.status = status;
   }
 }
-
-const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
-  code: z.string(),
-  generatedPath: z.string().optional(),
-  message: z.string(),
-  recovery: z.string().optional(),
-  severity: z.enum(['error', 'info', 'warning']),
-  sourcePath: z.string().optional(),
-  target: z.string().optional(),
-});
 
 const configEntrySchema: z.ZodType<RouteManifestConfigEntry> = z.strictObject({
   key: z.string(),

@@ -4,6 +4,7 @@ import { lstat, mkdir, open, realpath, rename, rm, unlink } from 'node:fs/promis
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { serialQueue, type SerialQueue } from '../../core/async.ts';
+import { containsProviderCredential, isCredentialKey } from '../../core/credentials.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInsideOrEqual } from '../../core/paths.ts';
 import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
@@ -336,23 +337,6 @@ const traceSources: ReadonlySet<string> = new Set<PlaygroundTraceSource>([
 
 const isTraceSource = (value: unknown): value is PlaygroundTraceSource =>
   typeof value === 'string' && traceSources.has(value);
-const providerCredentialPatterns = Object.freeze([
-  /\bsk-(?:proj-|ant-|live-)?[a-z0-9_-]{16,}\b/iu,
-  /\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{16,}|akia[a-z0-9]{16})\b/iu,
-  /\bbearer[ \t]+[a-z0-9._~+/=-]{20,}\b/iu,
-]);
-
-const sensitiveKey = (key: string): boolean => {
-  const segments = key
-    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
-    .toLocaleLowerCase('en-US')
-    .split(/[^a-z0-9]+/u)
-    .filter((segment) => segment.length > 0);
-  const compact = segments.join('');
-  return segments.some((segment) => ['authorization', 'credential', 'credentials', 'password', 'secret', 'token'].includes(segment))
-    || /(?:apikey|apitoken|authtoken|accesstoken)$/u.test(compact);
-};
-
 const hasOptionalOwnKey = (value: Record<string, unknown>, required: readonly string[], optional: string): boolean =>
   hasExactOwnKeys(value, required) || hasExactOwnKeys(value, [...required, optional]);
 
@@ -531,7 +515,7 @@ const clone = <T>(value: T, label = 'Playground value'): T => json(value, label)
 
 const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
   if (typeof value === 'string') {
-    if (providerCredentialPatterns.some((pattern) => pattern.test(value))) {
+    if (containsProviderCredential(value)) {
       throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
     }
     return;
@@ -542,7 +526,7 @@ const assertNoProviderCredentials = (value: PlaygroundJsonValue): void => {
   }
   if (isRecord(value)) {
     for (const [key, item] of Object.entries(value)) {
-      if (sensitiveKey(key)) {
+      if (isCredentialKey(key)) {
         throw serviceError('PLAYGROUND_CREDENTIAL_REJECTED', 'Playground records must not contain provider credential material.');
       }
       assertNoProviderCredentials(item);

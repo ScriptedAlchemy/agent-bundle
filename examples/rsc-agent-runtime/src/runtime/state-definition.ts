@@ -31,7 +31,6 @@ export const RecordedEditSchema = z
   })
   .strict();
 
-export type RecordedEdit = z.output<typeof RecordedEditSchema>;
 
 const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([

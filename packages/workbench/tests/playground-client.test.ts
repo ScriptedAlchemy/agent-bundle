@@ -3,18 +3,7 @@ import { expect, it } from '@rstest/core';
 import type { PlaygroundTraceEvent } from '../../agent-bundle/src/contracts/playground.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
-
-interface RecordedRequest {
-  readonly body: unknown;
-  readonly method: string;
-  readonly token: string | null;
-  readonly url: string;
-}
-
-const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
-  headers: { 'content-type': 'application/json' },
-  status,
-});
+import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';
 
 /** Supplies adversarial decoded JSON values that a real JSON parser cannot produce. */
 const decodedResponse = (body: unknown): Response => ({
@@ -58,23 +47,6 @@ const event = (sequence: number, summary: string): PlaygroundTraceEvent => ({
   summary,
   timestamp: `2026-08-14T10:00:0${sequence}.000Z`,
 });
-
-const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
-  async (input, init) => {
-    const url = String(input);
-    if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
-      origin: 'http://127.0.0.1:5173',
-      token: 'foreground-token',
-    });
-    calls.push({
-      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-      method: init?.method ?? 'GET',
-      token: new Headers(init?.headers).get('x-agent-bundle-session'),
-      url,
-    });
-    return reply();
-  };
 
 const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 

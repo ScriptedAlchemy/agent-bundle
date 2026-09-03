@@ -1,9 +1,9 @@
-import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
+import { conventionalEntryAt } from '../config/conventional-entry.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
 import { resolveAppRouteTemplate } from './app-template.ts';
 import {
@@ -95,27 +95,6 @@ const isNonGeneratedServerOverride = (override: CompiledServerMode | undefined):
       throw new TypeError(`Unhandled server mode override ${String(unreachable)}.`);
     }
   }
-};
-
-const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
-
-/**
- * Local copy of the conventional-entry probe from config/normalize.ts.
- * Importing it would close the cycle discover.ts -> routes/graph.ts ->
- * normalize.ts -> discover.ts, so the probe is duplicated here with the
- * same .ts/.tsx rule.
- */
-const conventionalEntryAt = (root: string, ...segments: string[]): string | undefined => {
-  const stem = resolve(root, ...segments);
-  for (const extension of conventionalEntryExtensions) {
-    const candidate = `${stem}${extension}`;
-    try {
-      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-    } catch {
-      // A racing deletion means the convention does not apply.
-    }
-  }
-  return undefined;
 };
 
 const routeError = (code: string, message: string, recovery: string, sourcePath?: string): Diagnostic => ({

@@ -4,7 +4,7 @@ import { bundleSummaryFor, type OverviewHostAdoption } from './overview-model.ts
 import type { WorkbenchCapabilities } from './workbench-capabilities.ts';
 import type { WorkbenchPage } from './workbench-screen.tsx';
 
-const StateMark = ({ state }: { readonly state: string }) => (
+export const StateMark = ({ state }: { readonly state: string }) => (
   <span aria-hidden="true" className={`state-mark state-mark--${state}`}>{
     state === 'active' || state === 'ready' || state === 'built' ? '✓'
       : state === 'stale' || state === 'invalid' || state === 'failed' ? '!'

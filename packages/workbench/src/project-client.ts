@@ -82,6 +82,7 @@ const projectEventTypes = [
   'build.failed',
   'build.started',
   'dev.contract.status',
+  'dev.host.sync',
   'invalidation',
   'replay.gap',
   'runtime.event',
@@ -95,7 +96,7 @@ const retryDelayMilliseconds = 250;
 
 const hasExactKeys: (value: Readonly<Record<string, unknown>>, keys: readonly string[]) => boolean = exactKeys;
 
-const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
+export const diagnosticSchema: z.ZodType<Diagnostic> = z.strictObject({
   code: z.string(),
   generatedPath: z.string().optional(),
   message: z.string(),

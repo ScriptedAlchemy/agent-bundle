@@ -90,36 +90,6 @@ export const AuditFileCards = ({ receipt }: AuditShelfProps) => (
   </>
 );
 
-export const AuditShelf = ({ receipt }: AuditShelfProps) => {
-  return (
-    <>
-      <AuditSummary receipt={receipt} />
-      <AuditFileCards receipt={receipt} />
-      {receipt.duplicateCandidates.slice(0, 10).map((group) => (
-        <CandidateGroupCallout
-          files={group.files}
-          identityKey={group.identityKey}
-          key={group.identityKey}
-          kind="duplicate"
-          reviewNote={receipt.reviewNote}
-        />
-      ))}
-      {receipt.multipartCandidates.slice(0, 10).map((group) => (
-        <CandidateGroupCallout
-          files={group.files.map((file) => `part ${String(file.part)} ${file.path}`)}
-          identityKey={group.identityKey}
-          key={`${group.directory}/${group.identityKey}`}
-          kind="multipart"
-          reviewNote={receipt.reviewNote}
-        />
-      ))}
-      {receipt.duplicateCandidates.length === 0 && receipt.multipartCandidates.length === 0
-        ? <Callout tone="review">{receipt.reviewNote}</Callout>
-        : null}
-    </>
-  );
-};
-
 export interface SelectionShelfProps {
   readonly receipt: SelectionReceipt;
 }

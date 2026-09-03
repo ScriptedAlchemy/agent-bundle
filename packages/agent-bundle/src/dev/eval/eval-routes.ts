@@ -4,6 +4,18 @@ import { Readable } from 'node:stream';
 
 import { hasOnlyOwnKeys, isRecord as coreIsRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+  type RequestDiagnostic,
+} from '../http.ts';
+import {
   EvalConfigError,
   EvalDefinitionError,
   EvalDiscoveryError,
@@ -24,15 +36,8 @@ import {
   type EvalSuiteListing,
 } from './eval-service.ts';
 
-const bodyLimit = 64 * 1024;
 const maximumTrials = 100;
 const streamByteLimit = 256 * 1024;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 type Route =
   | Readonly<{ readonly artifactRef: string; readonly kind: 'artifact'; readonly runId: string }>
@@ -69,19 +74,6 @@ export interface EvalRoutesOptions {
   readonly service?: EvalRouteService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
 /** Service messages name project paths, so each code keeps one fixed browser-facing sentence. */
 const serviceDiagnostics: Readonly<Record<EvalServiceErrorCode, RequestDiagnostic>> = Object.freeze({
   EVAL_ARTIFACT_NOT_FOUND: diagnostic('AB8085', 'Recorded raw evidence was not found.', 404),
@@ -113,72 +105,8 @@ const authoringDiagnostic = (error: unknown): RequestDiagnostic | undefined => {
   return undefined;
 };
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown, status = 200): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
 const terminalEvent = (event: EvalRunEventsReplay['events'][number]): boolean =>
   event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0] ?? '';
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
 const pathError = (): never => {
   throw requestError(diagnostic('AB8070', 'Eval route path is not valid.', 400));
@@ -244,9 +172,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
 const isRecord = coreIsRecord as (value: unknown) => value is JsonObject;
 
 const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
-
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
 
 const nameList = (value: unknown): readonly string[] => {
   if (!Array.isArray(value) || value.length === 0 || !value.every(nonemptyString)) return invalidShape();
@@ -436,7 +361,7 @@ export class EvalRoutes {
         const selection = runRequest(await jsonBody(request));
         if (this.#closePromise !== undefined) throw this.#unavailable(503);
         const admission = await service.start(selection);
-        return responseJson(response, { run: admission.run }, 202);
+        return writeJsonResponse(response, { run: admission.run }, { destroyIfEnded: true, status: 202 });
       } finally {
         finishAdmission();
       }
@@ -448,7 +373,7 @@ export class EvalRoutes {
         await cancelRequest(request);
         if (this.#closePromise !== undefined) throw this.#unavailable(503);
         const cancelled = await service.cancel(parsed.runId);
-        return responseJson(response, { cancelled, runId: parsed.runId }, 202);
+        return writeJsonResponse(response, { cancelled, runId: parsed.runId }, { destroyIfEnded: true, status: 202 });
       } finally {
         finishAdmission();
       }
@@ -458,10 +383,10 @@ export class EvalRoutes {
     }
     if (parsed.kind === 'comparisons') {
       const query = comparisonQuery(request.url);
-      return responseJson(response, { comparison: await service.compare(query.base, query.candidate) });
+      return writeJsonResponse(response, { comparison: await service.compare(query.base, query.candidate) }, { destroyIfEnded: true });
     }
     if (parsed.kind === 'events') {
-      return responseJson(response, { replay: await service.events(parsed.runId, eventCursor(request.url)) });
+      return writeJsonResponse(response, { replay: await service.events(parsed.runId, eventCursor(request.url)) }, { destroyIfEnded: true });
     }
     if (parsed.kind === 'stream') {
       return this.#stream(response, service, parsed.runId, eventCursor(request.url));
@@ -470,9 +395,9 @@ export class EvalRoutes {
       return this.#artifact(request, response, service, parsed);
     }
     noQuery(request.url);
-    if (parsed.kind === 'suites') return responseJson(response, await service.suites());
-    if (parsed.kind === 'runs') return responseJson(response, { runs: await service.list() });
-    return responseJson(response, { run: await service.read(parsed.runId) });
+    if (parsed.kind === 'suites') return writeJsonResponse(response, await service.suites(), { destroyIfEnded: true });
+    if (parsed.kind === 'runs') return writeJsonResponse(response, { runs: await service.list() }, { destroyIfEnded: true });
+    return writeJsonResponse(response, { run: await service.read(parsed.runId) }, { destroyIfEnded: true });
   }
 
   #unavailable(status: number): Error {

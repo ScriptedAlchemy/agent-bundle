@@ -24,8 +24,6 @@ export const CurationShelfStateSchema = z.object({
   selections: z.array(ShelfSelectionSchema),
 }).strict();
 
-export type ShelfSelection = z.output<typeof ShelfSelectionSchema>;
-export type ShelfMutation = z.output<typeof ShelfMutationSchema>;
 export type CurationShelfState = z.output<typeof CurationShelfStateSchema>;
 
 export const curationShelfEventSchemas = {

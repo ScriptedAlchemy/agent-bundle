@@ -1,5 +1,52 @@
 # Repository guidance
 
+## Code hygiene
+
+- **Extract and rewire in one change.** Every dead module this repo has had to
+  delete was born the same way: a refactor lifted helpers into a new file and
+  never switched the original over, so the monolith kept its inline copy and
+  the new file had zero importers from its first commit. If a commit adds
+  `foo-codec.ts`, the same commit deletes the code it replaced and leaves
+  `foo.ts` importing it. The follow-up PR that "wires it up" does not arrive.
+- **A module with no production importer is not delivered.** This repo's
+  dominant failure mode is a thoroughly tested service that nothing mounts.
+  Before believing a capability exists, find the production caller, not the
+  test. Before opening a PR, confirm every file it adds is reachable from
+  `src/index.ts`, a route, a CLI entry, or a hook — a passing suite proves
+  nothing about whether the code runs.
+- **Look for the helper before writing it.** `dev/http.ts` owns request and
+  response helpers (`diagnostic`, `requestError`, `isRequestDiagnostic`,
+  `responseDiagnostic`, `responseJson`, `singleHeader`, `isJsonRequest`,
+  `readBody`, `readJsonBody`, `rawPathname`, `decodedOpaqueSegment`);
+  `core/strict-json.ts`, `core/errors.ts`, `core/paths.ts`, and
+  `core/freeze.ts` own their equivalents. A route module that defines its own
+  `readBody` has forked a security-relevant bound that will be fixed in one
+  copy and not the other.
+- **Never copy a helper to dodge an import cycle.** Move it to a leaf module
+  both sides import — `config/conventional-entry.ts` is the pattern. A comment
+  explaining why the copy exists documents the debt; it does not discharge it.
+- **One class per name.** Two identical `class FooError` declarations in two
+  modules are not interchangeable: `instanceof` against the wrong one silently
+  returns `false`, so the `catch` that was supposed to handle it falls through.
+  Error classes live with the code that throws them, exported once.
+- **Delete on sight.** Unreferenced code is not free — it is read during
+  review, matched by search, and copied by the next author who finds it before
+  the live version. Removing it is a `patch` changeset, not a project.
+- Neither `pnpm lint` nor `pnpm typecheck` reports an unreferenced module, so
+  check by hand when a change adds or moves files:
+
+  ```sh
+  # any tracked file that mentions the module, other than itself
+  git grep -l '<module-stem>' -- ':!repos'
+  ```
+
+  One hit means the module only mentions itself and nothing imports it. Watch
+  for false positives from prose in `docs/**` and from strings that merely
+  contain the name: `Symbol('epoch-staging')` in `dev/epoch-store.ts` was the
+  only match for a 343-line dead file, which is why it read as reachable.
+- Gate before pushing: `pnpm typecheck && pnpm lint && pnpm test:unit`, plus
+  `pnpm build` first if the change touches `packages/rsc-runtime`.
+
 ## Workbench platform scope
 
 - The developer Workbench is a desktop-only application.

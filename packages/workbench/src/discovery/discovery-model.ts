@@ -181,7 +181,7 @@ const endpointPresentationFor = (report: DiscoveryEndpointReport): DiscoveryPres
   }
 };
 
-const hostLabelFor = (host: DiscoveryHost): string => {
+export const hostLabelFor = (host: DiscoveryHost): string => {
   switch (host) {
     case 'claude':
       return 'Claude';

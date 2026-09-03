@@ -30,6 +30,7 @@ import {
   type DiscoveryFindingView,
   type DiscoveryHostView,
   type DiscoveryPresentation,
+  hostLabelFor,
 } from './discovery-model.ts';
 import './discovery-page.css';
 
@@ -41,21 +42,6 @@ export interface DiscoveryPageProps {
 }
 
 const valueOrDash = (value: string | undefined): string => value ?? '—';
-
-const hostLabelFor = (host: DiscoveryHost): string => {
-  switch (host) {
-    case 'claude':
-      return 'Claude';
-    case 'codex':
-      return 'Codex';
-    case 'cursor':
-      return 'Cursor';
-    default: {
-      const exhaustive: never = host;
-      return exhaustive;
-    }
-  }
-};
 
 const errorDetails = (reason: unknown): Readonly<{ readonly code: string; readonly message: string }> => {
   if (reason instanceof Error) {

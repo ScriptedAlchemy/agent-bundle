@@ -11,23 +11,27 @@ import type {
   McpAppRuntimeRoutePreviewService,
 } from '../mcp-app-runtime-preview-service.ts';
 import { hasOnlyOwnKeys } from '../../core/strict-json.ts';
+import {
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  nonemptyString,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+} from '../http.ts';
 import { isMcpAppConsentCapability } from './mcp-app-sandbox.ts';
 import type { McpAppConsentChallenge } from './mcp-app-sandbox.ts';
 import type { McpAppConsentRequest } from './mcp-app-sandbox.ts';
 import { runtimeAppMessageLimits } from '../runtime-app-message-limits.ts';
 
-const bodyLimit = 64 * 1024;
 // A force-close DELETE that lands after an accepted graceful close must stay
 // idempotent (200, not 404), so this window has to dominate the frame relay's
 // force-close budget — clients may fall back as late as their closeTimeoutMs,
 // which mcp-app-frame.tsx caps at 30s.
 const gracefulCloseReceiptTimeoutMs = 35_000;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 interface CreateRoute {
   readonly kind: 'create';
@@ -99,33 +103,6 @@ export interface McpAppRoutesOptions {
   readonly service?: McpAppRoutePreviewService;
 }
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
 /** Runtime App operation results cross the bounded host-to-opaque-App channel. */
 const runtimeOperationResponseJson = (response: ServerResponse, body: unknown): void => {
   let encoded: string;
@@ -147,52 +124,6 @@ const runtimeOperationResponseJson = (response: ServerResponse, body: unknown): 
   });
   response.end(encoded);
 };
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string => requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
 const opaqueSegment = (value: string): string => {
   let decoded: string;
@@ -255,9 +186,6 @@ const isRecord = (value: unknown): value is JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
 const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
-
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && value.length <= 4_096 && !value.includes('\0');
 
 const isJsonValue = (value: unknown): value is McpAppJsonValue => {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
@@ -505,7 +433,7 @@ export class McpAppRoutes {
     if (parsed.kind === 'create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const preview = await service.create(createRequest(await jsonBody(request), parsed.sessionId));
-      return responseJson(response, { lifecycle: preview.bridge.lifecycle, preview: previewSnapshot(preview) });
+      return writeJsonResponse(response, { lifecycle: preview.bridge.lifecycle, preview: previewSnapshot(preview) });
     }
     if (parsed.kind === 'force-close') {
       if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -515,14 +443,14 @@ export class McpAppRoutes {
         if (!closed && !gracefulCloseAccepted) this.#unavailable();
         this.#clearTeardown(parsed.bindingId);
       });
-      return responseJson(response, { closed: true, lifecycle: 'closed' });
+      return writeJsonResponse(response, { closed: true, lifecycle: 'closed' });
     }
     if (parsed.kind === 'consent') {
       const preview = this.#preview(service, parsed.bindingId);
       if (method === 'GET') {
         const challenges = service.consentChallenges?.(parsed.bindingId);
         if (challenges === undefined) this.#unavailable();
-        return responseJson(response, { challenges, lifecycle: preview.bridge.lifecycle });
+        return writeJsonResponse(response, { challenges, lifecycle: preview.bridge.lifecycle });
       }
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const decision = consentDecision(await jsonBody(request));
@@ -532,7 +460,7 @@ export class McpAppRoutes {
       // A rejected-but-recognized action decision may carry the bridge's
       // terminal -32001 response. Forged/replayed decisions drain nothing.
       const messages = await service.takeOutbound(parsed.bindingId);
-      return responseJson(response, { approved, lifecycle: refreshed.bridge.lifecycle, messages, preview: previewSnapshot(refreshed) });
+      return writeJsonResponse(response, { approved, lifecycle: refreshed.bridge.lifecycle, messages, preview: previewSnapshot(refreshed) });
     }
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     if (parsed.kind === 'close') {
@@ -550,7 +478,7 @@ export class McpAppRoutes {
           started: true,
         });
       });
-      return responseJson(response, {
+      return writeJsonResponse(response, {
         actions: [],
         lifecycle: result.lifecycle,
         ...(result.started ? { message: result.message } : {}),
@@ -566,7 +494,7 @@ export class McpAppRoutes {
         }
         return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
       });
-      return responseJson(response, result);
+      return writeJsonResponse(response, result);
     }
     const result = await this.#serialize(parsed.bindingId, async () => {
       const preview = this.#preview(service, parsed.bindingId);
@@ -576,7 +504,7 @@ export class McpAppRoutes {
       const messages = await service.takeOutbound(parsed.bindingId);
       return Object.freeze({ accepted, actions: Object.freeze([]), lifecycle: preview.bridge.lifecycle, messages });
     });
-    return responseJson(response, result);
+    return writeJsonResponse(response, result);
   }
 
   async #dispatchRuntime(
@@ -589,7 +517,7 @@ export class McpAppRoutes {
     const method = request.method ?? 'GET';
     if (parsed.kind === 'runtime-create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { preview: await runtime.create(runtimeCreateRequest(await jsonBody(request))) });
+      return writeJsonResponse(response, { preview: await runtime.create(runtimeCreateRequest(await jsonBody(request))) });
     }
     if (parsed.kind === 'runtime-get') {
       if (method === 'DELETE') {
@@ -597,7 +525,7 @@ export class McpAppRoutes {
           this.#runtimeUnavailable(runtime, parsed.bindingId);
         }
         await runtime.close(parsed.bindingId);
-        return responseJson(response, { closed: true });
+        return writeJsonResponse(response, { closed: true });
       }
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const preview = runtime.get(parsed.bindingId);
@@ -609,7 +537,7 @@ export class McpAppRoutes {
     if (parsed.kind === 'runtime-close') {
       if (method !== 'DELETE') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       await runtime.close(parsed.bindingId);
-      return responseJson(response, { closed: true });
+      return writeJsonResponse(response, { closed: true });
     }
     if (parsed.kind === 'runtime-operation') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -624,12 +552,12 @@ export class McpAppRoutes {
     if (parsed.kind === 'runtime-consent-create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
-      return responseJson(response, await runtime.createConsent(parsed.bindingId, runtimeConsentRequest(await jsonBody(request))));
+      return writeJsonResponse(response, await runtime.createConsent(parsed.bindingId, runtimeConsentRequest(await jsonBody(request))));
     }
     if (parsed.kind !== 'runtime-consent-decide') throw new Error('Runtime MCP App route is not valid.');
     if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     if (runtime.get(parsed.bindingId) === undefined) this.#runtimeUnavailable(runtime, parsed.bindingId);
-    return responseJson(response, await runtime.decideConsent(parsed.bindingId, parsed.consentId, runtimeConsentDecision(await jsonBody(request))));
+    return writeJsonResponse(response, await runtime.decideConsent(parsed.bindingId, parsed.consentId, runtimeConsentDecision(await jsonBody(request))));
   }
 
   #preview(service: McpAppRoutePreviewService, bindingId: string): McpAppRoutePreview {
