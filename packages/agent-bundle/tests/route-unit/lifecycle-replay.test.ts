@@ -285,6 +285,13 @@ it('replays the Cursor workspaceOpen starter as an observation with no native re
       provenance: { host: 'cursor', nativeEvent: 'workspaceOpen' },
     },
     nativeInput: target?.fixture?.native,
+    requestContext: {
+      workspace: {
+        source: 'receipt',
+        state: 'available',
+        value: { root: '/tmp' },
+      },
+    },
   });
   expect((replay as LifecycleReplay).nativeResponse).toBeUndefined();
 });
