@@ -1,10 +1,10 @@
 import type { AgentProviderValues } from '@agent-bundle/runtime';
 
 import {
-  createProviderProcessLifetime,
   executeProviders,
   providerProcessLifetimeValue,
   type ExecutableProvider,
+  type ProviderProcessLifetime,
 } from '../routes/provider-execution.ts';
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest, TestableProviderDescriptor } from './manifest.ts';
@@ -23,13 +23,6 @@ import type { RenderedRouteProvenance } from './types.ts';
  * the runtime's request contract reads it.
  */
 
-/**
- * One process identity for this test worker, mirroring the generated scopes'
- * module-scope `processLifetime`: `hits` counts every request the harness
- * opened in this process, whichever proof level opened it.
- */
-const processLifetime = createProviderProcessLifetime();
-
 export interface MountProvidersOptions {
   /** Explicit provider values from the test; when present they win and nothing is discovered. */
   readonly explicit: AgentProviderValues | undefined;
@@ -37,6 +30,16 @@ export interface MountProvidersOptions {
   readonly invocation: unknown;
   /** Absent for a module rendered directly: no project, so nothing to discover. */
   readonly manifest: AgentBundleTestManifest | undefined;
+  /**
+   * The process identity of the simulated executable, scoped exactly as the
+   * artifact scopes its module-level `processLifetime`: one per CLI
+   * invocation (each generated executable starts at hit 1), one per rendered
+   * route request, and one per open in-memory MCP server session (shared by
+   * every request that session handles). Never shared across unrelated
+   * helper calls, so a provider branching on `hits` or `instanceId` cannot
+   * observe warmth the artifact would not exhibit.
+   */
+  readonly processLifetime: ProviderProcessLifetime;
   readonly provenance?: RenderedRouteProvenance;
   readonly signal: AbortSignal;
 }
@@ -63,10 +66,11 @@ const loadProvider = async (
 /**
  * The `providers` value for one harness request scope: the explicit map when
  * the test supplied one, otherwise the project's conventional providers
- * executed in the generated order over the framework-owned process identity.
+ * executed in the generated order over the caller's process identity.
  */
 export const mountProviders = async (options: MountProvidersOptions): Promise<AgentProviderValues> => {
   if (options.explicit !== undefined) return options.explicit;
+  const { processLifetime } = options;
   processLifetime.hits += 1;
   if (options.manifest === undefined) {
     return { processLifetime: providerProcessLifetimeValue(processLifetime) };

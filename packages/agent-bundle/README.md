@@ -418,9 +418,11 @@ are mounted automatically for every manifest-backed helper — `renderRoute`,
 generated request scopes mount them: discovered from the compiled manifest,
 executed once per request in the same deterministic key order, handed the same
 surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
-request closed when a factory throws. `providers.processLifetime` carries the
-test worker's process identity and a per-request hit counter, like the
-artifact's. Pass `context.providers` to opt out: an explicit map is mounted
+request closed when a factory throws. `providers.processLifetime` is scoped the
+way the artifact scopes it: each `invokeCli` call and each `renderRoute` render
+is a fresh simulated executable (hit 1, new `instanceId`), while one open
+`openInMemoryMcpServer` session shares a single identity across every request
+it handles, like the artifact's warm Flight worker. Pass `context.providers` to opt out: an explicit map is mounted
 verbatim and no conventional provider runs, which is how a test stubs a provider
 that would otherwise reach the network or the file system.
 

@@ -26,6 +26,7 @@ import type {
   GeneratedCliRenderContext,
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
+import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
@@ -628,6 +629,8 @@ export interface PrepareCliRenderHostOptions {
   readonly manifest: AgentBundleTestManifest;
   readonly modules: ReadonlyMap<string, AgentRouteModule>;
   readonly onValidated: (value: unknown) => void;
+  /** The invoking CLI's process identity; the rendered command runs inside that same simulated executable. */
+  readonly processLifetime: ProviderProcessLifetime;
   readonly provenance: RenderedRouteProvenance;
   readonly signal: AbortSignal;
 }
@@ -714,6 +717,7 @@ export const prepareCliRenderHost = async (
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
+            processLifetime: options.processLifetime,
             provenance: { ...options.provenance, routeId: command.routeId },
             signal: request.signal,
           });
@@ -789,6 +793,9 @@ const prepareRender = async (
   const collected: AgentProgressUpdate[] = [];
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
+  // A route-unit render stands in for one fresh executable serving one
+  // request; nothing is warm across renders, so each starts at hit 1.
+  const processLifetime = createProviderProcessLifetime();
   const mounted = await mountManifestState(resolved.manifest, resolved.provenance, context, renderer, signal);
   const dispatcher = createFlightDispatcher({
     collected,
@@ -806,6 +813,7 @@ const prepareRender = async (
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
+        processLifetime,
         provenance: resolved.provenance,
         signal: request.signal,
       }),

@@ -22,6 +22,7 @@ import type {
 } from '@agent-bundle/runtime/state';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 
+import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { mountProviders } from './providers.ts';
@@ -312,6 +313,9 @@ export const openInMemoryMcpServer = async <
   // the same warm host wrapper the artifact uses — it simply renders here
   // instead of in a spawned thread.
   const artifactEpoch = `${manifest.plugin.name}@${manifest.plugin.version}`;
+  // One process identity per open server, like the artifact's Flight worker:
+  // every request this session handles shares it, and a new server starts fresh.
+  const processLifetime = createProviderProcessLifetime();
   const runtimeState = options.state === undefined
     ? undefined
     : dependencies.createGeneratedRuntimeState(options.state);
@@ -338,6 +342,7 @@ export const openInMemoryMcpServer = async <
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
+            processLifetime,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
             signal: request.signal,
           });

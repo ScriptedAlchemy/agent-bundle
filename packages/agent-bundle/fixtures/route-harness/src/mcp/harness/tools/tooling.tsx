@@ -15,11 +15,17 @@ export const inputSchema = z.object({
 export const resultSchema = z.object({
   keys: z.array(z.string()),
   libraryTooling: z.unknown().optional(),
+  processLifetime: z.object({ hits: z.number(), instanceId: z.string(), pid: z.number() }).optional(),
 }).strict();
 
 export default async function Tooling() {
   const { providers } = await agent();
-  const value = { keys: Object.keys(providers).sort(), libraryTooling: providers['libraryTooling'] as JsonValue };
+  const { processLifetime } = providers;
+  const value = {
+    keys: Object.keys(providers).sort(),
+    libraryTooling: providers['libraryTooling'] as JsonValue,
+    ...(processLifetime === undefined ? {} : { processLifetime: { ...processLifetime } }),
+  };
   return (
     <Agent.Result value={value}>
       <Agent.Text>{`tooling: ${JSON.stringify(providers['libraryTooling'])}`}</Agent.Text>

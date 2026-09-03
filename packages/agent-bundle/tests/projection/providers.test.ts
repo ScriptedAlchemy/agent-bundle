@@ -2,7 +2,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { cliJson, invokeCli } from '../../src/test/cli.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
-import { invokeMcpTool } from '../../src/test/mcp.ts';
+import { invokeMcpTool, openInMemoryMcpServer } from '../../src/test/mcp.ts';
 import { renderRoute } from '../../src/test/render.ts';
 import { testManifest } from '../../src/test/registry.ts';
 
@@ -35,7 +35,7 @@ describe('conventional providers through the harness', () => {
     expect(cliJson(run)).toEqual({
       keys: ['libraryTooling', 'processLifetime'],
       libraryTooling: { kind: 'cli', surface: 'tooling inspect', tool: 'ffprobe 6.1' },
-      processLifetime: { hits: expect.any(Number), instanceId: expect.any(String), pid: process.pid },
+      processLifetime: { hits: 1, instanceId: expect.any(String), pid: process.pid },
     });
   });
 
@@ -57,6 +57,7 @@ describe('conventional providers through the harness', () => {
     expect(cliJson(run)).toEqual({
       keys: ['libraryTooling', 'processLifetime'],
       libraryTooling: { kind: 'tool', surface: 'tool:harness/tooling', tool: 'ffprobe 6.1' },
+      processLifetime: { hits: 1, instanceId: expect.any(String), pid: process.pid },
     });
   });
 
@@ -67,6 +68,7 @@ describe('conventional providers through the harness', () => {
     expect(call.structuredContent).toEqual({
       keys: ['libraryTooling', 'processLifetime'],
       libraryTooling: { kind: 'tool', surface: 'tool:harness/tooling', tool: 'ffprobe 6.1' },
+      processLifetime: { hits: 1, instanceId: expect.any(String), pid: process.pid },
     });
   });
 
@@ -76,6 +78,7 @@ describe('conventional providers through the harness', () => {
     expect(rendered.result).toEqual({
       keys: ['libraryTooling', 'processLifetime'],
       libraryTooling: { kind: 'tool', surface: 'tool:harness/tooling', tool: 'ffprobe 6.1' },
+      processLifetime: { hits: 1, instanceId: expect.any(String), pid: process.pid },
     });
   });
 
@@ -100,13 +103,47 @@ describe('conventional providers through the harness', () => {
     });
   });
 
-  it('counts every harness request in one process identity', async () => {
-    const first = cliJson(await invokeCli(['tooling', 'inspect'])) as { processLifetime: { hits: number; instanceId: string } };
-    await renderRoute('tool:harness/tooling');
-    const second = cliJson(await invokeCli(['tooling', 'inspect'])) as { processLifetime: { hits: number; instanceId: string } };
+  it('gives every CLI invocation its own fresh process identity, like a separate generated executable', async () => {
+    type Lifetime = { processLifetime: { hits: number; instanceId: string; pid: number } };
+    const first = cliJson(await invokeCli(['tooling', 'inspect'])) as Lifetime;
+    const second = cliJson(await invokeCli(['tooling', 'inspect'])) as Lifetime;
 
-    expect(second.processLifetime.instanceId).toBe(first.processLifetime.instanceId);
-    expect(second.processLifetime.hits).toBeGreaterThanOrEqual(first.processLifetime.hits + 2);
+    expect(first.processLifetime).toEqual({ hits: 1, instanceId: expect.any(String), pid: process.pid });
+    expect(second.processLifetime).toEqual({ hits: 1, instanceId: expect.any(String), pid: process.pid });
+    expect(second.processLifetime.instanceId).not.toBe(first.processLifetime.instanceId);
+  });
+
+  it('shares one process identity across the requests of one open in-memory MCP server only', async () => {
+    type Lifetime = { processLifetime: { hits: number; instanceId: string; pid: number } };
+    const lifetimeOf = (result: unknown): Lifetime['processLifetime'] =>
+      ((result as { structuredContent: Lifetime }).structuredContent).processLifetime;
+
+    await using session = await openInMemoryMcpServer();
+    const first = lifetimeOf(await session.client.callTool({ arguments: {}, name: 'tooling' }));
+    const second = lifetimeOf(await session.client.callTool({ arguments: {}, name: 'tooling' }));
+    await using other = await openInMemoryMcpServer();
+    const elsewhere = lifetimeOf(await other.client.callTool({ arguments: {}, name: 'tooling' }));
+    const convenience = lifetimeOf(await invokeMcpTool('tooling'));
+
+    // The same warm server serves both calls, exactly like the artifact's
+    // Flight worker; a second server, and the open-call-close convenience
+    // helper, are separate processes that start at hit 1.
+    expect(first).toEqual({ hits: 1, instanceId: expect.any(String), pid: process.pid });
+    expect(second).toEqual({ hits: 2, instanceId: first.instanceId, pid: process.pid });
+    expect(elsewhere).toEqual({ hits: 1, instanceId: expect.any(String), pid: process.pid });
+    expect(elsewhere.instanceId).not.toBe(first.instanceId);
+    expect(convenience).toEqual({ hits: 1, instanceId: expect.any(String), pid: process.pid });
+    expect(convenience.instanceId).not.toBe(first.instanceId);
+  });
+
+  it('gives every route-unit render a fresh process identity', async () => {
+    type Result = { processLifetime: { hits: number; instanceId: string } };
+    const first = (await renderRoute('tool:harness/tooling')).result as Result;
+    const second = (await renderRoute('tool:harness/tooling')).result as Result;
+
+    expect(first.processLifetime.hits).toBe(1);
+    expect(second.processLifetime.hits).toBe(1);
+    expect(second.processLifetime.instanceId).not.toBe(first.processLifetime.instanceId);
   });
 
   it('uses an explicit context.providers map verbatim instead of discovering providers', async () => {
