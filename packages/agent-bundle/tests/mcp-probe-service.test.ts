@@ -216,9 +216,19 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               name: 'non-network-scheme-with-path',
             },
             {
-              description: 'Registry oci://registry.example.test and mail mailto:ops@example.test',
+              description: 'Registry oci://registry.example.test stays a link',
               inputSchema: { type: 'object' as const },
               name: 'non-network-scheme-without-path',
+            },
+            {
+              description: 'Whitespace https://alice:se cret@example.test/private and tab https://bob:x\ty@example.test/',
+              inputSchema: { type: 'object' as const },
+              name: 'url-with-whitespace-in-userinfo',
+            },
+            {
+              description: 'Path-less https://example.test then ops@example.test before any slash',
+              inputSchema: { type: 'object' as const },
+              name: 'path-less-url-then-email',
             },
             {
               description: 'Bare user https://alice@example.test/private; contact ops@example.test',
@@ -265,7 +275,13 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       // ...and any other scheme with a path component fails closed too.
       '[REDACTED]',
       // A non-network scheme without a path component is not a path.
-      'Registry oci://registry.example.test and mail mailto:ops@example.test',
+      'Registry oci://registry.example.test stays a link',
+      // Whitespace inside userinfo is encoded (spaces) or stripped (tabs) by URL
+      // parsers, so it does not end the mask early.
+      'Whitespace https://[REDACTED]@example.test/private and tab https://[REDACTED]@example.test/',
+      // The documented trade-off: an `@` after a path-less URL, before any
+      // `/`, `?`, or `#`, is masked as if it were userinfo (over-redaction).
+      'Path-less https://[REDACTED]@example.test before any slash',
       // A bare user is masked too; an email address is not URL userinfo.
       'Bare user https://[REDACTED]@example.test/private; contact ops@example.test',
       // Masking runs through the final authority `@` (the delimiter URL parsers

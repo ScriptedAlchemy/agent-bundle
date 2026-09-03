@@ -161,15 +161,17 @@ const hasAbsolutePath = (value: string): boolean =>
  * URL userinfo (`scheme://user:secret@host`) is a credential that the generic
  * credential redaction does not recognize; because URLs are exempt from the
  * absolute-path fail-closed rule, the userinfo is stripped before that check.
- * The authority runs until whitespace or one of the authority terminators
- * every WHATWG scheme shares (`/`, `?`, `#`); within it the match is greedy
- * through the *final* `@`, the delimiter URL parsers honour, so a raw `@`,
- * quote, or backslash inside a password cannot leave part of the credential
- * behind. `\` is deliberately not a terminator here: it only ends the
- * authority for special schemes, while non-special ones such as
- * `postgres://` accept it inside userinfo — masking errs toward redaction.
+ * The authority runs until one of the terminators every WHATWG scheme shares
+ * (`/`, `?`, `#`); within it the match is greedy through the *final* `@`, the
+ * delimiter URL parsers honour, so a raw `@`, quote, backslash, or whitespace
+ * inside a password (parsers percent-encode spaces and strip embedded tabs and
+ * newlines) cannot leave part of the credential behind. Nothing short of those
+ * three terminators ends the run on purpose — `\` is userinfo for non-special
+ * schemes and whitespace is encoded rather than rejected — so a path-less URL
+ * followed on the same text by an `@` before any `/`, `?`, or `#` is masked
+ * as well: for a browser-facing report that over-redaction is the safe side.
  */
-const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/giu;
+const urlUserinfoPattern = /\b([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/giu;
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
