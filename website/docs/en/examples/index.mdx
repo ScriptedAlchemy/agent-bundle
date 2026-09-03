@@ -73,7 +73,11 @@ Two habits make the Workbench trustworthy while you explore:
   Workbench keeps serving the previously published artifact alongside the new diagnostic. Restore
   the checked-in source and rebuild; the new active epoch is the repair evidence.
 
-Three of the four walkthrough examples ship a reversible diagnostic walkthrough for exactly that reason.
+[Hooks and Scripts](./hooks-and-scripts.mdx) ships a scripted, reversible diagnostic walkthrough
+for exactly that reason — break a handler, watch the failed rebuild keep the last-good artifact,
+restore, and read the new epoch as the repair. [Skills Starter](./skills-starter.mdx) practices the
+same rebuild-and-restore loop against stale eval evidence; the other walkthroughs only ask you to
+wait for a completed state before judging a rebuild.
 
 ## Where the concepts live
 
