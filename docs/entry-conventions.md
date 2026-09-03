@@ -154,6 +154,11 @@ of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `processLifetime` is reserved for the framework-owned process identity and hit
 counter, so provider filenames must not derive that key.
 
+Route-unit and CLI-dispatch tests inject provider values through the same
+`context` seam as identity axes (`renderRoute(id, { context: { providers:
+{ library: fixture } } })`); the harness never executes conventional provider
+modules, so a test chooses exactly the values a component observes.
+
 ### Handler request context
 
 Conventional route components receive only their surface props, such as
