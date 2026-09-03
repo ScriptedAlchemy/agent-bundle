@@ -63,7 +63,7 @@ import {
 import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
-import { BundleWorkflow, HostAdoptionSection } from './overview-page.tsx';
+import { BundleWorkflow, HostAdoptionSection, StateMark } from './overview-page.tsx';
 import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
@@ -294,14 +294,6 @@ const RuntimeMcpHandoffButton = ({ authority, host }: { readonly authority: Runt
 };
 
 const downloadMcpFile = ({ blob, filename }: McpDownload): void => downloadBlob(blob, filename);
-
-const StateMark = ({ state }: { readonly state: string }) => (
-  <span aria-hidden="true" className={`state-mark state-mark--${state}`}>{
-    state === 'active' || state === 'ready' || state === 'built' ? '✓'
-      : state === 'stale' || state === 'invalid' || state === 'failed' ? '!'
-        : '–'
-  }</span>
-);
 
 type WorkbenchPage = GeneralWorkbenchPage | 'runtime';
 type RuntimeCapability = 'available' | 'unavailable' | 'unknown';

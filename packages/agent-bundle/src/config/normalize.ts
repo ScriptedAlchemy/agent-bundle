@@ -17,6 +17,7 @@ import {
 } from '../core/runtime.ts';
 import { developmentFallbackVersion, snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { conventionalEntryAt } from './conventional-entry.ts';
 import {
   canonicalHookEvents,
   isPrebuiltEntryInput,
@@ -154,21 +155,6 @@ const mcpEntryName = (name: string): string => {
 
 /** Anchored alias contract for generated target-local MCP entry modules. */
 export const mcpEntryAliasPattern = /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u;
-
-const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
-
-const conventionalEntryAt = (root: string, ...segments: string[]): string | undefined => {
-  const stem = resolve(root, ...segments);
-  for (const extension of conventionalEntryExtensions) {
-    const candidate = `${stem}${extension}`;
-    try {
-      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-    } catch {
-      // A racing deletion means the convention does not apply.
-    }
-  }
-  return undefined;
-};
 
 /**
  * The `src/mcp/<server-id>.ts` convention: the stdio entry for a declared MCP

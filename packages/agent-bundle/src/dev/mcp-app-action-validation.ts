@@ -28,7 +28,7 @@ const jsonRecord = (value: unknown): McpAppJsonRecord | undefined => {
     : copied as McpAppJsonRecord;
 };
 
-const validIcon = (value: unknown): boolean => {
+export const validIcon = (value: unknown): boolean => {
   const icon = jsonRecord(value);
   return icon !== undefined && nonempty(icon.src)
     && (icon.mimeType === undefined || nonempty(icon.mimeType))
@@ -36,9 +36,9 @@ const validIcon = (value: unknown): boolean => {
     && (icon.theme === undefined || icon.theme === 'light' || icon.theme === 'dark');
 };
 
-const validIcons = (value: unknown): boolean => Array.isArray(value) && value.every(validIcon);
+export const validIcons = (value: unknown): boolean => Array.isArray(value) && value.every(validIcon);
 
-const validIsoDateTimeWithOffset = (value: unknown): boolean => {
+export const validIsoDateTimeWithOffset = (value: unknown): boolean => {
   if (typeof value !== 'string') return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.exec(value);
   if (match === null) return false;
