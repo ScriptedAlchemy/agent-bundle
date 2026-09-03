@@ -98,7 +98,7 @@ it('records dated four-state Codex distribution rows mirrored by the adapter and
     const row = table[capability]!;
     expect(row.state, capability).toBe(expectedState);
     expect(row.evidence.length, capability).toBeGreaterThan(0);
-    expect(row.evidence.every((line) => /^(?:retrieved )?2026-09-02:/u.test(line)), capability).toBe(true);
+    expect(row.evidence.every((line) => /^(?:retrieved )?2026-09-0[23]:/u.test(line)), capability).toBe(true);
     if (expectedState === 'supported') {
       expect(row.reason).toBeUndefined();
       expect(codexAdapter.capabilities[capability]).toEqual({
@@ -125,6 +125,7 @@ it('records dated four-state Codex distribution rows mirrored by the adapter and
   expect(codexCapabilityTable.marketplace.policy).toEqual({
     authentication: ['ON_INSTALL', 'ON_USE'],
     installation: ['AVAILABLE', 'INSTALLED_BY_DEFAULT', 'NOT_AVAILABLE'],
+    notInstallable: 'NOT_AVAILABLE',
   });
 });
 
@@ -140,6 +141,11 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { package: '@example/codex-plugin', registry: 'https://registry.npmjs.org', source: 'npm', version: '^1.2.0' },
     { package: 'codex-plugin', source: 'npm' },
     { package: 'codex-plugin', source: 'npm', version: 'latest' },
+    { source: 'url', url: 'https://token@git.example.test:8443/team/codex-plugins.git' },
+    { source: 'url', url: 'ssh://git@git.example.test:2222/team/codex-plugins.git' },
+    { source: 'url', url: 'git@git.example.test:~team/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com/example/codex%20plugins.git' },
+    { package: 'codex-plugin', registry: 'https://npm.example.test:4873/prefix/', source: 'npm' },
   );
   expect(validate(admitted), JSON.stringify(validate.errors)).toBe(true);
 
@@ -149,8 +155,27 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { path: './plugins/../../outside', source: 'local' },
     { path: '.\\plugins\\my-plugin', source: 'local' },
     { source: 'url', url: 'file:///tmp/plugins' },
+    // Scheme-prefix matches with an unusable authority or path are not URLs.
+    { source: 'url', url: 'https://%zz/repository.git' },
+    { source: 'url', url: 'https://' },
+    { source: 'url', url: 'https://github.com' },
+    { source: 'url', url: 'https://github.com/example/codex%2plugins.git' },
+    { source: 'url', url: 'https://git hub.com/example/codex-plugins.git' },
+    { source: 'url', url: 'https://-github.com/example/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com:port/example/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com/example/codex-plugins.git?ref=main' },
+    { source: 'url', url: 'ssh://%zz/repository.git' },
+    { source: 'url', url: 'ssh://github.com' },
+    { source: 'url', url: 'git@%zz:example/codex-plugins.git' },
+    { source: 'url', url: 'git@github.com:' },
+    { source: 'url', url: 'git@github.com:example/codex plugins.git' },
     { source: 'url', url: 'https://github.com/example/codex-plugins.git', sha: 'not-hex' },
     { source: 'git-subdir', url: 'https://github.com/example/codex-plugins.git' },
+    { path: './plugins/remote-helper', source: 'git-subdir', url: 'https://%zz/repository.git' },
+    { package: '@example/codex-plugin', registry: 'https://%zz/', source: 'npm' },
+    { package: '@example/codex-plugin', registry: 'https://', source: 'npm' },
+    { package: '@example/codex-plugin', registry: 'https://registry.example.test:port', source: 'npm' },
+    { package: '@example/codex-plugin', registry: 'https://registry.example.test/a b', source: 'npm' },
     { package: '@example/codex-plugin', source: 'npm', version: 'file:../local' },
     { package: '@example/codex-plugin', source: 'npm', version: 'https://example.test/pkg.tgz' },
     { package: '@example/codex-plugin', source: 'npm', version: 'npm:other@1.0.0' },
@@ -226,9 +251,34 @@ it.each([
   { code: 'codex.marketplace.policy.field.unknown', value: { policy: { approval: 'prompt' } } },
   { code: 'codex.marketplace.policy.authentication.invalid', value: { policy: { authentication: 'ALWAYS' } } },
   { code: 'codex.marketplace.policy.installation.invalid', value: { policy: { installation: 'HIDDEN' } } },
+  { code: 'codex.marketplace.policy.installation.not-installable', value: { policy: { installation: 'NOT_AVAILABLE' } } },
 ] as const)('rejects invalid authored Codex marketplace input with $code', ({ code, value }) => {
   const rejected = emittedMarketplace(withCodexConfig({ marketplace: value }));
 
   expect(rejected.codes).toContain(code);
   expect(rejected.document).toBeUndefined();
+});
+
+it('keeps NOT_AVAILABLE documented in the pinned schema but refuses it for the self-installing artifact', () => {
+  // Live codex-cli 0.147.0 registers a NOT_AVAILABLE marketplace entry and then refuses
+  // `codex plugin add <plugin>@<marketplace>`, the exact command INSTALL.md and installBundle() run.
+  expect(codexCapabilityTable.marketplace.policy.notInstallable).toBe('NOT_AVAILABLE');
+  expect(codexCapabilityTable.distribution.marketplacePolicy).toMatchObject({
+    evidence: expect.arrayContaining([expect.stringContaining('is not available for install in marketplace')]),
+    rejected: ['NOT_AVAILABLE'],
+  });
+  const validate = createAdapterValidator().compile(marketplaceSchema);
+  expect(validate({
+    ...marketplace('./'),
+    plugins: [{ ...entry('./'), policy: { authentication: 'ON_INSTALL', installation: 'NOT_AVAILABLE' } }],
+  })).toBe(true);
+
+  const rejected = emittedMarketplace(withCodexConfig({ marketplace: { policy: { installation: 'NOT_AVAILABLE' } } }));
+  expect(rejected.codes).toEqual(['codex.marketplace.policy.installation.not-installable']);
+  expect(rejected.document).toBeUndefined();
+  for (const installation of ['AVAILABLE', 'INSTALLED_BY_DEFAULT']) {
+    const admitted = emittedMarketplace(withCodexConfig({ marketplace: { policy: { installation } } }));
+    expect(admitted.codes).toEqual([]);
+    expect(admitted.document).toMatchObject({ plugins: [{ policy: { authentication: 'ON_INSTALL', installation } }] });
+  }
 });

@@ -62,8 +62,12 @@ The Codex artifact is also its own repo marketplace: `.agents/plugins/marketplac
 local `./` entry whose `category` follows the plugin's interface category and whose
 `policy.installation` / `policy.authentication` default to `AVAILABLE` / `ON_INSTALL`.
 `codex.marketplace` authors the picker `displayName`, the `category`, and the documented policy
-values; the pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources
-for validating real-world marketplaces, but the adapter never emits them. Personal and legacy
+values, except `installation: NOT_AVAILABLE`, which fails the build
+(`codex.marketplace.policy.installation.not-installable`) because live `codex plugin add` refuses
+such entries and that is exactly the command the emitted `INSTALL.md` and `installBundle()` run.
+The pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources for
+validating real-world marketplaces (Git and registry URLs must carry a syntactically valid
+hostname and path, not just a scheme prefix), but the adapter never emits them. Personal and legacy
 `.claude-plugin/marketplace.json` discovery, the `~/.codex/plugins/cache` layout, `config.toml`
 enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
 managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or

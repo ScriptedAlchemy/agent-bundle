@@ -828,6 +828,7 @@ const planCodexApps = (model: NormalizedPlugin): CodexAppsPlan => {
 const marketplaceTable = capabilityTable.marketplace;
 const marketplaceAuthenticationPolicies: readonly string[] = marketplaceTable.policy.authentication;
 const marketplaceInstallationPolicies: readonly string[] = marketplaceTable.policy.installation;
+const marketplaceNotInstallablePolicy: string = marketplaceTable.policy.notInstallable;
 const marketplaceConfigFields = Object.freeze(['category', 'displayName', 'policy']);
 const marketplacePolicyFields = Object.freeze(['authentication', 'installation']);
 
@@ -922,6 +923,16 @@ const planCodexMarketplace = (model: NormalizedPlugin, interfaceCategory: string
           diagnostics.push(errorDiagnostic(
             'codex.marketplace.policy.installation.invalid',
             `Codex marketplace policy.installation must be one of ${marketplaceInstallationPolicies.join(', ')}.`,
+          ));
+        } else if (installation === marketplaceNotInstallablePolicy) {
+          // The emitted marketplace exists to install this artifact: INSTALL.md and
+          // installBundle() both run `codex plugin add`, which the host refuses for
+          // NOT_AVAILABLE entries, so a self-installing bundle cannot honestly carry it.
+          diagnostics.push(errorDiagnostic(
+            'codex.marketplace.policy.installation.not-installable',
+            `Codex marketplace policy.installation ${marketplaceNotInstallablePolicy} makes the emitted bundle refuse its own codex plugin add install path; use ${
+              marketplaceInstallationPolicies.filter((value) => value !== marketplaceNotInstallablePolicy).join(' or ')
+            }.`,
           ));
         } else {
           policy.installation = installation;

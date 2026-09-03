@@ -8,7 +8,7 @@
     },
     "gitUrl": {
       "minLength": 1,
-      "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]?://|[Ss][Ss][Hh]://|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:)\\S+$",
+      "pattern": "^(?:(?:[Hh][Tt][Tt][Pp][Ss]?|[Ss][Ss][Hh])://(?:[A-Za-z0-9._~!$&'()*+,;=-]+@)?[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})+)+/?|[A-Za-z0-9._-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*:(?:~?[A-Za-z0-9._!$&'()*+,;=@-]+)(?:/[A-Za-z0-9._~!$&'()*+,;=@-]+)*/?)$",
       "type": "string"
     },
     "gitRef": { "minLength": 1, "type": "string" },
@@ -49,7 +49,10 @@
       "additionalProperties": false,
       "properties": {
         "package": { "minLength": 1, "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$", "type": "string" },
-        "registry": { "pattern": "^[Hh][Tt][Tt][Pp][Ss]://[^@?#\\s]+$", "type": "string" },
+        "registry": {
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?:[A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+)*/?$",
+          "type": "string"
+        },
         "source": { "const": "npm", "type": "string" },
         "version": { "minLength": 1, "pattern": "^[^/\\\\:@]+$", "type": "string" }
       },

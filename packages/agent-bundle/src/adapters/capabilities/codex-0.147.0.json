@@ -15,7 +15,8 @@
   "marketplace": {
     "policy": {
       "authentication": ["ON_INSTALL", "ON_USE"],
-      "installation": ["AVAILABLE", "INSTALLED_BY_DEFAULT", "NOT_AVAILABLE"]
+      "installation": ["AVAILABLE", "INSTALLED_BY_DEFAULT", "NOT_AVAILABLE"],
+      "notInstallable": "NOT_AVAILABLE"
     }
   },
   "distribution": {
@@ -63,8 +64,10 @@
     "marketplacePolicy": {
       "evidence": [
         "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins requires policy.installation (AVAILABLE, INSTALLED_BY_DEFAULT, or NOT_AVAILABLE) and policy.authentication (install-time or first-use) on every entry; the adapter defaults to AVAILABLE and ON_INSTALL and accepts codex.marketplace.policy overrides validated against the documented values.",
-        "retrieved 2026-09-02: live codex-cli 0.147.0 echoed an authored INSTALLED_BY_DEFAULT/ON_USE entry back as installPolicy and authPolicy in codex plugin list --json and authPolicy in codex plugin add --json inside an isolated CODEX_HOME."
+        "retrieved 2026-09-02: live codex-cli 0.147.0 echoed an authored INSTALLED_BY_DEFAULT/ON_USE entry back as installPolicy and authPolicy in codex plugin list --json and authPolicy in codex plugin add --json inside an isolated CODEX_HOME.",
+        "retrieved 2026-09-03: live codex-cli 0.147.0 accepted codex plugin marketplace add for a NOT_AVAILABLE entry but refused codex plugin add with `plugin <name> is not available for install in marketplace <marketplace>`; because the emitted INSTALL.md and installBundle() run exactly that command, the adapter rejects authored NOT_AVAILABLE with codex.marketplace.policy.installation.not-installable instead of emitting a bundle whose own install path fails."
       ],
+      "rejected": ["NOT_AVAILABLE"],
       "state": "supported"
     },
     "marketplaceCategory": {
