@@ -352,9 +352,11 @@ absent ceiling means `internal`, the pre-sensitivity contract, so `secret`
 notices are withheld everywhere until a host row says otherwise.
 `resolveNoticeDisclosure(route, sensitivity, advertisement)` is the whole
 decision: `withheld` (`route-unavailable` or `sensitivity-exceeds-route`) or
-`disclosed` with `shape` and `redacted`. `createAgentNoticeLedger(store, {
-delivery })` and `createNoticeInboxSignaller({ delivery })` take the host's
-advertisement: `inbox()` omits withheld notices and hands out disclosed content
+`disclosed` with `shape` and `redacted`; a row naming a ceiling outside the
+vocabulary admits nothing. `createAgentNoticeLedger(store, { delivery })` and
+`createNoticeInboxSignaller({ delivery })` take the host's advertisement and
+validate it at construction (`validateNoticeDeliveryAdvertisement`, typed
+`invalid-input`): `inbox()` omits withheld notices and hands out disclosed content
 (the inbox resource projection reports `sensitivity` and
 `disclosure.redacted`), event admission neither authorizes nor attempts a
 withheld notice, `read()` deliveries carry `disclosure` and the disclosed
@@ -364,7 +366,10 @@ every other invocation to the inbox ceiling; a withheld class comes back as
 the `[REDACTED]` mark, so an id learned from a redacted inbox unlocks nothing),
 and the signaller never sends `resources/updated` for a notice the inbox would
 withhold, recording that refusal itself through
-`recordWithholding()` once per subscription. Every refusal is durable evidence,
+`recordWithholding()` once per subscription. Admission stays one commit per
+invocation: a retry of the same invocation id whose recomputed decision differs
+(a notice published or a ceiling changed in between) replays the committed
+admission instead of failing `idempotency-conflict`. Every refusal is durable evidence,
 not a state change: the notice records
 `withheld[route] = { count, firstAt, lastAt, reason }` and stays eligible for
 a route whose row admits it. The built-in hosts admit

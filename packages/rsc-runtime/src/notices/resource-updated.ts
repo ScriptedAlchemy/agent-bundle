@@ -9,7 +9,11 @@ import {
   type AgentNoticePrincipal,
 } from './contract.js';
 import { AGENT_NOTICE_DEFAULT_SENSITIVITY } from './redaction.js';
-import { resolveNoticeDisclosure, type AgentNoticeDeliveryAdvertisement } from './router.js';
+import {
+  resolveNoticeDisclosure,
+  validateNoticeDeliveryAdvertisement,
+  type AgentNoticeDeliveryAdvertisement,
+} from './router.js';
 import type { AgentNoticeWithheldEntry, AgentNoticeWithholdingReason } from './contract.js';
 import { recipientMatchesPrincipal } from './state.js';
 
@@ -200,6 +204,9 @@ export const createNoticeInboxSignaller = (
   options: CreateNoticeInboxSignallerOptions,
 ): AgentNoticeInboxSignaller => {
   const now = options.now ?? ((): Date => new Date());
+  // Fail closed at construction, like the ledger: an advertisement naming an
+  // unknown ceiling is a typed error before any subscription exists.
+  if (options.delivery !== undefined) validateNoticeDeliveryAdvertisement(options.delivery);
   const renewalIntervalMs = options.reservationRenewalIntervalMs
     ?? Math.floor(AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS / 3);
   let subscription: InboxSubscription | undefined;

@@ -72,7 +72,14 @@ export type AgentNoticeRouteSelection =
   | { readonly kind: 'selected'; readonly routes: readonly AgentNoticeDeliveryRoute[] }
   | { readonly kind: 'unavailable'; readonly reason: 'no-supported-cross-request-route' };
 
-const validateAdvertisement = (
+/**
+ * Fails closed on an advertisement the router cannot honour: a missing route,
+ * a reasonless unavailability, or a supported row naming a sensitivity the
+ * vocabulary does not spell. Route selection, the ledger, and the signaller all
+ * validate at construction so a JavaScript embedder's typo (`"secrect"`) is a
+ * typed `invalid-input` up front, never a silently disclosed secret.
+ */
+export const validateNoticeDeliveryAdvertisement = (
   advertisement: AgentNoticeDeliveryAdvertisement,
 ): void => {
   for (const route of AGENT_NOTICE_DELIVERY_ROUTES) {
@@ -100,7 +107,7 @@ const validateAdvertisement = (
 export const selectNoticeDeliveryRoutes = (
   advertisement: AgentNoticeDeliveryAdvertisement,
 ): AgentNoticeRouteSelection => {
-  validateAdvertisement(advertisement);
+  validateNoticeDeliveryAdvertisement(advertisement);
   const routes = crossRequestPreference.filter(
     (route) => advertisement[route].state === 'supported',
   );
@@ -109,11 +116,18 @@ export const selectNoticeDeliveryRoutes = (
     : Object.freeze({ kind: 'selected', routes: Object.freeze(routes) });
 };
 
-/** The sensitivity ceiling a route row admits; absent rows admit `internal`. */
+/**
+ * The sensitivity ceiling a route row admits; absent rows admit `internal`.
+ * A ceiling outside the vocabulary admits nothing: `undefined` here withholds
+ * every class, so an unvalidated row can only ever fail closed.
+ */
 export const routeSensitivityCeiling = (
   entry: AgentNoticeDeliveryRouteState,
-): AgentNoticeSensitivity | undefined =>
-  entry.state === 'supported' ? entry.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY : undefined;
+): AgentNoticeSensitivity | undefined => {
+  if (entry.state !== 'supported') return undefined;
+  if (entry.sensitivity === undefined) return AGENT_NOTICE_DEFAULT_SENSITIVITY;
+  return isNoticeSensitivity(entry.sensitivity) ? entry.sensitivity : undefined;
+};
 
 /**
  * Decides what one route may disclose of a notice, from the notice's declared

@@ -58,6 +58,7 @@ import {
 } from './retention.js';
 import {
   resolveNoticeDisclosure,
+  validateNoticeDeliveryAdvertisement,
   type AgentNoticeDeliveryAdvertisement,
   type AgentNoticeDeliveryRoute,
 } from './router.js';
@@ -545,7 +546,11 @@ export const createAgentNoticeLedger = (
   options: CreateAgentNoticeLedgerOptions,
 ): AgentNoticeLedger => {
   const policy = resolveNoticeRetentionPolicy(options.retention);
+  // Both policies fail closed at construction: a malformed retention value or
+  // an advertisement naming an unknown ceiling is a typed error here, before
+  // any request could be judged against it.
   const advertisement = options.delivery;
+  if (advertisement !== undefined) validateNoticeDeliveryAdvertisement(advertisement);
   return Object.freeze({
   expire(expiry: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot> {
     return runPromise(Effect.gen(function*() {
@@ -607,6 +612,12 @@ export const createAgentNoticeLedger = (
             recipient: notice.recipient,
           }).pipe(Effect.map((decision) => ({ decision, id: notice.id }))));
         if (expiring.length > 0 || decisions.length > 0 || withheld.length > 0) {
+          // One admission per invocation. A retry of the same invocation id
+          // whose world moved on — a notice published, a ceiling raised or
+          // lowered — recomputes a different payload; the store refuses to
+          // commit that under the committed key, and the refusal is the
+          // signal to replay: the earlier admission already holds for this
+          // invocation, so its committed state is what this retry sees.
           const committed = yield* storeEffect(() => store.dispatch(
             'admitted',
             {
@@ -625,7 +636,10 @@ export const createAgentNoticeLedger = (
               idempotencyKey: `agent-notices:admit:${request.invocation.id}`,
               signal: request.signal,
             },
-          ));
+          )).pipe(Effect.catch((error) =>
+            error instanceof AgentStateError && error.code === 'idempotency-conflict'
+              ? storeEffect(() => store.read({ signal: request.signal }))
+              : Effect.fail(error)));
           admitted = committed.state;
         }
         deliveries = Object.freeze(admitted.notices

@@ -86,6 +86,7 @@ export {
   resolveNoticeDisclosure,
   routeSensitivityCeiling,
   selectNoticeDeliveryRoutes,
+  validateNoticeDeliveryAdvertisement,
 } from './router.js';
 export type {
   AgentNoticeDeliveryAdvertisement,

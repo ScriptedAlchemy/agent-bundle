@@ -16,6 +16,7 @@ import {
   redactNoticeDocument,
   redactSecretText,
   resolveNoticeDisclosure,
+  routeSensitivityCeiling,
   selectNoticeDeliveryRoutes,
   type AgentNoticeDeliveryAdvertisement,
   type AgentNoticeDeliveryRoute,
@@ -201,10 +202,25 @@ describe('route disclosure decisions', () => {
     expect(resolveNoticeDisclosure('host-toast', 'public', noToast)).toEqual({ kind: 'withheld', reason: 'route-unavailable' });
   });
 
-  it('fails closed on an unknown sensitivity in a row', () => {
+  it('fails closed on an unknown sensitivity in a row', async () => {
     const rows = { ...advertisement({}), 'mcp-inbox': { sensitivity: 'top-secret', state: 'supported' } } as unknown as AgentNoticeDeliveryAdvertisement;
     expect(() => selectNoticeDeliveryRoutes(rows)).toThrow(AgentNoticeError);
     expect(() => selectNoticeDeliveryRoutes(rows)).toThrow(/unknown sensitivity "top-secret"/u);
+    // A JavaScript embedder's typo never compares as a ceiling: the row admits
+    // nothing, and the ledger and signaller refuse the advertisement outright.
+    expect(routeSensitivityCeiling(rows['mcp-inbox'])).toBeUndefined();
+    for (const sensitivity of AGENT_NOTICE_SENSITIVITIES) {
+      expect(resolveNoticeDisclosure('mcp-inbox', sensitivity, rows)).toEqual({ kind: 'withheld', reason: 'route-unavailable' });
+    }
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentNoticeStateDefinition('process'));
+    expect(() => createAgentNoticeLedger(store, { authorize: () => ({ state: 'authorized' }), delivery: rows }))
+      .toThrow(/unknown sensitivity "top-secret"/u);
+    expect(() => createNoticeInboxSignaller({
+      delivery: rows,
+      store: { close: async () => undefined, noticeLedger: async () => { throw new Error('unused'); } },
+    })).toThrow(/unknown sensitivity "top-secret"/u);
+    await driver.close();
   });
 });
 
@@ -323,6 +339,36 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     expect(replayed.map((delivery) => [delivery.disclosure.redacted, delivery.notice.id, delivery.notice.content]))
       .toEqual([[true, secret.notice.id, { root: { kind: 'text', text: NOTICE_REDACTION_MARK }, status: 'success', version: 1 }]]);
     expect((await lowered.read()).notices[0]?.attempts).toHaveLength(1);
+    await driver.close();
+  });
+
+  it('replays a prior admission when the same invocation is retried under a changed ceiling', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentNoticeStateDefinition('process'));
+    const closed = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'next-event': 'internal' }),
+    });
+    const raised = createAgentNoticeLedger(store, {
+      authorize: () => ({ state: 'authorized' }),
+      delivery: advertisement({ 'next-event': 'secret' }),
+    });
+    const secret = await publish(closed, { id: 'secret', sensitivity: 'secret' });
+    const event = { actorId: 'recipient', id: 'event-retry', kind: 'event' as const, startedAt: '2026-09-03T10:10:00.000Z' };
+    expect(await run(closed, event, async () => (await agent()).notices!.read())).toEqual([]);
+    const afterFirst = await closed.read();
+    expect(afterFirst.notices[0]).toMatchObject({ state: 'pending', withheld: { 'next-event': { count: 1 } } });
+    // The retry recomputes a different admission (the ceiling now admits the
+    // notice); instead of an idempotency conflict it replays the committed
+    // one: nothing attempted, nothing re-recorded, the revision unchanged.
+    expect(await run(raised, event, async () => (await agent()).notices!.read())).toEqual([]);
+    const afterRetry = await raised.read();
+    expect(afterRetry.revision).toBe(afterFirst.revision);
+    expect(afterRetry.notices[0]).toMatchObject({ attempts: [], id: secret.notice.id, state: 'pending', withheld: { 'next-event': { count: 1 } } });
+    // A genuinely new invocation under the raised ceiling attempts it.
+    const fresh = await run(raised, { ...event, id: 'event-fresh', startedAt: '2026-09-03T10:11:00.000Z' }, async () => (await agent()).notices!.read());
+    expect(fresh.map((delivery) => [delivery.notice.id, delivery.notice.state, (delivery.notice.content.root as { text: string }).text]))
+      .toEqual([[secret.notice.id, 'attempted', SECRET_TEXT]]);
     await driver.close();
   });
 
