@@ -71,6 +71,43 @@ export const config = {
 其来源，不知道时则发布带有类型化原因的 `unavailable`。裸 stdio 既不提供 session id 也不提供 HTTP
 actor 认证，因此这两个轴保持诚实的不可用，而不是被伪造出来。
 
+## 共享布局
+
+`src/layout.tsx` 是每个渲染式路由外层的组合点——页面框架中 `layout.tsx` 的思路应用到 Agent Document 上。
+它默认导出一个接收 `{ children, route, signal }` 的组件，并在 `children`（路由渲染出的元素）外层渲染
+`Agent.Result`。`src/mcp/<server>/layout.tsx` 嵌套在它之内，只作用于一个生成式服务器；组合顺序是根布局、
+服务器布局、路由。生成式 MCP 工具、资源与提示、渲染式 `src/cli/**` 命令、投影的 MCP 命令以及渲染式
+`src/scripts/*.tsx` 都会被包裹。事件路由是宿主协议响应，浏览器 App 路由是浏览器构建，二者都不会被包裹。
+
+```tsx
+// src/layout.tsx —— 使用者需要编写的全部布局
+import { Agent, type AgentLayoutProps } from '@agent-bundle/runtime';
+import React from 'react';
+
+export default function Layout({ children, route }: AgentLayoutProps) {
+  return (
+    <Agent.Result metadata={{ route: route.id }}>
+      {children}
+    </Agent.Result>
+  );
+}
+```
+
+没有 `value` 的 `Agent.Result` 是一个容器：运行时在解码时把它与路由自己的 `<Agent.Result value={...}>`
+合并，因此路由保留其结果值、`structuredContent` 与内容，布局只添加共享的外壳——一个标题、末尾的
+`Agent.Context` 说明、文档元数据。`metadata` 对象按键合并，容器一方优先；由于 MCP 投影器把根元数据暴露为
+结果的 `_meta`，声明了元数据的布局会改变 `_meta`，没有声明的则保持原样。`route` 是编译期身份（`id`、
+`kind`、`name`，MCP 类型还有 `serverId`），`signal` 是请求中止信号，`await agent()` 在布局中的用法与在
+路由中完全一致。
+
+路由的元素在布局链渲染**之前**解析，因此抛错的路由仍然让整次渲染失败（CLI 退出码 `1`、MCP 传输失败），
+而不是被降级为布局外壳之下的 boundary 错误；代价是布局无法在 `children` 周围流式输出 `Suspense` 回退。
+默认导出不是函数、或导出了仅属于路由的 `config`/`inputSchema`/`resultSchema` 的布局是 `AB4830`；同一作用域
+下 `.ts` 与 `.tsx` 并存是 `AB4831`；其服务器没有声明任何工具、资源或提示路由的服务器布局是 `AB4832`，而固定为
+`custom`、`command` 或 `remote` 的服务器会完全跳过其布局。route-unit 与 projection 两个测试层级组合同一条
+布局链，因此 `renderRoute('tool:...')` 与 `invokeMcpTool(...)` 证明的是组合后的文档；直接传给 `renderRoute()`
+的模块不会组合任何布局。
+
 ## 手写 stdio 入口
 
 在配置中声明、但未指定 `entry`、`command` 或 `url` 的服务器，会识别约定的 `src/mcp/<server-id>.ts`

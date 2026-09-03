@@ -25,11 +25,13 @@ my-plugin/
     │   ├── tools/*.tsx
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
-    │   └── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
+    │   ├── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
+    │   └── layout.tsx         # optional per-server layout around this server's routes
     ├── scripts/<name>.ts      # artifact scripts (.tsx renders through the Agent renderer)
     ├── cli.ts                 # a single package bin
     ├── cli/**/*.ts            # or a routed CLI, where nesting is the command path
     ├── index.ts               # the library entry
+    ├── layout.tsx             # optional shared layout around every rendered route
     ├── state.ts               # project state definition
     └── providers/<name>.ts    # request-context providers
 ```
@@ -49,6 +51,8 @@ my-plugin/
 | `src/cli.ts` | A package bin named after `plugin.name`. | `bin: false` |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one executable. Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Supersedes the `src/cli.ts` convention. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_`. |
 | `src/index.ts` | The library output, with declarations. | `lib: false` |
+| `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed-CLI commands, projected MCP commands, and rendered scripts. Event routes and browser Apps are never wrapped. | Rename to `_layout.tsx`. |
+| `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode. |
 | `src/state.ts` | Project state: default-exports `defineState`. Generated MCP, routed-CLI, and rendered-script request scopes mount it. | `state: false`, or rename to `_state.ts`. |
 | `src/providers/<name>.{ts,tsx}` | A request-context provider mounted at `providers.<camelCaseName>` on the request handle. | Prefix the file with `_`. |
 | `assets/` | Static resources copied byte-for-byte into every target artifact's `assets/` directory. | Declare a top-level `assets` list instead. |

@@ -24,11 +24,13 @@ my-plugin/
     │   ├── tools/*.tsx
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
-    │   └── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
+    │   ├── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
+    │   └── layout.tsx         # 可选的按服务器布局，包裹该服务器的路由
     ├── scripts/<name>.ts      # 产物脚本（.tsx 通过 Agent 渲染器渲染）
     ├── cli.ts                 # 单个包 bin
     ├── cli/**/*.ts            # 或路由式 CLI，嵌套即命令路径
     ├── index.ts               # 库入口
+    ├── layout.tsx             # 可选的共享布局，包裹每个渲染式路由
     ├── state.ts               # 项目状态定义
     └── providers/<name>.ts    # 请求上下文 provider
 ```
@@ -48,6 +50,8 @@ my-plugin/
 | `src/cli.ts` | 一个以 `plugin.name` 命名的包 bin。 | `bin: false` |
 | `src/cli/**/*.{ts,tsx}` | 路由式 CLI 命令，编译进一张做过冲突检查的命令图与一个可执行文件。嵌套即身份：`src/cli/library/audit.ts` 以 `<bin> library audit` 运行。它取代 `src/cli.ts` 约定。 | `bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。 |
 | `src/index.ts` | 库输出，带声明文件。 | `lib: false` |
+| `src/layout.{ts,tsx}` | 共享文档布局：默认导出一个接收 `{ children, route, signal }` 的组件，在每个渲染式路由——生成式 MCP 工具、资源与提示、渲染式路由 CLI 命令、投影的 MCP 命令与渲染式脚本——外层渲染 `Agent.Result`。事件路由与浏览器 App 永不被包裹。 | 重命名为 `_layout.tsx`。 |
+| `src/mcp/<server>/layout.{ts,tsx}` | 按服务器的布局，嵌套在根布局之内，包裹该生成式服务器的路由。 | 重命名为 `_layout.tsx`，或把 `routes.servers.<server>` 设为非生成模式。 |
 | `src/state.ts` | 项目状态：默认导出 `defineState`。生成的 MCP、路由式 CLI 与渲染式脚本的请求作用域都会挂载它。 | `state: false`，或改名为 `_state.ts`。 |
 | `src/providers/<name>.{ts,tsx}` | 一个请求上下文 provider，挂载在请求句柄的 `providers.<camelCaseName>` 上。 | 给文件名加 `_` 前缀。 |
 | `assets/` | 静态资源，按字节复制到每个 target 产物的 `assets/` 目录。 | 改为声明顶层 `assets` 列表。 |

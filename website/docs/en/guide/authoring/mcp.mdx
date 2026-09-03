@@ -76,6 +76,50 @@ transport publishes an `available` value and its source when it knows one, or `u
 a typed reason when it does not. Bare stdio supplies neither a session id nor HTTP actor
 authentication, so those axes stay honestly unavailable rather than being fabricated.
 
+## Shared layouts
+
+`src/layout.tsx` is the composition point around every rendered route — the `layout.tsx` idea from
+page frameworks applied to Agent Documents. It default-exports one component receiving
+`{ children, route, signal }` and renders `Agent.Result` around `children`, the route's rendered
+element. `src/mcp/<server>/layout.tsx` nests inside it for one generated server; composition order
+is root layout, server layout, route. Generated MCP tools, resources, and prompts, rendered
+`src/cli/**` commands, projected MCP commands, and rendered `src/scripts/*.tsx` are all wrapped.
+Event routes are host protocol responses and browser App routes are browser builds, so neither is.
+
+```tsx
+// src/layout.tsx — the whole layout a consumer writes
+import { Agent, type AgentLayoutProps } from '@agent-bundle/runtime';
+import React from 'react';
+
+export default function Layout({ children, route }: AgentLayoutProps) {
+  return (
+    <Agent.Result metadata={{ route: route.id }}>
+      {children}
+    </Agent.Result>
+  );
+}
+```
+
+An `Agent.Result` without a `value` is a container: the runtime merges it with the route's own
+`<Agent.Result value={...}>` while decoding, so the route keeps its result value,
+`structuredContent`, and content, and the layout adds only the shared shell — a heading, a trailing
+`Agent.Context` note, document metadata. `metadata` objects merge key by key with the container
+winning; because the MCP projector exposes root metadata as the result's `_meta`, a layout that
+declares metadata changes `_meta`, and one that does not leaves it untouched. `route` is the
+compile-time identity (`id`, `kind`, `name`, `serverId` for MCP kinds), `signal` the request abort
+signal, and `await agent()` works inside a layout exactly as in a route.
+
+The route's element resolves **before** the layout chain renders, so a throwing route still fails
+the whole render (CLI exit `1`, MCP transport failure) rather than being downgraded to a boundary
+error beneath the layout's shell; the trade-off is that a layout cannot stream a `Suspense`
+fallback around `children`. A layout whose default export is not a function, or that exports the
+route-only `config`/`inputSchema`/`resultSchema`, is `AB4830`; `.ts` and `.tsx` siblings for one
+scope are `AB4831`; a server layout whose server declares no tool, resource, or prompt routes is
+`AB4832`, while a server pinned to `custom`, `command`, or `remote` skips its layout entirely. The
+route-unit and projection test levels compose the same chain, so `renderRoute('tool:...')` and
+`invokeMcpTool(...)` prove the composed document; a module passed directly to `renderRoute()`
+composes no layout.
+
 ## Handwritten stdio entries
 
 A server declared in config with no `entry`, `command`, or `url` picks up the conventional
