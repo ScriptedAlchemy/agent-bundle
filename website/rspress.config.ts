@@ -9,12 +9,14 @@ import {
   transformerNotationFocus,
   transformerNotationHighlight,
 } from '@shikijs/transformers';
+import { generatedReference } from './plugins/generated-reference.ts';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
 
 const websiteDir = import.meta.dirname;
 const docsDir = path.join(websiteDir, 'docs');
+const repoRoot = path.join(websiteDir, '..');
 
-const packageSource = path.join(websiteDir, '..', 'packages', 'agent-bundle', 'src');
+const packageSource = path.join(repoRoot, 'packages', 'agent-bundle', 'src');
 
 const publicApiEntryPoints = [
   'index.ts',
@@ -119,6 +121,13 @@ export default defineConfig({
     mirrorApiLocale({
       sourceDir: generatedApiDir,
       targetDirs: mirroredApiDirs,
+    }),
+    generatedReference({
+      repoRoot,
+      locales: [
+        { lang: 'en', dir: 'en' },
+        { lang: 'zh', dir: 'zh' },
+      ],
     }),
     pluginTwoslash({
       twoslashOptions: {

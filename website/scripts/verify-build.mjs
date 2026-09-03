@@ -29,6 +29,15 @@ const publicApiEntryModules = {
 
 const apiRoutePrefixes = ['api', 'zh/api'];
 
+/**
+ * Reference pages rendered at build time from repository sources of truth
+ * (capability tables, docs/diagnostics.md). Mirrors `generatedReferencePages`
+ * in plugins/generated-reference.ts; a missing page means the generator
+ * silently skipped or the sidebar drifted.
+ */
+const generatedReferencePages = ['hosts', 'events', 'notices', 'diagnostics'];
+const localePrefixes = ['', 'zh/'];
+
 const requiredArtifacts = [
   { artifact: 'index.html', reason: 'English homepage' },
   { artifact: 'zh/index.html', reason: 'Chinese homepage' },
@@ -43,6 +52,12 @@ const requiredArtifacts = [
     Object.entries(publicApiEntryModules).map(([entry, moduleName]) => ({
       artifact: `${prefix}/modules/${moduleName}.html`,
       reason: `generated API page for export entry "${entry}"`,
+    })),
+  ),
+  ...localePrefixes.flatMap(prefix =>
+    generatedReferencePages.map(page => ({
+      artifact: `${prefix}reference/${page}.html`,
+      reason: `generated reference page "${page}"`,
     })),
   ),
 ];
