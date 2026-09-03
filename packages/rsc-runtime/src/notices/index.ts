@@ -69,6 +69,7 @@ export type {
   CreateNoticeInboxSignallerOptions,
 } from './resource-updated.js';
 export {
+  AGENT_NOTICE_STATE_VERSION,
   agentNoticeEventSchemas,
   agentNoticeStateDefinition,
   recipientMatchesPrincipal,

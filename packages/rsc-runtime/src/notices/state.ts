@@ -116,6 +116,14 @@ export interface AgentNoticeLedgerState {
   readonly notices: readonly AgentNotice[];
 }
 
+/**
+ * Schema version of the notice ledger definition. Bumped whenever the reducer
+ * changes what an already-journaled event means, so a durable store written
+ * under the previous version is migrated from its materialized head instead
+ * of being replayed by a reducer that would disagree with it.
+ */
+export const AGENT_NOTICE_STATE_VERSION = 2;
+
 export const agentNoticeEventSchemas = {
   acknowledged: z.object({
     at: z.string().min(1),
@@ -445,6 +453,13 @@ export const agentNoticeStateDefinition = (
     id: '@agent-bundle/runtime/agent-notice-ledger/v1',
     initial: { notices: [] },
     lifetime,
+    // Version 2 changes replay semantics, not shape: `availability-signalled`
+    // now records a receipt on a notice in any state (version 1 ignored
+    // terminal notices) and reservations carry keys, TTLs, and budget checks.
+    // Journals written under version 1 therefore cannot be replayed by this
+    // reducer; the migration rebases them on their materialized head, which
+    // already satisfies the version 2 schema unchanged.
+    migrations: { 2: (persisted) => persisted },
     reduce: (state, event) => {
       switch (event.name) {
         case 'published': {
@@ -529,4 +544,5 @@ export const agentNoticeStateDefinition = (
     schema: z.object({
       notices: z.array(noticeSchema).readonly(),
     }).strict().readonly(),
+    version: AGENT_NOTICE_STATE_VERSION,
   });

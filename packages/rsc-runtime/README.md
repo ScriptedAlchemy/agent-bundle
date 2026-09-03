@@ -284,7 +284,11 @@ a stale send and a takeover send can never push a budget-one notice to two.
 Ownership, not state, decides whether a receipt lands: a notice acknowledged,
 expired, or withdrawn while its send was in flight still keeps the hold, so the
 receipt for the send that happened is recorded on it without moving its state,
-and a key that never held the slot is refused on a terminal notice too. A
+and a key that never held the slot is refused on a terminal notice too. These
+reducer semantics are schema version 2 of the notice ledger
+(`AGENT_NOTICE_STATE_VERSION`); a workspace-durable store journaled under
+version 1 is migrated from its materialized head on first open rather than
+replayed by a reducer that would disagree with it. A
 send that reached the wire but whose receipt commit failed stays owed: the same
 idempotent receipt is retried on the renewal cadence (renewing its hold as it
 goes), before any later observation spends, and on `close()`, so a live process

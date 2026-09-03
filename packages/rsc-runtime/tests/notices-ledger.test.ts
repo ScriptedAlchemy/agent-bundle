@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from '@rstest/core';
 
 import {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
+  AGENT_NOTICE_STATE_VERSION,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
   selectNoticeDeliveryRoutes,
@@ -15,7 +20,8 @@ import {
   available,
   runAgentRequest,
 } from '../src/index.js';
-import { createMemoryStateDriver } from '../src/state/index.js';
+import { createMemoryStateDriver, defineState } from '../src/state/index.js';
+import { createSqliteStateDriver } from '../src/state/sqlite.js';
 
 const document = (text: string) => ({
   root: { kind: 'text' as const, text },
@@ -1275,5 +1281,115 @@ describe('stage-4 review findings regressions', () => {
     }, async () => (await agent()).notices!.acknowledge(published.notice.id)))
       .rejects.toMatchObject({ code: 'invalid-input' });
     await driver.close();
+  });
+});
+
+describe('notice ledger schema version', () => {
+  /**
+   * The version-1 reducer as PR #361 shipped it for the one event whose
+   * meaning version 2 changes: `availability-signalled` was a no-op for any
+   * notice no longer pending or attempted. Reservations did not exist yet.
+   */
+  const legacyDefinition = () => {
+    const current = agentNoticeStateDefinition('workspace-durable');
+    return defineState({
+      events: current.events,
+      id: current.id,
+      initial: current.initial,
+      lifetime: current.lifetime,
+      reduce: (state, event) => {
+        if (event.name !== 'availability-signalled') return current.reduce(state, event);
+        const live = new Set(state.notices
+          .filter((notice) => notice.state === 'pending' || notice.state === 'attempted')
+          .map((notice) => notice.id));
+        return current.reduce(state, {
+          ...event,
+          payload: { ...event.payload, noticeIds: event.payload.noticeIds.filter((id) => live.has(id)) },
+        } as typeof event);
+      },
+      schema: current.schema,
+      version: 1,
+    });
+  };
+
+  it('migrates a version-1 journal whose replay the version-2 reducer would contradict', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-notice-ledger-v1-'));
+    try {
+      expect(AGENT_NOTICE_STATE_VERSION).toBe(2);
+      // A version-1 store: publish, acknowledge, then a receipt over the
+      // acknowledged notice that version 1 journaled as a no-op.
+      const legacyDriver = createSqliteStateDriver({ root });
+      const legacyStore = await legacyDriver.open(legacyDefinition());
+      const legacy = createAgentNoticeLedger(legacyStore, { authorize: () => ({ state: 'authorized' }) });
+      const published = await run(legacy, {
+        actorId: 'publisher',
+        id: 'publish-legacy',
+        kind: 'tool',
+        startedAt: '2026-09-01T19:00:00.000Z',
+      }, async () => (await agent()).notices!.publish({
+        content: document('legacy'),
+        priority: 'high',
+        recipient: { actor: { id: 'recipient' } },
+      }, { idempotencyKey: 'publish:legacy' }));
+      await run(legacy, {
+        actorId: 'recipient',
+        id: 'ack-legacy',
+        kind: 'event',
+        startedAt: '2026-09-01T19:01:00.000Z',
+      }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+      const noop = await legacy.signalAvailability({
+        at: '2026-09-01T19:02:00.000Z',
+        idempotencyKey: 'signal:legacy',
+        noticeIds: [published.notice.id],
+      });
+      expect(noop.notices[0]).toMatchObject({ state: 'acknowledged' });
+      expect(noop.notices[0]).not.toHaveProperty('availability');
+      await legacyDriver.close();
+
+      // The same journal replayed by the version-2 reducer disagrees with the
+      // materialized head, so without a version bump the store is corrupt.
+      const unversioned = createSqliteStateDriver({ root });
+      await expect(unversioned.open(defineState({
+        ...agentNoticeStateDefinition('workspace-durable'),
+        migrations: {},
+        version: 1,
+      }))).rejects.toMatchObject({ code: 'corrupt' });
+      await unversioned.close();
+
+      // Under version 2 the store migrates from its head instead: the
+      // acknowledged notice is intact, still without a receipt, and the
+      // ledger keeps working with the new semantics.
+      const driver = createSqliteStateDriver({ root });
+      const store = await driver.open(agentNoticeStateDefinition('workspace-durable'));
+      const ledger = createAgentNoticeLedger(store, { authorize: () => ({ state: 'authorized' }) });
+      const migrated = await ledger.read();
+      expect(migrated.notices).toHaveLength(1);
+      expect(migrated.notices[0]).toMatchObject({ id: published.notice.id, state: 'acknowledged' });
+      expect(migrated.notices[0]).not.toHaveProperty('availability');
+      await ledger.reserveAvailability({
+        at: '2026-09-01T19:03:00.000Z',
+        idempotencyKey: 'reserve:v2',
+        noticeIds: [published.notice.id],
+        reservationKey: 'holder:1',
+      });
+      // A pre-migration terminal notice takes no new hold (budget rules apply
+      // to pending/attempted only), so a keyed receipt is refused — and an
+      // unreserved receipt now records on it, as version 2 defines.
+      await expect(ledger.signalAvailability({
+        at: '2026-09-01T19:03:01.000Z',
+        idempotencyKey: 'signal:v2-keyed',
+        noticeIds: [published.notice.id],
+        reservationKey: 'holder:1',
+      })).rejects.toMatchObject({ code: 'reservation-lost' });
+      const recorded = await ledger.signalAvailability({
+        at: '2026-09-01T19:03:02.000Z',
+        idempotencyKey: 'signal:v2-unreserved',
+        noticeIds: [published.notice.id],
+      });
+      expect(recorded.notices[0]).toMatchObject({ availability: { count: 1 }, state: 'acknowledged' });
+      await driver.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });
