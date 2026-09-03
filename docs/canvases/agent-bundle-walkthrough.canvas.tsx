@@ -403,8 +403,9 @@ export default function AgentBundleWalkthrough() {
           <Text as="span" weight="semibold"> inputSchema</Text>, and
           <Text as="span" weight="semibold"> resultSchema</Text> exports — there is no
           execute/render split (exporting either is the AB4811 error). Other
-          route kinds (events, CLI commands, skills) carry their own export
-          contracts.
+          route kinds (events, CLI commands) carry their own export
+          contracts; skills are Markdown documents parsed from frontmatter
+          unless the rendered SKILL.tsx form is used.
         </Text>
         <Grid columns="1fr 1fr" gap={12} align="start">
           <Card>
@@ -643,7 +644,7 @@ export default function AgentBundleWalkthrough() {
             n={5}
             title="Thin client prints the host-native response and exits 0"
             channel="wrapper → Claude · stdout"
-            note="Claude blocks the Write and surfaces the reason to the model. If the route had decided to allow it, the wrapper prints an explicit hookSpecificOutput.permissionDecision: 'allow' (optionally with updatedInput / additionalContext); a route that renders no decision prints nothing."
+            note="Claude blocks the Write and surfaces the reason to the model. On tool/before the wrapper always answers: an explicit hookSpecificOutput.permissionDecision ('allow' unless the route denied, optionally with updatedInput / additionalContext) — even when the route renders no decision. Silence is reserved for observation-only families such as session/end."
             payload={WIRE_STDOUT}
             last
           />

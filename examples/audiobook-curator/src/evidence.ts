@@ -260,11 +260,13 @@ export const identifyAudibleSample = async (
   for (const candidate of selected) {
     const asin = String(candidate.asin ?? '');
     const region = String(candidate.region ?? 'us') as AudibleRegion;
+    const score = asRecord(candidate.evidence).score as JsonValue | undefined;
+    // Receipts are strict JSON; absent fields are omitted, never undefined.
     const base = {
-      asin: asin || undefined,
+      ...(asin === '' ? {} : { asin }),
       region,
-      score: asRecord(candidate.evidence).score as JsonValue | undefined,
-      title: candidate.title,
+      ...(score === undefined ? {} : { score }),
+      ...(candidate.title === undefined ? {} : { title: candidate.title }),
     };
     if (asin === '') {
       attempts.push({ ...base, reason: 'candidate has no ASIN', status: 'skipped' });
@@ -276,20 +278,27 @@ export const identifyAudibleSample = async (
         attempts: input.attempts,
         chunkSeconds: input.chunkSeconds,
         file: input.file,
+        // Staging follows the receipt's disk; without this, identification
+        // would stage beside source media the receipt was chosen to avoid.
+        ...(input.receipt === undefined ? {} : { receipt: input.receipt }),
         region,
         ...(typeof candidate.sample_url === 'string' ? { sampleUrl: candidate.sample_url } : {}),
         verbose: input.verbose,
       }, dependencies);
       const found = outcome.fingerprint.found === true;
+      const attemptTitle = candidate.title ?? outcome.audible.title;
       attempts.push({
         ...base,
         fingerprint: outcome.fingerprint,
-        sampleUrl: outcome.audible.sampleUrl,
+        ...(outcome.audible.sampleUrl === undefined ? {} : { sampleUrl: outcome.audible.sampleUrl }),
         status: found ? 'matched' : 'no-match',
-        title: candidate.title ?? outcome.audible.title,
+        ...(attemptTitle === undefined ? {} : { title: attemptTitle }),
       });
       if (found) {
-        identified ??= { asin, region, title: candidate.title ?? outcome.audible.title };
+        const title = candidate.title ?? outcome.audible.title;
+        // A titleless identification must not place an undefined (non-JSON)
+        // value into the durable receipt.
+        identified ??= { asin, region, ...(title === undefined ? {} : { title }) };
         if (input.all !== true) break;
       }
     } catch (error) {
