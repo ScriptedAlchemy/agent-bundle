@@ -53,6 +53,11 @@ const mcpProbeTeardownWaitMs = 50;
  * against a transport whose close never settles.
  */
 export const mcpProbePluginDataTeardownCapMs = 10_000;
+/**
+ * Delay before the one bounded removal retry that follows a teardown which
+ * settled while the child still held the directory for a moment (Windows).
+ */
+const mcpProbePluginDataRetryDelayMs = 250;
 const safeCapabilityName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 const connectionErrorCodes = new Set([
   'EACCES',
@@ -141,8 +146,15 @@ const bundlePathPattern = (bundleRoot: string): RegExp => {
  * An absolute POSIX path starts the text or follows a separator; a `:` counts
  * as a separator (`cwd:/private`) only when it is not the `://` of a URI
  * scheme, so `https://example.com/docs` is link guidance, not a local path.
+ * That exemption is limited to network schemes (`http`, `https`, `ws`,
+ * `wss`): any other `scheme://…/…` — `unix:///home/…`, `vscode://file/home/…`,
+ * `file:` — may carry a machine-local path in its authority or path and fails
+ * closed like a bare absolute path.
  */
+const localUriPathPattern = /\b(?!(?:https?|wss?):\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s/]*\//iu;
+
 const hasAbsolutePath = (value: string): boolean =>
+  localUriPathPattern.test(value) ||
   /(?:file:|(?:^|[\s"'([{=,]|:(?!\/\/))\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
 
 /**
@@ -444,12 +456,25 @@ export class McpProbeService {
         return this.#removePluginData(pluginData);
       })
       .then(() => undefined, () => {
-        if (!capWon) return;
-        void teardown.then(() => this.#removePluginData(pluginData)).catch(() => undefined);
+        if (capWon) {
+          void teardown.then(() => this.#removePluginData(pluginData)).catch(() => undefined);
+          return;
+        }
+        // The teardown settled (a close may have failed fast) but the child
+        // still held the directory for a moment: one bounded, fenced retry.
+        this.#track(
+          new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, mcpProbePluginDataRetryDelayMs); })
+            .then(() => this.#removePluginData(pluginData))
+            .then(() => undefined, () => undefined),
+        );
       });
+    this.#track(pending);
+    return pending;
+  }
+
+  #track(pending: Promise<void>): void {
     this.#pendingTeardowns.add(pending);
     void pending.then(() => this.#pendingTeardowns.delete(pending));
-    return pending;
   }
 
   #runtime(host: McpProbeHost): TargetMcpRuntimeContract {

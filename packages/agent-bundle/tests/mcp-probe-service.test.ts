@@ -196,9 +196,29 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               name: 'file-url',
             },
             {
-              description: 'Private docs at https://alice:hunter2@example.test/private and postgres://svc:pa55@db.internal:5432/app',
+              description: 'Private docs at https://alice:hunter2@example.test/private and wss://svc:pa55@relay.example.test:5432/app',
               inputSchema: { type: 'object' as const },
               name: 'url-with-userinfo',
+            },
+            {
+              description: 'Socket unix:///home/alice/private.sock',
+              inputSchema: { type: 'object' as const },
+              name: 'local-uri-empty-authority',
+            },
+            {
+              description: 'Open vscode://file/home/alice/project in the editor',
+              inputSchema: { type: 'object' as const },
+              name: 'local-uri-authority-then-path',
+            },
+            {
+              description: 'Database postgres://svc:pa55@db.internal:5432/app',
+              inputSchema: { type: 'object' as const },
+              name: 'non-network-scheme-with-path',
+            },
+            {
+              description: 'Registry oci://registry.example.test and mail mailto:ops@example.test',
+              inputSchema: { type: 'object' as const },
+              name: 'non-network-scheme-without-path',
             },
             {
               description: 'Bare user https://alice@example.test/private; contact ops@example.test',
@@ -211,7 +231,7 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
               name: 'url-with-at-and-quote-in-userinfo',
             },
             {
-              description: String.raw`Non-special scheme postgres://alice:se\cret@example.test/db and https://bob:pw\x@example.test/`,
+              description: String.raw`Backslash in the password https://bob:pw\x@example.test/ and ws://carol:a\b@example.test/feed`,
               inputSchema: { type: 'object' as const },
               name: 'url-with-backslash-in-userinfo',
             },
@@ -235,27 +255,30 @@ it('keeps URLs while redacting real absolute and bundle paths (#316 review)', as
       '[REDACTED]',
       // ...and file: URLs are local paths.
       '[REDACTED]',
-      // URL userinfo is a credential: it is masked while the link survives.
-      'Private docs at https://[REDACTED]@example.test/private and postgres://[REDACTED]@db.internal:5432/app',
+      // URL userinfo is a credential: it is masked while the network link survives.
+      'Private docs at https://[REDACTED]@example.test/private and wss://[REDACTED]@relay.example.test:5432/app',
+      // Only network schemes are exempt from the path rule: a local-resource
+      // URI with an empty authority...
+      '[REDACTED]',
+      // ...or with a path after its authority carries a machine-local path...
+      '[REDACTED]',
+      // ...and any other scheme with a path component fails closed too.
+      '[REDACTED]',
+      // A non-network scheme without a path component is not a path.
+      'Registry oci://registry.example.test and mail mailto:ops@example.test',
       // A bare user is masked too; an email address is not URL userinfo.
       'Bare user https://[REDACTED]@example.test/private; contact ops@example.test',
       // Masking runs through the final authority `@` (the delimiter URL parsers
       // honour), so a raw `@` or quote inside the password leaves nothing behind,
       // while an `@` in the query is not userinfo.
       'Raw @ in the password https://[REDACTED]@example.test/private?next=me@x and quote https://[REDACTED]@example.test/#top',
-      // A backslash is userinfo for non-special schemes; masking treats it as
-      // such for every scheme rather than leaving a credential behind.
-      'Non-special scheme postgres://[REDACTED]@example.test/db and https://[REDACTED]@example.test/',
+      // A backslash inside userinfo is masked with the rest of the credential.
+      'Backslash in the password https://[REDACTED]@example.test/ and ws://[REDACTED]@example.test/feed',
     ]);
     const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain('hunter2');
-    expect(serialized).not.toContain('pa55');
-    expect(serialized).not.toContain('alice');
-    expect(serialized).not.toContain('pa@ss');
-    expect(serialized).not.toContain('@ss@');
-    expect(serialized).not.toContain('s3cret');
-    expect(serialized).not.toContain('cret');
-    expect(serialized).not.toContain('bob');
+    for (const secret of ['hunter2', 'pa55', 'alice', 'pa@ss', '@ss@', 's3cret', 'bob', 'carol']) {
+      expect(serialized).not.toContain(secret);
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -759,6 +782,41 @@ it('retries plugin-data removal once a capped teardown finally settles (#397 rev
     await expect(readFile(join(pluginData, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(parent, { force: true, recursive: true });
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('retries removal once, fenced, when the teardown settled but the directory was still held (#397 review)', async () => {
+  const root = await createBundle();
+  let pluginData: string | undefined;
+  let removals = 0;
+  try {
+    const service = serviceFor(root, {
+      createPluginData: async () => {
+        pluginData = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-data-'));
+        await writeFile(join(pluginData, 'proof.txt'), 'present');
+        return pluginData;
+      },
+      // The transport's close fails fast, so the teardown settles at once
+      // while (on Windows) the child still holds the directory for a moment.
+      createStdioTransport: () => transport(() => Promise.reject(new Error('close failed fast'))),
+      removePluginData: async (target) => {
+        removals += 1;
+        if (removals === 1) {
+          throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        }
+        await rm(target, { force: true, recursive: true });
+      },
+    });
+
+    const report = await service.probe({ host: 'claude', serverName: 'timeline' });
+    expect(report.status).toBe('ok');
+    // The fence covers the delayed retry: settle() resolves only after it ran.
+    await service.settle();
+    expect(removals).toBe(2);
+    await expect(readFile(join(pluginData!, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (pluginData !== undefined) await rm(pluginData, { force: true, recursive: true });
     await rm(root, { force: true, recursive: true });
   }
 });
