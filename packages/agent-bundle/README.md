@@ -436,6 +436,23 @@ const stubbed = await invokeCli(['library', 'audit', './books'], {
 });
 ```
 
+`context` (and `context.providers`) stays optional even once the generated
+`.agent-bundle/routes.d.ts` augmentation declares provider keys: omitting it
+runs the real providers, which is what the artifact does, while an explicit map
+must carry every declared key, so a fixture cannot leave a promised value
+`undefined`. Only a direct `runAgentRequest` requires `providers` in that case,
+because nothing else would supply them.
+
+The harness simulates the process identity per executable, not module
+evaluation: one Rstest worker evaluates each provider module once, so
+module-level state in a provider is shared across every simulated CLI
+invocation, render, and in-memory server in that worker (as it is for the route
+modules themselves), whereas a real artifact evaluates the module afresh in
+every CLI process and Flight worker. A provider's module-level cache, counter,
+or singleton is therefore only proven by the packed and projected proof levels
+that spawn the artifact; a route-unit test that needs cold state should stub
+the provider through `context.providers` or reset that state between calls.
+
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`,
 `toContainText`, `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
 

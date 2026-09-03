@@ -75,8 +75,9 @@ export interface InMemoryMcpSessionOptionsBase<
 
 /**
  * Session options; `context` holds the request-scoped overrides applied to
- * every route render in this session and is required once the project
- * declares providers (see {@link RenderRouteContextInit}).
+ * every route render in this session; omitting it (or its `providers`) mounts
+ * the project's conventional providers exactly as the generated server does
+ * (see {@link RenderRouteContextInit}).
  */
 export type InMemoryMcpSessionOptions<
   TState = unknown,

@@ -52,24 +52,27 @@ import type {
  * `@agent-bundle/runtime`. `providers` is the opt-out for conventional
  * provider discovery: when present it is mounted verbatim; when absent the
  * harness executes the project's `src/providers/*` exactly as the generated
- * request scopes do.
+ * request scopes do. It stays optional even once the generated
+ * `.agent-bundle/routes.d.ts` augmentation declares provider keys — omitting
+ * it runs the real providers, which is the artifact's behavior — while an
+ * explicit map must still carry every declared key, so a fixture cannot leave
+ * a promised value `undefined`.
  */
-export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'signal'> & {
+export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'providers' | 'signal'> & {
   readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
   readonly progress?: AgentProgressReporter;
+  readonly providers?: AgentProviderValues;
 };
 
 /**
- * The `context` member of every harness call. The harness installs fixture
- * values instead of executing `src/providers/*`, so once the project's
- * generated `.agent-bundle/routes.d.ts` augmentation declares required provider
- * keys, `context` (and its `providers`) becomes mandatory: a test cannot omit
- * the fixtures while the route's types promise them. Provider-free projects
- * keep `context` optional.
+ * The `context` member of every harness call. Unlike a direct
+ * `runAgentRequest`, where `providers` becomes mandatory once the augmentation
+ * declares keys because nothing else would supply them, a harness call
+ * mounts the project's conventional providers itself, so `context` is always
+ * optional: omitting it observes what the artifact mounts, and passing
+ * `context.providers` substitutes a complete fixture map.
  */
-export type RenderRouteContextInit = Record<never, never> extends AgentProviderValues
-  ? { readonly context?: RenderRouteContext }
-  : { readonly context: RenderRouteContext };
+export type RenderRouteContextInit = { readonly context?: RenderRouteContext };
 
 export interface RenderRouteOptionsBase {
   /** CLI route arguments; `cli` routes only. */
@@ -89,13 +92,11 @@ export interface RenderRouteOptionsBase {
 export type RenderRouteOptions = RenderRouteOptionsBase & RenderRouteContextInit;
 
 /**
- * The trailing options parameter of every harness entry point. Provider-free
- * projects may omit it; once the generated augmentation declares provider
- * keys it is mandatory, so no harness call can silently skip the fixtures.
+ * The trailing options parameter of every harness entry point. It is always
+ * optional: a call that omits it mounts the project's conventional providers
+ * exactly as the generated request scopes do (see {@link RenderRouteContextInit}).
  */
-export type HarnessOptionsArguments<Options> = Record<never, never> extends AgentProviderValues
-  ? readonly [options?: Options]
-  : readonly [options: Options];
+export type HarnessOptionsArguments<Options> = readonly [options?: Options];
 
 export interface RenderedRoute {
   /** The final Agent Document the real renderer produced. */

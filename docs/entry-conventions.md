@@ -186,7 +186,13 @@ has no project to discover, so it observes only `processLifetime`. Once the
 generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, an
 explicit `context.providers` map must carry every declared key (as must
 `providers` on a direct `runAgentRequest`), so a fixture that omits a value the
-route's types promise is a compile error rather than a runtime `undefined`.
+route's types promise is a compile error rather than a runtime `undefined`;
+omitting `context.providers` altogether stays legal and mounts the real
+providers. The harness reproduces the per-executable process identity, not
+per-executable module evaluation: provider modules are evaluated once per test
+worker, so module-level provider state is shared across the simulated
+executables of that worker and is only proven cold by the proof levels that
+spawn the artifact.
 
 ### Handler request context
 

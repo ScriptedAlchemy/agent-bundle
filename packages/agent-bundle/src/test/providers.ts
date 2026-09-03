@@ -22,6 +22,18 @@ import type { RenderedRouteProvenance } from './types.ts';
  * observes the provider map the artifact would mount. A test that passes
  * `context.providers` opts out: the explicit map is used verbatim, exactly as
  * the runtime's request contract reads it.
+ *
+ * What the harness simulates per executable is the framework-owned process
+ * identity (`processLifetime`), not module evaluation. Provider modules load
+ * through the generated setup's static loaders, so one Rstest worker evaluates
+ * each module once and every simulated CLI invocation, route render, and
+ * in-memory server in that worker shares its module-level state — the same
+ * way the worker shares the route modules themselves. A real artifact
+ * evaluates the module afresh in every CLI process and Flight worker, so a
+ * provider's module-level cache, counter, or singleton is only proven by the
+ * packed and projected proof levels that spawn the artifact; a route-unit test
+ * that needs cold module state should substitute a fixture through
+ * `context.providers` or reset that state between calls.
  */
 
 export interface MountProvidersOptions {

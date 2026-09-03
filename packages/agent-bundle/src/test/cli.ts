@@ -44,8 +44,9 @@ export interface InvokeCliOptionsBase {
 
 /**
  * Dispatch options; `context` carries the request-scope overrides for the
- * dispatched command over the runtime's request contract and is required once
- * the project declares providers (see {@link RenderRouteContextInit}).
+ * dispatched command over the runtime's request contract; omitting it (or its
+ * `providers`) mounts the project's conventional providers exactly as the
+ * generated executable does (see {@link RenderRouteContextInit}).
  */
 export type InvokeCliOptions = InvokeCliOptionsBase & RenderRouteContextInit;
 
