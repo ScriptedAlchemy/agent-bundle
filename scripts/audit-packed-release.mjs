@@ -151,8 +151,11 @@ const validateSbom = (sbom, productManifest, installedPackages) => {
 
 /**
  * Every publishable tarball must declare the project license and carry the
- * root LICENSE and NOTICE byte-for-byte; npm's implicit inclusion is not
- * trusted because the package copies are build outputs that may be stale.
+ * root LICENSE and NOTICE byte-for-byte. Like the rest of this audit (attw and
+ * the SBOM install both pack `dist`), it inspects build output and never
+ * regenerates it: the package copies are written by each package's `build`
+ * (scripts/sync-license-files.mjs), and syncing here would hide a build step
+ * that stopped producing them.
  */
 const validateLicenseFiles = async (packOutput, packageDirectory) => {
   const manifest = JSON.parse(await readFile(join(repositoryRoot, packageDirectory, 'package.json'), 'utf8'));
@@ -162,12 +165,14 @@ const validateLicenseFiles = async (packOutput, packageDirectory) => {
   if (!Array.isArray(packOutput.files)) fail(`${packageDirectory} npm pack did not list tarball files`);
   const packedPaths = new Set(packOutput.files.map((file) => asRecord(file, 'pack file must be an object').path));
   for (const file of licenseFiles) {
+    const actual = await readFile(join(repositoryRoot, packageDirectory, file), 'utf8').catch(() => undefined);
+    if (actual === undefined) {
+      fail(`${packageDirectory}/${file} is missing; this audit inspects build output, so run \`pnpm build\` (which runs scripts/sync-license-files.mjs) first`);
+    }
     if (!packedPaths.has(file)) fail(`${packageDirectory} tarball is missing ${file}`);
-    const [expected, actual] = await Promise.all([
-      readFile(join(repositoryRoot, file), 'utf8'),
-      readFile(join(repositoryRoot, packageDirectory, file), 'utf8').catch(() => fail(`${packageDirectory}/${file} is not readable`)),
-    ]);
-    if (expected !== actual) fail(`${packageDirectory}/${file} differs from the repository root ${file}`);
+    if (actual !== await readFile(join(repositoryRoot, file), 'utf8')) {
+      fail(`${packageDirectory}/${file} differs from the repository root ${file}`);
+    }
   }
 };
 
