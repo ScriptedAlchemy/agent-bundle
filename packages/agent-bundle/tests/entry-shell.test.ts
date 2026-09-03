@@ -357,8 +357,14 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('/project/src/mcp/curator/tools/inspect.tsx');
   expect(source).toContain('/project/src/events/tool/after.tsx');
   expect(source).toContain("message.invocation.kind === 'event'");
+  // The worker resolves the event route by its hook identity but mounts the
+  // compiled route id as `operationId`, the same id the hook shell, the
+  // lifecycle replay, and the test harness use for that route.
+  expect(source).toContain(
+    '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
+  );
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '2b9feba295b3a77cd14bdee6527379837a9a21712e649c545d35d1fed107245d',
+    'f0a574cc26aa4c7d5556e7468d13743c1da55d372fe5e6eae9151df0be873948',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',

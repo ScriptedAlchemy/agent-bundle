@@ -555,11 +555,19 @@ const eventRouteImports = (
 ): readonly string[] => routes.map((route, index) =>
   `import * as route${String(offset + index)} from ${JSON.stringify(route.source)};`);
 
+/**
+ * Event route records stay keyed by the hook identity the worker resolves
+ * from the canonical event (`hook:event-route:tool-after`), but the record's
+ * `id` is the compiled route id (`event:tool/after`): that is the
+ * `operationId` the hook shell opens the request scope with, the lifecycle
+ * replay mounts, the test manifest addresses, and the harness renders, so a
+ * route reading `invocation.operationId` sees one value everywhere.
+ */
 const eventRouteRecords = (
   routes: readonly NormalizedHook[],
   offset: number,
 ): readonly string[] => routes.map((route, index) =>
-  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
 const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider, index) =>
