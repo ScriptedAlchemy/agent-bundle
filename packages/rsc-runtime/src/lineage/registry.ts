@@ -80,7 +80,11 @@ const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> 
   cursor: (toolName) => toolName === 'Task',
 });
 
-/** Cursor events only the user-facing conversation emits; a subagent's conversation never carries them. */
+/**
+ * Cursor events only the user-facing conversation emits; a subagent's
+ * conversation never carries them. Observed on a conversation the registry
+ * bound blind to a pending child, one proves the binding wrong.
+ */
 const CURSOR_ROOT_EVENTS: ReadonlySet<string> = new Set([
   'session/start',
   'session/end',
@@ -91,12 +95,6 @@ const CURSOR_ROOT_EVENTS: ReadonlySet<string> = new Set([
   'workspace/open',
 ]);
 
-/**
- * The Cursor event only a user's own conversation can carry: a subagent never
- * receives a prompt. Observed on a conversation the registry bound blind to a
- * pending child, it proves the binding wrong and is corrected.
- */
-const CURSOR_USER_ONLY_EVENTS: ReadonlySet<string> = new Set(['prompt/submit']);
 
 /**
  * A digest of the Cursor `workspace_roots` on a payload. Every Cursor hook
@@ -326,9 +324,10 @@ export const createAgentLineageRegistry = (
 
   /**
    * A conversation bound blind to a pending Cursor child that now carries a
-   * user-only event was a root all along (its prompt predates the registry, or
-   * Cursor never delivered it). The child returns to pending and the
-   * conversation becomes the root it is.
+   * root-only event was a root all along (its prompt predates the registry, or
+   * Cursor never delivered it). The child returns to pending, anything started
+   * beneath the conversation is re-rooted under it, and the conversation
+   * becomes the root it is.
    */
   const correctMisboundChild = async (
     conversation: string,
@@ -453,6 +452,14 @@ export const createAgentLineageRegistry = (
     const observedAt = observation.observedAt ?? new Date().toISOString();
     const { event, host, native } = observation;
     const carrier = lineageCarrier(host, native);
+    // A Cursor conversation bound blind to a pending child cannot carry a
+    // root-only event; one that does was a root the registry had not seen, so
+    // the binding is undone before anything acts on the wrong tree — a
+    // `session/end` must retire this conversation, not the parent it was
+    // misfiled under.
+    if (host === 'cursor' && CURSOR_ROOT_EVENTS.has(event) && carrier.conversation !== undefined) {
+      await correctMisboundChild(carrier.conversation, observedAt, keys);
+    }
     switch (event) {
       case 'agent/start':
         await observeStart(observation, observedAt, keys);
@@ -465,12 +472,6 @@ export const createAgentLineageRegistry = (
         break;
       default:
         break;
-    }
-    // A Cursor conversation bound blind to a pending child cannot receive a
-    // prompt; one that does was a root the registry had not seen, so the
-    // binding is undone before the event is placed.
-    if (host === 'cursor' && CURSOR_USER_ONLY_EVENTS.has(event) && carrier.conversation !== undefined) {
-      await correctMisboundChild(carrier.conversation, observedAt, keys);
     }
     // Claude and Codex name the root on every payload; Cursor never repeats
     // it, so only root-shaped Cursor events may establish a root, and a

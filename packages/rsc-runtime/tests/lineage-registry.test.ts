@@ -794,6 +794,57 @@ describe('lineage registry Cursor child binding precision (desktop hooks-service
     expect(snapshot.nodes['other-root']).toMatchObject({ depth: 0, root: 'other-root' });
   });
 
+  it('corrects a blind binding before session/end so the misbound chat retires itself, not the parent it was filed under', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] });
+    await observe('agent/start', 's', start('root', 'call-a', '/ws'));
+    await observe('tool/before', 'x1', tool('other-root', 'x1', '/ws'));
+    expect(registry.snapshot().nodes['other-root']).toMatchObject({ depth: 1, root: 'root' });
+    // The other chat tab is closed: only a root receives sessionEnd.
+    await observe('session/end', 'x-end', {
+      conversation_id: 'other-root', duration_ms: 1, final_status: 'none', hook_event_name: 'sessionEnd', is_background_agent: false, reason: 'window_close', workspace_roots: ['/ws'],
+    });
+    const snapshot = registry.snapshot();
+    expect(snapshot.nodes['root']?.stoppedAt).toBeUndefined();
+    expect(snapshot.nodes['call-a']).toMatchObject({ id: 'call-a', parent: 'root' });
+    expect(snapshot.nodes['call-a']?.stoppedAt).toBeUndefined();
+    expect(snapshot.pendingChildren).toEqual(['call-a']);
+    expect(snapshot.nodes['other-root']).toBeUndefined();
+    // The real child still binds to the restored pending start.
+    expect(value(await observe('tool/before', 'c1', tool('child', 'c1', '/ws')))).toMatchObject({ conversation: 'child', depth: 1, parent: 'root', root: 'root' });
+  });
+
+  it('re-roots what the misbound conversation started beneath it when the binding is undone', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = cursor(registry);
+    await observe('prompt/submit', 'p', { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] });
+    await observe('agent/start', 's', start('root', 'call-a', '/ws'));
+    // The other chat is bound blind, then spawns its own subagent, whose conversation binds beneath it.
+    await observe('tool/before', 'x1', tool('other-root', 'x1', '/ws'));
+    await observe('agent/start', 'sx', start('other-root', 'call-x', '/ws'));
+    const grandchild = value(await observe('tool/before', 'g1', tool('grandchild', 'g1', '/ws')));
+    expect(grandchild).toMatchObject({ conversation: 'grandchild', depth: 2, parent: 'other-root', root: 'root' });
+    await observe('tool/before', 'g-mcp', { ...tool('grandchild', 'g-mcp', '/ws'), tool_name: 'MCP:probe' });
+    // The prompt proves the other chat a root; its subtree follows it.
+    expect(value(await observe('prompt/submit', 'x-prompt', { conversation_id: 'other-root', hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/ws'] }))).toMatchObject({ depth: 0, root: 'other-root' });
+    const snapshot = registry.snapshot();
+    expect(snapshot.nodes['grandchild']).toMatchObject({ depth: 1, parent: 'other-root', root: 'other-root', subagentId: 'call-x' });
+    expect(snapshot.nodes['call-a']).toMatchObject({ depth: 1, parent: 'root', root: 'root' });
+    expect(snapshot.pendingChildren).toEqual(['call-a']);
+    expect(snapshot.openCalls.find((call) => call.toolCallId === 'g-mcp')?.root).toBe('other-root');
+    expect(value(await registry.resolveToolCall({ host: 'cursor', toolName: 'probe' }))).toMatchObject({ conversation: 'grandchild', depth: 1, parent: 'other-root', root: 'other-root' });
+    // Retiring the corrected root takes its own subtree and nothing of the original root's.
+    await observe('session/end', 'x-end', {
+      conversation_id: 'other-root', duration_ms: 1, final_status: 'none', hook_event_name: 'sessionEnd', is_background_agent: false, reason: 'window_close', workspace_roots: ['/ws'],
+    });
+    const retired = registry.snapshot();
+    expect(retired.nodes['grandchild']?.stoppedAt).toBe('2026-09-03T00:00:00.000Z');
+    expect(retired.nodes['root']?.stoppedAt).toBeUndefined();
+    expect(retired.nodes['call-a']?.stoppedAt).toBeUndefined();
+    expect(retired.openCalls.find((call) => call.toolCallId === 'g-mcp')).toBeUndefined();
+  });
+
   it('records the workspace digest on Cursor roots and children and never the raw roots', async () => {
     const registry = createAgentLineageRegistry();
     const observe = cursor(registry);

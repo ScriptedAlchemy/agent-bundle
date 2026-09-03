@@ -126,7 +126,7 @@ Not delivered to the plugin in this run: `sessionStart` (never fired for the
 plugin; the sibling raw-hooks probe on the same build saw none either),
 `workspaceOpen` (fired to user-level hooks only), `sessionEnd` (nothing arrived
 when the window was closed with the agent idle), `postToolUseFailure`,
-`preCompact`. §8 below shows that on a real desktop `workspaceOpen` and
+`preCompact`. §9 below shows that on a real desktop `workspaceOpen` and
 `sessionEnd` *do* reach plugin-scoped hooks and only `sessionStart` never
 does. `preToolUse` was delivered twice for some `Read`/`Grep` calls with the
 same `tool_use_id` (pairs 3/4, 9/10, … in the fixture).
@@ -236,7 +236,7 @@ root, and the parent-of-subagent chain — is the only identity-adjacent surface
 | Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Bound by elimination in the registry (single pending start per workspace); refused while ambiguous for parallel workers; filed as #424 |
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
 | `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 ask 4); lineage never depends on it to establish a root |
-| Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction when a bound conversation later receives `beforeSubmitPrompt` |
+| Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (`beforeSubmitPrompt`, `stop`, `sessionEnd`, `preCompact`) |
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
 | Claude `PostToolUse(Agent).tool_response.agentId` not consumed by the registry | Claude | §1, §2 | The registry claims the newest unclaimed spawn under the root at `SubagentStart` and marks same-parent sibling cohorts `siblingsUncertain`; the parent's `Agent` PostToolUse could later firm those up. Not needed for either live run (spawns were sequential); left as an improvement |

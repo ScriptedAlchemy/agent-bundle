@@ -447,11 +447,14 @@ elimination and refuses when elimination is not possible:
   bind each other's children). With several pending in that workspace it
   stays `id-not-resolvable` until all but one have stopped; after a registry
   restart it stays unresolved, because nothing distinguishes it from a root.
-- A blind binding is undone when the bound conversation later receives a
-  `prompt/submit` — subagents never do — so a second chat tab whose prompt
-  predates the registry (Cursor desktop restarts mid-conversation, and many
-  conversations are first seen on a tool hook) becomes the root it is and the
-  pending child waits for its real conversation again.
+- A blind binding is undone the moment the bound conversation carries any
+  root-shaped event (`prompt/submit`, `stop`, `session/end`, `compact/*`) —
+  subagents never do — so a second chat tab whose prompt predates the registry
+  (Cursor desktop restarts mid-conversation, and many conversations are first
+  seen on a tool hook) becomes the root it is, anything it started meanwhile is
+  re-rooted beneath it, and the pending child waits for its real conversation
+  again. The correction runs before the event acts, so a `session/end` on a
+  misbound chat retires that chat, never the parent it was filed under.
 
 `session/end` retires the root and every descendant still
 marked live; stopped nodes are pruned past the retention bound as they stop.

@@ -169,14 +169,32 @@ export const reduceLineage = (
       const bound = state.nodes[conversation];
       if (bound === undefined || bound.subagentId !== subagentId || state.nodes[subagentId] !== undefined) return state;
       const { [conversation]: _moved, ...rest } = state.nodes;
+      // Everything started beneath the misbound conversation belongs to the
+      // root it is about to become: same shape, re-rooted, depth rebased.
+      const descendants = new Set<string>();
+      const descendsFrom = (node: LineageNode, hops = 0): boolean => {
+        if (node.parent === conversation) return true;
+        if (node.parent === undefined || hops > Object.keys(rest).length) return false;
+        const parent = rest[node.parent];
+        return parent !== undefined && descendsFrom(parent, hops + 1);
+      };
+      for (const node of Object.values(rest)) {
+        if (node.root === bound.root && descendsFrom(node)) descendants.add(node.id);
+      }
+      const rerooted = (node: LineageNode): LineageNode =>
+        descendants.has(node.id) ? { ...node, depth: node.depth - bound.depth, root: conversation } : node;
+      const rerootedCall = (call: OpenToolCall): OpenToolCall =>
+        call.conversation === conversation || descendants.has(call.conversation) ? { ...call, root: conversation } : call;
       return {
         ...state,
-        nodes: { ...rest, [subagentId]: { ...bound, id: subagentId } },
+        nodes: { ...Object.fromEntries(Object.entries(rest).map(([key, node]) => [key, rerooted(node)])), [subagentId]: { ...bound, id: subagentId } },
+        openCalls: state.openCalls.map(rerootedCall),
         // A child whose stop already arrived stays a finished, never-bound
         // node; a live one waits for its real conversation again.
         pendingChildren: bound.stoppedAt === undefined
           ? [subagentId, ...state.pendingChildren.filter((candidate) => candidate !== subagentId)]
           : state.pendingChildren,
+        pendingSpawns: state.pendingSpawns.map(rerootedCall),
         seenStarts: state.seenStarts.filter((known) => known !== conversation),
       };
     }
