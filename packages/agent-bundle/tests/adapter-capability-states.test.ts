@@ -1,10 +1,15 @@
 import { expect, it } from '@rstest/core';
 
+import { AGENT_NOTICE_DELIVERY_ROUTES, selectNoticeDeliveryRoutes } from '@agent-bundle/runtime/notices';
+import type { AgentNoticeDeliveryAdvertisement, AgentNoticeDeliveryRoute } from '@agent-bundle/runtime/notices';
+
 import {
   capabilityBooleanView,
   capabilityEvidence,
   capabilityIsSupported,
   intersectCapabilityStates,
+  intersectNoticeDeliveryAdvertisements,
+  noticeDeliveryAdvertisementFrom,
   supportedCapability,
   unavailableCapability,
   unionCapabilityStates,
@@ -14,6 +19,8 @@ import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.jso
 import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import cursorHooksSchema from '../src/adapters/schemas/cursor/hooks.schema.json' with { type: 'json' };
 import { cursorContractCapabilityRows } from '../src/adapters/cursor.ts';
+import { NOTICE_DELIVERY_ROUTES } from '../src/adapters/notice-delivery.ts';
+import type { NoticeDeliveryAdvertisement, NoticeDeliveryRoute } from '../src/adapters/notice-delivery.ts';
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
@@ -1497,4 +1504,129 @@ it('records dated Cursor contract rows and mirrors every one through the unified
     rules: './rules/',
     skills: './skills/',
   });
+});
+
+it('exposes each host advertisement through the adapter and registry, typed for the route selector (#99 stage 4)', () => {
+  const registry = createDefaultRegistry();
+  const tables = {
+    claude: claudeCapabilityTable.noticeDelivery,
+    codex: codexCapabilityTable.noticeDelivery,
+    cursor: cursorCapabilityTable.noticeDelivery,
+  } as const;
+  for (const [host, rows] of Object.entries(tables)) {
+    const adapter = registry.get(host);
+    expect(adapter.noticeDelivery).toEqual(rows);
+    expect(registry.noticeDelivery(host)).toEqual(adapter.noticeDelivery);
+    expect(Object.isFrozen(adapter.noticeDelivery)).toBe(true);
+    // The advertisement feeds the runtime selector unchanged: every pinned host
+    // runs the inbox, resources/updated, and next-event routes, and nothing else.
+    expect(selectNoticeDeliveryRoutes(adapter.noticeDelivery!)).toEqual({
+      kind: 'selected',
+      routes: ['mcp-resource-updated', 'mcp-inbox', 'next-event'],
+    });
+  }
+  // Hookless portable loses the hook-borne route and keeps the MCP ones.
+  expect(selectNoticeDeliveryRoutes(registry.noticeDelivery('portable')!)).toEqual({
+    kind: 'selected',
+    routes: ['mcp-resource-updated', 'mcp-inbox'],
+  });
+  // The unified bundle serves all three hosts, so it advertises their intersection.
+  const plugin = registry.noticeDelivery('plugin')!;
+  expect(plugin).toEqual(intersectNoticeDeliveryAdvertisements(
+    intersectNoticeDeliveryAdvertisements(registry.noticeDelivery('claude')!, registry.noticeDelivery('codex')!),
+    registry.noticeDelivery('cursor')!,
+  ));
+  expect(selectNoticeDeliveryRoutes(plugin)).toEqual({
+    kind: 'selected',
+    routes: ['mcp-resource-updated', 'mcp-inbox', 'next-event'],
+  });
+  expect(() => registry.noticeDelivery('unknown')).toThrow(/Unknown target adapter/u);
+});
+
+it('spells the notice delivery taxonomy locally so public declarations never resolve through the optional runtime peer', () => {
+  // `@agent-bundle/runtime` is an optional peer of `agent-bundle`, so the
+  // compiler's exported `TargetAdapter.noticeDelivery` uses a local shape. These
+  // assignments fail to compile if either vocabulary drifts from the other.
+  const toRuntime = (value: NoticeDeliveryAdvertisement): AgentNoticeDeliveryAdvertisement => value;
+  const fromRuntime = (value: AgentNoticeDeliveryAdvertisement): NoticeDeliveryAdvertisement => value;
+  const routeToRuntime = (route: NoticeDeliveryRoute): AgentNoticeDeliveryRoute => route;
+  const routeFromRuntime = (route: AgentNoticeDeliveryRoute): NoticeDeliveryRoute => route;
+  const claude = createDefaultRegistry().noticeDelivery('claude')!;
+  expect(fromRuntime(toRuntime(claude))).toBe(claude);
+  expect([...NOTICE_DELIVERY_ROUTES].map(routeToRuntime).toSorted())
+    .toEqual([...AGENT_NOTICE_DELIVERY_ROUTES].map(routeFromRuntime).toSorted());
+});
+
+it('intersects host advertisements so a composite only claims routes every host supports', () => {
+  const claude = createDefaultRegistry().noticeDelivery('claude')!;
+  const partial: AgentNoticeDeliveryAdvertisement = Object.freeze({
+    ...claude,
+    'mcp-resource-updated': Object.freeze({ reason: '2026-09-02: host B drops resources/updated.', state: 'unavailable' as const }),
+    'next-event': Object.freeze({ reason: '2026-09-02: host B has no hooks.', state: 'unavailable' as const }),
+  });
+  const merged = intersectNoticeDeliveryAdvertisements(claude, partial);
+  expect(merged['mcp-inbox']).toEqual({ state: 'supported' });
+  expect(merged['mcp-resource-updated']).toEqual({ reason: '2026-09-02: host B drops resources/updated.', state: 'unavailable' });
+  expect(merged['next-event']).toEqual({ reason: '2026-09-02: host B has no hooks.', state: 'unavailable' });
+  // Both reasons survive, deduplicated and ordered, when both hosts decline.
+  expect(merged['directed-push']).toEqual(claude['directed-push']);
+  const twice = intersectNoticeDeliveryAdvertisements(partial, Object.freeze({
+    ...claude,
+    'next-event': Object.freeze({ reason: '2026-09-02: host C has no hooks.', state: 'unavailable' as const }),
+  }));
+  expect(twice['next-event']).toEqual({
+    reason: '2026-09-02: host B has no hooks.; 2026-09-02: host C has no hooks.',
+    state: 'unavailable',
+  });
+  expect(selectNoticeDeliveryRoutes(merged)).toEqual({ kind: 'selected', routes: ['mcp-inbox'] });
+});
+
+it('fails closed on a notice delivery table row it cannot describe honestly', () => {
+  const rows = { ...claudeCapabilityTable.noticeDelivery } as Record<string, { reason?: string; state: string }>;
+  expect(noticeDeliveryAdvertisementFrom('claude', rows)).toEqual(claudeCapabilityTable.noticeDelivery);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { state: 'suported' } }))
+    .toThrow(/Unsupported notice delivery route state "suported" for mcp-inbox/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { state: 'unavailable' } }))
+    .toThrow(/host-toast unavailable without a dated reason/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: '  ', state: 'unavailable' } }))
+    .toThrow(CapabilityStateError);
+  // A reason without a survey date is not dated evidence, however long it is.
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: 'unsupported', state: 'unavailable' } }))
+    .toThrow(/host-toast unavailable without a dated reason/u);
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: 'build 20260902 lacks it', state: 'unavailable' } }))
+    .toThrow(/host-toast unavailable without a dated reason/u);
+  expect(noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'host-toast': { reason: '2026-09-02: no toast API.', state: 'unavailable' } }))
+    .toMatchObject({ 'host-toast': { reason: '2026-09-02: no toast API.', state: 'unavailable' } });
+  const { 'directed-push': _omitted, ...missing } = rows;
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', missing))
+    .toThrow(/advertises no notice delivery route directed-push/u);
+  // Degraded and prohibited are capability states, not delivery-route states.
+  expect(() => noticeDeliveryAdvertisementFrom('fixture', { ...rows, 'mcp-inbox': { reason: 'x', state: 'degraded' } }))
+    .toThrow(CapabilityStateError);
+});
+
+it('re-validates a JavaScript adapter advertisement at the registry boundary', () => {
+  const source = createDefaultRegistry().get('cursor');
+  const asAdvertisement = (value: unknown): AgentNoticeDeliveryAdvertisement => value as AgentNoticeDeliveryAdvertisement;
+
+  expect(() => new TargetRegistry().register({
+    ...source,
+    noticeDelivery: asAdvertisement({ ...source.noticeDelivery, 'mcp-inbox': { state: 'suported' } }),
+  })).toThrow(CapabilityStateError);
+  expect(() => new TargetRegistry().register({
+    ...source,
+    noticeDelivery: asAdvertisement({ ...source.noticeDelivery, 'mcp-inbox': 'supported' }),
+  })).toThrow(/notice delivery route "mcp-inbox" must declare a state/u);
+  expect(() => new TargetRegistry().register({ ...source, noticeDelivery: asAdvertisement('supported') }))
+    .toThrow(/must declare notice delivery advertisements as a record/u);
+  // The registry never exposes an undated reason as dated evidence.
+  expect(() => new TargetRegistry().register({
+    ...source,
+    noticeDelivery: asAdvertisement({ ...source.noticeDelivery, 'host-toast': { reason: 'unsupported', state: 'unavailable' } }),
+  })).toThrow(/host-toast unavailable without a dated reason/u);
+  const { noticeDelivery: _declared, ...undeclared } = source;
+  const registry = new TargetRegistry().register(undeclared);
+  // An adapter that declares no advertisement honestly has no cross-request route.
+  expect(registry.noticeDelivery('cursor')).toBeUndefined();
+  expect(() => new TargetRegistry().register(source)).not.toThrow();
 });

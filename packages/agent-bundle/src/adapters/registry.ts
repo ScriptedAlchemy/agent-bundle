@@ -9,7 +9,12 @@ import type {
   NormalizationNativeHookSource,
   NormalizationTargetRegistry,
 } from '../core/types.ts';
-import { capabilityIsSupported, cliBinCapability } from './capability-state.ts';
+import {
+  capabilityIsSupported,
+  cliBinCapability,
+  noticeDeliveryAdvertisementFrom,
+  type NoticeDeliveryCapabilityTableEntry,
+} from './capability-state.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
@@ -30,6 +35,7 @@ import {
 } from './types.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import type { NoticeDeliveryAdvertisement } from './notice-delivery.ts';
 
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
@@ -446,6 +452,32 @@ const snapshotMcpRuntime = (adapter: TargetAdapter): TargetMcpRuntimeContract | 
 };
 
 /**
+ * Re-validates a declared notice delivery advertisement at the registry
+ * boundary so a JavaScript adapter cannot smuggle an unknown route state into
+ * the generated MCP entry's route selection.
+ */
+const snapshotNoticeDelivery = (adapter: TargetAdapter): NoticeDeliveryAdvertisement | undefined => {
+  const declared = adapter.noticeDelivery;
+  if (declared === undefined) return undefined;
+  const rows = record(declared);
+  if (rows === undefined) {
+    throw new CapabilityStateError(
+      `Target adapter "${adapter.name}" must declare notice delivery advertisements as a record.`,
+    );
+  }
+  const entries = Object.fromEntries(Object.entries(rows).map(([route, entry]): [string, NoticeDeliveryCapabilityTableEntry] => {
+    const row = record(entry);
+    if (row === undefined || typeof row.state !== 'string') {
+      throw new CapabilityStateError(
+        `Target adapter "${adapter.name}" notice delivery route "${route}" must declare a state.`,
+      );
+    }
+    return [route, { ...(typeof row.reason === 'string' ? { reason: row.reason } : {}), state: row.state }];
+  }));
+  return noticeDeliveryAdvertisementFrom(adapter.name, entries);
+};
+
+/**
  * The registry is a runtime boundary for third-party and JavaScript adapters,
  * whose declarations the compiler never checked. Rejecting a malformed state
  * here keeps it out of `supports()` and capability intersection entirely.
@@ -491,6 +523,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
   readonly #mcpRuntimes = new Map<string, TargetMcpRuntimeContract>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
+  readonly #noticeDeliveries = new Map<string, NoticeDeliveryAdvertisement>();
   readonly #outputStylesSources = new Map<string, OutputStylesSource>();
   readonly #workflowsSources = new Map<string, WorkflowsSource>();
 
@@ -513,6 +546,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     const mcpRuntime = snapshotMcpRuntime(adapter);
     const artifactLayout = snapshotArtifactLayout(adapter, hookContract, mcpRuntime);
     const lowersConfigExtensions = snapshotLowersConfigExtensions(adapter);
+    const noticeDelivery = snapshotNoticeDelivery(adapter);
 
     this.#adapters.set(adapter.name, adapter);
     this.#lowersConfigExtensions.set(adapter.name, lowersConfigExtensions);
@@ -542,6 +576,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     }
     if (mcpRuntime !== undefined) {
       this.#mcpRuntimes.set(adapter.name, mcpRuntime);
+    }
+    if (noticeDelivery !== undefined) {
+      this.#noticeDeliveries.set(adapter.name, noticeDelivery);
     }
     if (options.default === true) {
       this.#defaults.push(adapter.name);
@@ -599,6 +636,14 @@ export class TargetRegistry implements NormalizationTargetRegistry {
       throw new Error(`Unknown target adapter "${name}".`);
     }
     return this.#mcpRuntimes.get(name);
+  }
+
+  /** The validated notice delivery advertisement, or undefined for a host that declares none. */
+  noticeDelivery(name: string): NoticeDeliveryAdvertisement | undefined {
+    if (!this.#adapters.has(name)) {
+      throw new Error(`Unknown target adapter "${name}".`);
+    }
+    return this.#noticeDeliveries.get(name);
   }
 
   configExtensions(): readonly NormalizationConfigExtension[] {

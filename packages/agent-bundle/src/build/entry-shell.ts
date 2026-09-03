@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
+import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
@@ -592,6 +593,13 @@ export const generatedRenderedScriptEntrySource = (
 export interface GeneratedRouteMcpEntryOptions {
   readonly artifactEpoch?: string;
   readonly eventRoutes?: readonly NormalizedHook[];
+  /**
+   * The target host's notice delivery advertisement (`TargetAdapter.noticeDelivery`).
+   * Cross-request routes are wired only where the host advertises them; an
+   * absent advertisement wires none, so a target the registry knows nothing
+   * about never receives a fabricated channel.
+   */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
@@ -604,6 +612,8 @@ export interface GeneratedRouteFlightWorkerOptions {
   readonly artifactEpoch: string;
   readonly eventRoutes?: readonly NormalizedHook[];
   readonly layouts?: readonly CompiledLayout[];
+  /** The target host's advertisement; the worker mounts the inbox route only where it is advertised. */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
@@ -639,26 +649,52 @@ const routeRecords = (
     return `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}${layoutFields}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))}${serverField} }),`;
   });
 
-const noticeInboxImport = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state === undefined
-    ? []
-    : [`import * as noticeInboxRoute from ${JSON.stringify(noticeInboxRuntimeSpecifier)};`];
+const noticeInboxImport = (wired: boolean): readonly string[] =>
+  wired
+    ? [`import * as noticeInboxRoute from ${JSON.stringify(noticeInboxRuntimeSpecifier)};`]
+    : [];
 
-const noticeInboxRecord = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state === undefined
-    ? []
-    : ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),'];
+const noticeInboxRecord = (wired: boolean): readonly string[] =>
+  wired
+    ? ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),']
+    : [];
+
+interface NoticeRouteSelection {
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  readonly state?: NormalizedStateDefinition;
+}
 
 /**
- * The server process's own handle on the workspace-durable notice store its
- * Flight worker mounts (#99 stage 4): SQLite is the one lifetime two threads
- * can share, so only durable artifacts wire `resources/subscribe` and
- * `notifications/resources/updated` for the inbox; volatile lifetimes live in
- * the worker's heap and honestly advertise no subscription capability. The
- * anchor resolution matches the worker's so both open the same files.
+ * Whether the generated artifact exposes the `mcp-inbox` route (#99 stage 3):
+ * the cross-request inbox resource needs a mounted notice ledger, so the
+ * project must declare state, and the target host must advertise the route
+ * in its pinned capability table. Each route is selected from its own
+ * advertised state; a host whose table marks it unavailable, or a target with
+ * no advertisement at all, exposes nothing it cannot honestly carry.
  */
-const noticeDeliveryImports = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state?.lifetime === 'workspace-durable'
+const wiresInboxRoute = (options: NoticeRouteSelection): boolean =>
+  options.state !== undefined && options.noticeDelivery?.['mcp-inbox'].state === 'supported';
+
+/**
+ * Whether the generated entry wires the `mcp-resource-updated` delivery route
+ * (#99 stage 4). It signals about the inbox resource, so the inbox must be
+ * exposed; the host must advertise the route itself; and the project's state
+ * must be workspace-durable. SQLite is the one lifetime two threads can
+ * share, so only durable artifacts can give the server process its own handle
+ * on the notice store its Flight worker mounts; volatile lifetimes live in
+ * the worker's heap and honestly advertise no subscription capability.
+ */
+const wiresResourceUpdatedRoute = (options: NoticeRouteSelection): boolean =>
+  wiresInboxRoute(options) &&
+  options.state?.lifetime === 'workspace-durable' &&
+  options.noticeDelivery?.['mcp-resource-updated'].state === 'supported';
+
+/**
+ * The server process's own handle on the durable notice store. The anchor
+ * resolution matches the worker's so both open the same files.
+ */
+const noticeDeliveryImports = (wired: boolean): readonly string[] =>
+  wired
     ? [
       "import { join } from 'node:path';",
       "import { fileURLToPath } from 'node:url';",
@@ -668,8 +704,8 @@ const noticeDeliveryImports = (state: NormalizedStateDefinition | undefined): re
     ]
     : [];
 
-const noticeDeliveryOwner = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state?.lifetime === 'workspace-durable'
+const noticeDeliveryOwner = (wired: boolean): readonly string[] =>
+  wired
     ? [
       "const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
       "const noticeDelivery = createNoticeInboxSignaller({ store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable' }) });",
@@ -764,13 +800,14 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
   const eventRoutes = options.eventRoutes ?? [];
   const providers = orderedProviders(options.providers ?? []);
   const layouts = workerLayouts(options.layouts ?? [], routes);
+  const wiresInbox = wiresInboxRoute(options);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
     "import { runAgentRequest } from '@agent-bundle/runtime';",
     ...generatedStateImports(options.state, 'artifact'),
-    ...noticeInboxImport(options.state),
+    ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
     ...providerImports(providers),
@@ -787,7 +824,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
     ...routeRecords(routes, { layouts }),
-    ...noticeInboxRecord(options.state),
+    ...noticeInboxRecord(wiresInbox),
     ...eventRouteRecords(eventRoutes, routes.length),
     '});',
     'const requests = new Map();',
@@ -910,6 +947,8 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const allowedEventTargets = eventTarget === 'plugin'
     ? ['claude', 'codex', 'cursor']
     : [eventTarget];
+  const wiresInbox = wiresInboxRoute(options);
+  const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
@@ -920,17 +959,17 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
         ]
       : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
-    ...noticeDeliveryImports(options.state),
-    ...noticeInboxImport(options.state),
+    ...noticeDeliveryImports(wiresResourceUpdated),
+    ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
     'const routes = Object.freeze({',
     ...routeRecords(routes),
-    ...noticeInboxRecord(options.state),
+    ...noticeInboxRecord(wiresInbox),
     '});',
     '',
-    ...noticeDeliveryOwner(options.state),
+    ...noticeDeliveryOwner(wiresResourceUpdated),
     ...(hasEvents
       ? [
           // The endpoint identity is artifact-location dependent, so it stays
@@ -955,7 +994,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     '  artifactEpoch: ARTIFACT_EPOCH,',
     ...(hasEvents ? ['  events,'] : []),
     `  host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
-    ...(options.state?.lifetime === 'workspace-durable' ? ['  notices: noticeDelivery,'] : []),
+    ...(wiresResourceUpdated ? ['  notices: noticeDelivery,'] : []),
     `  plugin: ${stableJson(options.plugin)},`,
     '  routes,',
     '});',

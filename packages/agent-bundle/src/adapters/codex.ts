@@ -21,6 +21,7 @@ import {
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   featureCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
   cliBinCapability,
   supportedCapability,
@@ -1415,6 +1416,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: codexName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(codexName, capabilityTable.noticeDelivery),
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan: planCodexArtifacts,
 });

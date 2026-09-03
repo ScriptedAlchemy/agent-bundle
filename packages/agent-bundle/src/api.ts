@@ -198,6 +198,9 @@ export type { HookListOptions, HookSimulationOptions } from './services/hook-ser
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
+  NoticeDeliveryAdvertisement,
+  NoticeDeliveryRoute,
+  NoticeDeliveryRouteState,
   TargetAdapter,
   TargetAdapterMetadata,
   TargetArtifactCopy,
@@ -948,11 +951,15 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     try {
       bundler = await composeBundlerInspection({
         model,
-        targets: plans.map((plan) => ({
-          cliBin: targetHostsCliBin(prepared.registry, plan.target),
-          hookEntries: plan.hookEntries,
-          name: plan.target,
-        })),
+        targets: plans.map((plan) => {
+          const noticeDelivery = prepared.registry.noticeDelivery(plan.target);
+          return {
+            cliBin: targetHostsCliBin(prepared.registry, plan.target),
+            hookEntries: plan.hookEntries,
+            name: plan.target,
+            ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+          };
+        }),
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
     } catch {

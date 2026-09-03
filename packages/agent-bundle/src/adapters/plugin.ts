@@ -12,6 +12,7 @@ import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   cliBinCapability,
   intersectCapabilityStates,
+  intersectNoticeDeliveryAdvertisements,
   supportedEventRouteNamesFrom,
   unavailableCapability,
   unionCapabilityStates,
@@ -1126,6 +1127,12 @@ export const pluginAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: pluginName,
+  // A unified bundle's generated MCP entry serves all three hosts, so it may
+  // only wire the cross-request routes every pinned host advertises.
+  noticeDelivery: intersectNoticeDeliveryAdvertisements(
+    intersectNoticeDeliveryAdvertisements(claudeAdapter.noticeDelivery!, codexAdapter.noticeDelivery!),
+    cursorAdapter.noticeDelivery!,
+  ),
   binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
   outputStylesSource: (config: Readonly<AgentBundleConfig>) => config.claude?.outputStyles,
   plan,
