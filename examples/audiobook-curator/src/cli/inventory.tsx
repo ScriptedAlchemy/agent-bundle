@@ -1,8 +1,8 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { CuratorDocument } from '../components/curator-document.js';
 import { inventoryHeadline } from '../components/headlines.js';
 import { InventoryShelf } from '../components/library-shelf.js';
 import type { InventoryReceipt } from '../library.js';
@@ -27,11 +27,9 @@ export const resultSchema = operation.resultSchema;
 export default async function inventory({ input, signal }: CliRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
   return (
-    <CuratorDocument
-      headline={inventoryHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{inventoryHeadline(receipt)}</Agent.Text>
       <InventoryShelf receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

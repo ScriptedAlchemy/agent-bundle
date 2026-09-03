@@ -30,6 +30,8 @@ export type {
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
   AppRouteConfig,

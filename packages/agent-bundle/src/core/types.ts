@@ -5,7 +5,7 @@ import type {
   AgentEventRuntimeMode,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
+import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
 
@@ -649,6 +649,8 @@ export interface NormalizedPlugin {
    * models predating prebuilt payloads stay valid.
    */
   readonly payloads?: readonly NormalizedPayload[];
+  /** Conventional layout modules composed around every rendered route (root first, then the owning server's). */
+  readonly layouts?: readonly CompiledLayout[];
   /** Conventional context providers executed for every generated render request. */
   readonly providers?: readonly CompiledProvider[];
   /**

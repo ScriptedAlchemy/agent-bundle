@@ -67,6 +67,31 @@ The routed CLI under `src/cli/` contains 16 authored commands. The
 Projected tools accept one optional `--input '<JSON object>'`; tools annotated
 read-only run directly, while mutation-capable tools require `--yes`.
 
+### `src/layout.tsx` is the shared document shell
+
+The conventional layout module wraps every rendered route once — the 16 MCP
+tools, the catalog resource, the curate prompt, the rendered CLI commands, and
+the projected `curator <tool>` commands — so no route imports a wrapper to get
+the server's standard document structure. The layout renders a container
+`Agent.Result` and the runtime merges each route's own
+`<Agent.Result value={receipt}>` into it: the structured receipt, the MCP
+content, and the CLI Markdown are exactly what the route declared, and the
+shell contributes document metadata naming the producing route and surface,
+which MCP hosts receive as `CallToolResult._meta.curator`. A route therefore
+states only its value, its headline, and its report:
+
+```tsx
+export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
+  return (
+    <Agent.Result value={receipt}>
+      <Agent.Text>{inventoryHeadline(receipt)}</Agent.Text>
+      <InventoryShelf receipt={receipt} />
+    </Agent.Result>
+  );
+}
+```
+
 ### `src/components/` is the shared presentation library
 
 The route modules perform domain work and compose these report components
@@ -74,7 +99,6 @@ instead of maintaining separate MCP and CLI presenters:
 
 | Component | MCP composition | Rendered authored CLI composition |
 | --- | --- | --- |
-| `CuratorDocument` and its `CuratorReceipt` union | Wrap the structured receipt and headline for 15 receipt-bearing tools | Wrap `inventory`, `select`, `audible-search`, `convert`, `audit`, and `library-audit` |
 | `DataList`, `Field`, `Callout`, and `FileList` | Provide atomic report fields, prose callouts, and file-list blocks throughout the component library and directly in the catalog resource, curate prompt, cache route, and library audit | Provide the same primitives through the shared components and directly in `library-audit` |
 | `FileCard` and `EditionCard`, fed by `view-models` | Render file and edition models in `audit_library`, shelf, and ranking views | Reached through the receipt-specific shelves and ranking components |
 | `InspectionShelf`, `InventoryShelf`, `AuditShelf`, and `SelectionShelf` | Compose receipt-specific inspection, inventory, audit, and selection reports; the inspection, inventory, and selection shelves are used directly by their MCP routes | `InventoryShelf` and `SelectionShelf` compose `inventory` and `select` |

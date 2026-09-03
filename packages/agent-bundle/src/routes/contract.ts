@@ -22,7 +22,7 @@ const unwrappedExpression = (expression: ts.Expression): ts.Expression => {
 };
 
 const diagnostic = (
-  code: 'AB4810' | 'AB4811' | 'AB4940',
+  code: 'AB4810' | 'AB4811' | 'AB4830' | 'AB4940',
   message: string,
   sourcePath: string,
   recovery: string,
@@ -172,6 +172,34 @@ export const validateEventRouteModuleContract = (
     ));
   }
   return Object.freeze(diagnostics);
+};
+
+/**
+ * Validates one conventional layout module without evaluating it: the default
+ * export must be a function component (sync or async) and the module must
+ * not carry the route contract's `inputSchema`/`resultSchema`/`config`
+ * exports — a layout wraps routes, it is not one, and a stray schema export
+ * usually means a route module was saved under the reserved layout name.
+ */
+export const validateLayoutModuleContract = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+): readonly Diagnostic[] => {
+  const { defaultFunction, named, splitExport } = scanRouteModuleExports(moduleText, relativePath);
+  const routeExports = ['config', 'inputSchema', 'resultSchema'].filter((name) => named.has(name));
+  const details = [
+    ...(defaultFunction ? [] : ['default export is not a function component']),
+    ...(routeExports.length === 0 ? [] : [`exports route-only ${routeExports.join(', ')}`]),
+    ...(splitExport ? ['exports execute or render'] : []),
+  ];
+  if (details.length === 0) return Object.freeze([]);
+  return Object.freeze([diagnostic(
+    'AB4830',
+    `Layout module ${relativePath} does not satisfy the layout contract: ${details.join('; ')}.`,
+    sourcePath,
+    'Default-export one function component receiving { children, route, signal } that renders Agent.Result around children, and keep route schemas in route modules.',
+  )]);
 };
 
 /** Validates one context provider's default factory export without evaluating the module. */

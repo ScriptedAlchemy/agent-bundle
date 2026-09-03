@@ -77,6 +77,7 @@ describe('the compiled test manifest', () => {
       'tool:harness/context',
       'tool:harness/echo',
       'tool:harness/journal',
+      'tool:harness/layout-probe',
       'tool:harness/lifecycle',
       'tool:harness/mutation-probe',
       'tool:harness/publish-notice',
@@ -94,6 +95,22 @@ describe('the compiled test manifest', () => {
       relativePath: 'src/providers/library-tooling.ts',
       source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
     }]);
+    // Layouts are never routes; the manifest carries them separately, ordered by id.
+    expect(manifest.layouts).toEqual([
+      {
+        id: 'layout:mcp:harness',
+        relativePath: 'src/mcp/harness/layout.tsx',
+        scope: 'server',
+        serverId: 'mcp:harness',
+        source: resolve(fixtureRoot, 'src/mcp/harness/layout.tsx'),
+      },
+      {
+        id: 'layout:root',
+        relativePath: 'src/layout.tsx',
+        scope: 'root',
+        source: resolve(fixtureRoot, 'src/layout.tsx'),
+      },
+    ]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
       config: {
         annotations: { readOnlyHint: true },
@@ -222,6 +239,7 @@ describe('the compiled test manifest', () => {
       projected('context', 'Returns the request identity axes observed by this route.', true),
       projected('echo', 'Echoes one message back with the observed workspace root.', false),
       projected('journal', 'Records and reads durable route-harness journal entries.', true),
+      projected('layout-probe', 'Renders a bare valued result so the layout chain around it is observable.', false),
       projected('lifecycle', 'Replays a deterministic durable lifecycle through mounted state.', true),
       projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
@@ -336,6 +354,15 @@ describe('the generated route registry', () => {
     expect(providerLoaders).toContain('/src/providers/library-tooling.ts');
     // A project without providers emits no loader table at all.
     expect(routeTestSetupSource({ ...manifest, providers: undefined })).not.toContain('providerLoaders');
+  });
+
+  it('registers one loader per compiled layout so renders compose the same chain the workers bake', () => {
+    const layoutLoaders = /layoutLoaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
+
+    expect(layoutLoaders).toContain('"layout:root": () => import(');
+    expect(layoutLoaders).toContain('"layout:mcp:harness": () => import(');
+    expect(layoutLoaders).toContain('/src/layout.tsx")');
+    expect(layoutLoaders).toContain('/src/mcp/harness/layout.tsx")');
   });
 
   it('carries the manifest and the registry version the helpers require', () => {

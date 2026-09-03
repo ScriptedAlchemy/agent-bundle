@@ -17,6 +17,14 @@ Agent Bundle has one newcomer model:
    `execute`/`render` split.
 4. **Opt in to context.** Call `await agent()` inside that component only when
    host, session, actor, workspace, capability, or state context is needed.
+5. **Share the shell once.** An optional `src/layout.tsx` (and
+   `src/mcp/<server>/layout.tsx` for one server) default-exports a component
+   receiving `{ children, route, signal }` (`AgentLayoutProps` from
+   `@agent-bundle/runtime`) and renders `Agent.Result` around
+   every rendered route; the route keeps its own `<Agent.Result value>`, and the
+   runtime merges the two so the result value and content are unchanged (layout
+   metadata surfaces as MCP `_meta`).
+   See [Shared layouts](entry-conventions.md#shared-layouts).
 
 The complete conventional config is usually:
 

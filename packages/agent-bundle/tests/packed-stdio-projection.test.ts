@@ -121,6 +121,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'context',
         'echo',
         'journal',
+        'layout-probe',
         'lifecycle',
         'mutation-probe',
         'publish-notice',

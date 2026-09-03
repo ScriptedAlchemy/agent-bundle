@@ -42,6 +42,230 @@ describe('decodeAgentDocument', () => {
     expect(Object.isFrozen(document)).toBe(true);
   });
 
+  it('merges a valued result into its valueless container so a layout shell keeps the route value', () => {
+    const document = decodeAgentDocument(createElement(
+      'agent-result',
+      { metadata: { layout: 'root' } },
+      createElement('agent-text', null, 'header'),
+      createElement(
+        'agent-result',
+        { metadata: { layout: 'route' }, value: { ready: true } },
+        createElement('agent-markdown', null, '# Ready'),
+      ),
+      createElement('agent-context', null, 'footer'),
+    ));
+
+    expect(document).toEqual({
+      root: {
+        children: [
+          { kind: 'text', text: 'header' },
+          { kind: 'markdown', text: '# Ready' },
+          { kind: 'context', text: 'footer' },
+        ],
+        kind: 'result',
+        metadata: { layout: 'root' },
+      },
+      status: 'success',
+      value: { ready: true },
+      version: 1,
+    });
+  });
+
+  it('merges nested containers bottom-up, combining object metadata with the outer container winning conflicts', () => {
+    const document = decodeAgentDocument(createElement(
+      'agent-result',
+      { metadata: { layer: 'root', shell: 'fixture' } },
+      createElement(
+        'agent-result',
+        { metadata: { layer: 'server', server: 'harness' } },
+        createElement('agent-result', { metadata: { from: 'route', layer: 'route' }, value: 1 }, createElement('agent-text', null, 'leaf')),
+      ),
+    ));
+
+    expect(document).toEqual({
+      root: {
+        children: [{ kind: 'text', text: 'leaf' }],
+        kind: 'result',
+        metadata: { from: 'route', layer: 'root', server: 'harness', shell: 'fixture' },
+      },
+      status: 'success',
+      value: 1,
+      version: 1,
+    });
+  });
+
+  it('adopts inner metadata when the container declares none and lets a non-object container metadata win outright', () => {
+    const adopted = decodeAgentDocument(createElement(
+      'agent-result',
+      null,
+      createElement('agent-result', { metadata: { from: 'route' }, value: 1 }, createElement('agent-text', null, 'leaf')),
+    ));
+    expect(adopted.root).toEqual({ children: [{ kind: 'text', text: 'leaf' }], kind: 'result', metadata: { from: 'route' } });
+
+    const outright = decodeAgentDocument(createElement(
+      'agent-result',
+      { metadata: 'container' },
+      createElement('agent-result', { metadata: { from: 'route' }, value: 1 }, createElement('agent-text', null, 'leaf')),
+    ));
+    expect(outright.root).toEqual({ children: [{ kind: 'text', text: 'leaf' }], kind: 'result', metadata: 'container' });
+
+    // An explicit JSON null is authored metadata, not absence: it wins over the
+    // inner object exactly like any other non-object container metadata.
+    const explicitNull = decodeAgentDocument(createElement(
+      'agent-result',
+      { metadata: null },
+      createElement('agent-result', { metadata: { from: 'route' }, value: 1 }, createElement('agent-text', null, 'leaf')),
+    ));
+    expect(explicitNull.root).toEqual({ children: [{ kind: 'text', text: 'leaf' }], kind: 'result', metadata: null });
+    expect(explicitNull.root.metadata).toBeNull();
+  });
+
+  it('rejects non-JSON metadata on either side of a container merge instead of flattening it', () => {
+    // Without a layout a Date fails the document contract; merging must not
+    // spread it into `{}` first and let it through.
+    const leaf = createElement('agent-text', null, 'leaf');
+    const valued = (metadata: unknown) => createElement('agent-result', { metadata, value: 1 }, leaf);
+    expect(() => decodeAgentDocument(valued(new Date(0)))).toThrow(AgentContractError);
+
+    expect(() => decodeAgentDocument(createElement('agent-result', { metadata: new Date(0) }, valued({ from: 'route' }))))
+      .toThrow(AgentContractError);
+    expect(() => decodeAgentDocument(createElement('agent-result', { metadata: { shell: 'layout' } }, valued(new Date(0)))))
+      .toThrow(AgentContractError);
+    class Tagged { readonly tag = 'instance'; }
+    expect(() => decodeAgentDocument(createElement('agent-result', { metadata: new Tagged() }, valued({ from: 'route' }))))
+      .toThrow(AgentContractError);
+    let getterReads = 0;
+    const accessor = Object.defineProperty({}, 'lazy', { enumerable: true, get: () => { getterReads += 1; return 'read'; } });
+    expect(() => decodeAgentDocument(createElement('agent-result', { metadata: accessor }, valued({ from: 'route' }))))
+      .toThrow(AgentContractError);
+    expect(getterReads).toBe(0);
+
+    // Plain JSON objects still merge, and the merged result is a fresh snapshot.
+    const routeMetadata = { from: 'route' };
+    const merged = decodeAgentDocument(createElement('agent-result', { metadata: { shell: 'layout' } }, valued(routeMetadata)));
+    expect(merged.root.metadata).toEqual({ from: 'route', shell: 'layout' });
+    expect(merged.root.metadata).not.toBe(routeMetadata);
+  });
+
+  it('charges pre-merge metadata against the document budget at its authored depth', () => {
+    const leaf = createElement('agent-text', null, 'leaf');
+    const valued = (metadata: unknown) => createElement('agent-result', { metadata, value: 1 }, leaf);
+
+    // The container overwrites the oversized key, so the finished document is
+    // tiny — the authored inner metadata must still be charged.
+    const oversized = { note: 'x'.repeat(2_000) };
+    const overwritten = createElement('agent-result', { metadata: { note: 'short' } }, valued(oversized));
+    expect(() => decodeAgentDocument(overwritten, { maxDocumentBytes: 1_024 })).toThrow(
+      expect.objectContaining({ code: 'document-bytes-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(valued({ note: 'short' }), { maxDocumentBytes: 1_024 })).not.toThrow();
+
+    // Discarded bytes are measured together with the finished document, so a
+    // payload split between overwritten inner metadata (~660 bytes, under the
+    // cap alone) and retained content (~620 bytes, under the cap alone) still
+    // exceeds a 1,024-byte budget as the authored tree did.
+    const split = (containerMetadata: unknown) => createElement(
+      'agent-result',
+      { metadata: containerMetadata },
+      createElement('agent-result', { metadata: { note: 'i'.repeat(650) }, value: 1 }, createElement('agent-text', null, 't'.repeat(600))),
+    );
+    expect(() => decodeAgentDocument(split({ note: 'o' }), { maxDocumentBytes: 1_024 })).toThrow(
+      expect.objectContaining({ code: 'document-bytes-exceeded' }),
+    );
+    // Container metadata that wins outright drops the whole inner object; it counts too.
+    expect(() => decodeAgentDocument(split(null), { maxDocumentBytes: 1_024 })).toThrow(
+      expect.objectContaining({ code: 'document-bytes-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(split({ note: 'o' }), { maxDocumentBytes: 2_048 })).not.toThrow();
+    // Nothing is discarded when the keys are disjoint: the finished document alone decides.
+    expect(() => decodeAgentDocument(split({ other: 'o' }), { maxDocumentBytes: 1_400 })).not.toThrow();
+
+    // Inner metadata is measured one level below the container, exactly where
+    // it was authored, so lifting it into the container cannot buy a level.
+    const deep = { a: { b: { c: 'leaf' } } };
+    // Container at depth 1, inner result at depth 2, metadata object/keys from
+    // depth 3: the innermost leaf sits at depth 5 while the merged copy would
+    // sit at depth 4.
+    const lifted = createElement('agent-result', null, valued(deep));
+    expect(() => decodeAgentDocument(lifted, { maxDocumentDepth: 4 })).toThrow(
+      expect.objectContaining({ code: 'document-depth-exceeded' }),
+    );
+    expect(() => decodeAgentDocument(lifted, { maxDocumentDepth: 5 })).not.toThrow();
+
+    // JSON nodes of both operands count toward the node budget alongside the
+    // document nodes, as they do for the finished document.
+    const wide = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`k${String(index)}`, index]));
+    expect(() => decodeAgentDocument(createElement('agent-result', { metadata: wide }, valued(wide)), { maxDocumentNodes: 30 })).toThrow(
+      expect.objectContaining({ code: 'document-node-count-exceeded' }),
+    );
+
+    // Nested layouts charge each authored object once: the outer merge carries
+    // the inner merge's snapshot forward instead of counting it again. Two
+    // disjoint 2,000-key objects (4,002 JSON nodes plus a handful of document
+    // nodes) fit a 5,000-node cap; recharging the 4,001-node merged object
+    // would not.
+    const fields = (prefix: string) => Object.fromEntries(Array.from({ length: 2_000 }, (_, index) => [`${prefix}${String(index)}`, index]));
+    const nested = createElement(
+      'agent-result',
+      { metadata: { shell: 'root' } },
+      createElement('agent-result', { metadata: fields('server') }, valued(fields('route'))),
+    );
+    const document = decodeAgentDocument(nested, { maxDocumentNodes: 5_000 });
+    expect(Object.keys(document.root.metadata as Record<string, unknown>)).toHaveLength(4_001);
+    expect(document.value).toBe(1);
+
+    // An adopted value is charged where its result declared it (depth 2 under
+    // one container: object 2, `a` 3, `b` 4), not at the document root where
+    // the finished document validates it (1, 2, 3).
+    const deepValue = { a: { b: 1 } };
+    const liftedValue = createElement(
+      'agent-result',
+      null,
+      createElement('agent-result', { value: deepValue }, leaf),
+    );
+    expect(() => decodeAgentDocument(createElement('agent-result', { value: deepValue }, leaf), { maxDocumentDepth: 3 })).not.toThrow();
+    expect(() => decodeAgentDocument(liftedValue, { maxDocumentDepth: 3 })).toThrow(
+      expect.objectContaining({ code: 'document-depth-exceeded' }),
+    );
+    expect(decodeAgentDocument(liftedValue, { maxDocumentDepth: 4 }).value).toEqual(deepValue);
+
+    // Two containers charge the adopted value once, at the declaring depth.
+    const twice = createElement('agent-result', null, createElement('agent-result', null, createElement('agent-result', { value: fields('v') }, leaf)));
+    expect(decodeAgentDocument(twice, { maxDocumentNodes: 2_100 }).value).toEqual(fields('v'));
+  });
+
+  it('keeps a valued root and its nested results exactly as authored', () => {
+    const document = decodeAgentDocument(createElement(
+      'agent-result',
+      { value: 'outer' },
+      createElement('agent-result', { value: 'inner' }, createElement('agent-text', null, 'leaf')),
+    ));
+
+    expect(document).toEqual({
+      root: {
+        children: [{ children: [{ kind: 'text', text: 'leaf' }], kind: 'result' }],
+        kind: 'result',
+      },
+      status: 'success',
+      value: 'outer',
+      version: 1,
+    });
+  });
+
+  it('leaves a container with no valued child as a plain grouping node without a document value', () => {
+    const document = decodeAgentDocument(createElement(
+      'agent-result',
+      null,
+      createElement('agent-result', null, createElement('agent-text', null, 'leaf')),
+    ));
+
+    expect(document.value).toBeUndefined();
+    expect(document.root).toEqual({
+      children: [{ children: [{ kind: 'text', text: 'leaf' }], kind: 'result' }],
+      kind: 'result',
+    });
+  });
+
   it('never invokes function components while decoding Flight output', () => {
     let invoked = false;
     const Component = () => {

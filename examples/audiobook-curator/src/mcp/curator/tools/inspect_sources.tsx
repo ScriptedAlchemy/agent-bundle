@@ -1,7 +1,7 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { InspectionShelf } from '../../../components/library-shelf.js';
 import type { InspectionReceipt } from '../../../curator-core.js';
 import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
@@ -18,11 +18,9 @@ export const resultSchema = operation.resultSchema;
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as InspectionReceipt;
   return (
-    <CuratorDocument
-      headline={`Inspected ${receipt.files.length} audio files (${receipt.totalBytes} bytes).`}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{`Inspected ${receipt.files.length} audio files (${receipt.totalBytes} bytes).`}</Agent.Text>
       <InspectionShelf receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

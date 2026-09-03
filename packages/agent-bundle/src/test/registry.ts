@@ -2,7 +2,7 @@ import type { AgentStateDefinition, AgentStateEventSchemas } from '@agent-bundle
 
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest } from './manifest.ts';
-import type { AgentRouteModuleLoader } from './types.ts';
+import type { AgentLayoutModule, AgentRouteModuleLoader } from './types.ts';
 
 /**
  * The realm bridge between the generated Rstest configuration and the test
@@ -20,16 +20,20 @@ const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
  * Bumped whenever the registry layout changes so a setup module and the
  * helpers reading it never silently disagree about what the registry carries.
  * 4: `providerLoaders` (conventional context providers mounted by the harness).
+ * 5: `layoutLoaders` (conventional layouts composed around manifest renders).
  */
-export const AGENT_TEST_REGISTRY_VERSION = 4;
+export const AGENT_TEST_REGISTRY_VERSION = 5;
 
 export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;
 }>;
 
 export type AgentProviderModuleLoader = () => Promise<{ readonly default?: unknown }>;
+export type AgentLayoutModuleLoader = () => Promise<AgentLayoutModule>;
 
 export interface AgentTestRouteRegistry {
+  /** Lazy loaders keyed by compiled layout id (`layout:root`, `layout:mcp:<server>`). */
+  readonly layoutLoaders?: Readonly<Record<string, AgentLayoutModuleLoader>>;
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */
   readonly loaders: Readonly<Record<string, AgentRouteModuleLoader>>;
   readonly manifest: AgentBundleTestManifest;
@@ -131,6 +135,16 @@ export const registeredProviderLoader = (
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
   return registry.providerLoaders?.[providerId];
+};
+
+/** The layout-module loader generated beside the registered manifest for one compiled layout id. */
+export const registeredLayoutLoader = (
+  manifest: AgentBundleTestManifest,
+  layoutId: string,
+): AgentLayoutModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.layoutLoaders?.[layoutId];
 };
 
 /** The registered manifest's identity, so a loader miss can name the mismatch that caused it. */

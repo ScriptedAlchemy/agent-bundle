@@ -88,6 +88,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
   'tool:harness/context': { resultCompat: 'closed' },
   'tool:harness/echo': { input: { message: 'contract matrix' }, resultCompat: 'additive' },
   'tool:harness/journal': { resultCompat: 'closed' },
+  'tool:harness/layout-probe': { input: { label: 'contract matrix' }, resultCompat: 'additive' },
   'tool:harness/lifecycle': lifecycleFixture(),
   'tool:harness/mutation-probe': { input: { marker: 'contract matrix' }, resultCompat: 'closed' },
   'tool:harness/publish-notice': {

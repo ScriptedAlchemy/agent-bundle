@@ -611,6 +611,44 @@ it('omits a server\'s routes and silences AB4800 under an explicit custom mode',
   expect(graph.servers[0]!.routes).toEqual([]);
 });
 
+it('skips a server layout entirely when routes.servers pins that server to a non-generated mode', async () => {
+  const root = await createRoot();
+  // The custom-mode layout is deliberately invalid and duplicated across .ts
+  // and .tsx, and the remote server has no route modules: none of AB4830,
+  // AB4831, or AB4832 may fire because the opt-out means no generated worker
+  // will ever compose those layouts.
+  await writeTree(root, {
+    'src/layout.tsx': 'export default ({ children }) => children;\n',
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/layout.ts': 'export default { children: undefined };\n',
+    'src/mcp/curator/layout.tsx': 'export default { children: undefined };\n',
+    'src/mcp/curator/tools/inspect.ts': moduleSource,
+    'src/mcp/relay/layout.tsx': 'export default ({ children }) => children;\n',
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    mcp: {
+      servers: {
+        curator: { entry: './src/mcp/curator.ts' },
+        relay: { url: 'https://example.test/mcp' },
+      },
+    },
+    routes: { servers: { curator: 'custom', relay: 'remote' } },
+  }));
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.layouts!.map((layout) => layout.id)).toEqual(['layout:root']);
+  expect(graph.servers.map((server) => ({ mode: server.mode, name: server.name }))).toEqual([{ mode: 'custom', name: 'curator' }]);
+
+  // Flipping the same server back to generated re-enables both the duplicate
+  // and the contract checks.
+  const generated = await compileRouteGraph(root, fixtureConfig({
+    mcp: { servers: { relay: { url: 'https://example.test/mcp' } } },
+    routes: { servers: { curator: 'generated', relay: 'remote' } },
+  }));
+  expect(codesOf(generated.diagnostics)).toEqual(['AB4831', 'AB4830']);
+  expect(generated.layouts!.map((layout) => layout.id)).toEqual(['layout:root', 'layout:mcp:curator']);
+});
+
 it('errors with AB4801 when the conventional CLI entry and command routes both exist', async () => {
   const root = await createRoot();
   await writeTree(root, {
@@ -1399,6 +1437,94 @@ it('validates provider default factories with AB4940', async () => {
     { code: 'AB4940', source: 'src/providers/missing.ts' },
     { code: 'AB4940', source: 'src/providers/not-a-function.ts' },
   ]);
+});
+
+it('discovers the root and per-server layout modules without changing a layout-free graph digest', async () => {
+  const root = await createRoot();
+  await writeTree(root, conventionalTree);
+  const layoutFree = await compileRouteGraph(root, fixtureConfig());
+  expect(layoutFree.layouts).toBeUndefined();
+  expect('layouts' in layoutFree).toBe(false);
+
+  await writeTree(root, {
+    'src/layout.tsx': 'export default function Layout({ children }) { return children; }\n',
+    'src/mcp/curator/layout.tsx': 'export default async ({ children }) => children;\n',
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.layouts).toEqual([
+    {
+      id: 'layout:root',
+      provenance: { kind: 'conventional', relativePath: 'src/layout.tsx' },
+      scope: 'root',
+      source: join(root, 'src/layout.tsx'),
+    },
+    {
+      id: 'layout:mcp:curator',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/layout.tsx' },
+      scope: 'server',
+      serverId: 'mcp:curator',
+      source: join(root, 'src/mcp/curator/layout.tsx'),
+    },
+  ]);
+  // The layout is never a route: the server's route list and ids are unchanged.
+  expect(graph.servers[0]!.routes.map((route) => route.id)).toEqual(layoutFree.servers[0]!.routes.map((route) => route.id));
+  expect(graph.digest).not.toBe(layoutFree.digest);
+  expect(isEmptyRouteGraph(graph)).toBe(false);
+
+  // A private layout file opts out of the convention.
+  const optedOut = await createRoot();
+  await writeTree(optedOut, {
+    ...conventionalTree,
+    'src/_layout.tsx': 'export default ({ children }) => children;\n',
+    'src/mcp/curator/_layout.tsx': 'export default ({ children }) => children;\n',
+  });
+  const optedOutGraph = await compileRouteGraph(optedOut, fixtureConfig());
+  expect(optedOutGraph.layouts).toBeUndefined();
+  expect(optedOutGraph.digest).toBe(layoutFree.digest);
+});
+
+it('validates layout modules with AB4830, duplicate scopes with AB4831, and orphaned server layouts with AB4832', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    ...conventionalTree,
+    'src/layout.ts': 'export default ({ children }) => children;\n',
+    'src/layout.tsx': 'export default ({ children }) => children;\n',
+    'src/mcp/curator/layout.tsx': [
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      'export default { children: undefined };',
+      '',
+    ].join('\n'),
+    'src/mcp/ghost/layout.tsx': 'export default ({ children }) => children;\n',
+    // App routes are browser builds that never take a layout, so a server
+    // declaring only apps is orphaned for layout purposes too.
+    'src/mcp/panel/apps/main.tsx': `export const config = { resourceUri: 'ui://panel/main.html' }; ${moduleSource}`,
+    'src/mcp/panel/layout.tsx': 'export default ({ children }) => children;\n',
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics.map(({ code, sourcePath }) => ({
+    code,
+    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
+  }))).toEqual([
+    { code: 'AB4831', source: 'src/layout.tsx' },
+    { code: 'AB4830', source: 'src/mcp/curator/layout.tsx' },
+    { code: 'AB4832', source: 'src/mcp/ghost/layout.tsx' },
+    { code: 'AB4832', source: 'src/mcp/panel/layout.tsx' },
+  ]);
+  expect(graph.diagnostics[0]!.message).toContain('src/layout.ts');
+  expect(graph.diagnostics[0]!.message).toContain('src/layout.tsx');
+  expect(graph.diagnostics[1]!.message).toContain('default export is not a function component');
+  expect(graph.diagnostics[1]!.message).toContain('exports route-only inputSchema, resultSchema');
+  expect(graph.diagnostics[2]!.message).toContain('"ghost"');
+  expect(graph.diagnostics[3]!.message).toContain('"panel"');
+  expect(graph.diagnostics[3]!.message).toContain('no tool, resource, or prompt route modules');
+  // Discovery keeps the modules visible beside the errors; only the duplicate is dropped.
+  expect(graph.layouts!.map((layout) => layout.id)).toEqual(['layout:root', 'layout:mcp:curator', 'layout:mcp:ghost', 'layout:mcp:panel']);
+  expect(graph.servers.map((server) => server.name)).toEqual(['curator', 'panel']);
 });
 
 it('rejects provider key collisions and the reserved processLifetime key', async () => {

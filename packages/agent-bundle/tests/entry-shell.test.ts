@@ -364,7 +364,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
     '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
   );
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '36f042498df1933c6321bd21e4585599a0d39e5ddb3890657bd660c322f4cc23',
+    'e9126849e5ad955dbd1f3d56ccdcb0eabe1293d265f861dd5a10339c1e2a3bfb',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -709,6 +709,190 @@ it('keeps the generated provider loop and the in-process execution helper identi
     providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
     signal: new AbortController().signal,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) failed: boom');
+});
+
+const layoutFixtures = [
+  {
+    id: 'layout:mcp:curator',
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/layout.tsx' },
+    scope: 'server' as const,
+    serverId: 'mcp:curator',
+    source: '/project/src/mcp/curator/layout.tsx',
+  },
+  {
+    id: 'layout:root',
+    provenance: { kind: 'conventional' as const, relativePath: 'src/layout.tsx' },
+    scope: 'root' as const,
+    source: '/project/src/layout.tsx',
+  },
+];
+
+it('composes the root and server layout chain around generated MCP routes and never around event routes', () => {
+  const source = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [{
+      event: 'afterTool',
+      eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
+      id: 'hook:event-route:tool-after',
+      name: 'event-route-tool-after',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
+      source: '/project/src/events/tool/after.tsx',
+      targets: ['claude'],
+      tools: [],
+    }],
+    layouts: layoutFixtures,
+    routes: [
+      {
+        config: {},
+        id: 'tool:curator/inspect',
+        kind: 'tool',
+        provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        serverId: 'mcp:curator',
+        source: '/project/src/mcp/curator/tools/inspect.tsx',
+      },
+      {
+        config: { uri: 'curator://catalog' },
+        id: 'resource:other/catalog',
+        kind: 'resource',
+        provenance: { kind: 'conventional', relativePath: 'src/mcp/other/resources/catalog.tsx' },
+        serverId: 'mcp:other',
+        source: '/project/src/mcp/other/resources/catalog.tsx',
+      },
+    ],
+    serverName: 'curator',
+  });
+
+  // Layout imports are ordered by id so the emitted worker is deterministic.
+  expect(source).toContain('import * as layout0 from "/project/src/mcp/curator/layout.tsx"');
+  expect(source).toContain('import * as layout1 from "/project/src/layout.tsx"');
+  // Root first, then the owning server's layout — the outer-to-inner chain.
+  expect(source).toContain('id: "tool:curator/inspect", kind: "tool", layouts: Object.freeze([1,0])');
+  expect(source).toContain('serverId: "mcp:curator"');
+  // A route of another server takes only the root layout.
+  expect(source).toContain('id: "resource:other/catalog", kind: "resource", layouts: Object.freeze([1])');
+  // Event routes carry no layout chain.
+  expect(source).toMatch(/"hook:event-route:tool-after": Object\.freeze\(\{ event: "tool\/after", id: "event:tool\/after", kind: 'event-route', module: route2, name: "tool\/after" \}\)/u);
+  expect(source).toContain('composed = createElement(layout.module.default, { children: composed, route: { id: route.id, kind: route.kind, name: route.name, ...(route.serverId === undefined ? {} : { serverId: route.serverId }) }, signal })');
+  expect(source).toContain('must default-export a function component');
+  // The route element is awaited by one root component before wrapping, so a
+  // throwing route still rejects the Flight root exactly as it does without a layout.
+  expect(source).toContain('let composed = await route.module.default(props);');
+  expect(source).toContain('if (chain.length === 0) return createElement(route.module.default, props);');
+  expect(source).toContain('renderAgentFlight(composeLayouts(route, props, controller.signal)');
+});
+
+it('imports only the layouts some route of the worker composes through, never another server\'s layout', () => {
+  // The rendered CLI/script worker carries the whole project layout list but
+  // only root layouts apply to its routes; the curator server layout must not
+  // be evaluated in that process at all.
+  const rendered = entryShellModule.generatedRenderedRouteWorkerSource({
+    layouts: layoutFixtures,
+    routes: [
+      {
+        config: {},
+        id: 'cli:library/audit',
+        kind: 'cli',
+        provenance: { kind: 'conventional', relativePath: 'src/cli/library/audit.tsx' },
+        source: '/project/src/cli/library/audit.tsx',
+      },
+      {
+        config: {},
+        id: 'script:rebuild-index',
+        kind: 'script',
+        provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.tsx' },
+        source: '/project/src/scripts/rebuild-index.tsx',
+      },
+    ],
+  });
+  expect(rendered).toContain('import * as layout0 from "/project/src/layout.tsx"');
+  expect(rendered).not.toContain('/project/src/mcp/curator/layout.tsx');
+  expect(rendered).toContain('"cli:library/audit": Object.freeze({ id: "cli:library/audit", kind: "cli", name: "library audit", module: route0, layouts: Object.freeze([0]) })');
+  expect(rendered).toContain('"script:rebuild-index": Object.freeze({ id: "script:rebuild-index", kind: "script", name: "rebuild-index", module: route1, layouts: Object.freeze([0]) })');
+
+  // Another generated server's worker likewise skips the curator layout.
+  const otherServer = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    layouts: layoutFixtures,
+    routes: [{
+      config: { uri: 'other://catalog' },
+      id: 'resource:other/catalog',
+      kind: 'resource',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/other/resources/catalog.tsx' },
+      serverId: 'mcp:other',
+      source: '/project/src/mcp/other/resources/catalog.tsx',
+    }],
+    serverName: 'other',
+  });
+  expect(otherServer).toContain('import * as layout0 from "/project/src/layout.tsx"');
+  expect(otherServer).not.toContain('/project/src/mcp/curator/layout.tsx');
+  expect(otherServer).toContain('id: "resource:other/catalog", kind: "resource", layouts: Object.freeze([0])');
+
+  // A server layout alone, for a worker whose routes never take it, leaves the
+  // worker byte-identical to a layout-free build.
+  const serverOnly = layoutFixtures.filter((layout) => layout.scope === 'server');
+  const cliRoutes = [{
+    config: {},
+    id: 'cli:library/audit',
+    kind: 'cli' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/cli/library/audit.tsx' },
+    source: '/project/src/cli/library/audit.tsx',
+  }];
+  expect(entryShellModule.generatedRenderedRouteWorkerSource({ layouts: serverOnly, routes: cliRoutes }))
+    .toBe(entryShellModule.generatedRenderedRouteWorkerSource({ routes: cliRoutes }));
+});
+
+it('emits an identity composition when no layout exists so layout-free workers render exactly the route element', () => {
+  const source = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      serverId: 'mcp:curator',
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+  });
+
+  expect(source).toContain('const composeLayouts = (route, props) => createElement(route.module.default, props);');
+  expect(source).not.toContain('import * as layout0');
+  expect(source).not.toContain('layouts: Object.freeze(');
+});
+
+it('hands rendered CLI, projected MCP, and script routes their layout chain and protocol-facing name', () => {
+  const source = entryShellModule.generatedRenderedRouteWorkerSource({
+    layouts: layoutFixtures,
+    routes: [
+      {
+        config: {},
+        id: 'cli:library/audit',
+        kind: 'cli',
+        provenance: { kind: 'conventional', relativePath: 'src/cli/library/audit.tsx' },
+        source: '/project/src/cli/library/audit.tsx',
+      },
+      {
+        config: {},
+        id: 'tool:curator/inspect',
+        kind: 'tool',
+        provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+        serverId: 'mcp:curator',
+        source: '/project/src/mcp/curator/tools/inspect.tsx',
+      },
+      {
+        config: {},
+        id: 'script:rebuild-index',
+        kind: 'script',
+        provenance: { kind: 'conventional', relativePath: 'src/scripts/rebuild-index.tsx' },
+        source: '/project/src/scripts/rebuild-index.tsx',
+      },
+    ],
+  });
+
+  expect(source).toContain('"cli:library/audit": Object.freeze({ id: "cli:library/audit", kind: "cli", name: "library audit", module: route0, layouts: Object.freeze([1]) })');
+  expect(source).toContain('"tool:curator/inspect": Object.freeze({ id: "tool:curator/inspect", kind: "tool", name: "inspect", serverId: "mcp:curator", module: route1, layouts: Object.freeze([1,0]) })');
+  expect(source).toContain('"script:rebuild-index": Object.freeze({ id: "script:rebuild-index", kind: "script", name: "rebuild-index", module: route2, layouts: Object.freeze([1]) })');
+  expect(source).toContain('renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal)');
 });
 
 it('conditionally emits generated state mounting without leaking sqlite into volatile or stateless entries', () => {

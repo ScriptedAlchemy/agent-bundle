@@ -10,6 +10,7 @@ import type {
   CompiledAgentRoute,
   CompiledCliCommand,
   CompiledProvider,
+  CompiledLayoutScope,
   CompiledRouteGraph,
   CompiledRouteKind,
 } from '../routes/types.ts';
@@ -148,6 +149,18 @@ export const FALLBACK_PLUGIN_IDENTITY: TestManifestPluginIdentity = Object.freez
  */
 export const isFallbackPluginIdentity = (plugin: TestManifestPluginIdentity): boolean =>
   plugin === FALLBACK_PLUGIN_IDENTITY;
+/** One conventional layout module the harness composes around manifest route renders, exactly as generated workers do. */
+export interface TestableLayoutDescriptor {
+  /** `layout:root` or `layout:mcp:<server>`. */
+  readonly id: string;
+  /** Project-relative POSIX path of the layout module. */
+  readonly relativePath: string;
+  readonly scope: CompiledLayoutScope;
+  /** The owning MCP server id (`mcp:<name>`); `server` scope only. */
+  readonly serverId?: string;
+  /** Absolute layout module path. */
+  readonly source: string;
+}
 
 /** The conventional state module the generated route-unit registry can load. */
 export interface TestableStateDescriptor {
@@ -214,6 +227,8 @@ export interface AgentBundleTestManifest {
   readonly digest: string;
   /** Generated MCP server that owns the shared event runtime, when event routes and a generated server coexist. */
   readonly eventRuntimeServerId?: string;
+  /** Conventional layouts from the same pass, ordered by id; empty when the project declares none. */
+  readonly layouts: readonly TestableLayoutDescriptor[];
   /** Plugin name and version, as the generated MCP server reports them in `initialize`. */
   readonly plugin: TestManifestPluginIdentity;
   readonly projectRoot: string;
@@ -335,6 +350,15 @@ export const testManifestFromRouteGraph = (input: {
     diagnostics: [...(input.diagnostics ?? input.graph.diagnostics)],
     digest: input.graph.digest,
     ...(eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId }),
+    layouts: [...(input.graph.layouts ?? [])]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((layout) => ({
+        id: layout.id,
+        relativePath: layout.provenance.relativePath,
+        scope: layout.scope,
+        ...(layout.serverId === undefined ? {} : { serverId: layout.serverId }),
+        source: layout.source,
+      })),
     plugin: input.plugin ?? FALLBACK_PLUGIN_IDENTITY,
     projectRoot: input.projectRoot,
     proofLevel: ROUTE_UNIT_PROOF_LEVEL,
