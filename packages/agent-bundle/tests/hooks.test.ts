@@ -1323,10 +1323,41 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       stderr: 'Agent Bundle hook error: native subagentStop status is invalid\n',
       stdout: '',
     });
+    // Every documented field except git_branch is mandatory: a malformed
+    // envelope must fail closed before the handler runs with undefined fields.
+    const { git_branch: _gitBranch, ...startWithoutGitBranch } = startInput;
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutGitBranch))
+      .resolves.toMatchObject({ code: 0, stderr: '' });
+    for (const [field, message] of [
+      ['tool_call_id', 'native tool_call_id must be a string'],
+      ['parent_conversation_id', 'native parent_conversation_id must be a string'],
+      ['subagent_model', 'native subagent_model must be a string'],
+      ['is_parallel_worker', 'native is_parallel_worker must be a boolean'],
+    ] as const) {
+      const { [field]: _omitted, ...missing } = startInput;
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), missing)).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: ${message}\n`,
+        stdout: '',
+      });
+    }
+    for (const [field, message] of [
+      ['description', 'native description must be a string'],
+      ['duration_ms', 'native subagentStop duration_ms must be a number'],
+      ['modified_files', 'native modified_files must be an array of strings'],
+      ['agent_transcript_path', 'native agent_transcript_path must be a string or null'],
+    ] as const) {
+      const { [field]: _omitted, ...missing } = stopInput;
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), missing)).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: ${message}\n`,
+        stdout: '',
+      });
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
-}, 15_000);
+}, 30_000);
 
 it('rejects malformed event-specific native input before calling generated Codex and Claude hooks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-input-'));

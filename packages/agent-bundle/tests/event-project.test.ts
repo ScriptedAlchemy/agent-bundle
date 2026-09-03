@@ -132,6 +132,19 @@ it('validates the documented Cursor subagentStart and subagentStop envelopes fai
     .toThrow(/native subagent_id must be a nonempty string/u);
   expect(() => validateNativeEventEnvelope({ ...start, is_parallel_worker: 'no' }, startOptions))
     .toThrow(/native is_parallel_worker must be a boolean/u);
+  // Only git_branch is documented "(optional)"; every other field must be present.
+  const { git_branch: _gitBranch, ...withoutGitBranch } = start;
+  expect(validateNativeEventEnvelope(withoutGitBranch, startOptions)).toBe(withoutGitBranch);
+  for (const [field, message] of [
+    ['parent_conversation_id', 'native parent_conversation_id must be a nonempty string'],
+    ['tool_call_id', 'native tool_call_id must be a nonempty string'],
+    ['subagent_model', 'native subagent_model must be a string'],
+    ['is_parallel_worker', 'native is_parallel_worker must be a boolean'],
+    ['task', 'native task must be a string'],
+  ] as const) {
+    const { [field]: _omitted, ...missing } = start;
+    expect(() => validateNativeEventEnvelope(missing, startOptions)).toThrow(message);
+  }
   // Claude's agent_id/agent_type spelling is not the Cursor envelope.
   expect(() => validateNativeEventEnvelope({
     agent_id: 'abc-123',
@@ -166,6 +179,20 @@ it('validates the documented Cursor subagentStart and subagentStop envelopes fai
     .toThrow(/native modified_files must be an array of strings/u);
   expect(() => validateNativeEventEnvelope({ ...stop, agent_transcript_path: 7 }, stopOptions))
     .toThrow(/native agent_transcript_path must be a string or null/u);
+  // The documented subagentStop input marks no field optional.
+  for (const [field, message] of [
+    ['task', 'native task must be a string'],
+    ['description', 'native description must be a string'],
+    ['summary', 'native summary must be a string'],
+    ['duration_ms', 'native duration_ms must be a number'],
+    ['message_count', 'native message_count must be a number'],
+    ['tool_call_count', 'native tool_call_count must be a number'],
+    ['modified_files', 'native modified_files must be an array of strings'],
+    ['agent_transcript_path', 'native agent_transcript_path must be a string or null'],
+  ] as const) {
+    const { [field]: _omitted, ...missing } = stop;
+    expect(() => validateNativeEventEnvelope(missing, stopOptions)).toThrow(message);
+  }
 });
 
 it('validates prompt/submit and session/end host envelopes fail closed', () => {

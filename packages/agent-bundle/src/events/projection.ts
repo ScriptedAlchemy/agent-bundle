@@ -185,13 +185,15 @@ export const validateNativeEventEnvelope = (
     }
     if (canonicalEvent === 'agent/start') {
       // https://cursor.com/docs/hooks#subagentstart (retrieved 2026-09-02).
+      // Only git_branch is documented "(optional)"; every other field is required.
       requireNativeString(native, 'subagent_id');
       requireNativeString(native, 'subagent_type');
       requireNativeStringValue(native, 'task');
-      for (const field of ['parent_conversation_id', 'tool_call_id', 'subagent_model', 'git_branch']) {
-        if (Object.hasOwn(native, field)) requireNativeStringValue(native, field);
-      }
-      if (Object.hasOwn(native, 'is_parallel_worker')) requireNativeBoolean(native, 'is_parallel_worker');
+      requireNativeString(native, 'parent_conversation_id');
+      requireNativeString(native, 'tool_call_id');
+      requireNativeStringValue(native, 'subagent_model');
+      requireNativeBoolean(native, 'is_parallel_worker');
+      if (Object.hasOwn(native, 'git_branch')) requireNativeStringValue(native, 'git_branch');
     }
     if (canonicalEvent === 'agent/stop') {
       // https://cursor.com/docs/hooks#subagentstop (retrieved 2026-09-02).
@@ -199,23 +201,21 @@ export const validateNativeEventEnvelope = (
       if (!['completed', 'error', 'aborted'].includes(String(native.status))) {
         return nativeEventError('native status is invalid');
       }
+      // The documented subagentStop input marks no field optional;
+      // agent_transcript_path is `string | null`.
       for (const field of ['task', 'description', 'summary']) {
-        if (Object.hasOwn(native, field)) requireNativeStringValue(native, field);
+        requireNativeStringValue(native, field);
       }
       for (const field of ['duration_ms', 'message_count', 'tool_call_count']) {
-        if (Object.hasOwn(native, field)) requireNativeNumber(native, field);
+        requireNativeNumber(native, field);
       }
       requireNativeNumber(native, 'loop_count');
-      if (
-        Object.hasOwn(native, 'modified_files')
-        && (!Array.isArray(native.modified_files) || !native.modified_files.every((file) => typeof file === 'string'))
-      ) {
+      if (!Array.isArray(native.modified_files) || !native.modified_files.every((file) => typeof file === 'string')) {
         return nativeEventError('native modified_files must be an array of strings');
       }
       if (
-        Object.hasOwn(native, 'agent_transcript_path')
-        && native.agent_transcript_path !== null
-        && typeof native.agent_transcript_path !== 'string'
+        !Object.hasOwn(native, 'agent_transcript_path')
+        || (native.agent_transcript_path !== null && typeof native.agent_transcript_path !== 'string')
       ) {
         return nativeEventError('native agent_transcript_path must be a string or null');
       }

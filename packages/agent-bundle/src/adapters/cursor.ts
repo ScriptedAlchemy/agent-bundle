@@ -111,11 +111,13 @@ const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 /**
- * The exact `format: "uri"` check the pinned plugin schema applies to
- * `homepage`/`repository`, so metadata is validated as the string that will
- * be emitted rather than as the normalized form `new URL()` would accept.
+ * The exact `format: "uri"` / `format: "email"` checks the pinned plugin
+ * schema applies to `homepage`/`repository` and `author.email`, so metadata is
+ * validated as the string that will be emitted rather than through a looser
+ * local approximation (`new URL()` normalizes; a hand regex admits `a@b..c`).
  */
 const validateSchemaUri = validator.compile({ type: 'string', format: 'uri' });
+const validateSchemaEmail = validator.compile({ type: 'string', format: 'email' });
 
 /** The pinned Cursor document validators, shared with the unified bundle adapter. */
 export const cursorPluginValidator = validatePlugin;
@@ -310,7 +312,7 @@ const isAbsoluteUrl = (value: unknown): value is string => {
 };
 
 const isEmail = (value: unknown): value is string =>
-  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+  isNonemptyString(value) && validateSchemaEmail(value) === true;
 
 const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isNonemptyString);
@@ -387,7 +389,7 @@ export const planCursorManifestMetadata = (
         diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.name.invalid`, 'Cursor author.name must be a nonempty string.'));
       }
       if (author['email'] !== undefined && !isEmail(author['email'])) {
-        diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.email.invalid`, 'Cursor author.email must be a valid email address.'));
+        diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.email.invalid`, "Cursor author.email must be an email address the pinned schema's email format admits."));
       }
       if (extra.length === 0 && isNonemptyString(author['name']) && (author['email'] === undefined || isEmail(author['email']))) {
         document['author'] = Object.freeze({

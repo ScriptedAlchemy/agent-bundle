@@ -534,21 +534,32 @@ export const encodeCursorPlaygroundInput = (
   // 2026-09-02): Cursor names the subagent fields subagent_* and reports the
   // completion summary and follow-up loop count instead of Claude's
   // last_assistant_message / stop_hook_active pair.
+  // Every documented field except git_branch is required, so the simulated
+  // envelope carries neutral values for the ones canonical input lacks.
   ...(nativeEvent === 'subagentStart'
     ? {
+        is_parallel_worker: false,
+        parent_conversation_id: input.sessionId,
         subagent_id: input.agentId,
+        subagent_model: input.model ?? '',
         subagent_type: input.agentType,
         task: '',
-        tool_call_id: input.toolUseId,
+        tool_call_id: input.toolUseId ?? '',
       }
     : {}),
   ...(nativeEvent === 'subagentStop'
     ? {
         agent_transcript_path: input.agentTranscriptPath ?? null,
+        description: '',
+        duration_ms: 0,
         loop_count: input.stopHookActive === true ? 1 : 0,
+        message_count: 0,
+        modified_files: [],
         status: 'completed',
         subagent_type: input.agentType,
-        summary: input.lastAssistantMessage,
+        summary: input.lastAssistantMessage ?? '',
+        task: '',
+        tool_call_count: 0,
       }
     : {}),
   session_id: input.sessionId,
@@ -771,8 +782,8 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  cwd: canonicalInput.cwd,',
   '  hook_event_name: nativeEvent,',
   '  ...(canonicalEvent === "stop" ? { loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed" } : {}),',
-  '  ...(canonicalEvent === "agentStart" ? { subagent_id: canonicalInput.agentId, subagent_type: canonicalInput.agentType, task: "", tool_call_id: canonicalInput.toolUseId } : {}),',
-  '  ...(canonicalEvent === "agentStop" ? { agent_transcript_path: canonicalInput.agentTranscriptPath ?? null, loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed", subagent_type: canonicalInput.agentType, summary: canonicalInput.lastAssistantMessage } : {}),',
+  '  ...(canonicalEvent === "agentStart" ? { is_parallel_worker: false, parent_conversation_id: canonicalInput.sessionId, subagent_id: canonicalInput.agentId, subagent_model: canonicalInput.model ?? "", subagent_type: canonicalInput.agentType, task: "", tool_call_id: canonicalInput.toolUseId ?? "" } : {}),',
+  '  ...(canonicalEvent === "agentStop" ? { agent_transcript_path: canonicalInput.agentTranscriptPath ?? null, description: "", duration_ms: 0, loop_count: canonicalInput.stopHookActive === true ? 1 : 0, message_count: 0, modified_files: [], status: "completed", subagent_type: canonicalInput.agentType, summary: canonicalInput.lastAssistantMessage ?? "", task: "", tool_call_count: 0 } : {}),',
   '  session_id: canonicalInput.sessionId,',
   '  ...(subagentEvent ? {} : { tool_input: canonicalInput.toolInput, tool_name: canonicalInput.toolName, tool_use_id: canonicalInput.toolUseId }),',
   '  ...(canonicalEvent === "afterTool" && canonicalInput.toolResponse !== undefined ? { tool_output: JSON.stringify(canonicalInput.toolResponse) } : {}),',
@@ -833,15 +844,19 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '    return;',
   '  }',
   '  if (canonicalEvent === "agentStart") {',
-  '    requireString(input, "subagent_id");',
-  '    requireString(input, "subagent_type");',
-  '    requireString(input, "task");',
+  '    for (const field of ["subagent_id", "subagent_type", "task", "parent_conversation_id", "tool_call_id", "subagent_model"]) requireString(input, field);',
+  '    if (typeof input.is_parallel_worker !== "boolean") fail("native is_parallel_worker must be a boolean");',
+  '    if (input.git_branch !== undefined) requireString(input, "git_branch");',
   '    return;',
   '  }',
   '  if (canonicalEvent === "agentStop") {',
-  '    requireString(input, "subagent_type");',
+  '    for (const field of ["subagent_type", "task", "description", "summary"]) requireString(input, field);',
   '    if (!["completed", "error", "aborted"].includes(input.status)) fail("native subagentStop status is invalid");',
-  '    if (typeof input.loop_count !== "number") fail("native subagentStop loop_count must be a number");',
+  '    for (const field of ["duration_ms", "message_count", "tool_call_count", "loop_count"]) {',
+  '      if (typeof input[field] !== "number") fail(`native subagentStop ${field} must be a number`);',
+  '    }',
+  '    if (!Array.isArray(input.modified_files) || !input.modified_files.every((file) => typeof file === "string")) fail("native modified_files must be an array of strings");',
+  '    if (input.agent_transcript_path !== null && typeof input.agent_transcript_path !== "string") fail("native agent_transcript_path must be a string or null");',
   '    return;',
   '  }',
   '  if (typeof input.loop_count !== "number") fail("native stop loop_count must be a number");',

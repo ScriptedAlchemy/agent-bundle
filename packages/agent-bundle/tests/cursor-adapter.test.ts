@@ -276,13 +276,22 @@ it('rejects cursor URLs that new URL() would normalize but the pinned uri format
     expect(manifest).not.toHaveProperty('homepage');
     expect(manifest).not.toHaveProperty('repository');
   }
+  // author.email goes through the same pinned `format: "email"` checker; a
+  // hand regex would admit the doubled dot and defer the failure to the
+  // generic schema pass.
+  const doubledDot = withCursorConfig({ author: { email: 'dev@example..com', name: 'Example' } });
+  expect(cursorAdapter.plan(doubledDot).diagnostics.map((diagnostic) => diagnostic.code))
+    .toEqual(['cursor.manifest.author.email.invalid']);
+  expect(JSON.parse(writeContents(doubledDot)['.cursor-plugin/plugin.json']!)).not.toHaveProperty('author');
   const exact = withCursorConfig({
+    author: { email: 'dev@example.com', name: 'Example' },
     homepage: 'https://example.test',
     repository: 'https://EXAMPLE.test/a%2Fb?ref=main#readme',
   });
   const plan = cursorAdapter.plan(exact);
   expect(plan.diagnostics).toEqual([]);
   const manifest = JSON.parse(writeContents(exact)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest['author']).toEqual({ email: 'dev@example.com', name: 'Example' });
   expect(manifest['homepage']).toBe('https://example.test');
   expect(manifest['repository']).toBe('https://EXAMPLE.test/a%2Fb?ref=main#readme');
 });
