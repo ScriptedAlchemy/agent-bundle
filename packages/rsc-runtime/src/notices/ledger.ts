@@ -18,6 +18,7 @@ import {
   type AgentNoticeAuthorizationDecision,
   type AgentNoticeAuthorizationRequest,
   type AgentNoticeAuthorizer,
+  type AgentNoticeAvailabilitySignalOptions,
   type AgentNoticeDelivery,
   type AgentNoticeExpiryOptions,
   type AgentNoticeLedger,
@@ -187,6 +188,17 @@ const publishProgram = Effect.fnUntraced(function*(
     const dedupeKey = input.dedupeKey === undefined
       ? undefined
       : nonEmptyText(input.dedupeKey, 'Notice dedupe key');
+    const retryBudget = input.retryBudget;
+    if (retryBudget !== undefined && (!Number.isInteger(retryBudget) || retryBudget < 1)) {
+      throw new AgentNoticeError('invalid-input', 'Notice retryBudget must be a positive integer');
+    }
+    const nextAttemptAt = input.nextAttemptAt === undefined
+      ? undefined
+      : timestamp(input.nextAttemptAt, 'Notice nextAttemptAt');
+    if (nextAttemptAt !== undefined && expiresAt !== undefined
+      && Date.parse(nextAttemptAt) >= Date.parse(expiresAt)) {
+      throw new AgentNoticeError('invalid-input', 'Notice nextAttemptAt must be earlier than expiresAt');
+    }
     const id = `notice_${createHash('sha256')
       .update(canonicalJson({ idempotencyKey, recipient: target }), 'utf8')
       .digest('hex')}`;
@@ -197,8 +209,10 @@ const publishProgram = Effect.fnUntraced(function*(
       ...(dedupeKey === undefined ? {} : { dedupeKey }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
       id,
+      ...(nextAttemptAt === undefined ? {} : { nextAttemptAt }),
       priority: priority(input.priority),
       recipient: target,
+      ...(retryBudget === undefined ? {} : { retryBudget }),
       state: 'pending',
     });
     return { dedupeKey, id, idempotencyKey, notice, target };
@@ -321,8 +335,10 @@ export const createAgentNoticeLedger = (
           && notice.expiresAt !== undefined
           && Date.parse(notice.expiresAt) <= admissionTime);
         const candidates = before.state.notices.filter((notice) =>
-          notice.state === 'pending'
+          (notice.state === 'pending'
+            || notice.state === 'attempted' && notice.attempts.length < (notice.retryBudget ?? 1))
           && Date.parse(notice.createdAt) <= admissionTime
+          && (notice.nextAttemptAt === undefined || Date.parse(notice.nextAttemptAt) <= admissionTime)
           && (notice.expiresAt === undefined
             || Date.parse(notice.expiresAt) > admissionTime)
           && recipientMatchesPrincipal(notice.recipient, request.principal));
@@ -362,6 +378,55 @@ export const createAgentNoticeLedger = (
 
       let closed = false;
       const handle: AgentNoticesHandle = Object.freeze({
+        acknowledge(id: string) {
+          return runPromise(Effect.gen(function*() {
+            yield* noticeEffect(() => assertOpen(closed, request.signal));
+            const noticeId = yield* noticeEffect(() => nonEmptyText(id, 'Notice id'));
+            const before = yield* storeEffect(() => store.read({ signal: request.signal }));
+            const target = before.state.notices.find((notice) => notice.id === noticeId);
+            if (target === undefined) {
+              return yield* Effect.fail(new AgentNoticeError('invalid-input', `Unknown notice ${noticeId}`));
+            }
+            if (!recipientMatchesPrincipal(target.recipient, request.principal)) {
+              return yield* Effect.fail(new AgentNoticeError(
+                'unauthorized',
+                'Only the notice recipient may acknowledge it',
+              ));
+            }
+            const authorization = yield* authorizeEffect(options.authorize, {
+              noticeId,
+              phase: 'acknowledge',
+              principal: request.principal,
+              recipient: target.recipient,
+            });
+            if (authorization.state === 'unavailable') {
+              return yield* Effect.fail(new AgentNoticeError(
+                'unauthorized',
+                'Notice acknowledgement authorization is unavailable',
+              ));
+            }
+            const committed = yield* storeEffect(() => store.dispatch(
+              'acknowledged',
+              {
+                at: request.invocation.startedAt,
+                id: noticeId,
+                invocationId: request.invocation.id,
+              },
+              {
+                idempotencyKey: `agent-notices:ack:${request.invocation.id}:${noticeId}`,
+                signal: request.signal,
+              },
+            ));
+            const acknowledged = committed.state.notices.find((notice) => notice.id === noticeId);
+            if (acknowledged === undefined || acknowledged.state !== 'acknowledged') {
+              return yield* Effect.fail(new AgentNoticeError(
+                'invalid-input',
+                `Notice ${noticeId} is not acknowledgeable from state ${acknowledged?.state ?? 'missing'}`,
+              ));
+            }
+            return acknowledged;
+          }));
+        },
         inbox() {
           return runPromise(Effect.gen(function*() {
             yield* noticeEffect(() => assertOpen(closed, request.signal));
@@ -393,6 +458,26 @@ export const createAgentNoticeLedger = (
   async read(): Promise<AgentNoticeLedgerSnapshot> {
     const snapshot = await store.read();
     return snapshotFrom(snapshot.revision, snapshot.state);
+  },
+
+  signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const at = yield* noticeEffect(() => timestamp(options.at, 'Notice availability time'));
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
+      const noticeIds = yield* noticeEffect(() => {
+        if (options.noticeIds.length === 0) {
+          throw new AgentNoticeError('invalid-input', 'Notice availability requires at least one notice id');
+        }
+        return options.noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
+      });
+      const committed = yield* storeEffect(() => store.dispatch(
+        'availability-signalled',
+        { at, channel: 'mcp-resource-updated', noticeIds },
+        { idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
   },
 
   withdraw(id: string, withdrawal: AgentNoticeWithdrawOptions): Promise<AgentNoticeLedgerSnapshot> {

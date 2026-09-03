@@ -70,12 +70,14 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
     openRequest: async () => Object.freeze({
       close: () => undefined,
       handle: Object.freeze({
+        acknowledge: reject,
         inbox: reject,
         publish: reject,
         read: reject,
       }),
     }),
     read: reject,
+    signalAvailability: reject,
     withdraw: reject,
   });
 };
