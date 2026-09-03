@@ -2,11 +2,11 @@ import { createElement } from 'react';
 import { z } from 'zod';
 
 import { Agent, agent, type JsonValue } from '../index.js';
-import { AgentNoticeError, type AgentNotice } from './index.js';
+import { AGENT_NOTICE_INBOX_URI, AgentNoticeError, type AgentNotice } from './index.js';
 
+export { AGENT_NOTICE_INBOX_URI };
 export const AGENT_NOTICE_INBOX_ROUTE_ID = 'agent-bundle:notice-inbox';
 export const AGENT_NOTICE_INBOX_ROUTE_NAME = 'notice-inbox';
-export const AGENT_NOTICE_INBOX_URI = 'agent-bundle://notices/inbox';
 
 export const config = Object.freeze({
   description: 'Read recipient-scoped pending notices without acknowledging them or marking delivery attempted.',
@@ -25,6 +25,9 @@ export const resultSchema = z.object({
 }).strict();
 
 const projectNotice = (notice: AgentNotice) => Object.freeze({
+  // Receipts, not state claims: `availability` counts resources/updated
+  // signals sent for this notice; `exposure` counts inbox reads that served it.
+  availability: notice.availability,
   content: notice.content,
   createdAt: notice.createdAt,
   ...(notice.expiresAt === undefined ? {} : { expiresAt: notice.expiresAt }),

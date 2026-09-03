@@ -257,6 +257,62 @@ expires instead of retaining unused attempts. Wire-level
 `signalAvailability()` as availability receipts, and MCP inbox reads record
 exposure receipts; neither is a delivery claim.
 
+`createNoticeInboxSignaller({ store })` is the `mcp-resource-updated` route
+itself: one long-lived MCP connection's subscription to the reserved inbox
+resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
+own handle on the workspace-durable store its Flight worker mounts
+(`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
+after every completed render `observe(send)` — detached from that render's
+response, so a slow subscriber's wire never delays a tool result — reads the ledger, reserves the
+budget slot of the subscriber's newly eligible pending notices as one
+compare-and-swap against the revision it read (`reserveAvailability()` with
+`expectedRevision`), sends at most one `notifications/resources/updated`, and
+then finalizes the reservation into the availability receipt
+(`signalAvailability()`) — or releases it (`releaseAvailability()`) when the
+protocol write failed, so the receipt only ever means the write succeeded and
+a failed send costs no budget. Eligibility is recipient-matched against the
+subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
+slot another signaller currently holds (a hold older than
+`AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned; a live
+holder renews it under its key while its write is pending, and the reducer
+refuses a renewal once another key has legitimately taken over — or once the
+takeover's receipt has spent the budget and cleared the hold), and is
+bounded by `retryBudget` (availability receipts per notice, durable across
+restarts); because the slot is held before the wire write, two server processes
+over one store can never both signal the same notice; a receipt presented by a
+key that lost its hold is refused (`reservation-lost`) rather than counted, so
+a stale send and a takeover send can never push a budget-one notice to two.
+Ownership, not state, decides whether a receipt lands: a notice acknowledged,
+expired, or withdrawn while its send was in flight still keeps the hold, so the
+receipt for the send that happened is recorded on it without moving its state,
+and a key that never held the slot is refused on a terminal notice too. These
+reducer semantics are schema version 2 of the notice ledger
+(`AGENT_NOTICE_STATE_VERSION`); a workspace-durable store journaled under
+version 1 is migrated from its materialized head on first open rather than
+replayed by a reducer that would disagree with it. A
+send that reached the wire but whose receipt commit failed stays owed: the same
+idempotent receipt is retried on the renewal cadence (renewing its hold as it
+goes), before any later observation spends, and on `close()`, so a live process
+cannot lose a send the wire already carried; only a process that dies while the
+ledger is refusing writes leaves an unrecorded send, and its hold then lapses
+after the TTL. A renewal still awaiting the ledger when a send settles is
+awaited before the hold is released or finalized, so no orphan hold is
+re-created behind a release. Shutdown never waits on the wire, nor on a ledger
+call that has not answered: `close()` abandons a `resources/updated` write or
+ledger call still pending (its outcome is unknown, so nothing is inferred from
+it — no receipt, no release — and its hold lapses after the TTL), then gives
+owed receipts and the store close one chance bounded by `closeTimeoutMs`
+(default 5 s), so neither a subscriber that stopped reading nor a store that
+stopped answering can wedge server teardown. The generated
+server coalesces observations — one in flight, at most one owed — because every
+observation reads the whole ledger, so renders completing behind a pending
+write never queue per-render work. Exposure and availability
+receipts never re-trigger a signal, so a subscribed client cannot be driven into
+a refetch loop. Subscribing fails closed when the store is unreadable,
+`unsubscribe()` resolves only after in-flight observations settle, and only the
+workspace-durable lifetime is wired — volatile stores live in the worker's
+heap, so those servers honestly advertise no `resources.subscribe`.
+
 States are `pending | attempted | expired | unavailable | withdrawn |
 acknowledged`. The ledger still does not claim `delivered` or `read` as
 states: observing the recipient process is not evidence the agent saw the

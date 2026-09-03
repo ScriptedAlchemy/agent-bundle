@@ -21,6 +21,7 @@ import type {
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
+import type { AgentNoticeInboxSignaller, AgentNoticePrincipal } from '@agent-bundle/runtime/notices';
 import type { ReactNode } from 'react';
 
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
@@ -29,7 +30,7 @@ import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
+import type { HarnessOptionsArguments, RenderRouteContext, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
 
 /** Where an in-memory projection result came from and what it proves. */
@@ -166,6 +167,7 @@ interface Renderer {
   readonly agent: typeof import('@agent-bundle/runtime').agent;
   readonly createElement: typeof import('react').createElement;
   readonly createGeneratedRuntimeState: typeof createGeneratedRuntimeState;
+  readonly createNoticeInboxSignaller: typeof import('@agent-bundle/runtime/notices').createNoticeInboxSignaller;
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
   readonly noticeInboxRoute: typeof import('@agent-bundle/runtime/notices/inbox-route');
   readonly renderAgentFlight: typeof import('@agent-bundle/runtime/flight/server').renderAgentFlight;
@@ -189,10 +191,11 @@ let dependenciesPromise: Promise<ServerRuntime & Renderer & Sdk> | undefined;
  */
 const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
   dependenciesPromise ??= (async () => {
-    const [serverRuntime, runtime, mount, noticeInboxRoute, flight, react, client] = await Promise.all([
+    const [serverRuntime, runtime, mount, notices, noticeInboxRoute, flight, react, client] = await Promise.all([
       import('../mcp-server-runtime.ts'),
       import('@agent-bundle/runtime'),
       import('@agent-bundle/runtime/mount'),
+      import('@agent-bundle/runtime/notices'),
       import('@agent-bundle/runtime/notices/inbox-route'),
       import('@agent-bundle/runtime/flight/server'),
       import('react'),
@@ -205,6 +208,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
       createElement: react.createElement,
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createGeneratedRouteMcpServer: serverRuntime.createGeneratedRouteMcpServer,
+      createNoticeInboxSignaller: notices.createNoticeInboxSignaller,
       createWarmFlightHost: runtime.createWarmFlightHost,
       noticeInboxRoute,
       renderAgentFlight: flight.renderAgentFlight,
@@ -234,6 +238,25 @@ const drain = async (stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> 
     chunks.push(next.value);
   }
 };
+
+const withContextIdentity = (
+  signaller: AgentNoticeInboxSignaller,
+  context: RenderRouteContext,
+): AgentNoticeInboxSignaller => Object.freeze({
+  inboxUri: signaller.inboxUri,
+  get subscribed(): boolean {
+    return signaller.subscribed;
+  },
+  close: () => signaller.close(),
+  observe: (send: () => Promise<void>) => signaller.observe(send),
+  subscribe: (principal: AgentNoticePrincipal) => signaller.subscribe({
+    actor: context.actor ?? principal.actor,
+    host: context.host ?? principal.host,
+    session: context.session ?? principal.session,
+    workspace: context.workspace ?? principal.workspace,
+  }),
+  unsubscribe: () => signaller.unsubscribe(),
+});
 
 const streamOf = (chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> =>
   new ReadableStream<Uint8Array>({
@@ -398,9 +421,21 @@ export const openInMemoryMcpServer = async <
     ...(runtimeState === undefined ? {} : { runtimeState }),
   });
 
+  // Mirrors the generated entry: only a workspace-durable store can be shared
+  // between the render side and the server process, so only that lifetime
+  // advertises `resources.subscribe` for the notice inbox. The warm host owns
+  // the state's lifetime, so the signaller's store handle does not close it,
+  // and the harness context seam overrides the subscriber's transport
+  // identity exactly as it overrides every render's.
+  const notices = runtimeState === undefined || options.state?.definition.lifetime !== 'workspace-durable'
+    ? undefined
+    : withContextIdentity(dependencies.createNoticeInboxSignaller({
+      store: { close: async () => undefined, noticeLedger: () => runtimeState.noticeLedger() },
+    }), context);
   const server = await dependencies.createGeneratedRouteMcpServer({
     artifactEpoch,
     host,
+    ...(notices === undefined ? {} : { notices }),
     plugin: manifest.plugin,
     routes: routes as never,
   });

@@ -71,6 +71,23 @@ export interface AgentNoticeAvailability {
   readonly lastAt: string;
 }
 
+/**
+ * A signaller's durable hold on one `resources/updated` send that has not yet
+ * succeeded. It spends no budget: the receipt is recorded only once the
+ * protocol write succeeds (`signalAvailability`) and released when it fails
+ * (`releaseAvailability`). It exists so two signallers over one store cannot
+ * both send for the same budget slot, and it is honoured only for
+ * `AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` so a crashed holder cannot
+ * starve the notice.
+ */
+export interface AgentNoticeAvailabilityReservation {
+  readonly at: string;
+  readonly key: string;
+}
+
+/** How long a reservation blocks other signallers before it is treated as abandoned. */
+export const AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS = 30_000;
+
 export interface AgentNoticeAcknowledgement {
   readonly acknowledgedAt: string;
   readonly invocationId: string;
@@ -82,6 +99,7 @@ export interface AgentNotice {
   readonly acknowledgement?: AgentNoticeAcknowledgement;
   readonly attempts: readonly AgentNoticeAttemptReceipt[];
   readonly availability?: AgentNoticeAvailability;
+  readonly availabilityReservation?: AgentNoticeAvailabilityReservation;
   readonly content: AgentDocumentSnapshot;
   readonly createdAt: string;
   readonly dedupeKey?: string;
@@ -179,15 +197,49 @@ export interface AgentNoticeRequestLease {
 
 export interface AgentNoticeAvailabilitySignalOptions {
   readonly at: string;
+  /**
+   * Compare-and-swap guard: the receipt commits only if the ledger is still at
+   * this revision, so concurrent signallers over one durable store cannot both
+   * spend a notice's budget (typed `revision-conflict` otherwise).
+   */
+  readonly expectedRevision?: number;
   readonly idempotencyKey: string;
   readonly noticeIds: readonly string[];
+  /**
+   * The reservation this signal finalizes. The receipt is recorded only on
+   * notices this key still holds and the hold is cleared with it; a key that
+   * lost the hold (another signaller took over after the TTL) records nothing
+   * and the call rejects with `reservation-lost`, so two holders can never
+   * both spend one budget slot.
+   */
+  readonly reservationKey?: string;
+}
+
+export interface AgentNoticeAvailabilityReservationOptions {
+  readonly at: string;
+  /** Compare-and-swap guard against the revision the eligibility was computed from. */
+  readonly expectedRevision?: number;
+  readonly idempotencyKey: string;
+  readonly noticeIds: readonly string[];
+  readonly reservationKey: string;
+}
+
+export interface AgentNoticeAvailabilityReleaseOptions {
+  readonly idempotencyKey: string;
+  readonly noticeIds: readonly string[];
+  /** Only a reservation with this key is released; a newer holder's is left intact. */
+  readonly reservationKey: string;
 }
 
 export interface AgentNoticeLedger {
   expire(options: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot>;
   openRequest(request: AgentNoticeRequest): Promise<AgentNoticeRequestLease>;
   read(): Promise<AgentNoticeLedgerSnapshot>;
-  /** Records a wire-level resources/updated signal; availability, never delivery. */
+  /** Releases a reservation whose resources/updated send failed; no budget was spent. */
+  releaseAvailability(options: AgentNoticeAvailabilityReleaseOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Holds one budget slot for a resources/updated send about to happen; records no receipt. */
+  reserveAvailability(options: AgentNoticeAvailabilityReservationOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Records a wire-level resources/updated signal that succeeded; availability, never delivery. */
   signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot>;
   withdraw(id: string, options: AgentNoticeWithdrawOptions): Promise<AgentNoticeLedgerSnapshot>;
 }
@@ -196,6 +248,8 @@ export type AgentNoticeErrorCode =
   | 'aborted'
   | 'invalid-input'
   | 'request-closed'
+  /** A reserved availability receipt was refused because the reservation key no longer holds the slot. */
+  | 'reservation-lost'
   | 'unauthorized';
 
 export class AgentNoticeError extends Error {

@@ -8,6 +8,7 @@
  * transactions, revisions, and idempotency.
  */
 export {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
 } from './contract.js';
@@ -19,6 +20,9 @@ export type {
   AgentNoticeAuthorizationRequest,
   AgentNoticeAuthorizer,
   AgentNoticeAvailability,
+  AgentNoticeAvailabilityReleaseOptions,
+  AgentNoticeAvailabilityReservation,
+  AgentNoticeAvailabilityReservationOptions,
   AgentNoticeAvailabilitySignalOptions,
   AgentNoticeDelivery,
   AgentNoticeErrorCode,
@@ -55,6 +59,17 @@ export type {
   CreateAgentNoticeLedgerOptions,
 } from './ledger.js';
 export {
+  AGENT_NOTICE_INBOX_URI,
+  createNoticeInboxSignaller,
+} from './resource-updated.js';
+export type {
+  AgentNoticeInboxSignaller,
+  AgentNoticeInboxSignalOutcome,
+  AgentNoticeInboxStore,
+  CreateNoticeInboxSignallerOptions,
+} from './resource-updated.js';
+export {
+  AGENT_NOTICE_STATE_VERSION,
   agentNoticeEventSchemas,
   agentNoticeStateDefinition,
   recipientMatchesPrincipal,

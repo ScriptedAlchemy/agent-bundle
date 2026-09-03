@@ -16,7 +16,7 @@
  */
 import { Worker } from 'node:worker_threads';
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import {
   AgentRuntimeError,
   agent,
@@ -26,6 +26,7 @@ import {
   createWarmFlightHost,
   projectMcpRenderStream,
   runAgentRequest,
+  unavailable,
 } from '@agent-bundle/runtime';
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
@@ -44,6 +45,7 @@ import type {
   Observed,
   WarmFlightHost,
 } from '@agent-bundle/runtime';
+import type { AgentNoticeInboxSignaller, AgentNoticeInboxSignalOutcome } from '@agent-bundle/runtime/notices';
 
 /** One route the generated server hosts, as the generated module records it. */
 export interface GeneratedRouteRecord {
@@ -233,12 +235,29 @@ export const advertisedOutputSchema = (schema: unknown): unknown => {
   return objectRootedJsonSchema(jsonSchema) ? schema : undefined;
 };
 
+/**
+ * Runs after every render the server completes, successful or not: a route
+ * that published a notice and then failed still advanced the ledger. The hook
+ * never throws into the request path and resolves as soon as the follow-up
+ * work is scheduled, never waiting on another connection's wire.
+ */
+export type GeneratedRenderSettled = () => Promise<void>;
+
+const settled = async <T>(operation: () => Promise<T>, afterRender: GeneratedRenderSettled | undefined): Promise<T> => {
+  try {
+    return await operation();
+  } finally {
+    await afterRender?.();
+  }
+};
+
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
 export const registerGeneratedRoutes = (
   server: McpServer,
   routes: Readonly<Record<string, GeneratedRouteRecord>>,
   dispatcher: AgentRenderDispatcher,
   artifactEpoch: string,
+  afterRender?: GeneratedRenderSettled,
 ): void => {
   for (const route of Object.values(routes)) {
     switch (route.kind) {
@@ -248,7 +267,7 @@ export const registerGeneratedRoutes = (
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
           inputSchema: route.module.inputSchema,
           ...(outputSchema === undefined ? {} : { outputSchema }),
-        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
+        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
           const rendered = await renderGeneratedRoute(
             dispatcher,
@@ -259,7 +278,7 @@ export const registerGeneratedRoutes = (
             { clientName },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
-        }) as never);
+        }, afterRender)) as never);
         break;
       }
       case 'resource': {
@@ -271,7 +290,7 @@ export const registerGeneratedRoutes = (
           route.name,
           uri,
           selectedConfig(route.config, ['_meta', 'description', 'icons', 'mimeType', 'title']) as never,
-          (async (resourceUri: URL, context: GeneratedRouteRequestContext) => {
+          (async (resourceUri: URL, context: GeneratedRouteRequestContext) => settled(async () => {
             const clientName = server.server.getClientVersion()?.name;
             return (await renderGeneratedRoute(
               dispatcher,
@@ -281,7 +300,7 @@ export const registerGeneratedRoutes = (
               context,
               { clientName },
             )).result;
-          }) as never,
+          }, afterRender)) as never,
         );
         break;
       }
@@ -289,7 +308,7 @@ export const registerGeneratedRoutes = (
         server.registerPrompt(route.name, {
           ...selectedConfig(route.config, ['_meta', 'description', 'icons', 'title']),
           argsSchema: route.module.inputSchema,
-        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
+        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
           return (await renderGeneratedRoute(
             dispatcher,
@@ -299,7 +318,7 @@ export const registerGeneratedRoutes = (
             context,
             { clientName },
           )).result;
-        }) as never);
+        }, afterRender)) as never);
         break;
       default: {
         const unreachable: never = route.kind;
@@ -482,6 +501,16 @@ export interface GeneratedEventRuntimeBinding {
   readonly target: string;
 }
 
+/**
+ * The `mcp-resource-updated` delivery route for the notice inbox (#99 stage
+ * 4): the server process's own handle on the durable notice store its Flight
+ * worker mounts, wrapped by the runtime's inbox signaller. Present only when
+ * the artifact's state is workspace-durable — that is the only lifetime two
+ * processes can share — so `resources.subscribe` is advertised exactly when a
+ * subscription can be honoured. Closed when the server closes.
+ */
+export type GeneratedNoticeDeliveryBinding = AgentNoticeInboxSignaller;
+
 export interface CreateGeneratedRouteMcpServerOptions {
   readonly apps?: readonly GeneratedMcpAppRecord[];
   /** Identity every request carries, so a stale worker fails loudly. */
@@ -489,9 +518,116 @@ export interface CreateGeneratedRouteMcpServerOptions {
   readonly events?: GeneratedEventRuntimeBinding;
   /** Renders one invocation to Flight bytes. Closed when the server closes. */
   readonly host: GeneratedRouteExecutionHost;
+  readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: Readonly<Record<string, GeneratedRouteRecord>>;
 }
+
+interface ResourceSubscriptionRequest {
+  readonly params: { readonly uri: string };
+}
+
+const noticeDiagnostic = (line: string): void => {
+  process.stderr.write(`[agent-bundle] notice inbox ${line}\n`);
+};
+
+const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Installs `resources/subscribe` / `resources/unsubscribe` for the notice
+ * inbox URI and returns the post-render observation that emits
+ * `notifications/resources/updated` to the subscribed connection. Only the
+ * inbox is subscribable: every other generated resource is static per
+ * request, so accepting a subscription for it would be a promise the server
+ * never keeps. Subscribing fails closed when the durable store is unreadable.
+ */
+const installNoticeInboxSubscriptions = (
+  server: McpServer,
+  notices: GeneratedNoticeDeliveryBinding,
+): GeneratedRenderSettled => {
+  const protocol = server.server;
+  protocol.assertCanSetRequestHandler('resources/subscribe');
+  protocol.assertCanSetRequestHandler('resources/unsubscribe');
+  protocol.registerCapabilities({ resources: { subscribe: true } });
+  const assertInboxUri = (uri: unknown): void => {
+    if (uri === notices.inboxUri) return;
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      `Resource ${String(uri)} does not support subscriptions; only ${notices.inboxUri} emits notifications/resources/updated.`,
+      { uri },
+    );
+  };
+  protocol.setRequestHandler('resources/subscribe', (async (
+    request: ResourceSubscriptionRequest,
+    context: GeneratedRouteRequestContext,
+  ) => {
+    assertInboxUri(request.params.uri);
+    const identity = requestIdentity(context, protocol.getClientVersion()?.name);
+    try {
+      await notices.subscribe({
+        actor: identity.actor ?? unavailable(),
+        host: identity.host ?? unavailable(),
+        session: identity.session ?? unavailable(),
+        workspace: identity.workspace,
+      });
+    } catch (error) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
+        `Notice inbox subscriptions are unavailable: ${describeError(error)}`,
+      );
+    }
+    return {};
+  }) as never);
+  protocol.setRequestHandler('resources/unsubscribe', (async (request: ResourceSubscriptionRequest) => {
+    assertInboxUri(request.params.uri);
+    // Acknowledged only once in-flight observations have settled, so the
+    // client never receives a signal after its unsubscribe succeeded.
+    await notices.unsubscribe();
+    return {};
+  }) as never);
+  const send = async (): Promise<void> => {
+    await protocol.sendResourceUpdated({ uri: notices.inboxUri });
+  };
+  const report = (outcome: AgentNoticeInboxSignalOutcome): void => {
+    switch (outcome.kind) {
+      case 'idle':
+      case 'signalled':
+        return;
+      case 'failed':
+        noticeDiagnostic(`resources/updated ${outcome.stage} failed: ${describeError(outcome.error)}`);
+        return;
+      default: {
+        const unreachable: never = outcome;
+        throw new TypeError(`Unhandled notice inbox signal outcome ${String(unreachable)}.`);
+      }
+    }
+  };
+  // Detached from the render that triggered it. The signaller serializes its
+  // observations and never rejects, and a notification write to a slow or
+  // wedged connection — renewed for as long as it takes — must not hold the
+  // completed render's response, or unrelated event handling, hostage.
+  // Observations coalesce: one is in flight and at most one more is owed,
+  // because an observation reads the whole ledger, so every render completing
+  // behind a pending write is covered by the single follow-up and a client
+  // that stops reading cannot grow a queue of closures per render.
+  let observing: Promise<void> | undefined;
+  let owed = false;
+  const observe = (): void => {
+    observing = notices.observe(send).then(report, (error: unknown) => {
+      noticeDiagnostic(`resources/updated observation failed: ${describeError(error)}`);
+    }).then(() => {
+      observing = undefined;
+      if (!owed) return;
+      owed = false;
+      observe();
+    });
+  };
+  return (): Promise<void> => {
+    if (observing === undefined) observe();
+    else owed = true;
+    return Promise.resolve();
+  };
+};
 
 const nativeString = (
   native: Readonly<Record<string, unknown>>,
@@ -520,12 +656,13 @@ const startEventRuntime = async (
   events: GeneratedEventRuntimeBinding,
   dispatcher: AgentRenderDispatcher,
   host: WarmFlightHost,
+  afterRender: GeneratedRenderSettled | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
   return events.createEventRuntimeServer({
     artifactEpoch: events.artifactEpoch,
     endpointId: events.endpointId,
-    handle: async (request, signal) => {
+    handle: async (request, signal) => settled(async () => {
     const event = canonicalEvent(request.event);
     const target = events.allowedTargets.find((candidate) => candidate === request.target);
     if (target === undefined) {
@@ -578,7 +715,7 @@ const startEventRuntime = async (
       nativeEvent,
       props.native,
     ));
-    },
+    }, afterRender),
     status: () => ({
       artifactEpoch: host.identity.artifactEpoch,
       availability: host.availability(),
@@ -601,16 +738,39 @@ export const createGeneratedRouteMcpServer = async (
 ): Promise<McpServer> => {
   const server = new McpServer(options.plugin);
   const dispatcher = createAgentRenderDispatcher(options.host);
+  // The subscribe bit registers before any transport connects; the SDK merges
+  // its own resources.listChanged into the same capability object when the
+  // inbox resource route registers below.
+  const afterRender = options.notices === undefined
+    ? undefined
+    : installNoticeInboxSubscriptions(server, options.notices);
   const events = options.events === undefined
     ? undefined
-    : await startEventRuntime(options.events, dispatcher, options.host);
-  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch);
+    : await startEventRuntime(options.events, dispatcher, options.host, afterRender);
+  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, afterRender);
   registerGeneratedMcpApps(server, options.apps ?? []);
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
-    await events?.close();
-    await options.host.close();
-    await close();
+    // The signaller drains any receipt still owed for a send that reached the
+    // wire, so it must close while the ledger it commits to is still open:
+    // the host owns (or shares) that store and closes after it. Its close
+    // abandons a notification write still pending rather than waiting on the
+    // client's wire, so a subscriber that stopped reading cannot wedge this
+    // teardown. Whatever fails on the way, the protocol and its transport are
+    // always closed; the teardown error surfaces once they are.
+    try {
+      try {
+        await events?.close();
+      } finally {
+        try {
+          await options.notices?.close();
+        } finally {
+          await options.host.close();
+        }
+      }
+    } finally {
+      await close();
+    }
   };
   return server;
 };

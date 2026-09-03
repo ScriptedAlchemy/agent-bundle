@@ -11,13 +11,15 @@ import {
   toRuntimeError,
 } from '../effect/boundary.js';
 import type { AgentStateStore } from '../state/contract.js';
-import { canonicalJson } from '../state/index.js';
+import { AgentStateError, canonicalJson } from '../state/index.js';
 import {
   AgentNoticeError,
   type AgentNotice,
   type AgentNoticeAuthorizationDecision,
   type AgentNoticeAuthorizationRequest,
   type AgentNoticeAuthorizer,
+  type AgentNoticeAvailabilityReleaseOptions,
+  type AgentNoticeAvailabilityReservationOptions,
   type AgentNoticeAvailabilitySignalOptions,
   type AgentNoticeDelivery,
   type AgentNoticeExpiryOptions,
@@ -44,6 +46,9 @@ export interface CreateAgentNoticeLedgerOptions {
 }
 
 type NoticeStore = AgentStateStore<AgentNoticeLedgerState, typeof agentNoticeEventSchemas>;
+
+/** Revision races tolerated while committing a reserved receipt over the state it was judged against. */
+const MAX_RESERVED_RECEIPT_ATTEMPTS = 8;
 
 const noticeEffect = <A>(evaluate: () => A): Effect.Effect<A, AgentNoticeError> =>
   Effect.try({
@@ -76,6 +81,20 @@ const timestamp = (value: string, label: string): string => {
     throw new AgentNoticeError('invalid-input', `${label} must be an ISO-8601 timestamp`);
   }
   return value;
+};
+
+const availabilityNoticeIds = (noticeIds: readonly string[]): string[] => {
+  if (noticeIds.length === 0) {
+    throw new AgentNoticeError('invalid-input', 'Notice availability requires at least one notice id');
+  }
+  return noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
+};
+
+const availabilityExpectedRevision = (expectedRevision: number | undefined): number | undefined => {
+  if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) {
+    throw new AgentNoticeError('invalid-input', 'Notice availability expectedRevision must be a non-negative integer');
+  }
+  return expectedRevision;
 };
 
 const priority = (value: AgentNoticePublishInput['priority']): AgentNoticePublishInput['priority'] => {
@@ -470,23 +489,106 @@ export const createAgentNoticeLedger = (
     return snapshotFrom(snapshot.revision, snapshot.state);
   },
 
+  releaseAvailability(options: AgentNoticeAvailabilityReleaseOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() =>
+        nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const committed = yield* storeEffect(() => store.dispatch(
+        'availability-released',
+        { noticeIds, reservationKey },
+        { idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
+  },
+
+  reserveAvailability(options: AgentNoticeAvailabilityReservationOptions): Promise<AgentNoticeLedgerSnapshot> {
+    return runPromise(Effect.gen(function*() {
+      const at = yield* noticeEffect(() => timestamp(options.at, 'Notice availability time'));
+      const idempotencyKey = yield* noticeEffect(() =>
+        nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() =>
+        nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const expectedRevision = yield* noticeEffect(() => availabilityExpectedRevision(options.expectedRevision));
+      const committed = yield* storeEffect(() => store.dispatch(
+        'availability-reserved',
+        { at, noticeIds, reservationKey },
+        { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
+      ));
+      return snapshotFrom(committed.revision, committed.state);
+    }));
+  },
+
   signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot> {
     return runPromise(Effect.gen(function*() {
       const at = yield* noticeEffect(() => timestamp(options.at, 'Notice availability time'));
       const idempotencyKey = yield* noticeEffect(() =>
         nonEmptyText(options.idempotencyKey, 'Notice availability idempotency key'));
-      const noticeIds = yield* noticeEffect(() => {
-        if (options.noticeIds.length === 0) {
-          throw new AgentNoticeError('invalid-input', 'Notice availability requires at least one notice id');
+      const noticeIds = yield* noticeEffect(() => availabilityNoticeIds(options.noticeIds));
+      const reservationKey = yield* noticeEffect(() => options.reservationKey === undefined
+        ? undefined
+        : nonEmptyText(options.reservationKey, 'Notice availability reservation key'));
+      const expectedRevision = yield* noticeEffect(() => availabilityExpectedRevision(options.expectedRevision));
+      const payload = {
+        at,
+        channel: 'mcp-resource-updated' as const,
+        noticeIds,
+        ...(reservationKey === undefined ? {} : { reservationKey }),
+      };
+      if (reservationKey === undefined) {
+        const committed = yield* storeEffect(() => store.dispatch(
+          'availability-signalled',
+          payload,
+          { ...(expectedRevision === undefined ? {} : { expectedRevision }), idempotencyKey },
+        ));
+        return snapshotFrom(committed.revision, committed.state);
+      }
+      // A reserved receipt is judged against the exact state it commits over:
+      // the dispatch is guarded by the revision just read (or the caller's own
+      // pin), so the ownership check and the reducer see the same holds.
+      // Unrelated writers move the revision too, hence the bounded re-read
+      // when the caller did not pin one. The guard is only ever applied by the
+      // store, which resolves the idempotency key first: a retry of a receipt
+      // whose commit landed but whose response was lost replays that commit
+      // instead of failing a revision precheck it could never satisfy.
+      for (let attempt = 0; attempt < MAX_RESERVED_RECEIPT_ATTEMPTS; attempt += 1) {
+        const before = yield* storeEffect(() => store.read());
+        const committed = yield* storeEffect(() => store.dispatch(
+          'availability-signalled',
+          payload,
+          { expectedRevision: expectedRevision ?? before.revision, idempotencyKey },
+        )).pipe(Effect.catch((error) =>
+          error instanceof AgentStateError && error.code === 'revision-conflict' && expectedRevision === undefined
+            ? Effect.succeed(undefined)
+            : Effect.fail(error)));
+        if (committed === undefined) continue;
+        if (!committed.replayed) {
+          // Ownership, not state, decides: a notice acknowledged, expired, or
+          // withdrawn after the send still keeps its hold, and the receipt for
+          // the send that happened lands on it; only a hold held by another
+          // key (or no hold at all) refuses the receipt.
+          const lost = before.state.notices.filter((notice) =>
+            noticeIds.includes(notice.id)
+            && notice.availabilityReservation?.key !== reservationKey);
+          if (lost.length > 0) {
+            return yield* Effect.fail(new AgentNoticeError(
+              'reservation-lost',
+              `Notice availability reservation ${JSON.stringify(reservationKey)} no longer holds ${
+                lost.map((notice) => notice.id).join(', ')
+              }; no receipt was recorded for it`,
+            ));
+          }
         }
-        return options.noticeIds.map((id) => nonEmptyText(id, 'Notice id'));
-      });
-      const committed = yield* storeEffect(() => store.dispatch(
-        'availability-signalled',
-        { at, channel: 'mcp-resource-updated', noticeIds },
-        { idempotencyKey },
-      ));
-      return snapshotFrom(committed.revision, committed.state);
+        return snapshotFrom(committed.revision, committed.state);
+      }
+      return yield* storeEffect(() => Promise.reject(new AgentStateError(
+        'revision-conflict',
+        `Notice availability receipt lost ${String(MAX_RESERVED_RECEIPT_ATTEMPTS)} consecutive revision races`,
+      )));
     }));
   },
 

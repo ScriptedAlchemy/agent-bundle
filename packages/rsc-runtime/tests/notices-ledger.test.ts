@@ -1,6 +1,12 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from '@rstest/core';
 
 import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
+  AGENT_NOTICE_STATE_VERSION,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
   selectNoticeDeliveryRoutes,
@@ -14,7 +20,8 @@ import {
   available,
   runAgentRequest,
 } from '../src/index.js';
-import { createMemoryStateDriver } from '../src/state/index.js';
+import { createMemoryStateDriver, defineState } from '../src/state/index.js';
+import { createSqliteStateDriver } from '../src/state/sqlite.js';
 
 const document = (text: string) => ({
   root: { kind: 'text' as const, text },
@@ -832,6 +839,390 @@ describe('notice delivery routing receipts (#99 stage 4)', () => {
     })).rejects.toMatchObject({ code: 'invalid-input' });
     await driver.close();
   });
+
+  it('guards availability receipts with compare-and-swap so racing signallers cannot both spend a budget', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const stale = (await ledger.read()).revision;
+    await ledger.signalAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      expectedRevision: stale,
+      idempotencyKey: 'availability:a',
+      noticeIds: [published.notice.id],
+    });
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: stale,
+      idempotencyKey: 'availability:b',
+      noticeIds: [published.notice.id],
+    })).rejects.toMatchObject({ code: 'revision-conflict' });
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      expectedRevision: -1,
+      idempotencyKey: 'availability:c',
+      noticeIds: [published.notice.id],
+    })).rejects.toMatchObject({ code: 'invalid-input' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
+
+  it('holds a budget slot with a reservation that finalizes into a receipt or releases without one', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    const revision = (await ledger.read()).revision;
+    const reserved = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      expectedRevision: revision,
+      idempotencyKey: 'reserve:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    // Reserving spends nothing and is guarded by the same compare-and-swap.
+    expect(reserved.notices[0]).toMatchObject({ availabilityReservation: { at: '2026-09-01T19:04:00.000Z', key: 'holder-a:1' } });
+    expect(reserved.notices[0]).not.toHaveProperty('availability');
+    await expect(ledger.reserveAvailability({
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: revision,
+      idempotencyKey: 'reserve:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    })).rejects.toMatchObject({ code: 'revision-conflict' });
+
+    // A live hold is not overwritten by a different key even without a
+    // compare-and-swap; the holder's own key renews it; a lapsed hold is taken.
+    const contested = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      idempotencyKey: 'reserve:b-uncontended',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(contested.notices[0]?.availabilityReservation).toEqual({ at: '2026-09-01T19:04:00.000Z', key: 'holder-a:1' });
+    const renewed = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:10.000Z',
+      idempotencyKey: 'renew:a:1',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(renewed.notices[0]?.availabilityReservation).toEqual({ at: '2026-09-01T19:04:10.000Z', key: 'holder-a:1' });
+    const lapsedAt = new Date(Date.parse('2026-09-01T19:04:10.000Z') + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS).toISOString();
+    const takenOver = await ledger.reserveAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'reserve:b-after-lapse',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(takenOver.notices[0]?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    // The lapsed holder's late renewal cannot steal the hold back.
+    const lateRenewal = await ledger.reserveAvailability({
+      at: new Date(Date.parse(lapsedAt) + 1_000).toISOString(),
+      idempotencyKey: 'renew:a:2',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(lateRenewal.notices[0]?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    await ledger.releaseAvailability({ idempotencyKey: 'release:b-takeover', noticeIds: [id], reservationKey: 'holder-b:1' });
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:a-again',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+
+    // Releasing with another holder's key leaves the hold intact; the owner's key clears it.
+    const foreignRelease = await ledger.releaseAvailability({
+      idempotencyKey: 'release:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(foreignRelease.notices[0]?.availabilityReservation).toMatchObject({ key: 'holder-a:1' });
+    const released = await ledger.releaseAvailability({
+      idempotencyKey: 'release:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(released.notices[0]).not.toHaveProperty('availabilityReservation');
+    expect(released.notices[0]).not.toHaveProperty('availability');
+
+    // A successful send finalizes: the receipt lands and the hold is cleared together.
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'reserve:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    // A key that does not hold the slot records nothing and is told so; the
+    // hold and the budget are untouched.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:stale',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    const afterStale = (await ledger.read()).notices[0];
+    expect(afterStale).not.toHaveProperty('availability');
+    expect(afterStale?.availabilityReservation).toMatchObject({ key: 'holder-c:1' });
+    const signalled = await ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    expect(signalled.notices[0]?.availability).toMatchObject({ count: 1, firstAt: '2026-09-01T19:05:00.000Z' });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+    // Replaying the committed receipt (same key, same payload) is not a lost
+    // hold: the idempotent result comes back and nothing is counted twice.
+    const replayed = await ledger.signalAvailability({
+      at: '2026-09-01T19:05:00.000Z',
+      idempotencyKey: 'signal:c',
+      noticeIds: [id],
+      reservationKey: 'holder-c:1',
+    });
+    expect(replayed.revision).toBe(signalled.revision);
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    // A late receipt from the holder that lost the slot is refused even once
+    // the hold is gone: only the send the ledger authorized is counted.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:05:01.000Z',
+      idempotencyKey: 'signal:stale-after',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    await driver.close();
+  });
+
+  it('judges a reserved receipt against the exact state it commits over, even when the hold changes hands mid-call', async () => {
+    const { driver, ledger, store } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    // Between holder A's ownership read and its commit, holder B takes the
+    // lapsed slot over. The receipt must not be reported as recorded.
+    const lapsedAt = new Date(Date.parse('2026-09-01T19:04:00.000Z') + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS).toISOString();
+    let interposed = false;
+    const originalRead = store.read.bind(store);
+    const racing = createAgentNoticeLedger(Object.freeze({
+      ...store,
+      read: async (options?: Parameters<typeof store.read>[0]) => {
+        const snapshot = await originalRead(options);
+        if (!interposed) {
+          interposed = true;
+          await ledger.reserveAvailability({
+            at: lapsedAt,
+            idempotencyKey: 'reserve:b-takeover',
+            noticeIds: [id],
+            reservationKey: 'holder-b:1',
+          });
+        }
+        return snapshot;
+      },
+    }) as typeof store, { authorize: () => ({ state: 'authorized' }) });
+    await expect(racing.signalAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'signal:a-late',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    const after = (await ledger.read()).notices[0];
+    expect(after).not.toHaveProperty('availability');
+    expect(after?.availabilityReservation).toEqual({ at: lapsedAt, key: 'holder-b:1' });
+    // B's own receipt still lands normally.
+    const signalled = await ledger.signalAvailability({
+      at: lapsedAt,
+      idempotencyKey: 'signal:b',
+      noticeIds: [id],
+      reservationKey: 'holder-b:1',
+    });
+    expect(signalled.notices[0]?.availability).toMatchObject({ count: 1 });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    await driver.close();
+  });
+
+  it('refuses to re-create a hold the takeover already spent, so a lapsed holder cannot push a budget-one notice to two', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    const heldAt = '2026-09-01T19:04:00.000Z';
+    const lapsedAt = new Date(Date.parse(heldAt) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS).toISOString();
+    await ledger.reserveAvailability({ at: heldAt, idempotencyKey: 'reserve:a', noticeIds: [id], reservationKey: 'holder-a:1' });
+    // A's lease lapses for a full TTL; B takes over and its receipt lands,
+    // spending the single budget slot and clearing the hold.
+    await ledger.reserveAvailability({ at: lapsedAt, idempotencyKey: 'reserve:b', noticeIds: [id], reservationKey: 'holder-b:1' });
+    const spent = await ledger.signalAvailability({ at: lapsedAt, idempotencyKey: 'signal:b', noticeIds: [id], reservationKey: 'holder-b:1' });
+    expect(spent.notices[0]).toMatchObject({ availability: { count: 1 }, state: 'pending' });
+    expect(spent.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    // A's late renewal (from its owed-receipt loop or a still-pending send)
+    // finds an empty slot whose budget is spent: no hold is re-created.
+    const renewedAt = new Date(Date.parse(lapsedAt) + 1_000).toISOString();
+    const renewed = await ledger.reserveAvailability({
+      at: renewedAt,
+      idempotencyKey: 'renew:a',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    });
+    expect(renewed.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    // Its receipt is therefore refused, and the count stays at the budget.
+    await expect(ledger.signalAvailability({
+      at: renewedAt,
+      idempotencyKey: 'signal:a-late',
+      noticeIds: [id],
+      reservationKey: 'holder-a:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    // With budget left, a fresh hold on the empty slot is still allowed.
+    const roomy = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-roomy',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('roomy'),
+      priority: 'high',
+      recipient: { actor: { id: 'recipient' } },
+      retryBudget: 2,
+    }, { idempotencyKey: 'publish:roomy' }));
+    await ledger.reserveAvailability({ at: heldAt, idempotencyKey: 'reserve:c', noticeIds: [roomy.notice.id], reservationKey: 'holder-c:1' });
+    await ledger.signalAvailability({ at: heldAt, idempotencyKey: 'signal:c', noticeIds: [roomy.notice.id], reservationKey: 'holder-c:1' });
+    const second = await ledger.reserveAvailability({
+      at: renewedAt,
+      idempotencyKey: 'reserve:d',
+      noticeIds: [roomy.notice.id],
+      reservationKey: 'holder-d:1',
+    });
+    expect(second.notices.find((notice) => notice.id === roomy.notice.id)?.availabilityReservation)
+      .toEqual({ at: renewedAt, key: 'holder-d:1' });
+    await driver.close();
+  });
+
+  it('replays a pinned reserved receipt whose commit landed but whose response was lost', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    const reserved = await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:pinned',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    const receipt = {
+      at: '2026-09-01T19:04:01.000Z',
+      expectedRevision: reserved.revision,
+      idempotencyKey: 'signal:pinned',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    };
+    const committed = await ledger.signalAvailability(receipt);
+    expect(committed.notices[0]?.availability).toMatchObject({ count: 1 });
+    // The head has moved past the pin; the same key must replay the commit
+    // rather than fail a revision check the store never got to judge.
+    const replayed = await ledger.signalAvailability(receipt);
+    expect(replayed.revision).toBe(committed.revision);
+    expect(replayed.notices[0]?.availability).toMatchObject({ count: 1 });
+    // A genuinely new receipt against a stale pin is still refused.
+    await expect(ledger.signalAvailability({ ...receipt, idempotencyKey: 'signal:pinned-stale' }))
+      .rejects.toMatchObject({ code: 'revision-conflict' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    await driver.close();
+  });
+
+  it('records the receipt of a send that raced an acknowledgement instead of discarding it as a no-op', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await publishTo(ledger);
+    const id = published.notice.id;
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:04:00.000Z',
+      idempotencyKey: 'reserve:holder',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    // The wire send succeeds, and before its receipt is finalized the
+    // recipient acknowledges the notice through another request.
+    const acknowledged = await run(ledger, {
+      actorId: 'recipient',
+      id: 'ack-racing',
+      kind: 'event',
+      startedAt: '2026-09-01T19:04:01.000Z',
+    }, async () => (await agent()).notices!.acknowledge(id));
+    expect(acknowledged.state).toBe('acknowledged');
+    expect(acknowledged.availabilityReservation).toEqual({ at: '2026-09-01T19:04:00.000Z', key: 'holder:1' });
+
+    // The holder still owns the slot, so the receipt for the send that
+    // happened lands on the acknowledged notice without moving its state.
+    const signalled = await ledger.signalAvailability({
+      at: '2026-09-01T19:04:02.000Z',
+      idempotencyKey: 'signal:holder',
+      noticeIds: [id],
+      reservationKey: 'holder:1',
+    });
+    expect(signalled.notices[0]).toMatchObject({
+      acknowledgement: { invocationId: 'ack-racing' },
+      availability: { channel: 'mcp-resource-updated', count: 1, firstAt: '2026-09-01T19:04:02.000Z' },
+      state: 'acknowledged',
+    });
+    expect(signalled.notices[0]).not.toHaveProperty('availabilityReservation');
+
+    // A key that never held the slot is still refused on a terminal notice,
+    // so a stale holder cannot invent evidence after the fact.
+    await expect(ledger.signalAvailability({
+      at: '2026-09-01T19:04:03.000Z',
+      idempotencyKey: 'signal:stranger',
+      noticeIds: [id],
+      reservationKey: 'stranger:1',
+    })).rejects.toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+
+    // Expiry after the hold behaves the same: the receipt records on the
+    // expired notice and the state stays expired.
+    const expiring = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-expiring',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('expiring'),
+      expiresAt: '2026-09-01T19:05:30.000Z',
+      priority: 'high',
+      recipient: { actor: { id: 'recipient' } },
+    }, { idempotencyKey: 'publish:expiring' }));
+    await ledger.reserveAvailability({
+      at: '2026-09-01T19:05:01.000Z',
+      idempotencyKey: 'reserve:expiring',
+      noticeIds: [expiring.notice.id],
+      reservationKey: 'holder:2',
+    });
+    await ledger.expire({ at: '2026-09-01T19:05:31.000Z', idempotencyKey: 'expire:racing' });
+    expect((await ledger.read()).notices.find((notice) => notice.id === expiring.notice.id)?.state).toBe('expired');
+    const lateReceipt = await ledger.signalAvailability({
+      at: '2026-09-01T19:06:00.000Z',
+      idempotencyKey: 'signal:expiring',
+      noticeIds: [expiring.notice.id],
+      reservationKey: 'holder:2',
+    });
+    const expired = lateReceipt.notices.find((notice) => notice.id === expiring.notice.id);
+    expect(expired).toMatchObject({ availability: { count: 1 }, state: 'expired' });
+    expect(expired).not.toHaveProperty('availabilityReservation');
+
+    for (const invalid of [
+      () => ledger.reserveAvailability({ at: 'never', idempotencyKey: 'x', noticeIds: [id], reservationKey: 'k' }),
+      () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'y', noticeIds: [], reservationKey: 'k' }),
+      () => ledger.reserveAvailability({ at: '2026-09-01T19:06:00.000Z', idempotencyKey: 'z', noticeIds: [id], reservationKey: ' ' }),
+      () => ledger.releaseAvailability({ idempotencyKey: 'w', noticeIds: [id], reservationKey: '' }),
+    ]) {
+      await expect(invalid()).rejects.toMatchObject({ code: 'invalid-input' });
+    }
+    await driver.close();
+  });
 });
 
 describe('notice delivery route selection', () => {
@@ -921,5 +1312,115 @@ describe('stage-4 review findings regressions', () => {
     }, async () => (await agent()).notices!.acknowledge(published.notice.id)))
       .rejects.toMatchObject({ code: 'invalid-input' });
     await driver.close();
+  });
+});
+
+describe('notice ledger schema version', () => {
+  /**
+   * The version-1 reducer as PR #361 shipped it for the one event whose
+   * meaning version 2 changes: `availability-signalled` was a no-op for any
+   * notice no longer pending or attempted. Reservations did not exist yet.
+   */
+  const legacyDefinition = () => {
+    const current = agentNoticeStateDefinition('workspace-durable');
+    return defineState({
+      events: current.events,
+      id: current.id,
+      initial: current.initial,
+      lifetime: current.lifetime,
+      reduce: (state, event) => {
+        if (event.name !== 'availability-signalled') return current.reduce(state, event);
+        const live = new Set(state.notices
+          .filter((notice) => notice.state === 'pending' || notice.state === 'attempted')
+          .map((notice) => notice.id));
+        return current.reduce(state, {
+          ...event,
+          payload: { ...event.payload, noticeIds: event.payload.noticeIds.filter((id) => live.has(id)) },
+        } as typeof event);
+      },
+      schema: current.schema,
+      version: 1,
+    });
+  };
+
+  it('migrates a version-1 journal whose replay the version-2 reducer would contradict', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-notice-ledger-v1-'));
+    try {
+      expect(AGENT_NOTICE_STATE_VERSION).toBe(2);
+      // A version-1 store: publish, acknowledge, then a receipt over the
+      // acknowledged notice that version 1 journaled as a no-op.
+      const legacyDriver = createSqliteStateDriver({ root });
+      const legacyStore = await legacyDriver.open(legacyDefinition());
+      const legacy = createAgentNoticeLedger(legacyStore, { authorize: () => ({ state: 'authorized' }) });
+      const published = await run(legacy, {
+        actorId: 'publisher',
+        id: 'publish-legacy',
+        kind: 'tool',
+        startedAt: '2026-09-01T19:00:00.000Z',
+      }, async () => (await agent()).notices!.publish({
+        content: document('legacy'),
+        priority: 'high',
+        recipient: { actor: { id: 'recipient' } },
+      }, { idempotencyKey: 'publish:legacy' }));
+      await run(legacy, {
+        actorId: 'recipient',
+        id: 'ack-legacy',
+        kind: 'event',
+        startedAt: '2026-09-01T19:01:00.000Z',
+      }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+      const noop = await legacy.signalAvailability({
+        at: '2026-09-01T19:02:00.000Z',
+        idempotencyKey: 'signal:legacy',
+        noticeIds: [published.notice.id],
+      });
+      expect(noop.notices[0]).toMatchObject({ state: 'acknowledged' });
+      expect(noop.notices[0]).not.toHaveProperty('availability');
+      await legacyDriver.close();
+
+      // The same journal replayed by the version-2 reducer disagrees with the
+      // materialized head, so without a version bump the store is corrupt.
+      const unversioned = createSqliteStateDriver({ root });
+      await expect(unversioned.open(defineState({
+        ...agentNoticeStateDefinition('workspace-durable'),
+        migrations: {},
+        version: 1,
+      }))).rejects.toMatchObject({ code: 'corrupt' });
+      await unversioned.close();
+
+      // Under version 2 the store migrates from its head instead: the
+      // acknowledged notice is intact, still without a receipt, and the
+      // ledger keeps working with the new semantics.
+      const driver = createSqliteStateDriver({ root });
+      const store = await driver.open(agentNoticeStateDefinition('workspace-durable'));
+      const ledger = createAgentNoticeLedger(store, { authorize: () => ({ state: 'authorized' }) });
+      const migrated = await ledger.read();
+      expect(migrated.notices).toHaveLength(1);
+      expect(migrated.notices[0]).toMatchObject({ id: published.notice.id, state: 'acknowledged' });
+      expect(migrated.notices[0]).not.toHaveProperty('availability');
+      await ledger.reserveAvailability({
+        at: '2026-09-01T19:03:00.000Z',
+        idempotencyKey: 'reserve:v2',
+        noticeIds: [published.notice.id],
+        reservationKey: 'holder:1',
+      });
+      // A pre-migration terminal notice takes no new hold (budget rules apply
+      // to pending/attempted only), so a keyed receipt is refused — and an
+      // unreserved receipt now records on it, as version 2 defines.
+      await expect(ledger.signalAvailability({
+        at: '2026-09-01T19:03:01.000Z',
+        idempotencyKey: 'signal:v2-keyed',
+        noticeIds: [published.notice.id],
+        reservationKey: 'holder:1',
+      })).rejects.toMatchObject({ code: 'reservation-lost' });
+      const recorded = await ledger.signalAvailability({
+        at: '2026-09-01T19:03:02.000Z',
+        idempotencyKey: 'signal:v2-unreserved',
+        noticeIds: [published.notice.id],
+      });
+      expect(recorded.notices[0]).toMatchObject({ availability: { count: 1 }, state: 'acknowledged' });
+      await driver.close();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });

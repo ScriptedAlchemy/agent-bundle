@@ -11,10 +11,11 @@ import type {
   AgentStateLifetime,
 } from '../state/contract.js';
 import { canonicalJson, defineState } from '../state/index.js';
-import type {
-  AgentNotice,
-  AgentNoticePrincipal,
-  AgentRecipient,
+import {
+  AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
+  type AgentNotice,
+  type AgentNoticePrincipal,
+  type AgentRecipient,
 } from './contract.js';
 
 const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state', [
@@ -76,6 +77,11 @@ const availabilitySchema = z.object({
   lastAt: z.string().min(1),
 }).strict().readonly();
 
+const availabilityReservationSchema = z.object({
+  at: z.string().min(1),
+  key: z.string().min(1),
+}).strict().readonly();
+
 const acknowledgementSchema = z.object({
   acknowledgedAt: z.string().min(1),
   invocationId: z.string().min(1),
@@ -85,6 +91,7 @@ const noticeSchema = z.object({
   acknowledgement: acknowledgementSchema.optional(),
   attempts: z.array(attemptSchema).readonly(),
   availability: availabilitySchema.optional(),
+  availabilityReservation: availabilityReservationSchema.optional(),
   content: documentSchema,
   createdAt: z.string().min(1),
   dedupeKey: z.string().min(1).optional(),
@@ -109,6 +116,14 @@ export interface AgentNoticeLedgerState {
   readonly notices: readonly AgentNotice[];
 }
 
+/**
+ * Schema version of the notice ledger definition. Bumped whenever the reducer
+ * changes what an already-journaled event means, so a durable store written
+ * under the previous version is migrated from its materialized head instead
+ * of being replayed by a reducer that would disagree with it.
+ */
+export const AGENT_NOTICE_STATE_VERSION = 2;
+
 export const agentNoticeEventSchemas = {
   acknowledged: z.object({
     at: z.string().min(1),
@@ -122,10 +137,20 @@ export const agentNoticeEventSchemas = {
     principal: principalSchema,
     unavailableIds: z.array(z.string().min(1)),
   }).strict(),
+  'availability-released': z.object({
+    noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1),
+  }).strict(),
+  'availability-reserved': z.object({
+    at: z.string().min(1),
+    noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1),
+  }).strict(),
   'availability-signalled': z.object({
     at: z.string().min(1),
     channel: z.literal('mcp-resource-updated'),
     noticeIds: z.array(z.string().min(1)),
+    reservationKey: z.string().min(1).optional(),
   }).strict(),
   exposed: z.object({
     at: z.string().min(1),
@@ -245,23 +270,79 @@ const transitionAcknowledgement = (
   }
 };
 
+/** Strips the reservation when `reservationKey` is absent or matches the holder's key. */
+const withoutReservation = (notice: AgentNotice, reservationKey: string | undefined): AgentNotice => {
+  if (notice.availabilityReservation === undefined) return notice;
+  if (reservationKey !== undefined && notice.availabilityReservation.key !== reservationKey) return notice;
+  const { availabilityReservation: _released, ...rest } = notice;
+  return Object.freeze(rest);
+};
+
+/**
+ * Records a wire-level availability receipt. The receipt is evidence that a
+ * `resources/updated` signal reached the wire, so it is recorded whatever the
+ * notice's state became after the hold was taken: an acknowledgement, expiry,
+ * or withdrawal that raced the send does not erase the send, and the state
+ * itself is never moved by a receipt. A reserved receipt is honoured only by
+ * the key that holds the slot: a holder whose hold lapsed and was taken over
+ * records nothing, so the takeover's send is the one the budget counts.
+ */
 const transitionAvailability = (
   notice: AgentNotice,
-  input: { readonly at: string; readonly noticeIds: ReadonlySet<string> },
+  input: { readonly at: string; readonly noticeIds: ReadonlySet<string>; readonly reservationKey: string | undefined },
+): AgentNotice => {
+  if (!input.noticeIds.has(notice.id)) return notice;
+  if (input.reservationKey !== undefined && notice.availabilityReservation?.key !== input.reservationKey) {
+    return notice;
+  }
+  return Object.freeze({
+    ...withoutReservation(notice, input.reservationKey),
+    availability: Object.freeze({
+      channel: 'mcp-resource-updated' as const,
+      count: (notice.availability?.count ?? 0) + 1,
+      firstAt: notice.availability?.firstAt ?? input.at,
+      lastAt: input.at,
+    }),
+  });
+};
+
+/**
+ * Holds a budget slot without spending it. A live notice carries at most one
+ * reservation: the holder renews it by reserving again under the same key,
+ * and a different key takes it over only once the current hold is older than
+ * the reservation TTL at the event's own `at` — a rule the reducer can apply
+ * deterministically on replay, so a slow holder's renewal can never steal a
+ * hold back from the process that legitimately took over after it lapsed —
+ * nor re-create a hold the takeover already spent.
+ */
+const transitionAvailabilityReservation = (
+  notice: AgentNotice,
+  input: { readonly at: string; readonly noticeIds: ReadonlySet<string>; readonly reservationKey: string },
 ): AgentNotice => {
   if (!input.noticeIds.has(notice.id)) return notice;
   switch (notice.state) {
     case 'pending':
-    case 'attempted':
+    case 'attempted': {
+      const held = notice.availabilityReservation;
+      if (
+        held !== undefined
+        && held.key !== input.reservationKey
+        && Date.parse(held.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > Date.parse(input.at)
+      ) {
+        return notice;
+      }
+      // A slot whose budget is already spent is not free: once a takeover's
+      // receipt has cleared the hold, the previous holder's renewal must not
+      // re-create it and let its stale receipt push the count past the budget.
+      // Only the key that currently holds the slot may still renew.
+      if (held?.key !== input.reservationKey && (notice.availability?.count ?? 0) >= (notice.retryBudget ?? 1)) {
+        return notice;
+      }
       return Object.freeze({
         ...notice,
-        availability: Object.freeze({
-          channel: 'mcp-resource-updated' as const,
-          count: (notice.availability?.count ?? 0) + 1,
-          firstAt: notice.availability?.firstAt ?? input.at,
-          lastAt: input.at,
-        }),
+        availabilityReservation: Object.freeze({ at: input.at, key: input.reservationKey }),
       });
+    }
     case 'expired':
     case 'unavailable':
     case 'withdrawn':
@@ -372,6 +453,13 @@ export const agentNoticeStateDefinition = (
     id: '@agent-bundle/runtime/agent-notice-ledger/v1',
     initial: { notices: [] },
     lifetime,
+    // Version 2 changes replay semantics, not shape: `availability-signalled`
+    // now records a receipt on a notice in any state (version 1 ignored
+    // terminal notices) and reservations carry keys, TTLs, and budget checks.
+    // Journals written under version 1 therefore cannot be replayed by this
+    // reducer; the migration rebases them on their materialized head, which
+    // already satisfies the version 2 schema unchanged.
+    migrations: { 2: (persisted) => persisted },
     reduce: (state, event) => {
       switch (event.name) {
         case 'published': {
@@ -425,7 +513,26 @@ export const agentNoticeStateDefinition = (
             notices: state.notices.map((notice) => transitionAvailability(notice, {
               at: event.payload.at,
               noticeIds,
+              reservationKey: event.payload.reservationKey,
             })),
+          };
+        }
+        case 'availability-reserved': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => transitionAvailabilityReservation(notice, {
+              at: event.payload.at,
+              noticeIds,
+              reservationKey: event.payload.reservationKey,
+            })),
+          };
+        }
+        case 'availability-released': {
+          const noticeIds = new Set(event.payload.noticeIds);
+          return {
+            notices: state.notices.map((notice) => noticeIds.has(notice.id)
+              ? withoutReservation(notice, event.payload.reservationKey)
+              : notice),
           };
         }
         default: {
@@ -437,4 +544,5 @@ export const agentNoticeStateDefinition = (
     schema: z.object({
       notices: z.array(noticeSchema).readonly(),
     }).strict().readonly(),
+    version: AGENT_NOTICE_STATE_VERSION,
   });

@@ -160,6 +160,15 @@ own `bin/` directory instead, like the MCP worker. Notice authorization is delib
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger, while application authorization policy is deferred.
 
+For workspace-durable state only, the generated MCP server process also opens
+its own SQLite handle on the notice ledger (`createGeneratedNoticeRuntime`
+over the same anchor) and advertises `resources.subscribe`: a client that
+subscribes to `agent-bundle://notices/inbox` receives one
+`notifications/resources/updated` after a render leaves it newly eligible
+pending notices, recorded on the ledger as an availability receipt. Volatile
+lifetimes keep the store in the worker's heap, so those servers register no
+subscription handlers and advertise no subscribe capability.
+
 #### State mutation budgets
 
 `defineState({ ... })` accepts an optional `budgets` runtime policy. Omitted
