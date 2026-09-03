@@ -64,9 +64,18 @@ const value = (observed: Awaited<ReturnType<AgentLineageRegistry['observe']>>) =
 };
 
 describe('lineage registry replaying the 2026-09-03 host captures', () => {
-  it('Claude 2.1.257: subagent events resolve to their own agent under the root session, nested depth 2, parent inferred from the open Agent call', async () => {
+  // Two live-model Claude Code 2.1.257 sessions (claude-sonnet-5, 2026-09-03):
+  // the primary fixture's root spawn ran in the background (`Agent`
+  // PostToolUse `status: async_launched` right after SubagentStart, `Stop`
+  // while the child still ran, a `<task-notification>` re-prompt afterwards);
+  // the foreground fixture's spawns block until the child finishes. Lineage
+  // must come out the same either way.
+  it.each([
+    ['background root spawn', 'claude-2.1.257.ndjson'],
+    ['foreground spawns', 'claude-2.1.257-foreground.ndjson'],
+  ])('Claude 2.1.257 (%s): subagent events resolve to their own agent under the root session, nested depth 2, parent inferred from the open Agent call', async (_label, name) => {
     const registry = createAgentLineageRegistry();
-    const records = fixture('claude-2.1.257.ndjson');
+    const records = fixture(name);
     const lineages = await replay('claude', records, registry);
     const root = records[0]!.event!.native['session_id'] as string;
     const [subagent, nested] = records
@@ -101,6 +110,16 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
 
     const nestedTool = lineages.find((entry) => entry.kind === 'tool/before' && entry.native?.['agent_id'] === nested)!;
     expect(value(nestedTool.lineage)).toMatchObject({ conversation: nested, depth: 2, parent: subagent, root });
+
+    // The host confirms each claim after the fact: the parent's `Agent`
+    // PostToolUse names the child it produced in `tool_response.agentId`,
+    // whether the child ran in the background (`async_launched`) or blocked
+    // the parent until it finished (`completed`).
+    const spawnResults = records
+      .filter((record) => record.event?.canonical.event === 'tool/after' && record.event.native['tool_name'] === 'Agent')
+      .map((record) => record.event!.native['tool_response'] as { readonly agentId: string; readonly status: string });
+    expect(new Set(spawnResults.map((result) => result.agentId))).toEqual(new Set([subagent, nested]));
+    for (const result of spawnResults) expect(['async_launched', 'completed']).toContain(result.status);
 
     // The MCP probe call carries claudecode/toolUseId, which names the open PreToolUse.
     const probes = lineages.filter((entry) => entry.kind === 'mcp:probe');

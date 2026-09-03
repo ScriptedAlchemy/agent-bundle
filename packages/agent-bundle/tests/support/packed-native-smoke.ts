@@ -41,7 +41,12 @@ interface EvalDocument {
 export interface PackedNativeSmokeReport {
   readonly hosts: readonly {
     readonly host: PackedNativeHost;
-    readonly normalHome?: 'unchanged';
+    /**
+     * Codex: auth, config, and plugins unchanged. Claude: settings and the
+     * installed-plugin tree unchanged — a real turn rewrites `.claude.json`
+     * session bookkeeping, so that file is not part of the guard.
+     */
+    readonly normalHome?: 'settings-and-plugins-unchanged' | 'unchanged';
     readonly status: 'failed' | 'passed';
     readonly trials: number;
   }[];
@@ -396,15 +401,19 @@ export const runPackedNativeSmoke = async (options: {
           '--json',
         ], { cwd: project, environment });
       };
-      const claudeHomeUnchanged = host === 'claude'
-        ? await normalClaudeHomeUnchanged(options.environment, executeEval)
+      // The Claude Eval is a real signed-in turn, and Claude Code 2.1.257
+      // rewrites `.claude.json` on every such turn (observed 2026-09-03,
+      // docs/audits/2026-09-03-claude-live-session-proofs.md), so the guard is
+      // the settings-and-plugins surface, as in the host-install session proofs.
+      const claudeSettingsAndPluginsUnchanged = host === 'claude'
+        ? await normalClaudeSettingsAndPluginsUnchanged(options.environment, executeEval)
         : undefined;
       if (host === 'codex') await executeEval();
       if (command === undefined) throw new Error('Packed native smoke did not execute the selected Eval host.');
       const summary = summarizeEval(host, command);
       if (host === 'claude') {
-        reports.push(claudeHomeUnchanged === true
-          ? Object.freeze({ ...summary, normalHome: 'unchanged' })
+        reports.push(claudeSettingsAndPluginsUnchanged === true
+          ? Object.freeze({ ...summary, normalHome: 'settings-and-plugins-unchanged' })
           : Object.freeze({ host, status: 'failed', trials: summary.trials }));
       } else if (before !== undefined) {
         const after = await digestNormalCodexState(normalCodexHome);

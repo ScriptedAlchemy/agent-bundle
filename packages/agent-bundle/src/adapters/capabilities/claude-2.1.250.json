@@ -160,27 +160,29 @@
     "subagent-events": {
       "state": "supported",
       "evidence": [
-        "2026-09-03 live capture (docs/audits/2026-09-03-host-lineage-matrix.md): SubagentStart/SubagentStop carry agent_id and agent_type; every hook inside a subagent carries the subagent's agent_id and the root session_id."
+        "live model 2026-09-03, Claude Code 2.1.257 (claude-sonnet-5; fixtures/host-lineage/claude-2.1.257.ndjson and claude-2.1.257-foreground.ndjson, docs/audits/2026-09-03-host-lineage-matrix.md): SubagentStart/SubagentStop carry agent_id and agent_type; every hook inside a subagent carries the subagent's agent_id and the root session_id.",
+        "live model 2026-09-03, Claude Code 2.1.257: the parent's Agent PostToolUse tool_response.agentId names the child (status async_launched for a background spawn right after SubagentStart, completed for a foreground spawn after the child's SubagentStop); Stop/SubagentStop background_tasks[] lists only background subagents still running, including the stopping agent itself; a finished background child re-enters the root as a <task-notification> UserPromptSubmit carrying task-id and tool-use-id."
       ]
     },
     "root": {
       "state": "supported",
       "evidence": [
-        "2026-09-03: session_id is the root session on every hook payload, including nested subagents."
+        "live model 2026-09-03, Claude Code 2.1.257: session_id is the root session on every hook payload, including nested subagents — 88 hook payloads across two sessions, every one carrying the root session_id; CLAUDE_CODE_SESSION_ID in hook and MCP server processes is the root id."
       ]
     },
     "parent": {
       "state": "degraded",
-      "reason": "2026-09-03: no hook payload names a subagent's parent; the runtime registry infers it from the Agent/Task PreToolUse that is open when SubagentStart fires (resolution: registry)."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257: no hook payload names a subagent's parent; the runtime registry infers it from the Agent/Task PreToolUse that is open when SubagentStart fires (resolution: registry), verified at depth 1 and 2 in both background and foreground spawn paths; the parent's Agent PostToolUse tool_response.agentId confirms the inference after the fact."
     },
     "depth": {
       "state": "degraded",
-      "reason": "2026-09-03: no depth counter is delivered; the registry derives it from the inferred parent chain."
+      "reason": "live model 2026-09-03, Claude Code 2.1.257: no depth counter is delivered (the result document's subagent_stats.max_depth is not a hook field); the registry derives depth from the inferred parent chain."
     },
     "mcp-correlation": {
       "state": "supported",
       "evidence": [
-        "2026-09-03: tools/call _meta carries claudecode/toolUseId equal to the PreToolUse tool_use_id, so the generated server resolves the caller's conversation through the open pre-tool hook."
+        "live model 2026-09-03, Claude Code 2.1.257: tools/call _meta carries claudecode/toolUseId equal to the PreToolUse tool_use_id, so the generated server resolves the caller's conversation through the open pre-tool hook; it matched on every MCP call at depth 0, 1, and 2, including calls the model issued in parallel with two pre-tool windows open.",
+        "live model 2026-09-03, Claude Code 2.1.257: MCP PostToolUse tool_response is a string and built-in-tool tool_response an object in every live payload."
       ]
     }
   },

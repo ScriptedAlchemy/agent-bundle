@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// Runs the opt-in packed native smoke for one host through `npm run`, never
+// `pnpm run`: the smoke packs and installs the release tarball with the
+// `npm_execpath` of the script runner, and only npm's entrypoint understands
+// `pack --json` (array / package-keyed object) and `install --omit=dev
+// --no-audit --no-fund`. Under pnpm the same proof fails before any host runs
+// ("npm pack --json returned 4 entries", then "Unknown options: 'omit'").
 
 import { spawn } from 'node:child_process';
 
