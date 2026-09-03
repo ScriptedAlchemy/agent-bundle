@@ -9,7 +9,9 @@ Agent Bundle has one newcomer model:
    `src/commands/*.md`, and `src/rules/*.mdc`. Top-level `assets/` holds
    static resources, and `agent-bundle.config.ts` stays at the project root.
 2. **One small flat config.** `agent-bundle.config.ts` holds project identity,
-   targets, and policy that no route file can own.
+   targets, and policy that no route file can own. The release version is
+   not repeated there: `package.json` is the single version source
+   (`plugin.version` is deprecated; see [Diagnostics](diagnostics.md#release-identity-ab4001-ab4008ab4011-ab4013)).
 3. **JSX = rendering.** An executable route is one async default Server
    Component. It does the work and returns `Agent.*`; there is no public
    `execute`/`render` split.
@@ -22,7 +24,7 @@ The complete conventional config is usually:
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin', version: '0.1.0' },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
   targets: ['portable', 'codex', 'claude'],
 });
 ```

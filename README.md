@@ -34,7 +34,7 @@ Or describe the plugin by hand in `agent-bundle.config.ts` at the project root:
 import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
-  plugin: { name: 'my-plugin', version: '0.1.0', description: 'What it does.' },
+  plugin: { name: 'my-plugin', description: 'What it does.' }, // version comes from package.json
   targets: ['plugin'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
