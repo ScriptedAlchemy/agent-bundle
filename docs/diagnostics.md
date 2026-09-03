@@ -23,6 +23,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
+| `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
@@ -251,6 +252,38 @@ simply not been built yet is a validation **warning** that only
 | `AB4748` | error (build) | `agent-bundle build` refuses a prebuilt entry file absent from its payload. |
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
+
+## Conventional host components: rules and commands (`AB4900`–`AB4906`, `AB4920`–`AB4926`)
+
+Conventional `src/rules/*.mdc` documents compile to the Rule IR (closed
+frontmatter: `description`, `globs`, `alwaysApply`, plus the bundle-only
+`targets` key that is peeled before emission) and `src/commands/*.md`
+documents compile to the Command IR (closed frontmatter: `description`,
+`argumentHint`, `allowedTools`, `model`, `disableModelInvocation`, plus
+`targets`). Each host lowers only the surfaces its pinned capability table
+supports; a document without `targets` is emitted where supported and
+accounted as `skipped` with the host's judgment elsewhere (see
+`agent-bundle inspect`), while a document that explicitly names a host without
+the surface is a build error — unsupported components fail before artifact
+publication rather than shipping as a broken half. Identity paths are
+canonicalized so the model digest is root-independent.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4900` | error | A conventional rule file cannot be read. | Make the `.mdc` file readable, or remove it from `src/rules/`. |
+| `AB4901` | error | Rule YAML frontmatter is invalid. | Repair the YAML between the `---` fences. |
+| `AB4902` | error | Rule frontmatter declares a field outside `description`, `globs`, `alwaysApply`, `targets`. | Remove the field; host-specific rule metadata is not part of the closed contract. |
+| `AB4903` | error | A rule frontmatter field has the wrong shape (`description` string, `globs` nonempty string or array, `alwaysApply` boolean, `targets` array of target names). | Fix the field's value. |
+| `AB4904` | error | A rule's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
+| `AB4905` | error | A rule explicitly targets a host whose `rules` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the rule's `targets`; only Cursor publishes a rules surface. |
+| `AB4906` | error | Two rule files share a name. | Rename one file so every rule name is unique. |
+| `AB4920` | error | A conventional command file cannot be read. | Make the `.md` file readable, or remove it from `src/commands/`. |
+| `AB4921` | error | Command YAML frontmatter is invalid. | Repair the YAML between the `---` fences. |
+| `AB4922` | error | Command frontmatter declares a field outside `description`, `argumentHint`, `allowedTools`, `model`, `disableModelInvocation`, `targets`. | Remove the field; per-host frontmatter is regenerated from the validated fields at lowering time. |
+| `AB4923` | error | A command frontmatter field has the wrong shape (`allowedTools` nonempty string or array, string fields, `disableModelInvocation` boolean, `targets` array of target names). | Fix the field's value. |
+| `AB4924` | error | A command's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
+| `AB4925` | error | A command explicitly targets a host whose `commands` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the command's `targets`; Cursor and Claude publish command surfaces, Codex and portable do not. |
+| `AB4926` | error | Two command files share a name. | Rename one file so every command name is unique. |
 
 ## Route graph, state, and provider conventions (`AB4800`–`AB4825`, `AB4940`–`AB4942`)
 
