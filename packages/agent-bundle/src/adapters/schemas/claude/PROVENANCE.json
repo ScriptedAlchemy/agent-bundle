@@ -17,8 +17,8 @@
       "url": "https://docs.anthropic.com/en/docs/claude-code/plugins"
     },
     "marketplace.schema.json": {
-      "bytes": 14889,
-      "sha256": "7fc9f2762fa0b15ddb7c1319e8a59ce486a83c39baab1b5f848481ee2e3be7eb",
+      "bytes": 14895,
+      "sha256": "4ffa94e8024966e8080b9d3b338c9612bdfa255802a8491b43f74f90427bc988",
       "url": "https://code.claude.com/docs/en/plugin-marketplaces"
     },
     "mcp.schema.json": {

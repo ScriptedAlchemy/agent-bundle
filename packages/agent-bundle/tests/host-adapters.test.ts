@@ -712,6 +712,7 @@ it.each([
     url: 'https://artifacts.example.test/review-tools.zip',
     sha256: 'd'.repeat(64),
   }, undefined],
+  [{ source: 'archive', url: 'https://artifacts.example.test' }, undefined],
   [{ source: 'command', command: 'review-tools plugin-path', timeout: 120, mode: 'copy' }, undefined],
   [{ source: 'command', command: 'review-tools plugin-path', mode: 'link' }, undefined],
 ] as const)('emits an authored Claude marketplace plugin source %#', (source, metadata) => {
@@ -971,6 +972,7 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { source: 'git-subdir', url: 'acme/monorepo', path: 'plugins/review-tools' },
     { source: 'npm', package: '@acme/review-tools', version: '~1.2.3', registry: 'https://npm.example.test' },
     { source: 'archive', url: 'https://artifacts.example.test/review-tools.zip', sha256: 'c'.repeat(64) },
+    { source: 'archive', url: 'https://artifacts.example.test' },
     { source: 'command', command: 'review-tools plugin-path', timeout: 60, mode: 'link' },
   ]) {
     expect(validate({
@@ -986,6 +988,10 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: './../outside' }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: './plugin\\..\\outside' }] },
     { ...manifest, metadata: { pluginRoot: './plugins\\..\\outside' } },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://localhost' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://localhost/plugin.zip' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://metadata' } }] },
+    { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://metadata/plugin.zip' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'github', repo: 'acme/review-tools', extra: true } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'archive', url: 'https://example.test/plugin.zip', sha256: 'bad' } }] },
     { ...manifest, plugins: [{ ...manifest.plugins[0], source: { source: 'command', command: 'plugin-path', mode: 'move' } }] },
