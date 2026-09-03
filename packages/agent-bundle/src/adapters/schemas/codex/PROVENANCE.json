@@ -16,7 +16,7 @@
     "marketplace.schema.json": [
       "Transcribed 2026-09-02 from the Marketplace metadata section of https://developers.openai.com/plugins/build/plugins: top-level name, interface.displayName, and plugins[] entries with name, source, policy, and category.",
       "interface is required even though one documented example omits it: the adapter always emits a displayName, and the marketplace picker shows that title.",
-      "source admits every documented form: a plain ./-prefixed string, { source: local, path }, { source: url, url, ref?, sha? }, { source: git-subdir, url, path, ref?, sha? }, and { source: npm, package, version?, registry? }; paths are root-contained with backslashes, control characters, and Unicode line terminators rejected, Git URLs must be HTTP(S) or ssh:// with a syntactically valid host (DNS labels whose last label contains a letter, or an in-range dotted-quad IPv4; optional userinfo and a 0-65535 port) and a non-empty percent-encoded repository path, or scp-style user@host:path, so scheme-prefixed values with an unusable authority such as https://%zz/repo.git or https://999.999.999.999/repo.git are rejected; sha selectors are 7-64 hexadecimal digits, npm versions must be a semver version, a semver range, or a dist-tag made only of characters encodeURIComponent leaves unescaped (npm-package-arg rejects anything else with EINVALIDTAGNAME), and registries must be credential-, query-, and fragment-free HTTPS URLs with the same host grammar.",
+      "source admits every documented form: a plain ./-prefixed string, { source: local, path }, { source: url, url, ref?, sha? }, { source: git-subdir, url, path, ref?, sha? }, and { source: npm, package, version?, registry? }; paths are root-contained with backslashes, control characters, and Unicode line terminators rejected, Git URLs must be HTTP(S) or ssh:// with a syntactically valid host (DNS labels whose last label contains a letter, an in-range dotted-quad IPv4, or a bracketed RFC 3986 IPv6 literal; optional userinfo and a 0-65535 port) and a non-empty percent-encoded repository path, or scp-style user@host:path, so scheme-prefixed values with an unusable authority such as https://%zz/repo.git or https://999.999.999.999/repo.git are rejected; sha selectors are 7-64 hexadecimal digits, npm versions must be a semver version, a semver range using semver's whitespace grammar (any whitespace run between comparators and around hyphens, trimmed at the ends), or a dist-tag made only of characters encodeURIComponent leaves unescaped (npm-package-arg rejects anything else with EINVALIDTAGNAME), and registries must be credential-, query-, and fragment-free HTTPS URLs with the same host grammar.",
       "policy.installation and policy.authentication are closed to the documented AVAILABLE|INSTALLED_BY_DEFAULT|NOT_AVAILABLE and ON_INSTALL|ON_USE values, and both are required alongside category as the page instructs."
     ],
     "hooks.schema.json": [
@@ -37,8 +37,8 @@
       "url": "https://learn.chatgpt.com/docs/hooks"
     },
     "marketplace.schema.json": {
-      "bytes": 6399,
-      "sha256": "1f069283d53ea61be08375233c9ad7a805e318d4d229304cf4bec587f9557715",
+      "bytes": 10805,
+      "sha256": "e0002bb331bd79c3f948dcc33168eb5e2cbc1f76dd72ed04c711f45c48cb5e19",
       "url": "https://developers.openai.com/plugins/build/plugins"
     },
     "mcp.schema.json": {

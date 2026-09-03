@@ -155,8 +155,18 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { source: 'url', url: 'https://localhost/team/codex-plugins.git' },
     { source: 'url', url: 'https://xn--bcher-kva.example/team/codex-plugins.git' },
     { package: 'codex-plugin', registry: 'https://10.0.0.1:4873/', source: 'npm' },
-    // npm version selectors: semver versions, ranges, and dist-tags (npm-package-arg rules).
-    ...['1.2.3', '~1.2', '>=1.0.0 <2.0.0', '1.2.3 - 2.3.4', '1.x', '*', '>=1.0.0-beta.1', '1.0.0+build.5', '^1 || ^2', 'v1.2.3', '=1.2.3', 'next', 'beta-2', 'rc.1']
+    // Bracketed IPv6 authorities (RFC 3986 IP-literal) in every URL form Git and npm accept.
+    { source: 'url', url: 'ssh://git@[2001:db8::1]/team/codex-plugins.git' },
+    { source: 'url', url: 'https://[2001:db8::1]:4873/team/codex-plugins.git' },
+    { source: 'url', url: 'https://[::1]/team/codex-plugins.git' },
+    { source: 'url', url: 'https://[::ffff:10.0.0.1]/team/codex-plugins.git' },
+    { source: 'url', url: 'https://[2001:0db8:85a3:0000:0000:8a2e:0370:7334]/team/codex-plugins.git' },
+    { source: 'url', url: 'git@[2001:db8::1]:team/codex-plugins.git' },
+    { package: 'codex-plugin', registry: 'https://[2001:db8::1]:4873/', source: 'npm' },
+    { package: 'codex-plugin', registry: 'https://[::1]/', source: 'npm' },
+    // npm version selectors: semver versions, ranges, and dist-tags (npm-package-arg rules), using
+    // semver's whitespace grammar (any run of whitespace between comparators, trimmed at the ends).
+    ...['1.2.3', '~1.2', '>=1.0.0 <2.0.0', '>=1.0.0  <2.0.0', '>=1.0.0\t<2.0.0', '>= 1.0.0', '~ 1.2', ' 1.2.3 ', '1.2.3 - 2.3.4', '1.0.0  -  2.0.0', '1.x', '*', '>=1.0.0-beta.1', '1.0.0+build.5', '^1 || ^2', '^1||^2', 'v1.2.3', '=1.2.3', 'next', 'beta-2', 'rc.1']
       .map((version) => ({ package: 'codex-plugin', source: 'npm', version })),
   );
   expect(validate(admitted), JSON.stringify(validate.errors)).toBe(true);
@@ -208,8 +218,17 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { source: 'url', url: 'ssh://999.999.999.999/team/plugin.git' },
     { package: '@example/codex-plugin', registry: 'https://999.999.999.999/', source: 'npm' },
     { package: '@example/codex-plugin', registry: 'https://example.123/', source: 'npm' },
+    // IPv6 literals must be bracketed, well-formed, and at most eight groups.
+    { source: 'url', url: 'https://[2001:db8::1/team/plugin.git' },
+    { source: 'url', url: 'https://[zz::1]/team/plugin.git' },
+    { source: 'url', url: 'https://[1:2:3:4:5:6:7:8:9]/team/plugin.git' },
+    { source: 'url', url: 'https://[1:2:3:4:5:6:7]/team/plugin.git' },
+    { source: 'url', url: 'https://[]/team/plugin.git' },
+    { source: 'url', url: 'https://2001:db8::1/team/plugin.git' },
+    { package: '@example/codex-plugin', registry: 'https://[2001:db8::1', source: 'npm' },
+    { package: '@example/codex-plugin', registry: 'https://[1:2:3:4:5:6:7:8:9]/', source: 'npm' },
     // Selectors npm rejects with EINVALIDTAGNAME or as unparseable ranges.
-    ...['foo bar', '%', '', '1.2.3 || foo bar', '>=1.0.0 <', 'latest@1', 'a/b', 'a:b', 'a#b', 'a?b']
+    ...['foo bar', '%', '', '1.2.3 || foo bar', '>=1.0.0 <', 'latest@1', 'a/b', 'a:b', 'a#b', 'a?b', '1.0.0 -2.0.0']
       .map((version) => ({ package: '@example/codex-plugin', source: 'npm', version })),
     { package: '@example/codex-plugin', registry: 'https://registry.example.test/a b', source: 'npm' },
     { package: '@example/codex-plugin', source: 'npm', version: 'file:../local' },
