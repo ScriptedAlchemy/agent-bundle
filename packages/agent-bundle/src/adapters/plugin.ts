@@ -723,11 +723,33 @@ const compositeFeatureCapability = (
   ))
   .reduce(combine);
 
+/**
+ * The composite ships one shared `skills/` tree: a skill lowers to the shared
+ * Claude/Codex pass-through document only when it declares no host extension
+ * and no placeholder, and otherwise to the portable document, which strips
+ * every host extension and admits no Skill Markdown token (AB3008). Neither
+ * skill feature therefore reaches the composite regardless of what any host
+ * half supports; the emission-dispatch union must not claim otherwise.
+ */
+const compositeSkillFeatureCapabilities = Object.freeze({
+  'skills.hostFrontmatter': unavailableCapability(
+    'The unified bundle emits one shared skills/ tree and lowers any skill that declares a host frontmatter extension to the portable document, which strips the extension; per-host skill trees are install-time selection (#101).',
+  ),
+  'skills.markdownTokens': unavailableCapability(
+    'The unified bundle lowers a skill that uses a Skill Markdown token to the portable document, which documents no interpolation placeholder; the token fails closed (AB3008).',
+  ),
+});
+
 const compositeFeatureCapabilities = (
   combine: (left: CapabilityState, right: CapabilityState) => CapabilityState,
-): Readonly<Record<string, CapabilityState>> => Object.freeze(Object.fromEntries(
-  compositeFeatureCapabilityNames.map((capability) => [capability, compositeFeatureCapability(capability, combine)]),
-));
+): Readonly<Record<string, CapabilityState>> => Object.freeze({
+  ...Object.fromEntries(
+    compositeFeatureCapabilityNames
+      .filter((capability) => !Object.hasOwn(compositeSkillFeatureCapabilities, capability))
+      .map((capability) => [capability, compositeFeatureCapability(capability, combine)]),
+  ),
+  ...compositeSkillFeatureCapabilities,
+});
 
 const pluginCapabilities: Readonly<Record<string, CapabilityState>> = Object.freeze({
   ...cursorOnlyCapabilities,

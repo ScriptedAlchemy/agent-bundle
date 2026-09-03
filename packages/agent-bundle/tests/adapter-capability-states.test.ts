@@ -306,8 +306,12 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   for (const capabilities of [codex, cursor, portable]) {
     expect(capabilities['skills.markdownTokens']).toMatchObject({ reason: expect.stringContaining('AB3008'), state: 'unavailable' });
   }
-  expect(plugin.componentCapabilities?.['skills.markdownTokens']).toMatchObject({ evidence: { target: 'claude' }, state: 'supported' });
-  expect(plugin.capabilities['skills.markdownTokens']).toMatchObject({ state: 'unavailable' });
+  // The composite's shared skills/ tree falls back to the portable document for
+  // any skill with a host extension or token, so neither feature reaches it.
+  for (const capability of ['skills.hostFrontmatter', 'skills.markdownTokens']) {
+    expect(plugin.componentCapabilities?.[capability]).toMatchObject({ reason: expect.stringContaining('portable document'), state: 'unavailable' });
+    expect(plugin.capabilities[capability]).toEqual(plugin.componentCapabilities?.[capability]);
+  }
 });
 
 it('judges composite event routes by the same intersection validation applies (#100 event-route kind)', () => {

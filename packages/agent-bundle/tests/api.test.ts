@@ -1154,6 +1154,22 @@ it('reports omitted component features per target from the host feature rows (#1
     for (const target of ['claude', 'cursor', 'plugin']) {
       expect(selectedOn(target, 'hook')).not.toHaveProperty('omittedFeatures');
     }
+    // A skill with a Claude host extension keeps it on Claude, but the
+    // composite's shared skills/ tree lowers it to the portable document, so
+    // the composite reports the host frontmatter as omitted.
+    await writeFile(
+      join(root, 'src', 'skills', 'review', 'SKILL.md'),
+      '---\nname: review\ndescription: Reviews changes\ntargets:\n  claude:\n    model: sonnet\n---\n# Review\n',
+    );
+    const withExtension = await readyInspection({ root });
+    const skillOn = (target: string) =>
+      withExtension.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === 'skill')!;
+    expect(skillOn('claude')).not.toHaveProperty('omittedFeatures');
+    expect(skillOn('plugin').omittedFeatures).toEqual([
+      { capability: { name: 'skills.hostFrontmatter', reason: expect.stringContaining('portable document'), state: 'unavailable' }, feature: 'hostFrontmatter' },
+    ]);
+    const pluginSkill = withExtension.model.skills[0]!.hostDocuments?.plugin;
+    expect(pluginSkill?.frontmatter).not.toHaveProperty('model');
     // `validate` surfaces the matching omit-with-reason warnings for the
     // implicit Cursor target; inspect stays a ready plan.
     const validated = await validate({ root });

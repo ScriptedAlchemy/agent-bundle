@@ -394,6 +394,12 @@ their rows below mirror that contract rather than adding a second check.
 | `skill` | `skills.hostFrontmatter` (typed host extension / Codex `agents/openai.yaml` sidecar) | supported | supported | supported | unavailable (portable fields only) |
 | `skill` | `skills.markdownTokens` (`$ARGUMENTS`, `${CLAUDE_PLUGIN_ROOT}`, …) | supported | unavailable (`AB3008`) | unavailable (`AB3008`) | unavailable (`AB3008`) |
 
+The composite `plugin` bundle ships one shared `skills/` tree and lowers any
+skill that declares a host extension or token to the portable document, so
+both skill feature rows are `unavailable` there and `inspect` reports the
+dropped host frontmatter under `omittedFeatures`; per-host skill trees are
+install-time selection (#101).
+
 Hook tool selectors a host cannot map still fail at plan time
 (`<target>.hook.tool.<tool>`), and the per-host matcher tables live under
 `hooks.matchers` in each capability table.
