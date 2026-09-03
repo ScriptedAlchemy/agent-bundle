@@ -79,7 +79,7 @@ proxy 从父命令 `dev` 继承 `--root`，并把诊断写到 stderr。
 ## install
 
 ```sh
-agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--replace] [--json]
 ```
 
 | 选项 | 默认值 | 含义 |
@@ -87,6 +87,11 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
 | `--from <bundle-dir>` | `process.cwd()` | target 捆绑包目录或产物根目录。 |
 | `--scope <scope>` | `user` | `user`、`project` 或 `local`。Claude 接受全部三种；Codex 与 Cursor 是 user 作用域。 |
+| `--replace`（别名 `--force`） | 关闭 | 即使版本不同，也替换该插件已有的 agent-bundle 安装。不带它时，内容完全相同的副本是 `already-installed` 空操作，版本相同但内容哈希不同的副本会被自动替换，版本不同则为 `AB7005`。外来目录总是被拒绝（`AB7005`）。 |
+
+输出的独立 `install.mjs` 与相对包的安装器 bin 接受同样的 `--replace`。Cursor 副本携带安装回执
+（`.agent-bundle-install.json`），替换只触碰归属文件，`--replace` 会接管回执出现之前的副本；Claude 的替换
+先运行 `claude plugin uninstall --keep-data` 再重新安装，Codex 则先 `codex plugin remove` 再 `add`。
 
 ## doctor
 
@@ -96,7 +101,9 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | `--from <bundle-dir>` | —— | 用于比对的 target 捆绑包目录或产物根目录。 |
 | `--json` | 关闭 | 写出一份机器可读的 JSON 文档。 |
 
-当 Doctor 报告任何 error 级诊断时以 `1` 退出，并且绝不修改任何东西。
+当 Doctor 报告任何 error 级诊断时以 `1` 退出，并且绝不修改任何东西。带 `--from` 时，它按宿主把已安装副本报告为
+`current`、`stale`（版本相同、内容不同——`AB7308`）、`version-mismatch`（`AB7309`）、`foreign`（`AB7321`）或
+`not-installed`（`AB7307`）。
 
 ## validate
 
@@ -132,6 +139,13 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | `--state` | 状态生命期。 |
 
 传入多个聚焦标志是错误。当规范化模型无效时，`inspect` 以 `1` 退出。
+
+每份检查计划都会以规范组件类型报告每个组件——`agent`、`cli`、`command`、`event-route`、`hook`、`lsp`、
+`mcp-app`、`mcp-server`、`native-diagnostics`、`native-extension`、`rule`、`script`、`skill`（来自
+`agent-bundle/api` 的 `AgentComponentKind`）——标为 `selected` 或带原因的 `skipped`，并附一份 `kinds` 矩阵：
+每种类型一条，包含该 target 自己的四态能力判定以及选中/省略计数。人类可读输出为每个 target 打印一行、每条
+省略及其原因，然后是 `kinds this host cannot emit:`。文件系统 `src/events` 路由报告为 `event-route`，按宿主的
+`event:<规范事件>` 行判定，而不是 `hook`。
 
 ## mcp
 

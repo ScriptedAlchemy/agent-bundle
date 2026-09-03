@@ -69,6 +69,20 @@ successful rebuild epochs, with atomic generation switching and a stable proxy c
 covered in [Developer Workbench](../development/workbench.mdx) and is not the same operation as
 `agent-bundle install`.
 
+## Reinstalling after a rebuild
+
+Every emitted installer — `agent-bundle install <host>`, the package-relative bin, and the
+standalone `install.mjs` — shares one replace policy. An identical copy is an `already-installed`
+no-op. A copy of the **same version whose content hash differs** is replaced automatically, so
+rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A different version is
+refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory — one
+this plugin's installer did not place — is refused either way. Cursor copies carry an install receipt
+(`.agent-bundle-install.json`: plugin, version, host, content hash, owned files); replacement is in
+place and touches owned files only, never unowned entries such as `state/`, and `--replace` adopts
+a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data` before
+reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
+`add`. The emitted `INSTALL.md` documents the same recipe per host.
+
 ## Inspect an install without changing it
 
 ```sh
@@ -79,7 +93,9 @@ npx agent-bundle doctor --from artifact --json
 Doctor is read-only. It probes hosts, inventories installed bundles, compares them against a
 supplied bundle, checks registration proof, samples runtime endpoint health and identity,
 inventories durable state, and re-runs the pinned process-free document and loader validators over
-installed bytes. It never repairs anything.
+installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
+`current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or
+`not-installed` (`AB7307`).
 
 | Code | Severity | Meaning |
 | --- | --- | --- |

@@ -79,7 +79,7 @@ Both build package outputs when the project declares `bin` or `lib`.
 ## install
 
 ```sh
-agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--replace] [--json]
 ```
 
 | Option | Default | Meaning |
@@ -87,6 +87,13 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
 | `--from <bundle-dir>` | `process.cwd()` | Target bundle directory or artifact root. |
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
+| `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
+
+The emitted standalone `install.mjs` and the package-relative installer bin accept the same
+`--replace`. Cursor copies carry an install receipt (`.agent-bundle-install.json`), replacement
+touches owned files only, and `--replace` adopts a pre-receipt copy; Claude replacement runs
+`claude plugin uninstall --keep-data` before reinstalling and Codex runs `codex plugin remove`
+before `add`.
 
 ## doctor
 
@@ -96,7 +103,9 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--json]
 | `--from <bundle-dir>` | — | Target bundle directory or artifact root to compare against. |
 | `--json` | off | Write one machine-readable JSON document. |
 
-Doctor exits `1` when it reports any error diagnostic, and never modifies anything.
+Doctor exits `1` when it reports any error diagnostic, and never modifies anything. With `--from`,
+it reports the installed copy per host as `current`, `stale` (same version, different content —
+`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), or `not-installed` (`AB7307`).
 
 ## validate
 
@@ -133,6 +142,14 @@ from `eval`.
 | `--state` | State lifetimes. |
 
 Passing more than one focus is an error. `inspect` exits `1` when the normalized model is invalid.
+
+Every inspection plan reports each component with its canonical kind — `agent`, `cli`, `command`,
+`event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`,
+`rule`, `script`, `skill` (`AgentComponentKind` from `agent-bundle/api`) — as `selected` or
+`skipped` with its cause, plus a `kinds` matrix: one entry per kind with the target's own four-state
+capability judgment and selected/omitted counts. The human output prints one line per target,
+each omission and its reason, then `kinds this host cannot emit:`. Filesystem `src/events` routes
+report as `event-route`, judged by the host's `event:<canonical event>` row, not as `hook`.
 
 ## mcp
 
