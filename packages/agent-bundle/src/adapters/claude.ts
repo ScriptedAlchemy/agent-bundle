@@ -424,12 +424,18 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.17.0',
+  adapterRevision: '1.18.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
 const evidence = capabilityEvidence(claudeName, metadata);
 const distributionPolicy = capabilityTable.plugin.distributionPolicy;
+const agentCapabilities = Object.freeze(Object.fromEntries(
+  Object.entries(capabilityTable.plugin.agents).map(([rowName, row]) => [
+    rowName === 'component' ? 'agents' : `agents.${rowName}`,
+    unavailableCapability(row.reason),
+  ]),
+));
 
 export const claudeArtifactValidation = deepFreeze({
   documents: [
@@ -3138,6 +3144,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   artifactValidation: claudeArtifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...agentCapabilities,
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
     bin: capabilityStateFromSupport(
       capabilityTable.plugin.bin.directory === 'bin' &&

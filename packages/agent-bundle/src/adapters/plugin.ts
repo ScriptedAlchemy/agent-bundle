@@ -186,7 +186,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.15.0',
+  adapterRevision: '1.16.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -579,10 +579,26 @@ const componentCapabilities = Object.freeze(Object.fromEntries(
   ]),
 ));
 
+const agentCapabilities = Object.freeze(Object.fromEntries(
+  Object.keys(claudeCapabilityTable.plugin.agents).map((rowName) => {
+    const capability = rowName === 'component' ? 'agents' : `agents.${rowName}`;
+    return [
+      capability,
+      intersectCapabilityStates(
+        claudeAdapter.capabilities[capability]!,
+        unavailableCapability(
+          'The pinned Codex and Cursor plugin contracts publish no shared plugin agents component or agent-frontmatter surface.',
+        ),
+      ),
+    ];
+  }),
+));
+
 export const pluginAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...agentCapabilities,
     ...compositeEventCapabilities,
     bin: unavailableCapability(
       'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',

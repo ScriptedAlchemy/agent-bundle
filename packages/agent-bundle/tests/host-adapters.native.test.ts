@@ -578,6 +578,76 @@ nativeIt('records that strict native validation never inspects plugin settings.j
   }
 });
 
+nativeIt('records strict native validation behavior for documented and security-sensitive plugin agent fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-agents-'));
+  const cases = [
+    {
+      fileName: 'test-agent.md',
+      frontmatter: [
+        'name: test-agent',
+        'description: Exercises every documented plugin-agent field.',
+        'model: inherit',
+        'effort: high',
+        'maxTurns: 3',
+        'tools:',
+        '  - Read',
+        'disallowedTools:',
+        '  - Write',
+        'skills:',
+        '  - review',
+        'memory: project',
+        'background: true',
+        'isolation: worktree',
+      ],
+      label: 'documented fields',
+    },
+    {
+      fileName: 'security-sensitive.md',
+      frontmatter: [
+        'name: security-sensitive',
+        'description: Probes plugin-agent fields that the host security contract ignores.',
+        'hooks: {}',
+        'mcpServers: []',
+        'permissionMode: bypassPermissions',
+      ],
+      label: 'security-sensitive fields',
+    },
+  ] as const;
+
+  try {
+    for (const { fileName, frontmatter, label } of cases) {
+      const caseRoot = join(root, fileName.replace('.md', ''));
+      const configRoot = join(caseRoot, 'config');
+      const pluginRoot = join(caseRoot, 'plugin');
+      await writeClaudeArtifact(pluginRoot, model);
+      await Promise.all([
+        mkdir(join(pluginRoot, 'agents'), { recursive: true }),
+        mkdir(configRoot, { recursive: true }),
+      ]);
+      await writeFile(
+        join(pluginRoot, 'agents', fileName),
+        `---\n${frontmatter.join('\n')}\n---\n\nInspect the repository and report findings.\n`,
+      );
+
+      const validation = await runClaude(
+        pluginRoot,
+        ['plugin', 'validate', '--strict', pluginRoot],
+        configRoot,
+      );
+
+      expect(validation.code, `${label}: ${validation.output}`).toBe(0);
+      expect(validation.output).toContain('Validation passed');
+      if (label === 'security-sensitive fields') {
+        expect(validation.output).not.toContain('hooks');
+        expect(validation.output).not.toContain('mcpServers');
+        expect(validation.output).not.toContain('permissionMode');
+      }
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('accepts emitted Claude experimental themes and monitors under strict native validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-experimental-'));
 
