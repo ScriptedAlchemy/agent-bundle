@@ -4,6 +4,7 @@ import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
@@ -1034,9 +1035,10 @@ it('rejects the built identity module with the intended error, not a TDZ Referen
   // `agent-bundle/meta` carries the same dist contract as `agent-bundle/mcp-apps`:
   // a compiled surface resolves it to the generated identity, and anything
   // else must say so rather than report a fabricated identity.
-  await expect(import('../src/meta.ts')).rejects.toThrow(
-    'agent-bundle/meta is available only inside a surface Agent Bundle compiles',
-  );
+  await expect(import('../src/meta.ts')).rejects.toMatchObject({
+    code: 'AB4760',
+    message: expect.stringContaining('agent-bundle/meta is available only inside a surface Agent Bundle compiles'),
+  });
 
   const distEntry = join(agentBundlePackageRoot, 'dist', 'meta.js');
   const { code, stderr } = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
@@ -1055,8 +1057,15 @@ it('rejects the built identity module with the intended error, not a TDZ Referen
     });
   });
   expect(code).toBe(1);
-  expect(stderr).toContain('agent-bundle/meta is available only inside a surface Agent Bundle compiles');
-  expect(stderr).not.toContain('ReferenceError');
+  // Node 24 colorizes the uncaught-error property dump even on a piped
+  // stderr, so the assertions read the text without its escape sequences.
+  const plain = stripVTControlCharacters(stderr);
+  expect(plain).toContain('[AB4760] agent-bundle/meta is available only inside a surface Agent Bundle compiles');
+  // The recovery rides on the message, so a bare `node` process prints the
+  // exact fix without any diagnostic formatter (#386).
+  expect(plain).toContain('recovery: Run the test under agentBundleRstest() or agentBundleBrowserRstest()');
+  expect(plain).toContain("code: 'AB4760'");
+  expect(plain).not.toContain('ReferenceError');
 });
 
 it('uses the selected streamable HTTP manifest with propagated cancellation and cleans data before rejecting tampering', async () => {

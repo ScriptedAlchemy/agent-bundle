@@ -16,7 +16,14 @@
       "Inline mcpServers values must be objects; inline hook documents use the same closed eleven-event, command-or-mcp_tool handler shape as hooks.schema.json.",
       "The closed interface object admits every documented install-surface field; brandColor requires a six-digit hexadecimal value, external links require http(s), asset paths must stay inside the plugin root, and screenshots must be ./assets/-relative PNG paths.",
       "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id.",
-      "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization."
+      "Component and interface-asset path patterns treat backslashes as separators and reject them outright so Windows-form parent traversal cannot escape the plugin root, and they reject control characters and Unicode line terminators (U+0000-U+001F, U+007F, U+2028, U+2029) so a line break cannot hide a parent segment from the containment lookahead; HTTP(S) URL scheme patterns are case-insensitive to match WHATWG URL protocol normalization.",
+      "The screenshots item pattern applies the same containment lookahead and character exclusions as the other asset paths (backslashes rejected as separators, control characters and Unicode line terminators rejected) on top of its ./assets/ prefix and .png suffix, so a Windows-form or line-break-hidden parent segment cannot escape the assets directory."
+    ],
+    "marketplace.schema.json": [
+      "Transcribed 2026-09-02 from the Marketplace metadata section of https://developers.openai.com/plugins/build/plugins: top-level name, interface.displayName, and plugins[] entries with name, source, policy, and category.",
+      "interface is required even though one documented example omits it: the adapter always emits a displayName, and the marketplace picker shows that title.",
+      "source admits every documented form: a plain ./-prefixed string, { source: local, path }, { source: url, url, ref?, sha? }, { source: git-subdir, url, path, ref?, sha? }, and { source: npm, package, version?, registry? }; paths are root-contained with backslashes, control characters, and Unicode line terminators rejected, Git URLs must be HTTP(S) or ssh:// with a syntactically valid host (DNS labels whose last label contains a letter, an in-range dotted-quad IPv4, or a bracketed RFC 3986 IPv6 literal; optional RFC 3986 userinfo including user:password and percent-escapes, and a 0-65535 port) and a non-empty percent-encoded repository path, or scp-style user@host:path, so scheme-prefixed values with an unusable authority such as https://%zz/repo.git or https://999.999.999.999/repo.git are rejected; ref selectors follow git check-ref-format (no control characters, whitespace, ~^:?*[\\, \"..\", or \"@{\"; components cannot be empty, start with \".\", or end with \".\" or \".lock\"; no leading \"-\" or lone \"@\"), sha selectors are 7-64 hexadecimal digits, npm versions must be a semver version, a semver range using semver's whitespace grammar (any whitespace run between comparators and around hyphens, trimmed at the ends), or a dist-tag made only of characters encodeURIComponent leaves unescaped and not starting with \".\" (npm-package-arg rejects anything else with EINVALIDTAGNAME or treats it as a directory spec), and registries must be credential-, query-, and fragment-free HTTPS URLs with the same host grammar.",
+      "policy.installation and policy.authentication are closed to the documented AVAILABLE|INSTALLED_BY_DEFAULT|NOT_AVAILABLE and ON_INSTALL|ON_USE values, and both are required alongside category as the page instructs."
     ],
     "hooks.schema.json": [
       "The hooks object is closed to the eleven release-documented events; Interrupt is excluded because rust-v0.147.0 ships no generated Interrupt schema.",
@@ -36,9 +43,9 @@
       "url": "https://learn.chatgpt.com/docs/hooks"
     },
     "marketplace.schema.json": {
-      "bytes": 1671,
-      "sha256": "1d43c5ed19de401fb7455c5912e4c21113f6e387aef4c28d2eca121f7554c4e8",
-      "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
+      "bytes": 11063,
+      "sha256": "fbccce3ade39e1b077fcb440e60260de6e811e8c2d222b2ae0fe8fe47706b470",
+      "url": "https://developers.openai.com/plugins/build/plugins"
     },
     "mcp.schema.json": {
       "bytes": 1267,
@@ -46,8 +53,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 6454,
-      "sha256": "986bcafa6ef46f9dc4558f05781f53400b3d75533a075068184ba8d43670d4ec",
+      "bytes": 6651,
+      "sha256": "074c6c71966a3e6560ccbceb8d82ec6a40cb1eccee2f2d863fb4ef1e2276a814",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

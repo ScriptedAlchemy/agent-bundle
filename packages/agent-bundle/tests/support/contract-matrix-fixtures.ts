@@ -111,11 +111,12 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
 
 /**
  * Packed-journey fixtures: journal sweep is read-only (`{}`) so durable-state
- * assertions in `packed-stdio-projection.test.ts` stay intact.
+ * assertions in `packed-stdio-projection.test.ts` stay intact. The compiled
+ * `app:harness/panel` route is deliberately absent — the packed level
+ * auto-covers app routes (#401).
  */
 export const routeHarnessPackedContractFixtures = (): Record<string, ContractRouteFixture> => ({
   ...routeHarnessContractFixtures(),
-  'app:harness/panel': {},
   'tool:harness/journal': { resultCompat: 'closed' },
   'tool:harness/lifecycle': lifecycleFixture(1),
 });

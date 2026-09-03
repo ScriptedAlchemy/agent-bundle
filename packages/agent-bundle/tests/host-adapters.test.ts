@@ -1151,20 +1151,46 @@ it('admits documented Codex component path and inline manifest forms', async () 
     { hooks: ['./hooks/start.json', './hooks/tools.json'], skills: './skills/' },
     { hooks: hookDocument, mcpServers: { docs: { type: 'http', url: 'https://example.test/mcp' } }, skills: './skills/' },
     { hooks: [hookDocument], skills: './skills/' },
+    {
+      interface: {
+        ...manifest.interface,
+        composerIcon: './assets/icon.png',
+        logo: './assets/logo.png',
+        screenshots: ['./assets/overview.png', './assets/nested/detail.png'],
+      },
+      skills: './skills/',
+    },
   ]) {
     expect(validate({ ...manifest, ...componentFields }), JSON.stringify(validate.errors)).toBe(true);
   }
   for (const invalid of [
     { hooks: '../hooks.json', skills: './skills/' },
     { hooks: ['./hooks.json', '../outside.json'], skills: './skills/' },
+    // Embedded line terminators must not hide a parent-directory segment from
+    // the traversal lookahead (#364 review).
+    { hooks: './hooks\n/../../outside.json', skills: './skills/' },
+    { hooks: ['./hooks\r/../outside.json'], skills: './skills/' },
+    { mcpServers: './mcp\u2028/../outside.json', skills: './skills/' },
+    { skills: './skills\u2029/../../outside/' },
+    { interface: { ...manifest.interface, logo: './assets\n/../../outside.png' }, skills: './skills/' },
+    { interface: { ...manifest.interface, composerIcon: './icon\u2028/../../outside.png' }, skills: './skills/' },
+    { interface: { ...manifest.interface, screenshots: ['./assets/../outside.png'] }, skills: './skills/' },
+    { interface: { ...manifest.interface, screenshots: ['./assets/..\\..\\outside.png'] }, skills: './skills/' },
     { hooks: [], skills: './skills/' },
     { hooks: [{ description: 'missing hooks map' }], skills: './skills/' },
     { mcpServers: '../.mcp.json', skills: './skills/' },
     { mcpServers: { docs: 'not-an-object' }, skills: './skills/' },
     { skills: '../skills/' },
     { skills: ['./skills/'] },
+    // Line terminators must not let a parent segment slip past the containment lookahead.
+    { skills: './x\n/../../outside/' },
+    { hooks: './x\r\n/../../outside.json', skills: './skills/' },
+    { mcpServers: './x\u2028/../../outside.json', skills: './skills/' },
+    { skills: './skills\u0000/' },
+    { interface: { ...manifest.interface, logo: './x\n/../../outside.png' }, skills: './skills/' },
+    { interface: { ...manifest.interface, composerIcon: './x\u2029/../../outside.png' }, skills: './skills/' },
   ]) {
-    expect(validate({ ...manifest, ...invalid })).toBe(false);
+    expect(validate({ ...manifest, ...invalid }), JSON.stringify(invalid)).toBe(false);
   }
 });
 

@@ -412,6 +412,59 @@ it('generates projected MCP commands with the same tool invocation and request c
   expect(source).toContain("invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } }");
   expect(source).toContain('request: { artifactEpoch: "route-fixture@1.2.3", kind: \'tool\', operationId: command.routeId, surface: command.mcp.tool }');
   expect(source).toContain('props: { input: parsed }');
+  // The worker mounts providers from `message.invocation`, so the render
+  // message must carry the dispatched invocation (#319 review).
+  expect(source).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+});
+
+it('forwards the dispatched invocation to the rendered worker in every rendered surface', async () => {
+  const generated = generatedRenderedScriptEntrySource({
+    name: 'report',
+    routeId: 'script:report',
+    workerFile: 'report-flight.mjs',
+  });
+  expect(generated).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+  const factoryStart = generated.indexOf('const openRenderedSession');
+  const factoryEnd = generated.indexOf('\nawait runGeneratedRenderedScriptProcess');
+  const factory = generated.slice(factoryStart, factoryEnd)
+    .replaceAll('import.meta.url', JSON.stringify(import.meta.url));
+  const harness = [
+    "import { EventEmitter } from 'node:events';",
+    factory,
+    'class FakeWorker extends EventEmitter {',
+    '  stdout = new EventEmitter();',
+    '  stderr = new EventEmitter();',
+    '  postMessage(message) {',
+    "    if (message.type !== 'render') return;",
+    "    process.stdout.write(`POSTED:${JSON.stringify(message.invocation)}\\n`);",
+    "    queueMicrotask(() => this.emit('message', { id: message.id, type: 'end' }));",
+    '  }',
+    '  async terminate() { return 0; }',
+    '}',
+    'const Worker = FakeWorker;',
+    // The real dispatcher hands host.execute the invocation from stream().
+    'const createAgentRenderDispatcher = (host) => ({',
+    '  stream: ({ invocation, signal }) => new ReadableStream({',
+    '    async start(controller) {',
+    '      try {',
+    '        const flight = await host.execute({ invocation, progress: undefined, signal });',
+    '        await flight.getReader().read();',
+    '        controller.close();',
+    '      } catch (error) { controller.error(error); }',
+    '    },',
+    '  }),',
+    '});',
+    'const signal = new AbortController().signal;',
+    "const session = openRenderedSession({ invocation: { kind: 'script', props: { input: ['a'], name: 'report' } }, props: {}, request: {}, routeId: 'script:report', signal, validate: (value) => value });",
+    'await session.events().getReader().read();',
+    'await session.close();',
+  ].join('\n');
+
+  const result = await execFile(process.execPath, ['--input-type=module', '--eval', harness]);
+  expect(result).toMatchObject({
+    stderr: '',
+    stdout: 'POSTED:{"kind":"script","props":{"input":["a"],"name":"report"}}\n',
+  });
 });
 
 it('generates deterministic per-request provider execution in the shared Flight worker', () => {

@@ -113,6 +113,34 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       'export const wrong = async (): Promise<number> => (await agent()).providers.library;',
       '',
     ].join('\n')),
+    // Contexts that do not run src/providers/* — a custom runAgentRequest host
+    // or a route-unit fixture — must supply the declared keys, or the handler's
+    // typed `providers.library` would dereference undefined at runtime.
+    writeProjectFile(root, 'custom-scope.ts', [
+      "import { runAgentRequest } from '@agent-bundle/runtime';",
+      "import { renderRoute } from 'agent-bundle/test';",
+      "import type { LibraryContext } from './src/providers/library.js';",
+      '',
+      "const library: LibraryContext = { stages: ['discover'], surface: 'tool' };",
+      'export const complete = async (): Promise<void> => {',
+      "  await runAgentRequest({ invocation: { kind: 'tool' }, providers: { buildNumber: 7, library } }, async () => undefined);",
+      "  await renderRoute('tool:curator/status', { context: { providers: { buildNumber: 7, library } } });",
+      '};',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'missing-providers.ts', [
+      "import { runAgentRequest } from '@agent-bundle/runtime';",
+      "export const omitted = runAgentRequest({ invocation: { kind: 'tool' } }, async () => undefined);",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'missing-fixture.ts', [
+      "import { renderRoute } from 'agent-bundle/test';",
+      "import type { LibraryContext } from './src/providers/library.js';",
+      "const library: LibraryContext = { stages: ['discover'], surface: 'tool' };",
+      "export const partial = renderRoute('tool:curator/status', { context: { providers: { library } } });",
+      "export const absent = renderRoute('tool:curator/status');",
+      '',
+    ].join('\n')),
   ]);
 
   const result = await inspect({ root });
@@ -126,4 +154,13 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
   const mismatch = typecheck(root, 'mismatch.ts');
   expect(mismatch).toHaveLength(1);
   expect(mismatch[0]).toContain("Type 'LibraryContext' is not assignable to type 'number'");
+
+  expect(typecheck(root, 'custom-scope.ts')).toEqual([]);
+  const missingProviders = typecheck(root, 'missing-providers.ts');
+  expect(missingProviders).toHaveLength(1);
+  expect(missingProviders[0]).toContain("Property 'providers' is missing");
+  const missingFixture = typecheck(root, 'missing-fixture.ts');
+  expect(missingFixture).toHaveLength(2);
+  expect(missingFixture[0]).toContain("Property '\"buildNumber\"' is missing");
+  expect(missingFixture[1]).toContain('Expected 2 arguments, but got 1.');
 });

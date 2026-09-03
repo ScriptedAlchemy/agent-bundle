@@ -195,7 +195,9 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         mcpServers: {
           fixture: {
             args: ['mcp/server.mjs'],
-            command: process.execPath,
+            // Bare executable name, as the compiler emits: Agent Plugins §7.2.1
+            // forbids absolute command paths and the build now fails closed.
+            command: 'node',
             cwd: '${PLUGIN_ROOT}',
             type: 'stdio',
           },

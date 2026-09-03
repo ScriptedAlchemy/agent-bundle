@@ -291,6 +291,20 @@ it('reports app-server-only schema output as unassessable information even in st
 it('rejects malformed fixtures for every locally validated Codex schema', async () => {
   const malformed = [
     ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], name: 'Invalid Name' }],
+    // Line terminators must not let a parent-directory segment slip past the
+    // component-path traversal guard (#364 review): `$` and `.` are
+    // line-sensitive in JS regular expressions.
+    ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], hooks: './hooks\n/../../outside.json' }],
+    ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], mcpServers: './mcp\r/../outside.json' }],
+    ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], skills: './skills\u2028/../../outside/' }],
+    ['.codex-plugin/plugin.json', {
+      ...validDocuments['.codex-plugin/plugin.json'],
+      interface: { ...validDocuments['.codex-plugin/plugin.json'].interface, logo: './assets\n/../../outside.png' },
+    }],
+    ['.codex-plugin/plugin.json', {
+      ...validDocuments['.codex-plugin/plugin.json'],
+      interface: { ...validDocuments['.codex-plugin/plugin.json'].interface, screenshots: ['./assets/../outside.png'] },
+    }],
     ['hooks/hooks.json', { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } }],
     ['.mcp.json', { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } }],
     ['.agents/plugins/marketplace.json', {

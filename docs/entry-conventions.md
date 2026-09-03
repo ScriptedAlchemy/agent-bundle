@@ -76,7 +76,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/index.ts` | Library output with declarations. | `lib: false` |
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
-| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. | Use a custom server or prefix the file with `_` |
+| `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required. An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`); the legacy project-root-relative form is accepted only while unambiguous (`AB4827` otherwise). Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. | Use a custom server or prefix the file with `_` |
 | `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
@@ -177,7 +177,11 @@ counter, so provider filenames must not derive that key.
 Route-unit and CLI-dispatch tests inject provider values through the same
 `context` seam as identity axes (`renderRoute(id, { context: { providers:
 { library: fixture } } })`); the harness never executes conventional provider
-modules, so a test chooses exactly the values a component observes.
+modules, so a test chooses exactly the values a component observes. Once the
+generated `.agent-bundle/routes.d.ts` augmentation declares provider keys, the
+harness `options` and its `context.providers` become required (as does
+`providers` on a direct `runAgentRequest`), so omitting a fixture the route's
+types promise is a compile error rather than a runtime `undefined`.
 
 ### Handler request context
 
@@ -460,11 +464,23 @@ module is a reserved specifier, so the `tools` hatch cannot externalize it,
 and no emitted bundle can still carry an unresolved import of it.
 
 Types ship with the package export, so no generated declaration file is
-involved. Outside Agent Bundle compilation the published module throws rather
-than reporting a fabricated identity — a plugin slug exists only in the
-config, and a runtime guess at it would silently disagree with the artifact.
-A release build refuses a project with no release version at all (`AB4013`),
-so a compiled artifact never carries the development fallback.
+involved. Outside Agent Bundle compilation the published module throws the
+`AB4760` diagnostic rather than reporting a fabricated identity — a plugin
+slug exists only in the config, and a runtime guess at it would silently
+disagree with the artifact. A release build refuses a project with no release
+version at all (`AB4013`), so a compiled artifact never carries the
+development fallback.
+
+Tests are not outside the compiler: `agentBundleRstest()` and
+`agentBundleBrowserRstest()` (`agent-bundle/rstest`) alias the specifier to
+`.agent-bundle/test/meta.mjs`, a module generated by the same
+`generatedMetaModuleSource` the build injects, fed from the same compiler
+pass's plugin identity. A source module importing `agent-bundle/meta` therefore
+loads under any Rstest pool built from the preset — plain unit tests, the
+route-unit level, `renderRoute`, and `invokeCli` alike — with the identity
+`package.json` and `agent-bundle.config.ts` declare. A custom runner that
+does not use the preset must add the same alias; the `AB4760` recovery text
+spells it out (see [Diagnostics](diagnostics.md#build-time-identity-outside-the-compiler-ab4760)).
 
 ## Prebuilt payloads — package what you compiled yourself
 

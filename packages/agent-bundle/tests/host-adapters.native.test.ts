@@ -368,6 +368,125 @@ nativeIt('installs and lists an emitted Codex plugin carrying the complete inter
   }
 });
 
+nativeIt('pins the Codex plugin and marketplace CLI JSON contracts, cache layout, and enable state for an authored marketplace policy', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-codex-marketplace-policy-'));
+  const pluginRoot = join(root, 'plugin');
+  const codexHome = join(root, 'codex-home');
+  const policyModel: NormalizedPlugin = {
+    ...model,
+    extensions: {
+      codex: {
+        id: 'extension:codex',
+        key: 'codex',
+        provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+        target: 'codex',
+        value: {
+          interface: { category: 'Developer Tools' },
+          marketplace: {
+            displayName: 'Review Tools Marketplace',
+            policy: { authentication: 'ON_USE', installation: 'INSTALLED_BY_DEFAULT' },
+          },
+        },
+      },
+    },
+  };
+  const pluginId = 'review-tools@review-tools-marketplace';
+
+  try {
+    await Promise.all([
+      mkdir(pluginRoot, { recursive: true }),
+      mkdir(codexHome, { recursive: true }),
+    ]);
+    const plan = codexAdapter.plan(policyModel);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: pluginRoot });
+
+    const added = await runCodex(root, ['plugin', 'marketplace', 'add', pluginRoot, '--json'], codexHome);
+    expect(added.code, added.stderr).toBe(0);
+    expect(JSON.parse(added.stdout)).toEqual({
+      alreadyAdded: false,
+      installedRoot: pluginRoot,
+      marketplaceName: 'review-tools-marketplace',
+    });
+    const readded = await runCodex(root, ['plugin', 'marketplace', 'add', pluginRoot, '--json'], codexHome);
+    expect(readded.code, readded.stderr).toBe(0);
+    expect(JSON.parse(readded.stdout)).toMatchObject({ alreadyAdded: true });
+
+    const marketplaces = await runCodex(root, ['plugin', 'marketplace', 'list', '--json'], codexHome);
+    expect(marketplaces.code, marketplaces.stderr).toBe(0);
+    expect(JSON.parse(marketplaces.stdout)).toMatchObject({
+      marketplaces: expect.arrayContaining([{
+        marketplaceSource: { source: pluginRoot, sourceType: 'local' },
+        name: 'review-tools-marketplace',
+        root: pluginRoot,
+      }]),
+    });
+
+    const installed = await runCodex(root, ['plugin', 'add', pluginId, '--json'], codexHome);
+    expect(installed.code, installed.stderr).toBe(0);
+    const installedDocument = JSON.parse(installed.stdout) as { readonly installedPath: string };
+    expect(installedDocument).toEqual({
+      authPolicy: 'ON_USE',
+      installedPath: join(codexHome, 'plugins', 'cache', 'review-tools-marketplace', 'review-tools', '1.2.3'),
+      marketplaceName: 'review-tools-marketplace',
+      name: 'review-tools',
+      pluginId,
+      version: '1.2.3',
+    });
+    // The documented cache layout names a literal `local` version segment for
+    // local plugins; the pinned 0.147.0 CLI uses the manifest version instead.
+    await access(join(installedDocument.installedPath, '.codex-plugin', 'plugin.json'));
+    const enableState = await readFile(join(codexHome, 'config.toml'), 'utf8');
+    expect(enableState).toContain(`[plugins."${pluginId}"]\nenabled = true`);
+    expect(enableState).toContain('[marketplaces.review-tools-marketplace]');
+    expect(enableState).toContain('source_type = "local"');
+
+    const listed = await runCodex(root, ['plugin', 'list', '--json'], codexHome);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout)).toEqual({
+      available: [],
+      installed: [{
+        authPolicy: 'ON_USE',
+        enabled: true,
+        installPolicy: 'INSTALLED_BY_DEFAULT',
+        installed: true,
+        marketplaceName: 'review-tools-marketplace',
+        marketplaceSource: { source: pluginRoot, sourceType: 'local' },
+        name: 'review-tools',
+        pluginId,
+        source: { path: pluginRoot, source: 'local' },
+        version: '1.2.3',
+      }],
+    });
+
+    const upgraded = await runCodex(root, ['plugin', 'marketplace', 'upgrade', '--json'], codexHome);
+    expect(upgraded.code, upgraded.stderr).toBe(0);
+    expect(JSON.parse(upgraded.stdout)).toEqual({ errors: [], selectedMarketplaces: [], upgradedRoots: [] });
+    const upgradeLocal = await runCodex(root, ['plugin', 'marketplace', 'upgrade', 'review-tools-marketplace', '--json'], codexHome);
+    expect(upgradeLocal.code).toBe(1);
+    expect(upgradeLocal.stderr).toContain('is not configured as a Git marketplace');
+
+    const removed = await runCodex(root, ['plugin', 'remove', pluginId, '--json'], codexHome);
+    expect(removed.code, removed.stderr).toBe(0);
+    expect(JSON.parse(removed.stdout)).toEqual({
+      marketplaceName: 'review-tools-marketplace',
+      name: 'review-tools',
+      pluginId,
+    });
+    const marketplaceRemoved = await runCodex(root, ['plugin', 'marketplace', 'remove', 'review-tools-marketplace', '--json'], codexHome);
+    expect(marketplaceRemoved.code, marketplaceRemoved.stderr).toBe(0);
+    expect(JSON.parse(marketplaceRemoved.stdout)).toEqual({
+      installedRoot: null,
+      marketplaceName: 'review-tools-marketplace',
+    });
+    const cleared = await readFile(join(codexHome, 'config.toml'), 'utf8');
+    expect(cleared).not.toContain(pluginId);
+    expect(cleared).not.toContain('[marketplaces.review-tools-marketplace]');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 nativeIt('pins Claude plugin and marketplace lifecycle command help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-lifecycle-help-'));
 

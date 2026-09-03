@@ -53,6 +53,37 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 }
 ```
 
+An MCP App is one browser entry under `src/mcp/<server>/apps/`, and a tool
+that opens it references the App instead of repeating its `ui://` literal:
+
+```ts
+// src/mcp/runtime/apps/dashboard.ts
+import type { AppRouteConfig } from 'agent-bundle';
+
+export const config = {
+  resourceUri: 'ui://my-plugin/dashboard.html',
+  template: './dashboard.html', // resolves beside this file, like an import
+} satisfies AppRouteConfig;
+```
+
+```tsx
+// src/mcp/runtime/tools/open-dashboard.tsx
+import type { ToolConfig } from 'agent-bundle';
+import { appResourceUri } from 'agent-bundle/routes';
+
+export const config = {
+  _meta: { ui: { resourceUri: appResourceUri('dashboard') } },
+  description: 'Open the dashboard.',
+} satisfies ToolConfig;
+```
+
+`appResourceUri('dashboard')` is resolved by the compiler to the App route's
+`config.resourceUri` (`AB4826` when no such App exists); a `const` string
+literal imported from a relative sibling module is accepted in static `config`
+as well, and is the form to use when the component also needs the URI at run
+time. The full grammar and the `config.template` resolution rule are in
+[Diagnostics](diagnostics.md).
+
 The compiler statically reads `config`, imports schemas and implementations
 only into generated entries, installs `runAgentRequest`, and derives the real
 MCP server from the route graph. Each call renders through a warm internal
@@ -107,7 +138,11 @@ the file is part of the project's TypeScript program (add
 `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
 stay `unknown`. Route-unit and CLI-dispatch tests inject fixture values through
 `renderRoute(id, { context: { providers: { library } } })`; the harness never
-executes provider modules on a test's behalf.
+executes provider modules on a test's behalf. Because the augmentation makes
+declared keys required, the same program also requires `context.providers`
+(and the harness `options` argument) on every `renderRoute`, `invokeCli`, and
+in-memory MCP call, and `providers` on a direct `runAgentRequest`: a handler
+typed against `providers.library` can never observe an unchecked `undefined`.
 
 ### What reaches the MCP wire
 
@@ -118,7 +153,7 @@ The final Agent Document of a tool route lowers to one `CallToolResult`:
 | `Agent.Text`, `Agent.Markdown`, `Agent.Context`, `Agent.Json` children | Ordered `content` text blocks (`Agent.Json` as its JSON text). |
 | `Agent.Image`, `Agent.Audio`, `Agent.Resource` | Native `image`, `audio`, and `resource_link` blocks; a host without that capability fails the projection closed unless a text fallback is selected. |
 | `Agent.Result value` | `structuredContent` when the value is a JSON object; a non-object value emits none and is never wrapped. |
-| `Agent.Result metadata` | `CallToolResult._meta`. It must be a JSON object (snapshotted through the same wire boundary as `structuredContent`); anything else fails the projection closed with `McpProjectionError('invalid-result-metadata')`. Listing-level `_meta` still comes from static `config._meta`, so the MCP Apps convention stamps `_meta.ui.resourceUri` on both halves. |
+| `Agent.Result metadata` | `CallToolResult._meta`. It must be a JSON object (snapshotted through the same wire boundary as `structuredContent`); anything else fails the projection closed with `McpProjectionError('invalid-result-metadata')`. Listing-level `_meta` still comes from static `config._meta`, so the MCP Apps convention stamps `_meta.ui.resourceUri` on both halves. In `config._meta.ui.resourceUri`, reference the App route instead of repeating its `ui://` literal: `appResourceUri('dashboard')` from `agent-bundle/routes` resolves at compile time to that App route's `config.resourceUri`, and a `const` string literal imported from a relative sibling module (`import { DASHBOARD_URI } from '../constants'`) is accepted too and stays available at run time for the result half. |
 | `Agent.Error code message` | `isError: true` plus one text block `[<code>] <message>`. The wire has no error-code field, so the code is deliberately kept in the text (the routed CLI prints the same `**[code]** message` form); choose codes that read well to the model. |
 | `resultSchema` | `outputSchema` in `tools/list` **only when the schema describes an object** (`z.object`, `z.record`, a discriminated union of objects). The MCP specification requires every result of a tool that declares `outputSchema` to carry `structuredContent`, so a text-only route declares `resultSchema = z.undefined()` (or any non-object schema), advertises no `outputSchema`, and returns no `structuredContent`. An object schema keeps the SDK's fail-closed output validation on every call. |
 
@@ -132,6 +167,30 @@ results and never renders JSX. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain.
+
+## Release identity in source: `agent-bundle/meta`
+
+Plugin source reads its own identity from the framework instead of
+maintaining a hand-written `src/lib/version.ts`:
+
+```ts
+import { name, version } from 'agent-bundle/meta';
+```
+
+The compiler replaces the specifier in every compiled surface with the exact
+`{ name, packageName, packageVersion, version }` the artifact manifests,
+`inspect`, and dev status report (see
+[Entry conventions](entry-conventions.md#agent-bundlemeta--build-time-release-identity)).
+
+Unit tests need no build to load such a module: `agentBundleRstest()` and
+`agentBundleBrowserRstest()` (`agent-bundle/rstest`) alias `agent-bundle/meta`
+to a generated module carrying the same identity, written from the same
+compiler pass to `.agent-bundle/test/meta.mjs`. Run every pool that reaches
+that source — plain unit tests included — through the preset (pass `include`
+to point it at the pool's files), and `renderRoute`, `invokeCli`, and direct
+imports all observe the package identity. Outside the compiler and outside
+those presets the published module raises `AB4760`, whose recovery names the
+alias a custom runner must add; it never reports a fabricated identity.
 
 ## Skills: convention, override, and rendered documents
 
@@ -188,9 +247,12 @@ export default defineConfig({
 });
 ```
 
-`output.distPath` defaults to `dist`. A CLI `--output <path>` overrides the
-configured path, so precedence is CLI `--output`, then `output.distPath`, then
-`dist`; existing projects are unchanged. The configured directory is excluded
+`output.distPath` defaults to `dist` for the programmatic `build()` API and to
+`artifact` for the `agent-bundle build` and `agent-bundle prepack` commands,
+which also emit the npm package build into `dist/`. A CLI `--output <path>`
+overrides the configured path, so precedence is CLI `--output`, then
+`output.distPath`, then the operation default; existing projects are
+unchanged. The configured directory is excluded
 from project source snapshots (as `dist` always was), ignored by the dev
 watcher, and used by Workbench host discovery and doctor drift checks.
 
@@ -271,10 +333,12 @@ metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and
 reverse-domain `extensions` are authored under the `portable` config key and
 land in the root `plugin.json`; omitting them leaves the manifest exactly as
 before. Emitted bytes are validated against the pinned schemas and the
-normative text at plan time, after every build, under
-`validate --artifact --host-validation`, and by `doctor` for installed Cursor
-local plugins that declare the standard's `$schema`
-(`AB6035`–`AB6038`, `AB7320`; see `docs/diagnostics.md`). A dogfood proof
+normative text at plan time (`portable.mcp.*.standard`), by the Agent Plugins
+byte lane after every ordinary build and `validate --artifact`
+(`AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane
+plus the `AB6038` provenance note), and by `doctor` for installed Cursor
+local plugins that declare the standard's `$schema` (`AB7320`; see
+`docs/diagnostics.md`). A dogfood proof
 against the real Cursor IDE plugin loader (discovery, skill listing, MCP
 launch, and three observed Cursor 3.18.25 placeholder-expansion conformance
 gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.

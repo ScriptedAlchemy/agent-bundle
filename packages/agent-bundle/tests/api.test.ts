@@ -14,6 +14,7 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { inspectArtifactFilesystem } from '../src/build/emit.ts';
+import type { CapabilityState } from '../src/core/capabilities.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
@@ -172,6 +173,49 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
     ]);
     expect(result.plans[0]?.selected).toEqual([]);
     expect(registry.names()).toEqual(['synthetic']);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('projects only the capability contract fields of adapter-owned rows into inspection', async () => {
+  const root = await createProject();
+  // A JavaScript or third-party adapter may decorate an otherwise valid row
+  // with extension fields. `isCapabilityState` admits them, so the inspection
+  // must not copy them: a `name` extension would shadow the canonical
+  // capability name and a cyclic value would break `inspect --json`.
+  const cyclic: Record<string, unknown> = {};
+  cyclic['self'] = cyclic;
+  const decorated = (row: CapabilityState): CapabilityState =>
+    ({ ...row, cyclic, name: 'shadow' }) as unknown as CapabilityState;
+  const capabilities: Record<string, CapabilityState> = {
+    hooks: decorated({ evidence: { observedVersion: '1.0.0', target: syntheticTarget }, state: 'supported' }),
+    mcp: decorated({ evidence: { observedVersion: '1.0.0', target: syntheticTarget }, state: 'supported' }),
+    skills: decorated({ reason: 'partial skill support', state: 'degraded' }),
+  };
+  const registry = new TargetRegistry().register({ ...syntheticAdapter, capabilities }, { default: true });
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'synthetic-api-fixture', version: '1.0.0' },",
+      "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+      "  synthetic: { enabled: true },",
+      "  targets: ['synthetic'],",
+      '};',
+      '',
+    ].join('\n'));
+
+    const result = await readyInspection({ registry, root });
+    const plan = result.plans[0];
+    if (plan === undefined) throw new Error('Expected one synthetic plan.');
+
+    expect(plan.selected.map((component) => component.capability)).toEqual([
+      { evidence: { observedVersion: '1.0.0', target: syntheticTarget }, name: 'hooks', state: 'supported' },
+    ]);
+    expect(plan.skipped.map((component) => component.capability)).toEqual([
+      { name: 'skills', reason: 'partial skill support', state: 'degraded' },
+    ]);
+    expect(() => JSON.stringify(result.plans)).not.toThrow();
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }

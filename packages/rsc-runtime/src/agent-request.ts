@@ -173,7 +173,20 @@ export interface AgentRequestContext {
   readonly notices: AgentNoticesHandle | undefined;
 }
 
-export interface AgentRequestInit {
+/**
+ * The `providers` member of {@link AgentRequestInit}. It is optional only while
+ * {@link AgentProviderValues} has no required keys. Once a project's generated
+ * `.agent-bundle/routes.d.ts` augmentation declares its conventional providers,
+ * every direct `runAgentRequest` caller — custom hosts and route-unit fixtures
+ * alike — must supply the full record, so a handler typed against those keys
+ * never observes an unchecked `undefined`. Generated request scopes always run
+ * the providers before the handler and are unaffected.
+ */
+export type AgentRequestProvidersInit = Record<never, never> extends AgentProviderValues
+  ? { readonly providers?: AgentProviderValues }
+  : { readonly providers: AgentProviderValues };
+
+export interface AgentRequestInitBase {
   readonly actor?: Observed<AgentActorIdentity>;
   readonly capabilities?: AgentRequestCapabilities;
   readonly host?: Observed<AgentHostIdentity>;
@@ -181,7 +194,6 @@ export interface AgentRequestInit {
   /** Optional durable notice authority; omitted projects load no notice code. */
   readonly noticeLedger?: AgentNoticeLedger;
   readonly progress?: AgentProgressReporter;
-  readonly providers?: AgentProviderValues;
   readonly services?: AgentServiceRegistry;
   readonly session?: Observed<AgentSessionIdentity>;
   readonly signal?: AbortSignal;
@@ -189,6 +201,8 @@ export interface AgentRequestInit {
   readonly state?: AgentStateHandle;
   readonly workspace?: Observed<AgentWorkspaceIdentity>;
 }
+
+export type AgentRequestInit = AgentRequestInitBase & AgentRequestProvidersInit;
 
 export type AgentRequestErrorCode = 'invalid-invocation' | 'outside-invocation' | 'request-closed' | 'store-version-conflict';
 

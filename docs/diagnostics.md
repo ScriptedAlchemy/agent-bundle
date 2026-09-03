@@ -23,6 +23,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
+| `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
@@ -92,14 +93,23 @@ Validation happens at three moments, all fail-closed:
 1. **Plan time** (`agent-bundle build`/`validate`): the emitted `plugin.json`
    and `mcp.json` are validated against the pinned schemas before they are
    written (`portable.schema.plugin`, `portable.schema.mcp`), authored manifest
-   metadata is checked field by field (`portable.manifest.<field>.invalid`), and
+   metadata is checked field by field (`portable.manifest.<field>.invalid`),
    MCP path tokens are refused where the standard forbids them
-   (`portable.mcp.token.*`). These target-scoped codes are errors.
+   (`portable.mcp.token.*`), and the normative MCP rules the schemas cannot
+   express are applied to each server as it will be written
+   (`portable.mcp.{command,cwd,env,url,headers}.standard`: command form, cwd
+   containment, env-key placeholders, URL form, header names/values/casing).
+   These target-scoped codes are errors, so a standard-invalid server never
+   reaches an artifact.
 2. **Artifact time** (`agent-bundle build`, `validate --artifact`): the generic
    target-contract pass reports a missing required document as `AB6011` and a
-   pinned-schema rejection as `AB6012`; `validate --artifact --host-validation`
-   additionally runs the byte lane below and returns a `portable` host
-   validation report.
+   pinned-schema rejection as `AB6012`, and the Agent Plugins byte lane below
+   (`AB6035`–`AB6037`) runs over every tree emitted by the built-in portable
+   adapter, so a standard-invalid layout fails the ordinary build before
+   publication (a tree already carrying a symlink or other unsupported entry
+   is reported as `AB6013` and never read by this lane).
+   `validate --artifact --host-validation` additionally returns the same lane
+   as a `portable` host validation report with the `AB6038` provenance note.
 3. **Installed bytes** (`agent-bundle doctor`): a Cursor local plugin whose root
    `plugin.json` declares an Agent Plugins `$schema` is validated with the same
    byte lane and reported under `AB7320` (an error marks the entry `corrupt`).
@@ -107,7 +117,7 @@ Validation happens at three moments, all fail-closed:
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB6035` | error | The root `plugin.json` is missing, or a present `plugin.json`/`mcp.json` is unreadable, not valid JSON, or rejected by its pinned Agent Plugins 1.0.0 schema (closed manifest fields, plugin name constraints, reserved `PLUGIN_ROOT`/`PLUGIN_DATA` env keys, closed server variants). | Repair the generated Agent Plugins document so it satisfies the pinned 1.0.0 schema, then rebuild. |
-| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders (§7.2.1); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
+| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders, or a header value contains anything other than visible ASCII, space, horizontal tab, or obs-text bytes (§7.2.1, RFC 9110 §5.5); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
 | `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
 | `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
 
@@ -289,6 +299,38 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
+## Build-time identity outside the compiler (`AB4760`)
+
+`agent-bundle/meta` (see `docs/entry-conventions.md`) is a reserved specifier
+the compiler replaces in every compiled surface with the project's exact
+`{ name, packageName, packageVersion, version }`. The published
+`dist/meta.js` module behind that specifier therefore never carries an
+identity of its own: every binding — `name`, `version`, `packageName`,
+`packageVersion`, `meta`, and the default export — throws this diagnostic at
+module evaluation, so a module that reaches it fails on import rather than
+observing a fabricated identity. The thrown value is an `Error` named
+`AgentBundleMetaUnavailableError` whose `code`, `recovery`, and structured
+`diagnostic` fields carry the same data the message prints, so a bare `node`
+process and a test runner both show the fix. The importing module is not
+observable from a module evaluated through ESM linking, so the message names
+the situation, not a file; the runner's own "failed to load" line names the
+file.
+
+Unit tests are the common way to reach it (issue #386): a plain Rstest pool
+imports a source module that imports `agent-bundle/meta`, no compiled surface
+replaced the specifier, and every test that touches that module fails at
+import. `agentBundleRstest()` and `agentBundleBrowserRstest()` prevent this by
+aliasing the specifier to `.agent-bundle/test/meta.mjs`, generated from the
+same compiler pass. When that pass produced no plugin model (the configuration
+could not be loaded or normalized) there is no identity to stamp, so the
+aliased module throws the same `AB4760` naming the compiler diagnostics and
+the recovery "fix them, then rerun Rstest" — the manifest's placeholder
+identity is never served as a real one.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |
+
 ## Config beside a route-generated MCP server (`AB4340`)
 
 A `mcp.servers.<id>` block for a server the route graph compiles in
@@ -355,9 +397,59 @@ references, methods, or accessors); array literals without spreads or holes;
 string literals and substitution-free template literals; numeric literals,
 optionally wrapped in unary `+`/`-`; `true`, `false`, and `null`; and
 `as`/`satisfies` casts, non-null assertions, and parentheses around any
-accepted form. Anything else is dynamic: the route compiles with an empty
-config beside a named `AB4806` error. A module without a `config` export
-compiles silently with an empty config.
+accepted form. Two constrained reference forms are accepted for string
+values, so an MCP App's `resourceUri` never has to be repeated as a literal
+in every tool that opens it:
+
+- **A `const` string-literal identifier.** A top-level `const X = '<literal>'`
+  (optionally `as const`) declared in the route module, or an
+  `export const X = '<literal>'` of a module reached through a *relative*
+  import (`import { X } from '../constants'`; `.ts`/`.tsx` resolution,
+  `.js`-style specifiers map onto their TypeScript source, index modules
+  resolve) inside the project root. The sibling module is parsed, never
+  executed, and only that one hop is followed: the exported const's
+  initializer must itself be a string literal. Because the identifier is a
+  real import, the same value is available at run time (for example in
+  `Agent.Result metadata`).
+- **`appResourceUri('<app>')`** imported from `agent-bundle/routes`. The
+  compiler resolves the reference to the target App route's static
+  `config.resourceUri` while compiling the graph. The App must belong to the
+  referencing route's own generated server — a generated server registers
+  exactly its own Apps, so another server's URI could never be read through
+  it. References are `'<app>'`, `'<server>/<app>'`,
+  `'app:<server>/<app>'`, or a module path relative to the referencing file
+  (`'../apps/dashboard'`, with or without its `.ts`/`.tsx` extension — a
+  `.js`/`.jsx` spelling maps onto the TypeScript source, and any other suffix
+  is part of the App name). The argument may be a
+  string literal or a const identifier of the first form. An unknown
+  reference — another server's App, an App whose own `resourceUri` is not a
+  static string, or any reference from a non-MCP route — is `AB4826`, and the
+  route compiles with the empty config beside it. Routes of a server that is
+  not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) never
+  ship their config, so their references are left as authored rather than
+  reported. Whether referenced or
+  written as a literal, an advertised `_meta.ui.resourceUri` must name an App
+  the server builds for every target it ships to (`AB4828` otherwise). At run time the helper returns the reference unchanged: generated
+  servers read the compiled config, never the module's evaluated `config`, so
+  use the const form when the URI is also needed inside the component.
+
+Anything else — any other identifier, a call, a package import, a relative
+import that leaves the project or does not export a string-literal const —
+is dynamic: the route compiles with an empty config beside a named `AB4806`
+error whose recovery names both reference forms. A module without a `config`
+export compiles silently with an empty config.
+
+An MCP App route's `config.template` resolves **relative to the route
+module**, the way its imports do (`template: './dashboard.html'`). The older
+project-root-relative form (`'./src/mcp/<server>/apps/dashboard.html'`) is
+still accepted, without a diagnostic, while it is the only interpretation
+that names an existing file. When both interpretations name different
+existing files, or neither exists, `AB4827` names both candidate paths; the
+fix is to make the path route-relative. The IR keeps the authored path (so the
+graph digest stays machine-independent) and the normalized model carries the
+resolved absolute file. Config-declared Apps (`mcp.servers.<server>.apps`)
+keep resolving `entry` and `template` from the project root, where the config
+file lives.
 Generated route declarations are published at `.agent-bundle/routes.d.ts` from
 the same graph. Development writes a sibling temporary file and renames it over
 the prior complete declaration atomically; invalid source retains the prior
@@ -452,7 +544,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4803` | error | A route path derives an unsafe identity segment (each segment must match `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
 | `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
-| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position. |
+| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position, and the recovery names the two accepted reference forms (a top-level `const` string literal declared locally or `export const`-ed by a relative sibling module, and `appResourceUri('<app>')` from `agent-bundle/routes`). |
 | `AB4807` | retired | The stage-1 rendered-script gate. Rendered script routes ship through the Agent renderer pipeline since #102 stage 3; the code is never reused. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
@@ -472,6 +564,9 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4823` | error | An event route declares an event outside the v1 event vocabulary. |
 | `AB4824` | error | An event route selects an unknown target or requires an event capability that the selected target does not support. |
 | `AB4825` | error | An event route's `config.targets` is not a nonempty array of nonempty target names. |
+| `AB4826` | error | A route's static `config` calls `appResourceUri('<app>')` with a reference that matches no App route of the route's own generated server with a static `config.resourceUri`: an unknown name, another server's App (a generated server registers only its own Apps), or a reference from a non-MCP route. The message names the cause and lists the server's known App route ids; reference the App as `'<app>'`, `'<server>/<app>'`, `'app:<server>/<app>'`, or a relative module path. |
+| `AB4827` | error | An MCP App route's `config.template` is ambiguous or missing: both the route-relative and the project-root-relative interpretation name different existing files, or neither exists. The message names both candidate paths; templates resolve relative to the route module, so rewrite the path as `'./<file>.html'` beside the route. |
+| `AB4828` | error | A generated MCP route advertises `_meta.ui.resourceUri` of an App on its server (through `appResourceUri()` or a literal) that is not built for every target the server ships to, because the App's `config.targets` (or a config-declared App's `targets`) is narrower. Widen the App's targets or restrict `mcp.servers.<server>.targets`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

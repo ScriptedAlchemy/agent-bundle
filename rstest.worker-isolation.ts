@@ -1,11 +1,51 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
 
 export const rstestWorkerId = (): string => process.env['RSTEST_WORKER_ID'] ?? '0';
 
 const hostTemporaryRoot = tmpdir();
+
+/**
+ * Owner marker for a hashed worker root. The root's name is not predictable
+ * from outside (the hash includes this process id), so the marker is how a
+ * runner that owns `temporaryRoot` — scripts/local-ci.mjs and its per-leg
+ * TMPDIR — recognizes and removes the roots a finished run left behind
+ * without touching another run's live roots.
+ */
+export interface RstestWorkerRootOwner {
+  readonly cwd: string;
+  readonly pid: number;
+  readonly temporaryRoot: string;
+  readonly workerId: string;
+}
+
+export const rstestWorkerRootOwner = (root: string): RstestWorkerRootOwner | undefined => {
+  const path = join(root, rstestWorkerRootOwnerFile);
+  if (!existsSync(path)) return undefined;
+  return JSON.parse(readFileSync(path, 'utf8')) as RstestWorkerRootOwner;
+};
+
+const writeOwnerMarker = (root: string, workerId: string): void => {
+  const path = join(root, rstestWorkerRootOwnerFile);
+  if (existsSync(path)) return;
+  const owner: RstestWorkerRootOwner = {
+    cwd: process.cwd(),
+    pid: process.pid,
+    temporaryRoot: hostTemporaryRoot,
+    workerId,
+  };
+  try {
+    writeFileSync(path, `${JSON.stringify(owner)}\n`, { flag: 'wx' });
+  } catch (error) {
+    // Another module of this same invocation won the race; its marker names
+    // the same owner.
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+};
 
 export const rstestWorkerRootPath = (
   temporaryRoot: string,
@@ -26,8 +66,10 @@ export const rstestWorkerRootPath = (
 };
 
 export const rstestWorkerRoot = (): string => {
-  const root = rstestWorkerRootPath(hostTemporaryRoot, rstestWorkerId());
+  const workerId = rstestWorkerId();
+  const root = rstestWorkerRootPath(hostTemporaryRoot, workerId);
   mkdirSync(root, { recursive: true });
+  writeOwnerMarker(root, workerId);
   return root;
 };
 
