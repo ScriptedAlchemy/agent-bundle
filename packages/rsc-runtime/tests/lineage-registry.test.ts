@@ -7,6 +7,7 @@ import { unavailable } from '../src/agent-request.js';
 import {
   agentLineageStateDefinition,
   createAgentLineageRegistry,
+  LINEAGE_STOPPED_RETENTION,
   lineageHostFromClient,
   resolveNativeLineage,
   type AgentLineageRegistry,
@@ -108,9 +109,10 @@ describe('lineage registry replaying the 2026-09-03 host captures', () => {
 
     // PostToolUse for MCP tools now arrives (string tool_response), so every window closes.
     expect(registry.snapshot().openCalls).toEqual([]);
+    // Both subagents stopped on SubagentStop; SessionEnd retired the root.
     const snapshot = registry.snapshot();
     expect(Object.values(snapshot.nodes).filter((node) => node.stoppedAt !== undefined).map((node) => node.id).sort())
-      .toEqual([nested, subagent].sort());
+      .toEqual([nested, root, subagent].sort());
   });
 
   it('Codex 0.147.0: MCP _meta resolves lineage natively including parent_thread_id; hooks agree', async () => {
@@ -304,5 +306,90 @@ describe('lineage registry edge cases raised in review', () => {
     expect(registry.resolveToolCall({ host: 'codex', meta: meta('root', undefined), toolName: 'dump' })).toMatchObject({ value: { depth: 0 } });
     expect(registry.resolveToolCall({ host: 'codex', meta: meta('child', 'root'), toolName: 'dump' })).toMatchObject({ value: { depth: 1, parent: 'root' } });
     expect(registry.resolveToolCall({ host: 'codex', meta: meta('grandchild', 'child'), toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+  });
+});
+
+describe('lineage registry durability and retention (review round 3)', () => {
+  it('shares one hydration so concurrent first observations see the persisted tree', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const seed = createAgentLineageRegistry({ store });
+    await seed.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    await seed.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'spawn', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'spawn-1' } });
+    await seed.observe({ event: 'agent/start', host: 'claude', idempotencyKey: 'start', native: { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' } });
+
+    const fresh = createAgentLineageRegistry({ store });
+    const [first, second] = await Promise.all([
+      fresh.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'c1', native: { agent_id: 'child', hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Bash', tool_use_id: 'c1' } }),
+      fresh.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'c2', native: { agent_id: 'child', hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Bash', tool_use_id: 'c2' } }),
+    ]);
+    expect(value(first)).toMatchObject({ conversation: 'child', depth: 1, parent: 'root' });
+    expect(value(second)).toMatchObject({ conversation: 'child', depth: 1, parent: 'root' });
+    expect(Object.keys(fresh.snapshot().nodes).sort()).toEqual(['child', 'root']);
+    await store.close();
+    await driver.close();
+  });
+
+  it('keeps the receipt timestamp out of the replay identity so a redelivered pre-tool hook cannot reopen a closed window', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    const registry = createAgentLineageRegistry({ store });
+    const before = { conversation_id: 'root', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'm1' };
+    await registry.observe({ event: 'prompt/submit', host: 'cursor', idempotencyKey: 'p', native: { conversation_id: 'root', hook_event_name: 'beforeSubmitPrompt' } });
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:00.000Z' });
+    await registry.observe({ event: 'tool/after', host: 'cursor', idempotencyKey: 'close', native: { ...before, hook_event_name: 'postToolUse', tool_output: '{}' }, observedAt: '2026-09-03T00:00:01.000Z' });
+    await registry.observe({ event: 'tool/before', host: 'cursor', idempotencyKey: 'open', native: before, observedAt: '2026-09-03T00:00:02.000Z' });
+    expect(registry.snapshot().openCalls).toEqual([]);
+    expect(registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    await store.close();
+    await driver.close();
+  });
+
+  it('does not promote an unknown Cursor conversation to a root on a tool event', async () => {
+    const registry = createAgentLineageRegistry();
+    const lineage = await registry.observe({
+      event: 'tool/before',
+      host: 'cursor',
+      idempotencyKey: 'orphan',
+      native: { conversation_id: 'maybe-a-child', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'Shell', tool_use_id: 'x' },
+    });
+    expect(lineage).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().nodes).toEqual({});
+    const root = await registry.observe({
+      event: 'prompt/submit',
+      host: 'cursor',
+      idempotencyKey: 'prompt',
+      native: { conversation_id: 'a-root', hook_event_name: 'beforeSubmitPrompt' },
+    });
+    expect(value(root)).toMatchObject({ conversation: 'a-root', depth: 0 });
+  });
+
+  it('retires the root and its live descendants on session/end', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp', { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'sp' });
+    await observe('agent/start', 'a', { agent_id: 'child', agent_type: 'default', hook_event_name: 'SubagentStart', session_id: 'root' });
+    await observe('session/end', 'e', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'root' });
+    const nodes = registry.snapshot().nodes;
+    expect(nodes['root']?.stoppedAt).toBe('2026-09-03T00:00:00.000Z');
+    expect(nodes['child']?.stoppedAt).toBe('2026-09-03T00:00:00.000Z');
+  });
+
+  it('prunes stopped nodes at the moment they stop, never exceeding the retention bound', async () => {
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>, observedAt: string) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt });
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' }, '2026-09-03T00:00:00.000Z');
+    const total = LINEAGE_STOPPED_RETENTION + 10;
+    for (let index = 0; index < total; index += 1) {
+      await observe('agent/start', `start-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, `2026-09-03T00:00:${String(index % 60).padStart(2, '0')}.000Z`);
+    }
+    for (let index = 0; index < total; index += 1) {
+      await observe('agent/stop', `stop-${String(index)}`, { agent_id: `agent-${String(index)}`, agent_type: 'general-purpose', hook_event_name: 'SubagentStop', session_id: 'root', stop_hook_active: false }, `2026-09-03T01:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`);
+    }
+    const stopped = Object.values(registry.snapshot().nodes).filter((node) => node.stoppedAt !== undefined);
+    expect(stopped.length).toBe(LINEAGE_STOPPED_RETENTION);
   });
 });

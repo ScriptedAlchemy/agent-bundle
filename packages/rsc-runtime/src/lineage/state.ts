@@ -111,7 +111,7 @@ export const reduceLineage = (
       if (node === undefined) return state;
       return {
         ...state,
-        nodes: { ...state.nodes, [nodeId]: { ...node, stoppedAt } },
+        nodes: pruneStopped({ ...state.nodes, [nodeId]: { ...node, stoppedAt } }),
         pendingChildren: state.pendingChildren.filter((pending) => pending !== nodeId),
       };
     }

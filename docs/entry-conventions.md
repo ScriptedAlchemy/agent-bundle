@@ -422,6 +422,15 @@ for every event by the id the payload carries. The observed host vocabulary
 | Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
 | Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the newest pending start when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>` |
 
+Only root-shaped Cursor events (`session/start`, `prompt/submit`, `stop`,
+`session/end`, `compact/*`, `workspace/open`) may establish a root; a fresh
+Cursor conversation seen on a tool event binds to the single pending
+`subagentStart`, and stays unresolved while several are pending or after a
+registry restart. `session/end` retires the root and every descendant still
+marked live; stopped nodes are pruned past the retention bound as they stop.
+Redelivered payloads replay their journal entries (keys derive from the
+canonical idempotency key and the payload minus receipt timestamps).
+
 `resolution` says which of those paths produced the answer. When none can,
 the axis is `unavailable` with a typed reason: `no-subagent-events` (the
 target defines no subagent families — portable), `id-not-resolvable` (the

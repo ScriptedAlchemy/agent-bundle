@@ -8,7 +8,7 @@ import {
   type Observed,
 } from '../agent-request.js';
 import { lineageCarrier, type LineageHost } from '../lineage-native.js';
-import type { AgentStateStore } from '../state/contract.js';
+import { AgentStateError, type AgentStateStore } from '../state/contract.js';
 import { canonicalJson } from '../state/index.js';
 import {
   initialLineageState,
@@ -70,6 +70,17 @@ const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> 
   cursor: (toolName) => toolName === 'Task',
 });
 
+/** Cursor events only the user-facing conversation emits; a subagent's conversation never carries them. */
+const CURSOR_ROOT_EVENTS: ReadonlySet<string> = new Set([
+  'session/start',
+  'session/end',
+  'prompt/submit',
+  'stop',
+  'compact/before',
+  'compact/after',
+  'workspace/open',
+]);
+
 const lineageOf = (node: LineageNode, generation: string | undefined, resolution: AgentLineageResolution): AgentLineage => Object.freeze({
   conversation: node.id,
   depth: node.depth,
@@ -99,9 +110,18 @@ interface JournalKeys {
   next(name: keyof LineageEvents, payload: unknown): string;
 }
 
+const RECEIPT_TIMESTAMPS = new Set(['openedAt', 'startedAt', 'stoppedAt']);
+
+/** Receipt timestamps are regenerated per delivery, so they stay out of the replay identity. */
+const replayIdentity = (payload: unknown): string => canonicalJson(
+  payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+    ? Object.fromEntries(Object.entries(payload).filter(([key]) => !RECEIPT_TIMESTAMPS.has(key)))
+    : payload,
+);
+
 const journalKeys = (idempotencyKey: string): JournalKeys => ({
   next(name, payload) {
-    const digest = createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex').slice(0, 16);
+    const digest = createHash('sha256').update(replayIdentity(payload), 'utf8').digest('hex').slice(0, 16);
     return `lineage:${idempotencyKey}:${name}:${digest}`;
   },
 });
@@ -119,16 +139,19 @@ export const createAgentLineageRegistry = (
 ): AgentLineageRegistry => {
   const { store } = options;
   let state: LineageState = initialLineageState;
-  let hydrated = store === undefined;
+  let hydration: Promise<void> | undefined;
 
-  const hydrate = async (): Promise<void> => {
-    if (hydrated || store === undefined) return;
-    hydrated = true;
-    try {
-      state = (await store.read()).state;
-    } catch {
-      // A cold or unreadable journal degrades to in-memory tracking; resolution stays honest through `inferred`.
-    }
+  /** One shared initial read: concurrent observations all wait for it, none mutates the empty state first. */
+  const hydrate = (): Promise<void> => {
+    if (store === undefined) return Promise.resolve();
+    hydration ??= (async () => {
+      try {
+        state = (await store.read()).state;
+      } catch {
+        // A cold or unreadable journal degrades to in-memory tracking; resolution stays honest through `inferred`.
+      }
+    })();
+    return hydration;
   };
 
   /**
@@ -152,7 +175,17 @@ export const createAgentLineageRegistry = (
     try {
       const committed = await store.dispatch(name, payload as never, { idempotencyKey });
       state = committed.replayed ? (await store.read()).state : committed.state;
-    } catch {
+    } catch (error) {
+      // The same key with a payload that differs only in what the digest
+      // ignores (a receipt timestamp) is a redelivery, not a new fact.
+      if (error instanceof AgentStateError && error.code === 'idempotency-conflict') {
+        try {
+          state = (await store.read()).state;
+        } catch {
+          // Keep the head we already hold.
+        }
+        return;
+      }
       state = reduceLineage(state, { name, payload });
     }
   };
@@ -192,6 +225,7 @@ export const createAgentLineageRegistry = (
     generation: string | undefined,
     observedAt: string,
     keys: JournalKeys,
+    allowRoot: boolean,
   ): Promise<LineageNode | undefined> => {
     const existing = state.nodes[conversation];
     if (existing !== undefined) return existing;
@@ -201,6 +235,10 @@ export const createAgentLineageRegistry = (
       await dispatch('childBound', { conversation, subagentId }, keys);
       return state.nodes[conversation];
     }
+    // An unknown conversation with no pending start is a root only when the
+    // event itself is root-shaped; a Cursor child's tool event after a registry
+    // restart carries nothing that distinguishes it from a root.
+    if (!allowRoot) return undefined;
     const node = rootNode(conversation, generation, observedAt);
     await dispatch('nodeStarted', node, keys);
     return node;
@@ -230,7 +268,7 @@ export const createAgentLineageRegistry = (
       if (subagentId === undefined || parentId === undefined) return;
       // A replayed start already registered (or bound) this child.
       if (state.nodes[subagentId] !== undefined || Object.values(state.nodes).some((node) => node.subagentId === subagentId)) return;
-      const parent = await ensureRoot(host, parentId, undefined, observedAt, keys);
+      const parent = await ensureRoot(host, parentId, undefined, observedAt, keys, false);
       if (parent === undefined) return;
       await dispatch('nodeStarted', {
         depth: parent.depth + 1,
@@ -250,7 +288,7 @@ export const createAgentLineageRegistry = (
     if (agentId === undefined || root === undefined) return;
     // A replayed start must not claim a second spawn or rewrite the node.
     if (state.nodes[agentId] !== undefined) return;
-    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys);
+    const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true);
     if (rootNodeValue === undefined) return;
     const spawn = await claimSpawn(host, rootNodeValue.root, keys);
     const parent = (spawn === undefined ? undefined : nodeFor(spawn.conversation)) ?? rootNodeValue;
@@ -280,6 +318,21 @@ export const createAgentLineageRegistry = (
     await dispatch('nodeStopped', { id: stopped, stoppedAt: observedAt }, keys);
   };
 
+  /** A finished session retires its root and every descendant still marked live, so roots never accumulate. */
+  const observeSessionEnd = async (observation: LineageObservation, observedAt: string, keys: JournalKeys): Promise<void> => {
+    const carrier = lineageCarrier(observation.host, observation.native);
+    const rootId = observation.host === 'cursor' ? carrier.conversation : carrier.root;
+    if (rootId === undefined) return;
+    const rootNodeValue = state.nodes[rootId];
+    const root = rootNodeValue?.root ?? rootId;
+    const live = Object.values(state.nodes)
+      .filter((node) => node.root === root && node.stoppedAt === undefined)
+      .sort((left, right) => right.depth - left.depth);
+    for (const node of live) {
+      await dispatch('nodeStopped', { id: node.id, stoppedAt: observedAt }, keys);
+    }
+  };
+
   const registry: AgentLineageRegistry = {
     async observe(observation) {
       await hydrate();
@@ -294,13 +347,22 @@ export const createAgentLineageRegistry = (
         case 'agent/stop':
           await observeStop(observation, observedAt, keys);
           break;
+        case 'session/end':
+          await observeSessionEnd(observation, observedAt, keys);
+          break;
         default:
           break;
       }
-      // Every other carrier is known or becomes a root; Cursor children bind here.
+      // Claude and Codex name the root on every payload; Cursor never repeats
+      // it, so only root-shaped Cursor events may establish a root, and a
+      // fresh child conversation binds to the single pending start.
       if (carrier.conversation !== undefined && nodeFor(carrier.conversation) === undefined) {
-        const rootLike = host === 'cursor' || carrier.conversation === carrier.root;
-        if (rootLike) await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys);
+        const rootLike = host === 'cursor'
+          ? CURSOR_ROOT_EVENTS.has(event)
+          : carrier.conversation === carrier.root;
+        if (rootLike || host === 'cursor') {
+          await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike);
+        }
       }
       const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');
       const toolName = nativeString(native, 'tool_name');
