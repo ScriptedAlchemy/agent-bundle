@@ -24,6 +24,7 @@ import type { CliRenderedEvent } from '../cli-entry.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
@@ -228,6 +229,14 @@ export const invokeCli = async (
           throw new CliInputError(error instanceof Error ? error.message : String(error));
         }
         const root = process.cwd();
+        // Same provider invocation the generated plain-command path builds (#366).
+        const providers = await mountProviders({
+          explicit: context.providers,
+          invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
+          manifest,
+          provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
+          signal: execution.signal,
+        });
         const result = await runtime.runAgentRequest({
           capabilities: {
             command: runtime.unavailable(),
@@ -238,6 +247,7 @@ export const invokeCli = async (
           host: runtime.unavailable('unsupported-surface'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
+          providers,
           invocation: {
             kind: 'cli',
             operationId: command.routeId,

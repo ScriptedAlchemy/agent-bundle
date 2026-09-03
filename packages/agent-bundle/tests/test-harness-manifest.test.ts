@@ -67,9 +67,12 @@ describe('the compiled test manifest', () => {
       'cli:db/migrate',
       'cli:inventory',
       'cli:report',
+      'cli:tooling/inspect',
+      'cli:tooling/report',
       'event:tool/after',
       'prompt:harness/summarize',
       'resource:harness/notes',
+      'script:tooling-summary',
       'tool:harness/catalog',
       'tool:harness/context',
       'tool:harness/echo',
@@ -79,10 +82,18 @@ describe('the compiled test manifest', () => {
       'tool:harness/publish-notice',
       'tool:harness/strict-report',
       'tool:harness/ticket',
+      'tool:harness/tooling',
       'tool:harness/unavailable',
       'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
+    expect(manifest.providers).toEqual([{
+      id: 'provider:library-tooling',
+      key: 'libraryTooling',
+      name: 'library-tooling',
+      relativePath: 'src/providers/library-tooling.ts',
+      source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
+    }]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
       config: {
         annotations: { readOnlyHint: true },
@@ -157,6 +168,24 @@ describe('the compiled test manifest', () => {
         rendered: true,
         routeId: 'cli:report',
       },
+      {
+        aliases: [],
+        description: 'Reports the request providers a plain command observes.',
+        exitCode: 'zero',
+        options: [],
+        path: ['tooling', 'inspect'],
+        rendered: false,
+        routeId: 'cli:tooling/inspect',
+      },
+      {
+        aliases: [],
+        description: 'Renders the request providers a rendered command observes.',
+        exitCode: 'zero',
+        options: [],
+        path: ['tooling', 'report'],
+        rendered: true,
+        routeId: 'cli:tooling/report',
+      },
     ]);
     const inputOption = {
       description: 'Tool input as one JSON object.',
@@ -198,6 +227,7 @@ describe('the compiled test manifest', () => {
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
+      projected('tooling', 'Reports the request providers an MCP tool observes.', false),
       projected('unavailable', 'Returns a typed unavailable result for projection checks.', true),
       projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true),
     ]);
@@ -297,6 +327,15 @@ describe('the generated route registry', () => {
     // The manifest still inventories every compiled route; only the loaders,
     // which decide what enters the Node test bundle, are filtered.
     expect(source).toContain('app:harness/panel');
+  });
+
+  it('registers a loader for every conventional provider so the harness mounts them like the entry shell', () => {
+    const providerLoaders = /providerLoaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
+
+    expect(providerLoaders).toContain('"provider:library-tooling": () => import(');
+    expect(providerLoaders).toContain('/src/providers/library-tooling.ts');
+    // A project without providers emits no loader table at all.
+    expect(routeTestSetupSource({ ...manifest, providers: undefined })).not.toContain('providerLoaders');
   });
 
   it('carries the manifest and the registry version the helpers require', () => {

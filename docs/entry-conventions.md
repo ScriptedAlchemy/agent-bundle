@@ -172,7 +172,10 @@ expected degradation should return an honest unavailable-shaped value instead
 of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `script`), so a provider can branch on the entry surface deliberately.
 `processLifetime` is reserved for the framework-owned process identity and hit
-counter, so provider filenames must not derive that key.
+counter, so provider filenames must not derive that key. The `agent-bundle/test`
+harness mounts the same providers, in the same order and with the same
+fail-closed semantics, for every manifest-backed helper; a test passes
+`context.providers` to substitute an explicit map instead.
 
 Route-unit and CLI-dispatch tests inject provider values through the same
 `context` seam as identity axes (`renderRoute(id, { context: { providers:

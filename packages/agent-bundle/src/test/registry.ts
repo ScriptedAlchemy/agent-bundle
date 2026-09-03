@@ -22,10 +22,14 @@ export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;
 }>;
 
+export type AgentProviderModuleLoader = () => Promise<{ readonly default?: unknown }>;
+
 export interface AgentTestRouteRegistry {
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */
   readonly loaders: Readonly<Record<string, AgentRouteModuleLoader>>;
   readonly manifest: AgentBundleTestManifest;
+  /** Lazy loaders keyed by compiled provider id; present only when the project declares providers. */
+  readonly providerLoaders?: Readonly<Record<string, AgentProviderModuleLoader>>;
   readonly stateLoader?: AgentStateModuleLoader;
   readonly version: number;
 }
@@ -112,6 +116,16 @@ export const registeredStateLoader = (
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
   return registry.stateLoader;
+};
+
+/** The provider-module loader generated beside the registered manifest for one compiled provider id. */
+export const registeredProviderLoader = (
+  manifest: AgentBundleTestManifest,
+  providerId: string,
+): AgentProviderModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.providerLoaders?.[providerId];
 };
 
 /** The registered manifest's identity, so a loader miss can name the mismatch that caused it. */

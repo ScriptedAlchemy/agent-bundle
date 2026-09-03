@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
+import { orderedProviders } from '../routes/provider-execution.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
 
@@ -560,12 +561,6 @@ const eventRouteRecords = (
 ): readonly string[] => routes.map((route, index) =>
   `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
-const orderedProviders = (providers: readonly CompiledProvider[]): readonly CompiledProvider[] =>
-  [...providers].sort((left, right) => {
-    const byKey = providerKeyFromName(left.name).localeCompare(providerKeyFromName(right.name));
-    return byKey === 0 ? left.source.localeCompare(right.source) : byKey;
-  });
-
 const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider, index) =>
     `import * as provider${String(index)} from ${JSON.stringify(provider.source)};`);
@@ -588,7 +583,9 @@ const processLifetimeValueSource =
  * (shared Flight worker, rendered CLI/script worker, plain routed CLI): once
  * per request, sequentially in deterministic key order, fail-closed on a
  * missing factory or a thrown/rejected factory, with the framework-owned
- * `processLifetime` value seeded first.
+ * `processLifetime` value seeded first. The emitted loop mirrors
+ * `executeProviders` in `../routes/provider-execution.ts`, which the
+ * in-process test harness runs; `entry-shell.test.ts` pins the two together.
  */
 const providerExecutionSource = (
   providers: readonly CompiledProvider[],

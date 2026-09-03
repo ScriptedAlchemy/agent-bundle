@@ -29,6 +29,7 @@ import type {
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { mountProviders } from './providers.ts';
 import {
   registeredManifestIdentity,
   registeredRouteLoader,
@@ -47,7 +48,10 @@ import type {
  * request contract. `host`, `session`, `actor`, `workspace`, and
  * `capabilities` are the identity-injection seam for context-dependent route
  * tests; construct observed values with `available` or `unavailable` from
- * `@agent-bundle/runtime`.
+ * `@agent-bundle/runtime`. `providers` is the opt-out for conventional
+ * provider discovery: when present it is mounted verbatim; when absent the
+ * harness executes the project's `src/providers/*` exactly as the generated
+ * request scopes do.
  */
 export type RenderRouteContext = Omit<AgentRequestInit, 'invocation' | 'progress' | 'signal'> & {
   readonly invocation?: Omit<AgentInvocationInput, 'kind'>;
@@ -564,13 +568,14 @@ interface FlightDispatcherOptions {
   readonly contextProgress?: AgentProgressReporter;
   readonly limits?: Partial<AgentRenderLimits>;
   readonly renderer: Renderer;
-  readonly requestInit: (request: AgentRenderDispatch) => AgentRequestInit;
+  /** Async so conventional providers execute inside the request, before the scope opens, as generated scopes do. */
+  readonly requestInit: (request: AgentRenderDispatch) => Promise<AgentRequestInit>;
 }
 
 const createFlightDispatcher = (options: FlightDispatcherOptions): AgentRuntime.AgentRenderDispatcher =>
   options.renderer.createAgentRenderDispatcher({
     execute: async (request) => streamOf(await options.renderer.runAgentRequest({
-      ...options.requestInit(request),
+      ...(await options.requestInit(request)),
       progress: progressFor(options.collected, options.contextProgress, request.progress),
       signal: request.signal,
     }, async () => drain(options.renderer.renderAgentFlight(
@@ -667,8 +672,15 @@ export const prepareCliRenderHost = async (
         componentProps: (request) => ({ input: parsed, signal: request.signal }),
         contextProgress: context.progress,
         renderer,
-        requestInit: (request) => {
+        requestInit: async (request) => {
           const root = process.cwd();
+          const providers = await mountProviders({
+            explicit: context.providers,
+            invocation,
+            manifest: options.manifest,
+            provenance: { ...options.provenance, routeId: command.routeId },
+            signal: request.signal,
+          });
           return {
             capabilities: {
               command: renderer.unavailable(),
@@ -680,6 +692,7 @@ export const prepareCliRenderHost = async (
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
+            providers,
             invocation: command.mcp === undefined
               ? {
                   kind: 'cli',
@@ -747,9 +760,18 @@ const prepareRender = async (
     contextProgress: context.progress,
     limits: options.limits,
     renderer,
-    requestInit: (request) => ({
+    requestInit: async (request) => ({
       ...context,
       ...mounted.context,
+      // The render invocation is exactly what the generated Flight worker
+      // receives as `message.invocation`, so providers see the same shape.
+      providers: await mountProviders({
+        explicit: context.providers,
+        invocation: request.invocation,
+        manifest: resolved.manifest,
+        provenance: resolved.provenance,
+        signal: request.signal,
+      }),
       invocation: {
         ...requestInvocation(request.invocation, resolved.provenance.routeId),
         ...context.invocation,

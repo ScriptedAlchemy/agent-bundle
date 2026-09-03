@@ -101,6 +101,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
     previousResults: [{ status: 'completed' }],
     resultCompat: 'additive',
   },
+  'tool:harness/tooling': { resultCompat: 'closed' },
   'tool:harness/unavailable': { resultCompat: 'additive' },
   'tool:harness/wait': {
     cancellation: { abortAfterMs: 50, input: { holdMs: 5000 } },

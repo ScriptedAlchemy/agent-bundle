@@ -411,6 +411,29 @@ than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target
 kind, and the module provenance.
 
+Conventional request context providers (`src/providers/*`, see
+[entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
+are mounted automatically for every manifest-backed helper — `renderRoute`,
+`renderRouteEvents`, `invokeCli`, and the in-memory MCP helpers — exactly as the
+generated request scopes mount them: discovered from the compiled manifest,
+executed once per request in the same deterministic key order, handed the same
+surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
+request closed when a factory throws. `providers.processLifetime` carries the
+test worker's process identity and a per-request hit counter, like the
+artifact's. Pass `context.providers` to opt out: an explicit map is mounted
+verbatim and no conventional provider runs, which is how a test stubs a provider
+that would otherwise reach the network or the file system.
+
+```ts
+// Real providers, as the artifact would mount them.
+const real = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+
+// Stubbed providers: nothing under src/providers/ executes.
+const stubbed = await invokeCli(['library', 'audit', './books'], {
+  context: { providers: { libraryTooling: { tool: 'ffprobe 6.1' } } },
+});
+```
+
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`,
 `toContainText`, `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
 

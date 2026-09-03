@@ -36,10 +36,13 @@ describe('the CLI dispatch level', () => {
         'harness publish-notice',
         'harness strict-report',
         'harness ticket',
+        'harness tooling',
         'harness unavailable',
         'harness wait',
         'inventory',
         'report',
+        'tooling inspect',
+        'tooling report',
       ],
       proofLevel: 'cli-dispatch',
     });

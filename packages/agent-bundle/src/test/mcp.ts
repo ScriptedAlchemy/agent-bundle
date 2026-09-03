@@ -24,6 +24,7 @@ import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 
 import { AgentTestError, captured } from './errors.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
@@ -330,6 +331,16 @@ export const openInMemoryMcpServer = async <
         }
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
+          // Conventional providers run before the scope opens, over the same
+          // tool invocation the generated Flight worker hands them.
+          const descriptor = manifest.routes[route.id];
+          const providers = await mountProviders({
+            explicit: context.providers,
+            invocation: request.invocation,
+            manifest,
+            ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
+            signal: request.signal,
+          });
           return streamOf(await dependencies.runAgentRequest({
             // Mirror the Flight worker boundary while allowing the documented
             // harness context seam to override forwarded transport identity.
@@ -338,6 +349,7 @@ export const openInMemoryMcpServer = async <
             session: transport.session,
             workspace: transport.workspace,
             ...context,
+            providers,
             invocation: {
               kind: 'tool' as const,
               operationId: route.id,
