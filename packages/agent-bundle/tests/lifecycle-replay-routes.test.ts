@@ -21,14 +21,24 @@ import {
 const graph = Object.freeze({
   diagnostics: Object.freeze([]),
   digest: 'manifest-a',
-  events: Object.freeze([{
-    config: Object.freeze({}),
-    event: 'tool/after',
-    id: 'event:tool/after',
-    kind: 'event-route',
-    provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
-    source: '/project/src/events/tool/after.tsx',
-  }]),
+  events: Object.freeze([
+    {
+      config: Object.freeze({}),
+      event: 'prompt/submit',
+      id: 'event:prompt/submit',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/prompt/submit.tsx' }),
+      source: '/project/src/events/prompt/submit.tsx',
+    },
+    {
+      config: Object.freeze({}),
+      event: 'tool/after',
+      id: 'event:tool/after',
+      kind: 'event-route',
+      provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/after.tsx' }),
+      source: '/project/src/events/tool/after.tsx',
+    },
+  ]),
   providers: Object.freeze([]),
   scripts: Object.freeze([]),
   servers: Object.freeze([]),
@@ -158,6 +168,24 @@ it('preserves stale and real native-envelope diagnostics at the HTTP boundary', 
       diagnostic: {
         code: 'AB8211',
         message: 'Agent Bundle event route error: native tool_response must be an object',
+      },
+    });
+
+    const malformedPrompt = await post(`${started.url}/api/lifecycles/replays`, {
+      binding: { manifestDigest: 'manifest-a', routeId: 'event:prompt/submit', target: 'claude' },
+      native: {
+        cwd: '/tmp/lifecycle-replay',
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'session-1',
+        transcript_path: '/tmp/lifecycle-replay/transcript.jsonl',
+      },
+      source: 'observed',
+    });
+    expect(malformedPrompt.status).toBe(400);
+    await expect(malformedPrompt.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8211',
+        message: 'Agent Bundle event route error: native prompt must be a string',
       },
     });
   } finally {

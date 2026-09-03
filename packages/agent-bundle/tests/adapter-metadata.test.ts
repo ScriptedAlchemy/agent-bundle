@@ -93,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.19.0',
+    adapterRevision: '1.20.0',
     observedVersion: '2.1.250',
     schemas: [
       {
@@ -139,7 +139,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'cursor')).toEqual({
-    adapterRevision: '1.5.0',
+    adapterRevision: '1.6.0',
     observedVersion: '2026-08-28',
     schemas: [
       {
@@ -205,10 +205,10 @@ it('records observed capability versions and rehashes schema snapshots against p
     }
 
     if (target === 'claude') {
-      expect(sha256Hex(capability)).toBe('c8c191063ad7792e87d00d9d66b20efdd16f2fa660b32ec526667b023bbe665c');
+      expect(sha256Hex(capability)).toBe('a767ea61ff5a9379133e75096fc44478fdec5d89ea6efa4bee0c9c869649f465');
     }
     if (target === 'cursor') {
-      expect(sha256Hex(capability)).toBe('d42dc98d3c7f1f91dd6ef733d6727618c30a7d8d41fdf030165e06ce46345223');
+      expect(sha256Hex(capability)).toBe('f25f3d27b6f9ef4b75ecb02039f67cc3f3f942faec916b55cdccc49abf1f4f6e');
       const pluginSchema = JSON.parse(await readFile(
         new URL('../src/adapters/schemas/cursor/plugin.schema.json', import.meta.url),
         'utf8',
@@ -236,7 +236,7 @@ it('records observed capability versions and rehashes schema snapshots against p
   }
 });
 
-it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
+it('pins and validates the Codex 0.147.0 event wire schemas', async () => {
   const schemas = [
     {
       fixture: 'codex-subagent-start.json',
@@ -262,6 +262,28 @@ it('pins and validates the Codex 0.147.0 subagent wire schemas', async () => {
       name: 'subagent-stop.command.output.schema.json',
       output: { decision: 'block', reason: 'Run one more focused pass.' },
       sha256: '8ba2cd7899ae4544193764e67e988235edebe984abe5788634d123bbf13e3e3a',
+    },
+    {
+      fixture: 'codex-user-prompt-submit.json',
+      name: 'user-prompt-submit.command.input.schema.json',
+      sha256: 'e6b923bc519896197c44c4fc267a9d115cef24ac418dde9c27db699f4e3b65fd',
+    },
+    {
+      name: 'user-prompt-submit.command.output.schema.json',
+      output: {
+        decision: 'block',
+        hookSpecificOutput: {
+          additionalContext: 'Repository policy context.',
+          hookEventName: 'UserPromptSubmit',
+        },
+        reason: 'Prompt rejected.',
+      },
+      sha256: '5e290303db710f3ccc12f4a2744e8586e7749b3ca2b6bf9f57781ed75bf17b2b',
+    },
+    {
+      fixture: 'codex-session-end.json',
+      name: 'session-end.command.input.schema.json',
+      sha256: '23b1b69f92fa8ac29f8319478984b5aa5aaf09e5ca355ce90aa010452937e41c',
     },
   ] as const;
   const validator = createDraft7AdapterValidator();

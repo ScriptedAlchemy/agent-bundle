@@ -48,6 +48,23 @@ const registry: NormalizationTargetRegistry = {
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
 };
 
+it('maps prompt/submit and session/end only through event-route contracts', () => {
+  const targetRegistry = createDefaultRegistry();
+  for (const target of ['claude', 'codex', 'cursor']) {
+    const contract = targetRegistry.hookContract(target);
+    expect(contract?.eventNames).not.toHaveProperty('promptSubmit');
+    expect(contract?.eventNames).not.toHaveProperty('sessionEnd');
+    expect(contract?.eventRouteNames?.['prompt/submit']).toBe(
+      target === 'cursor' ? 'beforeSubmitPrompt' : 'UserPromptSubmit',
+    );
+    expect(contract?.eventRouteNames?.['session/end']).toBe(
+      target === 'cursor' ? 'sessionEnd' : 'SessionEnd',
+    );
+    expect(contract?.nativeEventStarter?.('prompt/submit')).toBeDefined();
+    expect(contract?.nativeEventStarter?.('session/end')).toBeDefined();
+  }
+});
+
 it('keeps the hook simulation cancellation constructor private to the executor', async () => {
   const hookServiceExports: Readonly<Record<string, unknown>> = await import('../src/services/hook-service.ts');
 

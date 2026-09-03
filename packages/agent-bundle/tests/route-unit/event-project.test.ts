@@ -194,3 +194,118 @@ it('projects workspace/open as a fire-and-forget observation only', async () => 
   expect(() => projectEventDocument(context.document, 'workspace/open', 'cursor', 'workspaceOpen'))
     .toThrow(/Cursor's workspaceOpen has no context\/output channel.*pluginPaths.*deliberately not modeled/u);
 });
+
+it('projects prompt/submit through only the native channels each host supports', async () => {
+  const props = createCanonicalEventProps(
+    'prompt/submit',
+    {
+      cwd: '/workspace',
+      hook_event_name: 'UserPromptSubmit',
+      prompt: 'Review this change.',
+      session_id: 'session-1',
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'UserPromptSubmit',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const deniedWithContext = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: 'Prompt rejected.' } },
+      createElement(Agent.Context, null, 'Repository policy context.'),
+    ),
+  }, {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:prompt/submit',
+  });
+
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventDocument(deniedWithContext.document, 'prompt/submit', target, 'UserPromptSubmit')).toEqual({
+      decision: 'block',
+      hookSpecificOutput: {
+        additionalContext: 'Repository policy context.',
+        hookEventName: 'UserPromptSubmit',
+      },
+      reason: 'Prompt rejected.',
+    });
+  }
+  expect(() => projectEventDocument(
+    deniedWithContext.document,
+    'prompt/submit',
+    'cursor',
+    'beforeSubmitPrompt',
+  )).toThrow(/Cursor beforeSubmitPrompt has no additional-context channel/u);
+
+  const denied = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: 'Prompt rejected.' } },
+    ),
+  }, {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:prompt/submit',
+  });
+  expect(projectEventDocument(denied.document, 'prompt/submit', 'cursor', 'beforeSubmitPrompt')).toEqual({
+    continue: false,
+    user_message: 'Prompt rejected.',
+  });
+
+  const replaced = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { updatedInput: { prompt: 'Replacement prompt.' } } },
+    ),
+  }, {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:prompt/submit',
+  });
+  expect(() => projectEventDocument(replaced.document, 'prompt/submit', 'claude', 'UserPromptSubmit'))
+    .toThrow(/prompt\/submit cannot replace native input/u);
+});
+
+it('projects session/end as observation-only on every host', async () => {
+  const props = createCanonicalEventProps(
+    'session/end',
+    {
+      cwd: '/workspace',
+      hook_event_name: 'SessionEnd',
+      reason: 'other',
+      session_id: 'session-1',
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'SessionEnd',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const observed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:session/end',
+  });
+  for (const target of ['claude', 'codex', 'cursor']) {
+    expect(projectEventDocument(observed.document, 'session/end', target, target === 'cursor' ? 'sessionEnd' : 'SessionEnd'))
+      .toBeUndefined();
+  }
+
+  const context = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      null,
+      createElement(Agent.Context, null, 'Persist this context.'),
+    ),
+  }, {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:session/end',
+  });
+  expect(() => projectEventDocument(context.document, 'session/end', 'claude', 'SessionEnd'))
+    .toThrow(/session\/end is observation-only.*no context\/output channel/u);
+});
