@@ -148,8 +148,11 @@ servers always have one on every target.
 
 **Resolve persistent state and bundled assets against this anchor, not the process working
 directory.** Claude Code currently launches stdio servers from the host's own working directory
-and ignores the emitted `cwd` field — the Claude adapter still emits
-`cwd: "${CLAUDE_PLUGIN_ROOT}"` as documented, schema-valid future-proofing.
+and ignores any stdio `cwd` field (its placeholder table excludes `cwd`). The Claude adapter
+therefore **omits** `cwd` when the working directory is the canonical plugin root — the standard
+source-built `entry:` case — and instead makes the entry path absolute by prefixing the first
+argument with `${CLAUDE_PLUGIN_ROOT}/`, alongside the environment anchor. Only a non-token,
+explicitly authored `cwd` is passed through verbatim.
 
 A server's own `env` entries win over the injected value, so declaring
 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The variable name is exported so
