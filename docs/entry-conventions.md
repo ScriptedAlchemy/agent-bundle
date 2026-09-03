@@ -96,9 +96,10 @@ resolves to, so nothing is ever compiled twice into one artifact output. The
 exception is the package build: a `bin` or `lib` entry compiles to `dist/`,
 which is disjoint from every artifact output, so a direct `src/scripts/<name>`
 child those keys reference stays a conventional script and ships on both
-surfaces. (A nested `src/scripts/<dir>/<name>` module — which the flat scripts
-artifact could not ship anyway — stays claimed, so a package-only entry there
-never turns into `AB4808`.)
+surfaces. (A nested `src/scripts/<dir>/<name>` module or one whose stem is not
+a safe route identity — which the flat scripts artifact could not ship anyway
+— stays claimed, so a package-only entry there never turns into `AB4808` or
+`AB4803`.)
 `inspect` shows such a module under both `packageBuild.bins` (or
 `packageBuild.lib`) and `scripts`; no diagnostic fires, because that is the
 intended "same entry, npm bin + hook target" shape.
@@ -108,8 +109,8 @@ intended "same entry, npm bin + hook target" shape.
 | `scripts.<name>` | every route directory | Claimed: the explicit entry ships it as `scripts/<name>.mjs`; the convention no longer applies. A *different* module under `src/scripts/` sharing the configured `<name>` is `AB4809`. |
 | `hooks.<event>[].handler` | every route directory | Claimed: the module is a hook handler compiled under `hooks/`, not an artifact script. |
 | `mcp.servers.<id>.entry`, `mcp.servers.<id>.apps.<app>.entry` / `.template` | every route directory | Claimed: the module is the server or App entry compiled under `mcp/` or `mcp-apps/`. |
-| `bin.<name>` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and nested `src/scripts/**/*` — **not** a direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/bin/<name>.js` and `scripts/<name>.mjs`. A rendered `src/scripts/<name>.tsx` referenced by `bin` must also export `main`, otherwise `AB4737`. |
-| `lib.entry` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and nested `src/scripts/**/*` — **not** a direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/<stem>.js` (with declarations) and `scripts/<name>.mjs`. |
+| `bin.<name>` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and any `src/scripts/**` module that is nested or unsafely named — **not** a safely named direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/bin/<name>.js` and `scripts/<name>.mjs`. A rendered `src/scripts/<name>.tsx` referenced by `bin` must also export `main`, otherwise `AB4737`. |
+| `lib.entry` | `src/cli/**`, `src/events/**`, `src/mcp/**`, `src/providers/*`, and any `src/scripts/**` module that is nested or unsafely named — **not** a safely named direct `src/scripts/<name>` child | Not claimed: the module ships as both `dist/<stem>.js` (with declarations) and `scripts/<name>.mjs`. |
 
 To ship a `src/scripts/` module as a bin only, prefix a path segment with `_`
 (`src/scripts/_hauler.ts`): private segments opt the module out of discovery

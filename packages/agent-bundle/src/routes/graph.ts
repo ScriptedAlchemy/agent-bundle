@@ -273,13 +273,19 @@ const configClaimedSources = (
 };
 
 /**
- * True for a direct child of the conventional scripts root — the only shape
- * the flat scripts artifact can ship. A nested module a package-build entry
- * names stays claimed: keeping it discovered would only turn a valid
- * package-only configuration into an AB4808 error.
+ * True for a direct child of the conventional scripts root whose stem is a
+ * safe route identity — the only shape the flat scripts artifact can ship. A
+ * nested or unsafely named module a package-build entry names stays claimed:
+ * keeping it discovered would only turn a valid package-only configuration
+ * into an AB4808 or AB4803 error.
  */
-const isConventionalScriptPath = (relativePath: string): boolean =>
-  /^src\/scripts\/[^/]+$/u.test(relativePath);
+const isConventionalScriptPath = (relativePath: string): boolean => {
+  const segments = relativePath.split('/');
+  return segments.length === 3
+    && segments[0] === 'src'
+    && segments[1] === 'scripts'
+    && safeIdentitySegment.test(stemOf(segments[2]!));
+};
 
 interface RouteModeOverrides {
   readonly cli?: 'generated' | 'conventional';
