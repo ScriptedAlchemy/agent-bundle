@@ -274,7 +274,8 @@ subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
 slot another signaller currently holds (a hold older than
 `AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned; a live
 holder renews it under its key while its write is pending, and the reducer
-refuses a renewal once another key has legitimately taken over), and is
+refuses a renewal once another key has legitimately taken over — or once the
+takeover's receipt has spent the budget and cleared the hold), and is
 bounded by `retryBudget` (availability receipts per notice, durable across
 restarts); because the slot is held before the wire write, two server processes
 over one store can never both signal the same notice; a receipt presented by a

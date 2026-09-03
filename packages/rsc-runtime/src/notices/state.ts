@@ -304,7 +304,8 @@ const transitionAvailability = (
  * and a different key takes it over only once the current hold is older than
  * the reservation TTL at the event's own `at` — a rule the reducer can apply
  * deterministically on replay, so a slow holder's renewal can never steal a
- * hold back from the process that legitimately took over after it lapsed.
+ * hold back from the process that legitimately took over after it lapsed —
+ * nor re-create a hold the takeover already spent.
  */
 const transitionAvailabilityReservation = (
   notice: AgentNotice,
@@ -320,6 +321,13 @@ const transitionAvailabilityReservation = (
         && held.key !== input.reservationKey
         && Date.parse(held.at) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS > Date.parse(input.at)
       ) {
+        return notice;
+      }
+      // A slot whose budget is already spent is not free: once a takeover's
+      // receipt has cleared the hold, the previous holder's renewal must not
+      // re-create it and let its stale receipt push the count past the budget.
+      // Only the key that currently holds the slot may still renew.
+      if (held?.key !== input.reservationKey && (notice.availability?.count ?? 0) >= (notice.retryBudget ?? 1)) {
         return notice;
       }
       return Object.freeze({

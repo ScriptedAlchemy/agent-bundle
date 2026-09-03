@@ -603,6 +603,74 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('cannot win a spent slot back by renewing after the takeover finalized, so budget one stays one', async () => {
+    const { driver, ledger } = await openLedger();
+    let clock = Date.parse(T1);
+    // Process A reserves once, then is partitioned from the ledger for a full
+    // TTL while its send hangs; the partition lifts after B has spent the slot.
+    let partitioned = false;
+    let renewalsAfterPartition = 0;
+    const flaky: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      reserveAvailability: async (input) => {
+        if (partitioned) throw new AgentStateError('unavailable', 'partitioned');
+        if (input.idempotencyKey.includes(':renew:')) renewalsAfterPartition += 1;
+        return ledger.reserveAvailability(input);
+      },
+    });
+    const processA = createNoticeInboxSignaller({
+      now: () => new Date(clock),
+      reservationRenewalIntervalMs: 5,
+      store: { close: async () => undefined, noticeLedger: async () => flaky },
+    });
+    await processA.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+
+    let finishSend: () => void = () => undefined;
+    const sendSettled = new Promise<void>((resolve) => {
+      finishSend = resolve;
+    });
+    const sends: string[] = [];
+    const heldBy = async (): Promise<string | undefined> =>
+      (await ledger.read()).notices[0]?.availabilityReservation?.key;
+    const observingA = processA.observe(async () => {
+      sends.push('A');
+      partitioned = true;
+      await sendSettled;
+    });
+    for (let i = 0; i < 200 && await heldBy() === undefined; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(await heldBy()).toBeDefined();
+
+    clock = Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS + 1_000;
+    const processB = signallerOver(ledger, () => new Date(clock));
+    await processB.subscribe(principal('s1'));
+    await expect(processB.observe(async () => {
+      sends.push('B');
+    })).resolves.toMatchObject({ kind: 'signalled', noticeIds: [published.notice.id] });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    expect(await heldBy()).toBeUndefined();
+
+    // The partition lifts: A's renewals now reach the ledger and find an empty
+    // slot whose budget is spent. None of them re-creates a hold.
+    partitioned = false;
+    for (let i = 0; i < 200 && renewalsAfterPartition < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(renewalsAfterPartition).toBeGreaterThanOrEqual(2);
+    expect(await heldBy()).toBeUndefined();
+
+    finishSend();
+    const outcomeA = await observingA;
+    expect(outcomeA).toMatchObject({ kind: 'failed', stage: 'record' });
+    expect((outcomeA as { error: AgentNoticeError }).error).toMatchObject({ code: 'reservation-lost' });
+    expect((await ledger.read()).notices[0]?.availability).toMatchObject({ count: 1 });
+    expect(sends).toEqual(['A', 'B']);
+    await processA.close();
+    await driver.close();
+  });
+
   it('commits an owed receipt on close instead of losing it with the process', async () => {
     const { driver, ledger } = await openLedger();
     let receiptOutage = true;

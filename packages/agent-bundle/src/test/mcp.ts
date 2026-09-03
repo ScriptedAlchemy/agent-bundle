@@ -30,7 +30,7 @@ import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import type { HarnessOptionsArguments, RenderRouteContextInit } from './render.ts';
+import type { HarnessOptionsArguments, RenderRouteContext, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
 
 /** Where an in-memory projection result came from and what it proves. */
