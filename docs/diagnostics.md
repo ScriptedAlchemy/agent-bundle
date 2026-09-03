@@ -696,9 +696,10 @@ destination is decided as **receipt** (a receipt naming this plugin), **legacy**
 (no receipt, but the emitted `INSTALL.md` + `install.mjs` and a manifest with
 this plugin's name — a copy installed before receipts existed), or **foreign**
 (anything else). Claude and Codex copies are located through the host's own
-`plugin list --json` inventory; the host owns those copies, so replacement runs
-`claude plugin uninstall --keep-data` + `install` or `codex plugin remove` +
-`add`.
+`plugin list --json` inventory (Doctor runs it once per host and also lists every
+installed plugin from it; `AB7303` is emitted only when that listing is unusable);
+the host owns those copies, so replacement runs `claude plugin uninstall
+--keep-data` + `install` or `codex plugin remove` + `add`.
 
 | Installed copy | `install` | `install --replace` (alias `--force`) | Doctor |
 | --- | --- | --- | --- |

@@ -758,20 +758,110 @@ const cursorInventory = async (
   };
 };
 
-const unknownInventory = (
+/** One `<host> plugin list --json` run: usable JSON text, or the reason it was not. */
+type PublicHostListing =
+  | { readonly status: 'available'; readonly stdout: string }
+  | { readonly detail: string; readonly status: 'unavailable' };
+
+const readPublicHostListing = async (
   host: Exclude<DoctorHost, 'cursor'>,
-): { readonly diagnostics: readonly Diagnostic[]; readonly inventory: DoctorInventory } => ({
-  diagnostics: freezeDiagnostics([diagnostic(
-    'AB7303',
-    `${host} owns its plugin registry and Agent Bundle has no pinned read-only inventory verb.`,
-    host === 'claude'
-      ? 'Use `claude plugin details <name>` to inspect a known plugin.'
-      : 'Use Codex-owned commands to inspect installed plugins.',
-    'info',
-    host,
-  )]),
-  inventory: freezeInventory('unknown'),
-});
+  run: DoctorCommandRunner,
+  cwd: string,
+): Promise<PublicHostListing> => {
+  let result: DoctorCommandResult;
+  try {
+    result = await run(Object.freeze({
+      args: Object.freeze(['plugin', 'list', '--json']),
+      cwd,
+      executable: host,
+    }));
+  } catch (error) {
+    return { detail: error instanceof Error ? error.message : String(error), status: 'unavailable' };
+  }
+  if (result.exitCode !== 0 || result.termination !== undefined) {
+    return {
+      detail: result.termination ?? (result.stderr.trim() || `exit code ${result.exitCode ?? 'unknown'}`),
+      status: 'unavailable',
+    };
+  }
+  return { status: 'available', stdout: result.stdout };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * The host's installed-plugin inventory from its pinned `plugin list --json`
+ * verb (Claude rows carry `id`/`version`/`scope`/`installPath`; Codex rows
+ * carry `pluginId`/`version` and the pinned cache layout supplies the path).
+ * An unusable listing is reported honestly as unknown (`AB7303`).
+ */
+const publicHostInventory = (
+  host: Exclude<DoctorHost, 'cursor'>,
+  listing: PublicHostListing,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): { readonly diagnostics: readonly Diagnostic[]; readonly inventory: DoctorInventory } => {
+  const unknown = (detail: string) => ({
+    diagnostics: freezeDiagnostics([diagnostic(
+      'AB7303',
+      `${host} inventory is unknown: \`${host} plugin list --json\` was unusable (${detail}).`,
+      host === 'claude'
+        ? 'Use `claude plugin list --json` or `claude plugin details <name>` to inspect installed plugins.'
+        : 'Use `codex plugin list --json` to inspect installed plugins.',
+      'info',
+      host,
+    )]),
+    inventory: freezeInventory('unknown'),
+  });
+  if (listing.status === 'unavailable') return unknown(listing.detail);
+  let document: unknown;
+  try {
+    document = JSON.parse(listing.stdout) as unknown;
+  } catch {
+    return unknown('not JSON');
+  }
+  const findings: DoctorFinding[] = [];
+  if (host === 'claude') {
+    if (!Array.isArray(document)) return unknown('not an array');
+    for (const row of document) {
+      if (
+        !isRecord(row) ||
+        typeof row['id'] !== 'string' ||
+        typeof row['installPath'] !== 'string' ||
+        typeof row['version'] !== 'string'
+      ) {
+        return unknown('a row lacks id, installPath, or version');
+      }
+      findings.push({
+        entry: typeof row['scope'] === 'string' ? `${row['id']} (${row['scope']})` : row['id'],
+        name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
+        path: row['installPath'],
+        state: 'installed',
+        version: row['version'],
+      });
+    }
+  } else {
+    if (!isRecord(document) || !Array.isArray(document['installed'])) return unknown('no installed array');
+    for (const row of document['installed']) {
+      if (!isRecord(row) || typeof row['pluginId'] !== 'string' || typeof row['version'] !== 'string') {
+        return unknown('a row lacks pluginId or version');
+      }
+      if (row['installed'] === false) continue;
+      const separator = row['pluginId'].indexOf('@');
+      const name = separator === -1 ? row['pluginId'] : row['pluginId'].slice(0, separator);
+      const marketplace = separator === -1 ? '' : row['pluginId'].slice(separator + 1);
+      findings.push({
+        entry: row['pluginId'],
+        name,
+        path: join(publicHostCacheRoot(host, environment, home), marketplace, name, row['version']),
+        state: 'installed',
+        version: row['version'],
+      });
+    }
+  }
+  return { diagnostics: Object.freeze([]), inventory: freezeInventory('known', findings) };
+};
 
 const malformedBundle = (
   host: DoctorHost,
@@ -806,39 +896,23 @@ const installComparison = (
 });
 
 /**
- * The host's own installed-plugin inventory (`plugin list --json`), read
- * through the same parser `agent-bundle install` uses before replacing.
- * Doctor looks across scopes, so a Claude row at any scope counts.
+ * This plugin's copies in the host's inventory, read through the same parser
+ * `agent-bundle install` uses before replacing, from the listing Doctor
+ * already ran. Doctor looks across scopes, so a Claude row at any scope counts.
  */
-const readPublicHostInventory = async (
+const readPublicHostInventory = (
   host: Exclude<DoctorHost, 'cursor'>,
   identity: PluginIdentity,
-  run: DoctorCommandRunner,
+  listing: PublicHostListing,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
-): Promise<PublicHostInventory> => {
-  let result: DoctorCommandResult;
-  try {
-    result = await run(Object.freeze({
-      args: Object.freeze(['plugin', 'list', '--json']),
-      cwd: identity.bundleRoot,
-      executable: host,
-    }));
-  } catch (error) {
-    return { detail: error instanceof Error ? error.message : String(error), status: 'unavailable' };
-  }
-  if (result.exitCode !== 0 || result.termination !== undefined) {
-    return {
-      detail: result.termination ?? (result.stderr.trim() || `exit code ${result.exitCode ?? 'unknown'}`),
-      status: 'unavailable',
-    };
-  }
-  return parsePublicHostInventory(host, result.stdout, {
+): PublicHostInventory => listing.status === 'unavailable'
+  ? { detail: listing.detail, status: 'unavailable' }
+  : parsePublicHostInventory(host, listing.stdout, {
     cacheRoot: publicHostCacheRoot(host, environment, home),
     marketplace: identity.marketplace ?? '',
     plugin: identity.name,
   });
-};
 
 const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>, scopeArguments = ''): string => host === 'claude'
   ? `Rerun \`agent-bundle install claude --from <bundle-dir>${scopeArguments}\`; same-version content drift is replaced through ` +
@@ -1176,6 +1250,8 @@ const claudeRegistration = async (
 interface PublicHostContext {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly home: string;
+  /** The host's `plugin list --json` run once per Doctor host pass; shared by inventory and comparison. */
+  readonly listing: PublicHostListing;
   readonly run: DoctorCommandRunner;
 }
 
@@ -1188,7 +1264,7 @@ const claudeBundle = async (
   const registration = await claudeRegistration(identity, probe, context.run);
   if (probe.status !== 'available' || registration.finding === undefined) return registration;
   const artifact = await treeInventory(identity.bundleRoot);
-  const inventory = await readPublicHostInventory('claude', identity, context.run, context.environment, context.home);
+  const inventory = readPublicHostInventory('claude', identity, context.listing, context.environment, context.home);
   const compared = await publicHostInstallComparison('claude', identity, artifact, inventory);
   return {
     diagnostics: freezeDiagnostics([...registration.diagnostics, ...compared.diagnostics]),
@@ -1216,7 +1292,7 @@ const codexBundle = async (
     return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'skipped' }) };
   }
   const artifact = await treeInventory(identity.bundleRoot);
-  const inventory = await readPublicHostInventory('codex', identity, context.run, context.environment, context.home);
+  const inventory = readPublicHostInventory('codex', identity, context.listing, context.environment, context.home);
   if (inventory.status === 'unavailable') {
     return {
       diagnostics: freezeDiagnostics([diagnostic(
@@ -1595,9 +1671,15 @@ const doctorHost = async (
   const probed = host === 'cursor'
     ? await probeCursor(home)
     : await probeBinary(host, home, run);
+  const environment = options.environment ?? process.env;
+  const listing: PublicHostListing = host === 'cursor' || probed.probe.status !== 'available'
+    ? { detail: `${host} is not available`, status: 'unavailable' }
+    : await readPublicHostListing(host, run, options.from === undefined ? home : resolve(options.from));
   const inventoried = host === 'cursor'
     ? await cursorInventory(home, probed.probe.status === 'available')
-    : unknownInventory(host);
+    : probed.probe.status !== 'available'
+      ? { diagnostics: Object.freeze([]), inventory: freezeInventory('skipped') }
+      : publicHostInventory(host, listing, environment, home);
   const diagnostics = [...probed.diagnostics, ...inventoried.diagnostics];
   let bundle: DoctorHostReport['bundle'];
   if (options.from !== undefined) {
@@ -1609,7 +1691,7 @@ const doctorHost = async (
         identity.bundleRoot,
         await validateBundleFiles(identity.bundleRoot, host),
       );
-      const context: PublicHostContext = { environment: options.environment ?? process.env, home, run };
+      const context: PublicHostContext = { environment, home, listing, run };
       const checked = host === 'cursor'
         ? await cursorBundle(identity, home)
         : host === 'claude'

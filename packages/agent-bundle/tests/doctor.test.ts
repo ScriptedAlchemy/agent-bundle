@@ -720,14 +720,14 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       hosts: ['claude'],
     });
 
-    // Read-only proofs only: version probe, inline registration proof, installed inventory; never `plugin validate`.
+    // Read-only proofs only: version probe, installed inventory, inline registration proof; never `plugin validate`.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'claude' }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'claude' }),
       expect.objectContaining({
         args: ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
         executable: 'claude',
       }),
-      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'claude' }),
     ]);
     expect(hostReport(report, 'claude').bundle?.state).toBe('corrupt');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
@@ -781,7 +781,7 @@ it('reports unreadable Cursor local plugin directory as unknown inventory', asyn
   }
 });
 
-it('reports host-owned Claude and Codex inventories as honestly unknown', async () => {
+it('reports Claude and Codex inventories as honestly unknown when plugin list --json is unusable', async () => {
   const fixture = await temporaryDoctor();
   try {
     const report = await runDoctor({
@@ -792,6 +792,57 @@ it('reports host-owned Claude and Codex inventories as honestly unknown', async 
     });
     expect(report.hosts.map((entry) => entry.inventory.status)).toEqual(['unknown', 'unknown']);
     expect(report.diagnostics.filter((entry) => entry.code === 'AB7303')).toHaveLength(2);
+    expect(report.diagnostics.find((entry) => entry.code === 'AB7303')?.message).toContain('plugin list --json');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('inventories Claude and Codex installs from their pinned plugin list --json verbs', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const codexHome = join(fixture.root, 'codex-home');
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: `${request.executable} 1.2.3\n` });
+      if (request.executable === 'claude') {
+        return commandResult({ stdout: JSON.stringify([
+          { enabled: true, id: 'alpha@alpha-marketplace', installPath: '/cache/alpha/1.0.0', scope: 'user', version: '1.0.0' },
+          { enabled: true, id: 'alpha@alpha-marketplace', installPath: '/cache/alpha-project/1.0.0', scope: 'project', version: '1.0.0' },
+        ]) });
+      }
+      return commandResult({ stdout: JSON.stringify({
+        available: [],
+        installed: [
+          { enabled: true, installed: true, pluginId: 'beta@beta-marketplace', version: '2.0.0' },
+          { enabled: false, installed: false, pluginId: 'gamma@beta-marketplace', version: '3.0.0' },
+        ],
+      }) });
+    };
+    const report = await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CODEX_HOME: codexHome },
+      home: fixture.home,
+      hosts: ['claude', 'codex'],
+    });
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7303')).toBe(false);
+    expect(hostReport(report, 'claude').inventory).toEqual({
+      findings: [
+        { entry: 'alpha@alpha-marketplace (user)', name: 'alpha', path: '/cache/alpha/1.0.0', state: 'installed', version: '1.0.0' },
+        { entry: 'alpha@alpha-marketplace (project)', name: 'alpha', path: '/cache/alpha-project/1.0.0', state: 'installed', version: '1.0.0' },
+      ],
+      status: 'known',
+    });
+    expect(hostReport(report, 'codex').inventory).toEqual({
+      findings: [{
+        entry: 'beta@beta-marketplace',
+        name: 'beta',
+        path: join(codexHome, 'plugins', 'cache', 'beta-marketplace', 'beta', '2.0.0'),
+        state: 'installed',
+        version: '2.0.0',
+      }],
+      status: 'known',
+    });
   } finally {
     await fixture.cleanup();
   }

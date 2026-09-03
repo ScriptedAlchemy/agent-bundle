@@ -14,7 +14,7 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -440,16 +440,21 @@ export const stageArtifact = async (options: {
   const parent = await mkdtemp(join(options.stageRoot, `.${basename(options.destination)}.stage-`));
   const root = join(parent, 'bundle');
   try {
-    await cp(options.artifactRoot, root, {
+    // Runtime roots and a stray receipt in the artifact are never copied at all (a run-in-place
+    // artifact may hold a large live database).
+    const artifactRoot = resolve(options.artifactRoot);
+    await cp(artifactRoot, root, {
       errorOnExist: true,
+      filter: (source) => {
+        const relativePath = relative(artifactRoot, source);
+        if (relativePath === '') return true;
+        const top = relativePath.split(sep)[0] ?? '';
+        return top !== installReceiptFile && !preservedRuntimeEntries.includes(top);
+      },
       force: false,
       recursive: true,
       verbatimSymlinks: true,
     });
-    await rm(join(root, installReceiptFile), { force: true });
-    for (const entry of preservedRuntimeEntries) {
-      await rm(join(root, entry), { force: true, recursive: true });
-    }
     const inventory = await treeInventory(root);
     await writeFile(
       join(root, installReceiptFile),
