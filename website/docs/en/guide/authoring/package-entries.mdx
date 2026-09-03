@@ -120,6 +120,28 @@ dependency, because the generated executable installs the request context throug
 
 Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
 
+### The routed CLI inside host artifacts
+
+The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
+ship with the host artifact. So the build also emits the same compiled command graph into every
+selected target as `<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
+command renders). Every built-in target publishes the `cli` capability that admits it. The
+artifact bin is a self-contained ESM module with no shebang or executable bit — run it as
+`node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like `scripts/*.mjs`. Help, argv
+parsing, output modes, exit codes, and signals match the package bin; the one difference is that
+workspace-durable state without a host-supplied `AGENT_BUNDLE_PLUGIN_ROOT` anchors on the artifact
+root (the parent of `bin/`, the same fallback the generated MCP worker uses) instead of
+`$PWD/.agent-bundle/state`, so a co-installed CLI and server share one store.
+
+Reach it from the other surfaces with the plugin-root token — `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
+in Claude Skill Markdown and hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`
+in Cursor hooks — or, from a compiled script, as the sibling
+`new URL('../bin/<plugin-name>.mjs', import.meta.url)`. `inspect` accounts for the bin as one `cli`
+component per target and the artifact manifest records both files. A target without the `cli`
+capability omits the bin and reports `AB4765`; a host-emitted file at the same path (a `claude.bin`
+directory shipping `<plugin-name>.mjs`) is `AB4766`. The package build's `dist/bin/<plugin-name>.js`
+is unchanged.
+
 ### Projecting MCP tools into the CLI
 
 `routes.mcpCommands` adds tools from generated MCP servers to the same command graph and

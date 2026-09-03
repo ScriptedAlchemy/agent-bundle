@@ -110,6 +110,25 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 退出方式：`bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。
 
+### 宿主产物中的路由式 CLI
+
+包 bin 只能到达安装了 npm 包的用户，而 hook、Skill 与脚本是随宿主产物一起交付的。因此构建还会把同一张
+编译后的命令图发射进每个所选 target，路径为 `<target>/bin/<plugin-name>.mjs`（若有任一命令需要渲染，
+则再加上 `bin/<plugin-name>-flight.mjs`）。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
+自包含的 ESM 模块，没有 shebang 也没有可执行位——像 `scripts/*.mjs` 一样以
+`node <plugin-root>/bin/<plugin-name>.mjs <command>` 运行。帮助、argv 解析、输出模式、退出码与信号都与
+包 bin 一致；唯一的区别是，在宿主未提供 `AGENT_BUNDLE_PLUGIN_ROOT` 时，工作区级持久状态锚定在产物根目录
+（`bin/` 的父目录，与生成的 MCP worker 使用同一个回退），而不是 `$PWD/.agent-bundle/state`，这样一起安装
+的 CLI 与服务器观察到的是同一份存储。
+
+从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
+`${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
+`${CURSOR_PLUGIN_ROOT}/…`——或者在编译后的脚本里用同级引用
+`new URL('../bin/<plugin-name>.mjs', import.meta.url)`。`inspect` 把该 bin 记为每个 target 的一个 `cli`
+组件，产物清单会记录这两个文件。不具备 `cli` 能力的 target 会省略该 bin 并报告 `AB4765`；宿主在同一路径
+发射的文件（例如 `claude.bin` 目录中交付的 `<plugin-name>.mjs`）是 `AB4766`。包构建的
+`dist/bin/<plugin-name>.js` 保持不变。
+
 ### 把 MCP 工具投影进 CLI
 
 `routes.mcpCommands` 把生成式 MCP 服务器的工具加入同一张命令图与同一个可执行文件，即使项目完全没有
