@@ -154,7 +154,9 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
       mcp: {
         servers: {
           http: {
-            headers: { Authorization: 'Bearer ${PLUGIN_DATA}' },
+            // Agent Plugins §7.2.1: clients never expand placeholders in
+            // headers, and the build now fails closed on one (AB6036).
+            headers: { Authorization: 'Bearer fixture-token' },
             transport: 'streamable-http',
             url: 'https://mcp.example.test/tools',
           },
@@ -1090,8 +1092,7 @@ it('opens a generated streamable HTTP server through its modern transport', asyn
     const httpSession = await service.open({ epochId: 'epoch-remote', serverName: 'http', target: 'portable' });
 
     expect(http[0]?.url).toBe('https://mcp.example.test/tools');
-    expect(http[0]?.headers?.Authorization).toMatch(/^Bearer \/.+/u);
-    expect(http[0]?.headers?.Authorization).not.toContain('${PLUGIN_DATA}');
+    expect(http[0]?.headers).toEqual({ Authorization: 'Bearer fixture-token' });
 
     await Promise.all([httpSession.close(), service.close()]);
   } finally {

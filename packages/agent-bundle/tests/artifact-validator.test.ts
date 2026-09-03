@@ -847,6 +847,51 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
   }
 });
 
+it('fails ordinary artifact validation when an emitted portable tree breaks the Agent Plugins normative text', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    {
+      contents: JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+        mcpServers: {
+          headers: {
+            headers: { 'X-Tenant': 'a', 'x-tenant': 'b' },
+            type: 'streamable-http',
+            url: 'http://mcp.example.test/mcp',
+          },
+          server: { command: 'bin/server', cwd: '${PLUGIN_ROOT}/../elsewhere', type: 'stdio' },
+        },
+      }) + '\n',
+      kind: 'generated' as const,
+      path: 'portable/mcp.json',
+    },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    const normative = diagnostics.filter((entry) => entry.code === 'AB6036');
+    expect(normative.map((entry) => entry.message)).toEqual([
+      'Target "portable": mcp.json/mcpServers/headers/url uses plain HTTP against non-loopback host "mcp.example.test"; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/headers/headers/x-tenant repeats header "X-Tenant" under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/server/command "bin/server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/server/cwd "${PLUGIN_ROOT}/../elsewhere" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).',
+    ]);
+    expect(normative.every((entry) => entry.severity === 'error' && entry.target === 'portable' && entry.recovery !== undefined)).toBe(true);
+    expect(diagnostics).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'AB6012' })]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('admits nested project assets in the target-owned recursive asset namespace', async () => {
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');

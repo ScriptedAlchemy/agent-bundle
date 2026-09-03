@@ -278,10 +278,12 @@ metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and
 reverse-domain `extensions` are authored under the `portable` config key and
 land in the root `plugin.json`; omitting them leaves the manifest exactly as
 before. Emitted bytes are validated against the pinned schemas and the
-normative text at plan time, after every build, under
-`validate --artifact --host-validation`, and by `doctor` for installed Cursor
-local plugins that declare the standard's `$schema`
-(`AB6035`–`AB6038`, `AB7320`; see `docs/diagnostics.md`). A dogfood proof
+normative text at plan time (`portable.mcp.*.standard`), by the Agent Plugins
+byte lane after every ordinary build and `validate --artifact`
+(`AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane
+plus the `AB6038` provenance note), and by `doctor` for installed Cursor
+local plugins that declare the standard's `$schema` (`AB7320`; see
+`docs/diagnostics.md`). A dogfood proof
 against the real Cursor IDE plugin loader (discovery, skill listing, MCP
 launch, and three observed Cursor 3.18.25 placeholder-expansion conformance
 gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`.

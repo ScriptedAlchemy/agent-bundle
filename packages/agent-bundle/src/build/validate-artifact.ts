@@ -1,6 +1,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import { dirname, posix, resolve } from 'node:path';
 
+import { portableAdapter } from '../adapters/portable.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type {
   TargetArtifactDocumentIssue,
@@ -9,6 +10,7 @@ import type {
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
+import { validatePortablePluginFiles } from '../host-contracts/portable-plugin-validation.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   artifactDiagnostic as diagnostic,
@@ -433,6 +435,31 @@ const validateTargetContracts = async (options: {
   return Object.freeze(diagnostics);
 };
 
+/**
+ * Agent Plugins 1.0.0 bytes-at-rest lane (AB6035–AB6037) over every emitted
+ * portable tree, so a standard-invalid `mcp.json` or layout fails ordinary
+ * `build` and `validate --artifact` rather than only `--host-validation`.
+ */
+const validatePortableTargets = async (options: {
+  readonly artifactRoot: string;
+  readonly files: readonly ArtifactFile[];
+  readonly manifest: ArtifactManifest;
+}): Promise<readonly Diagnostic[]> => {
+  const diagnostics: Diagnostic[] = [];
+  for (const target of options.manifest.targets) {
+    if (target.name !== portableAdapter.name) continue;
+    const prefix = `${target.name}/`;
+    if (!options.files.some((file) => file.path.startsWith(prefix))) continue;
+    for (const entry of await validatePortablePluginFiles({
+      pluginDirectory: resolve(options.artifactRoot, target.name),
+      target: target.name,
+    })) {
+      diagnostics.push(Object.freeze({ ...entry, message: `Target ${JSON.stringify(target.name)}: ${entry.message}` }));
+    }
+  }
+  return Object.freeze(diagnostics);
+};
+
 const ownershipRecovery = artifactDiagnosticRecoveries.AB6014;
 
 const isSkillArtifactPath = (relativePath: string, skills: string | undefined): boolean => {
@@ -729,6 +756,7 @@ export const validateArtifactWithSnapshot = async (
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
     targetContractDiagnostics,
+    portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
     emittedSkillDiagnostics,
@@ -739,6 +767,11 @@ export const validateArtifactWithSnapshot = async (
       files: inspection.files,
       manifest,
       registry,
+    }),
+    validatePortableTargets({
+      artifactRoot,
+      files: inspection.files,
+      manifest,
     }),
     validateMcpCoherence({
       artifactRoot,
@@ -768,6 +801,7 @@ export const validateArtifactWithSnapshot = async (
   ]);
   diagnostics.push(
     ...targetContractDiagnostics,
+    ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
     ...hookCoherenceDiagnostics,
     ...emittedSkillDiagnostics,

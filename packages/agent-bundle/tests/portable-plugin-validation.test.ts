@@ -187,6 +187,36 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
   ]);
 });
 
+it('rejects every forbidden control character in HTTP header values while permitting horizontal tab', async () => {
+  const root = await conformantBundle();
+  const invalidValues: Record<string, string> = {
+    'X-Bell': 'a\u0007b',
+    'X-Cr': 'a\rb',
+    'X-Del': 'a\u007fb',
+    'X-Lf': 'a\nb',
+    'X-Nul': 'a\u0000b',
+    'X-Soh': 'a\u0001b',
+    'X-Unicode': 'a\u2014b',
+    'X-Vt': 'a\u000bb',
+  };
+  await writeJson(join(root, 'mcp.json'), {
+    $schema: mcpSchema,
+    mcpServers: {
+      invalid: { headers: invalidValues, type: 'streamable-http', url: 'https://mcp.example.test/mcp' },
+      valid: {
+        headers: { 'X-ObsText': 'caf\u00e9', 'X-Tab': 'a\tb', 'X-Visible': 'Bearer token-1 ~' },
+        type: 'streamable-http',
+        url: 'https://mcp.example.test/mcp',
+      },
+    },
+  });
+  const diagnostics = await validatePortablePluginFiles({ pluginDirectory: root, target: 'portable' });
+
+  expect(new Set(codes(diagnostics))).toEqual(new Set(['AB6036']));
+  expect(messages(diagnostics)).toEqual(Object.keys(invalidValues).map((name) =>
+    `mcp.json/mcpServers/invalid/headers/${name} is not a valid HTTP header field value: only visible ASCII, space, horizontal tab and obs-text bytes are allowed (Agent Plugins 1.0.0 §7.2.1).`));
+});
+
 it('reports fixed component locations of the wrong filesystem kind and skill directories without SKILL.md', async () => {
   const root = await conformantBundle();
   await rm(join(root, 'skills'), { recursive: true });
