@@ -106,6 +106,7 @@ beforeAll(async () => {
     access(join(installedArtifactRoot, 'claude')),
     access(join(installedArtifactRoot, 'codex')),
     access(join(installedArtifactRoot, 'cursor')),
+    access(join(installedArtifactRoot, 'plugin')),
   ]);
 
   await rm(projectRoot, { force: true, recursive: true });
@@ -119,6 +120,7 @@ beforeAll(async () => {
       claude: join(installedArtifactRoot, 'claude'),
       codex: join(installedArtifactRoot, 'codex'),
       cursor: join(installedArtifactRoot, 'cursor'),
+      plugin: join(installedArtifactRoot, 'plugin'),
     }),
     cli: sourceFixture.cli,
     root: cleanupRoot,
@@ -263,6 +265,12 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
     proofLevel: proofLabel,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',
+    unifiedBundle: {
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: { AB6027: 0, AB7320: 0 },
+    },
   });
   expect(report.install.version, proofLabel).toBe(fixturePackageVersion);
   expectHygienicReport(report);

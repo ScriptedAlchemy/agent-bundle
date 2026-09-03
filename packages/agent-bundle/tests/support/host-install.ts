@@ -147,7 +147,8 @@ export interface BuiltFixtureProject {
 }
 
 export interface BuiltHostInstallFixture extends BuiltFixtureProject {
-  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor', string>>;
+  /** Per-host bundles plus the unified `plugin` bundle (one root, three host manifests). */
+  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor' | 'plugin', string>>;
 }
 
 export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
@@ -292,6 +293,17 @@ export interface CursorHostInstallReport {
   readonly proofLevel: string;
   readonly skill: string;
   readonly status: 'passed';
+  /**
+   * The unified `plugin` bundle installed as a Cursor local plugin in its own isolated home: Doctor's
+   * static validation must follow the manifest to `hooks/hooks-cursor.json` and report zero
+   * AB7320/AB6027 findings even though a Claude-format `hooks/hooks.json` sits beside it (#438).
+   */
+  readonly unifiedBundle: {
+    readonly hooksDocument: 'hooks/hooks-cursor.json';
+    readonly hooksRegistration: 'registered';
+    readonly install: 'installed';
+    readonly staticFindings: { readonly AB6027: 0; readonly AB7320: 0 };
+  };
 }
 
 export interface PortableHostInstallReport {
@@ -585,7 +597,7 @@ export const buildHostInstallFixture = async (options: {
 }): Promise<BuiltHostInstallFixture> => {
   const built = await buildFixtureProject({
     ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
-    bundleNames: ['claude', 'codex', 'cursor'],
+    bundleNames: ['claude', 'codex', 'cursor', 'plugin'],
     environment: options.environment,
     fixture: 'host-install',
     ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
@@ -596,6 +608,7 @@ export const buildHostInstallFixture = async (options: {
       claude: join(built.artifactRoot, 'claude'),
       codex: join(built.artifactRoot, 'codex'),
       cursor: join(built.artifactRoot, 'cursor'),
+      plugin: join(built.artifactRoot, 'plugin'),
     }),
   });
 };
@@ -1245,6 +1258,68 @@ const assertCursorMarketplaceStaging = async (
   });
 };
 
+/**
+ * Installs the unified `plugin` bundle as a Cursor local plugin in a fresh isolated home and asks Doctor
+ * for the static and registration verdicts. The bundle carries both `hooks/hooks.json` (Claude/Codex
+ * format) and `hooks/hooks-cursor.json` (Cursor format, named by `.cursor-plugin/plugin.json`), so a
+ * validator that ignored the manifest would report AB7320/AB6027 against a byte-for-byte install (#438).
+ */
+const assertUnifiedBundleCursorInstall = async (
+  fixture: BuiltHostInstallFixture,
+  options: HostInstallProofOptions,
+): Promise<CursorHostInstallReport['unifiedBundle']> => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-cursor-unified-'));
+  try {
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.bundles.plugin, '--json'], {
+      cwd: fixture.bundles.plugin,
+      environment,
+    });
+    assertProof(result.exitCode === 0, `Unified bundle Cursor install failed: ${commandDetail(result)}`);
+    const installed = parseJson<InstallResult>(result.stdout, 'unified bundle Cursor install');
+    assertInstallResult(installed, 'cursor', 'installed');
+    const destination = join(home, '.cursor', 'plugins', 'local', plugin);
+    assertProof(installed.destination === destination, 'Unified bundle Cursor install did not report the isolated destination.');
+
+    const manifest = record(await readJson(join(destination, '.cursor-plugin', 'plugin.json'), 'unified bundle Cursor manifest'));
+    assertProof(
+      manifest?.hooks === './hooks/hooks-cursor.json',
+      `Unified bundle Cursor manifest did not name hooks/hooks-cursor.json: ${JSON.stringify(manifest?.hooks)}`,
+    );
+    await access(join(destination, 'hooks', 'hooks.json')).catch(() => fail('Unified bundle install lacks the Claude/Codex hooks/hooks.json.'));
+    const cursorHooks = parseJson<unknown>(
+      await readText(join(destination, 'hooks', 'hooks-cursor.json'), 'unified bundle Cursor hooks document'),
+      'unified bundle Cursor hooks document',
+    );
+    assertProof(cursorHooksValidator(cursorHooks), `Unified bundle Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
+
+    const report = await runDoctor({ home, hosts: ['cursor'] });
+    const staticFindings = report.diagnostics.filter((entry) => entry.code === 'AB7320');
+    const schemaFindings = report.diagnostics.filter((entry) => entry.message.includes('AB6027'));
+    assertProof(
+      staticFindings.length === 0 && schemaFindings.length === 0,
+      `Doctor reported static findings against a byte-for-byte unified bundle install: ${JSON.stringify([...staticFindings, ...schemaFindings])}`,
+    );
+    const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+    const finding = cursor?.inventory.findings.find((entry) => entry.path === destination);
+    assertProof(finding?.state === 'installed', `Doctor reported the unified bundle install as ${JSON.stringify(finding?.state)} instead of installed.`);
+    assertProof(
+      finding.hooks?.state === 'registered' && finding.hooks.source === join(destination, 'hooks', 'hooks-cursor.json'),
+      `Doctor did not register hooks from hooks/hooks-cursor.json: ${JSON.stringify(finding.hooks)}`,
+    );
+    assertProof(finding.hooks.events.includes('sessionStart'), 'Doctor did not see the unified bundle sessionStart hook registration.');
+    return Object.freeze({
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: Object.freeze({ AB6027: 0, AB7320: 0 }),
+    });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
+};
+
 export const runCursorHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
   options: HostInstallProofOptions,
@@ -1306,6 +1381,7 @@ export const runCursorHostInstallProof = async (
 
     const hooksRegistration = await assertCursorHooksRegistration(home, destination);
     const marketplace = await assertCursorMarketplaceStaging(fixture, home, environment);
+    const unifiedBundle = await assertUnifiedBundleCursorInstall(fixture, options);
 
     return Object.freeze({
       destination: normalizedRelative(home, destination),
@@ -1336,6 +1412,7 @@ export const runCursorHostInstallProof = async (
       proofLevel,
       skill: normalizedRelative(home, skillPath),
       status: 'passed',
+      unifiedBundle,
     });
   } finally {
     await rm(home, { force: true, recursive: true });

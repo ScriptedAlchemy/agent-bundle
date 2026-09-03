@@ -10,6 +10,7 @@ import marketplaceSchema from '../adapters/schemas/cursor/marketplace.schema.jso
 import pluginSchema from '../adapters/schemas/cursor/plugin.schema.json' with { type: 'json' };
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
+import { resolveCursorHooksSource } from '../host-contracts/cursor-plugin-validation.ts';
 import {
   cursorMarketplacePluginPath,
   cursorMarketplaceRoot,
@@ -19,7 +20,9 @@ import {
  * Read-only Doctor proof for Cursor hook registration (#407).
  *
  * Cursor delivers plugin hooks from the plugin manifest (`.cursor-plugin/plugin.json`
- * `hooks` -> `hooks/hooks.json`), substituting `${CURSOR_PLUGIN_ROOT}` and running
+ * `hooks` -> the named document, `hooks/hooks.json` for the `cursor` target and
+ * `hooks/hooks-cursor.json` for the unified `plugin` target; `hooks/hooks.json` by
+ * folder discovery when the field is absent), substituting `${CURSOR_PLUGIN_ROOT}` and running
  * each command from the plugin root (observed 2026-09-03, Cursor 3.18.25, isolated
  * HOME: preToolUse/postToolUse/stop fired for the emitted pack exactly like the
  * known-working ~/.cursor/plugins/local/tracedecay). `~/.cursor/hooks.json` is a
@@ -353,28 +356,48 @@ export const inspectCursorPluginHooks = async (
   if (manifest.error !== undefined || !Predicate.isObject(manifest.value)) {
     return { diagnostics: Object.freeze([]), registration: none };
   }
-  const declared = manifest.value.hooks;
-  if (declared === undefined) return { diagnostics: Object.freeze([]), registration: none };
+  // The same manifest-driven resolution the static validator applies (#438): the `hooks` field names the
+  // document Cursor loads; the folder-discovery default `hooks/hooks.json` applies only when it is absent.
+  const hooksSource = resolveCursorHooksSource(manifest.value);
   let parsed: ParsedHooksDocument | undefined;
   let source: string;
-  if (typeof declared === 'string') {
-    source = isAbsolute(declared) ? declared : join(pluginDirectory, declared);
-    const document = await readJson(source);
-    if (document.error === 'missing') {
-      return {
-        diagnostics: Object.freeze([finding(
-          'AB7322',
-          `Cursor plugin ${JSON.stringify(pluginDirectory)} declares hooks at ${JSON.stringify(declared)} but that file is missing; Cursor loads no hooks for it.`,
-          'Reinstall the plugin from a bundle whose hooks document exists.',
-          'error',
-        )]),
-        registration: Object.freeze({ ...none, source, state: 'missing' }),
-      };
+  switch (hooksSource.kind) {
+    case 'default': {
+      source = join(pluginDirectory, hooksSource.path);
+      const document = await readJson(source);
+      if (document.error === 'missing') return { diagnostics: Object.freeze([]), registration: none };
+      parsed = document.error === undefined ? parseHooksDocument(document.value) : undefined;
+      break;
     }
-    parsed = document.error === undefined ? parseHooksDocument(document.value) : undefined;
-  } else {
-    source = '.cursor-plugin/plugin.json#hooks';
-    parsed = parseHooksDocument(declared);
+    case 'file': {
+      source = isAbsolute(hooksSource.declared) ? hooksSource.declared : join(pluginDirectory, hooksSource.path);
+      const document = await readJson(source);
+      if (document.error === 'missing') {
+        return {
+          diagnostics: Object.freeze([finding(
+            'AB7322',
+            `Cursor plugin ${JSON.stringify(pluginDirectory)} declares hooks at ${JSON.stringify(hooksSource.declared)} but that file is missing; Cursor loads no hooks for it.`,
+            'Reinstall the plugin from a bundle whose hooks document exists.',
+            'error',
+          )]),
+          registration: Object.freeze({ ...none, source, state: 'missing' }),
+        };
+      }
+      parsed = document.error === undefined ? parseHooksDocument(document.value) : undefined;
+      break;
+    }
+    case 'inline':
+      source = '.cursor-plugin/plugin.json#hooks';
+      parsed = parseHooksDocument(hooksSource.value);
+      break;
+    case 'invalid':
+      source = '.cursor-plugin/plugin.json#hooks';
+      parsed = undefined;
+      break;
+    default: {
+      const exhaustive: never = hooksSource;
+      throw new TypeError(`Unexpected Cursor hooks source ${String(exhaustive)}.`);
+    }
   }
   if (parsed === undefined) {
     return {
@@ -382,7 +405,7 @@ export const inspectCursorPluginHooks = async (
         'AB7322',
         `Cursor plugin ${JSON.stringify(pluginDirectory)} hooks document ${JSON.stringify(source)} is not a valid ` +
           '`{ "version": 1, "hooks": { <event>: [{ "command": ... } | { "type": "prompt", "prompt": ... }] } }` document; Cursor loads no hooks for it.',
-        'Rebuild and reinstall the plugin; the emitted hooks/hooks.json must follow the pinned Cursor hooks schema.',
+        'Rebuild and reinstall the plugin; the hooks document the manifest names must follow the pinned Cursor hooks schema.',
         'error',
       )]),
       registration: Object.freeze({ ...none, source, state: 'stale' }),

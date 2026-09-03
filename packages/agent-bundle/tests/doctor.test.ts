@@ -2016,6 +2016,141 @@ it('proves plugin-scoped Cursor hook registration and flags stale, missing, and 
   }
 });
 
+/**
+ * The unified `plugin` target's Cursor view: `.cursor-plugin/plugin.json` points at the Cursor-format
+ * `hooks/hooks-cursor.json` while the Claude/Codex-format `hooks/hooks.json` sits at Cursor's
+ * folder-discovery default (#438).
+ */
+const writeUnifiedBundleCursorView = async (root: string): Promise<void> => {
+  await writeJson(join(root, '.cursor-plugin/plugin.json'), {
+    description: 'Unified bundle fixture.',
+    hooks: './hooks/hooks-cursor.json',
+    name: 'unified-fixture',
+    version: '0.3.5',
+  });
+  await writeJson(join(root, '.claude-plugin/plugin.json'), {
+    description: 'Unified bundle fixture.',
+    name: 'unified-fixture',
+    version: '0.3.5',
+  });
+  await writeJson(join(root, 'hooks/hooks.json'), {
+    hooks: {
+      PreToolUse: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/before-tool.mjs"', type: 'command' }], matcher: 'Bash' }],
+      SessionStart: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs"', type: 'command' }] }],
+      Stop: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/stop.mjs"', type: 'command' }] }],
+    },
+  });
+  await writeJson(join(root, 'hooks/hooks-cursor.json'), {
+    hooks: {
+      preToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/before-tool.cursor.mjs"', matcher: '^Shell$' }],
+      sessionStart: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/session-start.cursor.mjs"' }],
+      stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.cursor.mjs"' }],
+    },
+    version: 1,
+  });
+  for (const script of ['before-tool', 'session-start', 'stop']) {
+    await writeFile(join(root, 'hooks', `${script}.mjs`), 'export {};\n');
+    await writeFile(join(root, 'hooks', `${script}.cursor.mjs`), 'export {};\n');
+  }
+};
+
+it('validates the hooks document the Cursor manifest names for an installed unified bundle (#438)', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'unified-fixture');
+  try {
+    await writeUnifiedBundleCursorView(pluginRoot);
+
+    const report = await runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7320')).toEqual([]);
+    expect(report.diagnostics.filter((entry) => entry.message.includes('AB6027'))).toEqual([]);
+    expect(hostReport(report, 'cursor').inventory.findings).toEqual([expect.objectContaining({
+      entry: 'unified-fixture',
+      hooks: {
+        commands: 3,
+        duplicates: [],
+        events: ['preToolUse', 'sessionStart', 'stop'],
+        source: join(pluginRoot, 'hooks/hooks-cursor.json'),
+        state: 'registered',
+      },
+      state: 'installed',
+    })]);
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7322')).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('preToolUse, sessionStart, stop'), severity: 'info' }),
+    ]);
+
+    // The static validator and the registration proof agree on which file counts: breaking the named
+    // document is reported under its own path, while the Claude-format default stays out of the report.
+    await writeJson(join(pluginRoot, 'hooks/hooks-cursor.json'), { hooks: { Stop: [{ command: 'true' }] }, version: 1 });
+    const broken = await runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+    const staticErrors = broken.diagnostics.filter((entry) => entry.code === 'AB7320');
+    expect(staticErrors.length).toBeGreaterThan(0);
+    for (const entry of staticErrors) {
+      expect(entry.message).toContain('AB6027: hooks/hooks-cursor.json');
+      expect(entry.severity).toBe('error');
+    }
+    expect(hostReport(broken, 'cursor').inventory.findings).toEqual([expect.objectContaining({
+      hooks: expect.objectContaining({ state: 'stale' }),
+      state: 'corrupt',
+    })]);
+    expect(broken.diagnostics.filter((entry) => entry.code === 'AB7322')).toEqual([
+      expect.objectContaining({ severity: 'error' }),
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('accepts --from unified bundle Cursor bytes whose manifest names hooks/hooks-cursor.json (#438)', async () => {
+  const fixture = await temporaryDoctor();
+  const bundle = join(fixture.root, 'bundle-plugin');
+  try {
+    await writeUnifiedBundleCursorView(bundle);
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7319')).toEqual([]);
+    expect(hostReport(report, 'cursor').bundle).toMatchObject({ name: 'unified-fixture', version: '0.3.5' });
+    expect(hostReport(report, 'cursor').bundle?.state).not.toBe('corrupt');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('applies Cursor folder discovery of hooks/hooks.json only when the manifest declares no hooks field', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'discovered-fixture');
+  try {
+    await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'discovered-fixture', version: '1.0.0' });
+    await writeJson(join(pluginRoot, 'hooks/hooks.json'), {
+      hooks: { stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.mjs"' }] },
+      version: 1,
+    });
+    await writeFile(join(pluginRoot, 'hooks', 'stop.mjs'), 'export {};\n');
+
+    const report = await runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7320')).toEqual([]);
+    expect(hostReport(report, 'cursor').inventory.findings[0]?.hooks).toEqual({
+      commands: 1,
+      duplicates: [],
+      events: ['stop'],
+      source: join(pluginRoot, 'hooks/hooks.json'),
+      state: 'registered',
+    });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7322')).toEqual([
+      expect.objectContaining({ severity: 'info' }),
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports a plugin without declared hooks as having no hook registration', async () => {
   const fixture = await temporaryDoctor();
   try {

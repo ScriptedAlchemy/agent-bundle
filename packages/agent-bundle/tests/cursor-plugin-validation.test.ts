@@ -261,6 +261,141 @@ it('rejects malformed hook bytes under the pinned schema', async () => {
   expect(report.status).toBe('failed');
 });
 
+const claudeFormatHooks = Object.freeze({
+  hooks: {
+    PreToolUse: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/before-tool.mjs"', type: 'command' }], matcher: 'Bash' }],
+    Stop: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/stop.mjs"', type: 'command' }] }],
+  },
+});
+
+const cursorFormatHooks = Object.freeze({
+  hooks: {
+    preToolUse: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/before-tool.cursor.mjs"', matcher: '^Shell$' }],
+    stop: [{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/stop.cursor.mjs"' }],
+  },
+  version: 1,
+});
+
+// #438: the unified `plugin` bundle lays the Claude/Codex hooks document at the Cursor folder-discovery
+// default while its Cursor manifest points at `hooks/hooks-cursor.json`; only the named file counts.
+it('validates the hooks document the manifest names, not the folder-discovery default', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: './hooks/hooks-cursor.json', name: 'fixture-plugin' },
+    'hooks/hooks-cursor.json': cursorFormatHooks,
+    'hooks/hooks.json': claudeFormatHooks,
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics).toEqual([
+    expect.objectContaining({ code: 'AB6026', severity: 'info' }),
+  ]);
+  expect(report.status).toBe('passed');
+});
+
+it('reports a manifest-named hooks document under its own path with the Cursor hooks schema', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: './hooks/hooks-cursor.json', name: 'fixture-plugin' },
+    'hooks/hooks-cursor.json': claudeFormatHooks,
+    'hooks/hooks.json': cursorFormatHooks,
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  const hookErrors = report.diagnostics.filter((entry) => entry.code === 'AB6027');
+  expect(hookErrors.length).toBeGreaterThan(0);
+  for (const entry of hookErrors) {
+    expect(entry.message).toContain('hooks/hooks-cursor.json');
+    expect(entry.message).not.toContain('hooks/hooks.json');
+  }
+  expect(report.status).toBe('failed');
+});
+
+it('reports a manifest-named hooks document that is missing as AB6027', async () => {
+  const pluginDirectory = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: './hooks/hooks-cursor.json', name: 'fixture-plugin' },
+    'hooks/hooks.json': cursorFormatHooks,
+  });
+
+  const report = await validateCursorPlugin({
+    pluginDirectory,
+    run: versionRunner().run,
+    target: 'cursor',
+  });
+
+  expect(report.diagnostics.filter((entry) => entry.code === 'AB6027')).toEqual([
+    expect.objectContaining({
+      message: '.cursor-plugin/plugin.json declares hooks at "./hooks/hooks-cursor.json" but hooks/hooks-cursor.json is missing from the Cursor bundle; Cursor would load no hooks for it.',
+      severity: 'error',
+    }),
+  ]);
+  expect(report.status).toBe('failed');
+});
+
+it('rejects a manifest hooks path that leaves the plugin root', async () => {
+  for (const declared of ['../outside/hooks.json', '/etc/hooks.json']) {
+    const pluginDirectory = await createBundle({
+      '.cursor-plugin/plugin.json': { hooks: declared, name: 'fixture-plugin' },
+    });
+
+    const report = await validateCursorPlugin({
+      pluginDirectory,
+      run: versionRunner().run,
+      target: 'cursor',
+    });
+
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB6027')).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(`declares hooks at ${JSON.stringify(declared)}, which does not resolve inside the plugin root`),
+        severity: 'error',
+      }),
+    ]);
+    expect(report.status).toBe('failed');
+  }
+});
+
+it('validates an inline manifest hooks object with the Cursor hooks schema and token rules', async () => {
+  const valid = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: cursorFormatHooks, name: 'fixture-plugin' },
+    'hooks/hooks.json': claudeFormatHooks,
+  });
+  const invalid = await createBundle({
+    '.cursor-plugin/plugin.json': { hooks: claudeFormatHooks, name: 'fixture-plugin' },
+  });
+
+  const validReport = await validateCursorPlugin({ pluginDirectory: valid, run: versionRunner().run, target: 'cursor' });
+  expect(validReport.diagnostics).toEqual([expect.objectContaining({ code: 'AB6026', severity: 'info' })]);
+  expect(validReport.status).toBe('passed');
+
+  const invalidReport = await validateCursorPlugin({ pluginDirectory: invalid, run: versionRunner().run, target: 'cursor' });
+  const errors = invalidReport.diagnostics.filter((entry) => entry.code === 'AB6027');
+  expect(errors.length).toBeGreaterThan(0);
+  for (const entry of errors) expect(entry.message).toContain('.cursor-plugin/plugin.json#/hooks');
+  expect(invalidReport.status).toBe('failed');
+});
+
+it('falls back to hooks/hooks.json folder discovery only when the manifest declares no hooks field', async () => {
+  const discovered = await createBundle({
+    '.cursor-plugin/plugin.json': { name: 'fixture-plugin' },
+    'hooks/hooks.json': claudeFormatHooks,
+  });
+
+  const report = await validateCursorPlugin({ pluginDirectory: discovered, run: versionRunner().run, target: 'cursor' });
+
+  expect(report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'AB6027', message: expect.stringContaining('hooks/hooks.json/hooks') }),
+  ]));
+  expect(report.status).toBe('failed');
+});
+
 it('rejects malformed marketplace bytes under the pinned schema', async () => {
   const pluginDirectory = await createBundle({
     '.cursor-plugin/marketplace.json': {

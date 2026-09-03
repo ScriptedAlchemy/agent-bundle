@@ -63,7 +63,7 @@ beforeAll(async () => {
           "    version: '1.0.0',",
           '  },',
           '  routes: { mcpCommands: true },',
-          "  targets: ['claude', 'codex', 'cursor'],",
+          "  targets: ['claude', 'codex', 'cursor', 'plugin'],",
           '};',
           '',
         ].join('\n'));
@@ -242,6 +242,7 @@ it('accepts an installed artifact whose manifest declares no resource components
         claude: join(artifactRoot, 'claude'),
         codex: join(artifactRoot, 'codex'),
         cursor: join(artifactRoot, 'cursor'),
+        plugin: join(artifactRoot, 'plugin'),
       }),
       cli: builtFixture().cli,
       root: cloneRoot,
@@ -439,6 +440,12 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
     proofLevel: proofLabel,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',
+    unifiedBundle: {
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: { AB6027: 0, AB7320: 0 },
+    },
   });
   expectHygienicReport(report);
 
