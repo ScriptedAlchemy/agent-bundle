@@ -1,0 +1,12 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "default",
+  "session_id": "session-claude-1",
+  "tool_input": {
+    "command": "rm -rf build",
+    "description": "Remove the build directory"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

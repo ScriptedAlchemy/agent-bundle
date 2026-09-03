@@ -454,3 +454,145 @@ it('projects compact/after as observation-only on supported hosts', async () => 
       .toThrow(/compact\/after is observation-only/u);
   }
 });
+
+it('projects permission/request decisions through the pinned PermissionRequest output contract', async () => {
+  const props = createCanonicalEventProps(
+    'permission/request',
+    {
+      cwd: '/workspace',
+      hook_event_name: 'PermissionRequest',
+      permission_mode: 'default',
+      session_id: 'session-1',
+      tool_input: { command: 'rm -rf build' },
+      tool_name: 'Bash',
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'PermissionRequest',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const routeInput = {
+    input: { canonical: props.canonical, native: props.native },
+    kind: 'event-route',
+    routeId: 'event:permission/request',
+  } as const;
+
+  const denied = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      { value: { outcome: 'deny', reason: 'Destructive command requires review.' } },
+    ),
+  }, routeInput);
+  for (const target of ['claude', 'codex']) {
+    expect(projectEventDocument(denied.document, 'permission/request', target, 'PermissionRequest')).toEqual({
+      hookSpecificOutput: {
+        decision: {
+          behavior: 'deny',
+          message: 'Destructive command requires review.',
+        },
+        hookEventName: 'PermissionRequest',
+      },
+    });
+  }
+
+  const allowed = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'continue' } }),
+  }, routeInput);
+  expect(projectEventDocument(allowed.document, 'permission/request', 'claude', 'PermissionRequest')).toEqual({
+    hookSpecificOutput: {
+      decision: { behavior: 'allow' },
+      hookEventName: 'PermissionRequest',
+    },
+  });
+
+  const observed = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, routeInput);
+  expect(projectEventDocument(observed.document, 'permission/request', 'codex', 'PermissionRequest')).toBeUndefined();
+
+  const rewritten = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { updatedInput: { command: 'rm -r build' } } }),
+  }, routeInput);
+  expect(() => projectEventDocument(rewritten.document, 'permission/request', 'claude', 'PermissionRequest'))
+    .toThrow(/input rewrite is reserved upstream and fails closed/u);
+
+  const contextual = await renderRoute({
+    default: async () => createElement(
+      Agent.Result,
+      null,
+      createElement(Agent.Context, null, 'Context is not part of this contract.'),
+    ),
+  }, routeInput);
+  expect(() => projectEventDocument(contextual.document, 'permission/request', 'claude', 'PermissionRequest'))
+    .toThrow(/no additional-context channel/u);
+});
+
+it('projects permission/denied and stop/failure as observation-only Claude families', async () => {
+  const deniedProps = createCanonicalEventProps(
+    'permission/denied',
+    {
+      cwd: '/workspace',
+      hook_event_name: 'PermissionDenied',
+      permission_decision: 'deny',
+      permission_decision_reason: 'Auto mode denied the command.',
+      session_id: 'session-1',
+      tool_input: { command: 'rm -rf build' },
+      tool_name: 'Bash',
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'PermissionDenied',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const deniedInput = {
+    input: { canonical: deniedProps.canonical, native: deniedProps.native },
+    kind: 'event-route',
+    routeId: 'event:permission/denied',
+  } as const;
+  const deniedObserved = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, deniedInput);
+  expect(projectEventDocument(deniedObserved.document, 'permission/denied', 'claude', 'PermissionDenied')).toBeUndefined();
+  const deniedRejected = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Again.' } }),
+  }, deniedInput);
+  expect(() => projectEventDocument(deniedRejected.document, 'permission/denied', 'claude', 'PermissionDenied'))
+    .toThrow(/observes an already-denied call/u);
+  const deniedContextual = await renderRoute({
+    default: async () => createElement(Agent.Result, null, createElement(Agent.Context, null, 'Retry hint.')),
+  }, deniedInput);
+  expect(() => projectEventDocument(deniedContextual.document, 'permission/denied', 'claude', 'PermissionDenied'))
+    .toThrow(/retry signalling has no canonical vocabulary yet/u);
+
+  const failureProps = createCanonicalEventProps(
+    'stop/failure',
+    {
+      cwd: '/workspace',
+      error: 'API Error: 529 overloaded',
+      hook_event_name: 'StopFailure',
+      session_id: 'session-1',
+      stop_hook_active: false,
+      transcript_path: '/workspace/transcript.jsonl',
+    },
+    'claude',
+    'StopFailure',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const failureInput = {
+    input: { canonical: failureProps.canonical, native: failureProps.native },
+    kind: 'event-route',
+    routeId: 'event:stop/failure',
+  } as const;
+  const failureObserved = await renderRoute({
+    default: async () => createElement(Agent.Result),
+  }, failureInput);
+  expect(projectEventDocument(failureObserved.document, 'stop/failure', 'claude', 'StopFailure')).toBeUndefined();
+  const failureRejected = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Do not end.' } }),
+  }, failureInput);
+  expect(() => projectEventDocument(failureRejected.document, 'stop/failure', 'claude', 'StopFailure'))
+    .toThrow(/observes an API-error turn end/u);
+});

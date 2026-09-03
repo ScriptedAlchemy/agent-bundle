@@ -1,0 +1,13 @@
+{
+  "cwd": "/workspace",
+  "hook_event_name": "PermissionDenied",
+  "permission_decision": "deny",
+  "permission_decision_reason": "Auto mode denied the destructive command.",
+  "session_id": "session-claude-1",
+  "tool_input": {
+    "command": "rm -rf build",
+    "description": "Remove the build directory"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

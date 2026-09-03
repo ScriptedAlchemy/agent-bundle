@@ -266,3 +266,82 @@ it('validates failure and compaction envelopes without flattening host differenc
     target: 'claude',
   })).toThrow(/native compact_summary must be a string/u);
 });
+
+it('validates permission and stop-failure envelopes against the pinned host contracts', () => {
+  const claudeRequest = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionRequest',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeRequest, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toBe(claudeRequest);
+  expect(() => validateNativeEventEnvelope({ ...claudeRequest, permission_mode: 'sometimes' }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toThrow(/permission_mode/u);
+
+  const codexRequest = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionRequest',
+    model: 'gpt-5-codex',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_input: { command: 'apply_patch' },
+    tool_name: 'apply_patch',
+    transcript_path: null,
+    turn_id: 'turn-1',
+  };
+  expect(validateNativeEventEnvelope(codexRequest, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toBe(codexRequest);
+  expect(() => validateNativeEventEnvelope({ ...codexRequest, turn_id: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toThrow(/turn_id/u);
+
+  const claudeDenied = {
+    cwd: '/workspace',
+    hook_event_name: 'PermissionDenied',
+    permission_decision: 'deny',
+    permission_decision_reason: 'Auto mode denied the command.',
+    session_id: 'session-1',
+    tool_input: { command: 'rm -rf build' },
+    tool_name: 'Bash',
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeDenied, {
+    canonicalEvent: 'permission/denied',
+    nativeEvent: 'PermissionDenied',
+    target: 'claude',
+  })).toBe(claudeDenied);
+
+  const claudeStopFailure = {
+    cwd: '/workspace',
+    error: 'API Error: 529 overloaded',
+    hook_event_name: 'StopFailure',
+    session_id: 'session-1',
+    stop_hook_active: false,
+    transcript_path: '/workspace/transcript.jsonl',
+  };
+  expect(validateNativeEventEnvelope(claudeStopFailure, {
+    canonicalEvent: 'stop/failure',
+    nativeEvent: 'StopFailure',
+    target: 'claude',
+  })).toBe(claudeStopFailure);
+  expect(() => validateNativeEventEnvelope({ ...claudeStopFailure, error: 42 }, {
+    canonicalEvent: 'stop/failure',
+    nativeEvent: 'StopFailure',
+    target: 'claude',
+  })).toThrow(/error/u);
+});

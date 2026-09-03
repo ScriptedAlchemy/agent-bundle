@@ -225,6 +225,36 @@ export const createNativeEventStarter = (
               : {}),
             stop_hook_active: false,
           });
+    case 'permission/request':
+      return deepFreeze({
+        ...base,
+        tool_input: toolInput,
+        tool_name: toolName,
+        ...(target === 'codex'
+          ? {
+              agent_id: 'lifecycle-replay-agent',
+              agent_type: 'general-purpose',
+              model: 'default',
+              permission_mode: 'default',
+              turn_id: 'lifecycle-replay-turn',
+            }
+          : { permission_mode: 'default' }),
+      });
+    case 'permission/denied':
+      return deepFreeze({
+        ...base,
+        permission_decision: 'deny',
+        permission_decision_reason: 'Lifecycle replay permission denial.',
+        tool_input: toolInput,
+        tool_name: toolName,
+      });
+    case 'stop/failure':
+      return deepFreeze({
+        ...base,
+        error: 'Lifecycle replay API failure.',
+        last_assistant_message: null,
+        stop_hook_active: false,
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {

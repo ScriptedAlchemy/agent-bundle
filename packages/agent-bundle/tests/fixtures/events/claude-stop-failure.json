@@ -1,0 +1,9 @@
+{
+  "cwd": "/workspace",
+  "error": "API Error: 529 overloaded",
+  "hook_event_name": "StopFailure",
+  "last_assistant_message": null,
+  "session_id": "session-claude-1",
+  "stop_hook_active": false,
+  "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

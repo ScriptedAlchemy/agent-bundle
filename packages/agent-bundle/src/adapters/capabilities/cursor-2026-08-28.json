@@ -30,6 +30,14 @@
         "state": "unavailable"
       },
       "compact/before": { "nativeEvent": "preCompact", "state": "supported" },
+      "permission/denied": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no permission-denied event.",
+        "state": "unavailable"
+      },
+      "permission/request": {
+        "reason": "retrieved 2026-09-02: https://cursor.com/docs/hooks documents no standalone permission-request event; pre-tool permission control is beforeShellExecution/beforeMCPExecution and is not inferred as this family per #258.",
+        "state": "unavailable"
+      },
       "prompt/submit": { "nativeEvent": "beforeSubmitPrompt", "state": "supported" },
       "session/end": {
         "availability": {
@@ -44,6 +52,10 @@
       },
       "session/start": { "nativeEvent": "sessionStart", "state": "supported" },
       "stop": { "nativeEvent": "stop", "state": "supported" },
+      "stop/failure": {
+        "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no stop-failure event.",
+        "state": "unavailable"
+      },
       "tool/after": { "nativeEvent": "postToolUse", "state": "supported" },
       "tool/before": { "nativeEvent": "preToolUse", "state": "supported" },
       "tool/failure": { "nativeEvent": "postToolUseFailure", "state": "supported" },
