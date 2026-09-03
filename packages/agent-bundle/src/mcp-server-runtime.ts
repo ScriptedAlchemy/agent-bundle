@@ -576,6 +576,7 @@ const startEventRuntime = async (
       event,
       target,
       nativeEvent,
+      props.native,
     ));
     },
     status: () => ({

@@ -1323,6 +1323,15 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       stderr: 'Agent Bundle hook error: native subagentStop status is invalid\n',
       stdout: '',
     });
+    // followup_message is consumed only when status is "completed"; a denial
+    // on an errored or aborted subagent fails instead of emitting ignored output.
+    for (const status of ['error', 'aborted']) {
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), { ...stopInput, status })).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported "${status}"\n`,
+        stdout: '',
+      });
+    }
     // Every documented field except git_branch is mandatory: a malformed
     // envelope must fail closed before the handler runs with undefined fields.
     const { git_branch: _gitBranch, ...startWithoutGitBranch } = startInput;

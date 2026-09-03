@@ -436,11 +436,18 @@ const appendContext = (node: AgentDocumentNode, contexts: string[]): void => {
   }
 };
 
+/**
+ * Projects a rendered event document to the host's native output. Pass the
+ * validated native envelope when the host's output contract depends on input
+ * state (Cursor consumes `subagentStop.followup_message` only for a completed
+ * subagent); the production callers always do.
+ */
 export const projectEventDocument = (
   document: AgentDocument,
   event: CanonicalAgentEvent,
   target: string,
   nativeEvent: string,
+  nativeInput?: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> | undefined => {
   if (target === 'plugin') {
     throw new TypeError('Composite plugin event projection must resolve the invoking host before projecting output.');
@@ -505,9 +512,16 @@ export const projectEventDocument = (
       if (additionalContext !== undefined) {
         throw new TypeError('Cursor subagentStop has no additional-context channel; only followup_message is documented.');
       }
-      return parsedValue?.outcome === 'deny'
-        ? Object.freeze({ followup_message: requireDenyReason() })
-        : undefined;
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('agent/stop reason is only valid when outcome is deny.');
+      }
+      if (parsedValue?.outcome !== 'deny') return undefined;
+      if (nativeInput !== undefined && nativeInput.status !== 'completed') {
+        throw new TypeError(
+          `Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported ${JSON.stringify(nativeInput.status)}, so the continuation would be ignored.`,
+        );
+      }
+      return Object.freeze({ followup_message: requireDenyReason() });
     }
     if (parsedValue?.outcome === 'deny') {
       return Object.freeze({ decision: 'block', reason: requireDenyReason() });

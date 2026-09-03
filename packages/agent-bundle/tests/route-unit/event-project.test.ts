@@ -218,13 +218,28 @@ it('projects the Cursor subagent lifecycle through its documented permission and
   const continued = await renderRoute({
     default: async () => createElement(Agent.Result, { value: { outcome: 'deny', reason: 'Run one more focused pass.' } }),
   }, stopInput);
-  expect(projectEventDocument(continued.document, 'agent/stop', 'cursor', 'subagentStop')).toEqual({
+  expect(projectEventDocument(continued.document, 'agent/stop', 'cursor', 'subagentStop', stopNative)).toEqual({
     followup_message: 'Run one more focused pass.',
   });
+  // Cursor consumes followup_message only when status is "completed"; a
+  // continuation requested for an errored or aborted subagent fails closed
+  // instead of emitting output Cursor would silently ignore.
+  for (const status of ['error', 'aborted']) {
+    expect(() => projectEventDocument(continued.document, 'agent/stop', 'cursor', 'subagentStop', { ...stopNative, status }))
+      .toThrow(new RegExp(`consumes followup_message only when status is "completed"; this subagent reported "${status}"`, 'u'));
+  }
   const observed = await renderRoute({
     default: async () => createElement(Agent.Result),
   }, stopInput);
-  expect(projectEventDocument(observed.document, 'agent/stop', 'cursor', 'subagentStop')).toBeUndefined();
+  expect(projectEventDocument(observed.document, 'agent/stop', 'cursor', 'subagentStop', stopNative)).toBeUndefined();
+  expect(projectEventDocument(observed.document, 'agent/stop', 'cursor', 'subagentStop', { ...stopNative, status: 'error' })).toBeUndefined();
+  // A reason without a deny outcome is invalid on both published Cursor
+  // handler paths; the route path must not swallow it.
+  const reasonWithoutDeny = await renderRoute({
+    default: async () => createElement(Agent.Result, { value: { outcome: 'continue', reason: 'Looks fine.' } }),
+  }, stopInput);
+  expect(() => projectEventDocument(reasonWithoutDeny.document, 'agent/stop', 'cursor', 'subagentStop', stopNative))
+    .toThrow(/agent\/stop reason is only valid when outcome is deny/u);
   const stopContext = await renderRoute({
     default: async () => createElement(Agent.Result, null, createElement(Agent.Context, null, 'Check the final result.')),
   }, stopInput);
