@@ -169,11 +169,39 @@ promote selected durable outcome/assertion evidence into a draft eval case. The 
 concise events and raw stdout/stderr/protocol streams by producer: normalization, build, diagnostics,
 MCP, hook, host trial, and grader.
 
-MCP sessions bind `{ epochId, target, serverName }` when opened and never move to a new epoch
-automatically. Use **Restart MCP session** to respawn that generated server on its selected epoch;
-open a new session to use a newly published epoch. Compatible MCP Apps preview through the same bound
-session. A host may need an explicit MCP reload when a server's catalog changes —
-`notifications/tools/list_changed` is not UI HMR.
+Workbench MCP sessions bind `{ epochId, target, serverName }` when opened and never move to a new
+epoch automatically. Use **Restart MCP session** to respawn that generated server on its selected
+epoch; open a new session to use a newly published epoch. Compatible MCP Apps preview through the
+same bound session.
+
+### Live host MCP proxy
+
+During development, a host can keep one stdio MCP process connected while `agent-bundle dev`
+rebuilds the generated server behind it. Configure the host's MCP server command as:
+
+```json
+{
+  "command": "agent-bundle",
+  "args": [
+    "dev",
+    "proxy",
+    "--root",
+    "/absolute/path/to/plugin",
+    "--server",
+    "tools"
+  ]
+}
+```
+
+The proxy discovers the loopback server through the project's development lock and connects to the
+stable Streamable HTTP endpoint at `/mcp/host/<serverName>`. `--target` defaults to `portable`;
+`--url http://127.0.0.1:<port>` overrides discovery. The endpoint is intentionally unauthenticated
+because the development server binds only to loopback and is not exposed beyond the local machine. Successful
+rebuilds keep the stdio connection open, route new calls to the active epoch, allow admitted calls
+to finish against their original epoch, and forward MCP catalog change notifications. If the epoch
+or development server disappears, the proxy fails closed with an MCP error and an `AB8024` or
+`AB8025` diagnostic. A generated server that crashes is not silently respawned within the same
+epoch; calls remain failed until a successful rebuild swaps in a newly primed epoch session.
 
 ### Optional Agent API
 

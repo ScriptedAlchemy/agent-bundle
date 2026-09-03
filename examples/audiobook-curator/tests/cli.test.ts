@@ -56,6 +56,18 @@ describe('audiobook-curator routed CLI', () => {
     expect(projectedCommands).toHaveLength(16);
     expect(projectedCommands.every((command) =>
       command.path[0] === 'curator' && command.rendered)).toBe(true);
+    expect(projectedCommands
+      .filter((command) => command.exitCode === 'result')
+      .map((command) => command.path.join(' '))
+      .sort()).toEqual([
+        'curator audit_audiobook',
+        'curator audit_library',
+        'curator identify_audible_sample',
+        'curator inventory_sources',
+        'curator search_audible',
+        'curator verify_audible_sample',
+        'curator verify_with_whisper',
+      ]);
 
     // inspect [--max-files N] <root>
     const inspect = byName.get('inspect')!;

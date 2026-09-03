@@ -11,6 +11,7 @@ const operation = evidenceOperations(defaultEvidenceOperations).whisperVerify;
 export const config = {
   annotations: { readOnlyHint: false },
   description: 'Extract and transcribe distributed PCM windows for human language, story, and narrator review.',
+  exitCode: 'result',
 };
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;

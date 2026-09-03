@@ -117,11 +117,10 @@ export const generatedInstallBinEntrySource = (options: {
   readonly hosts: readonly ('claude' | 'codex' | 'cursor')[];
   readonly name: string;
 }): string => [
-  "import { fileURLToPath } from 'node:url';",
   `import { runGeneratedInstallProcess } from ${JSON.stringify(installEntryRuntimeSpecifier)};`,
   '',
   'process.exitCode = await runGeneratedInstallProcess(process.argv.slice(2), Object.freeze({',
-  `  artifactRoot: fileURLToPath(new URL(${JSON.stringify(options.artifactRelativeUrl)}, import.meta.url)),`,
+  `  artifactRoot: new URL(${JSON.stringify(options.artifactRelativeUrl)}, import.meta.url),`,
   `  hosts: Object.freeze(${stableJson(options.hosts)}),`,
   `  name: ${JSON.stringify(options.name)},`,
   '}));',
@@ -350,6 +349,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
 };
 
 export interface GeneratedRenderedRouteWorkerOptions {
+  readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly state?: NormalizedStateDefinition;
 }
@@ -362,78 +362,109 @@ export interface GeneratedRenderedRouteWorkerOptions {
  */
 export const generatedRenderedRouteWorkerSource = (
   options: GeneratedRenderedRouteWorkerOptions,
-): string => [
-  "import { parentPort } from 'node:worker_threads';",
-  "import { createElement } from 'react';",
-  "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-  "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-  ...generatedStateImports(options.state, 'cwd'),
-  ...routeImports(options.routes),
-  '',
-  ...generatedStateOwner(options.state, 'cwd'),
-  '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
-  'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
-  "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
-  '// Machine output owns the parent stdout; anything a route logs goes to stderr.',
-  'process.stdout.write = process.stderr.write.bind(process.stderr);',
-  'const routes = Object.freeze({',
-  ...options.routes.map((route, index) =>
-    `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
-  '});',
-  'const requests = new Map();',
-  '',
-  'const render = async (message) => {',
-  '  const route = routes[message.routeId];',
-  "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
-  '  const controller = new AbortController();',
-  '  requests.set(message.id, controller);',
-  '  try {',
-  '    const cwd = process.cwd();',
-  ...(options.state === undefined
-    ? []
-    : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
-  ...(options.state === undefined ? [] : ['    try {']),
-  '    await runAgentRequest({',
-  '      capabilities: {',
-  '        command: unavailable(),',
-  '        filesystem: unavailable(),',
-  '        network: unavailable(),',
-  "        projectRoot: available({ root: cwd }, 'derived'),",
-  '      },',
-  "      host: unavailable('unsupported-surface'),",
-  '      invocation: message.request,',
-  ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
-  "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
-  '      signal: controller.signal,',
-  ...(options.state === undefined ? [] : ['      state: bindings.state,']),
-  "      workspace: available({ root: cwd }, 'derived'),",
-  '    }, async () => {',
-  '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
-  '      const reader = flight.getReader();',
-  '      while (true) {',
-  '        const next = await reader.read();',
-  '        if (next.done) break;',
-  '        const bytes = next.value;',
-  "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
-  '      }',
-  '    });',
-  ...(options.state === undefined
-    ? []
-    : ['    } finally {', '      await bindings.close();', '    }']),
-  "    parentPort.postMessage({ id: message.id, type: 'end' });",
-  '  } catch (error) {',
-  "    parentPort.postMessage({ id: message.id, message: error instanceof Error ? error.message : String(error), type: 'error' });",
-  '  } finally {',
-  '    requests.delete(message.id);',
-  '  }',
-  '};',
-  '',
-  "parentPort.on('message', (message) => {",
-  "  if (message.type === 'cancel') { requests.get(message.id)?.abort(); return; }",
-  "  if (message.type === 'render') void render(message);",
-  '});',
-  '',
-].join('\n');
+): string => {
+  const providers = orderedProviders(options.providers ?? []);
+  return [
+    "import { parentPort } from 'node:worker_threads';",
+    "import { createElement } from 'react';",
+    "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
+    "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...generatedStateImports(options.state, 'cwd'),
+    ...routeImports(options.routes),
+    ...providerImports(providers),
+    '',
+    ...generatedStateOwner(options.state, 'cwd'),
+    '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
+    'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
+    "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
+    '// Machine output owns the parent stdout; anything a route logs goes to stderr.',
+    'process.stdout.write = process.stderr.write.bind(process.stderr);',
+    'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
+    ...(providers.length === 0
+      ? []
+      : [
+        'const providers = Object.freeze([',
+        ...providerRecords(providers),
+        ']);',
+      ]),
+    'const routes = Object.freeze({',
+    ...options.routes.map((route, index) =>
+      `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+    '});',
+    'const requests = new Map();',
+    '',
+    'const render = async (message) => {',
+    '  const route = routes[message.routeId];',
+    "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
+    '  const controller = new AbortController();',
+    '  requests.set(message.id, controller);',
+    '  processLifetime.hits += 1;',
+    '  try {',
+    '    const cwd = process.cwd();',
+    ...(options.state === undefined
+      ? []
+      : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
+    ...(options.state === undefined ? [] : ['    try {']),
+    ...(providers.length === 0
+      ? []
+      : [
+        '    const providerValues = { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } };',
+        '    for (const provider of providers) {',
+        '      if (typeof provider.module.default !== \'function\') {',
+        '        throw new TypeError(`Context provider "${provider.key}" (${provider.source}) must default-export a factory.`);',
+        '      }',
+        '      try {',
+        '        providerValues[provider.key] = await provider.module.default({ invocation: message.invocation, signal: controller.signal });',
+        '      } catch (error) {',
+        '        throw new Error(`Context provider "${provider.key}" (${provider.source}) failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });',
+        '      }',
+        '    }',
+      ]),
+    '    await runAgentRequest({',
+    '      capabilities: {',
+    '        command: unavailable(),',
+    '        filesystem: unavailable(),',
+    '        network: unavailable(),',
+    "        projectRoot: available({ root: cwd }, 'derived'),",
+    '      },',
+    "      host: unavailable('unsupported-surface'),",
+    '      invocation: message.request,',
+    ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
+    ...(providers.length === 0
+      ? ['      providers: { processLifetime: { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid } },']
+      : ['      providers: providerValues,']),
+    '      signal: controller.signal,',
+    ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    "      workspace: available({ root: cwd }, 'derived'),",
+    '    }, async () => {',
+    '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
+    '      const reader = flight.getReader();',
+    '      while (true) {',
+    '        const next = await reader.read();',
+    '        if (next.done) break;',
+    '        const bytes = next.value;',
+    "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
+    '      }',
+    '    });',
+    ...(options.state === undefined
+      ? []
+      : ['    } finally {', '      await bindings.close();', '    }']),
+    "    parentPort.postMessage({ id: message.id, type: 'end' });",
+    '  } catch (error) {',
+    "    parentPort.postMessage({ id: message.id, message: error instanceof Error ? error.message : String(error), type: 'error' });",
+    '  } finally {',
+    '    requests.delete(message.id);',
+    '  }',
+    '};',
+    '',
+    "parentPort.on('message', (message) => {",
+    "  if (message.type === 'cancel') { requests.get(message.id)?.abort(); return; }",
+    "  if (message.type === 'render') void render(message);",
+    '});',
+    '',
+  ].join('\n');
+};
 
 export interface GeneratedRenderedScriptEntryOptions {
   readonly name: string;

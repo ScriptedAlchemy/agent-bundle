@@ -45,6 +45,7 @@ export interface ProjectServiceLogger {
 }
 
 export interface ProjectServiceOptions {
+  readonly artifactDistPathDefault?: string;
   readonly configPath?: string;
   readonly includeDevRuntime?: boolean;
   readonly logger?: ProjectServiceLogger;
@@ -56,7 +57,7 @@ export interface ProjectServiceOptions {
 }
 
 export interface PreparedProject {
-  /** The project-relative artifact output directory: config `output.distPath` or the `dist` default. */
+  /** The project-relative artifact output directory: config `output.distPath` or the operation's default. */
   readonly artifactDistPath: string;
   readonly configPath: string;
   /** The validated development-only Agent API flag from the prepared configuration. */
@@ -721,7 +722,10 @@ export class ProjectService {
         targets: this.#options.targets,
       });
       devAgentApiEnabled = agentApiEnabled(loaded.config);
-      artifactDistPath = configuredArtifactDistPath(loaded.config);
+      artifactDistPath = configuredArtifactDistPath(
+        loaded.config,
+        this.#options.artifactDistPathDefault,
+      );
       const artifactOutputRoots = await resolveOutputRoots(
         requestedRoot,
         root,

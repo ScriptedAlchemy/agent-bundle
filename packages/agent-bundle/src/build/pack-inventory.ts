@@ -124,8 +124,8 @@ export const packInventoryDiagnostics = async (options: {
     ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
     ...manifest.targets.flatMap((target) =>
       installSurfaceRequirements(target.name).map((path) => `${artifactPrefix}/${target.name}/${path}`)),
+    'README.md',
   ]);
-  if (await exists(join(projectRoot, 'README.md'))) expected.add('README.md');
 
   const diagnostics: Diagnostic[] = [];
   const missing = [...expected].filter((path) => !packed.has(path)).sort((left, right) => left.localeCompare(right));

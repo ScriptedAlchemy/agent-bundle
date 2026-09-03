@@ -15,6 +15,7 @@ const operation = discoveryOperations(defaultDiscoveryOperations).libraryAudit;
 export const config = {
   annotations: { readOnlyHint: false },
   description: 'Audit audiobook library metadata, duplicates, and multipart evidence without deletion advice.',
+  exitCode: 'result',
 };
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;

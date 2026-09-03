@@ -431,7 +431,7 @@ const metadata = Object.freeze({
 const evidence = capabilityEvidence(claudeName, metadata);
 const distributionPolicy = capabilityTable.plugin.distributionPolicy;
 
-const artifactValidation = deepFreeze({
+export const claudeArtifactValidation = deepFreeze({
   documents: [
     Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
     Object.freeze({ path: claudeArtifactPaths.lsp, required: false, schema: 'lsp' }),
@@ -3135,7 +3135,7 @@ const artifactLayout: TargetArtifactLayout = Object.freeze({
 });
 
 export const claudeAdapter: TargetAdapter = Object.freeze({
-  artifactValidation,
+  artifactValidation: claudeArtifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),

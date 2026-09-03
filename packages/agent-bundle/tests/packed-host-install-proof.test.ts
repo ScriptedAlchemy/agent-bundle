@@ -64,9 +64,10 @@ beforeAll(async () => {
       fixturePackageVersion = packageDocument.version;
       delete packageDocument.private;
       packageDocument.bin = { [pluginName]: `./dist/bin/${pluginName}.js` };
-      packageDocument.files = ['artifact', 'dist'];
+      packageDocument.files = ['artifact', 'dist', 'README.md'];
       await Promise.all([
         writeFile(packagePath, `${JSON.stringify(packageDocument, null, 2)}\n`),
+        writeFile(join(projectRoot, 'README.md'), '# Host install proof fixture\n'),
         writeFile(join(projectRoot, 'src', 'index.ts'), 'export const fixture = true;\n'),
       ]);
       const configPath = join(projectRoot, 'agent-bundle.config.ts');

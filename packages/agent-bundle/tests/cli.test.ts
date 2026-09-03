@@ -139,6 +139,39 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   return { cli: join(root, 'node_modules', '.bin', 'agent-bundle'), root };
 };
 
+it('parses the nested development proxy command', async () => {
+  let received: Parameters<NonNullable<CliDependencies['runHostMcpProxy']>>[0] | undefined;
+  const result = await runSourceCliWithOutput([
+    'dev',
+    'proxy',
+    '--root',
+    '/tmp/plugin project',
+    '--server',
+    'fixture',
+    '--url',
+    'http://127.0.0.1:4312',
+  ], {
+    runHostMcpProxy: async (options) => {
+      received = options;
+      return 0;
+    },
+  });
+
+  expect(result).toMatchObject({ code: 0, stderr: '', stdout: '' });
+  expect(received).toMatchObject({
+    projectRoot: '/tmp/plugin project',
+    serverName: 'fixture',
+    url: 'http://127.0.0.1:4312',
+  });
+});
+
+it('requires a server name for the nested development proxy command', async () => {
+  const result = await runSourceCliWithOutput(['dev', 'proxy', '--root', '/tmp/plugin']);
+
+  expect(result.code).toBe(2);
+  expect(result.stderr).toContain("required option '--server <server>' not specified");
+});
+
 it('builds a selected target through the built executable from a path containing spaces', async () => {
   await buildCliPackage();
   const project = await createCliProject();
@@ -341,7 +374,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
 
     await writeFile(join(project.root, 'agent-bundle.config.ts'), 'this source must not be loaded\n');
     const artifactValidation = await runCli(project.root, [
-      'validate', '--root', project.root, '--artifact', project.output, '--json',
+      'validate', '--root', project.root, '--artifact', project.output, '--no-host-validation', '--json',
     ]);
     expect(artifactValidation).toMatchObject({ code: 0, stderr: '' });
     const validationDocument = JSON.parse(artifactValidation.stdout) as {
@@ -360,7 +393,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     expect(validationDocument.diagnostics).toEqual(validationDocument.hostValidation[0]!.diagnostics);
 
     const humanValidation = await runCli(project.root, [
-      'validate', '--root', project.root, '--artifact', project.output,
+      'validate', '--root', project.root, '--artifact', project.output, '--no-host-validation',
     ]);
     expect(humanValidation).toMatchObject({ code: 0, stderr: '' });
     expect(humanValidation.stdout).toContain('Validation succeeded');

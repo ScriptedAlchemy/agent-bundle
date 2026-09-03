@@ -234,16 +234,20 @@ it('uses only an installed tarball after source deletion', async () => {
         readonly target: string;
       }[];
     };
-    expect(validationDocument.hostValidation.map((report) => report.target).sort())
-      .toEqual(['claude', 'codex']);
-    for (const report of validationDocument.hostValidation) {
-      expect(report.host).toBe(report.target);
-      expect(['passed', 'unavailable', 'warnings']).toContain(report.status);
-      expect(report.diagnostics.every((diagnostic) => diagnostic.severity !== 'error')).toBe(true);
+    expect(validationDocument.hostValidation.map((report) => report.host).sort()).toEqual(['claude', 'codex']);
+    for (const host of ['claude', 'codex'] as const) {
+      const report = validationDocument.hostValidation.find((candidate) => candidate.host === host)!;
+      expect(report.target).toBe(host);
+      expect(report.diagnostics.every((diagnostic) => diagnostic.severity === 'info')).toBe(true);
+      if (host === 'claude' && report.status === 'passed') {
+        expect(report.diagnostics).toEqual([]);
+      }
+      if (report.status === 'unavailable') expect(report.diagnostics.length).toBeGreaterThan(0);
     }
-    expect(validationDocument.diagnostics).toEqual(
-      validationDocument.hostValidation.flatMap((report) => report.diagnostics),
-    );
+    const hostDiagnosticCodes = validationDocument.hostValidation
+      .flatMap((report) => report.diagnostics.map((diagnostic) => diagnostic.code))
+      .sort();
+    expect(validationDocument.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual(hostDiagnosticCodes);
 
     const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [

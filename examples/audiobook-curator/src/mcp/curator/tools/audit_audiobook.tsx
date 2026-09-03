@@ -13,6 +13,7 @@ const operation = outputOperations(defaultOutputOperations).audit;
 export const config = {
   annotations: { readOnlyHint: false },
   description: 'Validate chapter structure, optional conversion mapping, file/audio hashes, probe facts, and optional full decode.',
+  exitCode: 'result',
 };
 export const inputSchema = operation.inputSchema;
 export const resultSchema = operation.resultSchema;

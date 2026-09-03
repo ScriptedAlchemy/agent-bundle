@@ -397,6 +397,25 @@ describe('compiled command graph', () => {
     expect(Object.isFrozen(graph.cli!.commands![0]!.mcp)).toBe(true);
   });
 
+  it('preserves a projected MCP tool result exit-code policy', async () => {
+    const root = await createRoot();
+    await writeTree(root, {
+      'src/mcp/alpha/tools/audit.tsx': toolModule(
+        "{ annotations: { readOnlyHint: true }, exitCode: 'result' }",
+      ),
+    });
+
+    const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+    expect(graph.diagnostics).toEqual([]);
+    expect(graph.cli?.commands).toEqual([
+      expect.objectContaining({
+        exitCode: 'result',
+        routeId: 'tool:alpha/audit',
+      }),
+    ]);
+  });
+
   it('selects projected tools with literal-star patterns and reports every unmatched pattern', async () => {
     const root = await createRoot();
     await writeTree(root, {
