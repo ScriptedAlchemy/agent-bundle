@@ -8,10 +8,17 @@
       "Top-level and author objects are closed; author admits only the documented name, email, and url fields.",
       "Documented URL and email fields use JSON Schema uri and email formats, and authored discovery strings must be nonempty.",
       "Component paths must begin with ./ and must not contain a parent-directory segment so they remain inside the plugin root.",
-      "Inline mcpServers values must be objects; inline hook documents use the same closed command-hook shape as hooks.schema.json."
+      "Inline mcpServers values must be objects; inline hook documents use the same closed command-hook shape as hooks.schema.json.",
+      "The closed interface object admits every documented install-surface field; brandColor requires a six-digit hexadecimal value, external links require http(s), asset paths must stay inside the plugin root, and screenshots must be ./assets/-relative PNG paths.",
+      "The apps pointer is const-locked to ./.app.json, and app.schema.json requires a nonempty apps map whose entries carry exactly one nonempty registered-connection id."
     ]
   },
   "schemas": {
+    "app.schema.json": {
+      "bytes": 608,
+      "sha256": "01c720a645e437bf0c4f8c26fd4cb5a13988e5649e4a8562ee23a1d4b7355c6a",
+      "url": "https://developers.openai.com/plugins/build/plugins"
+    },
     "hooks.schema.json": {
       "bytes": 1107,
       "sha256": "e42eef736997b9abb8f28b2ee9262f5c7b1f7f11d8289e9c25da8cc94a504eff",
@@ -28,8 +35,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 3894,
-      "sha256": "a3f24cd9f639b856937ae74fe967340bcce6966d131b0f45c628c78d9ac373f3",
+      "bytes": 4802,
+      "sha256": "6d8238718b8d74c59f5519d996c6a4c707ab5ddb02781dfef401333f3ca0b4a5",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

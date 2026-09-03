@@ -89,6 +89,98 @@ it('records an honest four-state rules row on every adapter', () => {
   ));
 });
 
+const codexParityCapabilityRows = {
+  interface: {
+    assets: 'interfaceAssets',
+    brandColor: 'interfaceBrandColor',
+    categoryCapabilities: 'interfaceCategoryCapabilities',
+    descriptions: 'interfaceDescriptions',
+    identity: 'interfaceIdentity',
+    starterPrompts: 'interfaceStarterPrompts',
+    urls: 'interfaceUrls',
+  },
+  apps: {
+    registeredMcpMappings: 'registeredMcpApps',
+  },
+  mcpServerPolicy: {
+    approvalModes: 'pluginMcpPolicyApprovalModes',
+    enabled: 'pluginMcpPolicyEnabled',
+    tools: 'pluginMcpPolicyTools',
+  },
+  hookEnvironment: {
+    claudePluginData: 'claudePluginDataEnvironment',
+    claudePluginRoot: 'claudePluginRootEnvironment',
+    pluginData: 'pluginDataEnvironment',
+    pluginRoot: 'pluginRootEnvironment',
+  },
+} as const;
+
+it('records dated Codex interface, apps, policy, and hook-environment capability rows', () => {
+  const registry = createDefaultRegistry();
+  const codex = registry.get('codex');
+  const unified = registry.get('plugin');
+  const expectedStates = {
+    apps: { registeredMcpMappings: 'supported' },
+    hookEnvironment: {
+      claudePluginData: 'supported',
+      claudePluginRoot: 'supported',
+      pluginData: 'supported',
+      pluginRoot: 'supported',
+    },
+    interface: {
+      assets: 'supported',
+      brandColor: 'supported',
+      categoryCapabilities: 'supported',
+      descriptions: 'supported',
+      identity: 'supported',
+      starterPrompts: 'supported',
+      urls: 'supported',
+    },
+    mcpServerPolicy: {
+      approvalModes: 'unavailable',
+      enabled: 'unavailable',
+      tools: 'unavailable',
+    },
+  } as const;
+
+  for (const [blockName, rows] of Object.entries(codexParityCapabilityRows)) {
+    const tableBlock = codexCapabilityTable.plugin[
+      blockName as keyof typeof codexParityCapabilityRows
+    ] as Readonly<Record<string, {
+      readonly evidence: readonly string[];
+      readonly reason?: string;
+      readonly state: string;
+    }>>;
+    expect(Object.keys(tableBlock).sort()).toEqual(Object.keys(rows).sort());
+    for (const [rowName, capability] of Object.entries(rows)) {
+      const row = tableBlock[rowName]!;
+      const expectedState = expectedStates[
+        blockName as keyof typeof expectedStates
+      ][rowName as never];
+      expect(row.state).toBe(expectedState);
+      expect(row.evidence.length).toBeGreaterThan(0);
+      expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+      expect(codex.capabilities[capability]).toMatchObject({
+        ...(row.state === 'unavailable' ? { reason: row.reason } : {
+          evidence: { observedVersion: '0.147.0', target: 'codex' },
+        }),
+        state: expectedState,
+      });
+      // The unified bundle intersects every Codex-only surface with an
+      // honest unavailable row for the hosts that lack it.
+      expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
+      expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
+      expect(registry.supports('plugin', capability)).toBe(false);
+    }
+  }
+
+  expect(codexCapabilityTable.tokens).toEqual({
+    pluginData: false,
+    pluginRoot: 'relative-with-plugin-root-cwd',
+    workspaceRoot: false,
+  });
+});
+
 it('reports Claude LSP support and honest unavailable composite coverage', () => {
   const registry = createDefaultRegistry();
 

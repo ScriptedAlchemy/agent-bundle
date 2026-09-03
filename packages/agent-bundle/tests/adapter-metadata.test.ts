@@ -67,9 +67,14 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.4.0',
+    adapterRevision: '1.5.0',
     observedVersion: '0.147.0',
     schemas: [
+      {
+        name: 'app',
+        revision: '0.147.0',
+        sha256: '01c720a645e437bf0c4f8c26fd4cb5a13988e5649e4a8562ee23a1d4b7355c6a',
+      },
       {
         name: 'hooks',
         revision: '0.147.0',
@@ -88,7 +93,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: 'a3f24cd9f639b856937ae74fe967340bcce6966d131b0f45c628c78d9ac373f3',
+        sha256: '6d8238718b8d74c59f5519d996c6a4c707ab5ddb02781dfef401333f3ca0b4a5',
       },
     ],
   });
@@ -164,7 +169,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.19.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.20.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {

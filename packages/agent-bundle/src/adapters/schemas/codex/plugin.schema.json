@@ -45,6 +45,7 @@
   },
   "additionalProperties": false,
   "properties": {
+    "apps": { "const": "./.app.json", "type": "string" },
     "author": {
       "additionalProperties": false,
       "properties": {
@@ -76,13 +77,21 @@
     "interface": {
       "additionalProperties": false,
       "properties": {
-        "capabilities": { "items": { "minLength": 1, "type": "string" }, "type": "array" },
-        "category": { "minLength": 1, "type": "string" },
-        "defaultPrompt": { "items": { "minLength": 1, "type": "string" }, "maxItems": 3, "minItems": 1, "type": "array" },
-        "developerName": { "minLength": 1, "type": "string" },
-        "displayName": { "minLength": 1, "type": "string" },
-        "longDescription": { "minLength": 1, "type": "string" },
-        "shortDescription": { "minLength": 1, "type": "string" }
+        "brandColor": { "pattern": "^#[0-9A-Fa-f]{6}$", "type": "string" },
+        "capabilities": { "items": { "minLength": 1, "pattern": "\\S", "type": "string" }, "type": "array" },
+        "category": { "minLength": 1, "pattern": "\\S", "type": "string" },
+        "composerIcon": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
+        "defaultPrompt": { "items": { "maxLength": 128, "minLength": 1, "pattern": "\\S", "type": "string" }, "maxItems": 3, "minItems": 1, "type": "array" },
+        "developerName": { "minLength": 1, "pattern": "\\S", "type": "string" },
+        "displayName": { "minLength": 1, "pattern": "\\S", "type": "string" },
+        "logo": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
+        "logoDark": { "pattern": "^\\./(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "type": "string" },
+        "longDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
+        "privacyPolicyURL": { "pattern": "^https?://", "type": "string" },
+        "screenshots": { "items": { "pattern": "^\\./assets/(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.png$", "type": "string" }, "type": "array" },
+        "shortDescription": { "minLength": 1, "pattern": "\\S", "type": "string" },
+        "termsOfServiceURL": { "pattern": "^https?://", "type": "string" },
+        "websiteURL": { "pattern": "^https?://", "type": "string" }
       },
       "required": ["displayName", "shortDescription", "longDescription", "developerName", "category", "capabilities", "defaultPrompt"],
       "type": "object"

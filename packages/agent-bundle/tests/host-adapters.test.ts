@@ -274,6 +274,22 @@ const withClaudeMarketplace = (
   },
 });
 
+const withCodexConfig = (
+  model: NormalizedPlugin,
+  value: Readonly<Record<string, unknown>>,
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    codex: {
+      id: 'extension:codex',
+      key: 'codex',
+      provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+      target: 'codex',
+      value,
+    },
+  },
+});
+
 const validateDocuments = async (
   target: 'codex' | 'claude',
   documents: Readonly<Record<string, string>>,
@@ -2596,6 +2612,129 @@ it('keeps Codex plugin and marketplace interface validator contracts separate', 
     developerName: 'review-tools',
   });
   expect(marketplace.interface).toEqual({ displayName: 'review-tools' });
+});
+
+it('emits every authored Codex interface field without changing marketplace metadata', () => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, {
+    interface: {
+      brandColor: '#10A37F',
+      capabilities: ['Interactive', 'Write'],
+      category: 'Developer Tools',
+      composerIcon: './assets/composer.png',
+      defaultPrompt: ['Review this change.', 'Explain this repository.'],
+      developerName: 'Agent Bundle',
+      displayName: 'Review Tools',
+      logo: './assets/logo.png',
+      logoDark: './assets/logo-dark.png',
+      longDescription: 'Review code and explain findings with repository context.',
+      privacyPolicyURL: 'https://example.test/privacy',
+      screenshots: ['./assets/overview.png', './assets/details.png'],
+      shortDescription: 'Repository-aware code review',
+      termsOfServiceURL: 'http://example.test/terms',
+      websiteURL: 'https://example.test/review-tools',
+    },
+  }));
+  const byPath = Object.fromEntries(plan.entries.map((entry) => [entry.relativePath, entry]));
+  const manifestEntry = byPath['.codex-plugin/plugin.json'];
+  const marketplaceEntry = byPath['.agents/plugins/marketplace.json'];
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifestEntry).toMatchObject({
+    kind: 'write',
+    sourceInputs: expect.arrayContaining([
+      '/workspace/agent-bundle.config.ts',
+      '/workspace/codex.config.ts',
+    ]),
+  });
+  if (manifestEntry?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifestEntry.content).interface).toEqual({
+    brandColor: '#10A37F',
+    capabilities: ['Interactive', 'Write'],
+    category: 'Developer Tools',
+    composerIcon: './assets/composer.png',
+    defaultPrompt: ['Review this change.', 'Explain this repository.'],
+    developerName: 'Agent Bundle',
+    displayName: 'Review Tools',
+    logo: './assets/logo.png',
+    logoDark: './assets/logo-dark.png',
+    longDescription: 'Review code and explain findings with repository context.',
+    privacyPolicyURL: 'https://example.test/privacy',
+    screenshots: ['./assets/overview.png', './assets/details.png'],
+    shortDescription: 'Repository-aware code review',
+    termsOfServiceURL: 'http://example.test/terms',
+    websiteURL: 'https://example.test/review-tools',
+  });
+  expect(marketplaceEntry).toMatchObject({ kind: 'write' });
+  if (marketplaceEntry?.kind !== 'write') throw new Error('Expected an emitted Codex marketplace.');
+  expect(JSON.parse(marketplaceEntry.content).interface).toEqual({ displayName: 'review-tools' });
+});
+
+it.each([
+  { code: 'codex.interface.invalid', value: [] },
+  { code: 'codex.interface.field.unknown', value: { typo: true } },
+  { code: 'codex.interface.display-name.invalid', value: { displayName: '' } },
+  { code: 'codex.interface.display-name.invalid', value: { displayName: '   ' } },
+  { code: 'codex.interface.short-description.invalid', value: { shortDescription: 7 } },
+  { code: 'codex.interface.long-description.invalid', value: { longDescription: '' } },
+  { code: 'codex.interface.developer-name.invalid', value: { developerName: null } },
+  { code: 'codex.interface.category.invalid', value: { category: '' } },
+  { code: 'codex.interface.capabilities.invalid', value: { capabilities: 'Write' } },
+  { code: 'codex.interface.capabilities.item.invalid', value: { capabilities: ['Write', ''] } },
+  { code: 'codex.interface.website-url.invalid', value: { websiteURL: 'file:///tmp/site' } },
+  { code: 'codex.interface.privacy-policy-url.invalid', value: { privacyPolicyURL: '/privacy' } },
+  { code: 'codex.interface.terms-of-service-url.invalid', value: { termsOfServiceURL: 'mailto:legal@example.test' } },
+  { code: 'codex.interface.default-prompt.invalid', value: { defaultPrompt: [] } },
+  { code: 'codex.interface.default-prompt.invalid', value: { defaultPrompt: ['One', 'Two', 'Three', 'Four'] } },
+  { code: 'codex.interface.default-prompt.item.invalid', value: { defaultPrompt: [''] } },
+  { code: 'codex.interface.default-prompt.item.invalid', value: { defaultPrompt: ['x'.repeat(129)] } },
+  { code: 'codex.interface.brand-color.invalid', value: { brandColor: 'green' } },
+  { code: 'codex.interface.composer-icon.invalid', value: { composerIcon: '/tmp/icon.png' } },
+  { code: 'codex.interface.logo.invalid', value: { logo: './../outside.png' } },
+  { code: 'codex.interface.logo-dark.invalid', value: { logoDark: 'https://example.test/logo.png' } },
+  { code: 'codex.interface.screenshots.invalid', value: { screenshots: './assets/screenshot.png' } },
+  { code: 'codex.interface.screenshots.item.invalid', value: { screenshots: ['./assets/screenshot.jpg'] } },
+] as const)('rejects invalid authored Codex interface input with $code', ({ code, value }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, { interface: value }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+});
+
+it('emits registered MCP app mappings as the documented compatibility document', () => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, {
+    apps: {
+      notion: { id: 'plugin_asdk_app_0123456789abcdef' },
+      search: { id: 'connector_search' },
+    },
+  }));
+  const byPath = Object.fromEntries(plan.entries.map((entry) => [entry.relativePath, entry]));
+  const manifestEntry = byPath['.codex-plugin/plugin.json'];
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(byPath['.app.json']).toEqual({
+    content: '{"apps":{"notion":{"id":"plugin_asdk_app_0123456789abcdef"},"search":{"id":"connector_search"}}}\n',
+    kind: 'write',
+    relativePath: '.app.json',
+    sourceInputs: ['/workspace/codex.config.ts'],
+  });
+  if (manifestEntry?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifestEntry.content).apps).toBe('./.app.json');
+  expect(manifestEntry.sourceInputs).toContain('/workspace/codex.config.ts');
+});
+
+it.each([
+  { code: 'codex.apps.invalid', value: [] },
+  { code: 'codex.apps.invalid', value: {} },
+  { code: 'codex.apps.name.invalid', value: { '': { id: 'connector_search' } } },
+  { code: 'codex.apps.name.invalid', value: { '   ': { id: 'connector_search' } } },
+  { code: 'codex.apps.entry.invalid', value: { search: 'connector_search' } },
+  { code: 'codex.apps.entry.invalid', value: { search: { id: 'connector_search', typo: true } } },
+  { code: 'codex.apps.id.invalid', value: { search: { id: '' } } },
+  { code: 'codex.apps.id.invalid', value: { search: { id: '   ' } } },
+] as const)('rejects invalid authored Codex app mappings with $code', ({ code, value }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexConfig(plugin, { apps: value }));
+
+  expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  expect(plan.entries.some((entry) => entry.relativePath === '.app.json')).toBe(false);
 });
 
 it('records every selected component provenance for generated host documents', () => {
