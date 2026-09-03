@@ -85,12 +85,13 @@ start/stop and pre-tool hooks, or `unavailable` with a typed reason (`id-not-res
 the payload — a Claude or Codex root, a Codex `_meta`), `registry` (the registry matched the
 subagent's start to the newest unclaimed spawn call), `confirmed` (the host afterwards named
 that edge itself — Claude's `Agent` `PostToolUse` carries the spawn `tool_use_id` and
-`tool_response.agentId`, the child — for every edge up to the root), or `inferred` (Cursor
-binds a child conversation to the single pending `subagentStart`). A confirmation also fills
-in `subagent.toolCallId` for siblings claimed blind, places a start no spawn window could, and
-moves a child the window filed under the wrong parent. There is deliberately no operator or
-user identity axis: the framework never reads or surfaces who the human behind a host session
-is.
+`tool_response.agentId`, the child — for every edge up to the root), `transcript` (read from
+the host-written rollout the payload names — Codex records a subagent's parent thread and
+depth there, which its hook payloads omit), or `inferred` (Cursor binds a child conversation
+to the single pending `subagentStart`). A confirmation also fills in `subagent.toolCallId` for
+siblings claimed blind, places a start no spawn window could, and moves a child the window
+filed under the wrong parent. There is deliberately no operator or user identity axis: the
+framework never reads or surfaces who the human behind a host session is.
 
 ## Shared layouts
 

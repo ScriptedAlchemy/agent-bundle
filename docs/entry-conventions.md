@@ -444,7 +444,7 @@ interface AgentLineage {
   depth: number;          // 0 at the root, +1 per subagent level
   generation?: string;    // Cursor generation_id, Codex turn_id, Claude prompt_id
   subagent?: { id: string; type?: string; toolCallId?: string; isParallelWorker?: boolean };
-  resolution: 'native' | 'registry' | 'confirmed' | 'inferred';
+  resolution: 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
 }
 ```
 
@@ -473,15 +473,29 @@ for every event by the id the payload carries. The observed host vocabulary
 | Host | `conversation` | `root` | Parent of a new subagent | MCP call correlation |
 | --- | --- | --- | --- | --- |
 | Claude | `agent_id`, else `session_id` | `session_id` | the agent whose `Agent`/`Task` `PreToolUse` is the newest unclaimed spawn; confirmed by that agent's `Agent` `PostToolUse` (`tool_response.agentId` = the child) | `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` |
-| Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
+| Codex | `agent_id`, else `session_id` | `session_id` | `source.subagent.thread_spawn.parent_thread_id` (and `depth`) in the head of the thread's own rollout, which every hook names in `transcript_path` (`agent_transcript_path` on `SubagentStop`); with that file unreadable, the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
 | Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the single pending start in the same workspace when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>`; when several conversations have that tool open, the one whose hook `tool_input` equals the call's `arguments` (identical arguments stay `id-not-resolvable`) |
 
-A Claude or Codex subagent is placed only when its spawning pre-tool hook
-(`Agent`/`Task`, `collaborationspawn_agent`) was observed, so projects that
-want `parent`/`depth` for subagents route `tool/before` alongside
-`agent/start`; a start with no claimable spawn — none open, or several
-parents with one — stays `id-not-resolvable`, and the registry keeps what the
-start said (id, type, time, and a stop that follows) as an unplaced start.
+A Claude subagent is placed only when its spawning pre-tool hook
+(`Agent`/`Task`) was observed, so projects that want `parent`/`depth` for
+subagents route `tool/before` alongside `agent/start`; a start with no
+claimable spawn — none open, or several parents with one — stays
+`id-not-resolvable`, and the registry keeps what the start said (id, type,
+time, and a stop that follows) as an unplaced start.
+
+A Codex thread carries its own evidence: the rollout its payload names opens
+with a `session_meta` line recording the spawning thread, the depth, and the
+`agent_path`, so the registry places it from that file (`resolution:
+'transcript'`, provenance `derived`) at `SubagentStart`, on the first hook of
+a thread it never saw start (or held unplaced), and at `SubagentStop` — no
+spawn ordering involved, and two parents with unclaimed spawns are no longer
+ambiguous. The `spawn_agent` call is still claimed, by parent and by the
+`agent_path` its `PostToolUse` `tool_response.task_name` carried, so
+`subagent.toolCallId` is exact even for same-parent siblings. Only when the
+rollout is unreadable does Codex fall back to the Claude rule (`resolution:
+'registry'`), and a parent inferred that way is corrected at `SubagentStop`,
+where `transcript_path` is the parent's rollout
+(`rollout-<timestamp>-<thread id>.jsonl`); descendants move with it.
 
 Claude Code names no parent on any hook a subagent emits (#422; hooks
 reference "Common input fields": `agent_id` and `agent_type` are the only
@@ -559,7 +573,9 @@ target defines no subagent families — portable), `id-not-resolvable` (the
 payload names an agent the registry never saw start, e.g. a cold runtime),
 `cloud-agent-no-user-hooks` (Cursor cloud agents run no user hooks),
 `no-shared-runtime` (a standalone hook process holds no registry; Claude and
-Codex root payloads still resolve to depth 0 from the payload alone),
+Codex root payloads still resolve to depth 0 from the payload alone, and a
+Codex subagent payload resolves fully from the rollout it names —
+`resolveStandaloneLineage`),
 `unsupported-surface` (routed CLI and rendered scripts run outside any host
 conversation), or `not-provided` (no registry was mounted). Per-host
 capability rows live under `lineage` in each pinned capability table.

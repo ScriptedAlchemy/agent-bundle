@@ -100,12 +100,14 @@ export interface AgentLineageSubagent {
  * events, the edge matched by spawn-window ordering (`registry`); the same
  * registry edge after the host itself named it — on Claude the parent's
  * `Agent` PostToolUse carries `tool_response.agentId`, the child, beside the
- * spawn `tool_use_id` (`confirmed`); or by ordering inference the host forced
- * on it (`inferred`, e.g. Cursor binds a child conversation to the most recent
- * pending `subagentStart`). `confirmed` requires every edge from the
- * conversation up to the root to be host-named.
+ * spawn `tool_use_id` (`confirmed`); read from the host-written transcript the
+ * payload named (`transcript`: a Codex subagent's rollout head records
+ * `parent_thread_id` and `depth`, which its hook payloads omit); or by ordering
+ * inference the host forced on it (`inferred`, e.g. Cursor binds a child
+ * conversation to the most recent pending `subagentStart`). `confirmed`
+ * requires every edge from the conversation up to the root to be host-named.
  */
-export type AgentLineageResolution = 'native' | 'registry' | 'confirmed' | 'inferred';
+export type AgentLineageResolution = 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
 
 /**
  * Where this request sits in the conversation tree (#host-lineage). The shape

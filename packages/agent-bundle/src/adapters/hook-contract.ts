@@ -629,7 +629,7 @@ const eventRouteHookWrapperSource = (
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
-      ? ["import { agent, available, createAgentRenderDispatcher, resolveNativeLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      ? ["import { agent, available, createAgentRenderDispatcher, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
       : []),
     ...(retiresLineage
       ? [
@@ -732,8 +732,9 @@ const eventRouteHookWrapperSource = (
           ...(retiresLineage ? ['  await retireLineage(native, props.canonical.idempotencyKey, props.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
-          // Standalone hooks hold no registry, so lineage is only what the payload proves (docs/audits/2026-09-03-host-lineage-matrix.md).
-          '  const lineage = target === "claude" || target === "codex" || target === "cursor" ? resolveNativeLineage(target, native) : unavailable("no-subagent-events");',
+          // Standalone hooks hold no registry, so lineage is what the payload proves — plus, on Codex, what the
+          // thread's own rollout named in the payload records (docs/audits/2026-09-03-host-lineage-matrix.md, #423).
+          '  const lineage = target === "claude" || target === "codex" || target === "cursor" ? await resolveStandaloneLineage(target, native) : unavailable("no-subagent-events");',
           '  const document = await runAgentRequest({',
           '    host: available({ name: target }, "native"),',
           '    invocation: { artifactEpoch, hostContractRevision: capabilityRevision, kind: "event", operationId: `event:${canonicalEvent}`, surface: canonicalEvent },',

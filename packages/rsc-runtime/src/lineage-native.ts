@@ -1,4 +1,5 @@
 import { available, unavailable, type AgentLineage, type Observed } from './agent-request.js';
+import { readCodexSpawnLineage, type CodexRolloutReader } from './lineage/codex-rollout.js';
 
 export type LineageHost = 'claude' | 'codex' | 'cursor';
 
@@ -82,4 +83,38 @@ export const resolveNativeLineage = (
     resolution: 'native',
     root: carrier.root,
   }, 'native');
+};
+
+/**
+ * `resolveNativeLineage`, plus what the host's own transcript proves: a Codex
+ * hook fired inside a subagent names the thread's rollout (`transcript_path`;
+ * `agent_transcript_path` on `SubagentStop`), whose head records the spawning
+ * thread and depth the payload omits. Read from that file, the lineage is
+ * exact (`resolution: 'transcript'`, provenance `derived`) without a registry;
+ * an unreadable or foreign rollout leaves the payload-only answer.
+ */
+export const resolveStandaloneLineage = async (
+  host: LineageHost,
+  native: Readonly<Record<string, unknown>>,
+  read?: CodexRolloutReader,
+): Promise<Observed<AgentLineage>> => {
+  const fromPayload = resolveNativeLineage(host, native);
+  if (host !== 'codex' || fromPayload.state === 'available') return fromPayload;
+  const carrier = lineageCarrier(host, native);
+  if (carrier.conversation === undefined || carrier.root === undefined) return fromPayload;
+  const ownRollout = nativeString(native, 'hook_event_name') === 'SubagentStop'
+    ? nativeString(native, 'agent_transcript_path')
+    : nativeString(native, 'transcript_path');
+  const spawn = await readCodexSpawnLineage(ownRollout, carrier.conversation, read);
+  if (spawn === undefined) return fromPayload;
+  const type = nativeString(native, 'agent_type');
+  return available({
+    conversation: carrier.conversation,
+    depth: spawn.depth,
+    ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
+    parent: spawn.parent,
+    resolution: 'transcript',
+    root: carrier.root,
+    subagent: { id: carrier.conversation, ...(type === undefined ? {} : { type }) },
+  }, 'derived');
 };
