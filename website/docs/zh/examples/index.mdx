@@ -1,12 +1,12 @@
 ---
-description: '四个可运行的 agent-bundle 示例：Skill 起步项目、钩子与脚本轨迹、交互式 MCP App，以及一个完整的媒体管理插件。'
+description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整媒体管理插件的四篇导览，外加两个进阶组合参考。'
 ---
 
 # 示例
 
-仓库中带有四个示例，它们是产品，而不是测试夹具。每个示例只使用公开的 `agent-bundle` 导出与
+仓库中带有六个示例，它们是产品，而不是测试夹具。每个示例只使用公开的 `agent-bundle` 导出与
 `workspace:*` 依赖，都通过你自己也会用的那套公开命令行来构建与校验，并且都不需要 API key 或已登录的
-宿主就能进入有意义的状态。
+宿主就能进入有意义的状态。其中四个在这里有导览：
 
 | 示例 | 证明什么 | 运行 |
 | --- | --- | --- |
@@ -14,6 +14,13 @@ description: '四个可运行的 agent-bundle 示例：Skill 起步项目、钩�
 | [钩子与脚本](./hooks-and-scripts.mdx) | 生成的钩子包装器与脚本进程外壳，包含一个阻断性退出码。 | `pnpm example:hooks` |
 | [MCP App](./mcp-app.mdx) | 一个生成的 stdio MCP 服务器，加上一个交互式 MCP App 资源。 | `pnpm example:mcp-app` |
 | [有声书策展器](./audiobook-curator.mdx) | 一个完整的路由树应用：MCP、投影出的 CLI、提供者与持久状态。 | `pnpm example:audiobook` |
+
+另外两个是进阶组合参考，由各自的 README 说明，这里不做导览：
+
+| 示例 | 证明什么 |
+| --- | --- |
+| [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | 一个根任务与两个位于关联 worktree 中的子智能体，通过持久通知协调。 |
+| [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | 一个可选启用的架构实验：一个 RSC 运行时同时服务钩子、MCP 工具与 MCP App 时间线。不是公开 API。 |
 
 ## 如何运行
 
@@ -55,7 +62,7 @@ pnpm dev        # agent-bundle dev
 - **把失败的重建理解为“上一个可用产物”的行为。** 失败的构建不会发布 epoch，因此 Workbench 会在报告
   新诊断的同时继续提供之前发布的产物。恢复签入的源码并重建；新的活跃 epoch 才是修复证据。
 
-四个示例中有三个专门带了可逆的诊断演练，原因正在于此。
+四篇导览示例中有三个专门带了可逆的诊断演练，原因正在于此。
 
 ## 概念分别在哪里
 

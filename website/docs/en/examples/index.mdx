@@ -1,13 +1,13 @@
 ---
-description: 'Four runnable agent-bundle examples: a Skills starter, hook and script traces, an interactive MCP App, and a complete media-management plugin.'
+description: 'The runnable agent-bundle examples: four walkthroughs from a Skills starter to a complete media-management plugin, plus two advanced composition references.'
 ---
 
 # Examples
 
-The repository ships four examples, and they are products rather than fixtures. Each one uses
+The repository ships six examples, and they are products rather than fixtures. Each one uses
 only public `agent-bundle` exports and `workspace:*` dependencies, each one builds and validates
 through the same public CLI you would use, and none of them needs an API key or a signed-in host
-to reach a useful state.
+to reach a useful state. Four have a walkthrough here:
 
 | Example | What it proves | Run |
 | --- | --- | --- |
@@ -15,6 +15,14 @@ to reach a useful state.
 | [Hooks and Scripts](./hooks-and-scripts.mdx) | The generated hook wrapper and script process envelope, including a blocking exit code. | `pnpm example:hooks` |
 | [MCP App](./mcp-app.mdx) | A generated stdio MCP server plus an interactive MCP App resource. | `pnpm example:mcp-app` |
 | [Audiobook Curator](./audiobook-curator.mdx) | A complete route-tree application: MCP, projected CLI, providers, durable state. | `pnpm example:audiobook` |
+
+Two more are advanced composition references, documented by their own READMEs rather than
+walked through here:
+
+| Example | What it proves |
+| --- | --- |
+| [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | One root task and two child agents in linked worktrees, coordinated through durable notices. |
+| [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | An opt-in architecture experiment: one RSC runtime shared by hooks, MCP tools, and an MCP App timeline. Not a public API. |
 
 ## Running them
 
@@ -63,7 +71,7 @@ Two habits make the Workbench trustworthy while you explore:
   Workbench keeps serving the previously published artifact alongside the new diagnostic. Restore
   the checked-in source and rebuild; the new active epoch is the repair evidence.
 
-Three of the four examples ship a reversible diagnostic walkthrough for exactly that reason.
+Three of the four walkthrough examples ship a reversible diagnostic walkthrough for exactly that reason.
 
 ## Where the concepts live
 

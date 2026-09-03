@@ -3,7 +3,7 @@
   // build must not depend on `pnpm build`: `packages/agent-bundle/src` imports
   // `@agent-bundle/runtime`, whose declarations only exist after that package
   // is compiled. Resolving those specifiers to `packages/rsc-runtime/src`
-  // keeps `docs:check` self-sufficient, mirroring the source-mapped `paths`
+  // keeps `pnpm docs:site:build` self-sufficient, mirroring the source-mapped `paths`
   // the Twoslash plugin uses for the same reason.
   "extends": "../packages/agent-bundle/tsconfig.build.json",
   "compilerOptions": {

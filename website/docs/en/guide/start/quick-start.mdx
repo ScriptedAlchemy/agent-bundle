@@ -105,13 +105,16 @@ that a convention was actually picked up.
 ## Install the result
 
 Every built target directory contains a generated `INSTALL.md` with commands that use the
-bundle's real plugin and marketplace names:
+bundle's real plugin and marketplace names. With the `portable`, `codex`, and `claude` targets
+built above, the host installs are:
 
 ```sh
 npx agent-bundle install claude --from dist/claude --scope user
 npx agent-bundle install codex --from dist/codex
-npx agent-bundle install cursor --from dist/cursor
 ```
+
+Add `cursor` to `targets` to build `dist/cursor`, and `npx agent-bundle install cursor --from
+dist/cursor` installs it the same way. A `plugin` build has one `INSTALL.md` covering every host.
 
 For an install-free development loop against Claude Code:
 

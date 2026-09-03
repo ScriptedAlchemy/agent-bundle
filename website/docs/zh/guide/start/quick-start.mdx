@@ -95,13 +95,16 @@ npx agent-bundle validate --root .           # 检查项目源码
 
 ## 安装结果
 
-每个构建出的 target 目录中都包含生成的 `INSTALL.md`，其中的命令使用该捆绑包真实的插件名与市场名：
+每个构建出的 target 目录中都包含生成的 `INSTALL.md`，其中的命令使用该捆绑包真实的插件名与市场名。按上文构建出
+`portable`、`codex` 与 `claude` 三个 target 后，宿主安装命令是：
 
 ```sh
 npx agent-bundle install claude --from dist/claude --scope user
 npx agent-bundle install codex --from dist/codex
-npx agent-bundle install cursor --from dist/cursor
 ```
+
+把 `cursor` 加入 `targets` 就会构建出 `dist/cursor`，然后用 `npx agent-bundle install cursor --from
+dist/cursor` 以同样方式安装。`plugin` 构建则只有一份覆盖所有宿主的 `INSTALL.md`。
 
 若想在 Claude Code 上进行免安装的开发循环：
 
