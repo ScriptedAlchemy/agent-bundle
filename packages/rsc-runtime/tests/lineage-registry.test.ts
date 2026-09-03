@@ -673,3 +673,33 @@ describe('lineage registry generation and replay memory (review round 10)', () =
     expect(value(fresh)).toMatchObject({ depth: 1, subagent: { toolCallId: 'spawn-new' } });
   });
 });
+
+describe('lineage registry replay ledger across degradation (review round 11)', () => {
+  it('keeps suppressing a redelivered durable commit after the journal degrades to memory', async () => {
+    const driver = createMemoryStateDriver({ lifetime: 'process' });
+    const store = await driver.open(agentLineageStateDefinition('process'));
+    let fail = false;
+    const flaky = {
+      ...store,
+      dispatch: async (name: string, payload: unknown, options: { idempotencyKey: string }) => {
+        if (fail) throw new Error('journal full');
+        return store.dispatch(name as never, payload as never, options);
+      },
+    } as typeof store;
+    const registry = createAgentLineageRegistry({ store: flaky });
+    const open = { event: 'tool/before', host: 'claude', idempotencyKey: 'm', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_p_s__dump', tool_use_id: 'm1' } } as const;
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' } });
+    await registry.observe(open);
+    await registry.observe({ event: 'tool/after', host: 'claude', idempotencyKey: 'm-after', native: { hook_event_name: 'PostToolUse', session_id: 'root', tool_input: {}, tool_name: 'mcp__plugin_p_s__dump', tool_response: 'ok', tool_use_id: 'm1' } });
+    expect(registry.snapshot().openCalls).toEqual([]);
+    // An unrelated commit fails: the registry degrades to memory for good.
+    fail = true;
+    await registry.observe({ event: 'prompt/submit', host: 'claude', idempotencyKey: 'p', native: { hook_event_name: 'UserPromptSubmit', prompt: 'again', session_id: 'root' } });
+    // The earlier `tool/before` is redelivered: the closed window must stay closed.
+    await registry.observe(open);
+    expect(registry.snapshot().openCalls).toEqual([]);
+    expect(await registry.resolveToolCall({ host: 'claude', meta: { 'claudecode/toolUseId': 'm1' }, toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    await store.close();
+    await driver.close();
+  });
+});

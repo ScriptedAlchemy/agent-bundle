@@ -189,22 +189,29 @@ export const createAgentLineageRegistry = (
     keys: JournalKeys,
   ): Promise<void> => {
     const idempotencyKey = keys.next(name, payload);
-    const target = journal();
-    if (target === undefined) {
-      // No journal: an in-memory ledger of applied keys suppresses redeliveries.
-      if (applied.has(idempotencyKey)) return;
+    // Every key this registry has applied — durably or in memory — lands in
+    // one bounded ledger, so a redelivery is still suppressed after the
+    // journal degrades mid-session (the durable head is no longer consulted).
+    if (applied.has(idempotencyKey)) return;
+    const remember = (): void => {
       applied.add(idempotencyKey);
       if (applied.size > APPLIED_KEY_RETENTION) applied.delete(applied.values().next().value!);
+    };
+    const target = journal();
+    if (target === undefined) {
+      remember();
       state = reduceLineage(state, { name, payload });
       return;
     }
     try {
       const committed = await target.dispatch(name, payload as never, { idempotencyKey });
+      remember();
       state = committed.replayed ? (await target.read()).state : committed.state;
     } catch (error) {
       // The same key with a payload that differs only in what the digest
       // ignores (a receipt timestamp) is a redelivery, not a new fact.
       if (error instanceof AgentStateError && error.code === 'idempotency-conflict') {
+        remember();
         try {
           state = (await target.read()).state;
         } catch {
@@ -213,7 +220,7 @@ export const createAgentLineageRegistry = (
         return;
       }
       degraded = true;
-      applied.add(idempotencyKey);
+      remember();
       state = reduceLineage(state, { name, payload });
     }
   };
