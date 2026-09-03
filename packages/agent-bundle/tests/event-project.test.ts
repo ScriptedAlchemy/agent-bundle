@@ -47,6 +47,34 @@ it('validates native event envelopes with the generated wrapper error contract',
     .toThrow('Agent Bundle event route error: stdin JSON value must be an object');
 });
 
+it('accepts any JSON tool_input/tool_response for Codex tool events per the pinned generated schemas', () => {
+  const options = { canonicalEvent: 'tool/after' as const, nativeEvent: 'PostToolUse', target: 'codex' };
+  const base = {
+    cwd: '/tmp/lifecycle-replay',
+    hook_event_name: 'PostToolUse',
+    model: 'gpt-5-codex',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_name: 'Write',
+    tool_use_id: 'tool-1',
+    transcript_path: null,
+    turn_id: 'turn-1',
+  };
+
+  for (const value of ['text', 7, true, null, [1, 2], { ok: true }]) {
+    const native = { ...base, tool_input: value, tool_response: value };
+    expect(validateNativeEventEnvelope(native, options)).toBe(native);
+  }
+  expect(() => validateNativeEventEnvelope({ ...base, tool_input: {} }, options))
+    .toThrow('Agent Bundle event route error: native tool_response is required');
+  expect(() => validateNativeEventEnvelope({ ...base, tool_response: {} }, options))
+    .toThrow('Agent Bundle event route error: native tool_input is required');
+  expect(() => validateNativeEventEnvelope(
+    { ...base, hook_event_name: 'PreToolUse', tool_input: 'text' },
+    { canonicalEvent: 'tool/before', nativeEvent: 'PreToolUse', target: 'codex' },
+  )).not.toThrow();
+});
+
 it('validates Cursor workspaceOpen without inventing an agent session', () => {
   const options = {
     canonicalEvent: 'workspace/open' as const,

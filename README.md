@@ -53,6 +53,8 @@ npx agent-bundle dev --root .                   # local workbench with live rebu
 
 `targets: ['plugin']` emits one multi-host bundle at `dist/plugin/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
 
+The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter — the default target, and the layout Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT load natively (Claude Code consumes it only through CLI translation). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time, after every build (`AB6011`/`AB6012`), under `validate --artifact --host-validation` (`AB6035`–`AB6038`), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
+
 Claude Code language servers are declared under `claude.lspServers`; the `claude` target and the Claude half of `plugin` emit the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary — install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
 
 Claude Code plugin defaults are declared under `claude.settings` and emitted as plugin-root `settings.json`, which Claude Code applies when the plugin is enabled. The pinned contract supports only `agent` and `subagentStatusLine`; Agent Bundle rejects any other key rather than shipping a default Claude Code would silently ignore, and it expands no path tokens here because `settings.json` is absent from the host's placeholder-substitution table. Because the plugin `agents/` component is still deferred, declaring `agent` also raises a warning: the referenced agent has to reach the plugin root some other way, such as a prebuilt payload.
@@ -64,7 +66,7 @@ The same config also owns the npm package build — no second bundler config, bi
 - `build` — validate the project and write an artifact (plus the `bin`/`lib` package build when declared)
 - `validate` — check project source, or a built artifact with `--artifact <dir>`
 - `inspect` — show the normalized configuration and per-target plans; `--bundler` dumps the synthesized bundler configs (post-`tools`-hatch merge)
-- `dev` — serve the local development workbench and rebuild the `dist/` package build when its inputs change
+- `dev` — serve the local development workbench and rebuild the `dist/` package build when its inputs change; `--install-host <claude|codex|cursor>` installs a development variant whose stable `dev proxy` MCP command hot-swaps epochs behind the host's open connection and re-syncs hooks and Skills on every adopted rebuild (see [Framework mode › Live development into hosts](docs/framework-mode.md#live-development-into-hosts))
 - `mcp list` / `mcp invoke` / `mcp run` — list, invoke, or run an artifact's MCP servers locally
 - `hooks list` / `hooks simulate` — inspect and simulate generated hooks
 - `eval` — run eval suites against a built artifact
@@ -95,4 +97,10 @@ Run these from the repository root. `pnpm examples:check` validates and builds e
 
 ## Status
 
-Pre-release. The final npm package name and license are not yet chosen; pkg.pr.new previews are the release channel until then.
+Pre-release. The final npm package name is not yet chosen; pkg.pr.new previews are the release channel until then.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party material in this
+repository (the Workbench MCP App renderer derived from the MIT-licensed MCP Inspector) is covered by
+its own notices in [packages/workbench/THIRD_PARTY_NOTICES](packages/workbench/THIRD_PARTY_NOTICES).

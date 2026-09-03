@@ -18,6 +18,7 @@ export type {
   AgentInvocationInput,
   AgentInvocationKind,
   AgentNetworkAuthority,
+  AgentProcessLifetime,
   AgentProgressReporter,
   AgentProgressUpdate,
   AgentProjectRootAuthority,

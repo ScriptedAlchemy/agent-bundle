@@ -282,15 +282,27 @@ export const validateNativeEventEnvelope = (
   if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
   if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
     requireNativeString(native, 'tool_name');
-    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+    // The pinned rust-v0.147.0 pre-tool-use/post-tool-use input schemas declare
+    // `"tool_input": true` and `"tool_response": true` (any JSON value), so Codex
+    // only guarantees presence; Claude documents both as objects.
+    if (target === 'codex') {
+      if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
+        return nativeEventError('native tool_input is required');
+      }
+    } else if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
       return nativeEventError('native tool_input must be an object');
     }
     requireNativeString(native, 'tool_use_id');
-    if (
-      canonicalEvent === 'tool/after'
-      && (typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response))
-    ) {
-      return nativeEventError('native tool_response must be an object');
+    if (canonicalEvent === 'tool/after') {
+      if (target === 'codex') {
+        if (!Object.hasOwn(native, 'tool_response') || native.tool_response === undefined) {
+          return nativeEventError('native tool_response is required');
+        }
+      } else if (
+        typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response)
+      ) {
+        return nativeEventError('native tool_response must be an object');
+      }
     }
   }
   if (canonicalEvent === 'agent/start' || canonicalEvent === 'agent/stop') {

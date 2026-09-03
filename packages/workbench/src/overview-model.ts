@@ -1,5 +1,12 @@
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
-import type { ArtifactEpoch, ArtifactState, ProjectStatus, SourceState } from '../../agent-bundle/src/contracts/project.ts';
+import type {
+  ArtifactEpoch,
+  ArtifactState,
+  DevContractFailure,
+  HostAdoptionStatus,
+  ProjectStatus,
+  SourceState,
+} from '../../agent-bundle/src/contracts/project.ts';
 import type { WorkbenchCapabilities } from './workbench-capabilities.ts';
 import type { WorkbenchPage } from './workbench-screen.tsx';
 
@@ -37,10 +44,23 @@ export interface BundleSummary {
   readonly targetCount: number;
 }
 
+export type OverviewHostAdoptionState = 'direct' | 'failed' | 'passed' | 'pending';
+
+/** What live host connections and development installs serve, and why. */
+export interface OverviewHostAdoption {
+  readonly adoptedEpochId?: string;
+  readonly failures: readonly DevContractFailure[];
+  readonly gateSummary?: string;
+  readonly mode: HostAdoptionStatus['mode'];
+  readonly state: OverviewHostAdoptionState;
+  readonly summary: string;
+}
+
 export interface OverviewModel {
   readonly changedFiles: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
   readonly epoch: OverviewEpoch;
+  readonly hostAdoption?: OverviewHostAdoption;
   readonly nextAction: OverviewNextAction;
   readonly normalization: OverviewNormalization;
   readonly targets: readonly OverviewTarget[];
@@ -117,8 +137,71 @@ const targetsFor = (status: ProjectStatus): readonly OverviewTarget[] => {
     .sort((left, right) => left.name.localeCompare(right.name)));
 };
 
-const nextActionFor = (status: ProjectStatus, diagnostics: readonly Diagnostic[]): OverviewNextAction => {
+const contractDiagnostics = (status: ProjectStatus): readonly Diagnostic[] =>
+  status.hostAdoption?.contracts?.state === 'failed' ? status.hostAdoption.contracts.diagnostics : [];
+
+const contractViolationCount = (failures: readonly DevContractFailure[]): number =>
+  failures.reduce((count, failure) => count + failure.checks.length, 0);
+
+/**
+ * A failed contract gate is a host-facing condition, not a build failure: the
+ * artifact published, but live hosts and development installs kept the last
+ * passing epoch. The summary names both epochs so the divergence is visible.
+ */
+const hostAdoptionFor = (status: ProjectStatus): OverviewHostAdoption | undefined => {
+  const adoption = status.hostAdoption;
+  if (adoption === undefined) return undefined;
+  const epoch = activeEpochFor(status);
+  const failures = adoption.contracts?.failures ?? [];
+  const shared = {
+    ...(adoption.adoptedEpochId === undefined ? {} : { adoptedEpochId: adoption.adoptedEpochId }),
+    failures: Object.freeze(failures.map((failure) => Object.freeze({ ...failure, checks: Object.freeze([...failure.checks]) }))),
+    ...(adoption.contracts === undefined ? {} : { gateSummary: adoption.contracts.summary }),
+    mode: adoption.mode,
+  };
+  if (adoption.mode === 'direct') {
+    return Object.freeze({
+      ...shared,
+      state: 'direct',
+      summary: adoption.adoptedEpochId === undefined
+        ? 'Hosts adopt each published build directly; none has been published yet'
+        : 'Hosts serve the published build directly',
+    });
+  }
+  if (adoption.contracts === undefined) {
+    return Object.freeze({ ...shared, state: 'pending', summary: 'Contract matrix has not settled for a published build yet' });
+  }
+  if (adoption.contracts.state === 'passed') {
+    return Object.freeze({
+      ...shared,
+      state: 'passed',
+      summary: adoption.contracts.epochId === epoch?.id
+        ? 'Contract matrix passed; hosts serve the current build'
+        : `Contract matrix passed for build ${adoption.contracts.epochId}`,
+    });
+  }
+  const violations = contractViolationCount(failures);
+  const held = adoption.adoptedEpochId === undefined
+    ? 'no build is served to hosts'
+    : `hosts keep build ${adoption.adoptedEpochId}`;
+  return Object.freeze({
+    ...shared,
+    state: 'failed',
+    summary: violations === 0
+      ? `Contract matrix could not complete for build ${adoption.contracts.epochId}; ${held}`
+      : `Contract matrix failed for build ${adoption.contracts.epochId} with ${counted(violations, 'violation')}; ${held}`,
+  });
+};
+
+const nextActionFor = (
+  status: ProjectStatus,
+  diagnostics: readonly Diagnostic[],
+  hostAdoption: OverviewHostAdoption | undefined,
+): OverviewNextAction => {
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length;
+  if (hostAdoption?.state === 'failed' && errors > 0) {
+    return { label: 'Rebuild', summary: `Resolve ${errors} ${errors === 1 ? 'error' : 'errors'}, then rebuild; hosts keep the last passing build` };
+  }
   if (errors > 0) return { label: 'Rebuild', summary: `Resolve ${errors} ${errors === 1 ? 'error' : 'errors'}, then rebuild` };
   if (status.artifact.state === 'missing') return { label: 'Rebuild', summary: 'Create the first successful build' };
   if (status.artifact.state === 'stale') return { label: 'Rebuild', summary: 'Rebuild the latest normalized source' };
@@ -126,12 +209,18 @@ const nextActionFor = (status: ProjectStatus, diagnostics: readonly Diagnostic[]
 };
 
 export const overviewFor = (status: ProjectStatus, changedFiles: readonly string[] = []): OverviewModel => {
-  const diagnostics = uniqueDiagnostics([...status.source.diagnostics, ...buildDiagnostics(status)]);
+  const diagnostics = uniqueDiagnostics([
+    ...status.source.diagnostics,
+    ...buildDiagnostics(status),
+    ...contractDiagnostics(status),
+  ]);
+  const hostAdoption = hostAdoptionFor(status);
   return Object.freeze({
     changedFiles: Object.freeze([...changedFiles]),
     diagnostics,
     epoch: Object.freeze(epochFor(status)),
-    nextAction: Object.freeze(nextActionFor(status, diagnostics)),
+    ...(hostAdoption === undefined ? {} : { hostAdoption }),
+    nextAction: Object.freeze(nextActionFor(status, diagnostics, hostAdoption)),
     normalization: Object.freeze({
       label: sourceLabel(status.source.state),
       ...(status.source.revision === undefined ? {} : { revision: status.source.revision }),

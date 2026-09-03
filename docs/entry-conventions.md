@@ -154,6 +154,11 @@ of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `processLifetime` is reserved for the framework-owned process identity and hit
 counter, so provider filenames must not derive that key.
 
+Route-unit and CLI-dispatch tests inject provider values through the same
+`context` seam as identity axes (`renderRoute(id, { context: { providers:
+{ library: fixture } } })`); the harness never executes conventional provider
+modules, so a test chooses exactly the values a component observes.
+
 ### Handler request context
 
 Conventional route components receive only their surface props, such as
@@ -378,6 +383,13 @@ name).
 Self-connecting entries — modules that construct and connect a transport at
 top level without a default export — keep today's behavior byte for byte.
 
+Every served tool call is one ordinary `tools/call`: optional
+`notifications/progress` while the caller's progress token is live, then one
+final `CallToolResult`. The shell advertises no `tasks` capability and
+processes a task-augmented request as an ordinary one; task-augmented calls
+are deferred until the MCP SDK ships a task runtime (see
+[MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)).
+
 The same lifecycle is public API for hand-rolled entries:
 
 ```ts
@@ -541,6 +553,28 @@ engine executes the config. Use instead the utils argument Rslib/Rsbuild pass
 to `tools.rspack` mutator functions —
 `tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
 engine's own `rspack` object.
+
+### `agent-bundle inspect` component accounting
+
+```sh
+agent-bundle inspect [--target <t>] [--json]
+```
+
+Every inspection plan accounts for each host component the project declares
+— skills, commands, rules, hooks, MCP servers, MCP Apps, and scripts — as
+either `selected` (emitted for that target) or `skipped` (omitted), in one
+deterministic order. A skipped component names its cause: `excluded-by-targets`
+when the author's `targets` left the host out, or `unsupported-capability` when
+the host's pinned capability table does not support the surface. Components
+that need a host capability carry that target's own four-state judgment as
+`capability` — `{ name, state: 'supported', evidence }` for emitted surfaces,
+or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
+the JSON explains why a Cursor rule is absent from a Claude bundle in the
+host's words rather than the compiler's. An adapter that publishes no row for
+a needed capability reads as an honest `unavailable`, never a silent pass.
+Scripts need no host capability and carry none. The human output prints one
+line per target (`<target>: N component(s) selected, M omitted`) followed by
+each omission and its reason.
 
 ### `agent-bundle inspect --bundler`
 

@@ -650,9 +650,19 @@ it.each([
     reason: expect.stringContaining(reason),
     state: 'unavailable',
   });
-  for (const target of ['cursor', 'portable'] as const) {
-    expect(registry.get(target).capabilities[capability]).toBeUndefined();
-    expect(registry.supports(target, capability)).toBe(false);
+  expect(registry.get('cursor').capabilities[capability]).toBeUndefined();
+  expect(registry.supports('cursor', capability)).toBe(false);
+  // Agent Plugins 1.0.0 §5.4 defines manifest metadata for the portable manifest (#307); it
+  // has no custom manifest path rules, so only that capability is declared there.
+  if (capability === 'manifestMetadata') {
+    expect(registry.get('portable').capabilities[capability]).toMatchObject({
+      evidence: { observedVersion: '1.0.0', target: 'portable' },
+      state: 'supported',
+    });
+    expect(registry.supports('portable', capability)).toBe(true);
+  } else {
+    expect(registry.get('portable').capabilities[capability]).toBeUndefined();
+    expect(registry.supports('portable', capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
   expect(registry.supports('plugin', capability)).toBe(false);

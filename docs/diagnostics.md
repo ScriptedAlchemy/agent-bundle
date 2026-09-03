@@ -23,10 +23,12 @@ gate a build, a validation, or a dev rebuild.
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
+| `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
 | `AB5000` | General CLI and adapter failures. |
-| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body). |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks. |
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
+| `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7320` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, and static bytes-at-rest validation. |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
@@ -34,6 +36,7 @@ gate a build, a validation, or a dev rebuild.
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8233`–`AB8235` | Workbench browser-side strict decoders rejecting a dev-server response: `AB8233` lifecycle replay, `AB8234` host discovery, `AB8235` MCP probe report. |
+| `AB8024`–`AB8025` | Live host MCP proxy: epoch drift behind a host connection and dev-server unavailability (see below). |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
@@ -73,6 +76,40 @@ locally against emitted bytes.
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB6034` | error | An emitted `SKILL.md` has valid YAML frontmatter but no Markdown instruction body after it. The pinned Agent Skills specification requires frontmatter followed by Markdown content. | Add Markdown instructions after the Skill frontmatter, then rebuild the artifact. |
+
+## Agent Plugins portable validation (`AB6035`–`AB6038`)
+
+The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification)
+(specification 1.0.0) adapter. Its contract is pinned in
+`packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json` (schema
+hashes, specification repository commit, retrieval and re-verification dates).
+The standard publishes machine-readable schemas plus normative text the schemas
+cannot express; the text wins on conflict, so validation runs both lanes and
+never spawns a client CLI (the standard publishes no reference validator).
+
+Validation happens at three moments, all fail-closed:
+
+1. **Plan time** (`agent-bundle build`/`validate`): the emitted `plugin.json`
+   and `mcp.json` are validated against the pinned schemas before they are
+   written (`portable.schema.plugin`, `portable.schema.mcp`), authored manifest
+   metadata is checked field by field (`portable.manifest.<field>.invalid`), and
+   MCP path tokens are refused where the standard forbids them
+   (`portable.mcp.token.*`). These target-scoped codes are errors.
+2. **Artifact time** (`agent-bundle build`, `validate --artifact`): the generic
+   target-contract pass reports a missing required document as `AB6011` and a
+   pinned-schema rejection as `AB6012`; `validate --artifact --host-validation`
+   additionally runs the byte lane below and returns a `portable` host
+   validation report.
+3. **Installed bytes** (`agent-bundle doctor`): a Cursor local plugin whose root
+   `plugin.json` declares an Agent Plugins `$schema` is validated with the same
+   byte lane and reported under `AB7320` (an error marks the entry `corrupt`).
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6035` | error | The root `plugin.json` is missing, or a present `plugin.json`/`mcp.json` is unreadable, not valid JSON, or rejected by its pinned Agent Plugins 1.0.0 schema (closed manifest fields, plugin name constraints, reserved `PLUGIN_ROOT`/`PLUGIN_DATA` env keys, closed server variants). | Repair the generated Agent Plugins document so it satisfies the pinned 1.0.0 schema, then rebuild. |
+| `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders (§7.2.1); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
+| `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
+| `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
 
 ## npm prepack gate (`AB7010`–`AB7013`)
 
@@ -252,6 +289,38 @@ simply not been built yet is a validation **warning** that only
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
 
+## Conventional host components: rules and commands (`AB4900`–`AB4906`, `AB4920`–`AB4926`)
+
+Conventional `src/rules/*.mdc` documents compile to the Rule IR (closed
+frontmatter: `description`, `globs`, `alwaysApply`, plus the bundle-only
+`targets` key that is peeled before emission) and `src/commands/*.md`
+documents compile to the Command IR (closed frontmatter: `description`,
+`argumentHint`, `allowedTools`, `model`, `disableModelInvocation`, plus
+`targets`). Each host lowers only the surfaces its pinned capability table
+supports; a document without `targets` is emitted where supported and
+accounted as `skipped` with the host's judgment elsewhere (see
+`agent-bundle inspect`), while a document that explicitly names a host without
+the surface is a build error — unsupported components fail before artifact
+publication rather than shipping as a broken half. Identity paths are
+canonicalized so the model digest is root-independent.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4900` | error | A conventional rule file cannot be read. | Make the `.mdc` file readable, or remove it from `src/rules/`. |
+| `AB4901` | error | Rule YAML frontmatter is invalid. | Repair the YAML between the `---` fences. |
+| `AB4902` | error | Rule frontmatter declares a field outside `description`, `globs`, `alwaysApply`, `targets`. | Remove the field; host-specific rule metadata is not part of the closed contract. |
+| `AB4903` | error | A rule frontmatter field has the wrong shape (`description` string, `globs` nonempty string or array, `alwaysApply` boolean, `targets` array of target names). | Fix the field's value. |
+| `AB4904` | error | A rule's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
+| `AB4905` | error | A rule explicitly targets a host whose `rules` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the rule's `targets`; only Cursor publishes a rules surface. |
+| `AB4906` | error | Two rule files share a name. | Rename one file so every rule name is unique. |
+| `AB4920` | error | A conventional command file cannot be read. | Make the `.md` file readable, or remove it from `src/commands/`. |
+| `AB4921` | error | Command YAML frontmatter is invalid. | Repair the YAML between the `---` fences. |
+| `AB4922` | error | Command frontmatter declares a field outside `description`, `argumentHint`, `allowedTools`, `model`, `disableModelInvocation`, `targets`. | Remove the field; per-host frontmatter is regenerated from the validated fields at lowering time. |
+| `AB4923` | error | A command frontmatter field has the wrong shape (`allowedTools` nonempty string or array, string fields, `disableModelInvocation` boolean, `targets` array of target names). | Fix the field's value. |
+| `AB4924` | error | A command's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
+| `AB4925` | error | A command explicitly targets a host whose `commands` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the command's `targets`; Cursor and Claude publish command surfaces, Codex and portable do not. |
+| `AB4926` | error | Two command files share a name. | Rename one file so every command name is unique. |
+
 ## Route graph, state, and provider conventions (`AB4800`–`AB4825`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
@@ -278,7 +347,15 @@ compiles silently with an empty config.
 Generated route declarations are published at `.agent-bundle/routes.d.ts` from
 the same graph. Development writes a sibling temporary file and renames it over
 the prior complete declaration atomically; invalid source retains the prior
-last-good file, while a successful route-free preparation removes it.
+last-good file, while a successful route-free, provider-free preparation
+removes it. Beside `AgentBundleRoutes`, a graph with conventional providers
+declares `AgentBundleProviders` (`ProviderKey`, `ProviderValue<Key>`) — each
+camel-cased key mapped to its factory's awaited return type, in execution
+order — and augments `@agent-bundle/runtime`'s `AgentProviderValues` so
+`(await agent()).providers.<key>` observes that type in projects whose
+TypeScript program includes the file. Provider-free graphs emit no
+augmentation, so the declaration never references a module the project has no
+reason to depend on.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
@@ -411,7 +488,29 @@ host CLI, repair a bundle, or perform a live protocol exchange.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
-| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract; the loader-recognized entry remains `installed`. | Reinstall an invalid Cursor plugin or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules, when a root `plugin.json` install that declares an Agent Plugins `$schema` violates the pinned Agent Plugins 1.0.0 contract (`AB6035`–`AB6037`, retained in the message), or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info naming the contract applied to an Agent Plugins install, or stating that a `.claude-plugin/plugin.json` (or schema-less root `plugin.json`) install has no Cursor-side pinned static document contract; loader-recognized entries remain `installed`. | Reinstall an invalid Cursor plugin, rebuild an invalid portable bundle, or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+
+## Live development into hosts (`AB7200`–`AB7202`, `AB7210`–`AB7211`, `AB8024`–`AB8025`)
+
+`agent-bundle dev` keeps a host's one stdio MCP process connected while it
+swaps the generated plugin behind it (`dev proxy`), re-syncs opted-in
+development installs (`--install-host`) on every adopted epoch, and — when a
+project declares `dev.contracts` — gates host-facing adoption on the
+development contract matrix. Every failure on that path is a structured
+diagnostic; none of them silently changes what a host serves. A failing gate
+is not a build failure: the epoch publishes to the Workbench playground, and
+the Overview page's **Host adoption** section names both the published and the
+host-facing build together with the failed checks.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7200` | error | A development rebuild could not be admitted: the coordinator is closed, closing, or not yet started. | Restart `agent-bundle dev`; no epoch changed. |
+| `AB7201` | error | The prepare, lint, or artifact phase of a development rebuild threw instead of reporting diagnostics. The message names the phase and the underlying error. | Fix the named failure and save again; the last-good epoch stays active. |
+| `AB7202` | error | Publishing a new epoch into an installed development host (`claude`, `codex`, or `cursor`) failed. Pointers were rolled back to the previous generation and the failure was published on `dev.host.sync`. | Repair the host cache path or permissions named in the message; the next successful epoch re-syncs. |
+| `AB7210` | error | `dev.contracts` is malformed, its `fixtures` module escapes the project root, cannot be loaded, or default-exports something other than route-id keyed `ContractRouteFixture` objects. Reported on `dev.contract.status` for the affected epoch; compilation is unaffected. | Correct `dev.contracts` or the fixture module and rebuild; host surfaces keep the last passing epoch meanwhile. |
+| `AB7211` | error | The development contract matrix failed or could not complete for a published epoch. The message carries the aggregated `contract-violation` detail; `dev.contract.status` lists the failed check names grouped by route. That epoch is never adopted by live host connections or development installs. | Fix the failing route or fixture and rebuild; a passing epoch is adopted normally. |
+| `AB8024` | error (MCP) | The epoch a live host connection was serving vanished from the epoch store mid-session. The connection is invalidated and the typed MCP error carries `{ code, epochId }`. | Reconnect from the host; the proxy binds to the currently adopted epoch. |
+| `AB8025` | error (MCP) | `agent-bundle dev proxy` found no running development server for the project (cold start or shutdown), so the host-facing connection fails closed rather than serving stale bytes. | Start `agent-bundle dev` for that project root; installed hooks and Skills remain in place. |
 
 ## Development package build (`AB7103`)
 

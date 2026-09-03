@@ -87,7 +87,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
 | `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
-| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source. |
+| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
@@ -219,6 +219,46 @@ Workbench MCP sessions bind `{ epochId, target, serverName }` when opened and ne
 epoch automatically. Use **Restart MCP session** to respawn that generated server on its selected
 epoch; open a new session to use a newly published epoch. Compatible MCP Apps preview through the
 same bound session.
+
+### Development contract matrix
+
+Projects can opt host-facing rebuild adoption into the generated contract matrix by pointing
+`dev.contracts.fixtures` at a project-local module:
+
+```ts
+// agent-bundle.config.ts
+export default {
+  dev: {
+    contracts: {
+      fixtures: './contract-fixtures.ts',
+      server: 'tools', // optional when the project has exactly one MCP server
+    },
+  },
+};
+```
+
+The module default-exports the same `Record<routeId, ContractRouteFixture>` consumed by
+`runContractMatrix`. Agent Bundle reloads and validates it for every prepared epoch. An invalid
+module does not fail compilation: it fails that epoch's contract run with an `AB7210` diagnostic
+instead. Omitting `dev.contracts` leaves the matrix off and preserves direct `artifact.available`
+adoption.
+
+For an enabled project, each published epoch is exercised through an already-open, epoch-pinned
+generated stdio session at the `dev-epoch` proof level. Passing epochs atomically replace the server
+behind existing live host MCP connections and refresh opted-in development host installs. Failing or
+timed-out epochs remain inactive on those host-facing surfaces (`AB7211`), leaving the last passing
+epoch connected and installed. On a cold start whose initial build fails, the last-good epoch the
+epoch store restored is seeded through the same gate before hosts serve it; when the project no
+longer prepares at all, the `dev.contracts` declaration cannot be read and the restored epoch is
+adopted directly, exactly as an undeclared project would be.
+
+The Workbench project stream emits `dev.contract.status`, and `status()` (and `/api/project/status`)
+carries a `hostAdoption` snapshot — `mode` (`gated` or `direct`), the `adoptedEpochId` hosts serve,
+and the latest `contracts` evaluation. The Overview page renders it as **Host adoption**: a failed
+gate names the published build, the build hosts kept, and the failed check names grouped by route,
+and folds the gate diagnostics into the Diagnostics table; the Logs page carries the same records.
+A later passing rebuild is adopted normally. Workbench playground sessions remain independently
+epoch-pinned and are not gated by this matrix.
 
 ### Live host MCP proxy
 
@@ -640,6 +680,13 @@ harness.
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in
 the published package.
 
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE); third-party material keeps
+its own notices under `dist/workbench/`.
+
 ## Contributor delivery and release gates
 
 The public examples live at [`../../examples`](../../examples). They are private
@@ -651,6 +698,7 @@ Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed:release`, and it does not replace
 `pnpm check`. `pnpm release` runs that release gate before `changeset publish`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
-npm publishing is deferred until the release owner picks the final package name/scope and
-license; pkg.pr.new previews are the interim channel, and the first npm release will use npm
-package provenance (`publishConfig.provenance` is already set).
+npm publishing is deferred until the release owner picks the final package name/scope;
+pkg.pr.new previews are the interim channel, and the first npm release will use npm
+package provenance (`publishConfig.provenance` is already set). `pnpm audit:release` fails if any
+publishable tarball lacks `LICENSE`, `NOTICE`, or the `"license": "Apache-2.0"` manifest field.

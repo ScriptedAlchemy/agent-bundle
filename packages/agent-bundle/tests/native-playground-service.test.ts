@@ -1,4 +1,4 @@
-import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1468,6 +1468,89 @@ it('fsyncs durable catalog publication, validates a no-replace winner, and retai
     expect(leftCatalog).toEqual(rightCatalog);
     expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
     await Promise.all([left.close(), right.close()]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('adopts a linked winner while its staging link is still present instead of rejecting the doubly linked sidecar', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-linked-winner-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-linked-winner', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  let winnerStaging: string | undefined;
+  let signalLinked!: () => void;
+  const linked = new Promise<void>((resolvePromise) => { signalLinked = resolvePromise; });
+  let releaseWinnerCleanup!: () => void;
+  const winnerCleanup = new Promise<void>((resolvePromise) => { releaseWinnerCleanup = resolvePromise; });
+  const storage: NativePlaygroundCatalogStorage = {
+    link: async (source, destination) => {
+      await link(source, destination);
+      winnerStaging = String(source);
+      signalLinked();
+    },
+    mkdir,
+    open,
+    remove: async (path, options) => {
+      if (String(path) === winnerStaging) await winnerCleanup;
+      await rm(path, options);
+    },
+  };
+  const serviceFor = (): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    catalogStorage: storage,
+    discover: async () => suite(),
+    inspectArtifact: async (candidate) => Object.freeze({
+      binding: Object.freeze({ manifestPath: 'agent-bundle.manifest.json', source: 'explicit' as const, targetDigests: candidate.epoch.targetDigests }),
+      root: candidate.root,
+    }),
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  const winner = serviceFor();
+  const loser = serviceFor();
+  try {
+    const winning = winner.catalog(reference);
+    await linked;
+    // The winner has linked its staging file into place but has not released
+    // it yet: the published sidecar is legitimately doubly linked here.
+    expect((await stat(sidecar)).nlink).toBe(2);
+
+    const losing = await loser.catalog(reference);
+    expect((await stat(sidecar)).nlink).toBe(2);
+    releaseWinnerCleanup();
+    expect(await winning).toEqual(losing);
+    expect((await stat(sidecar)).nlink).toBe(1);
+    expect((await readdir(catalogDirectory)).filter((name) => name.includes('.stage-'))).toEqual([]);
+    await Promise.all([winner.close(), loser.close()]);
+  } finally {
+    releaseWinnerCleanup();
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('still rejects a persisted catalog aliased by a hard link that is not an epoch staging file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-native-playground-aliased-catalog-'));
+  const catalogDirectory = join(root, 'catalog');
+  const reference = epoch('epoch-aliased-catalog', join(root, 'artifact'));
+  const sidecar = join(catalogDirectory, `${reference.epoch.id}.json`);
+  const serviceFor = (discover: () => Promise<readonly DiscoveredEvalSuite[]>): NativePlaygroundService => new NativePlaygroundService({
+    catalogDirectory,
+    discover,
+    planFixture: async () => fixturePlan,
+    projectRoot: '/project',
+  });
+  try {
+    const writer = serviceFor(async () => suite());
+    await writer.catalog(reference);
+    await writer.close();
+    for (const alias of ['alias.json', '.epoch-other.stage-alias', `.${reference.epoch.id}.staged`]) {
+      await link(sidecar, join(catalogDirectory, alias));
+      const reader = serviceFor(async () => { throw new Error('An aliased catalog must not fall back to discovery.'); });
+      await expect(reader.catalog(reference)).rejects.toThrow('catalog snapshot is invalid');
+      await reader.close();
+      await rm(join(catalogDirectory, alias));
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }

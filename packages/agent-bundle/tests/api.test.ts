@@ -156,9 +156,21 @@ it('prepares and inspects a target owned only by the supplied advanced registry'
       synthetic: expect.objectContaining({ target: 'synthetic', value: { enabled: true } }),
     });
     expect(result.plans).toEqual([expect.objectContaining({ target: 'synthetic' })]);
+    // An adapter that publishes no row for a capability has not evidenced it:
+    // the omission reads as an honest unavailable judgment, not a crash.
     expect(result.plans[0]?.skipped).toEqual([
-      expect.objectContaining({ kind: 'skill', name: 'review', reason: 'unsupported-capability' }),
+      expect.objectContaining({
+        capability: {
+          name: 'skills',
+          reason: 'The synthetic adapter publishes no skills capability row.',
+          state: 'unavailable',
+        },
+        kind: 'skill',
+        name: 'review',
+        reason: 'unsupported-capability',
+      }),
     ]);
+    expect(result.plans[0]?.selected).toEqual([]);
     expect(registry.names()).toEqual(['synthetic']);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -689,6 +701,43 @@ it('reports skipped target/component pairs against each target emission surface'
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
+    // Every omission explains itself with the host's own pinned judgment:
+    // capability-driven omissions carry the four-state row and its reason,
+    // author exclusions carry the judgment the host would have applied, and
+    // scripts (which need no host capability) carry none.
+    const portableSkipped = planFor('portable')!.skipped;
+    expect(portableSkipped.find((component) => component.kind === 'command' && component.name === 'shared')?.capability)
+      .toEqual({ name: 'commands', reason: expect.any(String), state: 'unavailable' });
+    expect(portableSkipped.find((component) => component.kind === 'rule' && component.name === 'shared')?.capability)
+      .toEqual({ name: 'rules', reason: expect.any(String), state: 'unavailable' });
+    expect(portableSkipped.find((component) => component.kind === 'hook')?.capability)
+      .toEqual({ name: 'hooks', reason: expect.any(String), state: 'unavailable' });
+    expect(portableSkipped.find((component) => component.kind === 'script')).not.toHaveProperty('capability');
+    expect(planFor('portable')?.selected).toEqual([
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'skills', state: 'supported' }), kind: 'skill', name: 'review' }),
+    ]);
+    // Cursor emits both surfaces with dated evidence; Claude emits commands but no rules.
+    expect(planFor('cursor')?.selected).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        capability: expect.objectContaining({ evidence: expect.objectContaining({ target: 'cursor' }), name: 'commands', state: 'supported' }),
+        kind: 'command',
+        name: 'shared',
+      }),
+      expect.objectContaining({
+        capability: expect.objectContaining({ evidence: expect.objectContaining({ target: 'cursor' }), name: 'rules', state: 'supported' }),
+        kind: 'rule',
+        name: 'cursor-only',
+      }),
+    ]));
+    expect(planFor('claude')?.selected.some((component) => component.kind === 'command' && component.name === 'shared')).toBe(true);
+    expect(planFor('claude')?.skipped.find((component) => component.kind === 'rule' && component.name === 'shared')?.capability)
+      .toEqual({ name: 'rules', reason: expect.any(String), state: 'unavailable' });
+    for (const plan of result.plans) {
+      expect(Object.isFrozen(plan.selected)).toBe(true);
+      expect(plan.selected.length + plan.skipped.length).toBe(
+        planFor('cursor')!.selected.length + planFor('cursor')!.skipped.length,
+      );
+    }
     expect(planFor('codex')?.skipped).toEqual([
       expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),

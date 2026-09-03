@@ -24,6 +24,16 @@ fallback or a typed `McpProjectionError`, never a silent drop. The existing
 `lowerMcpResult` / `lowerHookResult` helpers remain synchronous compatibility
 APIs for the operations-model path.
 
+Task-augmented tool calls (`CreateTaskResult`, `tasks/get`, `tasks/result`,
+`tasks/cancel`) are deferred, not partially implemented. The generated servers
+never advertise a `tasks` capability, and a request that carries task
+augmentation is processed as an ordinary `tools/call` — the fallback the
+2025-11-25 Tasks utility requires of a receiver that declared no task support.
+The deferral, its SDK pin, and the exact unblock condition are recorded in
+[MCP conformance evidence](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)
+and enforced by `tests/mcp-tasks-deferral.test.ts`, which fails the day the
+installed SDK grows a task runtime.
+
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
 
@@ -248,3 +258,9 @@ content, and the `available`/`read` taxonomy rows from #99 map onto the
 availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
 cross-request routes from a per-host advertisement and returns a typed
 unavailable outcome when none is supported; it never fabricates a channel.
+
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE).

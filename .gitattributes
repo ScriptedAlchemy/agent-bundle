@@ -1,0 +1,5 @@
+# The canonical license files are verified byte-for-byte (SHA-256 against
+# apache.org and root-vs-package copies), so they must never be CRLF-converted
+# by core.autocrlf on checkout.
+/LICENSE text eol=lf
+/NOTICE text eol=lf

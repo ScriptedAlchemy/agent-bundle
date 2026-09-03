@@ -451,6 +451,46 @@ it('prints a complete invalid inspection on JSON and human output', async () => 
   }
 }, 30_000 * timeScale);
 
+it('explains selected and omitted components per target on human inspect output', async () => {
+  const project = await createCliProject();
+  try {
+    // A conventional rule is a Cursor-only surface: portable and codex omit it
+    // with their pinned capability judgment, while the skill ships everywhere.
+    await mkdir(join(project.root, 'src', 'rules'), { recursive: true });
+    await writeFile(
+      join(project.root, 'src', 'rules', 'shared.mdc'),
+      '---\ndescription: Shared rule\n---\nShared guidance.\n',
+    );
+
+    const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
+    expect(human).toMatchObject({ code: 0, stderr: '' });
+    expect(human.stdout).toContain('Inspected cli-fixture: portable, codex\n');
+    expect(human.stdout).toContain('portable: 1 component(s) selected, 1 omitted\n');
+    expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
+    expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
+    expect(human.stdout).not.toContain('omitted skill review');
+
+    // The JSON form carries the same accounting with the full judgment.
+    const json = await runSourceCliWithOutput(['inspect', '--root', project.root, '--target', 'codex', '--json']);
+    expect(json).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      plans: [{
+        selected: [expect.objectContaining({ capability: expect.objectContaining({ name: 'skills', state: 'supported' }), kind: 'skill', name: 'review' })],
+        skipped: [expect.objectContaining({
+          capability: { name: 'rules', reason: expect.any(String), state: 'unavailable' },
+          kind: 'rule',
+          name: 'shared',
+          reason: 'unsupported-capability',
+        })],
+        target: 'codex',
+      }],
+      state: 'ready',
+    });
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000 * timeScale);
+
 it('reports an unselected inspect target on JSON and human output', async () => {
   const project = await createCliProject();
   try {

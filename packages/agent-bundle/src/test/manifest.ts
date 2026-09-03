@@ -23,6 +23,9 @@ import type {
  *   client over the SDK's in-memory transport pair. It proves the protocol
  *   contract — registration, schemas, content projection — and proves
  *   **nothing** about a process, stdout framing, or a packed artifact.
+ * - `dev-epoch` opens an epoch-pinned generated stdio entry through the
+ *   Workbench session service and drives its real process. It proves the
+ *   generated development artifact, not packed or native-host provenance.
  * - `cli-dispatch` runs an argv vector through the routed CLI's own shell over
  *   the compiled command graph, in this process. It proves command
  *   resolution, argv projection, and exit codes, not a spawned binary.
@@ -45,6 +48,7 @@ import type {
 export type AgentTestProofLevel =
   | 'route-unit'
   | 'mcp-in-memory'
+  | 'dev-epoch'
   | 'cli-dispatch'
   | 'packed-stdio'
   | 'packed-deleted-source'
@@ -54,6 +58,7 @@ export type AgentTestProofLevel =
 
 export const ROUTE_UNIT_PROOF_LEVEL = 'route-unit' as const;
 export const MCP_IN_MEMORY_PROOF_LEVEL = 'mcp-in-memory' as const;
+export const DEV_EPOCH_PROOF_LEVEL = 'dev-epoch' as const;
 export const CLI_DISPATCH_PROOF_LEVEL = 'cli-dispatch' as const;
 export const PACKED_STDIO_PROOF_LEVEL = 'packed-stdio' as const;
 export const PACKED_DELETED_SOURCE_PROOF_LEVEL = 'packed-deleted-source' as const;
@@ -72,6 +77,8 @@ export const proofLevelLabel = (level: AgentTestProofLevel): string => {
       return 'route-unit (real Agent renderer; no transport, browser, or artifact)';
     case 'mcp-in-memory':
       return 'mcp-in-memory (real generated MCP server + real client over the SDK in-memory transport; NOT process or packed-artifact evidence)';
+    case 'dev-epoch':
+      return 'dev-epoch (epoch-pinned generated stdio entry spawned as a real process through the Workbench session service; NOT packed or native-host evidence)';
     case 'cli-dispatch':
       return 'cli-dispatch (argv dispatched through the routed CLI shell in-process; NOT a spawned binary)';
     case 'packed-stdio':

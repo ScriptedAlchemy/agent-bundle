@@ -5,6 +5,10 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { ProtocolError, Server, type ReadResourceResult } from '@modelcontextprotocol/server';
 
 import { EpochStoreError, type EpochStore } from './epoch-store.ts';
+import {
+  subscribeToEpochAdoption,
+  type EpochAdoptionSource,
+} from './epoch-adoption-policy.ts';
 import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import {
   McpSessionStaleEpochError,
@@ -45,6 +49,7 @@ interface HostMcpEpochSession {
 }
 
 interface HostMcpRoutesOptions {
+  readonly adoption?: EpochAdoptionSource;
   readonly epochStore: EpochStore;
   readonly eventHub: ProjectEventHub;
   readonly mcpSessions: McpSessionService;
@@ -74,6 +79,7 @@ const isEpochDrift = (error: unknown): boolean =>
     (error.code === 'EPOCH_NOT_FOUND' || error.code === 'EPOCH_METADATA_INVALID'));
 
 class HostMcpConnection {
+  readonly #adoption: EpochAdoptionSource | undefined;
   readonly #binding: HostMcpBinding;
   readonly #epochStore: EpochStore;
   readonly #mcpSessions: McpSessionService;
@@ -91,9 +97,10 @@ class HostMcpConnection {
 
   constructor(
     binding: HostMcpBinding,
-    options: Pick<HostMcpRoutesOptions, 'epochStore' | 'mcpSessions'>,
+    options: Pick<HostMcpRoutesOptions, 'adoption' | 'epochStore' | 'mcpSessions'>,
     onSessionInitialized: (sessionId: string, connection: HostMcpConnection) => void,
   ) {
+    this.#adoption = options.adoption;
     this.#binding = binding;
     this.#epochStore = options.epochStore;
     this.#mcpSessions = options.mcpSessions;
@@ -198,7 +205,16 @@ class HostMcpConnection {
     if (this.#activeEpochSession === undefined) {
       this.#scheduleTransition(this.#lastEpochId ?? 'unknown', async () => {
         if (this.#activeEpochSession !== undefined) return;
-        const reference = await this.#epochStore.acquireActiveEpochReference();
+        const adoptedEpochId = this.#adoption?.currentEpochId;
+        if (this.#adoption !== undefined && adoptedEpochId === undefined) {
+          throw new Error(
+            '[AB7211] No development epoch has passed the contract matrix yet, so this host connection has nothing to serve; '
+            + 'fix the reported contract violations and rebuild.',
+          );
+        }
+        const reference = adoptedEpochId === undefined
+          ? await this.#epochStore.acquireActiveEpochReference()
+          : await this.#epochStore.acquireEpochReference(adoptedEpochId);
         this.#lastEpochId = reference.epoch.id;
         try {
           this.#activeEpochSession = await this.#openEpochSession(reference.epoch.id);
@@ -333,6 +349,7 @@ class HostMcpConnection {
 
 /** Stateful host-facing MCP transport whose handlers resolve the active artifact epoch per operation. */
 export class HostMcpRoutes {
+  readonly #adoption: EpochAdoptionSource | undefined;
   readonly #connections = new Set<HostMcpConnection>();
   readonly #epochStore: EpochStore;
   readonly #mcpSessions: McpSessionService;
@@ -341,11 +358,11 @@ export class HostMcpRoutes {
   #closed = false;
 
   constructor(options: HostMcpRoutesOptions) {
+    this.#adoption = options.adoption;
     this.#epochStore = options.epochStore;
     this.#mcpSessions = options.mcpSessions;
-    this.#subscription = options.eventHub.subscribe((event) => {
-      if (event.type !== 'artifact.available') return;
-      for (const connection of this.#connections) connection.refreshCatalog(event.epochId);
+    this.#subscription = subscribeToEpochAdoption(options.adoption, options.eventHub, (epochId) => {
+      for (const connection of this.#connections) connection.refreshCatalog(epochId);
     });
   }
 
@@ -374,7 +391,7 @@ export class HostMcpRoutes {
 
     const connection = new HostMcpConnection(
       binding,
-      { epochStore: this.#epochStore, mcpSessions: this.#mcpSessions },
+      { adoption: this.#adoption, epochStore: this.#epochStore, mcpSessions: this.#mcpSessions },
       (id, initialized) => this.#sessions.set(id, initialized),
     );
     this.#connections.add(connection);
