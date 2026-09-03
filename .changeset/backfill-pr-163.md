@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-MCP sessions re-check the caller abort signal after the asynchronous epoch availability probe and before tool dispatch, so a request cancelled while the probe is pending no longer dispatches the tool. (#163)
+Stop dispatching an MCP tool call whose request was cancelled while the epoch availability probe was pending: the dev-server MCP session re-checks the caller abort signal after the probe and before dispatch. (#163)

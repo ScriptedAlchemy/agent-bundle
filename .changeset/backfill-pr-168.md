@@ -3,4 +3,4 @@
 "create-agent-bundle": patch
 ---
 
-Generated route declarations exclude schema-less script routes, and `create-agent-bundle` requires coherent `agent-bundle` / `@agent-bundle/runtime` identities when scaffolding from local tarballs. (#168)
+Omit schema-less script routes from the generated route declarations, and make `create-agent-bundle` refuse local-tarball scaffolds whose `agent-bundle` and `@agent-bundle/runtime` identities disagree. (#168)

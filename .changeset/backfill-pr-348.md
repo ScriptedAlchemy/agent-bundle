@@ -4,4 +4,4 @@
 "create-agent-bundle": patch
 ---
 
-Consolidate duplicated guards and helpers onto canonical modules, with hot-path fixes riding along: route-graph module text is read once per build instead of once per surface, the sqlite state driver caches prepared statements, directory walks run with bounded concurrency, and the MCP App consent-capability vocabulary now lives in a browser-safe module so the Workbench bundle no longer pulls in `node:*` imports. (#348)
+Speed up `agent-bundle build` and the dev server by reading each route module once per build instead of once per surface, caching prepared statements in the `@agent-bundle/runtime/state/sqlite` driver, and bounding directory-walk concurrency; keep `node:*` imports out of the Workbench browser bundle by moving the MCP App consent-capability vocabulary to a browser-safe module. `create-agent-bundle` shares the same corrected helpers. (#348)
