@@ -11,6 +11,7 @@ export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebui
 export type ArtifactManifestValidationStatus = 'passed';
 
 export interface ArtifactManifestSourceInput {
+  readonly executable?: boolean;
   readonly path: string;
   readonly sha256: string;
 }
@@ -178,8 +179,14 @@ const requireStatus = (value: unknown, location: string): ArtifactManifestValida
 const parseSourceInputs = (value: unknown, location: string): readonly ArtifactManifestSourceInput[] => {
   const inputs = requireArray(value, location).map((candidate, index) => {
     const input = requireRecord(candidate, `${location}[${index}]`);
-    requireExactKeys(input, `${location}[${index}]`, ['path', 'sha256']);
+    requireExactKeys(input, `${location}[${index}]`, ['path', 'sha256'], ['executable']);
+    const executable = input.executable === undefined
+      ? undefined
+      : typeof input.executable === 'boolean'
+        ? input.executable
+        : fail(`${location}[${index}].executable must be a boolean.`);
     return {
+      ...(executable === undefined ? {} : { executable }),
       path: requirePath(input.path, `${location}[${index}].path`),
       sha256: requireHash(input.sha256, `${location}[${index}].sha256`),
     } satisfies ArtifactManifestSourceInput;

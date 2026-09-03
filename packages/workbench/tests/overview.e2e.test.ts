@@ -667,7 +667,7 @@ e2e('keeps runtime MCP routing constrained after direct navigation from a bound 
 e2e('restarts the real Runtime MCP App session when definition or transport authority changes', { timeout: 150_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const serverOwnedProjectSubscriptions = fixture.eventHubState.subscriptionCount;
-  expect(serverOwnedProjectSubscriptions).toBeGreaterThan(0);
+  expect(serverOwnedProjectSubscriptions).toBe(2);
   const pageErrors: Error[] = [];
   const artifactMcpSessionRequests: string[] = [];
   const projectEventStreams: string[] = [];

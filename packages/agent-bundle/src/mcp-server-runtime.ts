@@ -491,7 +491,11 @@ const startEventRuntime = async (
     );
     const sessionId = nativeString(request.native, 'session_id')
       ?? nativeString(request.native, 'conversation_id');
-    const workspaceRoot = nativeString(request.native, 'cwd');
+    const workspaceRoots = request.native['workspace_roots'];
+    const workspaceRoot = nativeString(request.native, 'cwd')
+      ?? (Array.isArray(workspaceRoots) && typeof workspaceRoots[0] === 'string'
+        ? workspaceRoots[0]
+        : undefined);
     return runAgentRequest({
       host: available({ name: target }, 'native'),
       invocation: {

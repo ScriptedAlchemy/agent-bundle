@@ -126,6 +126,7 @@ const sameInputs = (left: readonly ProjectSourceInput[], right: readonly Project
     return candidate !== undefined &&
       input.path === candidate.path &&
       candidate.error === undefined &&
+      input.executable === candidate.executable &&
       input.sha256 === candidate.sha256;
   });
 

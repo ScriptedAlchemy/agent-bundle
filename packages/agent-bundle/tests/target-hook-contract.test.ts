@@ -319,6 +319,8 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   expect(degradedSource).toContain('createAgentRenderDispatcher');
   expect(degradedSource).toContain('projectEventDocument');
   expect(degradedSource).toContain('error.code === "runtime-unavailable"');
+  expect(degradedSource).toContain('Array.isArray(native.workspace_roots)');
+  expect(degradedSource).toContain('native.workspace_roots[0]');
   expect(degradedSource).not.toContain('import * as routeModule');
   expect(degradedSource).not.toContain('renderStandaloneEventRoute');
 });
