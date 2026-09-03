@@ -1,10 +1,10 @@
 ---
-description: 'The runnable agent-bundle examples: four walkthroughs from a Skills starter to a complete media-management plugin, plus two advanced composition references.'
+description: 'The runnable agent-bundle examples: four walkthroughs from a Skills starter to a complete media-management plugin, plus three advanced composition references.'
 ---
 
 # Examples
 
-The repository ships six examples, and they are products rather than fixtures. Each one uses
+The repository ships seven examples, and they are products rather than fixtures. Each one uses
 only public `agent-bundle` exports and `workspace:*` dependencies, each one builds and validates
 through the same public CLI you would use, and none of them needs an API key or a signed-in host
 to reach a useful state. Four have a walkthrough here:
@@ -16,13 +16,14 @@ to reach a useful state. Four have a walkthrough here:
 | [MCP App](./mcp-app.mdx) | A generated stdio MCP server plus an interactive MCP App resource. | `pnpm example:mcp-app` |
 | [Audiobook Curator](./audiobook-curator.mdx) | A complete route-tree application: MCP, projected CLI, providers, durable state. | `pnpm example:audiobook` |
 
-Two more are advanced composition references, documented by their own READMEs rather than
+Three more are advanced composition references, documented by their own READMEs rather than
 walked through here:
 
 | Example | What it proves |
 | --- | --- |
 | [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | One root task and two child agents in linked worktrees, coordinated through durable notices. |
 | [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | An opt-in architecture experiment: one RSC runtime shared by hooks, MCP tools, and an MCP App timeline. Not a public API. |
+| [Host Test](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/host-test) | A probe plugin that records every hook payload and MCP call a host delivers, with the `request.lineage` each one resolved to. Its `probe:install` / `probe:capture` / `probe:uninstall` scripts drive a real host in an isolated home; `probe:capture <host> --scenario <file.json>` runs an ordered list of prompts as one multi-turn session (Claude: `claude -p --output-format stream-json`, later turns `--resume`d), saving the model's own tool-use stream beside the hook log. The Workbench walkthrough needs no signed-in host; the probe lifecycle does. |
 
 ## Running them
 
@@ -46,8 +47,8 @@ pnpm examples:check
 
 Each example package also exposes the same public commands directly, once the repository-level
 `pnpm build` has built the local `agent-bundle` workspace dependency. Every example has `validate`,
-`build`, and `check`; the four walkthrough examples and Worktree Proximity also have `dev`, while the
-RSC Agent Runtime demo is driven through its tests and `eval:hosts` instead:
+`build`, and `check`; the four walkthrough examples, Worktree Proximity, and Host Test also have `dev`,
+while the RSC Agent Runtime demo is driven through its tests and `eval:hosts` instead:
 
 ```sh
 cd examples/skills-starter

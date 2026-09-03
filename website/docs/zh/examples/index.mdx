@@ -1,10 +1,10 @@
 ---
-description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整媒体管理插件的四篇导览，外加两个进阶组合参考。'
+description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整媒体管理插件的四篇导览，外加三个进阶组合参考。'
 ---
 
 # 示例
 
-仓库中带有六个示例，它们是产品，而不是测试夹具。每个示例只使用公开的 `agent-bundle` 导出与
+仓库中带有七个示例，它们是产品，而不是测试夹具。每个示例只使用公开的 `agent-bundle` 导出与
 `workspace:*` 依赖，都通过你自己也会用的那套公开命令行来构建与校验，并且都不需要 API key 或已登录的
 宿主就能进入有意义的状态。其中四个在这里有导览：
 
@@ -15,12 +15,13 @@ description: '可运行的 agent-bundle 示例：从 Skill 起步项目到完整
 | [MCP App](./mcp-app.mdx) | 一个生成的 stdio MCP 服务器，加上一个交互式 MCP App 资源。 | `pnpm example:mcp-app` |
 | [有声书策展器](./audiobook-curator.mdx) | 一个完整的路由树应用：MCP、投影出的 CLI、提供者与持久状态。 | `pnpm example:audiobook` |
 
-另外两个是进阶组合参考，由各自的 README 说明，这里不做导览：
+另外三个是进阶组合参考，由各自的 README 说明，这里不做导览：
 
 | 示例 | 证明什么 |
 | --- | --- |
 | [Worktree Proximity](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/worktree-proximity) | 一个根任务与两个位于关联 worktree 中的子智能体，通过持久通知协调。 |
 | [RSC Agent Runtime](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/rsc-agent-runtime) | 一个可选启用的架构实验：一个 RSC 运行时同时服务钩子、MCP 工具与 MCP App 时间线。不是公开 API。 |
+| [Host Test](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/host-test) | 一个探针插件，记录宿主投递的每个钩子负载与 MCP 调用，以及各自解析出的 `request.lineage`。它的 `probe:install` / `probe:capture` / `probe:uninstall` 脚本在隔离的 home 中驱动真实宿主；`probe:capture <host> --scenario <file.json>` 把一组有序提示作为一个多轮会话运行（Claude 使用 `claude -p --output-format stream-json`，后续轮次以 `--resume` 续接），并把模型自身的工具调用流保存在钩子日志旁。Workbench 导览不需要已登录的宿主；探针生命周期则需要。 |
 
 ## 如何运行
 
@@ -41,8 +42,8 @@ pnpm examples:check
 ```
 
 在仓库级 `pnpm build` 构建过本地 `agent-bundle` 工作区依赖之后，每个示例包也直接暴露同样的公开命令。每个示例都有
-`validate`、`build` 与 `check`；四个导览示例与 Worktree Proximity 还有 `dev`，而 RSC Agent Runtime 演示则通过其测试与
-`eval:hosts` 驱动：
+`validate`、`build` 与 `check`；四个导览示例、Worktree Proximity 与 Host Test 还有 `dev`，而 RSC Agent Runtime
+演示则通过其测试与 `eval:hosts` 驱动：
 
 ```sh
 cd examples/skills-starter

@@ -330,12 +330,14 @@ const captureClaude = () => {
       const envelopes = parseStream(result.stdout ?? '');
       sessionId ??= envelopes.find((envelope) => typeof envelope.session_id === 'string')?.session_id;
       log(`turn ${String(index + 1)}/${String(turns.length)}: exit ${String(result.status)}, session ${sessionId ?? 'unknown'}; ${describeStream(envelopes)}`);
-      results.push({ ...result, stdoutExtension: 'stream.ndjson' });
-      if (result.status !== 0) break;
-      if (sessionId === undefined && index + 1 < turns.length) {
-        log('the first turn reported no session_id, so the remaining turns cannot resume it');
+      if (result.status === 0 && sessionId === undefined && index + 1 < turns.length) {
+        // A multi-turn scenario without a session to resume is not the
+        // scenario: fail the turn so `capture()` refuses the partial run.
+        results.push({ ...result, failure: 'the first turn reported no session_id, so the remaining turns cannot resume it', stdoutExtension: 'stream.ndjson' });
         break;
       }
+      results.push({ ...result, stdoutExtension: 'stream.ndjson' });
+      if (result.status !== 0) break;
     }
   } finally {
     mock?.kill();
@@ -397,8 +399,10 @@ const capture = () => {
     writeFileSync(join(paths.captures, `${name}.${turn.stdoutExtension}`), turn.stdout ?? '');
     writeFileSync(join(paths.captures, `${name}.stderr.txt`), turn.stderr ?? '');
   }
-  // The session failed if any turn did.
-  const result = turns.find((turn) => turn.status !== 0) ?? turns[turns.length - 1];
+  // The session failed if any turn did, or if the driver could not run the
+  // whole scenario (`failure`).
+  const result = turns.find((turn) => turn.status !== 0 || turn.failure !== undefined) ?? turns[turns.length - 1];
+  const failed = result.status !== 0 || result.failure !== undefined;
   log(`host exit ${String(result.status)} over ${String(turns.length)} turn(s); transcript at ${join(paths.captures, `session-${stamp}.*`)}`);
   const appended = existsSync(logFile) ? readFileSync(logFile).subarray(startOffset).toString('utf8') : '';
   const records = appended.split('\n').filter(Boolean).map((line) => JSON.parse(line));
@@ -417,9 +421,9 @@ const capture = () => {
   // session nor a session that produced no hook AND no MCP evidence is a
   // capture: automation must see the failure.
   const missing = ['event', 'mcp'].filter((kind) => !kinds.has(kind));
-  if (result.status !== 0) {
-    log(`host session failed with exit ${String(result.status)}; captures above are partial evidence at best`);
-    process.exitCode = result.status ?? 1;
+  if (failed) {
+    log(`host session failed (${result.failure ?? `exit ${String(result.status)}`}); captures above are partial evidence at best`);
+    process.exitCode = result.status === 0 || result.status === null ? 1 : result.status;
   } else if (missing.length > 0) {
     log(`host session exited 0 but produced no ${missing.join(' and no ')} record; the scenario requires both`);
     process.exitCode = 1;
