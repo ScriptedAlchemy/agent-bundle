@@ -67,7 +67,8 @@ values, except `installation: NOT_AVAILABLE`, which fails the build
 such entries and that is exactly the command the emitted `INSTALL.md` and `installBundle()` run.
 The pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources for
 validating real-world marketplaces (Git and registry URLs must carry a syntactically valid
-hostname and path, not just a scheme prefix), but the adapter never emits them. Personal and legacy
+host, port, and path rather than a bare scheme prefix, and npm `version` must be a semver
+version, range, or dist-tag), but the adapter never emits them. Personal and legacy
 `.claude-plugin/marketplace.json` discovery, the `~/.codex/plugins/cache` layout, `config.toml`
 enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
 managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or

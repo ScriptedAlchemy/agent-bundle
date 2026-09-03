@@ -84,7 +84,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'marketplace',
         revision: '0.147.0',
-        sha256: '4f643f986ce40e82fd545cd7d579e318a277c18418fa06eeccb76fb3447961a7',
+        sha256: '1f069283d53ea61be08375233c9ad7a805e318d4d229304cf4bec587f9557715',
       },
       {
         name: 'mcp',
