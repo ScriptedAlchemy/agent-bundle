@@ -295,7 +295,16 @@ idempotent receipt is retried on the renewal cadence (renewing its hold as it
 goes), before any later observation spends, and on `close()`, so a live process
 cannot lose a send the wire already carried; only a process that dies while the
 ledger is refusing writes leaves an unrecorded send, and its hold then lapses
-after the TTL. Exposure and availability
+after the TTL. A renewal still awaiting the ledger when a send settles is
+awaited before the hold is released or finalized, so no orphan hold is
+re-created behind a release. The wire is the one dependency the signaller never
+waits on at shutdown: `close()` abandons a `resources/updated` write that has
+not settled (its outcome is unknown, so it is neither recorded nor released and
+its hold lapses after the TTL), commits any owed receipt, and closes the store,
+so a subscriber that stopped reading cannot wedge server teardown. The generated
+server coalesces observations — one in flight, at most one owed — because every
+observation reads the whole ledger, so renders completing behind a pending
+write never queue per-render work. Exposure and availability
 receipts never re-trigger a signal, so a subscribed client cannot be driven into
 a refetch loop. Subscribing fails closed when the store is unreadable,
 `unsubscribe()` resolves only after in-flight observations settle, and only the

@@ -65,7 +65,12 @@ export type AgentNoticeInboxSignalOutcome =
 export interface AgentNoticeInboxSignaller {
   readonly inboxUri: typeof AGENT_NOTICE_INBOX_URI;
   readonly subscribed: boolean;
-  /** Commits any receipt still owed for a send that reached the wire, then closes the store. */
+  /**
+   * Commits any receipt still owed for a send that reached the wire, then
+   * closes the store. Never waits on a client's wire: a `resources/updated`
+   * write still pending is abandoned with its outcome unknown, and the hold
+   * it took lapses after the reservation TTL like any holder gone mid-send.
+   */
   close(): Promise<void>;
   /**
    * Runs after one completed render: first commits any receipt still owed from
@@ -160,6 +165,10 @@ export const createNoticeInboxSignaller = (
   let receiptRetryTimer: ReturnType<typeof setTimeout> | undefined;
   let renewalSequence = 0;
   let closed = false;
+  let resolveClosing: () => void = () => undefined;
+  const closing = new Promise<void>((resolve) => {
+    resolveClosing = resolve;
+  });
   // Observations and subscription changes serialize on one queue: two renders
   // completing together cannot both select the same notice and send two
   // signals for one revision, and an unsubscribe (or re-subscribe) that
@@ -316,7 +325,10 @@ export const createNoticeInboxSignaller = (
    * abandoned and send too; renewing under the same key refreshes `at`, and
    * the reducer refuses a renewal once a different key has legitimately taken
    * over, so a holder that could not renew for a whole TTL never steals back.
-   * The timer exists only for the duration of one in-flight send.
+   * The timer exists only for the duration of one in-flight send, and a
+   * renewal still awaiting the ledger when the send settles is awaited before
+   * the caller releases or finalizes the hold: a renewal landing afterwards
+   * would re-create a hold nobody owns and block the slot for a whole TTL.
    */
   const renewWhile = async <T>(
     ledger: AgentNoticeLedger,
@@ -325,15 +337,17 @@ export const createNoticeInboxSignaller = (
   ): Promise<T> => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let renewing: Promise<void> | undefined;
     const tick = (): void => {
       if (stopped) return;
       renewalSequence += 1;
-      void ledger.reserveAvailability({
+      renewing = ledger.reserveAvailability({
         at: now().toISOString(),
         idempotencyKey: `agent-notices:availability:renew:${hold.reservationKey}:${String(renewalSequence)}`,
         noticeIds: hold.noticeIds,
         reservationKey: hold.reservationKey,
       }).catch(() => undefined).then(() => {
+        renewing = undefined;
         if (stopped) return;
         timer = setTimeout(tick, renewalIntervalMs);
         timer.unref?.();
@@ -346,8 +360,21 @@ export const createNoticeInboxSignaller = (
     } finally {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
+      await renewing;
     }
   };
+
+  /**
+   * Races one protocol write against the signaller closing. The wire is the
+   * one dependency the signaller cannot bound — a subscriber that stops
+   * reading leaves the write pending forever — so shutdown must not wait on
+   * it: the send is abandoned with its outcome unknown and its hold is left to
+   * lapse after the TTL, exactly as for a holder that vanished mid-send.
+   */
+  const sendUntilClosed = (send: () => Promise<void>): Promise<'closed' | 'sent'> => Promise.race([
+    send().then((): 'sent' => 'sent'),
+    closing.then((): 'closed' => 'closed'),
+  ]);
 
   const observeOnce = async (send: () => Promise<void>): Promise<AgentNoticeInboxSignalOutcome> => {
     const current = subscription;
@@ -390,8 +417,9 @@ export const createNoticeInboxSignaller = (
     // the notice stays eligible for the next observation, while a successful
     // send finalizes the hold into the availability receipt. Only the receipt
     // means the protocol write succeeded.
+    let wire: 'closed' | 'sent';
     try {
-      await renewWhile(ledger, claimed, send());
+      wire = await renewWhile(ledger, claimed, sendUntilClosed(send));
     } catch (error) {
       try {
         await ledger.releaseAvailability({
@@ -404,6 +432,15 @@ export const createNoticeInboxSignaller = (
         // failure is the outcome worth reporting.
       }
       return Object.freeze({ error, kind: 'failed' as const, stage: 'send' as const });
+    }
+    if (wire === 'closed') {
+      // Whether the write reached the client is unknowable now, so neither a
+      // receipt nor a release would be honest; the hold lapses on its own.
+      return Object.freeze({
+        error: new AgentNoticeError('aborted', 'Notice inbox signaller closed while a resources/updated write was pending'),
+        kind: 'failed' as const,
+        stage: 'send' as const,
+      });
     }
     // The wire write succeeded: this subscription never sends for these notices
     // again, and the receipt is owed until it commits.
@@ -435,6 +472,9 @@ export const createNoticeInboxSignaller = (
     },
     close(): Promise<void> {
       closed = true;
+      // Unblocks an observation whose protocol write never settles so the
+      // queue — and this close behind it — cannot wait on a client's wire.
+      resolveClosing();
       if (receiptRetryTimer !== undefined) {
         clearTimeout(receiptRetryTimer);
         receiptRetryTimer = undefined;

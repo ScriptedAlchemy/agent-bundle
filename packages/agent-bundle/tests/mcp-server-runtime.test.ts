@@ -119,6 +119,63 @@ describe('generated server render completion', () => {
       await server.close();
     }
   });
+
+  it('coalesces renders completing behind a pending observation into one follow-up', async () => {
+    // Every observation reads the whole ledger, so the renders that complete
+    // while a notification write is pending are all covered by one follow-up:
+    // a client that stops reading cannot grow a queue of observations.
+    const settlers: Array<() => void> = [];
+    const { host, notices } = stubs({
+      observe: () => new Promise((resolve) => {
+        settlers.push(() => {
+          resolve({ kind: 'idle', reason: 'nothing-eligible', revision: 1 });
+        });
+      }),
+    });
+    const server = await createGeneratedRouteMcpServer({
+      artifactEpoch: 'epoch',
+      host,
+      notices,
+      plugin: { name: 'coalesced-observation', version: '0.0.0' },
+      routes: {
+        'mcp/coalesced/tools/probe': {
+          config: {},
+          id: 'mcp/coalesced/tools/probe',
+          kind: 'tool',
+          module: {
+            default: () => undefined,
+            inputSchema: z.object({}).strict(),
+            resultSchema: z.object({ ok: z.boolean() }).strict(),
+          },
+          name: 'probe',
+        },
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'coalesced-observation-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        await client.callTool({ arguments: {}, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      }
+      // Five completed renders, one observation in flight, one owed.
+      expect(settlers).toHaveLength(1);
+      settlers[0]!();
+      await tick();
+      expect(settlers).toHaveLength(2);
+      // The single follow-up settles with nothing further owed.
+      settlers[1]!();
+      await tick();
+      expect(settlers).toHaveLength(2);
+      // A render after the queue drained starts a fresh observation.
+      await client.callTool({ arguments: {}, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      expect(settlers).toHaveLength(3);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
 
 describe('generated server teardown', () => {

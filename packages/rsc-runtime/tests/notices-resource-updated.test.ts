@@ -777,6 +777,120 @@ describe('notice inbox resources/updated signaller', () => {
     await driver.close();
   });
 
+  it('waits for a renewal still in flight before releasing a failed send, so no orphan hold survives', async () => {
+    const { driver, ledger } = await openLedger();
+    // Renewals reach the ledger only when the test lets them, standing in for
+    // a ledger that answers slowly while the wire fails fast.
+    let releaseRenewals: () => void = () => undefined;
+    const renewalsGate = new Promise<void>((resolve) => {
+      releaseRenewals = resolve;
+    });
+    let renewals = 0;
+    const slowRenewals: AgentNoticeLedger = Object.freeze({
+      ...ledger,
+      reserveAvailability: async (input) => {
+        if (input.expectedRevision === undefined) {
+          renewals += 1;
+          await renewalsGate;
+        }
+        return ledger.reserveAvailability(input);
+      },
+    });
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(T1),
+      reservationRenewalIntervalMs: 5,
+      store: { close: async () => undefined, noticeLedger: async () => slowRenewals },
+    });
+    await signaller.subscribe(principal('s1'));
+    await publish(ledger, { sessionId: 's1' });
+
+    // The send fails only once a renewal has started and is awaiting the ledger.
+    const failingSend = async (): Promise<void> => {
+      for (let i = 0; i < 200 && renewals === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      expect(renewals).toBe(1);
+      throw new Error('transport closed');
+    };
+    const observing = signaller.observe(failingSend);
+    // The failure path does not release until that renewal has settled, so
+    // the observation is still pending while the renewal is gated.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await ledger.read()).notices[0]?.availabilityReservation).toMatchObject({ at: T1 });
+    releaseRenewals();
+    await expect(observing).resolves.toMatchObject({ kind: 'failed', stage: 'send' });
+
+    // Release came after the renewal landed: the slot is free, and stays free.
+    const released = (await ledger.read()).notices[0];
+    expect(released).toMatchObject({ state: 'pending' });
+    expect(released).not.toHaveProperty('availabilityReservation');
+    expect(released).not.toHaveProperty('availability');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await ledger.read()).notices[0]).not.toHaveProperty('availabilityReservation');
+    const other = signallerOver(ledger, () => new Date(Date.parse(T1) + 1_000));
+    await other.subscribe(principal('s1'));
+    await expect(other.observe(sender().send)).resolves.toMatchObject({ kind: 'signalled' });
+    await signaller.close();
+    await driver.close();
+  });
+
+  it('closes without waiting on a protocol write that never settles, leaving its hold to lapse', async () => {
+    const { driver, ledger } = await openLedger();
+    let storeClosed = 0;
+    const signaller = createNoticeInboxSignaller({
+      now: () => new Date(T1),
+      store: {
+        close: async () => {
+          storeClosed += 1;
+        },
+        noticeLedger: async () => ledger,
+      },
+    });
+    await signaller.subscribe(principal('s1'));
+    const published = await publish(ledger, { sessionId: 's1' });
+
+    // A subscriber that stopped reading: the write is accepted but never settles.
+    let sends = 0;
+    const wedgedSend = (): Promise<void> => {
+      sends += 1;
+      return new Promise(() => undefined);
+    };
+    const observing = signaller.observe(wedgedSend);
+    const heldAt = async (): Promise<string | undefined> =>
+      (await ledger.read()).notices[0]?.availabilityReservation?.at;
+    for (let i = 0; i < 200 && await heldAt() === undefined; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(sends).toBe(1);
+
+    // Close resolves promptly: the queue behind the wedged write is unblocked
+    // by shutdown itself, never by the client.
+    let closed = false;
+    const closing = signaller.close().then(() => {
+      closed = true;
+    });
+    await Promise.race([closing, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+    expect(closed).toBe(true);
+    expect(storeClosed).toBe(1);
+    const outcome = await observing;
+    expect(outcome).toMatchObject({ kind: 'failed', stage: 'send' });
+    expect((outcome as { error: AgentNoticeError }).error.code).toBe('aborted');
+
+    // The outcome of the write is unknown, so nothing is spent and nothing is
+    // released: the hold lapses after the TTL exactly as for a crashed holder.
+    const abandoned = (await ledger.read()).notices[0];
+    expect(abandoned).toMatchObject({ id: published.notice.id, state: 'pending' });
+    expect(abandoned).not.toHaveProperty('availability');
+    expect(abandoned?.availabilityReservation).toMatchObject({ at: T1 });
+    const withinTtl = signallerOver(ledger, () => new Date(Date.parse(T1) + 1_000));
+    await withinTtl.subscribe(principal('s1'));
+    await expect(withinTtl.observe(sender().send)).resolves.toMatchObject({ kind: 'idle', reason: 'nothing-eligible' });
+    const afterTtl = signallerOver(ledger, () => new Date(Date.parse(T1) + AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS));
+    await afterTtl.subscribe(principal('s1'));
+    await expect(afterTtl.observe(sender().send)).resolves.toMatchObject({ kind: 'signalled' });
+    await driver.close();
+  });
+
   it('treats a reservation as held until its TTL elapses, then as abandoned', async () => {
     const { driver, ledger } = await openLedger();
     const published = await publish(ledger, { sessionId: 's1' });

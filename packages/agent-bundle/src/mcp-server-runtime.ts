@@ -606,8 +606,25 @@ const installNoticeInboxSubscriptions = (
   // observations and never rejects, and a notification write to a slow or
   // wedged connection — renewed for as long as it takes — must not hold the
   // completed render's response, or unrelated event handling, hostage.
+  // Observations coalesce: one is in flight and at most one more is owed,
+  // because an observation reads the whole ledger, so every render completing
+  // behind a pending write is covered by the single follow-up and a client
+  // that stops reading cannot grow a queue of closures per render.
+  let observing: Promise<void> | undefined;
+  let owed = false;
+  const observe = (): void => {
+    observing = notices.observe(send).then(report, (error: unknown) => {
+      noticeDiagnostic(`resources/updated observation failed: ${describeError(error)}`);
+    }).then(() => {
+      observing = undefined;
+      if (!owed) return;
+      owed = false;
+      observe();
+    });
+  };
   return (): Promise<void> => {
-    void notices.observe(send).then(report);
+    if (observing === undefined) observe();
+    else owed = true;
     return Promise.resolve();
   };
 };
@@ -736,9 +753,11 @@ export const createGeneratedRouteMcpServer = async (
   server.close = async (): Promise<void> => {
     // The signaller drains any receipt still owed for a send that reached the
     // wire, so it must close while the ledger it commits to is still open:
-    // the host owns (or shares) that store and closes after it. Whatever
-    // fails on the way, the protocol and its transport are always closed;
-    // the teardown error surfaces once they are.
+    // the host owns (or shares) that store and closes after it. Its close
+    // abandons a notification write still pending rather than waiting on the
+    // client's wire, so a subscriber that stopped reading cannot wedge this
+    // teardown. Whatever fails on the way, the protocol and its transport are
+    // always closed; the teardown error surfaces once they are.
     try {
       try {
         await events?.close();
