@@ -10,4 +10,4 @@ table (no host interpolation; a *leading* `${PLUGIN_ROOT}` in `command`,
 `${PLUGIN_DATA}`, and workspace-root tokens fail the build), so the generated
 hosts reference renders it from the table instead of a hardcoded note. The
 `codex` target's `adapterRevision` advances to `1.12.0`, so previously built
-Codex artifacts revalidate as stale against the changed table. (#PR)
+Codex artifacts revalidate as stale against the changed table. (#431)
