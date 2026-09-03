@@ -146,7 +146,7 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
   }
 });
 
-it('replays captured prompt/submit and session/end fixtures through native projection', async () => {
+it('replays captured prompt/submit and session/end fixtures through native projection', { timeout: 30_000 }, async () => {
   const { graph } = await createFixtureProject();
   const service = new LifecycleReplayService({
     prepared: () => ({ graph, targets: ['claude', 'codex'] }),

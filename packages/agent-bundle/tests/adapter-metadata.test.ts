@@ -51,7 +51,7 @@ it('records exact immutable metadata for every built-in target', () => {
   const registry = createDefaultRegistry();
 
   expect(registryMetadata(registry, 'portable')).toEqual({
-    adapterRevision: '1.3.0',
+    adapterRevision: '1.4.0',
     observedVersion: '1.0.0',
     schemas: [
       {
@@ -67,7 +67,7 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'codex')).toEqual({
-    adapterRevision: '1.3.0',
+    adapterRevision: '1.4.0',
     observedVersion: '0.147.0',
     schemas: [
       {
@@ -164,7 +164,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.18.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.19.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
