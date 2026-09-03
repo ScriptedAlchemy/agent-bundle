@@ -346,8 +346,8 @@ importers:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       rsc-markdown-stream:
-        specifier: github:ScriptedAlchemy/rsc-markdown-stream#755c5eea448749ecbf889c090e5a052914fae4e6
-        version: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/755c5eea448749ecbf889c090e5a052914fae4e6(react@19.2.8)
+        specifier: github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47
+        version: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8)
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -370,6 +370,12 @@ importers:
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
+      micromark:
+        specifier: 4.0.2
+        version: 4.0.2(supports-color@7.2.0)
+      micromark-extension-gfm:
+        specifier: 3.0.0
+        version: 3.0.0
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -2452,8 +2458,8 @@ packages:
       '@rsbuild/core': ^2.0.0
       react-server-dom-rspack: '*'
 
-  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/755c5eea448749ecbf889c090e5a052914fae4e6:
-    resolution: {gitHosted: true, integrity: sha512-nZhiB1Oq0Py1FipM+I3EidXUrKkiYhtpPpiQ1XKI79feBj1FcAJD1Cy1JKpyvp7a53pBDTwTp0keLRW9aKvebw==, tarball: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/755c5eea448749ecbf889c090e5a052914fae4e6}
+  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47:
+    resolution: {gitHosted: true, integrity: sha512-lcNhSQSZZtAqZyArvaeBB/VraOr2kyresHsPj8DimmwtN7A08rUgJ5y6Hz4PE8m8WSZRrJpWpaWnZZynSysRDA==, tarball: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47}
     version: 0.1.0
     engines: {node: '>=18'}
     peerDependencies:
@@ -4885,7 +4891,7 @@ snapshots:
       '@rsbuild/core': 2.2.1
       react-server-dom-rspack: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
 
-  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/755c5eea448749ecbf889c090e5a052914fae4e6(react@19.2.8):
+  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8):
     dependencies:
       react: 19.2.8
 
