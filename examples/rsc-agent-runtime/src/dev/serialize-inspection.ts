@@ -5,7 +5,7 @@ import type {
   DevRuntimeTraceSpan,
   DevRuntimeTreeNode,
 } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from '../../../../packages/agent-bundle/src/dev/types.ts';
+import type { JsonObject, JsonValue } from 'agent-bundle';
 
 const inspectionStartedAt = '1970-01-01T00:00:00.000Z';
 const flightPreviewBytes = 32 * 1024;

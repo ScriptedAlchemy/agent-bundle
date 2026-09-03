@@ -13,6 +13,7 @@ export const config = {
 
 export default async function AfterTool({
   canonical,
+  native,
 }: AgentEventRouteProps) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
@@ -23,7 +24,7 @@ export default async function AfterTool({
     );
   }
   const topologyResult = await withTopology(async (topology) => {
-    const resolved = await actorForWorktree(topology, currentWorktree, canonical);
+    const resolved = await actorForWorktree(topology, currentWorktree, canonical, native);
     await topology.dispatch('intentRecorded', {
       actorId: resolved.actor.id,
       dependencies: [],

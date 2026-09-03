@@ -84,7 +84,7 @@ import {
   type DevRuntimeSurface,
   type RuntimeVector,
 } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from '../../../../packages/agent-bundle/src/dev/types.ts';
+import type { JsonObject, JsonValue } from 'agent-bundle';
 
 const descriptor: DevRuntimeDescriptor = Object.freeze({
   environmentVariables: Object.freeze([]),

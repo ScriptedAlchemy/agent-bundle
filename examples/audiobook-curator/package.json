@@ -32,7 +32,6 @@
   },
   "dependencies": {
     "@agent-bundle/runtime": "workspace:*",
-    "@modelcontextprotocol/server": "2.0.0",
     "react": "19.2.8",
     "zod": "4.5.4"
   },

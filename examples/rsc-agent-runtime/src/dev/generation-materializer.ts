@@ -18,7 +18,7 @@ import type {
 } from '../runtime/contracts.js';
 import type { DevRuntimePreparedProject } from '../../../../packages/agent-bundle/src/dev/runtime-provider.ts';
 import type { DevRuntimeMcpServerDescriptor } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from '../../../../packages/agent-bundle/src/dev/types.ts';
+import type { JsonObject, JsonValue } from 'agent-bundle';
 import type {
   RuntimeGenerationActivationGuard,
   RuntimeGenerationAsset,
