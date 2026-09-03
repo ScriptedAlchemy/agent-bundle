@@ -17,6 +17,7 @@ import type {
   runEvals,
   startDevServer,
   validate,
+  InspectionComponentCapability,
   InspectionSkippedComponent,
   ProjectOptions,
 } from './api.ts';
@@ -427,6 +428,13 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
     for (const component of plan.skipped) {
       output.write(`  omitted ${component.kind} ${component.name}: ${formatInspectionOmission(component)}\n`);
     }
+    // Feature-set omissions (#100): the component ships, minus a feature the
+    // host's `<kind>.<feature>` row does not support.
+    for (const component of plan.selected) {
+      for (const omitted of component.omittedFeatures ?? []) {
+        output.write(`  ${component.kind} ${component.name} omits ${omitted.feature}: ${formatCapabilityJudgment(omitted.capability)}\n`);
+      }
+    }
     // The kind matrix names every canonical kind this host cannot emit, with
     // the host's own state, even when the project declares none of them.
     const unsupportedKinds = plan.kinds
@@ -438,6 +446,21 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
   }
 };
 
+const formatCapabilityJudgment = (capability: InspectionComponentCapability): string => {
+  switch (capability.state) {
+    case 'supported':
+      return `${capability.name} supported`;
+    case 'degraded':
+    case 'unavailable':
+    case 'prohibited':
+      return `${capability.name} ${capability.state} — ${capability.reason}`;
+    default: {
+      const exhaustive: never = capability;
+      throw new TypeError(`Unhandled capability state ${JSON.stringify(exhaustive)}.`);
+    }
+  }
+};
+
 const formatInspectionOmission = (component: InspectionSkippedComponent): string => {
   switch (component.reason) {
     case 'excluded-by-targets':
@@ -445,18 +468,7 @@ const formatInspectionOmission = (component: InspectionSkippedComponent): string
     case 'unsupported-capability': {
       const capability = component.capability;
       if (capability === undefined) return 'unsupported capability';
-      switch (capability.state) {
-        case 'supported':
-          return `${capability.name} supported`;
-        case 'degraded':
-        case 'unavailable':
-        case 'prohibited':
-          return `${capability.name} ${capability.state} — ${capability.reason}`;
-        default: {
-          const exhaustive: never = capability;
-          throw new TypeError(`Unhandled capability state ${JSON.stringify(exhaustive)}.`);
-        }
-      }
+      return formatCapabilityJudgment(capability);
     }
     default: {
       const exhaustive: never = component.reason;

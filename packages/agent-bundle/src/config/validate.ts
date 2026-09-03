@@ -21,6 +21,7 @@ import {
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
+import { featureCapabilityName } from '../core/components.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -996,6 +997,8 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
 interface TargetedDocument {
   readonly authoredTargets?: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
+  /** Validated frontmatter; every key is a host feature the component uses. */
+  readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly source: string;
 }
 
@@ -1003,8 +1006,86 @@ interface TargetedDocumentCodes {
   /** Explicit target whose capability is degraded, prohibited, or unavailable. */
   readonly capability: string;
   readonly duplicateName: string;
+  /** Implicit target that cannot express a frontmatter feature: the feature is omitted with the host's reason. */
+  readonly featureOmitted: string;
+  /** Explicit target that cannot express a frontmatter feature: fail closed. */
+  readonly featureRequired: string;
   readonly outsideTargets: string;
 }
+
+/**
+ * The host's judgment of one component feature row (`<kind>.<feature>`, #100),
+ * read through the emission-dispatch view so the composite `plugin` target is
+ * judged by the half that emits the kind. A host that publishes no row for a
+ * feature it is asked about has not evidenced it and reads as `unavailable`.
+ */
+const featureCapabilityStateFor = (
+  registry: NormalizationTargetRegistry,
+  target: string,
+  capabilityName: string,
+): CapabilityState => {
+  const lookup = registry.componentCapabilityState ?? registry.capabilityState;
+  return lookup?.call(registry, target, capabilityName)
+    ?? { reason: `The ${target} adapter publishes no ${capabilityName} capability row.`, state: 'unavailable' };
+};
+
+
+/**
+ * Component feature sets (#100): a component may use only the host features the
+ * target's pinned feature rows support. An author-required target fails closed;
+ * an implicitly selected target still receives the component, minus the
+ * feature, and the omission is reported with the host's own reason. Targets
+ * whose kind row is not supported are judged by the kind-level checks instead.
+ */
+const validateDocumentFeatures = (
+  document: TargetedDocument,
+  name: string,
+  label: 'Command' | 'Rule',
+  capabilityName: 'commands' | 'rules',
+  codes: TargetedDocumentCodes,
+  selectedTargets: readonly string[],
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const features = Object.keys(document.frontmatter).sort((left, right) => left.localeCompare(right));
+  if (features.length === 0) return diagnostics;
+  const explicit = document.authoredTargets !== undefined;
+  const targets = explicit
+    ? document.authoredTargets!.filter((target) => registry.has(target) && selectedTargets.includes(target))
+    : selectedTargets.filter((target) => registry.has(target));
+  for (const target of targets) {
+    if (!capabilityIsSupported(featureCapabilityStateFor(registry, target, capabilityName))) continue;
+    for (const feature of features) {
+      const featureName = featureCapabilityName(capabilityName, feature);
+      const capability = featureCapabilityStateFor(registry, target, featureName);
+      switch (capability.state) {
+        case 'supported':
+          break;
+        case 'degraded':
+        case 'prohibited':
+        case 'unavailable':
+          diagnostics.push({
+            code: explicit ? codes.featureRequired : codes.featureOmitted,
+            message: explicit
+              ? `${label} ${JSON.stringify(name)} uses ${feature} and explicitly targets ${JSON.stringify(target)}, whose ${featureName} capability is ${capability.state}: ${capability.reason}`
+              : `${label} ${JSON.stringify(name)} uses ${feature}, which ${target} omits (${featureName} ${capability.state}): ${capability.reason}`,
+            recovery: explicit
+              ? `Remove ${feature} from the ${label.toLowerCase()} or drop ${JSON.stringify(target)} from its targets.`
+              : `Accept the omission, restrict the ${label.toLowerCase()}'s targets to hosts that support ${featureName}, or remove ${feature}.`,
+            severity: explicit ? 'error' : 'warning',
+            sourcePath: document.source,
+            target,
+          });
+          break;
+        default: {
+          const exhaustive: never = capability;
+          return exhaustive;
+        }
+      }
+    }
+  }
+  return diagnostics;
+};
 
 /** Shared validator for commands and rules, which differ only in label and codes. */
 const validateTargetedDocuments = (
@@ -1032,6 +1113,8 @@ const validateTargetedDocuments = (
         document.source,
       ));
     }
+
+    diagnostics.push(...validateDocumentFeatures(document, name, label, capabilityName, codes, selectedTargets, registry));
 
     for (const target of document.authoredTargets ?? []) {
       if (!registry.has(target) || !selectedTargets.includes(target)) {
@@ -1088,6 +1171,8 @@ const validateCommands = (
   validateTargetedDocuments(loaded, discovered.commands ?? [], 'Command', 'commands', {
     capability: 'AB4925',
     duplicateName: 'AB4926',
+    featureOmitted: 'AB4928',
+    featureRequired: 'AB4927',
     outsideTargets: 'AB4924',
   }, registry);
 
@@ -1099,6 +1184,8 @@ const validateRules = (
   validateTargetedDocuments(loaded, discovered.rules ?? [], 'Rule', 'rules', {
     capability: 'AB4905',
     duplicateName: 'AB4906',
+    featureOmitted: 'AB4908',
+    featureRequired: 'AB4907',
     outsideTargets: 'AB4904',
   }, registry);
 

@@ -19,6 +19,8 @@ import {
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   cliBinCapability,
+  featureCapabilitiesFrom,
+  frontmatterFeatureCapabilitiesFrom,
   supportedEventRouteNamesFrom,
   supportedCapability,
   type CapabilityTableRow,
@@ -462,7 +464,7 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.10.0',
+  adapterRevision: '1.11.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -682,6 +684,13 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
     // The routed CLI bin rides the same plugin-root directory the pinned
     // contract already executes `mcp/` and `scripts/` files from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): commands are frontmatter-free on Cursor
+    // (every field row unavailable), rules carry the documented .mdc fields.
+    ...frontmatterFeatureCapabilitiesFrom('commands', capabilityTable.plugin.commandFrontmatter, evidence),
+    // Hook feature rows reuse the #189 hooks.options rows (matcher, timeout).
+    ...featureCapabilitiesFrom('hooks', { timeout: hookOptions.timeout, toolMatchers: hookOptions.matcher }, evidence),
+    ...frontmatterFeatureCapabilitiesFrom('rules', capabilityTable.plugin.ruleFrontmatter, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,

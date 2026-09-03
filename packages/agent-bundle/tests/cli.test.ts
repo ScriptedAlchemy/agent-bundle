@@ -481,6 +481,22 @@ it('explains selected and omitted components per target on human inspect output'
     expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
     expect(human.stdout).not.toContain('omitted skill review');
+    // A feature the host cannot express is reported on the shipped component
+    // (#100 feature sets): select Cursor too and add one command with a field
+    // Cursor's frontmatter-free commands surface drops.
+    const originalConfig = await readFile(join(project.root, 'agent-bundle.config.ts'), 'utf8');
+    await mkdir(join(project.root, 'src', 'commands'), { recursive: true });
+    await Promise.all([
+      writeFile(join(project.root, 'src', 'commands', 'deploy.md'), '---\nargumentHint: <env>\n---\nDeploy.\n'),
+      writeFile(join(project.root, 'agent-bundle.config.ts'), originalConfig.replace("['portable', 'codex']", "['portable', 'codex', 'cursor']")),
+    ]);
+    const withCursor = await runSourceCliWithOutput(['inspect', '--root', project.root, '--target', 'cursor']);
+    expect(withCursor).toMatchObject({ code: 0, stderr: '' });
+    expect(withCursor.stdout).toMatch(/^ {2}command deploy omits argumentHint: commands\.argumentHint unavailable — .*frontmatter-free.*$/mu);
+    await Promise.all([
+      rm(join(project.root, 'src', 'commands'), { force: true, recursive: true }),
+      writeFile(join(project.root, 'agent-bundle.config.ts'), originalConfig),
+    ]);
     // The canonical kind matrix names every kind a host cannot emit, even
     // kinds this project never declares (#100).
     expect(human.stdout).toContain(

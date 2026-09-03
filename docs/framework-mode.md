@@ -370,6 +370,40 @@ diagnostics provider or an editor extension?" is a dated *no* per host rather
 than silence. The `agent` kind has no producer until the G5 gate admits it;
 Claude's `agents` row and its per-field `agents.*` rows record the deferral.
 
+### Component feature sets
+
+Each kind also has a **feature set**: the host features a component of that
+kind may use, published as one `<kind capability>.<feature>` row per feature
+with the same four-state judgment. A component is judged feature by feature
+against every target that supports its kind: a target the author named in
+`targets` fails closed when it cannot express a feature (`AB4907` rules,
+`AB4927` commands), while an implicitly selected target still receives the
+component minus the feature, reports the omission as a warning with the host's
+reason (`AB4908` / `AB4928`), and lists it under `omittedFeatures` on the
+selected component in `inspect` (human output: `<kind> <name> omits <feature>:
+…`). The composite `plugin` bundle is judged by the half that emits the kind
+(Claude for commands, Cursor for rules). Skills keep the closed per-host Skill
+IR schemas from #108 as their feature mechanism (`AB3006`, `AB3008`, `AB3010`);
+their rows below mirror that contract rather than adding a second check.
+
+| Kind | Feature rows | Claude | Codex | Cursor | portable |
+| --- | --- | --- | --- | --- | --- |
+| `command` | `commands.description`, `commands.argumentHint`, `commands.allowedTools`, `commands.model`, `commands.disableModelInvocation` | supported (documented kebab-case frontmatter) | no commands | unavailable — frontmatter-free Markdown, body only | no commands |
+| `rule` | `rules.description`, `rules.globs`, `rules.alwaysApply` | no rules | no rules | supported (`.mdc` frontmatter, retrieved 2026-09-03) | no rules |
+| `hook` | `hooks.toolMatchers`, `hooks.timeout` | supported | supported | supported | no hooks |
+| `skill` | `skills.hostFrontmatter` (typed host extension / Codex `agents/openai.yaml` sidecar) | supported | supported | supported | unavailable (portable fields only) |
+| `skill` | `skills.markdownTokens` (`$ARGUMENTS`, `${CLAUDE_PLUGIN_ROOT}`, …) | supported | unavailable (`AB3008`) | unavailable (`AB3008`) | unavailable (`AB3008`) |
+
+The composite `plugin` bundle ships one shared `skills/` tree and lowers any
+skill that declares a host extension or token to the portable document, so
+both skill feature rows are `unavailable` there and `inspect` reports the
+dropped host frontmatter under `omittedFeatures`; per-host skill trees are
+install-time selection (#101).
+
+Hook tool selectors a host cannot map still fail at plan time
+(`<target>.hook.tool.<tool>`), and the per-host matcher tables live under
+`hooks.matchers` in each capability table.
+
 ## Distribution
 
 `agent-bundle build` makes each target directory independently distributable.

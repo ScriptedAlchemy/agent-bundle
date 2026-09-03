@@ -28,7 +28,7 @@ even when no error diagnostic was reported.
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
-| `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4906`) and commands `src/commands/*.md` (`AB4920`–`AB4926`); see below. |
+| `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
 | `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
@@ -422,7 +422,7 @@ its entry.
 | --- | --- | --- |
 | `AB4340` | error | A declaration for a route-generated server sets `entry`, `command`, or `url` while `routes.servers.<id>` is `generated`. The routes already compile this server, so a second entry claim has no reading the compiler could honor. Remove the field to keep the generated server (the other fields still apply), or set the mode to `custom`, `command`, or `remote` to serve the declared entry and omit the routes. Without an explicit mode the same collision is `AB4800`. |
 
-## Conventional host components: rules and commands (`AB4900`–`AB4906`, `AB4920`–`AB4926`)
+## Conventional host components: rules and commands (`AB4900`–`AB4908`, `AB4920`–`AB4928`)
 
 Conventional `src/rules/*.mdc` documents compile to the Rule IR (closed
 frontmatter: `description`, `globs`, `alwaysApply`, plus the bundle-only
@@ -437,6 +437,19 @@ the surface is a build error — unsupported components fail before artifact
 publication rather than shipping as a broken half. Identity paths are
 canonicalized so the model digest is root-independent.
 
+Every frontmatter field is also a **component feature** (#100): each host
+publishes one `<kind>.<feature>` capability row per field it can express
+(`commands.argumentHint`, `rules.globs`, …; see
+[Host components](framework-mode.md#component-feature-sets)). A component
+that uses a feature the target's row does not support is judged per target:
+an explicitly named target fails closed (`AB4907` / `AB4927`), while an
+implicitly selected target still receives the component minus the feature and
+the omission is reported as a warning with the host's reason (`AB4908` /
+`AB4928`) and on the selected component in `inspect` (`omittedFeatures`).
+Targets whose kind row is itself unsupported are judged by the kind-level codes
+above, never per feature. Skills keep their own closed per-host schemas
+(`AB3006`, `AB3008`, `AB3010`).
+
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4900` | error | A conventional rule file cannot be read. | Make the `.mdc` file readable, or remove it from `src/rules/`. |
@@ -446,6 +459,8 @@ canonicalized so the model digest is root-independent.
 | `AB4904` | error | A rule's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
 | `AB4905` | error | A rule explicitly targets a host whose `rules` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the rule's `targets`; only Cursor publishes a rules surface. |
 | `AB4906` | error | Two rule files share a name. | Rename one file so every rule name is unique. |
+| `AB4907` | error | A rule explicitly targets a host that supports rules but whose `rules.<field>` row for a frontmatter field the rule uses is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Remove the field or drop that host from the rule's `targets`. Cursor documents `description`, `globs`, and `alwaysApply`. |
+| `AB4908` | warning | An implicitly selected host supports rules but cannot express a frontmatter field the rule uses; the rule ships there without it. | Accept the omission, restrict the rule's `targets` to hosts that support the field, or remove the field. |
 | `AB4920` | error | A conventional command file cannot be read. | Make the `.md` file readable, or remove it from `src/commands/`. |
 | `AB4921` | error | Command YAML frontmatter is invalid. | Repair the YAML between the `---` fences. |
 | `AB4922` | error | Command frontmatter declares a field outside `description`, `argumentHint`, `allowedTools`, `model`, `disableModelInvocation`, `targets`. | Remove the field; per-host frontmatter is regenerated from the validated fields at lowering time. |
@@ -453,6 +468,8 @@ canonicalized so the model digest is root-independent.
 | `AB4924` | error | A command's `targets` names a target that is not registered or not selected for the project. | Name only selected targets, or select that target in `targets`. |
 | `AB4925` | error | A command explicitly targets a host whose `commands` capability is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). | Drop that host from the command's `targets`; Cursor and Claude publish command surfaces, Codex and portable do not. |
 | `AB4926` | error | Two command files share a name. | Rename one file so every command name is unique. |
+| `AB4927` | error | A command explicitly targets a host that supports commands but whose `commands.<field>` row for a frontmatter field the command uses is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). Cursor's pinned commands surface is frontmatter-free Markdown, so every field row is unavailable there. | Remove the field or drop that host from the command's `targets`. |
+| `AB4928` | warning | An implicitly selected host supports commands but cannot express a frontmatter field the command uses; the command ships there without it (Cursor receives the prompt body only). | Accept the omission, restrict the command's `targets` to hosts that support the field, or remove the field. |
 
 ## Route graph, state, layout, and provider conventions (`AB4800`–`AB4832`, `AB4940`–`AB4942`)
 

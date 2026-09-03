@@ -809,8 +809,13 @@ or `{ name, state: 'degraded' | 'unavailable' | 'prohibited', reason }` — so
 the JSON explains why a Cursor rule is absent from a Claude bundle in the
 host's words rather than the compiler's. An adapter that publishes no row for
 a needed capability reads as an honest `unavailable`, never a silent pass.
-Scripts need no host capability and carry none. Every plan also carries
-`kinds`: one entry per canonical kind, in kind order, with the target's own
+Scripts need no host capability and carry none. A selected component that
+uses a feature the target cannot express (a command frontmatter field on
+Cursor, for example) carries `omittedFeatures`: one entry per omitted feature
+with the host's `<kind>.<feature>` row, matching the `AB4908` / `AB4928`
+warnings `validate` reports (see
+[Component feature sets](framework-mode.md#component-feature-sets)). Every
+plan also carries `kinds`: one entry per canonical kind, in kind order, with the target's own
 row for that kind (`capability`) and the counts of selected and skipped
 components of it — so a host with no `lsp`, `native-diagnostics`,
 `native-extension`, or `agent` surface says so in its own words even when the

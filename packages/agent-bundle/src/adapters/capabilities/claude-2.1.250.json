@@ -109,6 +109,20 @@
         "state": "unavailable"
       }
     },
+    "features": {
+      "timeout": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares an integer `timeout` (minimum 1) on every command hook entry; the hook contract lowers `timeoutMs` to whole seconds."
+        ],
+        "state": "supported"
+      },
+      "toolMatchers": {
+        "evidence": [
+          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares a string `matcher` on every hook group, and hooks.matchers above pins the canonical tool selectors (file.read, file.write, mcp, shell) to Claude tool-name regexes; an unmapped selector fails the plan (claude.hook.tool.<tool>)."
+        ],
+        "state": "supported"
+      }
+    },
     "matchers": {
       "file.read": "^Read$",
       "file.write": "^(?:Write|Edit)$",
@@ -279,6 +293,20 @@
     "channels": {
       "bindsToPluginMcpServer": true,
       "perChannelUserConfig": true
+    },
+    "commandFrontmatter": {
+      "evidence": [
+        "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents plugin commands/ as Markdown files with optional YAML frontmatter fields description, argument-hint, allowed-tools, model, and disable-model-invocation (see provenance.evidence).",
+        "2026-09-03: adapters/claude.ts claudeCommandMarkdown regenerates exactly those five kebab-case fields from the validated Command IR (allowedTools, argumentHint, description, disableModelInvocation, model) and never emits an authoring-only key."
+      ],
+      "fields": {
+        "allowedTools": "allowed-tools",
+        "argumentHint": "argument-hint",
+        "description": "description",
+        "disableModelInvocation": "disable-model-invocation",
+        "model": "model"
+      },
+      "state": "supported"
     },
     "commands": true,
     "dependencies": {
@@ -688,6 +716,20 @@
       "subagentStatusLineFields": ["command", "type"],
       "supportedKeys": ["agent", "subagentStatusLine"],
       "unknownKeysIgnored": true
+    },
+    "skillFeatures": {
+      "hostFrontmatter": {
+        "evidence": [
+          "2026-09-03: the Skill IR lowers the typed Claude extension (agent, allowed-tools, argument-hint, arguments, background, context, disable-model-invocation, disallowed-tools, effort, hooks, model, paths, shell, user-invocable, when_to_use) into SKILL.md frontmatter validated against the sha-pinned schemas/skill-hosts/claude-skill-frontmatter.schema.json (#108); unknown fields fail closed with AB3006 and schema violations with AB3010."
+        ],
+        "state": "supported"
+      },
+      "markdownTokens": {
+        "evidence": [
+          "2026-09-03: skills/tokens.ts pins every canonical token to a documented Claude Skill Markdown placeholder ($ARGUMENTS, ${CLAUDE_PLUGIN_ROOT}, ${CLAUDE_PLUGIN_DATA}, ${CLAUDE_PROJECT_DIR}, ${CLAUDE_SESSION_ID}, ${CLAUDE_SKILL_DIR}) per https://code.claude.com/docs/en/skills; the #242 real-session proof observed $ARGUMENTS, ${CLAUDE_PLUGIN_ROOT}, and ${CLAUDE_SKILL_DIR} resolving on Claude Code 2.1.257."
+        ],
+        "state": "supported"
+      }
     },
     "skills": true,
     "userConfig": {

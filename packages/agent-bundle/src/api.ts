@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { unavailableCapability } from './adapters/capability-state.ts';
+import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
@@ -18,6 +18,7 @@ import type { CapabilityEvidence, CapabilityState } from './core/capabilities.ts
 import {
   agentComponentKinds,
   componentKindCapabilityName,
+  featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
 import { isInsideOrEqual } from './core/paths.ts';
@@ -298,12 +299,24 @@ export type InspectionComponentKind = AgentComponentKind;
  */
 export type InspectionComponentCapability = CapabilityState & { readonly name: string };
 
+/**
+ * One host feature a selected component uses that this target cannot express
+ * (#100 feature sets): the component still ships, minus the feature, and the
+ * host's own `<kind>.<feature>` row explains why.
+ */
+export interface InspectionOmittedFeature {
+  readonly capability: InspectionComponentCapability;
+  readonly feature: string;
+}
+
 /** One component the plan emits for this target. */
 export interface InspectionSelectedComponent {
   readonly capability?: InspectionComponentCapability;
   readonly id: string;
   readonly kind: InspectionComponentKind;
   readonly name: string;
+  /** Features this target omits from the emitted component, in feature order; absent when none. */
+  readonly omittedFeatures?: readonly InspectionOmittedFeature[];
 }
 
 /**
@@ -620,6 +633,8 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
 
 interface InspectableComponent {
   readonly capability?: string;
+  /** Host features the component uses, judged per target by `<capability>.<feature>` rows. */
+  readonly features?: readonly string[];
   readonly id: string;
   readonly kind: InspectionComponentKind;
   readonly name: string;
@@ -629,15 +644,43 @@ interface InspectableComponent {
 const fixedKindComponent = (
   kind: Exclude<InspectionComponentKind, 'event-route'>,
   component: { readonly id: string; readonly name: string; readonly targets: readonly string[] },
+  features: readonly string[] = [],
 ): InspectableComponent => {
   const capability = componentKindCapabilityName(kind);
   return {
     ...(capability === undefined ? {} : { capability }),
+    ...(features.length === 0 ? {} : { features: [...features].sort((left, right) => left.localeCompare(right)) }),
     id: component.id,
     kind,
     name: component.name,
     targets: component.targets,
   };
+};
+
+/** Frontmatter keys are the features a command or rule uses (the closed sets from #219/#207). */
+const frontmatterFeatures = (frontmatter: Readonly<Record<string, unknown>>): readonly string[] =>
+  Object.keys(frontmatter);
+
+const hookFeatures = (hook: NormalizedPlugin['hooks'][number]): readonly string[] => [
+  ...(hook.timeoutMs === undefined ? [] : ['timeout']),
+  ...(hook.tools.length === 0 && (hook.nativeTools ?? []).length === 0 ? [] : ['toolMatchers']),
+];
+
+/**
+ * Skill features follow the Skill IR (#108): typed host frontmatter extensions
+ * and Skill Markdown placeholder tokens. The IR already fails closed per host
+ * (AB3006/AB3008/AB3010); inspection reports the same classes against the
+ * host's `skills.*` rows.
+ */
+const skillFeatures = (skill: NormalizedPlugin['skills'][number]): readonly string[] => {
+  const ir = skill.skillIr;
+  if (ir === undefined) return [];
+  return [
+    ...(ir.extensions.claude === undefined && ir.extensions.codex === undefined && ir.extensions.cursor === undefined
+      ? []
+      : ['hostFrontmatter']),
+    ...(ir.placeholders.length === 0 ? [] : ['markdownTokens']),
+  ];
 };
 
 /**
@@ -655,9 +698,9 @@ const inspectableComponents = (model: NormalizedPlugin): readonly InspectableCom
     name: bin.name,
     targets: model.targets.map((target) => target.name),
   })),
-  ...(model.commands ?? []).map((command) => fixedKindComponent('command', command)),
+  ...(model.commands ?? []).map((command) => fixedKindComponent('command', command, frontmatterFeatures(command.frontmatter))),
   ...model.hooks.map((hook) => hook.eventRoute === undefined
-    ? fixedKindComponent('hook', { id: hook.id, name: hook.event, targets: hook.targets })
+    ? fixedKindComponent('hook', { id: hook.id, name: hook.event, targets: hook.targets }, hookFeatures(hook))
     : {
       capability: `event:${hook.eventRoute.event}`,
       id: hook.id,
@@ -668,10 +711,32 @@ const inspectableComponents = (model: NormalizedPlugin): readonly InspectableCom
   ...(model.lspServers ?? []).map((server) => fixedKindComponent('lsp', server)),
   ...(model.mcpApps ?? []).map((app) => fixedKindComponent('mcp-app', app)),
   ...model.mcpServers.map((server) => fixedKindComponent('mcp-server', server)),
-  ...(model.rules ?? []).map((rule) => fixedKindComponent('rule', rule)),
+  ...(model.rules ?? []).map((rule) => fixedKindComponent('rule', rule, frontmatterFeatures(rule.frontmatter))),
   ...model.scripts.map((script) => fixedKindComponent('script', script)),
-  ...model.skills.map((skill) => fixedKindComponent('skill', skill)),
+  ...model.skills.map((skill) => fixedKindComponent('skill', skill, skillFeatures(skill))),
 ];
+
+/**
+ * The features a selected component uses that this target's `<kind>.<feature>`
+ * rows do not support. A host with no row for a feature has not evidenced it,
+ * so the feature reads as omitted `unavailable` rather than silently kept.
+ */
+const omittedFeaturesFor = (
+  component: InspectableComponent,
+  target: string,
+  capabilities: Readonly<Record<string, CapabilityState>>,
+): readonly InspectionOmittedFeature[] => {
+  if (component.capability === undefined || component.features === undefined) return Object.freeze([]);
+  const kindCapability = component.capability;
+  return Object.freeze(component.features.flatMap((feature) => {
+    const capability = componentCapabilityFor(
+      { ...component, capability: featureCapabilityName(kindCapability, feature) },
+      target,
+      capabilities,
+    );
+    return capability === undefined || capabilityIsSupported(capability) ? [] : [Object.freeze({ capability, feature })];
+  }));
+};
 
 /**
  * The target's judgment for one component capability. An adapter that
@@ -800,7 +865,11 @@ const accountComponentsFor = (
     } else if (capability !== undefined && !admitsComponent(component.kind, capability)) {
       skipped.push(Object.freeze({ ...identity, reason: 'unsupported-capability' satisfies InspectionSkipReason }));
     } else {
-      selected.push(Object.freeze(identity));
+      const omittedFeatures = omittedFeaturesFor(component, target, capabilities);
+      selected.push(Object.freeze({
+        ...identity,
+        ...(omittedFeatures.length === 0 ? {} : { omittedFeatures }),
+      }));
     }
   }
   return {

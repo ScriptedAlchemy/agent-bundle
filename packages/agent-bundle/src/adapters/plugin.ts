@@ -235,7 +235,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.26.0',
+  adapterRevision: '1.27.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex
@@ -703,11 +703,60 @@ const cursorOnlyCapabilities = Object.freeze(Object.fromEntries(
     ]),
 ));
 
+/**
+ * Feature rows (`<kind>.<feature>`, #100) published by any host half. The
+ * composite emits Claude-format commands and Cursor rules, so a feature is
+ * available to the bundle when the emitting half supports it (union, used by
+ * inspection); the intersection keeps the honest three-host judgment.
+ */
+const compositeFeatureCapabilityNames = Object.freeze([...new Set([
+  claudeAdapter, codexAdapter, cursorAdapter,
+].flatMap((adapter) => Object.keys(adapter.capabilities)
+  .filter((capability) => /^(?:commands|hooks|rules|skills)\./u.test(capability))))].sort((left, right) => left.localeCompare(right)));
+
+const compositeFeatureCapability = (
+  capability: string,
+  combine: (left: CapabilityState, right: CapabilityState) => CapabilityState,
+): CapabilityState => [claudeAdapter, codexAdapter, cursorAdapter]
+  .map((adapter) => adapter.capabilities[capability] ?? unavailableCapability(
+    `The pinned ${adapter.name} contract publishes no ${capability} feature row.`,
+  ))
+  .reduce(combine);
+
+/**
+ * The composite ships one shared `skills/` tree: a skill lowers to the shared
+ * Claude/Codex pass-through document only when it declares no host extension
+ * and no placeholder, and otherwise to the portable document, which strips
+ * every host extension and admits no Skill Markdown token (AB3008). Neither
+ * skill feature therefore reaches the composite regardless of what any host
+ * half supports; the emission-dispatch union must not claim otherwise.
+ */
+const compositeSkillFeatureCapabilities = Object.freeze({
+  'skills.hostFrontmatter': unavailableCapability(
+    'The unified bundle emits one shared skills/ tree and lowers any skill that declares a host frontmatter extension to the portable document, which strips the extension; per-host skill trees are install-time selection (#101).',
+  ),
+  'skills.markdownTokens': unavailableCapability(
+    'The unified bundle lowers a skill that uses a Skill Markdown token to the portable document, which documents no interpolation placeholder; the token fails closed (AB3008).',
+  ),
+});
+
+const compositeFeatureCapabilities = (
+  combine: (left: CapabilityState, right: CapabilityState) => CapabilityState,
+): Readonly<Record<string, CapabilityState>> => Object.freeze({
+  ...Object.fromEntries(
+    compositeFeatureCapabilityNames
+      .filter((capability) => !Object.hasOwn(compositeSkillFeatureCapabilities, capability))
+      .map((capability) => [capability, compositeFeatureCapability(capability, combine)]),
+  ),
+  ...compositeSkillFeatureCapabilities,
+});
+
 const pluginCapabilities: Readonly<Record<string, CapabilityState>> = Object.freeze({
   ...cursorOnlyCapabilities,
   ...agentCapabilities,
   ...codexHookContractUnifiedCapabilities,
   ...compositeEventCapabilities,
+  ...compositeFeatureCapabilities(intersectCapabilityStates),
   bin: unavailableCapability(
     'The unified bundle emits the Claude-only bin directory, but the pinned Codex and Cursor contracts declare no shared plugin executable surface.',
   ),
@@ -1057,6 +1106,7 @@ const pluginCapabilities: Readonly<Record<string, CapabilityState>> = Object.fre
  */
 const componentCapabilities: Readonly<Record<string, CapabilityState>> = Object.freeze({
   ...pluginCapabilities,
+  ...compositeFeatureCapabilities(unionCapabilityStates),
   ...Object.fromEntries(
     [cliBinCapability, 'commands', 'hooks', 'lsp', 'mcp', 'nativeDiagnostics', 'nativeExtension', 'rules', 'skills']
       .map((capability) => [capability, compositeUnion(capability)]),

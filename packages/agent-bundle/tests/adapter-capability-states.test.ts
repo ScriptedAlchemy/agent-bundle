@@ -258,6 +258,62 @@ it('records dated unavailable native-diagnostics and native-extension rows on ev
   expect(claudeCapabilityTable.plugin.lsp.optionalFields).toContain('diagnostics');
 });
 
+it('publishes dated component feature rows per kind and host (#100 feature sets)', () => {
+  const registry = createDefaultRegistry();
+  const claude = registry.get('claude').capabilities;
+  const codex = registry.get('codex').capabilities;
+  const cursor = registry.get('cursor').capabilities;
+  const portable = registry.get('portable').capabilities;
+  const plugin = registry.get('plugin');
+
+  // Commands: Claude documents the five frontmatter fields; Cursor's commands
+  // surface is frontmatter-free, so every field row is unavailable there.
+  const commandFields = ['allowedTools', 'argumentHint', 'description', 'disableModelInvocation', 'model'];
+  expect(Object.keys(claudeCapabilityTable.plugin.commandFrontmatter.fields)).toEqual(commandFields);
+  expect(cursorCapabilityTable.plugin.commandFrontmatter.fields).toEqual(commandFields);
+  for (const field of commandFields) {
+    expect(claude[`commands.${field}`]).toMatchObject({ evidence: { target: 'claude' }, state: 'supported' });
+    expect(cursor[`commands.${field}`]).toEqual({ reason: cursorCapabilityTable.plugin.commandFrontmatter.reason, state: 'unavailable' });
+    expect(codex[`commands.${field}`]).toBeUndefined();
+    expect(portable[`commands.${field}`]).toBeUndefined();
+    // Composite: intersection stays honest, emission dispatch follows the Claude half.
+    expect(plugin.capabilities[`commands.${field}`]).toMatchObject({ state: 'unavailable' });
+    expect(plugin.componentCapabilities?.[`commands.${field}`]).toMatchObject({ evidence: { target: 'claude' }, state: 'supported' });
+  }
+  expect(cursorCapabilityTable.plugin.commandFrontmatter.evidence.some((entry) => entry.startsWith('2026-09-03: '))).toBe(true);
+
+  // Rules: only Cursor publishes a rules surface, with the three documented .mdc fields.
+  for (const field of ['alwaysApply', 'description', 'globs']) {
+    expect(cursor[`rules.${field}`]).toMatchObject({ evidence: { target: 'cursor' }, state: 'supported' });
+    expect(claude[`rules.${field}`]).toBeUndefined();
+    expect(plugin.componentCapabilities?.[`rules.${field}`]).toMatchObject({ evidence: { target: 'cursor' }, state: 'supported' });
+  }
+  expect(cursorCapabilityTable.plugin.ruleFrontmatter.evidence[0]).toMatch(/^retrieved 2026-09-03: https:\/\/cursor\.com\/docs\/context\/rules/u);
+
+  // Hooks: every hook host pins timeout and tool matchers in its hooks schema.
+  for (const capabilities of [claude, codex, cursor]) {
+    expect(capabilities['hooks.timeout']).toMatchObject({ state: 'supported' });
+    expect(capabilities['hooks.toolMatchers']).toMatchObject({ state: 'supported' });
+  }
+  expect(portable['hooks.timeout']).toBeUndefined();
+
+  // Skills follow the Skill IR: typed host frontmatter on the three hosts, Markdown tokens on Claude only.
+  expect(claude['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
+  expect(codex['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
+  expect(cursor['skills.hostFrontmatter']).toMatchObject({ state: 'supported' });
+  expect(portable['skills.hostFrontmatter']).toMatchObject({ reason: expect.stringContaining('Agent Skills'), state: 'unavailable' });
+  expect(claude['skills.markdownTokens']).toMatchObject({ state: 'supported' });
+  for (const capabilities of [codex, cursor, portable]) {
+    expect(capabilities['skills.markdownTokens']).toMatchObject({ reason: expect.stringContaining('AB3008'), state: 'unavailable' });
+  }
+  // The composite's shared skills/ tree falls back to the portable document for
+  // any skill with a host extension or token, so neither feature reaches it.
+  for (const capability of ['skills.hostFrontmatter', 'skills.markdownTokens']) {
+    expect(plugin.componentCapabilities?.[capability]).toMatchObject({ reason: expect.stringContaining('portable document'), state: 'unavailable' });
+    expect(plugin.capabilities[capability]).toEqual(plugin.componentCapabilities?.[capability]);
+  }
+});
+
 it('judges composite event routes by the same intersection validation applies (#100 event-route kind)', () => {
   const registry = createDefaultRegistry();
   const plugin = registry.get('plugin');

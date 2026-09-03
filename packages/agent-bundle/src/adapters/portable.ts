@@ -21,6 +21,7 @@ import {
   cliBinCapability,
   eventRouteCapabilitiesFrom,
   supportedCapability,
+  featureCapabilitiesFrom,
   unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
@@ -92,7 +93,7 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.7.0',
+  adapterRevision: '1.8.0',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -625,6 +626,9 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     // it rides the plugin-root directory the standard's stdio MCP servers
     // already execute from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): the portable Skill document carries only
+    // the Agent Skills fields and no interpolation placeholders.
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     ),
