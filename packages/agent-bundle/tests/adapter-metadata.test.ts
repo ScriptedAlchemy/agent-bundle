@@ -84,7 +84,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'marketplace',
         revision: '0.147.0',
-        sha256: 'a4bca8063782e1bef29734f570c7e93b9c097f0a4dc676b6990f0a0122fd3b30',
+        sha256: '4f643f986ce40e82fd545cd7d579e318a277c18418fa06eeccb76fb3447961a7',
       },
       {
         name: 'mcp',
@@ -94,7 +94,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'plugin',
         revision: '0.147.0',
-        sha256: '986bcafa6ef46f9dc4558f05781f53400b3d75533a075068184ba8d43670d4ec',
+        sha256: '4ad476545c96c83d899c4524dcccd4eb4fe7d3299c307878a0cd46a237f48d58',
       },
     ],
   });

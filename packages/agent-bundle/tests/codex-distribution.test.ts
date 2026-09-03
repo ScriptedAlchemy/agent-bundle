@@ -146,6 +146,9 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { source: 'url', url: 'git@git.example.test:~team/codex-plugins.git' },
     { source: 'url', url: 'https://github.com/example/codex%20plugins.git' },
     { package: 'codex-plugin', registry: 'https://npm.example.test:4873/prefix/', source: 'npm' },
+    { source: 'url', url: 'https://github.com:65535/example/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com:0443/example/codex-plugins.git' },
+    { package: 'codex-plugin', registry: 'https://npm.example.test:65535', source: 'npm' },
   );
   expect(validate(admitted), JSON.stringify(validate.errors)).toBe(true);
 
@@ -154,6 +157,13 @@ it('admits every documented marketplace source form and rejects escapes, credent
     'plugins/my-plugin',
     { path: './plugins/../../outside', source: 'local' },
     { path: '.\\plugins\\my-plugin', source: 'local' },
+    // Line terminators must not let a parent segment slip past the containment lookahead.
+    './x\n/../../outside',
+    { path: './x\n/../../outside', source: 'local' },
+    { path: './x\r\n/../../outside', source: 'local' },
+    { path: './x\u2028/../../outside', source: 'local' },
+    { path: './plugins/my\u0000plugin', source: 'local' },
+    { path: './x\n/../../outside', ref: 'main', source: 'git-subdir', url: 'https://github.com/example/codex-plugins.git' },
     { source: 'url', url: 'file:///tmp/plugins' },
     // Scheme-prefix matches with an unusable authority or path are not URLs.
     { source: 'url', url: 'https://%zz/repository.git' },
@@ -163,6 +173,9 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { source: 'url', url: 'https://git hub.com/example/codex-plugins.git' },
     { source: 'url', url: 'https://-github.com/example/codex-plugins.git' },
     { source: 'url', url: 'https://github.com:port/example/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com:65536/example/codex-plugins.git' },
+    { source: 'url', url: 'https://github.com:99999/example/codex-plugins.git' },
+    { source: 'url', url: 'ssh://git@github.com:65536/example/codex-plugins.git' },
     { source: 'url', url: 'https://github.com/example/codex-plugins.git?ref=main' },
     { source: 'url', url: 'ssh://%zz/repository.git' },
     { source: 'url', url: 'ssh://github.com' },
@@ -175,6 +188,7 @@ it('admits every documented marketplace source form and rejects escapes, credent
     { package: '@example/codex-plugin', registry: 'https://%zz/', source: 'npm' },
     { package: '@example/codex-plugin', registry: 'https://', source: 'npm' },
     { package: '@example/codex-plugin', registry: 'https://registry.example.test:port', source: 'npm' },
+    { package: '@example/codex-plugin', registry: 'https://registry.example.test:65536', source: 'npm' },
     { package: '@example/codex-plugin', registry: 'https://registry.example.test/a b', source: 'npm' },
     { package: '@example/codex-plugin', source: 'npm', version: 'file:../local' },
     { package: '@example/codex-plugin', source: 'npm', version: 'https://example.test/pkg.tgz' },

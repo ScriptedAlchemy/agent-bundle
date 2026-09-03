@@ -1163,8 +1163,15 @@ it('admits documented Codex component path and inline manifest forms', async () 
     { mcpServers: { docs: 'not-an-object' }, skills: './skills/' },
     { skills: '../skills/' },
     { skills: ['./skills/'] },
+    // Line terminators must not let a parent segment slip past the containment lookahead.
+    { skills: './x\n/../../outside/' },
+    { hooks: './x\r\n/../../outside.json', skills: './skills/' },
+    { mcpServers: './x\u2028/../../outside.json', skills: './skills/' },
+    { skills: './skills\u0000/' },
+    { interface: { ...manifest.interface, logo: './x\n/../../outside.png' }, skills: './skills/' },
+    { interface: { ...manifest.interface, composerIcon: './x\u2029/../../outside.png' }, skills: './skills/' },
   ]) {
-    expect(validate({ ...manifest, ...invalid })).toBe(false);
+    expect(validate({ ...manifest, ...invalid }), JSON.stringify(invalid)).toBe(false);
   }
 });
 
