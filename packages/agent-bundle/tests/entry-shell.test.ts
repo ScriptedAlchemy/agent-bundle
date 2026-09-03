@@ -1050,14 +1050,18 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     workerFile: 'mcp-curator-flight.mjs',
   });
   expect(unsupportedEntry).toContain('noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute)');
+  // The sqlite driver itself stays: a workspace-durable project journals its
+  // lineage registry through it regardless of notice delivery. Only the notice
+  // runtime and its own durable store must be absent.
   for (const identifier of [
     'createGeneratedNoticeRuntime',
     'createNoticeInboxSignaller',
-    '@agent-bundle/runtime/state/sqlite',
+    'durableAnchor',
     'notices: noticeDelivery',
   ]) {
     expect(unsupportedEntry).not.toContain(identifier);
   }
+  expect(unsupportedEntry).toContain('agentLineageStateDefinition');
 
   // The inbox is a route of its own: a host that marks `mcp-inbox` unavailable,
   // or a target with no advertisement at all, exposes no inbox resource — and
