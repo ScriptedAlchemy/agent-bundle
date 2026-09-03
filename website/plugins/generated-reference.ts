@@ -90,6 +90,14 @@ const mcpPathTokenFields = (host: JsonObject): JsonObject => {
   return derived;
 };
 
+/**
+ * A host whose table records no MCP token fields because the adapter lowers
+ * the token instead of the host interpolating it says so in a dated
+ * `mcp.pathTokenLowering` row; its `reason` is the cell text.
+ */
+const mcpPathTokenLoweringNote = (host: JsonObject): string | undefined =>
+  asString(asObject(asObject(host.mcp).pathTokenLowering).reason);
+
 const escapeProse = (text: string): string =>
   text
     .replaceAll('|', '\\|')
@@ -157,12 +165,6 @@ const messages = {
     },
     unavailable: 'unavailable',
     notApplicable: '—',
-    // Hosts whose capability table records no MCP token fields because the
-    // adapter lowers the token instead of the host interpolating it.
-    mcpPathTokenNotes: {
-      codex:
-        'No host interpolation. `command`, `args`, `env` values, and `cwd` accept a *leading* `${PLUGIN_ROOT}` only when `cwd` is the plugin root; the compiler rewrites it to a `./`-relative path under `cwd: "./"`. Embedded tokens, `${PLUGIN_DATA}`, and workspace-root tokens are build errors.',
-    } as Readonly<Record<string, string>>,
     evidenceNotes: (count: number) => `${count} evidence note${count === 1 ? '' : 's'}`,
     eventsTitle: 'Event and hook matrix',
     eventsDescription:
@@ -236,10 +238,6 @@ const messages = {
     },
     unavailable: 'unavailable',
     notApplicable: '—',
-    mcpPathTokenNotes: {
-      codex:
-        '宿主不做插值。`command`、`args`、`env` 取值与 `cwd` 只在 `cwd` 为插件根时接受*开头*的 `${PLUGIN_ROOT}`；编译器会把它改写为 `cwd: "./"` 之下的 `./` 相对路径。嵌在中间的 token、`${PLUGIN_DATA}` 与工作区根 token 都是构建错误。',
-    } as Readonly<Record<string, string>>,
     evidenceNotes: (count: number) => `${count} 条证据说明`,
     eventsTitle: '事件与钩子矩阵',
     eventsDescription:
@@ -462,12 +460,11 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
         const fields = Object.entries(mcpPathTokenFields(host.data))
           .map(([field, tokens]) => `${code(field)}: ${Array.isArray(tokens) ? codeList(tokens) : m.notApplicable}`)
           .join('<br />');
-        const note = m.mcpPathTokenNotes[host.host];
         return [
           code(host.host),
           mcp.stdio === true ? 'supported' : m.unavailable,
           mcp.streamableHttp === true ? 'supported' : m.unavailable,
-          fields.length > 0 ? fields : note ?? m.notApplicable,
+          fields.length > 0 ? fields : mcpPathTokenLoweringNote(host.data) ?? m.notApplicable,
         ];
       }),
     ),
