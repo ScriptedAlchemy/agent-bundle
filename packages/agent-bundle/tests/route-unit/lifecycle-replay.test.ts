@@ -2,12 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { Agent, agent } from '@agent-bundle/runtime';
 import { afterEach, expect, it } from '@rstest/core';
+import { createElement } from 'react';
 
 import type { LifecycleReplay } from '../../src/contracts/lifecycles.ts';
 import { LifecycleReplayService } from '../../src/dev/playground/lifecycle-replay-service.ts';
 import { projectEventDocument } from '../../src/events/project.ts';
 import { compileRouteGraph } from '../../src/routes/graph.ts';
+import type { AgentRouteModule } from '../../src/test/types.ts';
 
 const roots: string[] = [];
 
@@ -44,14 +47,15 @@ const createFixtureProject = async () => {
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.tsx', [
-      "import { Agent } from '@agent-bundle/runtime';",
+      "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       'export default async function AfterTool({ canonical }) {',
+      '  const context = await agent();',
       '  return createElement(',
       '    Agent.Result,',
       '    null,',
       "    createElement(Agent.Markdown, null, `Observed ${canonical.event} from ${canonical.provenance.host}.`),",
-      "    createElement(Agent.Context, null, 'Lifecycle replay context.'),",
+      '    createElement(Agent.Context, null, `${context.invocation.operationId}|${context.invocation.surface}`),',
       '  );',
       '}',
       '',
@@ -139,7 +143,7 @@ it('replays Claude and Codex PostToolUse through decode, route execution, render
     );
     expect(replay.nativeResponse).toEqual({
       hookSpecificOutput: {
-        additionalContext: 'Lifecycle replay context.',
+        additionalContext: 'event:tool/after|tool/after',
         hookEventName: 'PostToolUse',
       },
     });
@@ -187,6 +191,54 @@ it('replays captured prompt/submit and session/end fixtures through native proje
     expect('diagnostics' in sessionEnd).toBe(false);
     expect((sessionEnd as LifecycleReplay).nativeResponse).toBeUndefined();
   }
+});
+
+it('preserves replay invocation provenance for an in-process route observing agent context', async () => {
+  const { graph } = await createFixtureProject();
+  const routeModule = {
+    default: async () => {
+      const context = await agent();
+      return createElement(
+        Agent.Result,
+        null,
+        createElement(
+          Agent.Context,
+          null,
+          `${context.invocation.operationId}|${context.invocation.surface}`,
+        ),
+      );
+    },
+  } satisfies AgentRouteModule;
+  const service = new LifecycleReplayService({
+    prepared: () => ({ graph, targets: ['claude'] }),
+    loadRouteModule: async () => routeModule,
+  });
+  const native = JSON.parse(await readFile(
+    new URL('../../../../examples/rsc-agent-runtime/tests/fixtures/events/claude-post-tool-use.json', import.meta.url),
+    'utf8',
+  )) as Record<string, unknown>;
+
+  const result = await service.replay({
+    binding: {
+      manifestDigest: graph.digest,
+      routeId: 'event:tool/after',
+      target: 'claude',
+    },
+    native,
+    source: 'fixture',
+  });
+  if ('diagnostics' in result) throw new Error('Expected a lifecycle replay.');
+
+  expect(result.requestContext.invocation).toMatchObject({
+    operationId: 'event:tool/after',
+    surface: 'tool/after',
+  });
+  expect(result.nativeResponse).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'event:tool/after|tool/after',
+      hookEventName: 'PostToolUse',
+    },
+  });
 });
 
 it('replays the Cursor workspaceOpen starter as an observation with no native response', async () => {

@@ -60,6 +60,12 @@ const render = async (request: LifecycleRenderChildRequest): Promise<LifecycleRe
           ...(request.requestContext.invocation.hostContractRevision === undefined
             ? {}
             : { hostContractRevision: request.requestContext.invocation.hostContractRevision }),
+          ...(request.requestContext.invocation.operationId === undefined
+            ? {}
+            : { operationId: request.requestContext.invocation.operationId }),
+          ...(request.requestContext.invocation.surface === undefined
+            ? {}
+            : { surface: request.requestContext.invocation.surface }),
         },
         session: request.requestContext.session,
         workspace: request.requestContext.workspace,

@@ -82,6 +82,12 @@ const renderContext = (requestContext: RequestContextProvenance): RenderRouteCon
     ...(requestContext.invocation.hostContractRevision === undefined
       ? {}
       : { hostContractRevision: requestContext.invocation.hostContractRevision }),
+    ...(requestContext.invocation.operationId === undefined
+      ? {}
+      : { operationId: requestContext.invocation.operationId }),
+    ...(requestContext.invocation.surface === undefined
+      ? {}
+      : { surface: requestContext.invocation.surface }),
   },
   session: requestContext.session,
   workspace: requestContext.workspace,
