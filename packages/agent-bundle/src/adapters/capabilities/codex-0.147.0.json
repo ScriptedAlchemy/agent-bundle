@@ -48,6 +48,75 @@
   "plugin": {
     "manifest": ".codex-plugin/plugin.json",
     "marketplace": ".agents/plugins/marketplace.json",
+    "manifestPackage": {
+      "manifestMetadata": {
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents top-level author (name, email, url), homepage, repository, license, and keywords as publisher and discovery metadata in .codex-plugin/plugin.json.",
+          "retrieved 2026-09-02: the adapter exposes those seven documented values through codex host config, validates them before emission, and retains the extension source as manifest provenance."
+        ],
+        "fields": [
+          "author.name",
+          "author.email",
+          "author.url",
+          "homepage",
+          "repository",
+          "license",
+          "keywords"
+        ],
+        "state": "supported"
+      },
+      "manifestPaths": {
+        "admitted": {
+          "hooks": ["path", "path-array", "inline-object", "inline-object-array"],
+          "mcpServers": ["path", "inline-object"],
+          "skills": ["path"]
+        },
+        "emitted": {
+          "hooks": "./hooks/hooks.json",
+          "mcpServers": "./.mcp.json",
+          "skills": "./skills/"
+        },
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins requires manifest component paths to begin with ./, resolve relative to the plugin root, and stay inside that root.",
+          "retrieved 2026-09-02: the same page documents skills as a path, mcpServers as a path or inline server object, and hooks as a path, path array, inline hooks object, or inline-hooks-object array.",
+          "retrieved 2026-09-02: the adapter emits canonical component paths while the pinned artifact schema admits every documented path and inline form for validating real-world manifests."
+        ],
+        "reason": "The adapter emits canonical component locations and validates all documented forms, but it has no authored config surface for selecting custom component paths or inline component objects.",
+        "state": "degraded"
+      },
+      "optionalAssets": {
+        "assets": [
+          "interface.composerIcon",
+          "interface.logo",
+          "interface.logoDark",
+          "interface.screenshots"
+        ],
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins documents composerIcon, logo, logoDark, and PNG screenshots under ./assets/ as optional install-surface presentation fields.",
+          "retrieved 2026-09-02: the compiler can copy project assets into assets/ but the Codex adapter exposes no authored mapping to these interface fields and emits none of them."
+        ],
+        "reason": "The Codex adapter copies selected assets but cannot author composerIcon, logo, logoDark, or screenshots references in the manifest.",
+        "state": "unavailable"
+      },
+      "submissionPolicy": {
+        "constraints": [
+          "Apps Management write access",
+          "verified developer or business identity",
+          "listing and policy URLs",
+          "production MCP review materials",
+          "five positive and three negative test cases",
+          "country or region availability",
+          "release notes and policy attestations"
+        ],
+        "evidence": [
+          "retrieved 2026-09-02: https://developers.openai.com/plugins/deploy/submission requires Apps Management write access, verified publisher identity, matching public listing and policy URLs, and release notes plus policy attestations.",
+          "retrieved 2026-09-02: the submission portal requires production MCP review materials when applicable, at least five positive and three negative test cases, and selected country or region availability.",
+          "retrieved 2026-09-02: these are portal-owned distribution checks; the compiler neither submits plugins nor claims to validate reviewer credentials, identity, public services, policy compliance, or regional readiness."
+        ],
+        "reason": "Public submission requirements are portal-owned distribution policy with no compiler-authored or compiler-validation surface.",
+        "state": "unavailable"
+      }
+    },
     "skills": true
   },
   "validation": {

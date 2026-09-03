@@ -1,8 +1,16 @@
 {
   "observedCliVersion": "0.147.0",
-  "retrievedAt": "2026-09-01",
+  "retrievedAt": "2026-09-02",
   "schemaSource": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md",
-  "notes": "The generated/subagent-{start,stop}.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
+  "notes": "plugin.schema.json transcribes the 2026-09-02 documented package manifest rather than a host-exported schema because Codex 0.147.0 publishes no plugin validate command. Skills stays optional so MCP-only plugins admitted by the documented packaging and submission flows validate. The generated/subagent-{start,stop}.command.{input,output}.schema.json evidence snapshots are byte-pinned from the rust-v0.147.0 tag at https://github.com/openai/codex/tree/rust-v0.147.0/codex-rs/hooks/schema/generated. Repository text files add one POSIX trailing newline; adapter-metadata.test.ts removes only that byte before comparing the authoritative upstream SHA-256 digests recorded in codex-0.147.0.json.",
+  "schemaTightenings": {
+    "plugin.schema.json": [
+      "Top-level and author objects are closed; author admits only the documented name, email, and url fields.",
+      "Documented URL and email fields use JSON Schema uri and email formats, and authored discovery strings must be nonempty.",
+      "Component paths must begin with ./ and must not contain a parent-directory segment so they remain inside the plugin root.",
+      "Inline mcpServers values must be objects; inline hook documents use the same closed command-hook shape as hooks.schema.json."
+    ]
+  },
   "schemas": {
     "hooks.schema.json": {
       "bytes": 1107,
@@ -20,8 +28,8 @@
       "url": "https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json"
     },
     "plugin.schema.json": {
-      "bytes": 1728,
-      "sha256": "f6e8e7d2ecb48c50ffa850d1a8190ad85ceffec705b8f0f39bb44a1d10aca0d9",
+      "bytes": 3894,
+      "sha256": "a3f24cd9f639b856937ae74fe967340bcce6966d131b0f45c628c78d9ac373f3",
       "url": "https://github.com/openai/codex/blob/main/codex-rs/skills/src/assets/samples/plugin-creator/references/plugin-json-spec.md"
     }
   },

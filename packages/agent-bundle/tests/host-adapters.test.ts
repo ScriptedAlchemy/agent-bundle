@@ -241,6 +241,23 @@ const withClaudeManifestMetadata = (
   },
 });
 
+const withCodexManifestMetadata = (
+  model: NormalizedPlugin,
+  manifestMetadata: Readonly<Record<string, unknown>>,
+  target = 'codex',
+): NormalizedPlugin => ({
+  ...model,
+  extensions: {
+    codex: {
+      id: 'extension:codex',
+      key: 'codex',
+      provenance: { kind: 'config', sourcePath: '/workspace/codex-manifest.config.ts' },
+      target,
+      value: manifestMetadata,
+    },
+  },
+});
+
 const withClaudeMarketplace = (
   model: NormalizedPlugin,
   marketplace: unknown,
@@ -934,6 +951,173 @@ it('pins the full closed Claude marketplace schema with the documented source ma
     { ...manifest, plugins: [{ ...manifest.plugins[0], relevance: { signals: { unknown: ['value'] } } }] },
   ]) {
     expect(validate(invalid)).toBe(false);
+  }
+});
+
+it('emits validated Codex manifest package metadata with extension provenance', async () => {
+  const model = withCodexManifestMetadata(plugin, {
+    author: {
+      email: 'plugins@example.test',
+      name: 'Review Tools Team',
+      url: 'https://example.test/review-tools',
+    },
+    homepage: 'https://example.test/review-tools/docs',
+    keywords: ['review', 'security'],
+    license: 'MIT',
+    repository: 'https://github.com/example/review-tools',
+  });
+  const plan = createDefaultRegistry().get('codex').plan(model);
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.codex-plugin/plugin.json');
+
+  expect(plan.diagnostics).toEqual([]);
+  expect(manifest).toMatchObject({
+    kind: 'write',
+    sourceInputs: [
+      '/workspace/agent-bundle.config.ts',
+      '/workspace/src/skills/review/SKILL.md',
+      '/workspace/codex-manifest.config.ts',
+    ],
+  });
+  if (manifest?.kind !== 'write') throw new Error('Expected an emitted Codex plugin manifest.');
+  expect(JSON.parse(manifest.content)).toMatchObject({
+    author: {
+      email: 'plugins@example.test',
+      name: 'Review Tools Team',
+      url: 'https://example.test/review-tools',
+    },
+    homepage: 'https://example.test/review-tools/docs',
+    keywords: ['review', 'security'],
+    license: 'MIT',
+    repository: 'https://github.com/example/review-tools',
+  });
+  await validateDocuments('codex', writeContents(model, 'codex'));
+});
+
+it.each([
+  {
+    code: 'codex.manifest.author.invalid',
+    declaration: { author: null },
+    label: 'a null author',
+  },
+  {
+    code: 'codex.manifest.author.invalid',
+    declaration: { author: { name: 'Review Tools', unknown: true } },
+    label: 'an author with an unknown field',
+  },
+  {
+    code: 'codex.manifest.author.name.invalid',
+    declaration: { author: { email: 'plugins@example.test' } },
+    label: 'an author without a name',
+  },
+  {
+    code: 'codex.manifest.author.name.invalid',
+    declaration: { author: { name: '   ' } },
+    label: 'a whitespace-only author name',
+  },
+  {
+    code: 'codex.manifest.author.email.invalid',
+    declaration: { author: { email: 'not-an-email', name: 'Review Tools' } },
+    label: 'an invalid author email',
+  },
+  {
+    code: 'codex.manifest.author.url.invalid',
+    declaration: { author: { name: 'Review Tools', url: './profile' } },
+    label: 'a relative author URL',
+  },
+  {
+    code: 'codex.manifest.homepage.invalid',
+    declaration: { homepage: './docs' },
+    label: 'a relative homepage',
+  },
+  {
+    code: 'codex.manifest.repository.invalid',
+    declaration: { repository: 7 },
+    label: 'a non-string repository',
+  },
+  {
+    code: 'codex.manifest.license.invalid',
+    declaration: { license: '   ' },
+    label: 'a whitespace-only license',
+  },
+  {
+    code: 'codex.manifest.keywords.invalid',
+    declaration: { keywords: 'review' },
+    label: 'non-array keywords',
+  },
+  {
+    code: 'codex.manifest.keywords.invalid',
+    declaration: { keywords: ['review', '   '] },
+    label: 'keywords with an empty entry',
+  },
+])('rejects $label without emitting authored Codex manifest metadata', ({ code, declaration }) => {
+  const plan = createDefaultRegistry().get('codex').plan(withCodexManifestMetadata(plugin, declaration));
+  const manifest = plan.entries.find((entry) => entry.relativePath === '.codex-plugin/plugin.json');
+
+  expect(plan.diagnostics).toContainEqual(expect.objectContaining({
+    code,
+    recovery: expect.any(String),
+    severity: 'error',
+    target: 'codex',
+  }));
+  if (manifest?.kind !== 'write') throw new Error('Expected the base Codex plugin manifest.');
+  const document = JSON.parse(manifest.content) as Record<string, unknown>;
+  expect(document.author).toEqual({ name: 'review-tools' });
+  expect(document).not.toHaveProperty('homepage');
+  expect(document).not.toHaveProperty('repository');
+  expect(document).not.toHaveProperty('license');
+  expect(document).not.toHaveProperty('keywords');
+});
+
+it('admits documented Codex component path and inline manifest forms', async () => {
+  const schema = (await import('../src/adapters/schemas/codex/plugin.schema.json', {
+    with: { type: 'json' },
+  })).default;
+  const validator = new Ajv2020({ allErrors: true, strict: false });
+  installFormats(validator);
+  const validate = validator.compile(schema);
+  const manifest = {
+    author: { name: 'Review Tools' },
+    description: 'Codex path-form schema fixture.',
+    interface: {
+      capabilities: ['skills'],
+      category: 'Productivity',
+      defaultPrompt: ['Review this repository.'],
+      developerName: 'Review Tools',
+      displayName: 'Review Tools',
+      longDescription: 'Review this repository with reusable workflows.',
+      shortDescription: 'Repository review workflows.',
+    },
+    name: 'codex-path-fixture',
+    version: '1.0.0',
+  };
+  const hookDocument = {
+    hooks: {
+      SessionStart: [{
+        hooks: [{ command: 'node "${PLUGIN_ROOT}/hooks/start.mjs"', type: 'command' }],
+      }],
+    },
+  };
+
+  for (const componentFields of [
+    { mcpServers: './config/mcp.json' },
+    { hooks: './custom/hooks.json', mcpServers: './config/mcp.json', skills: './workflows/' },
+    { hooks: ['./hooks/start.json', './hooks/tools.json'], skills: './skills/' },
+    { hooks: hookDocument, mcpServers: { docs: { type: 'http', url: 'https://example.test/mcp' } }, skills: './skills/' },
+    { hooks: [hookDocument], skills: './skills/' },
+  ]) {
+    expect(validate({ ...manifest, ...componentFields }), JSON.stringify(validate.errors)).toBe(true);
+  }
+  for (const invalid of [
+    { hooks: '../hooks.json', skills: './skills/' },
+    { hooks: ['./hooks.json', '../outside.json'], skills: './skills/' },
+    { hooks: [], skills: './skills/' },
+    { hooks: [{ description: 'missing hooks map' }], skills: './skills/' },
+    { mcpServers: '../.mcp.json', skills: './skills/' },
+    { mcpServers: { docs: 'not-an-object' }, skills: './skills/' },
+    { skills: '../skills/' },
+    { skills: ['./skills/'] },
+  ]) {
+    expect(validate({ ...manifest, ...invalid })).toBe(false);
   }
 });
 

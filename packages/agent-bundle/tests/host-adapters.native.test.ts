@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { claudeAdapter } from '../src/adapters/claude.ts';
+import { codexAdapter } from '../src/adapters/codex.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -14,6 +15,12 @@ const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : i
 interface ClaudeValidation {
   readonly code: number | null;
   readonly output: string;
+}
+
+interface CodexValidation {
+  readonly code: number | null;
+  readonly stderr: string;
+  readonly stdout: string;
 }
 
 const runClaude = async (
@@ -44,6 +51,31 @@ const runClaude = async (
 
 const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeValidation> =>
   runClaude(cwd, ['plugin', 'validate', '--strict', target]);
+
+const runCodex = async (
+  cwd: string,
+  args: readonly string[],
+  codexHome: string,
+): Promise<CodexValidation> =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn('codex', args, {
+      cwd,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise({ code, stderr, stdout }));
+  });
 
 const model: NormalizedPlugin = {
   extensions: {},
@@ -183,6 +215,84 @@ const writeClaudeArtifact = async (
   }
   return written;
 };
+
+nativeIt('registers an emitted Codex plugin carrying authored package metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-codex-manifest-metadata-'));
+  const pluginRoot = join(root, 'plugin');
+  const codexHome = join(root, 'codex-home');
+  const metadataModel: NormalizedPlugin = {
+    ...model,
+    extensions: {
+      codex: {
+        id: 'extension:codex',
+        key: 'codex',
+        provenance: { kind: 'config', sourcePath: '/workspace/codex.config.ts' },
+        target: 'codex',
+        value: {
+          author: {
+            email: 'plugins@example.test',
+            name: 'Review Tools Team',
+            url: 'https://example.test/review-tools',
+          },
+          homepage: 'https://example.test/review-tools/docs',
+          keywords: ['review', 'security'],
+          license: 'MIT',
+          repository: 'https://github.com/example/review-tools',
+        },
+      },
+    },
+  };
+
+  try {
+    await Promise.all([
+      mkdir(pluginRoot, { recursive: true }),
+      mkdir(codexHome, { recursive: true }),
+    ]);
+    const plan = codexAdapter.plan(metadataModel);
+    expect(plan.diagnostics).toEqual([]);
+    await emitPlanEntries({ entries: plan.entries, root: pluginRoot });
+
+    const version = await runCodex(root, ['--version'], codexHome);
+    expect(version.code, version.stderr).toBe(0);
+    expect(version.stdout).toContain('0.147.0');
+    const marketplace = await runCodex(
+      root,
+      ['plugin', 'marketplace', 'add', pluginRoot],
+      codexHome,
+    );
+    expect(marketplace.code, marketplace.stderr).toBe(0);
+    const installed = await runCodex(
+      root,
+      ['plugin', 'add', 'review-tools@review-tools-marketplace', '--json'],
+      codexHome,
+    );
+    expect(installed.code, installed.stderr).toBe(0);
+    expect(JSON.parse(installed.stdout)).toMatchObject({ name: 'review-tools' });
+    const listed = await runCodex(root, ['plugin', 'list', '--json'], codexHome);
+    expect(listed.code, listed.stderr).toBe(0);
+    const listedDocument = JSON.parse(listed.stdout) as {
+      readonly installed: readonly Record<string, unknown>[];
+    };
+    expect(listedDocument).toMatchObject({
+      available: [],
+      installed: [{
+        enabled: true,
+        installed: true,
+        marketplaceName: 'review-tools-marketplace',
+        name: 'review-tools',
+        pluginId: 'review-tools@review-tools-marketplace',
+        version: '1.2.3',
+      }],
+    });
+    expect(listedDocument.installed[0]).not.toHaveProperty('author');
+    expect(listedDocument.installed[0]).not.toHaveProperty('homepage');
+    expect(listedDocument.installed[0]).not.toHaveProperty('keywords');
+    expect(listedDocument.installed[0]).not.toHaveProperty('license');
+    expect(listedDocument.installed[0]).not.toHaveProperty('repository');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 nativeIt('pins Claude plugin and marketplace lifecycle command help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-lifecycle-help-'));

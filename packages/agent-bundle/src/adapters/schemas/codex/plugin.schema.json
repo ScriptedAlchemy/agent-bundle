@@ -1,15 +1,78 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/codex/0.147.0/plugin.schema.json",
+  "$defs": {
+    "componentPath": {
+      "pattern": "^\\./(?!(?:.*\\/)?\\.\\.(?:\\/|$)).+",
+      "type": "string"
+    },
+    "hookDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "hooks": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "hooks": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "command": { "minLength": 1, "type": "string" },
+                      "timeout": { "minimum": 1, "type": "integer" },
+                      "type": { "const": "command" }
+                    },
+                    "required": ["type", "command"],
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "matcher": { "type": "string" }
+              },
+              "required": ["hooks"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "required": ["hooks"],
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "author": {
       "additionalProperties": false,
-      "properties": { "name": { "minLength": 1, "type": "string" } },
+      "properties": {
+        "email": { "format": "email", "type": "string" },
+        "name": { "minLength": 1, "type": "string" },
+        "url": { "format": "uri", "pattern": "^https?://", "type": "string" }
+      },
       "required": ["name"],
       "type": "object"
     },
     "description": { "minLength": 1, "type": "string" },
+    "homepage": { "format": "uri", "pattern": "^https?://", "type": "string" },
+    "hooks": {
+      "oneOf": [
+        { "$ref": "#/$defs/componentPath" },
+        {
+          "items": { "$ref": "#/$defs/componentPath" },
+          "minItems": 1,
+          "type": "array"
+        },
+        { "$ref": "#/$defs/hookDocument" },
+        {
+          "items": { "$ref": "#/$defs/hookDocument" },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    },
     "interface": {
       "additionalProperties": false,
       "properties": {
@@ -24,12 +87,25 @@
       "required": ["displayName", "shortDescription", "longDescription", "developerName", "category", "capabilities", "defaultPrompt"],
       "type": "object"
     },
-    "mcpServers": { "const": "./.mcp.json", "type": "string" },
-    "hooks": { "const": "./hooks/hooks.json", "type": "string" },
+    "keywords": {
+      "items": { "minLength": 1, "type": "string" },
+      "type": "array"
+    },
+    "license": { "minLength": 1, "type": "string" },
+    "mcpServers": {
+      "oneOf": [
+        { "$ref": "#/$defs/componentPath" },
+        {
+          "additionalProperties": { "type": "object" },
+          "type": "object"
+        }
+      ]
+    },
     "name": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "type": "string" },
-    "skills": { "const": "./skills/", "type": "string" },
+    "repository": { "format": "uri", "pattern": "^https?://", "type": "string" },
+    "skills": { "$ref": "#/$defs/componentPath" },
     "version": { "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", "type": "string" }
   },
-  "required": ["name", "version", "description", "author", "interface", "skills"],
+  "required": ["name", "version", "description", "author", "interface"],
   "type": "object"
 }

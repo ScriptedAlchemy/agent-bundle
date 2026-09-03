@@ -56,12 +56,28 @@ import { deepFreeze } from '../core/freeze.ts';
 
 
 export interface CodexConfigExtension {
-  codex?: AgentBundleHostConfig;
+  codex?: CodexHostConfig;
+}
+
+/** Documented publisher identity in `.codex-plugin/plugin.json`. */
+export interface CodexAuthorConfig {
+  readonly email?: string;
+  readonly name: string;
+  readonly url?: string;
+}
+
+/** Codex-only authored package metadata layered onto the generated manifest. */
+export interface CodexHostConfig extends AgentBundleHostConfig {
+  readonly author?: CodexAuthorConfig;
+  readonly homepage?: string;
+  readonly keywords?: readonly string[];
+  readonly license?: string;
+  readonly repository?: string;
 }
 
 declare module '../core/types.ts' {
   interface AgentBundleConfigExtensions {
-    codex?: AgentBundleHostConfig;
+    codex?: CodexHostConfig;
   }
 }
 
@@ -80,29 +96,10 @@ const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 
 /**
- * The pinned schema const-locks the manifest's `mcpServers` pointer to the
- * conventional root path. The field is a path pointer, so a plan that
- * relocates the MCP document widens the validator to accept exactly the
- * conventional path or the requested relocation - nothing wider - keeping the
- * pointer and its validator impossible to configure apart.
+ * The pinned schema admits every documented plugin-root-relative component
+ * path. Standalone and unified plans still emit their canonical paths.
  */
-const relocatedPluginValidators = new Map<string, ValidateFunction>();
-const pluginValidatorFor = (mcpRelativePath: string): ValidateFunction => {
-  if (mcpRelativePath === codexArtifactPaths.mcp) return validatePlugin;
-  let compiled = relocatedPluginValidators.get(mcpRelativePath);
-  if (compiled === undefined) {
-    const cloned = structuredClone(pluginSchema) as Record<string, unknown>;
-    // The clone must not reuse the pinned schema's registered $id.
-    delete cloned['$id'];
-    const properties = cloned['properties'] as Record<string, Record<string, unknown>>;
-    const canonical = properties['mcpServers']?.['const'];
-    if (typeof canonical !== 'string') throw new Error('Pinned Codex plugin schema mcpServers pointer is not a const string.');
-    properties['mcpServers'] = { enum: [canonical, `./${mcpRelativePath}`], type: 'string' };
-    compiled = validator.compile(cloned);
-    relocatedPluginValidators.set(mcpRelativePath, compiled);
-  }
-  return compiled;
-};
+const pluginValidatorFor = (_mcpRelativePath: string): ValidateFunction => validatePlugin;
 
 /** Wrapped manifest validator for a plan whose MCP document path was relocated. */
 export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArtifactDocumentValidator =>
@@ -128,7 +125,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.2.0',
+  adapterRevision: '1.3.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -161,6 +158,172 @@ const mcpRuntime = createTargetMcpRuntime({
 });
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(codexName, 'Codex');
+
+const isPlainDataRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  [null, Object.prototype].includes(Object.getPrototypeOf(value));
+
+const isNonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const isAbsoluteUrl = (value: unknown): value is string => {
+  if (!isNonemptyString(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isEmail = (value: unknown): value is string =>
+  isNonemptyString(value) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+
+interface CodexManifestMetadataPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Readonly<Record<string, unknown>>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noManifestMetadataPlan: CodexManifestMetadataPlan = deepFreeze({
+  diagnostics: [],
+  sourceInputs: [],
+});
+
+const manifestMetadataDiagnostic = (
+  code: string,
+  message: string,
+  recovery: string,
+): Diagnostic => ({
+  ...errorDiagnostic(code, message),
+  recovery,
+});
+
+const planCodexManifestMetadata = (model: NormalizedPlugin): CodexManifestMetadataPlan => {
+  const extension = model.extensions[codexName];
+  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
+  const author = extension.value['author'];
+  const homepage = extension.value['homepage'];
+  const keywords = extension.value['keywords'];
+  const license = extension.value['license'];
+  const repository = extension.value['repository'];
+  if (
+    author === undefined &&
+    homepage === undefined &&
+    keywords === undefined &&
+    license === undefined &&
+    repository === undefined
+  ) {
+    return noManifestMetadataPlan;
+  }
+
+  const diagnostics: Diagnostic[] = [];
+  let plannedAuthor: Readonly<Record<string, string>> | undefined;
+  if (author !== undefined) {
+    if (!isPlainDataRecord(author)) {
+      diagnostics.push(manifestMetadataDiagnostic(
+        'codex.manifest.author.invalid',
+        'Codex author must be a plain object.',
+        'Set codex.author to an object containing name and optional email and url strings, or remove it.',
+      ));
+    } else {
+      const unknownFields = Object.keys(author).filter((field) => !['email', 'name', 'url'].includes(field));
+      if (unknownFields.length > 0) {
+        diagnostics.push(manifestMetadataDiagnostic(
+          'codex.manifest.author.invalid',
+          `Codex author contains unsupported field${unknownFields.length === 1 ? '' : 's'} ${unknownFields.map((field) => JSON.stringify(field)).join(', ')}.`,
+          'Keep only codex.author.name, codex.author.email, and codex.author.url.',
+        ));
+      }
+      const name = author['name'];
+      const email = author['email'];
+      const url = author['url'];
+      if (!isNonemptyString(name)) {
+        diagnostics.push(manifestMetadataDiagnostic(
+          'codex.manifest.author.name.invalid',
+          'Codex author.name must be a nonempty string after trimming whitespace.',
+          'Set codex.author.name to the author or team name.',
+        ));
+      }
+      if (email !== undefined && !isEmail(email)) {
+        diagnostics.push(manifestMetadataDiagnostic(
+          'codex.manifest.author.email.invalid',
+          'Codex author.email must be a valid nonempty email address.',
+          'Set codex.author.email to a contact email address, or remove it.',
+        ));
+      }
+      if (url !== undefined && !isAbsoluteUrl(url)) {
+        diagnostics.push(manifestMetadataDiagnostic(
+          'codex.manifest.author.url.invalid',
+          'Codex author.url must be an absolute HTTP or HTTPS URL.',
+          'Set codex.author.url to the author or team homepage, or remove it.',
+        ));
+      }
+      if (
+        unknownFields.length === 0 &&
+        isNonemptyString(name) &&
+        (email === undefined || isEmail(email)) &&
+        (url === undefined || isAbsoluteUrl(url))
+      ) {
+        plannedAuthor = Object.freeze({
+          ...(email === undefined ? {} : { email }),
+          name,
+          ...(url === undefined ? {} : { url }),
+        });
+      }
+    }
+  }
+  for (const [field, value] of [['homepage', homepage], ['repository', repository]] as const) {
+    if (value !== undefined && !isAbsoluteUrl(value)) {
+      diagnostics.push(manifestMetadataDiagnostic(
+        `codex.manifest.${field}.invalid`,
+        `Codex ${field} must be an absolute HTTP or HTTPS URL.`,
+        `Set codex.${field} to an absolute URL, or remove it.`,
+      ));
+    }
+  }
+  if (license !== undefined && !isNonemptyString(license)) {
+    diagnostics.push(manifestMetadataDiagnostic(
+      'codex.manifest.license.invalid',
+      'Codex license must be a nonempty string after trimming whitespace.',
+      'Set codex.license to a license identifier such as MIT or Apache-2.0, or remove it.',
+    ));
+  }
+  if (
+    keywords !== undefined &&
+    (
+      !Array.isArray(keywords) ||
+      keywords.some((keyword) => !isNonemptyString(keyword))
+    )
+  ) {
+    const invalidIndex = Array.isArray(keywords)
+      ? keywords.findIndex((keyword) => !isNonemptyString(keyword))
+      : undefined;
+    diagnostics.push(manifestMetadataDiagnostic(
+      'codex.manifest.keywords.invalid',
+      invalidIndex === undefined
+        ? 'Codex keywords must be an array of nonempty strings.'
+        : `Codex keywords[${invalidIndex}] must be a nonempty string after trimming whitespace.`,
+      'Set codex.keywords to discovery tags such as ["research", "crm"], or remove it.',
+    ));
+  }
+
+  const inputs = [extension.provenance.sourcePath];
+  if (diagnostics.length > 0) return { diagnostics, sourceInputs: inputs };
+  return {
+    diagnostics,
+    document: Object.freeze({
+      ...(plannedAuthor === undefined ? {} : { author: plannedAuthor }),
+      ...(homepage === undefined ? {} : { homepage }),
+      ...(keywords === undefined ? {} : { keywords }),
+      ...(license === undefined ? {} : { license }),
+      ...(repository === undefined ? {} : { repository }),
+    }),
+    sourceInputs: inputs,
+  };
+};
 
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
@@ -347,6 +510,8 @@ export const planCodexArtifacts = (
   diagnostics.push(...nativeHooks.diagnostics);
   const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
+  const manifestMetadata = planCodexManifestMetadata(model);
+  diagnostics.push(...manifestMetadata.diagnostics);
 
   const description = model.metadata.description ?? model.metadata.name;
   const interfaceMetadata = {
@@ -360,6 +525,7 @@ export const planCodexArtifacts = (
   };
   const plugin = {
     author: { name: model.metadata.name },
+    ...manifestMetadata.document,
     description,
     interface: {
       ...interfaceMetadata,
@@ -391,6 +557,7 @@ export const planCodexArtifacts = (
   diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
 
   return withInstallSurface(standardPluginArtifactPlan({
+    additionalPluginSourceInputs: manifestMetadata.sourceInputs,
     diagnostics,
     hookDocument,
     hookDocumentValid,
@@ -440,6 +607,18 @@ export const codexAdapter: TargetAdapter = Object.freeze({
       capabilityTable.plugin.skills,
       evidence,
       'The pinned Codex plugin contract does not support skills.',
+    ),
+    manifestMetadata: supportedCapability(evidence),
+    manifestPaths: Object.freeze({
+      evidence,
+      reason: capabilityTable.plugin.manifestPackage.manifestPaths.reason,
+      state: 'degraded',
+    }),
+    optionalAssets: unavailableCapability(
+      capabilityTable.plugin.manifestPackage.optionalAssets.reason,
+    ),
+    submissionPolicy: unavailableCapability(
+      capabilityTable.plugin.manifestPackage.submissionPolicy.reason,
     ),
   }),
   configExtension: Object.freeze({ key: codexName }),
