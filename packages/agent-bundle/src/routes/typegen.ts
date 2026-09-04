@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
+
+import { ensuringRemoved, runWithPlatform } from '../effect/platform.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { CompiledAgentRoute, CompiledProvider, CompiledRouteGraph } from './types.ts';
 
@@ -159,20 +162,29 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
 /**
  * Publishes typegen with a same-directory rename so dev readers observe the
  * previous complete file or the next complete file, never a partial write.
+ * Runs on Effect `FileSystem` (the path arithmetic stays `node:path`: it is
+ * string work shared with the pure generator above); a filesystem failure
+ * still rejects with the same Node `ErrnoException`.
  */
-export const writeRouteTypes = async (root: string, graph: CompiledRouteGraph): Promise<string> => {
+export const writeRouteTypesProgram = (
+  root: string,
+  graph: CompiledRouteGraph,
+): Effect.Effect<string, PlatformError, FileSystem.FileSystem> => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
   const output = join(root, routeTypesRelativePath);
+  const published = relative(root, output).replaceAll('\\', '/');
   if (executableRoutes(graph).length === 0 && graph.providers.length === 0) {
-    await rm(output, { force: true });
-    return relative(root, output).replaceAll('\\', '/');
+    yield* fs.remove(output, { force: true });
+    return published;
   }
-  await mkdir(dirname(output), { recursive: true });
+  yield* fs.makeDirectory(dirname(output), { recursive: true });
   const temporary = `${output}.${String(process.pid)}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, generateRouteTypes(graph), 'utf8');
-    await rename(temporary, output);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-  return relative(root, output).replaceAll('\\', '/');
-};
+  yield* ensuringRemoved(temporary, Effect.gen(function* () {
+    yield* fs.writeFileString(temporary, generateRouteTypes(graph));
+    yield* fs.rename(temporary, output);
+  }));
+  return published;
+});
+
+export const writeRouteTypes = (root: string, graph: CompiledRouteGraph): Promise<string> =>
+  runWithPlatform(writeRouteTypesProgram(root, graph));

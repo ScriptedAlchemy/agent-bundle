@@ -256,7 +256,11 @@ contract).
   without `force` and `orDie`s, so an operation that deleted its own staging
   directory would fail an already successful call, and a real cleanup error
   would surface as the `PlatformError` wrapper (scope finalizers cannot fail
-  typed). Tests may use `makeTempDirectoryScoped` for fixtures.
+  typed).   Tests may use `makeTempDirectoryScoped` for fixtures.
+  Same shape for a staging *file*: `ensuringRemoved(path, use)` is the
+  `try`/`finally` `rm(path, { force: true })` bracket behind
+  `withTempDirectory`; `routes/typegen.ts` uses it around its
+  write-then-rename of `.agent-bundle/routes.d.ts`.
   **Not** when ownership of the directory is
   transferred to a longer-lived object (the MCP session plugin-data dir in
   `dev/mcp-session/mcp-session-service.ts`): a scoped temp is removed when
@@ -322,18 +326,23 @@ the bundle.
 
 `packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
 layer: `platformLayer` (the `NodeServices` union composed from
-`@effect/platform-node-shared`), `withTempDirectory`,
-`unwrapPlatformError`, and `runWithPlatform`, which provides the layer and unwraps `PlatformError`
-before handing off to `boundary.ts`'s `runPromise`. It is the only module
-that imports `effect/PlatformError`: `boundary.ts` is bundled into every
-emitted hook wrapper, and the error class would drag `Data.TaggedError` into
-each one (measured: +12 kB per hook). Phase-1 callers are the throwaway
-artifact in `api.ts` (`listMcp` / `invokeMcp` / `runMcp` / `listHooks` /
-`simulateHook` without `artifact`) and the Codex validator's
-schema-generation directory, both through `withTempDirectory`. Emitted
-artifacts, hook wrappers, and compiler hot paths
-never import this module; the dev server picks it up in phase 2 through
-`makeScopedEffectRuntime(platformLayer)`.
+`@effect/platform-node-shared`), `withTempDirectory`, `ensuringRemoved`,
+`unwrapPlatformError`, and `runWithPlatform`, which provides the layer and
+unwraps `PlatformError` before handing off to `boundary.ts`'s `runPromise`.
+It is the only module that imports `effect/PlatformError`: `boundary.ts` is
+bundled into every emitted hook wrapper, and the error class would drag
+`Data.TaggedError` into each one (measured: +12 kB per hook). Phase-1
+callers are the throwaway artifact in `api.ts` (`listMcp` / `invokeMcp` /
+`runMcp` / `listHooks` / `simulateHook` without `artifact`) and the Codex
+validator's schema-generation directory, both through `withTempDirectory`,
+and `routes/typegen.ts`'s `writeRouteTypesProgram` (the atomic
+`routes.d.ts` publish, through `ensuringRemoved`; `writeRouteTypes` keeps
+its Promise signature via `runWithPlatform`). The sibling `routes/graph.ts`
+reads stay raw: `compileRouteGraph` is the compiler/cold-start discovery
+path, and lifting only its two async reads would add an Effect runtime per
+compile for nothing. Emitted artifacts, hook wrappers, and compiler hot
+paths never import this module; the dev server picks it up in phase 2
+through `makeScopedEffectRuntime(platformLayer)`.
 
 ## Effect Schema wire contracts (Schema projections)
 
