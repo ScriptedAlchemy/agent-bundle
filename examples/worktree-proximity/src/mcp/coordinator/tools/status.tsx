@@ -1,11 +1,9 @@
-import { Agent, type AgentNoticeState, type JsonValue } from '@agent-bundle/runtime';
-import { AGENT_NOTICE_STATES } from '@agent-bundle/runtime/notices';
+import { Agent, agent, type JsonValue } from '@agent-bundle/runtime';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
 import { z } from 'zod';
 
-import { withIntent, withNotices } from '../../../coordination.js';
-import { agentTree } from '../../../event-support.js';
+import type { AgentTopologyProviderValue } from '../../../providers/agent-topology.js';
 import { ActivitySchema, BindingSchema } from '../../../state.js';
 
 export const config = {
@@ -100,27 +98,37 @@ export const resultSchema = z
   .strict();
 
 type StatusResult = z.output<typeof resultSchema>;
-type PublishedNotices = z.output<typeof PublishedNoticesSchema>;
 
-const emptyCounts = (): Record<AgentNoticeState, number> =>
-  Object.fromEntries(AGENT_NOTICE_STATES.map((state) => [state, 0])) as Record<AgentNoticeState, number>;
-
-const publishedNotices = async (): Promise<PublishedNotices> => {
-  const result = await withNotices(async (notices) => notices.published());
-  if (result.state === 'unavailable') {
-    return { ...emptyCounts(), reason: result.reason, state: 'unavailable', total: 0 };
-  }
-  const counts = emptyCounts();
-  for (const notice of result.value) counts[notice.state] += 1;
-  return { ...counts, state: 'available', total: result.value.length };
-};
+/**
+ * The topology snapshot the `agent-topology` provider assembled for this
+ * request (agent-bundle#459): the agent tree the runtime resolved for the
+ * call, a read of the intent state, and the counts of the notices this caller
+ * published, each with its own availability. A fixture that omits the provider
+ * is reported, never worked around with a second read.
+ */
+const topologyOf = (providers: { readonly agentTopology?: AgentTopologyProviderValue }): AgentTopologyProviderValue =>
+  providers.agentTopology ?? {
+    agents: { reason: 'agent-topology provider not mounted', state: 'unavailable' },
+    intent: { reason: 'Intent state unavailable: the agent-topology provider is not mounted.', state: 'unavailable' },
+    notices: {
+      acknowledged: 0,
+      attempted: 0,
+      expired: 0,
+      pending: 0,
+      reason: 'Published notices unavailable: the agent-topology provider is not mounted.',
+      state: 'unavailable',
+      total: 0,
+      unavailable: 0,
+      withdrawn: 0,
+    },
+  };
 
 export default async function Status({
   input,
 }: ToolRouteProps<typeof inputSchema>) {
-  const agents = await agentTree();
-  const intentResult = await withIntent(async (store) => store.read());
-  const notices = await publishedNotices();
+  // Everything this tool reports was read once, by the provider, from the
+  // request the runtime opened for this call: no second read, no guess.
+  const { agents, intent: intentResult, notices } = topologyOf((await agent()).providers);
   let result: StatusResult;
   if (intentResult.state === 'unavailable') {
     result = {
@@ -135,7 +143,7 @@ export default async function Status({
       state: 'unavailable',
     };
   } else {
-    const { revision, state: intent } = intentResult.value;
+    const { revision, value: intent } = intentResult.value;
     const bindings = input.actorId === undefined
       ? intent.bindings
       : intent.bindings.filter((binding) => binding.actorId === input.actorId);

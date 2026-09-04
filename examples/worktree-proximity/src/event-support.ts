@@ -64,12 +64,21 @@ export type AgentTreeView =
   | { readonly reason: string; readonly state: 'unavailable' };
 
 /**
- * The whole-tree view the coordinator reports, read from `request.lineage`
- * and nothing else. A lineage with no `tree` (a payload that proved only its
- * own chain, or a standalone hook) is reported as unavailable rather than as
- * an empty tree.
+ * An observed lineage as a route reads it (`Observed<AgentLineage>`) or as a
+ * provider receives it (`AgentProviderContext['lineage']`, the same shape
+ * spelled without a runtime import); both are assignable here.
  */
-export const agentTreeOf = (lineage: Observed<AgentLineage>): AgentTreeView => {
+type ObservedLineage =
+  | { readonly state: 'available'; readonly value: AgentLineage }
+  | { readonly reason: string; readonly state: 'unavailable' };
+
+/**
+ * The whole-tree view the coordinator reports, read from the request's
+ * lineage and nothing else. A lineage with no `tree` (a payload that proved
+ * only its own chain, or a standalone hook) is reported as unavailable rather
+ * than as an empty tree.
+ */
+export const agentTreeOf = (lineage: ObservedLineage): AgentTreeView => {
   if (lineage.state !== 'available') {
     return { reason: `lineage unavailable (${lineage.reason})`, state: 'unavailable' };
   }
@@ -89,8 +98,6 @@ export const agentTreeOf = (lineage: Observed<AgentLineage>): AgentTreeView => {
     state: 'available',
   };
 };
-
-export const agentTree = async (): Promise<AgentTreeView> => agentTreeOf(await requestLineage());
 
 /**
  * The subagent a request speaks for, when the runtime's `request.lineage`

@@ -13,6 +13,7 @@ import type {
 import type { Stream } from 'node:stream';
 
 import type { TargetRegistry } from '../../adapters/registry.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import type { EpochStore } from '../epoch-store.ts';
 import type {
   McpSessionBinding,
@@ -172,6 +173,8 @@ export interface McpSessionServiceOptions {
   readonly epochStore: EpochStore;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   /** Optional observability sink. It receives safe trace categories, never changes session behavior. */
   readonly traceSink?: McpSessionTraceSink;
 }

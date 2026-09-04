@@ -10,12 +10,15 @@ export const config = {
 export const inputSchema = z.object({
   /** Makes the `library-tooling` provider throw, to prove the request fails closed. */
   failProvider: z.boolean().optional(),
+  /** Makes the `request-view` provider read `notices.inbox()`, which records an exposure receipt. */
+  inbox: z.boolean().optional(),
 }).strict();
 
 export const resultSchema = z.object({
   keys: z.array(z.string()),
   libraryTooling: z.unknown().optional(),
   processLifetime: z.object({ hits: z.number(), instanceId: z.string(), pid: z.number() }).optional(),
+  requestView: z.unknown().optional(),
 }).strict();
 
 export default async function Tooling() {
@@ -25,6 +28,7 @@ export default async function Tooling() {
     keys: Object.keys(providers).sort(),
     libraryTooling: providers['libraryTooling'] as JsonValue,
     ...(processLifetime === undefined ? {} : { processLifetime: { ...processLifetime } }),
+    requestView: providers['requestView'] as JsonValue,
   };
   return (
     <Agent.Result value={value}>
