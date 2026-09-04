@@ -7,7 +7,7 @@ import npa from 'npm-package-arg';
 
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { readModuleImports, type ModuleImport } from './module-imports.ts';
 
 /**
@@ -505,21 +505,25 @@ const commandLiteral = (command: string): RegExp =>
  * The module specifiers JavaScript source loads — the lexer's static and
  * dynamic literal imports, plus literal `require`/`createRequire` calls —
  * and whether that is all of them: a computed `import(x)` or `require(x)`,
- * or a loader passed on as a value, means it is not. Packed files and inline
- * `node -e` programs are read alike.
+ * or a loader passed on as a value, means it is not — and so does source the
+ * lexer rejects, whose `import()` calls it could not report (syntax itself is
+ * another gate's concern). Packed files and inline `node -e` programs are
+ * read alike.
  */
 const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEvidence, 'complete' | 'specifiers'>> => {
   let imports: readonly ModuleImport[];
+  let lexed = true;
   try {
     imports = await readModuleImports(source, { check: 'lexed', ...(sha256 === undefined ? {} : { sha256 }) });
   } catch {
-    // Syntax is another gate's concern; skipping can only keep a declaration.
     imports = [];
+    lexed = false;
   }
   const loaders = loaderNames(source);
   const factories = factoryNames(source);
   return {
-    complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
+    complete: lexed
+      && imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
       && !computedLoad(loaders, factories).test(source)
       && !loaderReference(loaders).test(codeOnly(source)),
     specifiers: [
@@ -668,7 +672,9 @@ const unscopedName = (name: string): string => name.replace(/^@[^/]+\//u, '');
 const executableCommands = async (names: readonly string[], projectRoot: string): Promise<ExecutableCommands> => {
   const readManifest = async (name: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
     try {
-      const parsed = parseJsonWithoutDuplicateKeys(await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8'));
+      // Plain `JSON.parse`, not `core/strict-json.ts`: this is a third party's manifest read as npm reads it, where a
+      // duplicate key's last value wins and decides the `bin` name; our own strict config rules do not apply to it.
+      const parsed: unknown = JSON.parse(await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8'));
       return isRecord(parsed) ? parsed : undefined;
     } catch {
       return undefined;

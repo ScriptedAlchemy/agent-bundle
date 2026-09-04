@@ -209,11 +209,13 @@ dependency a consumer-side `preinstall`/`install`/`postinstall` script — not `
 for a published tarball — or any script it delegates to with `npm run` (the first positional after `run`; options
 before or after `run`, valued or not, are skipped, and later words such as `npm run setup -- dormant` are that
 script's arguments) or a direct `npm test`/`start`/`stop`/`restart` names (`npm restart` without a `restart` script running `stop` then `start`) (or whose `bin` command it runs; a
-string-form `bin` is named after the installed manifest, and the unscoped name stands in when the
-dependency is not installed locally). A
+string-form `bin` is named after the installed manifest, read as npm reads it — the last of duplicate keys
+wins — and the unscoped name stands in when the dependency is not installed locally or its manifest is not
+JSON). A
 computed `import(expression)` or `require(expression)` (likewise `require.resolve`, `import.meta.resolve`,
 a direct `createRequire(…)(…)`, or a `createRequire` binding) in packed code could load any declared
-package, so it withholds `AB7014` altogether; so does `require` passed on as a value (`const load = require`,
+package, so it withholds `AB7014` altogether; so does packed source the ESM lexer rejects, whose `import()`
+calls it cannot report, and so does `require` passed on as a value (`const load = require`,
 `fn(require)`) rather than called, since packages may then be loaded under a name the scan never sees. A mention inside a comment can only keep a dependency, never
 report one; `devDependencies` are never inspected, and an `npm:` alias counts as a registry specifier when its target does.
 

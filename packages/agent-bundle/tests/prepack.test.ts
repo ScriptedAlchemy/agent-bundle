@@ -530,6 +530,21 @@ it('withholds AB7014 when packed JavaScript has a computed import() that could l
   },
 ));
 
+it('withholds AB7014 when packed JavaScript the lexer rejects may hide an import()', () => withPackageDocument(
+  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'unlexable.mjs');
+    // An unbalanced call: the lexer throws before reporting any import, so nothing proves the package unused.
+    await writeFile(consumer, 'export const load = () => import("chosen-at-runtime"\n');
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/unlexable.mjs' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
 it.each([
   ['require()', 'module.exports = (name) => require(name);'],
   ['require.resolve()', 'module.exports = (name) => require.resolve(name);'],
@@ -701,6 +716,7 @@ it.each([
   ['an awaited import() in an ES module program', 'node --input-type=module -e "await import(\'optional-driver\')"', 'error'],
   ['a computed import(), which may load any declared package', 'node -e "import(process.argv[1])"', 'error'],
   ['a literal require()', 'node -e "require(\'optional-driver\')"', 'error'],
+  ['source the lexer rejects, which may hide an import()', 'node -e "import(\'optional-driver\'"', 'error'],
   ['import.meta, which loads nothing', 'node --input-type=module -p "typeof import.meta"', 'warning'],
   ['the package name in a string', 'node -p "\'optional-driver\'"', 'warning'],
 ])('an inline node program with %s (%s) leaves a skipped optional dependency at severity %s', (_form, postinstall, severity) => withPackageDocument(
@@ -734,6 +750,30 @@ it('reads a dependency whose installed manifest is not JSON as an unknown execut
       expect(withCode(reported, 'AB7015')).toHaveLength(0);
     } finally {
       await rm(broken, { force: true, recursive: true });
+    }
+  },
+));
+
+it('reads an installed manifest as npm does, so the last of duplicate name keys decides a string-form bin', () => withPackageDocument(
+  (document) => {
+    document.optionalDependencies = { 'prepack-test-dup': 'github:owner/prepack-test-dup' };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'effective --init' };
+  },
+  async () => {
+    // The fixture's node_modules is the workspace's; the manifest is removed again below. `JSON.stringify` cannot
+    // write a duplicate key, so the manifest is spelled out.
+    const dup = join(workspaceNodeModules, 'prepack-test-dup');
+    await mkdir(dup, { recursive: true });
+    await writeFile(join(dup, 'package.json'), '{ "name": "first-name", "name": "@scope/effective", "version": "1.0.0", "bin": "cli.js" }');
+    try {
+      // npm installs the bin as `effective`, the unscoped last `name`; the script runs it, so the skipped fetch is fatal.
+      const reported = await diagnostics();
+      const [skipped] = withCode(reported, 'AB7015');
+      expect(skipped?.message).toContain('"prepack-test-dup"');
+      expect(skipped?.severity).toBe('error');
+      expect(withCode(reported, 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(dup, { force: true, recursive: true });
     }
   },
 ));
