@@ -1607,8 +1607,23 @@ it('reports the scanned export surface of a re-exporting module', () => {
     ].join('\n')],
     ['/project/src/shared/cycle-a.tsx', "export { default } from './cycle-b.tsx';\n"],
     ['/project/src/shared/cycle-b.tsx', "export { default } from './cycle-a.tsx';\n"],
+    // An emitted `.js` beside its `.tsx` source: TypeScript resolution order
+    // names the source first, so the async component is judged, not the
+    // stale sync emit.
+    ['/project/src/shared/dual.js', 'export default function Dual() { return undefined; }\n'],
+    ['/project/src/shared/dual.tsx', 'export default async function Dual() { return undefined; }\n'],
+    ['/project/src/shared/dir/index.tsx', 'export default async () => undefined;\n'],
+    ['/project/src/shared/legacy.cts', 'export default async function Legacy() { return undefined; }\n'],
   ]);
   const readModule = (path: string): string | undefined => modules.get(path);
+  const scan = (text: string, source: string): routesModule.RouteModuleExports =>
+    routesModule.scanRouteModuleExports(text, source.slice('/project/'.length), { readModule, source });
+
+  // The same TypeScript candidate order the config extractor uses.
+  expect(scan("export { default } from '../shared/dual.js';\n", '/project/src/mcp/dual.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/dir';\n", '/project/src/mcp/dir.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/legacy.cjs';\n", '/project/src/mcp/legacy.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/dual.ts';\n", '/project/src/mcp/exact.tsx').defaultReExport?.resolution).toBe('unresolved');
 
   const followed = routesModule.scanRouteModuleExports(
     "export { default, helper, Alias as Component } from '../shared/page.tsx';\n",

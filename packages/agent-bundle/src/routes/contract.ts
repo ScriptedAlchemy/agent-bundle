@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
 
 const modifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
   ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((item) => item.kind === kind) ?? false);
@@ -76,33 +76,6 @@ export interface ScanRouteModuleOptions {
   /** The scanned module's absolute path; relative re-exports resolve against its directory. */
   readonly source?: string;
 }
-
-const readModuleText = (absolutePath: string): string | undefined => {
-  try {
-    return readFileSync(absolutePath, 'utf8');
-  } catch {
-    return undefined;
-  }
-};
-
-/**
- * Candidate files for one relative specifier, in resolution order: the path
- * as written, then the TypeScript source behind an emitted-extension
- * specifier (`./x.js` → `./x.ts`/`./x.tsx`), then an extensionless specifier
- * with the route extensions appended.
- */
-const reExportCandidates = (base: string, specifier: string): readonly string[] => {
-  const written = resolve(base, specifier);
-  const emitted = /\.(m?js|jsx)$/u.exec(written);
-  if (emitted !== null) {
-    const stem = written.slice(0, -emitted[0].length);
-    return emitted[1] === 'mjs' ? [written, `${stem}.mts`] : [written, `${stem}.ts`, `${stem}.tsx`];
-  }
-  if (/\.[cm]?[jt]sx?$/u.test(written)) return [written];
-  return [written, `${written}.ts`, `${written}.tsx`];
-};
-
-const isRelativeSpecifier = (specifier: string): boolean => specifier.startsWith('./') || specifier.startsWith('../');
 
 interface PendingReExport {
   readonly name: string;
@@ -299,9 +272,11 @@ const followReExport = (
   visited: ReadonlySet<string>,
 ): ScannedModuleExports | undefined => {
   if (options.source === undefined || !isRelativeSpecifier(specifier)) return undefined;
-  const read = options.readModule ?? readModuleText;
+  const read = options.readModule ?? readModuleFromDisk;
   const seen = new Set([...visited, options.source]);
-  for (const candidate of reExportCandidates(dirname(options.source), specifier)) {
+  // The same candidate order the config extractor uses for imported
+  // constants, so both static scans name one file for one specifier.
+  for (const candidate of moduleCandidates(dirname(options.source), specifier)) {
     if (seen.has(candidate)) return undefined;
     const text = read(candidate);
     if (text === undefined) continue;
