@@ -423,14 +423,27 @@ export default () => createRscMcpServer(application, 'curator');
 这层保护之所以重要，是因为 stdout 承载着 JSON-RPC 帧：任何被导入模块中一次走神的 `console.log` 都会
 破坏协议流。
 
-自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变。源码校验
+自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变：没有生命周期
+外壳，也没有操作者 `.env` 层，因为没有外壳能在模块自身的顶层代码运行之前应用它。源码校验
 会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
 
-同一套生命周期对手写入口也是公开 API：
+同一套生命周期对手写入口也是公开 API，生成外壳在导入服务器模块之前应用的操作者 `.env` 层同样如此
+（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）。这两个导入都会被内联进产出的
+入口，入口保持自包含；`agent-bundle/launch-env` 会被别名到每一个 stdio 入口，因此无论入口有没有外壳都能
+解析。需要这一层的自行连接入口应在第一行自行应用它，并像生成外壳一样锚定（产物根目录是 `mcp/` 的上一级）：
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` 会优先采用宿主设置的 `AGENT_BUNDLE_PLUGIN_ROOT`，否则回退到你传入的目录，
+因此该入口读取的文件与同一个包的钩子包装器和 CLI 完全一致。
 
 ## 在配置中声明服务器
 
