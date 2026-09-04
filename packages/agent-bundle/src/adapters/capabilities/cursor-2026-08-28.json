@@ -149,6 +149,14 @@
         "reason": "retrieved 2026-09-02: Cursor documents afterFileEdit as an agent-edit tool variant that overlaps canonical tool/after per the #258 selector rule, not a disk-watch FileChanged equivalent; no dedicated family is inferred without fixture evidence of loss.",
         "state": "unavailable"
       },
+      "model-switch/after": {
+        "reason": "2026-09-03: https://cursor.com/docs/hooks (retrieved 2026-09-02) documents no hook that runs after the session model changes; the model reaches Cursor hooks only as the `model` input field of session-scoped events.",
+        "state": "unavailable"
+      },
+      "model-switch/before": {
+        "reason": "2026-09-03: https://cursor.com/docs/hooks (retrieved 2026-09-02) documents no hook that runs before a model switch and no output that could block one.",
+        "state": "unavailable"
+      },
       "permission/denied": {
         "reason": "retrieved 2026-09-02: the complete https://cursor.com/docs/hooks event inventory documents no permission-denied event.",
         "state": "unavailable"

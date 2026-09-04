@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/hooks.schema.json",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.260/hooks.schema.json",
   "$defs": {
     "commandHandler": {
       "type": "object",
@@ -166,10 +166,12 @@
         "PermissionDenied": { "$ref": "#/$defs/allHandlerGroups" },
         "PermissionRequest": { "$ref": "#/$defs/allHandlerGroups" },
         "PostCompact": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PostModelSwitch": { "$ref": "#/$defs/nonModelHandlerGroups" },
         "PostToolBatch": { "$ref": "#/$defs/allHandlerGroups" },
         "PostToolUse": { "$ref": "#/$defs/allHandlerGroups" },
         "PostToolUseFailure": { "$ref": "#/$defs/allHandlerGroups" },
         "PreCompact": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PreModelSwitch": { "$ref": "#/$defs/nonModelHandlerGroups" },
         "PreToolUse": { "$ref": "#/$defs/allHandlerGroups" },
         "SessionEnd": { "$ref": "#/$defs/nonModelHandlerGroups" },
         "SessionStart": { "$ref": "#/$defs/startupHandlerGroups" },

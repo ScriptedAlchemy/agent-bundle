@@ -14,8 +14,9 @@ import type {
  * The route result vocabulary. `continue` (or no value at all) is the
  * pass-through answer: the route has no opinion, so no decision reaches the
  * host and its normal permission flow applies. `allow` and `ask` are explicit
- * `tool/before` decisions (`allow` also answers `permission/request`); `deny`
- * blocks. Only an explicit decision is ever projected as one (#461).
+ * `tool/before` and `model-switch/before` decisions (`allow` also answers
+ * `permission/request`); `deny` blocks. Only an explicit decision is ever
+ * projected as one (#461).
  */
 const resultValueSchema = z.object({
   outcome: z.enum(['continue', 'allow', 'ask', 'deny']).optional(),
@@ -313,6 +314,35 @@ export const validateNativeEventEnvelope = (
     requireNativeString(native, 'teammate_name');
     requireNativeString(native, 'team_name');
   }
+  if (canonicalEvent === 'model-switch/before' || canonicalEvent === 'model-switch/after') {
+    // hooks reference "PreModelSwitch input" / "PostModelSwitch input"
+    // (uploaded 2026-09-03, v2.1.251+): PostModelSwitch adds the `auto` and
+    // `resume` sources for switches Claude Code makes on its own.
+    requireNativeString(native, 'from_model');
+    requireNativeString(native, 'to_model');
+    if (native.requested_model !== null && typeof native.requested_model !== 'string') {
+      return nativeEventError('native requested_model must be a string or null');
+    }
+    const sources = canonicalEvent === 'model-switch/before'
+      ? ['command', 'picker', 'sdk']
+      : ['command', 'picker', 'sdk', 'auto', 'resume'];
+    if (!sources.includes(String(native.source))) {
+      return nativeEventError('native source is invalid');
+    }
+    // The five cost fields describe what re-sending the conversation costs;
+    // the reference documents them on every switch, but no live envelope has
+    // been captured yet, so they are type-checked when present.
+    for (const field of ['context_tokens', 'estimated_cache_write_usd']) {
+      if (Object.hasOwn(native, field)) requireNativeNumber(native, field);
+    }
+    if (Object.hasOwn(native, 'prompt_cache_warm')) requireNativeBoolean(native, 'prompt_cache_warm');
+    if (Object.hasOwn(native, 'cache_ttl') && !['5m', '1h'].includes(String(native.cache_ttl))) {
+      return nativeEventError('native cache_ttl is invalid');
+    }
+    if (Object.hasOwn(native, 'pricing') && !['configured', 'catalog', 'default'].includes(String(native.pricing))) {
+      return nativeEventError('native pricing is invalid');
+    }
+  }
   if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
     requireCompactTrigger(native);
     if (target === 'codex') {
@@ -459,11 +489,11 @@ export const projectEventDocument = (
   const additionalContext = contexts.length === 0 ? undefined : contexts.join('');
   const parsedValue = document.value === undefined ? undefined : resultValueSchema.parse(document.value);
   if (
-    (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request')
-    || (parsedValue?.outcome === 'ask' && event !== 'tool/before')
+    (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request' && event !== 'model-switch/before')
+    || (parsedValue?.outcome === 'ask' && event !== 'tool/before' && event !== 'model-switch/before')
   ) {
     throw new TypeError(
-      `${event} does not accept outcome "${parsedValue.outcome}": allow is a tool/before or permission/request decision and ask is a tool/before decision; continue leaves the host's own flow untouched.`,
+      `${event} does not accept outcome "${parsedValue.outcome}": allow is a tool/before, model-switch/before, or permission/request decision and ask is a tool/before or model-switch/before decision; continue leaves the host's own flow untouched.`,
     );
   }
   const requireDenyReason = (): string => {
@@ -703,6 +733,53 @@ export const projectEventDocument = (
       throw new TypeError('stop/failure has no documented context/output channel.');
     }
     return undefined;
+  }
+  if (event === 'model-switch/before') {
+    // https://code.claude.com/docs/en/hooks#premodelswitch-decision-control
+    // (uploaded 2026-09-03): permissionDecision allow | deny | ask with
+    // permissionDecisionReason (shown for deny and ask, ignored for allow);
+    // no defer, updatedInput, or additionalContext. Precedence across hooks
+    // is deny > ask > allow, and `ask` is a refusal outside interactive /model.
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('model-switch/before cannot replace native input; PreModelSwitch accepts no updatedInput.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('model-switch/before has no additional-context channel; PreModelSwitch accepts no additionalContext.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny' && parsedValue.outcome !== 'ask') {
+      throw new TypeError('model-switch/before reason is only valid when outcome is deny or ask.');
+    }
+    if (parsedValue?.outcome === undefined || parsedValue.outcome === 'continue') return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        hookEventName: nativeEvent,
+        permissionDecision: parsedValue.outcome,
+        ...(parsedValue.outcome === 'deny'
+          ? { permissionDecisionReason: requireDenyReason() }
+          : parsedValue.outcome === 'ask' && parsedValue.reason !== undefined
+            ? { permissionDecisionReason: parsedValue.reason }
+            : {}),
+      },
+    });
+  }
+  if (event === 'model-switch/after') {
+    // https://code.claude.com/docs/en/hooks#postmodelswitch-decision-control:
+    // the model has already changed; only additionalContext reaches Claude,
+    // with the next request after the switch.
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('model-switch/after observes a completed model switch and cannot deny or replace native input.');
+    }
+    if (additionalContext === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'file/change') {
     if (

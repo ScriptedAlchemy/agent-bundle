@@ -1,5 +1,5 @@
 {
-  "success": true,
+  "success": false,
   "strict": true,
   "target": "/bundle/claude/.claude-plugin/plugin.json",
   "reporter": "text",
@@ -10,5 +10,24 @@
     "warnings": [],
     "notes": []
   },
-  "contents": []
+  "contents": [
+    {
+      "file": "/bundle/claude/hooks/hooks.json",
+      "type": "hooks",
+      "errors": [
+        {
+          "path": "hooks.PreModelSwitch",
+          "message": "Invalid key in record",
+          "code": null
+        },
+        {
+          "path": "hooks.PostModelSwitch",
+          "message": "Invalid key in record",
+          "code": null
+        }
+      ],
+      "warnings": [],
+      "notes": []
+    }
+  ]
 }

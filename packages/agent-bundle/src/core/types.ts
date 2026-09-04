@@ -54,6 +54,8 @@ export const eventRouteOnlyHookEvents = Object.freeze([
   'taskCreate',
   'taskComplete',
   'agentIdle',
+  'modelSwitchBefore',
+  'modelSwitchAfter',
 ] as const);
 
 export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];
