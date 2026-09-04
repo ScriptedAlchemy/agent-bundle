@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -145,6 +145,10 @@ it('validates Codex bundle documents and matching generated schemas without shel
         executable: 'codex',
       }),
     ]);
+    // The generator's scoped output directory is gone once the report settles.
+    const outputDirectory = (fixture.calls[1] as { readonly args: readonly string[] }).args[3]!;
+    expect(outputDirectory).toMatch(/agent-bundle-codex-schema-/u);
+    await expect(access(outputDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(report).toEqual({
       diagnostics: [expect.objectContaining({
         code: 'AB6030',
