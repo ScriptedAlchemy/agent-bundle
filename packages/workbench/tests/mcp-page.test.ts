@@ -17,6 +17,7 @@ import {
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
 import {
+  MCP_PAGE_TASK_TTL_MS,
   McpPage,
   McpProtocolEvidence,
   createMcpPageActionTracker,
@@ -24,8 +25,10 @@ import {
   mcpAppConsentDetailsSummary,
   downloadCurrentMcpProtocolTrace,
   mcpConfigDownload,
+  isTerminalMcpTask,
   mcpAppPreviewSourceFor,
   mcpPageControllerReplacementState,
+  mcpPageTasksFor,
   mcpPageSessionControls,
   supportedMcpAppPreviewProfiles,
   type McpPageArtifactProps,
@@ -930,6 +933,98 @@ describe('MCP page', () => {
       ...invocation,
       error: { message: 'tool failure' },
     })).toBeUndefined();
+  });
+
+  describe('task-augmented tool calls (#369)', () => {
+    const at = (offset: number) => ({ completedAt: 1_700_000_000_010 + offset, durationMs: 5, startedAt: 1_700_000_000_005 + offset });
+    const taskId = 'a3f0c2d1-0000-4000-8000-000000000369';
+    const working = { createdAt: '2026-09-04T00:00:00.000Z', lastUpdatedAt: '2026-09-04T00:00:00.000Z', pollInterval: 250, status: 'working', taskId, ttl: 600_000 };
+    const history: McpBrowserSessionInvocation[] = [
+      { id: 'create', operation: 'callToolTask', request: { arguments: { holdMs: 400 }, name: 'wait', task: { ttl: 600_000 } }, result: { task: working }, timing: at(0) },
+      {
+        id: 'poll-1',
+        operation: 'getTask',
+        request: { taskId },
+        result: { ...working, _meta: { 'agent-bundle/progress': { message: 'waiting', progress: 1, total: 4 } }, lastUpdatedAt: '2026-09-04T00:00:00.100Z', statusMessage: 'waiting' },
+        timing: at(100),
+      },
+      { id: 'result', operation: 'getTaskResult', request: { taskId }, result: { content: [{ text: 'waited 400ms', type: 'text' }], structuredContent: { waitedMs: 400 } }, timing: at(400) },
+      { id: 'poll-2', operation: 'getTask', request: { taskId }, result: { ...working, lastUpdatedAt: '2026-09-04T00:00:00.400Z', status: 'completed' }, timing: at(410) },
+      { id: 'other', operation: 'callTool', request: { arguments: {}, name: 'echo' }, result: { content: [] }, timing: at(500) },
+      { id: 'gone', operation: 'getTask', request: { taskId: 'expired' }, error: { code: -32_602, message: 'Task not found: expired' }, timing: at(600) },
+    ];
+
+    it('folds the invocation history into the session\'s tasks, newest answers winning', () => {
+      const tasks = mcpPageTasksFor(history);
+
+      expect(tasks).toEqual([{
+        createdBy: 'create',
+        progress: { message: 'waiting', progress: 1, total: 4 },
+        result: { content: [{ text: 'waited 400ms', type: 'text' }], structuredContent: { waitedMs: 400 } },
+        task: { ...working, lastUpdatedAt: '2026-09-04T00:00:00.400Z', status: 'completed' },
+        toolName: 'wait',
+      }]);
+      expect(isTerminalMcpTask(tasks[0]!)).toBe(true);
+      // Mid-flight: the latest tasks/get answer is the task, its progress meta lifted beside it.
+      const midway = mcpPageTasksFor(history.slice(0, 2));
+      expect(midway[0]).toMatchObject({ progress: { progress: 1, total: 4 }, task: { status: 'working', statusMessage: 'waiting' } });
+      expect(isTerminalMcpTask(midway[0]!)).toBe(false);
+      // A listed task the session did not create is still shown, without a tool name.
+      const listed = mcpPageTasksFor([{ id: 'list', operation: 'listTasks', request: {}, result: { tasks: [{ ...working, taskId: 'listed-1' }] }, timing: at(0) }]);
+      expect(listed).toEqual([{ progress: undefined, task: { ...working, taskId: 'listed-1' } }]);
+      // An error answer on a known task is kept; one on an unknown task adds nothing.
+      const failing = mcpPageTasksFor([history[0]!, { ...history[5]!, request: { taskId } }]);
+      expect(failing[0]).toMatchObject({ error: { code: -32_602 }, task: { status: 'working' } });
+      expect(mcpPageTasksFor([history[5]!])).toEqual([]);
+      // A later successful answer — a poll or the result — clears the error, so polling resumes.
+      const recovered = mcpPageTasksFor([history[0]!, { ...history[5]!, request: { taskId } }, history[1]!]);
+      expect(recovered[0]).not.toHaveProperty('error');
+      expect(recovered[0]).toMatchObject({ task: { status: 'working', statusMessage: 'waiting' } });
+      const resultAfterTimeout = mcpPageTasksFor([history[0]!, { ...history[2]!, error: { message: 'timed out' }, result: undefined }, history[2]!]);
+      expect(resultAfterTimeout[0]).not.toHaveProperty('error');
+      expect(resultAfterTimeout[0]).toMatchObject({ result: { structuredContent: { waitedMs: 400 } } });
+    });
+
+    it('renders the task panel, the run-as-task toggle for opted-in tools, and the list control when the server declares tasks', () => {
+      const taskModel = {
+        ...model,
+        catalogs: {
+          ...model.catalogs,
+          tools: [
+            { description: 'Waits.', execution: { taskSupport: 'optional' }, inputSchema: { properties: {}, type: 'object' }, name: 'wait' },
+            { description: 'Task only.', execution: { taskSupport: 'required' }, name: 'background' },
+            { description: 'Ordinary.', name: 'echo' },
+          ],
+        },
+        connection: { ...model.connection, serverCapabilities: { tasks: { cancel: {}, list: {}, requests: { tools: { call: {} } } }, tools: {} } },
+        phase: 'ready',
+      } as unknown as McpBrowserSessionModel;
+      const markup = renderToStaticMarkup(createElement(McpPage, {
+        controller: { ...controller(), history: history.slice(0, 2), model: taskModel },
+        epochOptions: ['epoch-1'],
+        targetOptions: ['codex'],
+      }));
+
+      expect(markup).toContain('Run as task');
+      expect(markup).toContain('>List tasks</button>');
+      expect(markup).toContain('aria-label="MCP tasks"');
+      expect(markup).toContain(`data-task-id="${taskId}"`);
+      expect(markup).toContain('data-task-status="working"');
+      expect(markup).toContain('Progress 1 / 4 · waiting');
+      expect(markup).toContain(`Cancel ${taskId.slice(0, 8)}`);
+      expect(markup).toContain(`Fetch result ${taskId.slice(0, 8)}`);
+      expect(MCP_PAGE_TASK_TTL_MS).toBe(600_000);
+
+      // Without a tasks capability the list control stays hidden; without task history the panel does not render.
+      const plain = renderToStaticMarkup(createElement(McpPage, {
+        controller: { ...controller(), model: { ...model, phase: 'ready' } },
+        epochOptions: ['epoch-1'],
+        targetOptions: ['codex'],
+      }));
+      expect(plain).not.toContain('>List tasks</button>');
+      expect(plain).not.toContain('aria-label="MCP tasks"');
+      expect(plain).not.toContain('Run as task');
+    });
   });
 
   it('renders an explicit supported-profile picker and history preview entry point', () => {

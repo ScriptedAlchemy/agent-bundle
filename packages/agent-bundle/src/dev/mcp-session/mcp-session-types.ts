@@ -8,6 +8,7 @@ import type {
   ServerCapabilities,
   Tool,
   Transport,
+  StandardSchemaV1,
 } from '@modelcontextprotocol/client';
 import type { Stream } from 'node:stream';
 
@@ -59,6 +60,40 @@ export interface McpClient {
   ): Promise<{ readonly resourceTemplates: readonly ResourceTemplateType[] }>;
   listTools(params?: undefined, options?: McpRequestOptions): Promise<{ readonly tools: readonly Tool[] }>;
   readResource(params: { readonly uri: string }, options?: McpRequestOptions): Promise<{ readonly contents: readonly unknown[] }>;
+  /**
+   * One request outside the SDK's typed method surface — the `2025-11-25`
+   * task methods — validated against the SDK schema of its result. Optional
+   * so a narrow test double stays a valid client; a session whose client
+   * lacks it refuses task operations.
+   */
+  request?<T extends StandardSchemaV1>(
+    request: { readonly method: string; readonly params?: Record<string, unknown> },
+    resultSchema: T,
+    options?: McpRequestOptions,
+  ): Promise<StandardSchemaV1.InferOutput<T>>;
+}
+
+/** The `params.task` of a task-augmented `tools/call` (MCP `2025-11-25` Tasks). */
+export interface McpSessionTaskCreation {
+  readonly pollInterval?: number;
+  readonly ttl?: number;
+}
+
+/**
+ * A task-augmented tool call (#369): the request carries `params.task` and the
+ * server answers with a `CreateTaskResult` handle instead of the tool result,
+ * which `getTaskResult` then retrieves.
+ */
+export interface McpSessionTaskCallOptions extends McpSessionToolCallOptions {
+  readonly task: McpSessionTaskCreation;
+}
+
+export interface McpSessionTaskOptions extends McpSessionRequestOptions {
+  readonly taskId: string;
+}
+
+export interface McpSessionTaskListOptions extends McpSessionRequestOptions {
+  readonly cursor?: string;
 }
 
 export interface StdioTransport extends Transport {

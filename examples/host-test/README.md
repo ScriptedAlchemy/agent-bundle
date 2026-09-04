@@ -34,11 +34,17 @@ bounded summary into the durable state kernel (`src/state.ts`,
 Two MCP servers ship in the plugin:
 
 - `host-test` (generated routes, `src/mcp/host-test/tools/`): `dump` (filter by
-  any conversation/session/subagent id, `full` for raw lines) and `reset`. Each
-  `dump` call records the request context the generated server mounted for it.
-  A bare `dump` returns the newest 50 matching records — a whole log of a few
-  hundred records overflows the tool-result document — so pass `limit` (up to
-  5000) for more; `matched` and `total` always count the whole log.
+  any conversation/session/subagent id, `full` for raw lines), `reset`, and
+  `slow`. Each `dump` call records the request context the generated server
+  mounted for it. A bare `dump` returns the newest 50 matching records — a
+  whole log of a few hundred records overflows the tool-result document — so
+  pass `limit` (up to 5000) for more; `matched` and `total` always count the
+  whole log. `slow` holds a call open for `holdMs` (up to 30 s) and reports
+  progress every `tickMs`; it declares `execution.taskSupport: "optional"`, so
+  a host that speaks the MCP `2025-11-25` Tasks utility may run it as a task
+  (`tools/call` answered by a task handle, the result through `tasks/result`)
+  while every other host receives the ordinary result. The recorded call and
+  the `host-test-raw` envelope show which path the host took.
 - `host-test-raw` (hand-rolled stdio factory, `src/mcp/host-test-raw.ts`):
   `probe` records the raw SDK request context — session id, JSON-RPC id,
   `_meta`, lifted envelope, negotiated client info — so hook↔MCP correlation is

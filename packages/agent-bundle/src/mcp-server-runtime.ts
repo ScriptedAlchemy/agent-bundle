@@ -16,7 +16,7 @@
  */
 import { Worker } from 'node:worker_threads';
 
-import { McpServer, ProtocolError, ProtocolErrorCode, isJSONRPCRequest, type Transport } from '@modelcontextprotocol/server';
+import { ProtocolError, ProtocolErrorCode, isJSONRPCRequest, type McpServer, type Transport } from '@modelcontextprotocol/server';
 import {
   AgentRuntimeError,
   agent,
@@ -31,8 +31,10 @@ import {
 } from '@agent-bundle/runtime';
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
+import { createTaskAugmentedMcpServer, type TaskAugmentedMcpServer } from './mcp-tasks.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
 import { routeRenderLimits } from './routes/render-budget.ts';
+import { routeTaskSupport } from './routes/task-support.ts';
 import { noTerminal } from './terminal-capability.ts';
 import type {
   AgentActorIdentity,
@@ -371,6 +373,13 @@ export interface RegisterGeneratedRoutesOptions {
   readonly pluginRoot?: Observed<AgentPluginIdentity>;
   /** Raw `tools/call` arguments captured off the wire, for lineage correlation. */
   readonly rawArguments?: RawToolArgumentsCapture;
+  /**
+   * The task lifecycle of the server (#369): every tool route's compiled
+   * `config.execution.taskSupport` is declared on it so `tools/list`
+   * advertises the value and a task-augmented call is served as a task.
+   * Absent on a plain `McpServer`, where every tool is an ordinary request.
+   */
+  readonly tasks?: Pick<TaskAugmentedMcpServer, 'declareTool'>;
 }
 
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
@@ -385,7 +394,7 @@ export const registerGeneratedRoutes = (
     switch (route.kind) {
       case 'tool': {
         const outputSchema = advertisedOutputSchema(route.module.resultSchema);
-        server.registerTool(route.name, {
+        const registered = server.registerTool(route.name, {
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
           inputSchema: route.module.inputSchema,
           ...(outputSchema === undefined ? {} : { outputSchema }),
@@ -406,6 +415,7 @@ export const registerGeneratedRoutes = (
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);
+        options.tasks?.declareTool(registered, route.name, routeTaskSupport(route.config));
         break;
       }
       case 'resource': {
@@ -969,7 +979,8 @@ const startEventRuntime = async (
 export const createGeneratedRouteMcpServer = async (
   options: CreateGeneratedRouteMcpServerOptions,
 ): Promise<McpServer> => {
-  const server = new McpServer(options.plugin);
+  const tasks = createTaskAugmentedMcpServer(options.plugin);
+  const server = tasks.server;
   const dispatcher = createAgentRenderDispatcher(
     options.host,
     options.limits === undefined ? {} : { limits: options.limits },
@@ -990,10 +1001,16 @@ export const createGeneratedRouteMcpServer = async (
     ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
       ? {}
       : { lineageHost: lineageHostFor(options.events.target) }),
+    tasks,
   });
   registerGeneratedMcpApps(server, options.apps ?? []);
+  // Advertised only when a tool opted in, before any transport connects.
+  tasks.install();
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
+    // Tasks still rendering are cancelled first: their results can no longer
+    // be collected, and their renders must not outlive the host below.
+    tasks.tasks.abortTasks('The MCP server closed before the task settled.');
     // The signaller drains any receipt still owed for a send that reached the
     // wire, so it must close while the ledger it commits to is still open:
     // the host owns (or shares) that store and closes after it. Its close

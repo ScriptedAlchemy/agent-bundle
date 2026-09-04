@@ -11,7 +11,18 @@ import {
 } from './mcp-route-client.ts';
 
 const maxEmptyStreamReconnects = 3;
-const browserRoutedMethods = new Set(['tools/list', 'resources/list', 'tools/call', 'resources/read'] as const);
+const browserRoutedMethods = new Set([
+  'tools/list', 'resources/list', 'tools/call', 'resources/read', 'tasks/get', 'tasks/result', 'tasks/cancel', 'tasks/list',
+] as const);
+
+const taskCreation = (value: unknown): Readonly<{ readonly pollInterval?: number; readonly ttl?: number }> | 'invalid' => {
+  if (!isRecord(value)) return 'invalid';
+  const { pollInterval, ttl, ...rest } = value;
+  if (Object.keys(rest).length > 0) return 'invalid';
+  if (ttl !== undefined && (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0)) return 'invalid';
+  if (pollInterval !== undefined && (typeof pollInterval !== 'number' || !Number.isFinite(pollInterval) || pollInterval <= 0)) return 'invalid';
+  return { ...(pollInterval === undefined ? {} : { pollInterval }), ...(ttl === undefined ? {} : { ttl }) };
+};
 
 interface JsonRpcRequest {
   readonly id: number | string;
@@ -82,12 +93,25 @@ const operationFor = (message: JsonRpcRequest): OperationResolution => {
   }
   if (message.method === 'tools/call') {
     if (typeof params?.name !== 'string' || (params.arguments !== undefined && !isRecord(params.arguments))) return { kind: 'invalid' };
+    // MCP 2025-11-25 Tasks (#369): `params.task` asks the server to answer with a task handle.
+    const task = params.task === undefined ? undefined : taskCreation(params.task);
+    if (task === 'invalid') return { kind: 'invalid' };
     return { kind: 'operation', operation: {
       arguments: params.arguments ?? {},
       name: params.name,
       operation: 'tools/call',
       requestId: requestKey(message.id),
+      ...(task === undefined ? {} : { task }),
     } };
+  }
+  if (message.method === 'tasks/get' || message.method === 'tasks/result' || message.method === 'tasks/cancel') {
+    return typeof params?.taskId === 'string' && params.taskId.length > 0
+      ? { kind: 'operation', operation: { operation: message.method, taskId: params.taskId } }
+      : { kind: 'invalid' };
+  }
+  if (message.method === 'tasks/list') {
+    if (params?.cursor !== undefined && typeof params.cursor !== 'string') return { kind: 'invalid' };
+    return { kind: 'operation', operation: { operation: 'tasks/list', ...(typeof params?.cursor === 'string' ? { cursor: params.cursor } : {}) } };
   }
   return message.method === 'prompts/get' ? { kind: 'invalid' } : undefined;
 };
@@ -119,7 +143,9 @@ export interface AgentBundleMcpDispatchResult {
   readonly vector?: import('../../../agent-bundle/src/contracts/runtime.ts').RuntimeVector;
 }
 
-type AgentBundleMcpRoutedMethod = 'tools/list' | 'resources/list' | 'tools/call' | 'resources/read';
+type AgentBundleMcpRoutedMethod =
+  | 'tools/list' | 'resources/list' | 'tools/call' | 'resources/read'
+  | 'tasks/get' | 'tasks/result' | 'tasks/cancel' | 'tasks/list';
 
 export const dispatchAgentBundleMcpRequest = async (
   message: JSONRPCMessage,

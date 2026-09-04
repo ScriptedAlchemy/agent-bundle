@@ -51,6 +51,8 @@ export {
 export type { RouteModuleExports } from './contract.ts';
 export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
 export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
+export { routeTaskSupport, toolTaskSupportValues, validateRouteExecutionConfig } from './task-support.ts';
+export type { ValidatedRouteExecutionConfig } from './task-support.ts';
 export {
   agentEventPayloadFieldKinds,
   agentEventPayloadFields,
@@ -94,5 +96,7 @@ export type {
   RouteSchemaOutput,
   RouteUiMeta,
   ToolConfig,
+  ToolExecutionConfig,
   ToolRouteProps,
+  ToolTaskSupport,
 } from './public.ts';
