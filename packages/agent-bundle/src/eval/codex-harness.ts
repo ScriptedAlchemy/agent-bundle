@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
-import { cp } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
+
 import { stableJson } from '../core/digest.ts';
+import { runWithPlatform } from '../effect/platform.ts';
 import { redactEvalCredentialText } from './credentials.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import {
@@ -239,7 +241,10 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
   try {
     try {
       try {
-        await cp(join(options.artifact.root, target), temporary.candidate, { recursive: true });
+        await runWithPlatform(Effect.flatMap(
+          FileSystem.FileSystem,
+          (fs) => fs.copy(join(options.artifact.root, target), temporary.candidate, { overwrite: true }),
+        ));
       } catch (error) {
         throw new CodexEvalHarnessError(
           'CODEX_ARTIFACT_INVALID',

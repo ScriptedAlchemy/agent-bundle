@@ -1,5 +1,8 @@
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
+
+import { Effect, FileSystem, Result } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv/dist/ajv.js';
 import addFormats from 'ajv-formats';
@@ -13,6 +16,7 @@ import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
+import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 import {
   runBoundedChildProcess,
   type BoundedChildProcessRequest,
@@ -298,20 +302,27 @@ const schemaDiagnostics = (document: ParsedDocument, target: string): readonly D
   )));
 };
 
-const readDocument = async (
+/** `stat` first: `readFile` on a FIFO or device would block until a writer appears. */
+const readRegularFile = (
+  fs: FileSystem.FileSystem,
+  file: string,
+): Effect.Effect<string, Error | PlatformError, FileSystem.FileSystem> => Effect.gen(function* () {
+  const info = yield* fs.stat(file);
+  if (info.type !== 'File') return yield* Effect.fail(new Error(`${file} is not a regular file`));
+  return yield* readFileString(file);
+});
+
+const readDocument = Effect.fnUntraced(function* (
   pluginDirectory: string,
   contract: DocumentContract,
   missingMessage: string,
   target: string,
-): Promise<DocumentReadResult> => {
+): Effect.fn.Return<DocumentReadResult, never, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
   const file = join(pluginDirectory, contract.path);
-  let source: string;
-  try {
-    // `stat` first: `readFile` on a FIFO or device would block until a writer appears.
-    if (!(await stat(file)).isFile()) throw new Error(`${contract.path} is not a regular file`);
-    source = await readFile(file, 'utf8');
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) {
+  const read = yield* readRegularFile(fs, file).pipe(Effect.result);
+  if (Result.isFailure(read)) {
+    if (isPlatformErrno(read.failure, 'ENOENT')) {
       if (!contract.required) return Object.freeze({ diagnostics: Object.freeze([]) });
       return Object.freeze({
         diagnostics: freezeDiagnostics([diagnostic('AB6027', missingMessage, 'error', target)]),
@@ -328,7 +339,7 @@ const readDocument = async (
   }
   let value: unknown;
   try {
-    value = JSON.parse(source) as unknown;
+    value = JSON.parse(read.success) as unknown;
   } catch {
     return Object.freeze({
       diagnostics: freezeDiagnostics([diagnostic('AB6027', `${contract.path} is not valid JSON.`, 'error', target)]),
@@ -336,7 +347,7 @@ const readDocument = async (
   }
   const document: ParsedDocument = Object.freeze({ kind: contract.kind, path: contract.path, value });
   return Object.freeze({ diagnostics: schemaDiagnostics(document, target), document });
-};
+});
 
 /**
  * The hooks document is the one the manifest names (or the folder-discovery
@@ -344,11 +355,11 @@ const readDocument = async (
  * A declared file that is missing is an error: the loader would deliver no
  * hooks even though the bundle promised them.
  */
-const readHooksDocument = async (
+const readHooksDocument = (
   pluginDirectory: string,
   manifest: ParsedDocument | undefined,
   target: string,
-): Promise<DocumentReadResult> => {
+): Effect.Effect<DocumentReadResult, never, FileSystem.FileSystem> => {
   const source = resolveCursorHooksSource(manifest?.value);
   switch (source.kind) {
     case 'default':
@@ -360,7 +371,7 @@ const readHooksDocument = async (
       );
     case 'file': {
       if (!source.insidePluginRoot) {
-        return Object.freeze({
+        return Effect.succeed(Object.freeze({
           diagnostics: freezeDiagnostics([diagnostic(
             'AB6027',
             `${manifestPath} declares hooks at ${JSON.stringify(source.declared)}, which does not resolve inside the plugin root; ` +
@@ -368,7 +379,7 @@ const readHooksDocument = async (
             'error',
             target,
           )]),
-        });
+        }));
       }
       return readDocument(
         pluginDirectory,
@@ -380,11 +391,11 @@ const readHooksDocument = async (
     }
     case 'inline': {
       const document: ParsedDocument = Object.freeze({ kind: 'hooks', path: inlineHooksPath, value: source.value });
-      return Object.freeze({ diagnostics: schemaDiagnostics(document, target), document });
+      return Effect.succeed(Object.freeze({ diagnostics: schemaDiagnostics(document, target), document }));
     }
     case 'invalid':
       // The manifest schema already reports the malformed `hooks` field.
-      return Object.freeze({ diagnostics: Object.freeze([]) });
+      return Effect.succeed(Object.freeze({ diagnostics: Object.freeze([]) }));
     default: {
       const exhaustive: never = source;
       throw new Error(`Unexpected Cursor hooks source: ${String(exhaustive)}`);
@@ -392,18 +403,25 @@ const readHooksDocument = async (
   }
 };
 
-const readDocuments = async (
-  pluginDirectory: string,
-  target: string,
-): Promise<Readonly<{
+interface ReadDocumentsResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly documents: readonly ParsedDocument[];
-}>> => {
+}
+
+/**
+ * The pinned-schema document lane; `validateCursorPluginFiles` runs it through
+ * `runWithPlatform`. Not exported: an Effect-typed export would put `effect`
+ * on the public declaration graph (`public-api.test.ts`).
+ */
+const readCursorPluginDocuments = Effect.fnUntraced(function* (
+  pluginDirectory: string,
+  target: string,
+): Effect.fn.Return<ReadDocumentsResult, never, FileSystem.FileSystem> {
   const diagnostics: Diagnostic[] = [];
   const documents: ParsedDocument[] = [];
   let manifest: ParsedDocument | undefined;
   for (const contract of fixedDocumentContracts) {
-    const result = await readDocument(
+    const result = yield* readDocument(
       pluginDirectory,
       contract,
       `${contract.path} is required in a generated Cursor bundle.`,
@@ -414,15 +432,16 @@ const readDocuments = async (
     documents.push(result.document);
     if (contract.kind === 'manifest') manifest = result.document;
   }
-  const hooks = await readHooksDocument(pluginDirectory, manifest, target);
+  const hooks = yield* readHooksDocument(pluginDirectory, manifest, target);
   diagnostics.push(...hooks.diagnostics);
   if (hooks.document !== undefined) documents.push(hooks.document);
   return Object.freeze({
     diagnostics: freezeDiagnostics(diagnostics),
     documents: Object.freeze(documents),
   });
-};
+});
 
+/** Stays on `lstat`: a dangling manifest symlink still wins loader precedence. */
 const manifestPrecedenceDiagnostics = async (
   pluginDirectory: string,
   target: string,
@@ -443,6 +462,11 @@ const manifestPrecedenceDiagnostics = async (
 
 const displayPath = (root: string, path: string): string => relative(root, path).replaceAll('\\', '/');
 
+/**
+ * Stays on `node:fs`: containment is about link identity (`Dirent` symlink
+ * types plus `realpath`), which the pinned `FileSystem` cannot express —
+ * `stat` follows links and `readDirectory` returns names only.
+ */
 const symlinkDiagnostics = async (
   pluginDirectory: string,
   containmentRoot: string,
@@ -576,7 +600,7 @@ export const validateCursorPluginFiles = async (
 ): Promise<readonly Diagnostic[]> => {
   const pluginDirectory = resolve(options.pluginDirectory);
   const [localDocuments, precedence, symlinks] = await Promise.all([
-    readDocuments(pluginDirectory, options.target),
+    runWithPlatform(readCursorPluginDocuments(pluginDirectory, options.target)),
     manifestPrecedenceDiagnostics(pluginDirectory, options.target),
     validateCursorPluginSymlinks({
       ...(options.containmentRoot === undefined ? {} : { containmentRoot: options.containmentRoot }),

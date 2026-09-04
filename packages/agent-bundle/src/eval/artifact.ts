@@ -1,4 +1,4 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import { build } from '../api.ts';
@@ -9,6 +9,7 @@ import { digest } from '../core/digest.ts';
 import { harnessError } from './errors.ts';
 import type { EvalArtifactBinding } from './run-store.ts';
 import { isErrno } from '../core/errors.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 
 export interface PrepareEvalArtifactOptions {
   /** An explicit already-built artifact root. Nothing is ever guessed from an ambient output directory. */
@@ -82,7 +83,7 @@ const readValidatedArtifact = async (
   const manifestPath = join(artifactRoot, manifestName);
   let manifest: ArtifactManifest;
   try {
-    manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
   } catch (error) {
     throw harnessError(
       'EVAL_ARTIFACT_INVALID',

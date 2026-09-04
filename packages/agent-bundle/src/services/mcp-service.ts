@@ -8,16 +8,20 @@ import {
   type Transport,
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Stream } from 'node:stream';
+
+import { Effect, type FileSystem } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { liftPromise } from '../effect/lift.ts';
+import { readFileString, runWithPlatform, withTempDirectory } from '../effect/platform.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { readTargetMcpServer, type ModernMcpServer, type TargetMcpRuntimeContract } from './mcp-runtime.ts';
 
@@ -222,20 +226,44 @@ export class McpService {
     if (errors.length > 0) throw new DiagnosticError(errors);
 
     const targetRoot = joinArtifact(artifact, options.target);
-    const server = await this.#server(targetRoot, options.target, runtime, options.server);
+    // The per-connection plugin-data directory lives exactly as long as the
+    // connection: `withTempDirectory` is the `mkdtemp` + `finally rm` bracket
+    // (cleanup failure wins, as the throwing `finally` did). The client and
+    // stderr capture are closed inside the bracket, before the removal.
+    return runWithPlatform(Effect.gen({ self: this }, function* (this: McpService) {
+      const server = yield* this.#server(targetRoot, options.target, runtime, options.server);
+      return yield* withTempDirectory(
+        { directory: tmpdir(), prefix: 'agent-bundle-mcp-' },
+        (pluginData) => liftPromise(() => this.#connect(options, operation, { pluginData, runtime, server, targetRoot })),
+      );
+    }));
+  }
+
+  async #connect<Result>(
+    options: McpOperationOptions,
+    operation: (
+      client: McpClient,
+      requestOptions: RequestOptions,
+    ) => Promise<Result>,
+    launch: {
+      readonly pluginData: string;
+      readonly runtime: TargetMcpRuntimeContract;
+      readonly server: ModernMcpServer;
+      readonly targetRoot: string;
+    },
+  ): Promise<{ readonly connection: McpConnectionState; readonly value: Result }> {
     const requestOptions: RequestOptions = { signal: options.signal, timeout: timeoutFor(options) };
     const client = this.#createClient();
     let capture: StderrCapture | undefined;
     let closed = false;
-    const pluginData = await mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'));
 
     try {
       const roots = {
-        pluginData,
-        pluginRoot: targetRoot,
+        pluginData: launch.pluginData,
+        pluginRoot: launch.targetRoot,
         workspaceRoot: resolve(options.workspaceRoot ?? process.cwd()),
       };
-      const transport = this.#transport(server, runtime, options.target, targetRoot, roots, (nextCapture) => {
+      const transport = this.#transport(launch.server, launch.runtime, options.target, launch.targetRoot, roots, (nextCapture) => {
         capture = nextCapture;
       });
       await client.connect(transport, requestOptions);
@@ -264,7 +292,6 @@ export class McpService {
         if (!closed) await client.close();
       } finally {
         capture?.stop();
-        await rm(pluginData, { force: true, recursive: true });
       }
     }
   }
@@ -274,27 +301,27 @@ export class McpService {
     target: string,
     runtime: TargetMcpRuntimeContract,
     name: string,
-  ): Promise<ModernMcpServer> {
+  ): Effect.Effect<ModernMcpServer, Error | PlatformError, FileSystem.FileSystem> {
     if (name.trim().length === 0) {
-      return Promise.reject(new Error('MCP server name must be nonempty.'));
+      return Effect.fail(new Error('MCP server name must be nonempty.'));
     }
     const path = joinArtifact(targetRoot, runtime.manifestPath);
-    return readFile(path, 'utf8').then((contents) => {
+    return Effect.flatMap(readFileString(path), (contents) => Effect.suspend(() => {
       let document: unknown;
       try {
         document = parseJsonWithoutDuplicateKeys(contents);
       } catch {
-        throw new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`);
+        return Effect.fail(new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`));
       }
       const result = readTargetMcpServer(runtime, document, name);
       if (result.status === 'missing') {
-        throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(name)}.`);
+        return Effect.fail(new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(name)}.`));
       }
       if (result.status === 'invalid') {
-        throw new Error(`MCP server ${JSON.stringify(name)} in target ${JSON.stringify(target)} is invalid.`);
+        return Effect.fail(new Error(`MCP server ${JSON.stringify(name)} in target ${JSON.stringify(target)} is invalid.`));
       }
-      return result.server;
-    });
+      return Effect.succeed(result.server);
+    }));
   }
 
   #runtime(name: string): TargetMcpRuntimeContract {

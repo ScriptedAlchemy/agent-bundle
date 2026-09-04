@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
@@ -8,6 +7,7 @@ import {
   readTargetNativeHookCommands,
 } from '../adapters/hook-contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic } from './artifact-diagnostics.ts';
 import { matchesManifestFile, pathInTargetOutputLayout, targetArtifactPath } from './artifact-layout.ts';
 import {
@@ -21,7 +21,7 @@ import type { ArtifactManifest } from './manifest.ts';
 
 const readArtifactHookIndex = async (artifactRoot: string): Promise<ArtifactHookIndex | undefined> => {
   try {
-    return parseArtifactHookIndex(await readFile(resolve(artifactRoot, artifactHookIndexName), 'utf8'));
+    return parseArtifactHookIndex(await runWithPlatform(readFileString(resolve(artifactRoot, artifactHookIndexName))));
   } catch {
     return undefined;
   }
@@ -108,7 +108,7 @@ export const validateHookCoherence = async (options: {
     }
     let document: unknown;
     try {
-      document = JSON.parse(await readFile(resolve(options.artifactRoot, manifestPath), 'utf8'));
+      document = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, manifestPath))));
     } catch {
       diagnostics.push(diagnostic(
         'AB6018',
