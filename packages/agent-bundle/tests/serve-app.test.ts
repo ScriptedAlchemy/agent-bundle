@@ -147,6 +147,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('content-security-policy')).toContain(`frame-src ${served.sandboxOrigin}`);
+    expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     const html = await page.text();
     expect(html).toContain('<title>status/status</title>');
     const seed = seedOf(html);

@@ -392,13 +392,20 @@ export default async function dashboard({ input, signal }: CliRouteProps<typeof 
     tool: 'hauler_status',
   });
   signal.addEventListener('abort', () => { void served.close(); }, { once: true });
-  await served.closed;
+  try {
+    // 在 Ctrl-C（经由 signal）或守护进程自行退出时落定。
+    await served.closed;
+  } finally {
+    // `closed` 只跟踪服务器连接；close() 还会释放宿主、沙箱代理与任何一次性产物。
+    await served.close();
+  }
   return { url: served.url };
 }
 ```
 
 `serveApp` 运行在插件的开发期或 CLI 进程里，绝不在 MCP 服务器外壳之内：像上面那样，在需要它的路由中
 惰性导入，这样输出的产物就不携带宿主运行时；同时要保证 `agent-bundle` 在该 CLI 运行之处可被解析。
+用完后务必 `close()`——`closed` 落定只表示服务器连接结束，并不表示宿主已被拆除。
 `autoApprove` 会在 App 请求时代操作者批准列出的同意能力（`call-tool` 让轮询型仪表盘无需弹窗即可刷新）；
 其余能力与 Workbench 一样，在宿主页面里等待 Allow/Deny 决定。
 

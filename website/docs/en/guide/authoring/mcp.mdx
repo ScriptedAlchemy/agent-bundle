@@ -428,14 +428,23 @@ export default async function dashboard({ input, signal }: CliRouteProps<typeof 
     tool: 'hauler_status',
   });
   signal.addEventListener('abort', () => { void served.close(); }, { once: true });
-  await served.closed;
+  try {
+    // Settles on Ctrl-C (through the signal) or when the daemon exits on its own.
+    await served.closed;
+  } finally {
+    // `closed` tracks only the server connection; close() also releases the
+    // host, the sandbox proxy, and any throwaway artifact.
+    await served.close();
+  }
   return { url: served.url };
 }
 ```
 
 `serveApp` runs in the plugin's dev-time or CLI process, never inside the MCP server shell: import
 it lazily from the route that needs it, as above, so the emitted artifact stays free of the host
-runtime, and expect `agent-bundle` to be resolvable where that CLI runs. `autoApprove` grants the
+runtime, and expect `agent-bundle` to be resolvable where that CLI runs. Always `close()` when
+you are done — `closed` settling means the server connection ended, not that the host was torn
+down. `autoApprove` grants the
 listed consent capabilities on the operator's behalf as the App requests them (`call-tool` lets a
 polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision in the
 host page, as in the Workbench.

@@ -540,11 +540,15 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<ServedMcpAppSh
     token,
     toolName: selection.tool.name,
   });
+  // `frame-ancestors` does not inherit from `default-src`: without it, a page
+  // on another origin could frame this consent-bearing document on a fixed
+  // `--port` and clickjack its Allow/Deny controls.
   const contentSecurityPolicy = [
     "default-src 'none'",
     "base-uri 'none'",
     "connect-src 'self'",
     "form-action 'none'",
+    "frame-ancestors 'none'",
     `frame-src ${sandbox.origin}`,
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
