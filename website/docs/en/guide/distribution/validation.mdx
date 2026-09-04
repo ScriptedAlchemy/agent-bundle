@@ -65,9 +65,10 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
 - Host **errors** become Agent Bundle errors (`AB6021`).
 - Host **warnings** stay warnings (`AB6020`) unless `agent-bundle validate --strict` is set.
 - Each finding names the file Claude Code checked, for example
-  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`. On Claude Code 2.1.259
-  or later Agent Bundle reads the CLI's `--json` report; older releases are parsed from the text
-  report. The marketplace run's `plugins[0] plugin.json →` copies of manifest findings the plugin
+  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`. Agent Bundle asks for
+  the CLI's `--json` report first (Claude Code 2.1.259 or later; the pinned 2.1.260 prints it) and
+  parses the text report only when the CLI rejects the flag or the probed version predates
+  2.1.259. The marketplace run's `plugins[0] plugin.json →` copies of manifest findings the plugin
   run already reported are dropped.
 - A missing binary is reported as an explicit informational **skip** (`AB6019`), never as
   fabricated success; a probe or run that cannot complete is `AB6022`. A `build` without `claude`

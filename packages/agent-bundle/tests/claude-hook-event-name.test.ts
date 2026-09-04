@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import { expect, it } from '@rstest/core';
 
-import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { pluginAdapter } from '../src/adapters/plugin.ts';
 import type { NormalizedHook, NormalizedHookEvent, NormalizedPlugin } from '../src/core/types.ts';
@@ -31,6 +31,8 @@ const claudeEventRoutes: readonly {
   { hookEvent: 'compactBefore', native: 'claude-pre-compact.json', route: 'compact/before' },
   { hookEvent: 'configChange', native: 'claude-config-change.json', route: 'config/change' },
   { hookEvent: 'fileChange', native: 'claude-file-changed.json', route: 'file/change' },
+  { hookEvent: 'modelSwitchAfter', native: 'claude-post-model-switch.json', route: 'model-switch/after' },
+  { hookEvent: 'modelSwitchBefore', native: 'claude-pre-model-switch.json', route: 'model-switch/before' },
   { hookEvent: 'permissionDenied', native: 'claude-permission-denied.json', route: 'permission/denied' },
   { hookEvent: 'permissionRequest', native: 'claude-permission-request.json', route: 'permission/request' },
   { hookEvent: 'promptSubmit', native: 'claude-user-prompt-submit.json', route: 'prompt/submit' },

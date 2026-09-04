@@ -617,6 +617,8 @@ export interface GeneratedEventRuntimeBinding {
 export interface GeneratedNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /** Optional like the runtime's: absent is unavailable lineage. */
+  readonly lineage?: Observed<AgentLineage>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
@@ -714,12 +716,14 @@ const installNoticeInboxSubscriptions = (
   ) => {
     assertInboxUri(request.params.uri);
     // Subscriptions are not tool calls: no pre-tool hook precedes them, so
-    // there is no correlation window to resolve lineage through.
+    // there is no correlation window to resolve lineage through — a
+    // subscriber therefore never matches a `conversation`/`root` recipient.
     const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'));
     try {
       await notices.subscribe({
         actor: identity.actor ?? unavailable(),
         host: identity.host ?? unavailable(),
+        lineage: identity.lineage,
         session: identity.session ?? unavailable(),
         workspace: identity.workspace,
       });

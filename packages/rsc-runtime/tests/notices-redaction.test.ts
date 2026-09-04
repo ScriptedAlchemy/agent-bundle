@@ -590,6 +590,7 @@ describe('ledger disclosure through the inbox and next-event routes', () => {
     const principal: AgentNoticePrincipal = {
       actor: actor('recipient'),
       host: unavailable(),
+      lineage: unavailable(),
       session: unavailable(),
       workspace: unavailable(),
     };

@@ -99,48 +99,48 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.27.0',
-    observedVersion: '2.1.250',
+    adapterRevision: '1.28.0',
+    observedVersion: '2.1.260',
     schemas: [
       {
         name: 'hooks',
-        revision: '2.1.250',
-        sha256: '7535806f86481b89b628a0ccf8e34261e6f93163f562c2146ca8dbfe4d95766e',
+        revision: '2.1.260',
+        sha256: '0cdfc5eb5201f2c3091768559ac82f4c563ccb1b7bce7a39d5f99e5f404654cb',
       },
       {
         name: 'lsp',
-        revision: '2.1.250',
-        sha256: 'c81fd2f57c410f70f8e5c3f84483f5ec1b575ee02802b424977826f757dccd8e',
+        revision: '2.1.260',
+        sha256: 'b4419c5d857267c7e2b21e3e1eb98b4fdc302c87109007190d3258e6ba7096e4',
       },
       {
         name: 'marketplace',
-        revision: '2.1.250',
-        sha256: '4ffa94e8024966e8080b9d3b338c9612bdfa255802a8491b43f74f90427bc988',
+        revision: '2.1.260',
+        sha256: '31ee4cc43ba5ce2be248030a69da2d31171550b2cc51c1fcb9f788a8ab92783d',
       },
       {
         name: 'mcp',
-        revision: '2.1.250',
-        sha256: '76ccf02c7bfe2d57945ba18e84da8d655529bd68b4d692f72bce28238c99067e',
+        revision: '2.1.260',
+        sha256: 'edd4770e41d6aee5beae1ff918d33139613a243e454ecbd52b72fa824be4a662',
       },
       {
         name: 'monitors',
-        revision: '2.1.250',
-        sha256: 'd45abdf7561e4316ba217ce9c2ac84f32e1049622b74abb081693b479a54b48d',
+        revision: '2.1.260',
+        sha256: '6378d94b51fb7c784eaee178237008a03da0f889d0520d57486784954a1d484c',
       },
       {
         name: 'plugin',
-        revision: '2.1.250',
-        sha256: 'e8524e1b1bf9d72f6866c31b37b7312147fcf29d0504f7e5dce5719bc908830b',
+        revision: '2.1.260',
+        sha256: '2a976091b81ad07ae8eca57f6f9c5749efeba17fa089a0c12b6ca84d6e70f118',
       },
       {
         name: 'settings',
-        revision: '2.1.250',
-        sha256: '9e86d8c5e4053e8de0e468d349e2c3dde5834d22d6769372b88570e301700073',
+        revision: '2.1.260',
+        sha256: '2bbca553621dbf9433a9b7d1ff7952543a368434f2d999a4e4e360b95b6d4c3d',
       },
       {
         name: 'theme',
-        revision: '2.1.250',
-        sha256: '721aa9b0bc7c60cd9359343e5c7205ffbdfea82da312f601720c9dfaa2d8cf0d',
+        revision: '2.1.260',
+        sha256: '9931264e6f5a1d4b3b854ce7a17d602c9ba1b57cc1991f1d3991b316eaa81ac2',
       },
     ],
   });
@@ -170,7 +170,7 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.28.0');
+  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.29.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {
@@ -178,7 +178,7 @@ it('records observed capability versions and rehashes schema snapshots against p
   const targets = [
     { capabilityFile: 'portable-1.0.0.json', provenanceFile: 'portable/PROVENANCE.json', target: 'portable', versionKey: 'version' },
     { capabilityFile: 'codex-0.147.0.json', provenanceFile: 'codex/PROVENANCE.json', target: 'codex', versionKey: 'observedCliVersion' },
-    { capabilityFile: 'claude-2.1.250.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
+    { capabilityFile: 'claude-2.1.260.json', provenanceFile: 'claude/PROVENANCE.json', target: 'claude', versionKey: 'observedCliVersion' },
     { capabilityFile: 'cursor-2026-08-28.json', provenanceFile: 'cursor/PROVENANCE.json', target: 'cursor', versionKey: 'observedCliVersion' },
   ] as const;
 

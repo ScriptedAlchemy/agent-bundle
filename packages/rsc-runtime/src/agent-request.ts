@@ -650,7 +650,7 @@ export const runAgentRequest = async <T>(
     ? undefined
     : await init.noticeLedger.openRequest({
       invocation,
-      principal: Object.freeze({ actor, host, session, workspace }),
+      principal: Object.freeze({ actor, host, lineage, session, workspace }),
       signal,
     });
   const values: FrozenValues = Object.freeze({

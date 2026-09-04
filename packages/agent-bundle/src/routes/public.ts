@@ -30,6 +30,8 @@ export const canonicalAgentEvents = Object.freeze([
   'task/create',
   'task/complete',
   'agent/idle',
+  'model-switch/before',
+  'model-switch/after',
 ] as const);
 
 export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];

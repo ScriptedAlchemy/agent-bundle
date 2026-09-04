@@ -1061,7 +1061,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
       }
     }
     expect(planFor('claude').kinds.find((report) => report.kind === 'lsp')).toEqual({
-      capability: { evidence: { observedVersion: '2.1.250', target: 'claude' }, name: 'lsp', state: 'supported' },
+      capability: { evidence: { observedVersion: '2.1.260', target: 'claude' }, name: 'lsp', state: 'supported' },
       kind: 'lsp',
       selected: 1,
       skipped: 0,
