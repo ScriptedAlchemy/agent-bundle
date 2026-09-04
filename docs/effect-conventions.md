@@ -86,6 +86,27 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
 - Layers compose services. `Layer.scoped` when the layer needs `Scope`.
 - Host `AbortSignal` at a Promise edge goes on `runPromise(..., { signal })`.
   Inside Effect, `interruptWhenAborted` or `yield* scopedAbortSignal`.
+- `scopedAbortSignal` is `Effect.abortSignal`, which in rc.112 is exactly
+  `acquireRelease(sync(() => new AbortController()), c => sync(() => c.abort()))`
+  mapped to `.signal`: it aborts only when the owning scope closes, always
+  with no reason, and never hands out the controller. A contract that must
+  abort *with a reason* on a caller's request (the MCP session's `cancel()`
+  and close-time `#cancelAll`, whose reason reaches the SDK rejection) owns
+  its `AbortController` as the scoped resource instead — `acquireRelease`
+  admits the slot and returns the controller, release aborts it and frees
+  the slot, and the host signal is joined with `AbortSignal.any` (#512,
+  `dev/mcp-session/mcp-session.ts` `#admitRequest`). That is the same
+  shape as `Effect.abortSignal`, not a bare `new AbortController()` inside
+  `Effect.gen`.
+- Caveat on `agent-patterns/effect-scope.md` § AbortSignal (vendored under
+  `repos/`, so not editable here): the language-service rule it names,
+  `abortControllerInEffect`, does not exist in `@effect/language-service@0.87.2`.
+  The `*InEffect*` rules that ship are `cryptoRandomUUIDInEffect`,
+  `globalConsoleInEffect`, `globalDateInEffect`, `globalErrorInEffectCatch`,
+  `globalErrorInEffectFailure`, `globalFetchInEffect`, `globalRandomInEffect`,
+  `globalTimersInEffect`, `lazyPromiseInEffectSync`, `processEnvInEffect`,
+  `schemaSyncInEffect`, `tryCatchInEffectGen`, and `unknownInEffectCatch`.
+  No rule flags a raw `AbortController`; review enforces the bullet above.
 
 ## Test helpers
 
@@ -157,11 +178,24 @@ Helped:
 
 Hurt / gotchas:
 
-- Effect finalizers are infallible by type. Teardown contracts that
-  *propagate* cleanup failures (the dev seam's last-failure-wins `finally`
-  chains, the staging-root removal that replaces the publish outcome) must be
-  explicit effect sequences — capture the attempt's `Exit`, run the cleanup,
-  then unwrap — never scope finalizers.
+- Scope finalizers are infallible by type — `Effect.acquireRelease` takes a
+  `release: (a, exit) => Effect<unknown, never, R>` and `Effect.addFinalizer`
+  an `Effect<void, never, R>` — so a release that can fail cannot even be
+  written there. `Effect.acquireUseRelease`'s `release` and `Effect.onExit`
+  / `Effect.ensuring` handlers are **not** infallible: rc.112 types them
+  `Effect<void, E3, R3>` and merges a failing handler into the result
+  (`combineFinalizerCause` → `Cause.combine(useCause, handlerCause)`). That
+  merged cause is first-failure-wins once it reaches the boundary:
+  `Cause.squash` returns the *first* `Fail` reason, which is the `use`
+  failure, and the cleanup failure is dropped. Teardown contracts that
+  *propagate* cleanup failures last-failure-wins (the dev seam's `finally`
+  chains, `DevCoordinatorCloseError` in `dev/coordinator.ts` #513, the IPC
+  claim release and socket removal in `events/ipc.ts` #516, the staging-root
+  removal that replaces the publish outcome) are therefore explicit effect
+  sequences — `Effect.exit` on the attempt, run the cleanup, aggregate,
+  then unwrap — under `Effect.uninterruptibleMask` where the original
+  `finally` was uninterruptible. Neither scope finalizers nor
+  `acquireUseRelease` express that ordering.
 - Bare `Effect.tryPromise(fn)` wraps rejections in `Cause.UnknownError`;
   always route through `src/effect/lift.ts` so typed dev errors and raw
   rejection values (`AbortSignal.reason`) cross the boundary untouched.
@@ -513,6 +547,38 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 4. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
 5. Re-verify every unstable-module row and the language-service diagnostics.
 6. Re-run the hook cold-start check.
+
+## Open decisions (maintainer)
+
+Divergences between the vendored guidance (`repos/effect/LLMS.md`,
+`agent-patterns/*`) and what the repo does today. Recorded, not decided; each
+row names the two positions and what a decision would touch. Until a row is
+resolved the current repo practice stands, and new code follows it.
+
+- **`isRecord` vs `Predicate`.** `LLMS.md` § Predicate says never to write
+  helpers like `isRecord` and to use the `Predicate` module. The repo has two
+  hand-written guards — `core/strict-json.ts` `isRecord` (non-null,
+  non-array object) and `workbench/src/client-helpers.ts` `isRecord` — with
+  roughly 400 call sites across the three packages, against about a dozen
+  `Predicate.isObject` uses (the install lane). rc.112 `Predicate` has no
+  `isRecord`; `Predicate.isObject` is the closest match (`{}`-typed, excludes
+  arrays), and `Predicate.isObjectOrArray` includes arrays. Options: keep the
+  local guard as the sanctioned spelling and say so here (its `Readonly<Record<string, unknown>>`
+  narrowing is what the decoders index into), or migrate to
+  `Predicate.isObject` in a single mechanical chore and re-verify the
+  cold-start budget for hooks that would newly import `effect/Predicate`.
+- **`Data.Error` for internal class errors.** Every typed error is a plain
+  `Error` subclass (82 `export class … extends CodedError | Error`), so they
+  enter the channel through `Effect.fail(...)`; `Effect.gen` cannot
+  `yield*` them. rc.112 `Data.Error<Fields>` is a yieldable, untagged error
+  (`Cause.YieldableError`), which would let programs `yield* new X(...)`
+  without `Effect.fail` and without the `Schema.TaggedError` that the
+  [Error mapping](#error-mapping) section keeps off public and MCP
+  contracts. It changes the constructor to a single fields object and adds a
+  `Data` import (measured `Data.TaggedError` cost for hooks: +12 kB, see
+  [Effect platform services](#effect-platform-services-effectplatform-node)),
+  so it would apply to internals only — the `Agent*` classes and the
+  boundary's identity-preserving rethrow table stay as they are either way.
 
 ## Parked toolchain follow-ups
 
