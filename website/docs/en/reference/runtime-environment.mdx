@@ -39,6 +39,7 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
 | `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin install root and durable-state anchor. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
+| `AGENT_BUNDLE_ENV_FILE` | Generated executables | The operator env file(s) an installed pack reads at launch instead of `<plugin root>/.env` and `.env.local`: one path, or several joined by the platform path delimiter, later files winning; `none` disables the layer. `mcp run` sets it for its child from `--env-file` / `--no-env`. |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | The bearer token the Agent API requires before it can be enabled. |
 | `AGENT_BUNDLE_HOOK_HOST` | Generated hook wrappers | Pins the declared host explicitly instead of detecting it. |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | Generated hook wrappers | `1` marks a simulated invocation; the Workbench hook playground sets it. |
@@ -62,6 +63,21 @@ The `.env` layer is the conventional Rsbuild set at the project root (the runtim
 workspace root) — `.env`, `.env.local`, `.env.<mode>`, `.env.<mode>.local` — unless
 `--env-file <path>` replaces it with exactly the files you name, or `--no-env` removes it. The two flags are mutually exclusive. Files are read into a
 scratch object, so the real `process.env` is never mutated.
+
+## Operator `.env` files in installed packs
+
+A host launches an installed pack directly, so the pack's own shells apply the same layer
+themselves: the stdio MCP entries, the hook wrappers that run plugin code, and the artifact CLI
+`bin/<name>.mjs` read `<plugin root>/.env` then `.env.local` at launch (or the files
+`AGENT_BUNDLE_ENV_FILE` names), filling only variables the host did not set — host environment and
+manifest `env` win, `.env.local` beats `.env`, values are never logged, a missing file costs
+nothing, an unreadable one is skipped. The plugin root is `AGENT_BUNDLE_PLUGIN_ROOT` when the host
+set it, otherwise the directory above the shell's own. No `${VAR}` interpolation is performed.
+Under `mcp run` the plugin root is the project root, so the shell re-reads the files `mcp run`
+already composed and changes nothing; `--env-file` and `--no-env` travel down as
+`AGENT_BUNDLE_ENV_FILE`. The npm package bin reads no pack file. Doctor reports the presence and
+variable count of each file (`AB7331`). Details and the precedence table:
+[Installation](../guide/distribution/installation.mdx#operator-configuration-the-installed-packs-env).
 
 ## Durable state
 

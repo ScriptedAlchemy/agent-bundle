@@ -36,6 +36,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 | 变量 | 由谁读取 | 含义 |
 | --- | --- | --- |
 | `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录与持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_ENV_FILE` | 生成式可执行文件 | 已安装包在启动时改为读取的操作者 env 文件：一个路径，或以平台路径分隔符连接的多个路径（后者胜出），代替 `<插件根目录>/.env` 与 `.env.local`；`none` 关闭这一层。`mcp run` 会根据 `--env-file` / `--no-env` 为其子进程设置它。 |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
 | `AGENT_BUNDLE_HOOK_HOST` | 生成的钩子 wrapper | 显式指定声明的宿主，而不去探测。 |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的钩子 playground 会设置它。 |
@@ -59,6 +60,18 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 `.env.<mode>`、`.env.<mode>.local` —— 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
 `--no-env` 把它移除。
 这两个标志互斥。文件被读入一个临时对象，因此真实的 `process.env` 绝不会被改动。
+
+## 已安装包中的操作者 `.env` 文件
+
+宿主直接启动已安装的包，因此包自己的外壳会自行应用同一层：stdio MCP 入口、运行插件代码的 hook 包装器
+以及产物 CLI `bin/<name>.mjs` 在启动时读取 `<插件根目录>/.env` 再读取 `.env.local`（或
+`AGENT_BUNDLE_ENV_FILE` 指定的文件），只填补宿主未设置的变量——宿主环境与清单 `env` 胜出，`.env.local`
+胜过 `.env`，取值永不记录，文件缺失没有开销，无法读取则跳过。插件根目录在宿主设置了
+`AGENT_BUNDLE_PLUGIN_ROOT` 时取它，否则取外壳自身所在目录的上一级。不做 `${VAR}` 插值。在 `mcp run` 下
+插件根目录就是项目根目录，因此外壳重读的正是 `mcp run` 已经合成过的文件，不会改变任何东西；`--env-file`
+与 `--no-env` 以 `AGENT_BUNDLE_ENV_FILE` 传给子进程。npm 包 bin 不读取任何包文件。Doctor 会报告每个文件
+是否存在及其变量数量（`AB7331`）。细节与优先级表见
+[安装](../guide/distribution/installation.mdx#操作者配置已安装包的-env)。
 
 ## 持久状态
 
