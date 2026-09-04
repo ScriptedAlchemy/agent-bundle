@@ -159,6 +159,14 @@ const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
 const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
 
 /**
+ * A `require(expression)` whose argument is not a string literal: CommonJS
+ * selecting a package at runtime, which no literal can prove. Bundler
+ * runtimes (`__webpack_require__(…)`) have no word boundary before
+ * `require` and never match.
+ */
+const computedRequire = /\brequire\s*[(]\s*[^"'\s)]/u;
+
+/**
  * Every module specifier a declaration file resolves: `from "…"`,
  * `import("…")`, `import x = require("…")`, and `/// <reference types="…" />`.
  * A consumer needs the package that provides these types even though the
@@ -208,7 +216,8 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
     imports = [];
   }
   return {
-    complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined),
+    complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
+      && !computedRequire.test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
       ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),
@@ -237,30 +246,93 @@ export interface ImportedPackages {
   /** Every package name the packed files name literally. */
   readonly names: ReadonlySet<string>;
   /**
-   * Whether `names` is the whole story. A computed `import(expression)` in
-   * packed JavaScript may load any declared package, so no declaration can
-   * then be called unused.
+   * Whether `names` is the whole story. A computed `import(expression)` or
+   * `require(expression)` in packed JavaScript may load any declared package,
+   * so no declaration can then be called unused.
    */
   readonly complete: boolean;
 }
 
+/** Every string target in a `package.json` `imports` map, through conditional and nested targets. */
+const importMapTargets = (value: unknown): readonly string[] => {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(importMapTargets);
+  return isRecord(value) ? Object.values(value).flatMap(importMapTargets) : [];
+};
+
 /**
- * Every package name the packed JavaScript imports, requires, or resolves, or
- * the packed declarations reference, read from the bytes npm would publish.
+ * The packages a `#subpath` import may reach: Node resolves `#name` through
+ * the manifest's `imports` map, whose targets may be external packages.
+ * Which target a given `#name` picks depends on conditions, so a packed
+ * `#` import counts for every package the map names.
+ */
+const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>): readonly string[] =>
+  importMapTargets(packageDocument.imports);
+
+const installScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+
+/**
+ * Dependencies a consumer's install lifecycle uses: npm puts every
+ * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`
+ * (and `prepare` when installing from git), so a script that names a
+ * dependency, or one of its `bin` commands, needs it installed even though no
+ * packed JavaScript imports it. Bin names come from the dependency's own
+ * manifest under `node_modules`; an uninstalled dependency contributes its
+ * package name only.
+ */
+const installScriptDependencies = async (
+  packageDocument: Readonly<Record<string, unknown>>,
+  names: readonly string[],
+  projectRoot: string,
+): Promise<readonly string[]> => {
+  const scripts = isRecord(packageDocument.scripts) ? packageDocument.scripts : {};
+  const text = installScripts.flatMap((script) => (typeof scripts[script] === 'string' ? [scripts[script]] : [])).join('\n');
+  if (text === '') return [];
+  const mentioned = async (name: string): Promise<boolean> => {
+    if (text.includes(name)) return true;
+    const manifest = await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8').catch(() => undefined);
+    if (manifest === undefined) return false;
+    const parsed: unknown = JSON.parse(manifest);
+    const bin = isRecord(parsed) ? parsed.bin : undefined;
+    const commands = typeof bin === 'string' ? [name.replace(/^@[^/]+\//u, '')] : isRecord(bin) ? Object.keys(bin) : [];
+    return commands.some((command) => new RegExp(String.raw`(?<![\w-])${command.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![\w-])`, 'u').test(text));
+  };
+  const used = await Promise.all(names.map(async (name) => ((await mentioned(name)) ? [name] : [])));
+  return used.flat();
+};
+
+/**
+ * Every package name the packed JavaScript imports, requires, or resolves,
+ * the packed declarations reference, a packed `#` import may reach through
+ * the manifest's `imports` map, or a consumer's install script runs — read
+ * from the bytes npm would publish.
  */
 export const importedPackageNames = async (options: {
+  /** Names to test for install-script use; every other source is scanned whole. */
+  readonly declared: readonly string[];
+  readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly paths: readonly string[];
   readonly projectRoot: string;
 }): Promise<ImportedPackages> => {
   const projectRoot = resolve(options.projectRoot);
-  const evidence = await Promise.all(options.paths
-    .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
-    .map((path) => fileEvidence(resolve(projectRoot, path))));
+  const [evidence, fromScripts] = await Promise.all([
+    Promise.all(options.paths
+      .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
+      .map((path) => fileEvidence(resolve(projectRoot, path)))),
+    installScriptDependencies(options.packageDocument, options.declared, projectRoot),
+  ]);
+  const specifiers = evidence.flatMap((file) => file.specifiers);
+  const reachable = specifiers.some((specifier) => specifier.startsWith('#'))
+    ? packageImportTargets(options.packageDocument)
+    : [];
   return {
     complete: evidence.every((file) => file.complete),
-    names: new Set(evidence.flatMap((file) => file.specifiers).flatMap((specifier) => {
-      const name = packageNameOf(specifier);
-      return name === undefined ? [] : [name];
-    })),
+    names: new Set([
+      ...[...specifiers, ...reachable].flatMap((specifier) => {
+        const name = packageNameOf(specifier);
+        return name === undefined ? [] : [name];
+      }),
+      ...fromScripts,
+    ]),
   };
 };

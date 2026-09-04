@@ -159,7 +159,12 @@ const dependencyDiagnostics = async (options: {
 }): Promise<readonly Diagnostic[]> => {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
-  const imported = await importedPackageNames({ paths: options.packedPaths, projectRoot: options.projectRoot });
+  const imported = await importedPackageNames({
+    declared: declared.map((dependency) => dependency.name),
+    packageDocument: options.packageDocument,
+    paths: options.packedPaths,
+    projectRoot: options.projectRoot,
+  });
   const unresolvable = declared.filter((dependency) => !dependency.bundled && (isWorkspaceProtocol(dependency.specifier)
     ? !options.packerRewritesWorkspaceProtocols
     : !isRegistrySpecifier(dependency.specifier)));
@@ -170,7 +175,7 @@ const dependencyDiagnostics = async (options: {
       'AB7014',
       `package.json ${field} names packages no packed JavaScript or declaration file references: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
-      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import(expression) in packed code withholds this check.',
+      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
     )),
     ...perField(unresolvable, (field, own) => diagnostic(
       'AB7015',

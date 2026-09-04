@@ -197,8 +197,11 @@ package that provides those types even without a runtime import; a type directiv
 named package and its `@types/*` twin, `@types/scope__name` for a scoped name); bare specifiers are reduced to
 their package name (`@scope/name` or `name`), and Node built-ins are ignored. A mention inside a
 comment or string can only keep a dependency, never report one, and `devDependencies` are never
-inspected. A computed `import(expression)` in packed JavaScript could load any declared package,
-so its presence withholds `AB7014` entirely; the recovery text says so.
+inspected. A packed `#subpath` import counts for every package the manifest's `imports` map targets,
+and a dependency named by a consumer-side `preinstall`/`install`/`postinstall`/`prepare` script — by
+package name or by one of its `bin` commands — counts as used. A computed `import(expression)` or
+`require(expression)` in packed JavaScript could load any declared package, so its presence withholds
+`AB7014` entirely; the recovery text says so.
 
 ## Declaration generation (`AB4716`)
 

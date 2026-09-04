@@ -274,6 +274,43 @@ it('withholds AB7014 when packed JavaScript has a computed import() that could l
   },
 ));
 
+it('withholds AB7014 for a computed CommonJS require() just as for a computed import()', () => withPackageDocument(
+  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'computed.cjs');
+    await writeFile(consumer, 'module.exports = (name) => require(name);\n');
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/computed.cjs' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
+it('accepts a dependency reached through a package imports map or run by a consumer install script', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { 'driver-package': '^1.0.0', 'named-in-script': '^1.0.0', typescript: '^5.0.0' };
+    document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'named-in-script --init && tsc --version' };
+  },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'mapped.mjs');
+    await writeFile(consumer, 'export { default } from "#driver";\n');
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/mapped.mjs' }] };
+      // `#driver` reaches driver-package; the script names named-in-script directly and typescript through its `tsc` bin.
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      // Without the `#` import the map alone proves nothing.
+      const [reported] = withCode(await diagnostics(), 'AB7014');
+      expect(reported?.message).toContain('"driver-package"');
+      expect(reported?.message).not.toContain('"typescript"');
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
 it('accepts a dependency that only packed declaration files reference, including @types for a type directive', () => withPackageDocument(
   (document) => { document.dependencies = { zod: '^4.5.4', '@types/node': '^22.0.0' }; },
   async () => {
