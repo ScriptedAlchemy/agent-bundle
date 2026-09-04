@@ -16,7 +16,11 @@ description: 'agent-bundle 的安全边界：不接受提供方凭据、仅 loop
 
 每次 Codex 试验都会设置一个临时的 `CODEX_HOME`，并只把已安装 CLI 那份不透明的 `auth.json` 复制进去。
 你日常的 Codex home、配置与已安装插件状态不会被用作试验状态，也不会被改动。贡献者冒烟命令会移除提供方
-API key 与形似凭据的环境取值，并在所选宿主的日常 home 状态发生变化时失败。
+API key 与形似凭据的环境取值，并在所选宿主的日常配置、设置或已安装插件状态发生变化时失败。对 Claude
+而言，这个范围是 `~/.claude/config.json`、`settings.json`、`settings.local.json` 与 `plugins/`，
+另外原生契约冒烟还会检查 `~/.claude.json` 里用户作用域的 `mcpServers` 注册。`~/.claude.json` 的其余
+内容是 Claude Code 每次启动都会重写的宿主记账数据（缓存的特性开关、首次启动与机器标识、使用计数、
+按项目的会话统计），有意不在守护范围内。
 
 原生的已认证冒烟测试被排除在默认与日常本地测试运行之外，而运行它们的那个可信自托管 CI 工作流使用既有的
 订阅会话，且**不使用任何工作流 secret**。

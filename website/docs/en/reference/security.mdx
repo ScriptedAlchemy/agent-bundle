@@ -19,8 +19,13 @@ existing session, and there is no fallback path that reads an API key from confi
 Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
 `auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not
 used as trial state and are left unchanged. The contributor smoke commands remove provider
-API-key and credential-shaped environment values and fail if the selected host's normal home state
-changes.
+API-key and credential-shaped environment values and fail if the selected host's normal
+configuration, settings, or installed-plugin state changes. For Claude that surface is
+`~/.claude/config.json`, `settings.json`, `settings.local.json`, and `plugins/`, plus — in the
+native contract smoke — the user-scope `mcpServers` registrations inside `~/.claude.json`. The
+rest of `~/.claude.json` is host bookkeeping Claude Code rewrites on every start (cached feature
+flags, first-start and machine identity, usage counters, per-project session statistics) and is
+deliberately not guarded.
 
 Native authenticated smokes are excluded from default and ordinary local test runs, and the
 trusted self-hosted CI workflow that runs them uses an existing subscription session with **no

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { spawn } from 'node:child_process';
@@ -244,12 +245,23 @@ export interface NativeClaudeSmokeReport {
   readonly status: 'harness-failure' | 'passed' | 'skipped';
 }
 
+/**
+ * The normal-home surface the smoke must leave untouched: the settings files,
+ * the installed plugin tree, and the user-scope MCP registrations inside the
+ * sibling `.claude.json` state file. The rest of that file is host
+ * bookkeeping Claude Code rewrites on every signed-in turn (cached feature
+ * flags, first-start and machine identity, notification and usage counters,
+ * per-project session statistics — 2.1.257+ even under
+ * `--no-session-persistence`), so digesting it whole made the guard trip on
+ * every real run (#439); `mcpServers` is the one durable configuration the
+ * file carries that a plugin smoke could plausibly alter.
+ */
 interface ClaudeNormalHomeSnapshot {
-  readonly claudeJson: string;
   readonly config: string;
   readonly localSettings: string;
   readonly plugins: string;
   readonly settings: string;
+  readonly stateMcpServers: string;
 }
 
 const candidateSkillEventName = (pluginName: string, skillName: string): string => `${pluginName}:${skillName}`;
@@ -334,20 +346,48 @@ const resolveClaudeNormalHome = (
   return Object.freeze({ directory: join(homeDirectory, '.claude'), stateFile: join(homeDirectory, '.claude.json') });
 };
 
+/**
+ * Digests the user-scope `mcpServers` registrations of Claude's `.claude.json`
+ * and nothing else in it. An absent file and a file without the key both mean
+ * "no registrations" (a first start in a fresh home creates the file without
+ * any), a file that is not a JSON object digests to its own constant, so the
+ * guard still notices the smoke creating registrations or corrupting the
+ * file, while the bookkeeping keys the host rewrites on every turn never enter
+ * the digest.
+ */
+const digestClaudeStateMcpServers = async (path: string): Promise<string> => {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return 'none';
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return 'unparsable';
+  }
+  if (!isRecord(parsed)) return 'unparsable';
+  if (!('mcpServers' in parsed)) return 'none';
+  return digest(parsed.mcpServers);
+};
+
 const snapshotClaudeNormalHome = async (paths: ClaudeNormalHomePaths): Promise<ClaudeNormalHomeSnapshot> => Object.freeze({
-  claudeJson: await digestClaudeFileTree(paths.stateFile),
   config: await digestClaudeFileTree(join(paths.directory, 'config.json')),
   localSettings: await digestClaudeFileTree(join(paths.directory, 'settings.local.json')),
   plugins: await digestClaudeFileTree(join(paths.directory, 'plugins')),
   settings: await digestClaudeFileTree(join(paths.directory, 'settings.json')),
+  stateMcpServers: await digestClaudeStateMcpServers(paths.stateFile),
 });
 
 const sameClaudeNormalHome = (left: ClaudeNormalHomeSnapshot, right: ClaudeNormalHomeSnapshot): boolean =>
-  left.claudeJson === right.claudeJson
-  && left.config === right.config
+  left.config === right.config
   && left.localSettings === right.localSettings
   && left.plugins === right.plugins
-  && left.settings === right.settings;
+  && left.settings === right.settings
+  && left.stateMcpServers === right.stateMcpServers;
 
 const normalHomeFailure = (code: string, message: string): NativeClaudeSmokeReport => Object.freeze({
   diagnostics: diagnostic(code, message),
@@ -356,7 +396,7 @@ const normalHomeFailure = (code: string, message: string): NativeClaudeSmokeRepo
 
 const normalHomeChangedDiagnostic = Object.freeze({
   code: 'claude-native.normal-home.changed',
-  message: 'Claude normal config/settings/plugins state changed; inspect local state without retaining its output.',
+  message: 'Claude normal config/settings/plugins state or user-scope MCP registrations changed; inspect local state without retaining its output.',
 });
 
 const isMissingExecutableError = (error: unknown): boolean => isErrno(error, 'ENOENT');

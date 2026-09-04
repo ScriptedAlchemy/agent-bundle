@@ -1056,7 +1056,11 @@ pnpm test:packed:native:codex
 ```
 
 Each command builds and installs one production-only tarball, removes provider API-key and
-credential-shaped environment values, and fails if the selected host's normal home state changes.
+credential-shaped environment values, and fails if the selected host's normal configuration,
+settings, or installed-plugin state changes (for Claude: `~/.claude/config.json`, `settings.json`,
+`settings.local.json`, and `plugins/`; the source contract smoke additionally guards the
+user-scope `mcpServers` registrations in `~/.claude.json`, whose other keys are host bookkeeping
+Claude Code rewrites on every start).
 Do not add provider API keys to the project configuration or use them as a fallback for either
 harness.
 
