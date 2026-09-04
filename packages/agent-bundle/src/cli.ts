@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import type { Effect, Layer } from 'effect';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -44,16 +45,19 @@ import { formatInstallResult, formatUninstallResult } from './install/format.ts'
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
+import { makeScopedEffectRuntime } from './effect/boundary.ts';
+import { type CliServices, display, nodeCliServices, writeStderr, writeStdout } from './effect/terminal.ts';
 
 declare const __AGENT_BUNDLE_VERSION__: string;
 
-interface Output {
-  write(chunk: string): unknown;
-}
-
-export interface CliStreams {
-  readonly stderr?: Output;
-  readonly stdout?: Output;
+/**
+ * The CLI's terminal services (#465 / Effect Terminal adoption). User-facing
+ * text is written through `Terminal.display`; diagnostics and machine output
+ * through `Stdio`. The process-backed Node layers are the default; tests
+ * provide a capture layer instead of spying on `process.stdout`.
+ */
+export interface CliOutput {
+  readonly services?: Layer.Layer<CliServices>;
 }
 
 interface CliSignalSource {
@@ -286,40 +290,36 @@ const diagnosticsFor = (error: unknown): readonly Diagnostic[] => {
   }];
 };
 
-const writeMachine = (output: Output, result: unknown): void => {
-  output.write(`${stableJson(result === undefined ? null : result)}\n`);
-};
+/** One canonical JSON line: the `--json` document on stdout, or the diagnostics document on stderr. */
+const machineLine = (result: unknown): string => `${stableJson(result === undefined ? null : result)}\n`;
 
-const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build>>): void => {
-  // Errors abort the command before this writer runs, so any diagnostics
+const humanBuild = (result: Awaited<ReturnType<typeof build>>): string => {
+  const out: string[] = [];
+  // Errors abort the command before this formatter runs, so any diagnostics
   // reaching it are informational nudges or host-validation warnings.
   for (const diagnostic of result.diagnostics) {
-    output.write(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
+    out.push(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
   }
-  output.write(`Built ${result.model.metadata.name} to ${result.build.outputRoot}\n`);
+  out.push(`Built ${result.model.metadata.name} to ${result.build.outputRoot}\n`);
   for (const report of result.hostValidation ?? []) {
-    output.write(
+    out.push(
       `Host validation (${report.target}): ${report.status}` +
         `${report.version === undefined ? '' : ` (Claude Code ${report.version})`}` +
         `${report.load === undefined ? '' : `, load check ${report.load.status}`}\n`,
     );
   }
   if (result.packageBuild !== undefined) {
-    output.write(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
+    out.push(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
   }
+  return out.join('');
 };
 
-const writeHumanPrepack = (output: Output, result: Awaited<ReturnType<typeof prepack>>): void => {
-  output.write(
-    `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`,
-  );
-};
+const humanPrepack = (result: Awaited<ReturnType<typeof prepack>>): string =>
+  `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`;
 
 const shortContentHash = (hash: string): string => hash.slice(0, 12);
 
-const writeHumanInstall = (output: Output, result: InstallResult): void => {
-  output.write(formatInstallResult(result));
-};
+const humanInstall = (result: InstallResult): string => formatInstallResult(result);
 
 const writeHumanUninstall = (output: Output, result: UninstallResult): void => {
   output.write(formatUninstallResult(result));
@@ -372,11 +372,12 @@ const formatByteSize = (bytes: number): string => {
   return `${(kibibytes / 1024).toFixed(1).replace(/\.0$/u, '')} MiB`;
 };
 
-const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
+const humanDoctor = (result: DoctorReport): string => {
+  const out: string[] = [];
   for (const host of result.hosts) {
     const detail = host.probe.version ?? host.probe.evidence;
-    output.write(`${host.host}: ${host.probe.status}${detail === undefined ? '' : ` (${detail})`}\n`);
-    output.write(
+    out.push(`${host.host}: ${host.probe.status}${detail === undefined ? '' : ` (${detail})`}\n`);
+    out.push(
       `  inventory: ${host.inventory.status}` +
       `${host.inventory.status === 'known' ? ` (${host.inventory.findings.length} finding(s))` : ''}\n`,
     );
@@ -384,9 +385,9 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
       const identity = host.bundle.name === undefined
         ? ''
         : ` ${host.bundle.name}${host.bundle.version === undefined ? '' : `@${host.bundle.version}`}`;
-      output.write(`  bundle:${identity} ${host.bundle.state}\n`);
+      out.push(`  bundle:${identity} ${host.bundle.state}\n`);
       if (host.bundle.comparison !== undefined) {
-        output.write(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
+        out.push(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
       }
       for (const validation of host.bundle.hostValidation ?? []) {
         output.write(
@@ -412,72 +413,74 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
     if (uniqueReports.length > 0) {
       const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);
       const bytes = uniqueReports.reduce((total, report) => total + report.summary.bytes, 0);
-      output.write(
+      out.push(
         `  durable state: ${stores} ${stores === 1 ? 'store' : 'stores'}, ${formatByteSize(bytes)}\n`,
       );
     }
   }
-  output.write(
+  out.push(
     `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +
     `${result.endpoints.summary.staleSockets} stale socket(s), ` +
     `${result.endpoints.summary.staleLocks} stale lock(s)\n`,
   );
   for (const entry of result.diagnostics) {
-    output.write(`${entry.code}: ${entry.message}\nRecovery: ${entry.recovery}\n`);
+    out.push(`${entry.code}: ${entry.message}\nRecovery: ${entry.recovery}\n`);
   }
-  output.write(
+  out.push(
     `Doctor summary: ${result.summary.errors} error(s), ${result.summary.warnings} warning(s), ` +
     `${result.summary.infos} info(s)\n`,
   );
+  return out.join('');
 };
 
-const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof inspect>>): void => {
+const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
+  const out: string[] = [];
   if (result.state === 'invalid') {
     for (const diagnostic of result.diagnostics) {
-      output.write(`${diagnostic.code}: ${diagnostic.message}\nRecovery: ${diagnostic.recovery}\n`);
+      out.push(`${diagnostic.code}: ${diagnostic.message}\nRecovery: ${diagnostic.recovery}\n`);
     }
-    return;
+    return out.join('');
   }
   if (result.selected?.bundler !== undefined) {
     // The bundler focus is a debugging dump: the full synthesized
     // configuration is the human output, not a one-line summary.
-    output.write(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
-    return;
+    out.push(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
+    return out.join('');
   }
   if (result.selected?.routes !== undefined) {
     // The route focus follows the bundler contract: the compiled graph is
     // the human output, not a one-line summary.
-    output.write(`${JSON.stringify(result.selected.routes, null, 2)}\n`);
-    return;
+    out.push(`${JSON.stringify(result.selected.routes, null, 2)}\n`);
+    return out.join('');
   }
   if (result.selected?.state !== undefined) {
-    output.write(`${JSON.stringify(result.selected.state, null, 2)}\n`);
-    return;
+    out.push(`${JSON.stringify(result.selected.state, null, 2)}\n`);
+    return out.join('');
   }
-  output.write(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
+  out.push(`Inspected ${result.model.metadata.name}: ${result.plans.map((plan) => plan.target).join(', ')}\n`);
   // Release identity is derived from package.json (issue #94); a project
   // without a package version gets a clearly labeled development fallback.
   if (result.projectContext.packageName !== undefined) {
-    output.write(`Package: ${result.projectContext.packageName}\n`);
+    out.push(`Package: ${result.projectContext.packageName}\n`);
   }
-  output.write(`Version: ${projectVersionLabel(result.projectContext)}\n`);
+  out.push(`Version: ${projectVersionLabel(result.projectContext)}\n`);
   if (result.model.state !== undefined) {
     const driver = result.model.state.lifetime === 'workspace-durable' ? 'sqlite' : 'memory';
-    output.write(`state: ${result.model.state.id} (${result.model.state.lifetime}, ${driver} driver)\n`);
+    out.push(`state: ${result.model.state.id} (${result.model.state.lifetime}, ${driver} driver)\n`);
   }
   // Per-target component accounting: what each host emits and, for every
   // omission, whether the author excluded it or the host's pinned capability
   // judgment (degraded/unavailable/prohibited, with its reason) ruled it out.
   for (const plan of result.plans) {
-    output.write(`${plan.target}: ${plan.selected.length} component(s) selected, ${plan.skipped.length} omitted\n`);
+    out.push(`${plan.target}: ${plan.selected.length} component(s) selected, ${plan.skipped.length} omitted\n`);
     for (const component of plan.skipped) {
-      output.write(`  omitted ${component.kind} ${component.name}: ${formatInspectionOmission(component)}\n`);
+      out.push(`  omitted ${component.kind} ${component.name}: ${formatInspectionOmission(component)}\n`);
     }
     // Feature-set omissions (#100): the component ships, minus a feature the
     // host's `<kind>.<feature>` row does not support.
     for (const component of plan.selected) {
       for (const omitted of component.omittedFeatures ?? []) {
-        output.write(`  ${component.kind} ${component.name} omits ${omitted.feature}: ${formatCapabilityJudgment(omitted.capability)}\n`);
+        out.push(`  ${component.kind} ${component.name} omits ${omitted.feature}: ${formatCapabilityJudgment(omitted.capability)}\n`);
       }
     }
     // The kind matrix names every canonical kind this host cannot emit, with
@@ -486,9 +489,10 @@ const writeHumanInspect = (output: Output, result: Awaited<ReturnType<typeof ins
       .filter((report) => report.capability !== undefined && report.capability.state !== 'supported')
       .map((report) => `${report.kind} (${report.capability!.state})`);
     if (unsupportedKinds.length > 0) {
-      output.write(`  kinds this host cannot emit: ${unsupportedKinds.join(', ')}\n`);
+      out.push(`  kinds this host cannot emit: ${unsupportedKinds.join(', ')}\n`);
     }
   }
+  return out.join('');
 };
 
 const formatCapabilityJudgment = (capability: InspectionComponentCapability): string => {
@@ -525,16 +529,18 @@ const formatInspectionOmission = (component: InspectionSkippedComponent): string
 const emptyEvalSummary = Object.freeze({ cases: 0, fail: 0, inconclusive: 0, pass: 0, trials: 0 });
 
 /** Inconclusive trials are counted on their own line; they are never reported as failures. */
-const writeHumanEval = (output: Output, result: Awaited<ReturnType<typeof runEvals>>): void => {
+const humanEval = (result: Awaited<ReturnType<typeof runEvals>>): string => {
+  const out: string[] = [];
   for (const diagnostic of result.diagnostics) {
-    output.write(`${diagnostic.code}: ${diagnostic.message}\n`);
+    out.push(`${diagnostic.code}: ${diagnostic.message}\n`);
   }
   const summary = result.run.summary ?? emptyEvalSummary;
-  output.write([
+  out.push([
     `Evaluated ${summary.cases} case(s) in run ${result.run.id}: `,
     `${summary.pass} passed, ${summary.fail} failed, ${summary.inconclusive} inconclusive `,
     `across ${summary.trials} trial(s)\n`,
   ].join(''));
+  return out.join('');
 };
 
 const signed = (value: number): string => `${value > 0 ? '+' : ''}${value}`;
@@ -559,60 +565,86 @@ const formatComparisonDelta = (delta: EvalComparisonDelta): string => [
   ...(delta.totalTokens === undefined ? [] : [`tokens ${signed(delta.totalTokens)}`]),
 ].join(', ');
 
-const writeHumanEvalComparison = (output: Output, result: Awaited<ReturnType<typeof compareEvals>>): void => {
+const humanEvalComparison = (result: Awaited<ReturnType<typeof compareEvals>>): string => {
+  const out: string[] = [];
   const { summary } = result;
-  output.write([
+  out.push([
     `Compared ${result.baselineRunId} to ${result.candidateRunId}: `,
     `${summary.comparable} comparable, ${summary.nonComparable} non-comparable `,
     `(${summary.reliability} reliability, ${summary.smoke} smoke)\n`,
   ].join(''));
   for (const row of result.rows) {
-    output.write(`case ${row.caseId} / host ${row.host} / model ${row.model ?? 'unverified'}\n`);
-    if (row.baseline !== undefined) output.write(`  baseline: ${formatComparisonMetrics(row.baseline)}\n`);
-    if (row.candidate !== undefined) output.write(`  candidate: ${formatComparisonMetrics(row.candidate)}\n`);
+    out.push(`case ${row.caseId} / host ${row.host} / model ${row.model ?? 'unverified'}\n`);
+    if (row.baseline !== undefined) out.push(`  baseline: ${formatComparisonMetrics(row.baseline)}\n`);
+    if (row.candidate !== undefined) out.push(`  candidate: ${formatComparisonMetrics(row.candidate)}\n`);
     if (row.comparable) {
-      output.write(`  delta: ${formatComparisonDelta(row.delta)}\n`);
+      out.push(`  delta: ${formatComparisonDelta(row.delta)}\n`);
       continue;
     }
-    for (const cause of row.causes) output.write(`  not comparable: ${cause.code}: ${cause.message}\n`);
+    for (const cause of row.causes) out.push(`  not comparable: ${cause.code}: ${cause.message}\n`);
   }
+  return out.join('');
 };
 
-const writeHumanValidate = (output: Output, result: Awaited<ReturnType<typeof validate>>): void => {
+const humanValidate = (result: Awaited<ReturnType<typeof validate>>): string => {
+  const out: string[] = [];
   // Errors abort the command before this writer runs, so any diagnostics
   // reaching it are informational nudges or warnings worth surfacing.
   for (const diagnostic of result.diagnostics) {
-    output.write(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
+    out.push(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
   }
-  output.write(result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
+  out.push(result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
     ? `Validation reported ${result.diagnostics.length} diagnostic(s)\n`
     : 'Validation succeeded\n');
+  return out.join('');
 };
 
+/**
+ * Closes the foreground development session on SIGINT/SIGTERM. Returns a
+ * promise that settles once a signal has closed the session (so the caller
+ * can keep the terminal services alive until the close diagnostics, if any,
+ * have been written); it never settles when no signal arrives.
+ */
 const closeForegroundOnSignal = (
   session: Pick<Awaited<ReturnType<typeof startDevServer>>, 'close'>,
   signals: CliSignalSource,
-  stderr: Output,
-): void => {
+  writeDiagnostics: (text: string) => Promise<void>,
+): Promise<void> => new Promise<void>((settle) => {
   const terminationSignals = ['SIGINT', 'SIGTERM'] as const;
   let closing: Promise<void> | undefined;
   const close = (): void => {
-    closing ??= session.close().catch((error: unknown) => {
-      writeMachine(stderr, diagnosticsFor(error));
-    }).finally(() => {
+    closing ??= session.close().catch((error: unknown) => writeDiagnostics(machineLine(diagnosticsFor(error)))).finally(() => {
       for (const signal of terminationSignals) signals.removeListener(signal, close);
+      settle();
     });
   };
   for (const signal of terminationSignals) signals.once(signal, close);
-};
+});
+
+/** Commander writes help and argv errors synchronously; the CLI queues them and replays them through the terminal services in order. */
+interface QueuedWrite {
+  readonly stream: 'stderr' | 'stdout';
+  readonly text: string;
+}
 
 export const runCli = async (
   args: string[],
-  streams: CliStreams = {},
+  output: CliOutput = {},
   dependencies: CliDependencies = {},
 ): Promise<number> => {
-  const stdout = streams.stdout ?? process.stdout;
-  const stderr = streams.stderr ?? process.stderr;
+  // The terminal services are provided exactly once, here at the composition
+  // root; every write below runs through the boundary against this runtime.
+  const runtime = makeScopedEffectRuntime(output.services ?? nodeCliServices);
+  const run = <A, E>(effect: Effect.Effect<A, E, CliServices>): Promise<A> => runtime.run(effect);
+  const machine = (result: unknown): Promise<void> => run(writeStdout(machineLine(result)));
+  const diagnostics = (text: string): Promise<void> => run(writeStderr(text));
+  const queued: QueuedWrite[] = [];
+  const flushQueued = async (): Promise<void> => {
+    for (const entry of queued.splice(0)) {
+      await (entry.stream === 'stdout' ? run(display(entry.text)) : diagnostics(entry.text));
+    }
+  };
+  let foreground: Promise<void> | undefined;
   let exitCode = 0;
   const program = new Command();
   program
@@ -621,8 +653,8 @@ export const runCli = async (
     .exitOverride()
     .showHelpAfterError(false)
     .configureOutput({
-      writeErr: (chunk) => stderr.write(chunk),
-      writeOut: (chunk) => stdout.write(chunk),
+      writeErr: (chunk) => void queued.push({ stream: 'stderr', text: chunk }),
+      writeOut: (chunk) => void queued.push({ stream: 'stdout', text: chunk }),
     });
 
   const devCommand = program.command('dev').description('Serve the packaged development workbench on loopback')
@@ -642,8 +674,8 @@ export const runCli = async (
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,
     });
-    stdout.write(`Development workbench at ${session.url}\n`);
-    closeForegroundOnSignal(session, dependencies.signals ?? process, stderr);
+    await run(display(`Development workbench at ${session.url}\n`));
+    foreground = closeForegroundOnSignal(session, dependencies.signals ?? process, diagnostics);
   });
 
   const devProxyCommand = devCommand.command('proxy')
@@ -653,13 +685,17 @@ export const runCli = async (
     .option('--url <url>', 'Explicit loopback development server origin');
   devProxyCommand.action(async (options: DevProxyCommandOptions) => {
     const proxy = dependencies.runHostMcpProxy ?? (await import('./dev/host-mcp-proxy.ts')).runHostMcpProxy;
+    // The bridge reports at arbitrary times over its lifetime; a serial chain
+    // keeps its stderr lines in order and lets the action await the last one.
+    let pending = Promise.resolve();
     exitCode = await proxy({
       projectRoot: devCommand.opts<DevCommandOptions>().root,
       serverName: options.server,
       target: options.target,
       ...(options.url === undefined ? {} : { url: options.url }),
-      writeDiagnostic: (message) => { stderr.write(`${message}\n`); },
+      writeDiagnostic: (message) => { pending = pending.then(() => diagnostics(`${message}\n`)); },
     });
+    await pending;
   });
 
   const buildCommand = configureSourceOptions(
@@ -681,8 +717,7 @@ export const runCli = async (
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
     }
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanBuild(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanBuild(result))));
   });
 
   const prepackCommand = configureSourceOptions(
@@ -695,8 +730,7 @@ export const runCli = async (
       output: options.output,
       packageOutputs: true,
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanPrepack(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanPrepack(result))));
   });
 
   const installCommand = program.command('install')
@@ -724,8 +758,7 @@ export const runCli = async (
       ...(options.mode === undefined ? {} : { mode: options.mode }),
       scope: installScope(options.scope),
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanInstall(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanInstall(result))));
   });
 
   const uninstallCommand = program.command('uninstall')
@@ -775,8 +808,7 @@ export const runCli = async (
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.host.length === 0 ? {} : { hosts: options.host }),
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanDoctor(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanDoctor(result))));
     if (result.diagnostics.some((entry) => entry.severity === 'error')) exitCode = 1;
   });
 
@@ -798,8 +830,7 @@ export const runCli = async (
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
     }
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanValidate(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanValidate(result))));
   });
 
   const evalCommand = configureSourceOptions(
@@ -820,8 +851,7 @@ export const runCli = async (
       ...(options.suite === undefined || options.suite.length === 0 ? {} : { suites: options.suite }),
       ...(options.trials === undefined ? {} : { trials: options.trials }),
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanEval(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanEval(result))));
     const summary = result.run.summary ?? emptyEvalSummary;
     // Inconclusive trials produced no evidence, so they cannot report success either.
     if (summary.fail > 0 || summary.inconclusive > 0) exitCode = 1;
@@ -840,8 +870,7 @@ export const runCli = async (
       baseRunId: baseline,
       candidateRunId: candidate,
     });
-    if (sourceOptions.json === true) writeMachine(stdout, result);
-    else writeHumanEvalComparison(stdout, result);
+    await (sourceOptions.json === true ? machine(result) : run(display(humanEvalComparison(result))));
   });
 
   const inspectCommand = configureInspectOptions(
@@ -873,8 +902,7 @@ export const runCli = async (
       ...(options.state === true ? { focus: 'state' as const } : {}),
       ...(options.target === undefined ? {} : { target: options.target }),
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanInspect(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanInspect(result))));
     if (result.state === 'invalid') exitCode = 1;
   });
 
@@ -890,8 +918,7 @@ export const runCli = async (
       server: options.server,
       target: options.target,
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else stdout.write(`Listed ${result.tools.length} tool(s) from ${options.server}\n`);
+    await (options.json === true ? machine(result) : run(display(`Listed ${result.tools.length} tool(s) from ${options.server}\n`)));
   });
 
   const mcpInvokeCommand = configureArtifactOptions(
@@ -915,8 +942,7 @@ export const runCli = async (
       target: options.target,
       tool: options.tool,
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else stdout.write(`Invoked ${options.tool} on ${options.server}\n`);
+    await (options.json === true ? machine(result) : run(display(`Invoked ${options.tool} on ${options.server}\n`)));
   });
 
   const mcpRunCommand = configureArtifactOptions(
@@ -957,8 +983,7 @@ export const runCli = async (
   hooksListCommand.action(async (options: ArtifactCommandOptions) => {
     const { listHooks } = await import('./api.ts');
     const result = await listHooks({ ...artifactOptions(options), target: options.target });
-    if (options.json === true) writeMachine(stdout, result);
-    else stdout.write(`Listed ${result.length} hook(s)${options.target === undefined ? '' : ` from ${options.target}`}\n`);
+    await (options.json === true ? machine(result) : run(display(`Listed ${result.length} hook(s)${options.target === undefined ? '' : ` from ${options.target}`}\n`)));
   });
 
   const hooksSimulateCommand = configureArtifactOptions(
@@ -979,19 +1004,25 @@ export const runCli = async (
       input: await parseJsonObject(options),
       target: options.target,
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else stdout.write(`Simulated ${options.hook}\n`);
+    await (options.json === true ? machine(result) : run(display(`Simulated ${options.hook}\n`)));
   });
 
   try {
     await program.parseAsync(args, { from: 'user' });
+    await flushQueued();
     return exitCode;
   } catch (error) {
+    await flushQueued();
     if (error instanceof CommanderError) {
       return error.exitCode === 0 ? 0 : 2;
     }
-    writeMachine(stderr, diagnosticsFor(error));
+    await diagnostics(machineLine(diagnosticsFor(error)));
     return 1;
+  } finally {
+    // A foreground session outlives this call; its close diagnostics still
+    // need the services, so the runtime follows the session instead.
+    if (foreground === undefined) await runtime.close();
+    else void foreground.then(() => runtime.close());
   }
 };
 

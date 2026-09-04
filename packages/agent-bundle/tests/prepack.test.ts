@@ -8,6 +8,7 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { prepack } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -104,11 +105,11 @@ it('prepack validates the complete dry-run inventory', async () => {
 
 it('exposes --root, --output, and --json through the prepack command', async () => {
   const calls: unknown[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runCli(
     ['prepack', '--root', projectRoot, '--output', 'host-packs', '--json'],
-    { stderr: { write: () => undefined }, stdout: { write: (chunk: string) => stdout.push(chunk) } },
+    terminal.output,
     {
       prepack: async (options) => {
         calls.push(options);
@@ -122,7 +123,7 @@ it('exposes --root, --output, and --json through the prepack command', async () 
     packageOutputs: true,
     root: projectRoot,
   })]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({
+  expect(JSON.parse(terminal.stdout())).toMatchObject({
     build: { model: { metadata: { name: 'installer-fixture' } } },
     pack: { files: expect.any(Array) },
   });

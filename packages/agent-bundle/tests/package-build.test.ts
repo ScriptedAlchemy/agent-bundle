@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { build, runMcp } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { mcpServerStateDirectory } from '../src/services/mcp-run.ts';
 
 const execFile = promisify(executeFile);
@@ -260,14 +261,11 @@ describe('framework-owned package build', () => {
     });
     await installTypescriptToolchain(root);
 
-    const stderr: string[] = [];
-    const exitCode = await runCli(
-      ['build', '--root', root, '--output', 'artifact'],
-      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
-    );
+    const terminal = captureCliTerminal();
+    const exitCode = await runCli(['build', '--root', root, '--output', 'artifact'], terminal.output);
     expect(exitCode).toBe(1);
 
-    const diagnostics = JSON.parse(stderr.join('')) as readonly {
+    const diagnostics = JSON.parse(terminal.stderr()) as readonly {
       code: string;
       message: string;
       recovery?: string;
@@ -476,13 +474,13 @@ describe('mcp run', () => {
   }, 120_000);
 
   it('rejects --env-file combined with --no-env', async () => {
-    const stderr: string[] = [];
+    const terminal = captureCliTerminal();
     const exitCode = await runCli(
       ['mcp', 'run', '--root', '.', '--artifact', 'artifact', '--target', 'portable', '--server', 's', '--env-file', 'x.env', '--no-env'],
-      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
+      terminal.output,
     );
     expect(exitCode).toBe(1);
-    expect(stderr.join('')).toContain('Use either --env-file or --no-env, not both.');
+    expect(terminal.stderr()).toContain('Use either --env-file or --no-env, not both.');
   });
 
   it('runs a built server end to end through the CLI and forwards its exit code', async () => {

@@ -23,7 +23,7 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
-import { CliInputError } from '../cli-entry.ts';
+import { cliInputError } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
   GeneratedCliRenderContext,
@@ -863,7 +863,7 @@ export const prepareCliRenderHost = async (
       try {
         parsed = module.inputSchema.parse(input);
       } catch (error) {
-        throw new CliInputError(error instanceof Error ? error.message : String(error));
+        throw cliInputError(command, input, error);
       }
       const commandName = command.path.join(' ');
       const invocation: AgentRenderInvocation = command.mcp === undefined

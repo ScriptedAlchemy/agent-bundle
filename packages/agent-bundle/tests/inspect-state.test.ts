@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
 import { agentStateDefaultBudgets } from '../src/core/state-inspection.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 
 it('keeps static inspection defaults aligned with the runtime package', () => {
   expect(agentStateDefaultBudgets).toEqual({
@@ -39,17 +40,10 @@ const inspectCli = async (
   root: string,
   args: readonly string[],
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-  const code = await runCli(
-    ['inspect', '--root', root, ...args],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
-  );
-  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+  const code = await runCli(['inspect', '--root', root, ...args], terminal.output);
+  return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
 it('inspects volatile and workspace-durable state without inventing runtime paths', async () => {

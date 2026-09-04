@@ -9,6 +9,7 @@ import { runCli } from '../src/cli.ts';
 import { createEvalRun, type EvalTrialRecordInput } from '../src/eval/index.ts';
 import type { EvalRunResult } from '../src/dev/eval/eval-service.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { seedEvalProject } from './support/eval-project.ts';
 
 const runCliWithOutput = async (args: readonly string[]): Promise<{
@@ -16,14 +17,10 @@ const runCliWithOutput = async (args: readonly string[]): Promise<{
   readonly stderr: string;
   readonly stdout: string;
 }> => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-  const code = await runCli([...args], {
-    stderr: { write: (chunk: string) => stderr.push(chunk) },
-    stdout: { write: (chunk: string) => stdout.push(chunk) },
-  });
-  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+  const code = await runCli([...args], terminal.output);
+  return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
 interface PersistComparisonRunOptions {

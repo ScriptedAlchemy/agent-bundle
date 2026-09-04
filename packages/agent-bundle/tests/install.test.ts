@@ -22,6 +22,7 @@ import {
 } from '../src/install/receipt.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -1381,17 +1382,13 @@ it('rejects a Cursor plugin name that could escape the local install root', asyn
 });
 
 it('dispatches the public CLI install command to the native installer', async () => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
 
   const code = await runCli(
     ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--force', '--json'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
+    terminal.output,
     {
       installBundle: async (options: unknown) => {
         calls.push(options);
@@ -1408,14 +1405,14 @@ it('dispatches the public CLI install command to the native installer', async ()
   );
 
   expect(code).toBe(0);
-  expect(stderr.join('')).toBe('');
+  expect(terminal.stderr()).toBe('');
   expect(calls).toEqual([{
     from: '/tmp/example bundle',
     host: 'claude',
     replace: true,
     scope: 'project',
   }]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({
+  expect(JSON.parse(terminal.stdout())).toMatchObject({
     host: 'claude',
     plugin: 'fixture',
     state: 'installed',
@@ -1707,8 +1704,6 @@ it('rejects an install mode for hosts other than Cursor', async () => {
 });
 
 it('passes --mode through the public CLI and prints the staged next steps', async () => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
   const calls: unknown[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const dependencies = {
@@ -1729,19 +1724,17 @@ it('passes --mode through the public CLI and prints the staged next steps', asyn
     },
   } as unknown as Parameters<typeof runCli>[2];
 
+  const terminal = captureCliTerminal();
   const code = await runCli(
     ['install', 'cursor', '--from', '/tmp/example bundle', '--mode', 'marketplace'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
+    terminal.output,
     dependencies,
   );
 
   expect(code).toBe(0);
-  expect(stderr.join('')).toBe('');
+  expect(terminal.stderr()).toBe('');
   expect(calls).toEqual([{ from: '/tmp/example bundle', host: 'cursor', mode: 'marketplace', replace: false, scope: 'user' }]);
-  expect(stdout.join('')).toBe([
+  expect(terminal.stdout()).toBe([
     'Staged fixture@1.0.0 for cursor (marketplace mode) at /home/user/.cursor/agent-bundle/marketplaces/fixture',
     'Marketplace: fixture-marketplace @ abc123',
     'Next steps:',
@@ -1749,16 +1742,14 @@ it('passes --mode through the public CLI and prints the staged next steps', asyn
     '',
   ].join('\n'));
 
+  const invalidTerminal = captureCliTerminal();
   const invalid = await runCli(
     ['install', 'cursor', '--from', '/tmp/example bundle', '--mode', 'remote'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: () => undefined },
-    },
+    invalidTerminal.output,
     dependencies,
   );
   expect(invalid).not.toBe(0);
-  expect(stderr.join('')).toContain('Install mode must be local or marketplace.');
+  expect(invalidTerminal.stderr()).toContain('Install mode must be local or marketplace.');
 });
 
 it('labels a repeated marketplace-mode run as already staged, not installed', () => {

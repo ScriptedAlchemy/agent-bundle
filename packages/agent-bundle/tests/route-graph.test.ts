@@ -7,6 +7,7 @@ import ts from 'typescript-5';
 
 import { inspect, type ReadyInspectResult, validate } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { discoverProject } from '../src/config/discover.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
@@ -791,22 +792,16 @@ it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses
   const root = await createInspectProject({
     'src/mcp/curator/tools/inspect.ts': moduleSource,
   });
-  const stdout: string[] = [];
-  const code = await runCli(['inspect', '--root', root, '--routes', '--json'], {
-    stderr: { write: () => undefined },
-    stdout: { write: (chunk: string) => stdout.push(chunk) },
-  });
+  const terminal = captureCliTerminal();
+  const code = await runCli(['inspect', '--root', root, '--routes', '--json'], terminal.output);
   expect(code).toBe(0);
-  const document = JSON.parse(stdout.join('')) as ReadyInspectResult;
+  const document = JSON.parse(terminal.stdout()) as ReadyInspectResult;
   expect(document.selected?.routes?.servers?.[0]).toMatchObject({ id: 'mcp:curator', mode: 'generated' });
 
-  const stderr: string[] = [];
-  const ambiguous = await runCli(['inspect', '--root', root, '--routes', '--skills'], {
-    stderr: { write: (chunk: string) => stderr.push(chunk) },
-    stdout: { write: () => undefined },
-  });
+  const ambiguousTerminal = captureCliTerminal();
+  const ambiguous = await runCli(['inspect', '--root', root, '--routes', '--skills'], ambiguousTerminal.output);
   expect(ambiguous).toBe(1);
-  expect(stderr.join('')).toContain('Choose at most one inspect focus.');
+  expect(ambiguousTerminal.stderr()).toContain('Choose at most one inspect focus.');
 });
 
 it('evaluates a stateful config factory once when inspecting the routes focus', async () => {

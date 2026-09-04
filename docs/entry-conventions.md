@@ -678,6 +678,27 @@ already emit the canonical JSON document. Routed CLI projects need
 `@agent-bundle/runtime` as a dependency — the generated executable installs
 the request context through it.
 
+When the module's `inputSchema` rejects the parsed argv, the shell reports
+each issue in CLI terms rather than the raw schema issue JSON (#465): one
+line per issue naming the argument as typed (`--max-files` for a named
+option, `<root>` for a positional, `--input.<path>` for a projected MCP
+command, `input` when no single argument is at fault), the expectation, and
+the received value as canonical JSON, followed by the command's exact usage
+line and the `--help` hint, all on stderr:
+
+```text
+Invalid value for --max-files: expected number <= 55000; received 300000.
+Usage: curator doctor [options] <root>
+Run 'curator doctor --help' for usage.
+```
+
+Under `--json` stdout stays empty and stderr carries exactly one canonical
+line, `{"error":{"code":"CLI_INPUT_INVALID","issues":[{"expected":...,
+"message":...,"received":...,"target":...}],"usage":"Usage: ..."}}`; under
+`--ndjson` the stdout stream carries one `type: "error"` event with the same
+`error` object (plus the joined `message`) at `sequence: 0`. The exit code
+is 2 in every mode.
+
 A `.tsx` command route swaps the default function for an async default
 Server Component with the same `{ input, signal }` props and renders through
 the runtime dispatcher's public `stream()` against a sibling

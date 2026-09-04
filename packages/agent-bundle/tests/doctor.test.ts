@@ -9,6 +9,7 @@ import { expect, it } from '@rstest/core';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 import { installBundle } from '../src/install/install.ts';
 import { emptyContentHash, installReceiptFile, installReceiptFormat, installReceiptScopeKey, treeInventory } from '../src/install/receipt.ts';
@@ -540,22 +541,14 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       summary: { bytes: 15, stores: 1 },
     });
 
-    const human: string[] = [];
-    const humanCode = await runCli(
-      ['doctor'],
-      { stdout: { write: (chunk: string) => human.push(chunk) } },
-      { runDoctor: async () => report },
-    );
+    const human = captureCliTerminal();
+    const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
     expect(humanCode).toBe(0);
-    expect(human.join('')).toContain('durable state: 1 store, 15 B');
+    expect(human.stdout()).toContain('durable state: 1 store, 15 B');
 
-    const json: string[] = [];
-    await runCli(
-      ['doctor', '--json'],
-      { stdout: { write: (chunk: string) => json.push(chunk) } },
-      { runDoctor: async () => report },
-    );
-    expect(JSON.parse(json.join('')).hosts[0].inventory.findings[0].durableState).toMatchObject({
+    const json = captureCliTerminal();
+    await runCli(['doctor', '--json'], json.output, { runDoctor: async () => report });
+    expect(JSON.parse(json.stdout()).hosts[0].inventory.findings[0].durableState).toMatchObject({
       findings: [{ bytes: 15, file: store }],
       summary: { bytes: 15, stores: 1 },
     });
@@ -2571,7 +2564,7 @@ const cliReport = (
 });
 
 it('prints human Doctor output and exits zero for warnings', async () => {
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const report = cliReport([{
     code: 'AB7314',
     message: 'Stale endpoint.',
@@ -2584,20 +2577,16 @@ it('prints human Doctor output and exits zero for warnings', async () => {
     probe: Object.freeze({ evidence: 'directory', status: 'available' }),
     receipts: Object.freeze([]),
   }]);
-  const code = await runCli(
-    ['doctor'],
-    { stdout: { write: (chunk: string) => stdout.push(chunk) } },
-    { runDoctor: async () => report },
-  );
+  const code = await runCli(['doctor'], terminal.output, { runDoctor: async () => report });
   expect(code).toBe(0);
-  expect(stdout.join('')).toContain('cursor: available (directory)');
-  expect(stdout.join('')).toContain('AB7314: Stale endpoint.');
-  expect(stdout.join('')).toContain('Recovery: Remove it manually.');
-  expect(stdout.join('')).toContain('Doctor summary: 0 error(s), 1 warning(s), 0 info(s)');
+  expect(terminal.stdout()).toContain('cursor: available (directory)');
+  expect(terminal.stdout()).toContain('AB7314: Stale endpoint.');
+  expect(terminal.stdout()).toContain('Recovery: Remove it manually.');
+  expect(terminal.stdout()).toContain('Doctor summary: 0 error(s), 1 warning(s), 0 info(s)');
 });
 
 it('prints one stable JSON report, forwards filters, and gates only errors', async () => {
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   const report = cliReport([{
     code: 'AB7301',
@@ -2607,7 +2596,7 @@ it('prints one stable JSON report, forwards filters, and gates only errors', asy
   }]);
   const code = await runCli(
     ['doctor', '--host', 'claude', '--host', 'cursor', '--from', '/bundle', '--json'],
-    { stdout: { write: (chunk: string) => stdout.push(chunk) } },
+    terminal.output,
     {
       runDoctor: async (options) => {
         calls.push(options);
@@ -2617,18 +2606,15 @@ it('prints one stable JSON report, forwards filters, and gates only errors', asy
   );
   expect(code).toBe(1);
   expect(calls).toEqual([{ from: '/bundle', hosts: ['claude', 'cursor'] }]);
-  expect(JSON.parse(stdout.join(''))).toEqual(report);
-  expect(stdout.join('').trim()).toBe(JSON.stringify(JSON.parse(stdout.join(''))));
+  expect(JSON.parse(terminal.stdout())).toEqual(report);
+  expect(terminal.stdout().trim()).toBe(JSON.stringify(JSON.parse(terminal.stdout())));
 });
 
 it('rejects an invalid Doctor host as a usage error', async () => {
-  const stderr: string[] = [];
-  const code = await runCli(
-    ['doctor', '--host', 'portable'],
-    { stderr: { write: (chunk: string) => stderr.push(chunk) } },
-  );
+  const terminal = captureCliTerminal();
+  const code = await runCli(['doctor', '--host', 'portable'], terminal.output);
   expect(code).toBe(2);
-  expect(stderr.join('')).toContain('Doctor host must be claude, codex, or cursor.');
+  expect(terminal.stderr()).toContain('Doctor host must be claude, codex, or cursor.');
 });
 
 const writeHookedCursorPlugin = async (pluginRoot: string, version = '1.2.3'): Promise<void> => {

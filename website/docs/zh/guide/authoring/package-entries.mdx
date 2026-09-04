@@ -103,6 +103,20 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 | `2` | 用法或输入失败。 |
 | `130` / `143` | SIGINT / SIGTERM，它们同时会抵达路由的 `AbortSignal`。 |
 
+当 `inputSchema` 拒绝解析后的 argv 时，shell 会用 CLI 的措辞逐条说明问题，而不是打印原始的 schema issue
+JSON：按用户输入的形式指出参数（`--max-files`、`<root>`，或投影 MCP 命令的 `--input.<path>`）、期望值与
+实际收到的值，每个问题一行，随后是该命令的准确用法行与 `--help` 提示——全部写到 stderr，退出码为 `2`：
+
+```text
+Invalid value for --max-files: expected number <= 55000; received 300000.
+Usage: curator doctor [options] <root>
+Run 'curator doctor --help' for usage.
+```
+
+在 `--json` 下 stdout 保持为空，stderr 只输出一行规范化的
+`{"error":{"code":"CLI_INPUT_INVALID","issues":[...],"usage":"..."}}`；在 `--ndjson` 下，事件流中只包含一个
+携带相同 `error` 对象的 `type: "error"` 事件。
+
 `.tsx` 命令路由把默认函数换成一个具有相同 props 的 async 默认 Server Component，并通过运行时分发器
 针对同级的 `dist/bin/<plugin-name>-flight.mjs` worker 渲染。它由此获得
 [脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
