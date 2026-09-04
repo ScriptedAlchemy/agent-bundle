@@ -38,6 +38,16 @@ export interface LineageObservation {
 }
 
 export interface LineageToolCallQuery {
+  /**
+   * The raw `tools/call` arguments, exactly as the client sent them. Without a
+   * conversation id in `_meta` (Cursor sends only `progressToken`, #424) they
+   * are the one payload fact shared with the pre-tool hook's `tool_input`, and
+   * narrow the open windows when several conversations have the same tool open
+   * at once. Omit the property (rather than passing `undefined`) when the raw
+   * arguments are unknown: an absent call argument is `undefined` and digests
+   * like `{}`, an absent property disables the narrowing.
+   */
+  readonly arguments?: unknown;
   readonly host: LineageHost | undefined;
   /** The MCP request `_meta`, when the transport supplied one. */
   readonly meta?: Readonly<Record<string, unknown>> | undefined;
@@ -67,6 +77,18 @@ export interface CreateAgentLineageRegistryOptions {
 const nativeString = (native: Readonly<Record<string, unknown>>, key: string): string | undefined => {
   const value = native[key];
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+};
+
+/**
+ * Digest of a tool's arguments as the hosts deliver them: the hook's
+ * `tool_input` object and the MCP `arguments` object are the same value, so
+ * `undefined` and `{}` digest alike (both mean "no arguments"). Non-object
+ * values never match anything.
+ */
+const inputDigest = (input: unknown): string | undefined => {
+  const value = input === undefined ? {} : input;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex').slice(0, 16);
 };
 
 /**
@@ -499,9 +521,11 @@ export const createAgentLineageRegistry = (
     const carrierNode = carrier.conversation === undefined ? undefined : nodeFor(carrier.conversation);
     if (carrier.conversation !== undefined && carrierNode !== undefined && toolCallId !== undefined && toolName !== undefined) {
       if (event === 'tool/before') {
+        const digest = inputDigest(native['tool_input']);
         await dispatch('toolCallOpened', {
           conversation: carrier.conversation,
           ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
+          ...(digest === undefined ? {} : { inputDigest: digest }),
           openedAt: observedAt,
           root: carrierNode.root,
           ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
@@ -541,6 +565,7 @@ export const createAgentLineageRegistry = (
         }
       }
       const { host, meta, toolName } = query;
+      const argumentsDigest = Object.hasOwn(query, 'arguments') ? inputDigest(query.arguments) : undefined;
       if (host === undefined) return unavailable('id-not-resolvable');
       if (host === 'codex') {
         const turn = meta?.['x-codex-turn-metadata'];
@@ -588,13 +613,22 @@ export const createAgentLineageRegistry = (
         // The open pre-tool hooks naming this tool: `MCP:<tool>` on Cursor,
         // `mcp__<server>__<tool>` on Codex, `mcp__plugin_<p>_<s>__<tool>` on
         // Claude. Several from one conversation share a lineage; several from
-        // different conversations cannot be told apart without `_meta`.
+        // different conversations are told apart only by the arguments the
+        // hook recorded — identical arguments stay ambiguous, never guessed,
+        // and a window opened before digests were recorded (or from a hook
+        // whose `tool_input` was not an object) could own any call, so it is
+        // never excluded.
         const matches = state.openCalls.filter((candidate) =>
           candidate.toolName === `MCP:${toolName}`
           || candidate.toolName.endsWith(`__${toolName}`)
           || candidate.toolName === toolName);
-        if (new Set(matches.map((candidate) => candidate.conversation)).size > 1) return unavailable('id-not-resolvable');
-        call = matches[matches.length - 1];
+        const conversations = (candidates: readonly OpenToolCall[]): number => new Set(candidates.map((candidate) => candidate.conversation)).size;
+        let narrowed = matches;
+        if (conversations(matches) > 1 && argumentsDigest !== undefined) {
+          narrowed = matches.filter((candidate) => candidate.inputDigest === undefined || candidate.inputDigest === argumentsDigest);
+        }
+        if (conversations(narrowed) > 1) return unavailable('id-not-resolvable');
+        call = narrowed[narrowed.length - 1];
       }
       if (call === undefined) return unavailable('id-not-resolvable');
       const node = nodeFor(call.conversation);

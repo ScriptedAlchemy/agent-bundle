@@ -344,7 +344,10 @@
     },
     "mcp-correlation": {
       "state": "degraded",
-      "reason": "2026-09-03: tools/call _meta carries only progressToken and the client name is cursor-vscode (#424); the generated server resolves the caller through the open preToolUse whose tool_name is MCP:<tool>, and refuses when open windows for that tool span several conversations."
+      "reason": "2026-09-03: tools/call _meta carries only progressToken and the client name is cursor-vscode (#424); the generated server resolves the caller through the open preToolUse whose tool_name is MCP:<tool>. When open windows for that tool span several conversations it narrows by the arguments: the preToolUse tool_input is the call's arguments verbatim (fixtures/host-lineage/cursor-3.18.25.ndjson rows 44/45, 53/54: MCP:probe {\"note\":\"subagent\"} / {\"note\":\"nested\"} arrived at the server as exactly those arguments), so a concurrent call with different arguments resolves (resolution: inferred, provenance derived) and identical arguments stay id-not-resolvable — never a guess by name.",
+      "evidence": [
+        "2026-09-03 live capture on Cursor 3.18.25 (fixtures/host-lineage/cursor-3.18.25.ndjson): preToolUse MCP:probe tool_input {\"note\":\"subagent\"} (row 44) preceded a tools/call whose server-side record shows note: \"subagent\" and _meta { progressToken } only (row 45); the nested conversation repeated the pattern with {\"note\":\"nested\"} (rows 53/54)."
+      ]
     },
     "cloud": {
       "state": "unavailable",

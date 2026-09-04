@@ -585,6 +585,66 @@ describe('lineage registry ambiguity refusals (review round 4)', () => {
     await observe('tool/after', 'mb-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_output: '{}', tool_use_id: 'mb' });
     expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
   });
+
+  it('Cursor 3.18.25: concurrent MCP:<tool> windows in several conversations are told apart by the arguments the pre-tool hook recorded (#424)', async () => {
+    // fixtures/host-lineage/cursor-3.18.25.ndjson rows 44/45 and 53/54: preToolUse `MCP:probe` carries
+    // tool_input {"note":"subagent"} / {"note":"nested"}, and the server received exactly those arguments
+    // while `_meta` carried only progressToken. Two conversations with the tool open at once are
+    // resolvable when their arguments differ, and stay refused when they do not.
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('tool/before', 'pa', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: { note: 'subagent' }, tool_name: 'MCP:probe', tool_use_id: 'pa' });
+    await observe('tool/before', 'pb', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: { note: 'nested' }, tool_name: 'MCP:probe', tool_use_id: 'pb' });
+
+    // Without arguments the two windows are indistinguishable, exactly as before.
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'probe' })).toEqual(unavailable('id-not-resolvable'));
+    // The arguments pick the window whose hook recorded them; key order does not matter, the digest is canonical.
+    expect(await registry.resolveToolCall({ arguments: { note: 'nested' }, host: 'cursor', toolName: 'probe' })).toMatchObject({
+      source: 'derived',
+      value: { conversation: 'root-b', depth: 0, resolution: 'inferred' },
+    });
+    expect(await registry.resolveToolCall({ arguments: { note: 'subagent' }, host: 'cursor', toolName: 'probe' })).toMatchObject({
+      value: { conversation: 'root-a' },
+    });
+    // Arguments no open window recorded resolve nothing: never a guess by name.
+    expect(await registry.resolveToolCall({ arguments: { note: 'other' }, host: 'cursor', toolName: 'probe' })).toEqual(unavailable('id-not-resolvable'));
+
+    // Identical arguments in both conversations stay ambiguous.
+    await observe('tool/before', 'da', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'da' });
+    await observe('tool/before', 'db', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_use_id: 'db' });
+    expect(await registry.resolveToolCall({ arguments: {}, host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+    expect(await registry.resolveToolCall({ host: 'cursor', toolName: 'dump' })).toEqual(unavailable('id-not-resolvable'));
+
+    // A single open conversation never needs the arguments to agree: `undefined` and `{}` are the same
+    // "no arguments", and a mismatch cannot make a lone window ambiguous.
+    await observe('tool/after', 'db-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: {}, tool_name: 'MCP:dump', tool_output: '{}', tool_use_id: 'db' });
+    expect(await registry.resolveToolCall({ arguments: undefined, host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
+    expect(await registry.resolveToolCall({ arguments: { limit: 10 }, host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
+    expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'pa')?.inputDigest).toBeDefined();
+  });
+
+  it('keeps a window without a recorded digest in contention, so an upgraded journal never attributes by elimination', async () => {
+    // A durable registry upgraded mid-session still holds pre-upgrade windows with no
+    // inputDigest (the field is optional for v1 journals). Such a window could own any
+    // call for its tool, so it is never filtered out: with a digested competitor in
+    // another conversation the call stays id-not-resolvable.
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
+    // A pre-upgrade window: the hook carried no object tool_input, so no digest was recorded.
+    await observe('tool/before', 'legacy', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: 'opaque', tool_name: 'MCP:probe', tool_use_id: 'legacy' });
+    expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'legacy')?.inputDigest).toBeUndefined();
+    await observe('tool/before', 'pb', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: { note: 'nested' }, tool_name: 'MCP:probe', tool_use_id: 'pb' });
+    expect(await registry.resolveToolCall({ arguments: { note: 'nested' }, host: 'cursor', toolName: 'probe' })).toEqual(unavailable('id-not-resolvable'));
+    // Once the digested competitor closes, the legacy window resolves alone, whatever the arguments.
+    await observe('tool/after', 'pb-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: { note: 'nested' }, tool_name: 'MCP:probe', tool_output: '{}', tool_use_id: 'pb' });
+    expect(await registry.resolveToolCall({ arguments: { note: 'nested' }, host: 'cursor', toolName: 'probe' })).toMatchObject({ value: { conversation: 'root-a' } });
+  });
 });
 
 describe('lineage registry retirement and cohorts (review round 5)', () => {

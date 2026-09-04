@@ -16,7 +16,7 @@
  */
 import { Worker } from 'node:worker_threads';
 
-import { McpServer, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import { McpServer, ProtocolError, ProtocolErrorCode, isJSONRPCRequest, type Transport } from '@modelcontextprotocol/server';
 import {
   AgentRuntimeError,
   agent,
@@ -83,6 +83,8 @@ export interface GeneratedRouteRequestContext {
   readonly mcpReq: {
     /** Request `_meta`: the progress token plus host-specific correlation keys (`claudecode/toolUseId`, `x-codex-turn-metadata`). */
     readonly _meta?: { readonly progressToken?: McpProgressToken } & Readonly<Record<string, unknown>>;
+    /** The JSON-RPC request id, the key the raw `tools/call` arguments were captured under. */
+    readonly id?: number | string;
     readonly notify?: (notification: {
       readonly method: 'notifications/progress';
       readonly params: McpProgressNotificationParams;
@@ -108,22 +110,79 @@ interface GeneratedRouteIdentity {
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
+/** A captured `tools/call` `params.arguments` value; `value` is `undefined` when the call carried none. */
+export interface RawToolArguments {
+  readonly value: unknown;
+}
+
+/** Raw `tools/call` arguments by request, consumed once by the tool callback that serves the request. */
+export interface RawToolArgumentsCapture {
+  take(requestId: number | string | undefined): RawToolArguments | undefined;
+}
+
+const requestKey = (requestId: number | string): string => `${typeof requestId}:${String(requestId)}`;
+/** Calls that never reach a registered tool (unknown tool, rejected params) are forgotten past this many. */
+const RAW_ARGUMENTS_RETENTION = 1024;
+
+/**
+ * Captures every `tools/call`'s arguments off the wire, before the SDK parses
+ * them against the route's input schema. Lineage correlates a Cursor call with
+ * its pre-tool hook by those raw arguments (the hook's `tool_input`); schema
+ * defaults would make two different calls look alike, so the parsed input is
+ * never what is compared. The capture wraps the transport's `onmessage` the
+ * moment the server connects and keeps one entry per request id until the
+ * tool callback takes it.
+ */
+const captureRawToolArguments = (server: McpServer): RawToolArgumentsCapture => {
+  const captured = new Map<string, RawToolArguments>();
+  const connect = server.connect.bind(server);
+  server.connect = async (transport: Transport): Promise<void> => {
+    await connect(transport);
+    const inner = transport.onmessage;
+    transport.onmessage = (message, extra) => {
+      if (isJSONRPCRequest(message) && message.method === 'tools/call') {
+        const params = message.params;
+        const value = params !== undefined && typeof params === 'object' && params !== null && !Array.isArray(params)
+          ? (params as { readonly arguments?: unknown }).arguments
+          : undefined;
+        captured.set(requestKey(message.id), Object.freeze({ value }));
+        if (captured.size > RAW_ARGUMENTS_RETENTION) captured.delete(captured.keys().next().value!);
+      }
+      inner?.(message, extra);
+    };
+  };
+  return Object.freeze({
+    take(requestId: number | string | undefined): RawToolArguments | undefined {
+      if (requestId === undefined) return undefined;
+      const key = requestKey(requestId);
+      const raw = captured.get(key);
+      captured.delete(key);
+      return raw;
+    },
+  });
+};
+
 /**
  * Lineage for one MCP tool call: Codex names it in `_meta`, Claude names the
  * pre-tool hook's `tool_use_id` in `_meta`, Cursor names nothing — so the
- * registry falls back to the open `MCP:<tool>` pre-tool hook. Without a
- * registry (a project with no event routes, or the in-memory proof level) the
- * axis is honestly absent.
+ * registry falls back to the open `MCP:<tool>` pre-tool hook, told apart from
+ * a concurrent call in another conversation by the raw arguments the hook
+ * recorded. A call whose raw arguments were not captured (a transport the
+ * server did not connect itself) is correlated by tool name alone, never by
+ * its schema-parsed input. Without a registry (a project with no event
+ * routes, or the in-memory proof level) the axis is honestly absent.
  */
 const toolCallLineage = async (
   registry: AgentLineageRegistry | undefined,
   context: GeneratedRouteRequestContext,
   toolName: string,
+  rawArguments: RawToolArguments | undefined,
   clientName: string | undefined,
   fallbackHost: LineageHost | undefined,
 ): Promise<Observed<AgentLineage>> => {
   if (registry === undefined) return unavailable<AgentLineage>('not-provided');
   return registry.resolveToolCall({
+    ...(rawArguments === undefined ? {} : { arguments: rawArguments.value }),
     host: lineageHostFromClient(clientName) ?? fallbackHost,
     meta: context.mcpReq._meta,
     toolName,
@@ -287,6 +346,8 @@ export interface RegisterGeneratedRoutesOptions {
   readonly lineage?: AgentLineageRegistry;
   /** The artifact's host, used when the negotiated client name maps to none. */
   readonly lineageHost?: LineageHost;
+  /** Raw `tools/call` arguments captured off the wire, for lineage correlation. */
+  readonly rawArguments?: RawToolArgumentsCapture;
 }
 
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
@@ -307,13 +368,14 @@ export const registerGeneratedRoutes = (
           ...(outputSchema === undefined ? {} : { outputSchema }),
         } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
+          const rawArguments = options.rawArguments?.take(context.mcpReq.id);
           const rendered = await renderGeneratedRoute(
             dispatcher,
             artifactEpoch,
             route,
             input,
             context,
-            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, clientName, options.lineageHost) },
+            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, rawArguments, clientName, options.lineageHost) },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);
@@ -870,7 +932,7 @@ export const createGeneratedRouteMcpServer = async (
     : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage);
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
     ...(afterRender === undefined ? {} : { afterRender }),
-    ...(options.lineage === undefined ? {} : { lineage: options.lineage }),
+    ...(options.lineage === undefined ? {} : { lineage: options.lineage, rawArguments: captureRawToolArguments(server) }),
     ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
       ? {}
       : { lineageHost: lineageHostFor(options.events.target) }),
