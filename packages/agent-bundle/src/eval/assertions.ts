@@ -1,3 +1,5 @@
+import type { RegisteredMcpRouteName, RegisteredMcpServerName } from '@agent-bundle/runtime';
+
 import { digest } from '../core/digest.ts';
 import { EvalDefinitionError } from './errors.ts';
 import { claudeSemanticGraderId } from './graders.ts';
@@ -18,15 +20,36 @@ export interface EvalEvidenceOptions {
   readonly minimumEvidence?: ActivationEvidence;
 }
 
-export interface ExpectMcpCallOptions extends EvalEvidenceOptions {
+/**
+ * The constraint an MCP-call assertion's `tool` must satisfy for `Server`.
+ * Once the generated `.agent-bundle/routes.d.ts` registers the project's
+ * routes and `server` is a literal naming one of the project's own compiled
+ * MCP servers, a literal `tool` must be one of that server's registered tool
+ * names (`find` for `tool:curator/find`) — a typo is rejected naming the
+ * alternatives. A server outside the registration (an assertion about a
+ * third-party MCP server the host also exposes), a value typed `string`, or an
+ * unregistered project keeps `string`, exactly as before. The `& string`
+ * reduces the alias instantiation to a literal union so a rejection lists the
+ * server's tool names.
+ */
+export type EvalMcpToolConstraint<Server extends string, Tool> = Server extends RegisteredMcpServerName
+  ? string extends Tool ? string : RegisteredMcpRouteName<'tool', Server> & string
+  : string;
+
+/**
+ * `server` is the MCP server name as the host trace records it and `tool` the
+ * wire tool name; both are inferred from literals so `tool` checks against the
+ * project's registered tools of that server (see {@link EvalMcpToolConstraint}).
+ */
+export interface ExpectMcpCallOptions<Server extends string = string, Tool extends string = string> extends EvalEvidenceOptions {
   readonly atLeast?: number;
-  readonly server: string;
-  readonly tool: string;
+  readonly server: Server;
+  readonly tool: (Tool & EvalMcpToolConstraint<Server, Tool>) | EvalMcpToolConstraint<Server, Tool>;
 }
 
-export interface ExpectNoMcpCallOptions extends EvalEvidenceOptions {
-  readonly server: string;
-  readonly tool?: string;
+export interface ExpectNoMcpCallOptions<Server extends string = string, Tool extends string = string> extends EvalEvidenceOptions {
+  readonly server: Server;
+  readonly tool?: (Tool & EvalMcpToolConstraint<Server, Tool>) | EvalMcpToolConstraint<Server, Tool>;
 }
 
 export interface ExpectOutcomeOptions extends EvalEvidenceOptions {
@@ -95,7 +118,9 @@ export const expectExitCode = (
   return Object.freeze({ ...expectation, id: assertionId(expectation.kind, expectation) });
 };
 
-export const expectMcpCall = (options: ExpectMcpCallOptions): EvalMcpCallAssertion => {
+export const expectMcpCall = <Server extends string, Tool extends string>(
+  options: ExpectMcpCallOptions<Server, Tool>,
+): EvalMcpCallAssertion => {
   const expectation = {
     atLeast: requireCount(options.atLeast ?? 1, 'Expected MCP call count', 1),
     kind: 'mcp-call' as const,
@@ -106,7 +131,9 @@ export const expectMcpCall = (options: ExpectMcpCallOptions): EvalMcpCallAsserti
   return Object.freeze({ ...expectation, id: assertionId(expectation.kind, expectation) });
 };
 
-export const expectNoMcpCall = (options: ExpectNoMcpCallOptions): EvalNoMcpCallAssertion => {
+export const expectNoMcpCall = <Server extends string, Tool extends string>(
+  options: ExpectNoMcpCallOptions<Server, Tool>,
+): EvalNoMcpCallAssertion => {
   const expectation = {
     kind: 'no-mcp-call' as const,
     minimumEvidence: requireMinimumEvidence(options.minimumEvidence, 'observed'),

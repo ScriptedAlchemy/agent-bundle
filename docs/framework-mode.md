@@ -180,6 +180,24 @@ lookups, a directly imported module target is unaffected, and a project that
 excludes the generated declarations (or has not built yet) sees the
 unregistered types — any string, `unknown` input, `unknown` result.
 
+That one registration is read by every public surface that takes or yields a
+route id or route payload, the way TanStack Router's `Register` reaches `Link
+to`, `useNavigate`, and `RoutesByPath`: `invokeMcpTool` and `getMcpPrompt`
+check their wire name against the registered tool/prompt names (the last
+segment of a `tool:`/`prompt:` id) — of the literal `server` when one is
+passed, since the session mounts only that server's routes — and type
+`input` from that route;
+`runContractMatrix` and the packed, dev-epoch, and installed-host matrices type
+the inputs of each registered `fixtures` key (an App route key stays untyped —
+Apps register no contract); `invokeCli` reports `routeId` as a registered id;
+and `agent-bundle/eval`'s `expectMcpCall`/`expectNoMcpCall` check a literal
+`tool` against the registered tools of a literal project `server`.
+`RegisteredMcpServerName`, `RegisteredMcpRouteName`, and `RegisteredMcpRouteId`
+expose the server and protocol names an id encodes. `readMcpResource` (a wire
+URI), `runScript` (no registered contract), the wire `structuredContent`
+(object-valued documents only), and `agent-bundle/api` (an arbitrary project
+`root`) stay `string`/`unknown` on purpose.
+
 ### What reaches the MCP wire
 
 The final Agent Document of a tool route lowers to one `CallToolResult`:

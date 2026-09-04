@@ -20,7 +20,14 @@ import type {
   AgentStateDriver,
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
-import type { LineageHost } from '@agent-bundle/runtime';
+import type {
+  LineageHost,
+  RegisteredMcpRouteId,
+  RegisteredMcpRouteKind,
+  RegisteredMcpRouteName,
+  RegisteredMcpServerName,
+  RegisteredRouteInput,
+} from '@agent-bundle/runtime';
 import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 import type { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';
 import type { ReactNode } from 'react';
@@ -115,9 +122,64 @@ export interface InMemoryMcpSession extends AsyncDisposable {
   readonly provenance: McpProjectionProvenance;
 }
 
-export type McpInvocationOptions = InMemoryMcpSessionOptions & {
-  readonly input?: unknown;
+/**
+ * The constraint a `server` option must satisfy: once the project's routes
+ * are registered, a literal must name a compiled server (`curator` for
+ * `tool:curator/find`; a typo is rejected naming the alternatives), while a
+ * value typed `string` stays legal. `string` for an unregistered project.
+ */
+export type McpServerConstraint<Server> = string extends Server ? string : RegisteredMcpServerName & string;
+
+/**
+ * The server the wire helpers look a name up on: a registered literal narrows
+ * the lookup to that server's routes; `string` (omitted or dynamic) and an
+ * unregistered literal — already rejected by {@link McpServerConstraint} —
+ * match every compiled server, so the one error lands on `server`.
+ */
+export type McpRouteServer<Server extends string> = Server extends RegisteredMcpServerName ? Server : string;
+
+/**
+ * Options of one wire invocation. `Input` is the payload the generated server
+ * hands the route: `invokeMcpTool` and `getMcpPrompt` bind it to the route's
+ * registered input ({@link McpRouteInput}) when the name is a literal, and
+ * it stays `unknown` — the previous shape — for a dynamic name or an
+ * unregistered project. `Server` is the literal `server` option, when given;
+ * it selects which server's route the name resolves to.
+ */
+export type McpInvocationOptions<Input = unknown, Server extends string = string> = InMemoryMcpSessionOptions & {
+  readonly input?: Input;
+  readonly server?: (Server & McpServerConstraint<Server>) | McpServerConstraint<Server>;
 };
+
+/**
+ * The constraint one protocol name must satisfy — `RouteTargetConstraint` for
+ * the wire helpers. Once the generated `.agent-bundle/routes.d.ts` registers
+ * the project's routes, a string literal must be the protocol name of a
+ * registered `Kind` route on `Server` (`find` for `tool:curator/find`; the
+ * editor completes them and a typo is rejected naming the alternatives) —
+ * on any compiled server when `server` is omitted or dynamic — while a value
+ * typed `string` stays legal for dynamic lookups. Without a registration
+ * `RegisteredMcpRouteName` is `string`, so every name is legal, as before.
+ *
+ * The `& string` is not a widening: it makes the compiler reduce the alias
+ * instantiation to a fresh literal union, so a rejection lists the registered
+ * names rather than printing `RegisteredMcpRouteName<"tool">`.
+ */
+export type McpRouteNameConstraint<Name, Kind extends RegisteredMcpRouteKind, Server extends string = string> =
+  string extends Name ? string : RegisteredMcpRouteName<Kind, McpRouteServer<Server>> & string;
+
+/**
+ * The registered input of the `Kind` route named `Name` on `Server` — on any
+ * compiled server when `Server` is `string`, a union when two of them register
+ * the same name; `unknown` for a dynamic name or an unregistered project.
+ */
+export type McpRouteInput<
+  Name extends string,
+  Kind extends RegisteredMcpRouteKind,
+  Server extends string = string,
+> = Name extends RegisteredMcpRouteName<Kind, McpRouteServer<Server>>
+  ? RegisteredRouteInput<RegisteredMcpRouteId<Kind, McpRouteServer<Server>, Name>>
+  : unknown;
 
 const serverRoutes = (
   manifest: AgentBundleTestManifest,
@@ -524,10 +586,19 @@ const asContentBlocks = (value: unknown): readonly McpContentBlock[] =>
 /**
  * Calls one compiled tool through the real protocol and returns the projected
  * result. `mcp-in-memory` level: protocol contract proof, not process proof.
+ *
+ * `tool` is the wire name (`find` for the route `tool:curator/find`). Once
+ * the project's routes are registered, a literal is checked against the
+ * compiled tool names — of the literal `server` when one is passed, since
+ * the session mounts only that server's routes — and `input` is typed from
+ * that route's `inputSchema` (see {@link McpRouteNameConstraint}). The
+ * projected `structuredContent` stays `unknown`: the wire carries it only for
+ * object-valued documents, so the route's `resultSchema` output is not what
+ * every call yields.
  */
-export const invokeMcpTool = async (
-  tool: string,
-  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions>
+export const invokeMcpTool = async <Name extends string, Server extends string = string>(
+  tool: (Name & McpRouteNameConstraint<Name, 'tool', Server>) | McpRouteNameConstraint<Name, 'tool', Server>,
+  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions<McpRouteInput<Name, 'tool', Server>, Server>>
 ): Promise<McpToolInvocation> => withSession(options, async (session) => {
   const result = await session.client.callTool({
     arguments: (options.input ?? {}) as Record<string, unknown>,
@@ -564,10 +635,16 @@ export interface McpPromptResult {
   readonly provenance: McpProjectionProvenance;
 }
 
-/** Gets one compiled prompt route through the real protocol. */
-export const getMcpPrompt = async (
-  prompt: string,
-  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions>
+/**
+ * Gets one compiled prompt route through the real protocol. `prompt` is the
+ * wire name (`brief` for `prompt:curator/brief`); once registered, a literal
+ * is checked against the compiled prompt names (of the literal `server`, when
+ * passed) and `input` is typed from that route's `inputSchema`, exactly as
+ * {@link invokeMcpTool} types a tool.
+ */
+export const getMcpPrompt = async <Name extends string, Server extends string = string>(
+  prompt: (Name & McpRouteNameConstraint<Name, 'prompt', Server>) | McpRouteNameConstraint<Name, 'prompt', Server>,
+  ...[options = {}]: HarnessOptionsArguments<McpInvocationOptions<McpRouteInput<Name, 'prompt', Server>, Server>>
 ): Promise<McpPromptResult> => withSession(options, async (session) => {
   const result = await session.client.getPrompt({
     arguments: (options.input ?? {}) as Record<string, string>,

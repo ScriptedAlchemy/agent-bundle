@@ -197,10 +197,21 @@ export interface AgentProviderValues {
  * `resultSchema`, and for an event route its `{ canonical, native }` payload
  * with an `undefined` result — in the same `declare module
  * '@agent-bundle/runtime'` block that declares
- * provider keys on {@link AgentProviderValues}. Route-aware types such as
- * {@link RegisteredRouteId} read through it and degrade to their unregistered
- * shape (`string`, `unknown`) when the file is absent or excluded from the
- * program, so nothing here is required for a project to type-check.
+ * provider keys on {@link AgentProviderValues}.
+ *
+ * Every route-aware public type reads through this one registration, the way
+ * TanStack's `RegisteredRouter` reaches `Link to`, `useNavigate`, and
+ * `RoutesByPath`: {@link RegisteredRouteId}, {@link RegisteredRouteInput}, and
+ * {@link RegisteredRouteResult} for a route id; {@link RegisteredMcpServerName},
+ * {@link RegisteredMcpRouteName}, and {@link RegisteredMcpRouteId} for the MCP
+ * server and protocol names a registered `tool:`/`prompt:`/`resource:` id
+ * encodes. `agent-bundle/test` types `renderRoute`, `renderRouteEvents`,
+ * `invokeMcpTool`, `getMcpPrompt`, the contract-matrix `fixtures`, and
+ * `invokeCli`'s reported `routeId` from them, and `agent-bundle/eval` types
+ * `expectMcpCall`/`expectNoMcpCall`'s `tool` from them. All of them degrade to
+ * their unregistered shape (`string`, `unknown`) when the file is absent or
+ * excluded from the program, so nothing here is required for a project to
+ * type-check.
  */
 // rslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration-merge extension point
 export interface Register {}
@@ -228,6 +239,42 @@ export type RegisteredRouteInput<Id extends string> = Id extends keyof Registere
 export type RegisteredRouteResult<Id extends string> = Id extends keyof RegisteredRoutes
   ? RegisteredRoutes[Id] extends RegisteredRouteContract ? RegisteredRoutes[Id]['result'] : unknown
   : unknown;
+
+/** The route kinds whose ids encode an MCP server and protocol name: `<kind>:<server>/<name>`. */
+export type RegisteredMcpRouteKind = 'prompt' | 'resource' | 'tool';
+
+/**
+ * The registered MCP route ids of `Kind` on `Server` whose protocol name is
+ * `Name` (`tool:curator/find` for `<'tool', 'curator', 'find'>`; the `string`
+ * defaults match every server or name), after TanStack Router's
+ * `RoutesByPath`. `string` when no project has registered.
+ */
+export type RegisteredMcpRouteId<
+  Kind extends RegisteredMcpRouteKind = RegisteredMcpRouteKind,
+  Server extends string = string,
+  Name extends string = string,
+> = unknown extends RegisteredRoutes ? string : Extract<RegisteredRouteId, `${Kind}:${Server}/${Name}`>;
+
+/** Distributes over a route-id union so each member yields its own server segment. */
+type McpServerSegment<Id> = Id extends `${RegisteredMcpRouteKind}:${infer Server}/${string}` ? Server : never;
+
+/** The MCP server names the registered routes belong to (`curator` for `tool:curator/find`); `string` when no project has registered. */
+export type RegisteredMcpServerName = unknown extends RegisteredRoutes ? string : McpServerSegment<RegisteredRouteId>;
+
+/** Distributes over a route-id union so each member yields its own protocol name. */
+type McpNameSegment<Id, Kind extends RegisteredMcpRouteKind, Server extends string> =
+  Id extends `${Kind}:${Server}/${infer Name}` ? Name : never;
+
+/**
+ * The protocol names (the wire `tools/call` or `prompts/get` name) of the
+ * registered MCP routes of `Kind` on `Server`: `find | status` for the tool
+ * routes `tool:curator/find` and `tool:curator/status`. `string` when no
+ * project has registered.
+ */
+export type RegisteredMcpRouteName<
+  Kind extends RegisteredMcpRouteKind = RegisteredMcpRouteKind,
+  Server extends string = string,
+> = unknown extends RegisteredRoutes ? string : McpNameSegment<RegisteredRouteId, Kind, Server>;
 
 export interface AgentInvocation {
   readonly artifactEpoch?: string;

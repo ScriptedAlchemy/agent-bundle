@@ -522,6 +522,20 @@ name that surface for wrappers. A value typed `string`, a module target, or a
 program without the generated file sees the previous types — any id, `unknown`
 input and result.
 
+The registration flows to every harness surface that takes a route id or
+payload, not only `renderRoute`: `invokeMcpTool('find', { input })` and
+`getMcpPrompt` check the wire name against the registered tool/prompt names and
+type `input` from that route — of the literal `server`, when passed
+(`RegisteredMcpServerName`, `RegisteredMcpRouteName`,
+and `RegisteredMcpRouteId` name what a `tool:<server>/<name>` id encodes); the
+contract matrices type each registered key of `fixtures` while an MCP App key
+or a dynamic `Record<string, ContractRouteFixture>` stays legal; `invokeCli`
+reports `routeId` as a registered id (`argv` is untouched); and
+`agent-bundle/eval`'s `expectMcpCall` checks a literal `tool` against the
+registered tools of a literal project `server`. `readMcpResource` (a URI),
+`runScript` (scripts register no contract), and `structuredContent` (carried
+only for object-valued documents) deliberately stay untyped.
+
 Conventional request context providers (`src/providers/*`, see
 [entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
 are mounted automatically for every manifest-backed helper — `renderRoute`,

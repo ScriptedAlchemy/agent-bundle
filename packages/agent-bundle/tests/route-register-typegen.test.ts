@@ -49,14 +49,26 @@ const equalityHelpers = [
   'type Assert<Value extends true> = Value;',
 ];
 
+const registeredIds = [
+  'cli:report',
+  'event:tool/after',
+  'prompt:curator/brief',
+  'tool:curator/find',
+  'tool:curator/status',
+  'tool:shelf/find',
+] as const;
+
 /**
  * The generated declarations register the project's route contracts on
  * `@agent-bundle/runtime`'s `Register` (TanStack Router's registration
- * pattern), so `renderRoute` narrows its id, `input`, and `result` from the
+ * pattern), so every route-aware public surface — `renderRoute`, the wire
+ * helpers `invokeMcpTool`/`getMcpPrompt`, the contract-matrix `fixtures`,
+ * `invokeCli`'s reported `routeId`, and `agent-bundle/eval`'s
+ * `expectMcpCall` — narrows its id or name, `input`, and `result` from the
  * route modules' own schemas with no per-route declaration file — and the
  * same program without the generated file degrades to `string` / `unknown`.
  */
-it('types renderRoute ids, inputs, and results from the generated route registration', { timeout: 60_000 }, async () => {
+it('types every route-aware public surface from the generated route registration', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-register-'));
   roots.push(root);
   // The audiobook example's installed tree supplies the built agent-bundle, @agent-bundle/runtime, and zod.
@@ -90,6 +102,28 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       'export default async function Find() { return { hits: 1 }; }',
       '',
     ].join('\n')),
+    // A second server registering the same tool name: the wire helpers see the union of both inputs.
+    writeProjectFile(root, 'src/mcp/shelf/tools/find.ts', [
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({ isbn: z.string() }).strict();',
+      'export const resultSchema = z.object({ shelved: z.boolean() }).strict();',
+      'export default async function Find() { return { shelved: true }; }',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/curator/prompts/brief.ts', [
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({ topic: z.string() }).strict();',
+      "export const resultSchema = z.object({ messages: z.array(z.object({ content: z.object({ text: z.string(), type: z.literal('text') }).strict(), role: z.literal('user') }).strict()) }).strict();",
+      "export default async function Brief() { return { messages: [{ content: { text: 'brief', type: 'text' as const }, role: 'user' as const }] }; }",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/cli/report.ts', [
+      "import { z } from 'zod';",
+      'export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();',
+      'export const resultSchema = z.object({ lines: z.number() }).strict();',
+      'export default async function Report() { return { lines: 1 }; }',
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'src/events/tool/after.ts', [
       "import type { AgentEventRouteProps } from 'agent-bundle';",
       'export default async function ToolAfter(props: AgentEventRouteProps) { return props.canonical.event; }',
@@ -97,12 +131,33 @@ it('types renderRoute ids, inputs, and results from the generated route registra
     ].join('\n')),
     writeProjectFile(root, 'assertions.ts', [
       "import type { AgentEventCanonicalIdentity, AgentEventNativePayload } from 'agent-bundle';",
-      "import type { RegisteredRouteId, RegisteredRouteInput, RegisteredRouteResult } from '@agent-bundle/runtime';",
-      "import { renderRoute, renderRouteEvents } from 'agent-bundle/test';",
+      "import { expectMcpCall, expectNoMcpCall } from 'agent-bundle/eval';",
+      'import type {',
+      '  RegisteredMcpRouteId,',
+      '  RegisteredMcpRouteName,',
+      '  RegisteredMcpServerName,',
+      '  RegisteredRouteId,',
+      '  RegisteredRouteInput,',
+      '  RegisteredRouteResult,',
+      "} from '@agent-bundle/runtime';",
+      'import {',
+      '  getMcpPrompt,',
+      '  invokeCli,',
+      '  invokeMcpTool,',
+      '  renderRoute,',
+      '  renderRouteEvents,',
+      '  runContractMatrix,',
+      '  runPackedContractMatrix,',
+      '  type ContractRouteFixture,',
+      '  type ContractRouteFixtures,',
+      '  type McpRouteInput,',
+      '  type PackedMcpSession,',
+      '  type PackedContractMatrixOptions,',
+      "} from 'agent-bundle/test';",
       '',
       ...equalityHelpers,
       '',
-      "export type Ids = Assert<Equal<RegisteredRouteId, 'event:tool/after' | 'tool:curator/find' | 'tool:curator/status'>>;",
+      `export type Ids = Assert<Equal<RegisteredRouteId, ${registeredIds.map((id) => `'${id}'`).join(' | ')}>>;`,
       "export type FindInput = Assert<Equal<RegisteredRouteInput<'tool:curator/find'>, { query: string }>>;",
       "export type FindResult = Assert<Equal<RegisteredRouteResult<'tool:curator/find'>, { hits: number }>>;",
       "export type Unregistered = Assert<Equal<RegisteredRouteInput<'tool:curator/missing'>, unknown>>;",
@@ -112,6 +167,15 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       "export type EventCanonical = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['canonical'], AgentEventCanonicalIdentity>>;",
       "export type EventNative = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['native'], AgentEventNativePayload>>;",
       "export type EventResult = Assert<Equal<RegisteredRouteResult<'event:tool/after'>, undefined>>;",
+      '// The MCP server and protocol names a registered id encodes (TanStack\'s `RoutesByPath` shape).',
+      "export type Servers = Assert<Equal<RegisteredMcpServerName, 'curator' | 'shelf'>>;",
+      "export type ToolNames = Assert<Equal<RegisteredMcpRouteName<'tool'>, 'find' | 'status'>>;",
+      "export type ShelfToolNames = Assert<Equal<RegisteredMcpRouteName<'tool', 'shelf'>, 'find'>>;",
+      "export type PromptNames = Assert<Equal<RegisteredMcpRouteName<'prompt'>, 'brief'>>;",
+      "export type FindIds = Assert<Equal<RegisteredMcpRouteId<'tool', string, 'find'>, 'tool:curator/find' | 'tool:shelf/find'>>;",
+      "export type FindWireInput = Assert<Equal<McpRouteInput<'find', 'tool'>, { query: string } | { isbn: string }>>;",
+      "export type ShelfFindWireInput = Assert<Equal<McpRouteInput<'find', 'tool', 'shelf'>, { isbn: string }>>;",
+      "export type DynamicWireInput = Assert<Equal<McpRouteInput<string, 'tool'>, unknown>>;",
       '',
       'export const typed = async (canonical: AgentEventCanonicalIdentity, native: AgentEventNativePayload): Promise<void> => {',
       "  const found = await renderRoute('tool:curator/find', { input: { query: 'dune' } });",
@@ -126,8 +190,96 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       "  const dynamic: string = ['tool:curator/status'].join('');",
       '  const loose = await renderRoute(dynamic);',
       '  const anything: unknown = loose.result;',
-      '  void hits; void status; void none; void anything;',
+      '  // The wire helpers take the protocol name; `input` is the registered input of every route with that name,',
+      '  // or of the one route on a literal `server`.',
+      "  await invokeMcpTool('status');",
+      "  await invokeMcpTool('find', { input: { query: 'dune' } });",
+      "  await invokeMcpTool('find', { input: { query: 'dune' }, server: 'curator' });",
+      "  await invokeMcpTool('find', { input: { isbn: '9780441172719' }, server: 'shelf' });",
+      "  await invokeMcpTool('find', { input: { isbn: '9780441172719' }, server: dynamic });",
+      "  await invokeMcpTool(dynamic, { input: { anything: true }, server: dynamic });",
+      "  await getMcpPrompt('brief', { input: { topic: 'dune' } });",
+      "  await getMcpPrompt('brief', { input: { topic: 'dune' }, server: 'curator' });",
+      '  // A contract-matrix fixture map types each registered key\'s inputs; unregistered keys (MCP App routes) stay legal.',
+      '  const fixtures: ContractRouteFixtures = {',
+      "    'tool:curator/find': { cancellation: { input: { query: 'slow' } }, input: { query: 'dune' }, inputs: [{ query: 'arrakis' }], resultCompat: 'closed' },",
+      "    'tool:curator/status': { input: {}, resultCompat: 'closed' },",
+      "    'prompt:curator/brief': { input: { topic: 'dune' } },",
+      "    'app:curator/dashboard': { kind: 'resource' },",
+      '  };',
+      '  await runContractMatrix({ fixtures });',
+      '  // A record built dynamically stays legal with unknown inputs.',
+      '  const dynamicFixtures: Readonly<Record<string, ContractRouteFixture>> = {};',
+      "  await runContractMatrix({ fixtures: dynamicFixtures, server: 'curator' });",
+      '  const packed = (session: PackedMcpSession, manifest: PackedContractMatrixOptions[\'manifest\']) =>',
+      "    runPackedContractMatrix({ fixtures: { 'tool:shelf/find': { input: { isbn: '1' }, resultCompat: 'additive' } }, manifest, session });",
+      "  // `invokeCli` reports the executed route's registered id; argv itself is untyped.",
+      "  const ran = await invokeCli(['report', '--verbose']);",
+      '  const executed: RegisteredRouteId | undefined = ran.routeId;',
+      "  const isReport: boolean = ran.routeId === 'cli:report';",
+      '  // Eval assertions check a literal tool against the registered tools of that server; other servers stay free.',
+      "  expectMcpCall({ server: 'curator', tool: 'find' });",
+      "  expectMcpCall({ server: 'shelf', tool: 'find', atLeast: 2 });",
+      "  expectNoMcpCall({ server: 'curator' });",
+      "  expectNoMcpCall({ server: 'github', tool: 'search_issues' });",
+      "  expectMcpCall({ server: dynamic, tool: dynamic });",
+      '  void hits; void status; void none; void anything; void packed; void executed; void isReport;',
       '};',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-tool-name.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const missing = invokeMcpTool('missing');",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-tool-input.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const mistyped = invokeMcpTool('status', { input: { query: 'dune' } });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-prompt-input.ts', [
+      "import { getMcpPrompt } from 'agent-bundle/test';",
+      "export const mistyped = getMcpPrompt('brief', { input: { topic: 7 } });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-tool.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const elsewhere = invokeMcpTool('status', { server: 'shelf' });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-input.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const mistyped = invokeMcpTool('find', { input: { query: 'dune' }, server: 'shelf' });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-name.ts', [
+      "import { getMcpPrompt } from 'agent-bundle/test';",
+      "export const missing = getMcpPrompt('brief', { input: { topic: 'dune' }, server: 'librarian' });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-fixture-input.ts', [
+      "import { runContractMatrix } from 'agent-bundle/test';",
+      "export const mistyped = runContractMatrix({ fixtures: { 'tool:curator/find': { input: { query: 7 }, resultCompat: 'closed' } } });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-fixture-transition.ts', [
+      "import { runContractMatrix } from 'agent-bundle/test';",
+      'export const mistyped = runContractMatrix({ fixtures: {',
+      "  'tool:curator/find': {",
+      "    lifecycle: { transitionDriver: () => [{ expectedStructuredContent: {}, input: { isbn: '1' }, phase: 'terminal', progressNotifications: 0 }] },",
+      "    resultCompat: 'closed',",
+      '  },',
+      '} });',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-cli-route.ts', [
+      "import { invokeCli } from 'agent-bundle/test';",
+      "export const compared = async (): Promise<boolean> => (await invokeCli(['report'])).routeId === 'cli:missing';",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-eval-tool.ts', [
+      "import { expectMcpCall } from 'agent-bundle/eval';",
+      "export const mistyped = expectMcpCall({ server: 'shelf', tool: 'status' });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'wrong-event-input.ts', [
@@ -151,15 +303,24 @@ it('types renderRoute ids, inputs, and results from the generated route registra
       '',
     ].join('\n')),
     writeProjectFile(root, 'unregistered.ts', [
-      "import type { RegisteredRouteId, RegisteredRouteResult } from '@agent-bundle/runtime';",
-      "import { renderRoute } from 'agent-bundle/test';",
+      "import { expectMcpCall } from 'agent-bundle/eval';",
+      "import type { RegisteredMcpRouteName, RegisteredMcpServerName, RegisteredRouteId, RegisteredRouteResult } from '@agent-bundle/runtime';",
+      "import { getMcpPrompt, invokeCli, invokeMcpTool, renderRoute, runContractMatrix, type McpRouteInput } from 'agent-bundle/test';",
       '',
       ...equalityHelpers,
       '',
-      '// Without the generated file in the program, ids are string and contracts are unknown.',
+      '// Without the generated file in the program, ids and names are string and contracts are unknown.',
       'export type Ids = Assert<Equal<RegisteredRouteId, string>>;',
       "export type Result = Assert<Equal<RegisteredRouteResult<'tool:curator/find'>, unknown>>;",
+      'export type Servers = Assert<Equal<RegisteredMcpServerName, string>>;',
+      "export type ToolNames = Assert<Equal<RegisteredMcpRouteName<'tool'>, string>>;",
+      "export type WireInput = Assert<Equal<McpRouteInput<'find', 'tool'>, unknown>>;",
       "export const anyId = renderRoute('tool:curator/missing', { input: { query: 7 } });",
+      "export const anyTool = invokeMcpTool('missing', { input: { query: 7 }, server: 'librarian' });",
+      "export const anyPrompt = getMcpPrompt('missing', { input: { topic: 7 } });",
+      "export const anyFixture = runContractMatrix({ fixtures: { 'tool:curator/missing': { input: { query: 7 }, resultCompat: 'closed' } } });",
+      "export const anyRoute = async (): Promise<string | undefined> => (await invokeCli(['report'])).routeId;",
+      "export const anyAssertion = expectMcpCall({ server: 'curator', tool: 'missing' });",
       '',
     ].join('\n')),
   ]);
@@ -174,7 +335,7 @@ it('types renderRoute ids, inputs, and results from the generated route registra
   const wrongId = typecheck(root, 'wrong-id.ts', true);
   expect(wrongId).toHaveLength(1);
   // The rejection names the registered ids, not `never`.
-  expect(wrongId[0]).toContain('Argument of type \'"tool:curator/missing"\' is not assignable to parameter of type \'"event:tool/after" | "tool:curator/find" | "tool:curator/status"\'');
+  expect(wrongId[0]).toContain(`Argument of type '"tool:curator/missing"' is not assignable to parameter of type '${registeredIds.map((id) => `"${id}"`).join(' | ')}'`);
   const wrongInput = typecheck(root, 'wrong-input.ts', true);
   expect(wrongInput).toHaveLength(1);
   expect(wrongInput[0]).toContain("Type 'number' is not assignable to type 'string'");
@@ -184,6 +345,49 @@ it('types renderRoute ids, inputs, and results from the generated route registra
   const wrongResult = typecheck(root, 'wrong-result.ts', true);
   expect(wrongResult).toHaveLength(1);
   expect(wrongResult[0]).toContain("Type 'number | undefined' is not assignable to type 'string | undefined'");
+
+  // The wire helpers: a tool name is checked against the registered protocol names of that kind, and
+  // `input` against the named route's own schema.
+  const wrongToolName = typecheck(root, 'wrong-tool-name.ts', true);
+  expect(wrongToolName).toHaveLength(1);
+  expect(wrongToolName[0]).toContain('Argument of type \'"missing"\' is not assignable to parameter of type \'"find" | "status"\'');
+  const wrongToolInput = typecheck(root, 'wrong-tool-input.ts', true);
+  expect(wrongToolInput).toHaveLength(1);
+  // `status` registers `z.object({}).strict()`, so a stray key is rejected against `Record<string, never>`.
+  expect(wrongToolInput[0]).toContain("Type 'string' is not assignable to type 'never'");
+  const wrongPromptInput = typecheck(root, 'wrong-prompt-input.ts', true);
+  expect(wrongPromptInput).toHaveLength(1);
+  expect(wrongPromptInput[0]).toContain("Type 'number' is not assignable to type 'string'");
+  // A literal `server` binds the lookup to that server's routes, since the session mounts only those:
+  // a name another server registers, and the other server's input, are rejected; an unknown server is
+  // rejected on `server` itself, naming the compiled ones.
+  const wrongServerTool = typecheck(root, 'wrong-server-tool.ts', true);
+  expect(wrongServerTool).toHaveLength(1);
+  expect(wrongServerTool[0]).toContain('Argument of type \'"status"\' is not assignable to parameter of type \'"find"\'');
+  const wrongServerInput = typecheck(root, 'wrong-server-input.ts', true);
+  expect(wrongServerInput).toHaveLength(1);
+  expect(wrongServerInput[0]).toContain("'query' does not exist in type '{ isbn: string; }'");
+  const wrongServerName = typecheck(root, 'wrong-server-name.ts', true);
+  expect(wrongServerName).toHaveLength(1);
+  expect(wrongServerName[0]).toContain('Type \'"librarian"\' is not assignable to type \'"curator" | "shelf" | undefined\'');
+
+  // Contract-matrix fixtures: a registered key's `input` and lifecycle transitions carry that route's input.
+  const wrongFixtureInput = typecheck(root, 'wrong-fixture-input.ts', true);
+  expect(wrongFixtureInput).toHaveLength(1);
+  expect(wrongFixtureInput[0]).toContain("Type 'number' is not assignable to type 'string'");
+  const wrongFixtureTransition = typecheck(root, 'wrong-fixture-transition.ts', true);
+  expect(wrongFixtureTransition).toHaveLength(1);
+  expect(wrongFixtureTransition[0]).toContain("'isbn' does not exist in type '{ query: string; }'");
+
+  // `invokeCli` reports a registered id, so comparing it with an unregistered literal is rejected.
+  const wrongCliRoute = typecheck(root, 'wrong-cli-route.ts', true);
+  expect(wrongCliRoute).toHaveLength(1);
+  expect(wrongCliRoute[0]).toContain('This comparison appears to be unintentional');
+
+  // Eval assertions: a literal tool is checked against the registered tools of that literal server.
+  const wrongEvalTool = typecheck(root, 'wrong-eval-tool.ts', true);
+  expect(wrongEvalTool).toHaveLength(1);
+  expect(wrongEvalTool[0]).toContain('Type \'"status"\' is not assignable to type \'"find"\'');
 
   expect(typecheck(root, 'unregistered.ts', false)).toEqual([]);
 });

@@ -18,6 +18,7 @@
  * wire behavior.
  */
 import type * as AgentRuntime from '@agent-bundle/runtime';
+import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
 import { CliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
@@ -63,7 +64,15 @@ export interface CliInvocation {
    */
   readonly exitCode: number;
   readonly provenance: CliDispatchProvenance;
-  readonly routeId?: string;
+  /**
+   * The compiled route the shell executed: a `cli:` route, or the `tool:`
+   * route behind a projected MCP command. Typed from the project's route
+   * registration once `.agent-bundle/routes.d.ts` is in the program (both
+   * kinds register), `string` without it; absent for help, `--version`, and
+   * usage failures. `argv` itself stays `readonly string[]` — it is the shell's
+   * input, not a route id.
+   */
+  readonly routeId?: RegisteredRouteId;
   /** Everything the shell wrote to its diagnostic stream. */
   readonly stderr: string;
   /** Everything the shell wrote to stdout, including rendered Markdown, TTY, JSON, or NDJSON output. */
@@ -292,7 +301,8 @@ export const invokeCli = async (
 
   return Object.freeze({
     argv: Object.freeze([...argv]),
-    ...(executed === undefined ? {} : { command: commandPath(executed), routeId: executed.routeId }),
+    // The compiled command graph's ids are the ones the registration lists.
+    ...(executed === undefined ? {} : { command: commandPath(executed), routeId: executed.routeId as RegisteredRouteId }),
     exitCode,
     provenance,
     stderr: err,
