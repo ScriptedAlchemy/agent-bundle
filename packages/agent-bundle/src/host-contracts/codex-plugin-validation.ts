@@ -26,7 +26,7 @@ import {
 // Imported last on purpose: see the matching note in `src/api.ts` — the
 // position of `effect/lift.ts` in the module graph keeps the emitted hook
 // bundles byte-identical.
-import { runWithPlatform, scopedTempDirectory } from '../effect/platform.ts';
+import { runWithPlatform, withTempDirectory } from '../effect/platform.ts';
 import { liftPromise } from '../effect/lift.ts';
 
 const maximumOutputBytes = 1024 * 1024;
@@ -261,10 +261,10 @@ const schemaVerbUnavailable = (output: string): boolean =>
   /(?:unrecognized|unknown|invalid) (?:subcommand|command)|no such (?:subcommand|command)/iu.test(output);
 
 /**
- * Runs the live schema generator into a scoped temp directory and compares
+ * Runs the live schema generator into a temporary directory and compares
  * its output with the pinned revision. Every generator failure is reported
  * as a diagnostic (AB6033 / AB6031), never thrown; the directory is removed
- * when the scope closes, whichever way the program settles.
+ * whichever way the program settles.
  */
 const schemaGenerationDiagnostics = (
   options: Readonly<{
@@ -275,67 +275,69 @@ const schemaGenerationDiagnostics = (
     readonly target: string;
     readonly version: string | undefined;
   }>,
-): Effect.Effect<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> => Effect.scoped(Effect.gen(function* () {
-  const outputDirectory = yield* scopedTempDirectory({ prefix: 'agent-bundle-codex-schema-' });
-  const started = yield* liftPromise(() => options.run(Object.freeze({
-    args: Object.freeze(['app-server', 'generate-json-schema', '--out', outputDirectory]),
-    cwd: options.cwd,
-    executable: options.executable,
-  }))).pipe(Effect.option);
-  if (Option.isNone(started)) {
-    return freezeDiagnostics([diagnostic(
-      'AB6033',
-      'Codex CLI schema generation could not be started.',
-      'error',
-      options.target,
-      'Verify the Codex CLI starts and supports app-server schema generation, then rerun artifact validation.',
-    )]);
-  }
-  const result: CodexPluginCommandResult = started.value;
-
-  if (result.termination !== undefined) {
-    return freezeDiagnostics([diagnostic(
-      'AB6033',
-      commandFailureMessage('schema generation', result),
-      'error',
-      options.target,
-      'Rerun Codex schema generation within the configured time and output bounds.',
-    )]);
-  }
-  if (result.exitCode !== 0) {
-    const output = `${result.stdout}\n${result.stderr}`;
-    if (schemaVerbUnavailable(output)) {
+): Effect.Effect<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> => withTempDirectory(
+  { prefix: 'agent-bundle-codex-schema-' },
+  (outputDirectory) => Effect.gen(function* () {
+    const started = yield* liftPromise(() => options.run(Object.freeze({
+      args: Object.freeze(['app-server', 'generate-json-schema', '--out', outputDirectory]),
+      cwd: options.cwd,
+      executable: options.executable,
+    }))).pipe(Effect.option);
+    if (Option.isNone(started)) {
       return freezeDiagnostics([diagnostic(
-        'AB6031',
-        `The Codex ${options.version ?? 'unknown'} app-server generate-json-schema verb is unavailable; ` +
-          `live schema drift could not be checked against pinned Codex ${pinnedRevision}.`,
-        'info',
+        'AB6033',
+        'Codex CLI schema generation could not be started.',
+        'error',
         options.target,
-        'Use a Codex release that publishes app-server schema generation, or retain validation against the vendored pinned schemas.',
+        'Verify the Codex CLI starts and supports app-server schema generation, then rerun artifact validation.',
       )]);
     }
-    return freezeDiagnostics([diagnostic(
+    const result: CodexPluginCommandResult = started.value;
+
+    if (result.termination !== undefined) {
+      return freezeDiagnostics([diagnostic(
+        'AB6033',
+        commandFailureMessage('schema generation', result),
+        'error',
+        options.target,
+        'Rerun Codex schema generation within the configured time and output bounds.',
+      )]);
+    }
+    if (result.exitCode !== 0) {
+      const output = `${result.stdout}\n${result.stderr}`;
+      if (schemaVerbUnavailable(output)) {
+        return freezeDiagnostics([diagnostic(
+          'AB6031',
+          `The Codex ${options.version ?? 'unknown'} app-server generate-json-schema verb is unavailable; ` +
+            `live schema drift could not be checked against pinned Codex ${pinnedRevision}.`,
+          'info',
+          options.target,
+          'Use a Codex release that publishes app-server schema generation, or retain validation against the vendored pinned schemas.',
+        )]);
+      }
+      return freezeDiagnostics([diagnostic(
+        'AB6033',
+        commandFailureMessage('schema generation', result),
+        'error',
+        options.target,
+        'Run `codex app-server generate-json-schema --out <dir>` successfully, then rerun artifact validation.',
+      )]);
+    }
+
+    return yield* liftPromise(() => compareGeneratedSchemas(
+      outputDirectory,
+      options.version,
+      options.strict,
+      options.target,
+    )).pipe(Effect.catch(() => Effect.succeed(freezeDiagnostics([diagnostic(
       'AB6033',
-      commandFailureMessage('schema generation', result),
+      'Codex CLI generated schema output could not be inspected.',
       'error',
       options.target,
-      'Run `codex app-server generate-json-schema --out <dir>` successfully, then rerun artifact validation.',
-    )]);
-  }
-
-  return yield* liftPromise(() => compareGeneratedSchemas(
-    outputDirectory,
-    options.version,
-    options.strict,
-    options.target,
-  )).pipe(Effect.catch(() => Effect.succeed(freezeDiagnostics([diagnostic(
-    'AB6033',
-    'Codex CLI generated schema output could not be inspected.',
-    'error',
-    options.target,
-    'Ensure the generated schema directory is readable, then rerun artifact validation.',
-  )]))));
-}));
+      'Ensure the generated schema directory is readable, then rerun artifact validation.',
+    )]))));
+  }),
+);
 
 export const validateCodexPlugin = async (
   options: ValidateCodexPluginOptions,

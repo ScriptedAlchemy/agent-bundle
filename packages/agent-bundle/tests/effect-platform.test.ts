@@ -2,20 +2,21 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Effect, FileSystem, Path, PlatformError } from 'effect';
+import { Cause, Effect, Exit, FileSystem, Path, PlatformError } from 'effect';
 import { describe, expect, it } from '@rstest/core';
 
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { liftPromise } from '../src/effect/lift.ts';
-import { platformLayer, runWithPlatform, scopedTempDirectory, unwrapPlatformError } from '../src/effect/platform.ts';
+import { platformLayer, runWithPlatform, unwrapPlatformError, withTempDirectory } from '../src/effect/platform.ts';
 import * as devApi from '../src/dev/index.ts';
 import * as rootApi from '../src/index.ts';
 
 /**
  * `runWithPlatform` is the Promise edge for platform-dependent programs:
- * the scoped-temp-directory idiom the public API (`temporaryArtifact`) and
+ * the `withTempDirectory` bracket the public API (`temporaryArtifact`) and
  * the Codex validator use must remove the directory whichever way the
- * program settles, and the failure contract must stay the boundary's.
+ * operation settles, and the failure contract must stay the one the
+ * `try`/`finally` sites had.
  */
 describe('effect platform layer (agent-bundle)', () => {
   it('is not part of any public export', () => {
@@ -59,32 +60,37 @@ describe('effect platform layer (agent-bundle)', () => {
     expect(platformLayer).toBeDefined();
   });
 
-  it('removes a scoped temp directory after the program succeeds', async () => {
+  it('removes the temp directory after the operation succeeds', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
     try {
-      const directory = await runWithPlatform(Effect.scoped(Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const created = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
-        expect(created.startsWith(join(parent, '.staging-'))).toBe(true);
-        yield* fs.writeFileString(join(created, 'manifest.json'), '{}');
-        yield* Effect.promise(() => access(created));
-        return created;
-      })));
+      const directory = await runWithPlatform(withTempDirectory(
+        { directory: parent, prefix: '.staging-' },
+        (created) => Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          expect(created.startsWith(join(parent, '.staging-'))).toBe(true);
+          yield* fs.writeFileString(join(created, 'manifest.json'), '{}');
+          yield* Effect.promise(() => access(created));
+          return created;
+        }),
+      ));
       await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(parent, { force: true, recursive: true });
     }
   });
 
-  it('removes the scoped temp directory and rethrows the typed failure when the program fails', async () => {
+  it('removes the temp directory and rethrows the typed failure when the operation fails', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
     let directory: string | undefined;
     const failure = new DiagnosticError([{ code: 'AB7200', message: 'rebuild failed', severity: 'error' }]);
     try {
-      await expect(runWithPlatform(Effect.scoped(Effect.gen(function* () {
-        directory = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
-        yield* liftPromise(() => Promise.reject(failure));
-      })))).rejects.toBe(failure);
+      await expect(runWithPlatform(withTempDirectory(
+        { directory: parent, prefix: '.staging-' },
+        (created) => {
+          directory = created;
+          return liftPromise(() => Promise.reject(failure));
+        },
+      ))).rejects.toBe(failure);
       expect(directory).toBeDefined();
       await expect(access(directory!)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
@@ -92,16 +98,37 @@ describe('effect platform layer (agent-bundle)', () => {
     }
   });
 
-  it('keeps the result when the operation already removed its scoped temp directory', async () => {
+  it('keeps the result when the operation already removed its temp directory', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
     try {
-      const result = await runWithPlatform(Effect.scoped(Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const created = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
-        yield* fs.remove(created, { recursive: true });
-        return 'settled';
-      })));
+      const result = await runWithPlatform(withTempDirectory(
+        { directory: parent, prefix: '.staging-' },
+        (created) => Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(created, { recursive: true });
+          return 'settled';
+        }),
+      ));
       expect(result).toBe('settled');
+    } finally {
+      await rm(parent, { force: true, recursive: true });
+    }
+  });
+
+  it('removes the temp directory when the operation is interrupted', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
+    let directory: string | undefined;
+    try {
+      const exit = await runWithPlatform(Effect.exit(withTempDirectory(
+        { directory: parent, prefix: '.staging-' },
+        (created) => {
+          directory = created;
+          return Effect.interrupt;
+        },
+      )));
+      expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
+      expect(directory).toBeDefined();
+      await expect(access(directory!)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(parent, { force: true, recursive: true });
     }
@@ -109,8 +136,39 @@ describe('effect platform layer (agent-bundle)', () => {
 
   it('throws the Node error when the temp directory cannot be created', async () => {
     const missingParent = join(tmpdir(), 'agent-bundle-platform-missing', String(process.pid));
-    await expect(runWithPlatform(Effect.scoped(Effect.gen(function* () {
-      return yield* scopedTempDirectory({ directory: missingParent, prefix: '.staging-' });
-    })))).rejects.toMatchObject({ code: 'ENOENT', syscall: 'mkdtemp' });
+    await expect(runWithPlatform(withTempDirectory(
+      { directory: missingParent, prefix: '.staging-' },
+      (created) => Effect.succeed(created),
+    ))).rejects.toMatchObject({ code: 'ENOENT', syscall: 'mkdtemp' });
+  });
+
+  describe('cleanup failures (FileSystem.layerNoop)', () => {
+    const eacces: NodeJS.ErrnoException = new Error("EACCES: permission denied, rmdir '/virtual/tmp/.staging-1'");
+    eacces.code = 'EACCES';
+    const failingRemove = FileSystem.layerNoop({
+      makeTempDirectory: () => Effect.succeed('/virtual/tmp/.staging-1'),
+      remove: (path) => Effect.fail(PlatformError.systemError({
+        _tag: 'PermissionDenied',
+        cause: eacces,
+        method: 'remove',
+        module: 'FileSystem',
+        pathOrDescriptor: path,
+      })),
+    });
+
+    it('throws the Node cleanup error after a successful operation, as the former finally did', async () => {
+      await expect(runWithPlatform(withTempDirectory(
+        { prefix: '.staging-' },
+        (created) => Effect.succeed(created),
+      ).pipe(Effect.provide(failingRemove)))).rejects.toBe(eacces);
+    });
+
+    it('lets the cleanup error win when the operation failed too', async () => {
+      const failure = new DiagnosticError([{ code: 'AB7200', message: 'rebuild failed', severity: 'error' }]);
+      await expect(runWithPlatform(withTempDirectory(
+        { prefix: '.staging-' },
+        () => Effect.fail(failure),
+      ).pipe(Effect.provide(failingRemove)))).rejects.toBe(eacces);
+    });
   });
 });

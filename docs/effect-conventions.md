@@ -237,13 +237,16 @@ contract).
   modules. `fromFileUrl` fails with `BadArgument`; `Effect.orDie` it when the
   URL is built from `import.meta.url`.
 - Temporary directories whose lifetime ends with the enclosing operation:
-  a scoped temp directory inside `Effect.scoped`, replacing `mkdtemp` +
-  `try`/`finally` `rm`. In `agent-bundle` use `scopedTempDirectory` from
-  `src/effect/platform.ts`, not `fs.makeTempDirectoryScoped` directly: the
-  rc.112 finalizer removes without `force`, so an operation that deletes its
-  own staging directory would die with ENOENT at scope close, where the old
-  `rm(dir, { recursive: true, force: true })` succeeded. Tests may use
-  `makeTempDirectoryScoped` (nothing removes the fixture underneath them).
+  in `agent-bundle`, `withTempDirectory(options, use)` from
+  `src/effect/platform.ts`, the bracket that reproduces `mkdtemp` +
+  `try`/`finally` `rm(dir, { recursive: true, force: true })` exactly —
+  `force`, cleanup failure as a typed `PlatformError` that wins over the
+  operation's failure, cleanup on interruption. Not
+  `fs.makeTempDirectoryScoped` in library code: the rc.112 finalizer removes
+  without `force` and `orDie`s, so an operation that deleted its own staging
+  directory would fail an already successful call, and a real cleanup error
+  would surface as the `PlatformError` wrapper (scope finalizers cannot fail
+  typed). Tests may use `makeTempDirectoryScoped` for fixtures.
   **Not** when ownership of the directory is
   transferred to a longer-lived object (the MCP session plugin-data dir in
   `dev/mcp-session/mcp-session-service.ts`): a scoped temp is removed when
@@ -307,7 +310,7 @@ provides `NodeServices.layer` once. Measured on rc.112 (bundled by Rslib,
 the bundle.
 
 `packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
-layer: `platformLayer` (= `NodeServices.layer`), `scopedTempDirectory`,
+layer: `platformLayer` (= `NodeServices.layer`), `withTempDirectory`,
 `unwrapPlatformError`, and `runWithPlatform`, which provides the layer and unwraps `PlatformError`
 before handing off to `boundary.ts`'s `runPromise`. It is the only module
 that imports `effect/PlatformError`: `boundary.ts` is bundled into every
@@ -315,8 +318,8 @@ emitted hook wrapper, and the error class would drag `Data.TaggedError` into
 each one (measured: +12 kB per hook). Phase-1 callers are the throwaway
 artifact in `api.ts` (`listMcp` / `invokeMcp` / `runMcp` / `listHooks` /
 `simulateHook` without `artifact`) and the Codex validator's
-schema-generation directory, both `scopedTempDirectory` (the `force: true`
-finalizer) inside `Effect.scoped`. Emitted artifacts, hook wrappers, and compiler hot paths
+schema-generation directory, both through `withTempDirectory`. Emitted
+artifacts, hook wrappers, and compiler hot paths
 never import this module; the dev server picks it up in phase 2 through
 `makeScopedEffectRuntime(platformLayer)`.
 

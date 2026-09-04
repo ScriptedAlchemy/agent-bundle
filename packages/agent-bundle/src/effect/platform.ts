@@ -1,5 +1,5 @@
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, type Layer, type Scope } from 'effect';
+import { Effect, FileSystem, type Layer } from 'effect';
 import { PlatformError } from 'effect/PlatformError';
 
 import { runPromise, type RunPromiseOptions } from './boundary.ts';
@@ -37,25 +37,35 @@ export const unwrapPlatformError = <E>(error: E): Exclude<E, PlatformError> | Er
     : (error as Exclude<E, PlatformError>);
 
 /**
- * A temporary directory that lives exactly as long as the enclosing scope,
- * with the `rm(dir, { recursive: true, force: true })` finalizer the
- * `try`/`finally` sites had before they moved onto Effect. rc.112's own
- * `makeTempDirectoryScoped` finalizes without `force`, so an operation that
- * removes (or renames away) its own staging directory would die with ENOENT
- * at scope close and reject a call that had already succeeded. A finalizer
- * failure other than "already gone" is still a defect, as the `finally`
- * throw was.
+ * `const dir = await mkdtemp(...); try { return await use(dir) } finally
+ * { await rm(dir, { recursive: true, force: true }) }` as an Effect, with
+ * the same contract the two `try`/`finally` sites had before they moved
+ * onto Effect:
+ *
+ * - `force: true` — an operation that removed (or renamed away) its own
+ *   staging directory does not fail the call;
+ * - the cleanup failure is a typed `PlatformError` on the error channel
+ *   (unwrapped to its Node cause by `runWithPlatform`), and when both the
+ *   operation and the cleanup fail the cleanup error wins, as a throwing
+ *   `finally` did;
+ * - cleanup runs on interruption as well, uninterruptibly.
+ *
+ * Not `fs.makeTempDirectoryScoped`: in rc.112 its finalizer removes without
+ * `force` and `orDie`s, so a missing directory would reject an already
+ * successful call, and an `EACCES` would surface as the `PlatformError`
+ * wrapper (scope finalizers cannot fail typed).
  */
-export const scopedTempDirectory = (
-  options?: { readonly directory?: string; readonly prefix?: string },
-): Effect.Effect<string, PlatformError, FileSystem.FileSystem | Scope.Scope> =>
-  Effect.gen(function* () {
+export const withTempDirectory = <A, E, R>(
+  options: { readonly directory?: string; readonly prefix?: string } | undefined,
+  use: (directory: string) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | PlatformError, R | FileSystem.FileSystem> =>
+  Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    return yield* Effect.acquireRelease(
-      fs.makeTempDirectory(options),
-      (directory) => Effect.orDie(fs.remove(directory, { force: true, recursive: true })),
-    );
-  });
+    const directory = yield* fs.makeTempDirectory(options);
+    const exit = yield* Effect.exit(restore(use(directory)));
+    yield* fs.remove(directory, { force: true, recursive: true });
+    return yield* exit;
+  }));
 
 /**
  * Run a platform-dependent Effect program at a Promise edge. Same failure
