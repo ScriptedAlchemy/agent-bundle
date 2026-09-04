@@ -45,6 +45,55 @@ npx agent-bundle eval --root . --suite mcp-app-status --trials 3
 npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
 ```
 
+### Writing an outcome grader
+
+`expectOutcome({ script })` names a module that default-exports one grader function. The path is
+resolved relative to the suite file and must not climb out of the suite directory (`../` past it
+is rejected; the check is on the path, so a symlink inside the suite is followed wherever it
+points). `agent-bundle/eval`
+exports its contract: [`EvalGraderFunction`](../../api/types/eval.EvalGraderFunction.md) takes an
+[`EvalGraderContext`](../../api/interfaces/eval.EvalGraderContext.md) and returns an
+[`EvalScriptOutcome`](../../api/interfaces/eval.EvalScriptOutcome.md), synchronously or as a
+promise. This is `examples/skills-starter/evals/graders/release-result.ts` verbatim; the suite
+above names `./graders/status-result.ts`, which has the same shape in `examples/mcp-app`:
+
+```ts twoslash
+// evals/graders/release-result.ts
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import type { EvalGraderFunction } from 'agent-bundle/eval';
+
+interface ReleaseResult {
+  readonly blockers?: unknown;
+  readonly verdict?: string;
+}
+
+const grade: EvalGraderFunction = async ({ fixturePath }) => {
+  const result = JSON.parse(await readFile(join(fixturePath, 'result.json'), 'utf8')) as ReleaseResult;
+  return result.verdict === 'ready' && Array.isArray(result.blockers) && result.blockers.length === 0
+    ? { detail: 'The release artifact is ready with no blockers.', outcome: 'pass' }
+    : { detail: 'The release artifact is not ready or has unresolved blockers.', outcome: 'fail' };
+};
+
+export default grade;
+```
+
+The context is the trial the grader is judging:
+
+| Field | Meaning |
+| --- | --- |
+| `fixturePath` | The trial's own copy of the case `fixture`, after the agent ran against it. Read the agent's output from here; the checked-in fixture is never touched. |
+| `artifactRoot` | The prepared artifact the trial ran against, for a grader that checks what shipped rather than what the agent wrote. |
+| `prompt` | The case prompt the agent received. |
+
+The outcome is `{ outcome, detail }`: `outcome` is `pass`, `fail`, or `inconclusive` — the same
+three verdicts as every other assertion — and `detail` is the sentence shown beside the result in
+the trial record. A module that does not default-export a function, or returns anything but that
+shape, is a grader defect, not plugin evidence: the trial is reported `EVAL_GRADER_FAILED` and its
+result stays inconclusive. Graders run in the eval process with the host's file system, so read the
+fixture and the artifact; do not reach into the agent's session.
+
 ## Three outcomes, not two
 
 Every assertion resolves to `pass`, `fail`, or **`inconclusive`**, and declares the minimum

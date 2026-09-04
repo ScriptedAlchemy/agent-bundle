@@ -42,6 +42,50 @@ npx agent-bundle eval --root . --suite mcp-app-status --trials 3
 npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
 ```
 
+### 编写一个结果 grader
+
+`expectOutcome({ script })` 指名一个默认导出一个 grader 函数的模块。路径相对套件文件解析，且不得越出套件
+目录（越过它的 `../` 会被拒绝；这项检查针对的是路径本身，因此套件内的符号链接会被跟随到它所指向的任何位置）。`agent-bundle/eval` 导出了它的契约：[`EvalGraderFunction`](../../api/types/eval.EvalGraderFunction.md)
+接收一个 [`EvalGraderContext`](../../api/interfaces/eval.EvalGraderContext.md)，并同步或以 promise 形式返回一个
+[`EvalScriptOutcome`](../../api/interfaces/eval.EvalScriptOutcome.md)。下面是
+`examples/skills-starter/evals/graders/release-result.ts` 的原文；上面的套件指名的 `./graders/status-result.ts`
+在 `examples/mcp-app` 中具有同样的形状：
+
+```ts twoslash
+// evals/graders/release-result.ts
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import type { EvalGraderFunction } from 'agent-bundle/eval';
+
+interface ReleaseResult {
+  readonly blockers?: unknown;
+  readonly verdict?: string;
+}
+
+const grade: EvalGraderFunction = async ({ fixturePath }) => {
+  const result = JSON.parse(await readFile(join(fixturePath, 'result.json'), 'utf8')) as ReleaseResult;
+  return result.verdict === 'ready' && Array.isArray(result.blockers) && result.blockers.length === 0
+    ? { detail: 'The release artifact is ready with no blockers.', outcome: 'pass' }
+    : { detail: 'The release artifact is not ready or has unresolved blockers.', outcome: 'fail' };
+};
+
+export default grade;
+```
+
+上下文就是 grader 正在评判的那次试验：
+
+| 字段 | 含义 |
+| --- | --- |
+| `fixturePath` | 该次试验自己的 case `fixture` 副本，agent 已经在其上运行过。从这里读取 agent 的输出；签入的 fixture 永远不会被改动。 |
+| `artifactRoot` | 该次试验所针对的已准备产物，供检查"实际发布了什么"而非"agent 写了什么"的 grader 使用。 |
+| `prompt` | agent 收到的 case 提示词。 |
+
+结果是 `{ outcome, detail }`：`outcome` 是 `pass`、`fail` 或 `inconclusive`——与其他所有断言相同的三种裁定——
+`detail` 是在试验记录中显示于结果旁边的那句话。一个不默认导出函数、或返回了任何其他形状的模块，是 grader
+的缺陷而不是插件的证据：该次试验会被报告为 `EVAL_GRADER_FAILED`，其结果保持 inconclusive。grader 在 eval
+进程中以宿主的文件系统运行，因此请读取 fixture 与产物；不要触及 agent 的会话。
+
 ## 三种结果，而不是两种
 
 每个断言都解析为 `pass`、`fail` 或 **`inconclusive`**，并声明它所接受的最低证据。当断言所需的证据强于
