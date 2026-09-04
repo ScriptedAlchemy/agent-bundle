@@ -13,8 +13,10 @@ import {
   declaredDependencies,
   importedPackageNames,
   isRegistrySpecifier,
+  rewritesWorkspaceProtocols,
   type DeclaredDependency,
   type InstalledDependencyField,
+  type RegistrySpecifierOptions,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
 
@@ -149,28 +151,31 @@ const perField = (
  * package — and fail outright when the specifier is one npm 12 refuses by
  * default (git, remote tarball, path).
  */
-const dependencyDiagnostics = async (
-  packageDocument: Readonly<Record<string, unknown>>,
-  packedPaths: readonly string[],
-  projectRoot: string,
-): Promise<readonly Diagnostic[]> => {
-  const declared = declaredDependencies(packageDocument);
+const dependencyDiagnostics = async (options: {
+  readonly packageDocument: Readonly<Record<string, unknown>>;
+  readonly packedPaths: readonly string[];
+  readonly packerUserAgent: string | undefined;
+  readonly projectRoot: string;
+}): Promise<readonly Diagnostic[]> => {
+  const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
-  const imported = await importedPackageNames({ paths: packedPaths, projectRoot });
+  const imported = await importedPackageNames({ paths: options.packedPaths, projectRoot: options.projectRoot });
+  const registry: RegistrySpecifierOptions = { workspaceProtocols: rewritesWorkspaceProtocols(options.packerUserAgent) };
   return [
     ...perField(declared.filter((dependency) => !imported.has(dependency.name)), (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages no packed JavaScript imports: ${quoteAll(own.map((dependency) => dependency.name))}. `
+      `package.json ${field} names packages no packed JavaScript or declaration file imports: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
       'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime.',
     )),
-    ...perField(declared.filter((dependency) => !isRegistrySpecifier(dependency.specifier)), (field, own) => diagnostic(
+    ...perField(declared.filter((dependency) => !isRegistrySpecifier(dependency.specifier, registry)), (field, own) => diagnostic(
       'AB7015',
       `package.json ${field} resolves packages outside a registry: ${own.map((dependency) =>
         `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}. `
-        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote), so '
+        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and rejects workspace protocols outright, so '
         + (field === 'optionalDependencies' ? 'every consumer install fails to fetch them.' : 'consumers cannot install the package.'),
-      'Depend on a published registry version, or bundle the package and declare it under devDependencies.',
+      'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
+        + 'workspace: and catalog: are accepted only when pnpm, Yarn, or Bun runs the pack and rewrites them.',
     )),
   ];
 };
@@ -180,6 +185,8 @@ export const packInventoryDiagnostics = async (options: {
   readonly model: NormalizedPlugin;
   readonly packageBuild: PackageBuildResult;
   readonly packOutput: PackOutput;
+  /** `npm_config_user_agent` of the package manager running the pack; decides whether workspace protocols are rewritten. */
+  readonly packerUserAgent: string | undefined;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
   const projectRoot = resolve(options.projectRoot);
@@ -262,7 +269,12 @@ export const packInventoryDiagnostics = async (options: {
     ));
   }
 
-  diagnostics.push(...await dependencyDiagnostics(packageDocument, [...packed], projectRoot));
+  diagnostics.push(...await dependencyDiagnostics({
+    packageDocument,
+    packedPaths: [...packed],
+    packerUserAgent: options.packerUserAgent,
+    projectRoot,
+  }));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));
 };

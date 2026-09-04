@@ -184,14 +184,17 @@ Validation happens at three moments, all fail-closed:
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
-| `AB7014` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages that no packed JavaScript imports or requires (one diagnostic per field). The build inlines every dependency into `dist/bin` and the host packs, so such an entry only makes every consumer's `npm install` fetch build-time packages. Move them to `devDependencies`, or import the package from a packed module if a consumer really needs it at runtime. |
-| `AB7015` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` entry resolves outside a registry: a `git`/`github:`/`gitlab:`/`bitbucket:`/`gist:` source, an `owner/repo` shorthand, an `http(s):` tarball, or a `file:`/`link:`/`portal:`/relative path. npm 12 refuses git and remote fetches by default (`allow-git=none`, `allow-remote=none`), so consumers cannot install the published package. Depend on a published registry version, or bundle the package and declare it under `devDependencies`. `npm:` aliases and `workspace:` protocols (rewritten at publish time) are registry specifiers. |
+| `AB7014` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages that no packed JavaScript imports or requires and no packed declaration file references (one diagnostic per field). Peers `peerDependenciesMeta` marks optional are never installed and are not inspected. The build inlines every dependency into `dist/bin` and the host packs, so such an entry only makes every consumer's `npm install` fetch build-time packages. Move them to `devDependencies`, or import the package from a packed module if a consumer really needs it at runtime. |
+| `AB7015` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` entry resolves outside a registry: a `git`/`github:`/`gitlab:`/`bitbucket:`/`gist:` source, an `owner/repo` shorthand, an `http(s):` tarball, or a `file:`/`link:`/`portal:`/relative path. npm 12 refuses git and remote fetches by default (`allow-git=none`, `allow-remote=none`), so consumers cannot install the published package. Depend on a published registry version, or bundle the package and declare it under `devDependencies`. `npm:` aliases are registry specifiers. `workspace:` and `catalog:` count as registry specifiers only when pnpm, Yarn, or Bun is running the pack (`npm_config_user_agent`) and will rewrite them; npm publishes them verbatim and consumers fail with `EUNSUPPORTEDPROTOCOL`, so under npm — or when `agent-bundle prepack` runs outside any package-manager lifecycle — they are reported. |
 
 The dependency evidence is read from the packed bytes themselves: every `.js`/`.mjs`/`.cjs` file
 `npm pack --dry-run` lists is lexed for static and dynamic `import` specifiers and scanned for
-literal `require("…")` calls; bare specifiers are reduced to their package name (`@scope/name` or
-`name`), and Node built-ins are ignored. A mention inside a comment or string can only keep a
-dependency, never report one, and `devDependencies` are never inspected.
+literal `require("…")` calls, and every `.d.ts`/`.d.mts`/`.d.cts` file is scanned for `from "…"`,
+`import("…")`, `import x = require("…")`, and `/// <reference types="…" />` (a consumer needs the
+package that provides those types even without a runtime import); bare specifiers are reduced to
+their package name (`@scope/name` or `name`), and Node built-ins are ignored. A mention inside a
+comment or string can only keep a dependency, never report one, and `devDependencies` are never
+inspected.
 
 ## Declaration generation (`AB4716`)
 

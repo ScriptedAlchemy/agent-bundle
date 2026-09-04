@@ -1171,6 +1171,7 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
+    packerUserAgent: process.env.npm_config_user_agent,
     projectRoot: options.root,
   });
   if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);

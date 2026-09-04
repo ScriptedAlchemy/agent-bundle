@@ -59,12 +59,16 @@ afterAll(async () => {
   await rm(cleanupRoot, { force: true, recursive: true });
 });
 
-const diagnostics = (packOutput: PackOutput = result.pack): Promise<readonly Diagnostic[]> =>
+const diagnostics = (
+  packOutput: PackOutput = result.pack,
+  packerUserAgent: string | undefined = 'npm/11.4.2 node/v24.0.0 linux x64 workspaces/false',
+): Promise<readonly Diagnostic[]> =>
   packInventoryDiagnostics({
     artifactRoot: result.build.build.outputRoot,
     model: result.build.model,
     packageBuild: result.build.packageBuild!,
     packOutput,
+    packerUserAgent,
     projectRoot,
   });
 
@@ -201,12 +205,13 @@ it('reports package, model, host, and provenance version disagreement as AB7013'
 it('reports installed dependencies no packed JavaScript imports as AB7014, per field', () => withPackageDocument(
   (document) => {
     document.dependencies = { zod: '4.5.4', effect: '4.0.0' };
-    document.peerDependencies = { react: '19.2.8' };
+    document.peerDependencies = { react: '19.2.8', 'optional-host': '^1.0.0' };
+    document.peerDependenciesMeta = { 'optional-host': { optional: true } };
     document.devDependencies = { 'agent-bundle': 'workspace:*' };
   },
   async () => {
     const reported = withCode(await diagnostics(), 'AB7014');
-    // One diagnostic per field; devDependencies never reach a consumer and are not inspected.
+    // One diagnostic per field; devDependencies never reach a consumer and optional peers are never installed.
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*"effect", "zod"/u),
       expect.stringMatching(/^package\.json peerDependencies .*"react"/u),
@@ -224,7 +229,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       local: 'file:../local',
       // Registry forms are not reported.
       alias: 'npm:effect@^4.0.0',
+      tilde: '~1.2.3',
       versioned: '^1.2.3',
+      // npm publishes a workspace protocol verbatim; only pnpm, Yarn, and Bun rewrite it while packing.
+      sibling: 'workspace:*',
     };
     document.optionalDependencies = { scp: 'git@github.com:owner/repo.git' };
   },
@@ -234,12 +242,34 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*fails to fetch/u),
     ]);
-    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local']) {
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
-    expect(reported[0]?.message).not.toContain('"alias"');
-    expect(reported[0]?.message).not.toContain('"versioned"');
+    for (const name of ['alias', 'tilde', 'versioned']) {
+      expect(reported[0]?.message).not.toContain(JSON.stringify(name));
+    }
     expect(reported[0]?.recovery).toContain('registry');
+
+    const underPnpm = withCode(await diagnostics(result.pack, 'pnpm/10.18.0 npm/? node/v24.0.0 linux x64'), 'AB7015');
+    expect(underPnpm[0]?.message).not.toContain('"sibling"');
+  },
+));
+
+it('accepts a dependency that only packed declaration files reference', () => withPackageDocument(
+  (document) => { document.dependencies = { zod: '^4.5.4' }; },
+  async () => {
+    const declaration = join(projectRoot, 'dist', 'consumer.d.ts');
+    await writeFile(declaration, [
+      "import type { ZodType } from 'zod';",
+      'export declare const schema: ZodType;',
+      '',
+    ].join('\n'));
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.d.ts' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(declaration, { force: true });
+    }
   },
 ));
 
