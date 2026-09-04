@@ -133,6 +133,7 @@ interface AgentTerminal {
 | 生成的 MCP 服务器 | `mcp` | 两者均为 `none`——stdout 是协议线路，stderr 是宿主的日志。从不探测，也从不猜测。 |
 | 事件路由（共享运行时或独立钩子进程） | `hook` | 两者均为 `none`——stdout 是宿主的钩子信封。 |
 | Workbench 生命周期回放 | `workbench` | 两者均为 `none`。 |
+| `defineRscApplication` 适配器 | `mcp` / `cli` | `createRscMcpServer` 两者均挂载 `none`；`runRscCli` 自身不做探测，只挂载调用方在选项中传入的 `terminal`，否则为 `unavailable`（`not-provided`）。 |
 | 未挂载该轴的自定义宿主 | — | `unavailable`（`not-provided`）。 |
 
 导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
