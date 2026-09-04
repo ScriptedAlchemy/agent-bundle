@@ -136,7 +136,9 @@ const routeCliConfig = (route: CompiledAgentRoute): RouteCliConfig => {
   // directly and has none, so declaring one there is a mistake to surface.
   const render = validateRouteRenderConfig(route, 'CLI route');
   diagnostics.push(...render.diagnostics);
-  if (render.render !== undefined && !isRenderedCliRoute(route)) {
+  // Any declaration counts, including the type-valid `render: {}`: the key has
+  // no meaning on a plain command whatever it holds.
+  if (route.config['render'] !== undefined && render.diagnostics.length === 0 && !isRenderedCliRoute(route)) {
     diagnostics.push({
       code: 'AB4835',
       message: `CLI route ${relativePath} declares config.render, but a plain .ts command executes without a render session; only rendered .tsx commands take a render budget.`,

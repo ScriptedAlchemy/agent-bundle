@@ -462,6 +462,8 @@ describe('compiled command graph', () => {
         'src/cli/fraction.tsx': renderedCommandModule('{ render: { maxElapsedMs: 1.5 } }'),
         'src/cli/negative.tsx': renderedCommandModule('{ render: { maxElapsedMs: -1 } }'),
         'src/cli/plain.ts': plainCommandModule({ config: '{ render: { maxElapsedMs: 1000 } }' }),
+        // Type-valid but meaningless on a plain command: the declaration itself is the defect.
+        'src/cli/plain-empty.ts': plainCommandModule({ config: '{ render: {} }' }),
         'src/cli/shape.tsx': renderedCommandModule("{ render: 'long' }"),
         'src/cli/unknown.tsx': renderedCommandModule('{ render: { timeoutMs: 1000 } }'),
         'src/mcp/alpha/tools/text.tsx': toolModule("{ render: { maxElapsedMs: '60000' } }"),
@@ -469,7 +471,7 @@ describe('compiled command graph', () => {
 
       const graph = await compileRouteGraph(root, fixtureConfig());
 
-      expect(codesOf(graph.diagnostics)).toEqual(['AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835']);
+      expect(codesOf(graph.diagnostics)).toEqual(['AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835']);
       const messages = graph.diagnostics.map((diagnostic) => diagnostic.message);
       // Server routes are validated with their server, before the CLI surface compiles.
       expect(messages).toEqual([
@@ -478,6 +480,7 @@ describe('compiled command graph', () => {
         expect.stringContaining('CLI route src/cli/fraction.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
         expect.stringContaining('CLI route src/cli/negative.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
         expect.stringContaining('CLI route src/cli/plain.ts declares config.render, but a plain .ts command executes without a render session'),
+        expect.stringContaining('CLI route src/cli/plain-empty.ts declares config.render, but a plain .ts command executes without a render session'),
         expect.stringContaining('CLI route src/cli/shape.tsx config.render must be an object'),
         expect.stringContaining('CLI route src/cli/unknown.tsx config.render declares unknown key "timeoutMs"'),
       ]);
