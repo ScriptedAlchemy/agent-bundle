@@ -45,10 +45,11 @@ those features, not the build. This example has no hooks.
   `audiobook-curator/shelf` state with three events. If state is not mounted, the read-only MCP
   tool and the rendered `shelf` CLI command both return an empty structured shelf and an explicit
   unavailable notice instead of failing.
-- **Suspense becomes MCP progress.** `audit_library` reports progress through the request's
-  `context.progress`, then places its asynchronous analysis behind React `Suspense` with an
-  `Agent.Progress` fallback. The generated projector streams the progress state and replaces it
-  with the completed analysis without changing the final structured receipt.
+- **Suspense becomes MCP progress.** `audit_library` places its asynchronous analysis behind
+  React `Suspense` with an `Agent.Progress` fallback, and that fallback alone is the progress
+  surface: the generated projector sends it as `notifications/progress` to a client that passed a
+  progress token, then replaces it with the completed analysis without changing the final
+  structured receipt. No `progress.report()` call repeats the message.
 - **The framework owns the package build.** The config declares no `bin` or `scripts` field. The routed
   `src/cli/` commands compile into `dist/bin/audiobook-curator.js` for `package.json` `bin`, and
   `dist/index.js` plus declarations serve `exports`. See

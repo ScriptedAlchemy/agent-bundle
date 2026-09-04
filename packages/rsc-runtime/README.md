@@ -17,8 +17,11 @@ elapsed time are bounded on the reconciler.
 
 Generated MCP tool calls project the live render-event stream through
 `projectMcpRenderStream`: `notifications/progress` is emitted only when the
-caller supplied a progress token, shell/replace stay internal, and the
-request resolves to one final `CallToolResult`. Image, audio, and resource
+caller supplied a progress token — for `progress.report()` events and for
+`Agent.Progress` nodes streamed in a shell/replace document (a `Suspense`
+fallback), under one monotonic `progress` rule so neither source duplicates
+the other — shell/replace content stays internal, and the request resolves to
+one final `CallToolResult`. Image, audio, and resource
 blocks are capability-gated — unsupported rich content uses a declared
 fallback or a typed `McpProjectionError`, never a silent drop. The existing
 `lowerMcpResult` / `lowerHookResult` helpers remain synchronous compatibility

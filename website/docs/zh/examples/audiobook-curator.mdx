@@ -37,9 +37,10 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
 - **持久状态有被挂载的身份。** `src/state.ts` 挂载工作区级持久状态 `audiobook-curator/shelf` 与三个
   事件。如果状态未挂载，那个只读 MCP 工具与渲染式 `shelf` CLI 命令都会返回一个空的结构化书架和一条
   显式的不可用提示，而不是失败。
-- **Suspense 变成 MCP 进度。** `audit_library` 先通过请求的 `context.progress` 报告进度，然后把它的
-  异步分析放到 React `Suspense` 之后，回退内容是一个 `Agent.Progress` 节点。生成的投影器会流式传输
-  进度状态，再用完成后的分析替换它，而最终的结构化收据不变。
+- **Suspense 变成 MCP 进度。** `audit_library` 把它的异步分析放到 React `Suspense` 之后，回退内容是一个
+  `Agent.Progress` 节点，而这个回退本身就是全部的进度表面：生成的投影器会把它作为 `notifications/progress`
+  发送给传入了 progress token 的客户端，再用完成后的分析替换它，而最终的结构化收据不变。没有任何
+  `progress.report()` 调用重复这条消息。
 - **包构建归框架所有。** 配置没有声明 `bin`，也没有声明 `scripts`。`src/cli/` 下的路由命令编译为
   `dist/bin/audiobook-curator.js` 以服务 `package.json` 的 `bin`，而 `dist/index.js` 加声明文件服务
   `exports`。见 [CLI 与库包入口](../guide/authoring/package-entries.mdx)。
