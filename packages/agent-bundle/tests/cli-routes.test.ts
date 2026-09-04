@@ -923,6 +923,21 @@ describe('generated CLI shell', () => {
       ]);
     });
 
+    it('keeps the operand of every string refinement in the bounded grammar', () => {
+      const cases: readonly [schema: z.ZodType, value: string, expected: string][] = [
+        [z.object({ root: z.string().startsWith('/') }), 'relative', 'string starting with "/"'],
+        [z.object({ root: z.string().endsWith('.json') }), 'config.yaml', 'string ending with ".json"'],
+        [z.object({ root: z.string().includes('@') }), 'nobody', 'string containing "@"'],
+        [z.object({ root: z.string().regex(/^[a-z]+$/u) }), 'Nope', 'string matching /^[a-z]+$/u'],
+        [z.object({ root: z.string().length(4) }), 'abc', 'string with exactly 4 characters'],
+        [z.object({ root: z.url() }), 'not a url', 'URL'],
+      ];
+      for (const [schema, value, expected] of cases) {
+        const error = cliInputError(doctor, { root: value }, failure(schema, { root: value }));
+        expect(error.message).toBe(`Invalid value for <root>: expected ${expected}; received ${JSON.stringify(value)}.`);
+      }
+    });
+
     it('spells a projected MCP command path as --input.<path>', () => {
       const schema = z.object({ message: z.string(), nested: z.object({ count: z.number() }).optional() });
       const input = { message: 42, nested: { count: 'x' } };

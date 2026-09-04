@@ -118,8 +118,10 @@ export class CliInputError extends Error {
 /** The structural shape of a zod (v3/v4) issue, matched without importing zod: routed executables resolve zod from the consumer project. */
 interface SchemaIssueLike {
   readonly code?: unknown;
+  readonly exact?: unknown;
   readonly expected?: unknown;
   readonly format?: unknown;
+  readonly includes?: unknown;
   readonly inclusive?: unknown;
   readonly keys?: unknown;
   readonly maximum?: unknown;
@@ -128,6 +130,8 @@ interface SchemaIssueLike {
   readonly origin?: unknown;
   readonly path: readonly PropertyKey[];
   readonly pattern?: unknown;
+  readonly prefix?: unknown;
+  readonly suffix?: unknown;
   readonly values?: unknown;
 }
 
@@ -143,24 +147,47 @@ const schemaIssuesOf = (error: unknown): readonly SchemaIssueLike[] | undefined 
   return issues;
 };
 
-/** `number <= 55000`, `non-empty string`, `array with at most 8 items`, ... */
-const boundLabel = (origin: unknown, bound: unknown, inclusive: unknown, direction: 'max' | 'min'): string => {
-  const inclusiveBound = inclusive !== false;
+/** `number <= 55000`, `non-empty string`, `array with at most 8 items`, `string with exactly 4 characters`, ... */
+const boundLabel = (issue: SchemaIssueLike, direction: 'max' | 'min'): string => {
+  const bound = direction === 'max' ? issue.maximum : issue.minimum;
+  const inclusiveBound = issue.inclusive !== false;
   const value = String(bound);
-  const quantifier = direction === 'max'
-    ? (inclusiveBound ? 'at most' : 'fewer than')
-    : (inclusiveBound ? 'at least' : 'more than');
-  switch (origin) {
+  const quantifier = issue.exact === true
+    ? 'exactly'
+    : direction === 'max'
+      ? (inclusiveBound ? 'at most' : 'fewer than')
+      : (inclusiveBound ? 'at least' : 'more than');
+  switch (issue.origin) {
     case 'string':
-      if (direction === 'min' && inclusiveBound && bound === 1) return 'non-empty string';
+      if (direction === 'min' && inclusiveBound && bound === 1 && issue.exact !== true) return 'non-empty string';
       return `string with ${quantifier} ${value} characters`;
     case 'array':
     case 'set':
-      return `${String(origin)} with ${quantifier} ${value} items`;
+      return `${String(issue.origin)} with ${quantifier} ${value} items`;
     default: {
-      const comparator = direction === 'max' ? (inclusiveBound ? '<=' : '<') : (inclusiveBound ? '>=' : '>');
-      return `${typeof origin === 'string' ? origin : 'value'} ${comparator} ${value}`;
+      const comparator = issue.exact === true
+        ? '=='
+        : direction === 'max' ? (inclusiveBound ? '<=' : '<') : (inclusiveBound ? '>=' : '>');
+      return `${typeof issue.origin === 'string' ? issue.origin : 'value'} ${comparator} ${value}`;
     }
+  }
+};
+
+/** The string-format refinements keep their operand: the user needs the prefix, suffix, substring, or pattern to fix the value. */
+const formatLabel = (issue: SchemaIssueLike): string => {
+  switch (issue.format) {
+    case 'starts_with':
+      return `string starting with ${JSON.stringify(issue.prefix)}`;
+    case 'ends_with':
+      return `string ending with ${JSON.stringify(issue.suffix)}`;
+    case 'includes':
+      return `string containing ${JSON.stringify(issue.includes)}`;
+    case 'regex':
+      return `string matching ${String(issue.pattern)}`;
+    case 'url':
+      return 'URL';
+    default:
+      return issue.message;
   }
 };
 
@@ -170,9 +197,9 @@ const expectationOf = (issue: SchemaIssueLike): string => {
     case 'invalid_type':
       return typeof issue.expected === 'string' ? issue.expected : issue.message;
     case 'too_big':
-      return boundLabel(issue.origin, issue.maximum, issue.inclusive, 'max');
+      return boundLabel(issue, 'max');
     case 'too_small':
-      return boundLabel(issue.origin, issue.minimum, issue.inclusive, 'min');
+      return boundLabel(issue, 'min');
     case 'invalid_value':
     case 'invalid_enum_value':
     case 'invalid_literal':
@@ -181,8 +208,7 @@ const expectationOf = (issue: SchemaIssueLike): string => {
         : issue.message;
     case 'invalid_format':
     case 'invalid_string':
-      if (issue.format === 'regex' && issue.pattern !== undefined) return `string matching ${String(issue.pattern)}`;
-      return typeof issue.format === 'string' ? `${issue.format} string` : issue.message;
+      return formatLabel(issue);
     case 'unrecognized_keys':
       return Array.isArray(issue.keys)
         ? `no unknown ${issue.keys.length === 1 ? 'key' : 'keys'} ${issue.keys.map((key) => JSON.stringify(key)).join(', ')}`
