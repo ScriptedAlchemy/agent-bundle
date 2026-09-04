@@ -33,6 +33,7 @@ import { terminalCapabilityRuntimePath } from '../build/entry-shell.ts';
 import { metaModuleSpecifier } from '../build/meta.ts';
 import { runGeneratedRenderedScript } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
+import { typeScriptTransformFlags } from '../core/runtime.ts';
 import { testMetaModuleSource } from '../rstest/meta-module.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
@@ -245,8 +246,8 @@ const rsbuildCorePath = ((): string | undefined => {
  * (the build's generated module over the manifest's plugin identity, or the
  * AB4760 module when the compiler pass produced no model), relative `.js` specifiers that name TypeScript sources resolve to
  * them (as the bundler resolves them for the generated executable), Node's
- * own type transform handles `.ts`, and `.tsx` / `.jsx` lower through the
- * bundler's SWC.
+ * own TypeScript loading handles `.ts` (see `typeScriptTransformFlags`), and
+ * `.tsx` / `.jsx` lower through the bundler's SWC.
  */
 const hooksSource = (manifest: AgentBundleTestManifest): string => `
 import { createRequire, registerHooks } from 'node:module';
@@ -366,9 +367,11 @@ const runPlainScript = async (
   // can start without the abort reaching it.
   signal.throwIfAborted();
   // A generated executable runs under plain `node`; the test runner's own
-  // flags are not inherited, only the type transform the source needs.
+  // flags are not inherited, only the TypeScript loading the source needs —
+  // the transform flag where this Node still has one (22, 24), nothing on
+  // Node 26, which rejects the old flag and strips types unflagged.
   const child = spawn(process.execPath, [
-    '--experimental-transform-types',
+    ...typeScriptTransformFlags(),
     '--disable-warning=ExperimentalWarning',
     '--import', `data:text/javascript,${encodeURIComponent(hooksSource(manifest))}`,
     '--input-type=module',

@@ -7,6 +7,7 @@ import {
 } from '../src/core/diagnostics.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
 import { assertInside } from '../src/core/paths.ts';
+import { typeScriptTransformFlags } from '../src/core/runtime.ts';
 import type { McpTransport } from '../src/index.ts';
 
 // Type-level contract: only modern MCP transports are public.
@@ -97,4 +98,44 @@ it('throws stable error summaries containing only error diagnostics', () => {
   }
 
   throw new Error('Expected DiagnosticBag.throwIfErrors() to throw.');
+});
+
+// The TypeScript-related entries of `process.allowedNodeEnvironmentFlags`, as
+// observed on each release line.
+const node22Flags: ReadonlySet<string> = new Set([
+  '--experimental-default-type',
+  '--experimental-strip-types',
+  '--experimental-transform-types',
+  '--input-type',
+  '--no-experimental-strip-types',
+  '--no-experimental-transform-types',
+]);
+const node24Flags: ReadonlySet<string> = new Set([
+  '--experimental-strip-types',
+  '--experimental-transform-types',
+  '--input-type',
+  '--no-experimental-transform-types',
+  '--no-strip-types',
+  '--strip-types',
+]);
+// Node 26 removed --experimental-transform-types (nodejs/node#61803).
+const node26Flags: ReadonlySet<string> = new Set([
+  '--experimental-strip-types',
+  '--input-type',
+  '--no-strip-types',
+  '--strip-types',
+]);
+
+it('passes --experimental-transform-types to a TypeScript child only where the binary accepts it', () => {
+  expect(typeScriptTransformFlags(node22Flags)).toEqual(['--experimental-transform-types']);
+  expect(typeScriptTransformFlags(node24Flags)).toEqual(['--experimental-transform-types']);
+  // Node 26 strips types unflagged and rejects the removed flag as a bad option.
+  expect(typeScriptTransformFlags(node26Flags)).toEqual([]);
+  expect(Object.isFrozen(typeScriptTransformFlags(node26Flags))).toBe(true);
+});
+
+it('defaults to the flags this process accepts, so a child over process.execPath never gets a bad option', () => {
+  const flags = typeScriptTransformFlags();
+  expect(flags).toEqual(typeScriptTransformFlags(process.allowedNodeEnvironmentFlags));
+  for (const flag of flags) expect(process.allowedNodeEnvironmentFlags.has(flag)).toBe(true);
 });
