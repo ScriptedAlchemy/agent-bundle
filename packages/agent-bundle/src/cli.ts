@@ -321,9 +321,7 @@ const shortContentHash = (hash: string): string => hash.slice(0, 12);
 
 const humanInstall = (result: InstallResult): string => formatInstallResult(result);
 
-const writeHumanUninstall = (output: Output, result: UninstallResult): void => {
-  output.write(formatUninstallResult(result));
-};
+const humanUninstall = (result: UninstallResult): string => formatUninstallResult(result);
 
 const describeLifecycle = (lifecycle: DoctorLifecycle): string => {
   const observations = (['placed', 'registered', 'enabled', 'active'] as const).map((stage) => {
@@ -396,13 +394,13 @@ const humanDoctor = (result: DoctorReport): string => {
         );
       }
       if (host.bundle.lifecycle !== undefined) {
-        output.write(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
+        out.push(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
       }
     }
     if (host.receipts.length > 0) {
-      output.write(`  receipts: ${host.receipts.length} store receipt(s)\n`);
+      out.push(`  receipts: ${host.receipts.length} store receipt(s)\n`);
       for (const receipt of host.receipts) {
-        output.write(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
+        out.push(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
       }
     }
     const reports = [
@@ -793,8 +791,7 @@ export const runCli = async (
       ...(options.purgeData === undefined ? {} : { purgeData: options.purgeData }),
       scope: installScope(options.scope),
     });
-    if (options.json === true) writeMachine(stdout, result);
-    else writeHumanUninstall(stdout, result);
+    await (options.json === true ? machine(result) : run(display(humanUninstall(result))));
   });
 
   const doctorCommand = program.command('doctor')

@@ -369,6 +369,10 @@ Wiring rules:
   subpaths, not the whole `platformLayer`: the CLI's help/version path does
   not use child-process, crypto, or filesystem services, and loading them
   measured at roughly +400 ms of startup.
+- The scaffolder (`packages/create-agent-bundle/src/index.ts`) uses the same
+  two services from its existing `NodeServices.layer` root for `--help`
+  (`Terminal.display`) and flag errors (`Stdio.stderr()`); Clack stays the
+  prompt renderer and is not replaced by `readLine`.
 - Keep `display` text explicit about line endings (`\n`); the service writes
   what it is given.
 - Tests provide a capture layer (`tests/support/cli-terminal.ts`:

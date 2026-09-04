@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 
 import { cancel, intro, isCancel, log, multiselect, note, outro, select, text } from '@clack/prompts';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, Path } from 'effect';
+import { Effect, FileSystem, Path, Stdio, Stream, Terminal } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
 
 import { mapCause, runPromise } from './effect/boundary.ts';
@@ -144,22 +144,40 @@ const scaffoldProgram = Effect.fnUntraced(function* (
   })));
 });
 
-export const runCli = async (argv: readonly string[]): Promise<0 | 1 | 2> => {
+/** `--help`: user-facing text, so it goes through the `Terminal` service (stdout). */
+const showHelp = Effect.gen(function* () {
+  const terminal = yield* Terminal.Terminal;
+  yield* terminal.display(helpText);
+  return 0 as const;
+});
+
+/** A flag error: the message and the help text on stderr through `Stdio` (`Terminal.display` is stdout-only). */
+const usageFailure = (error: UsageError) => Effect.gen(function* () {
+  const stdio = yield* Stdio.Stdio;
+  yield* Stream.run(Stream.make(`${error.message}\n\n${helpText}`), stdio.stderr());
+  return 2 as const;
+});
+
+/**
+ * The whole CLI as one program over the platform services, so tests can run
+ * the help and flag-error paths against a capture `Terminal` / `Stdio` layer.
+ * A non-usage `parseFlags` failure is a bug and keeps throwing.
+ */
+export const cliProgram = (
+  argv: readonly string[],
+): Effect.Effect<0 | 1 | 2, PlatformError, FileSystem.FileSystem | Path.Path | Stdio.Stdio | Terminal.Terminal> => {
   let flags: ParsedFlags;
   try {
     flags = parseFlags(argv);
   } catch (error) {
-    if (error instanceof UsageError) {
-      process.stderr.write(`${error.message}\n\n${helpText}`);
-      return 2;
-    }
+    if (error instanceof UsageError) return usageFailure(error);
     throw error;
   }
-  if (flags.help) {
-    process.stdout.write(helpText);
-    return 0;
-  }
-  // The one composition root: the Node platform services are provided here
-  // and nowhere else in the package.
-  return runPromise(Effect.provide(scaffoldProgram(flags), NodeServices.layer));
+  return flags.help ? showHelp : scaffoldProgram(flags);
 };
+
+export const runCli = (argv: readonly string[]): Promise<0 | 1 | 2> =>
+  // The one composition root: the Node platform services are provided here
+  // and nowhere else in the package. Clack stays the prompt renderer; only
+  // the plain help and flag-error text goes through Terminal / Stdio.
+  runPromise(Effect.provide(cliProgram(argv), NodeServices.layer));
