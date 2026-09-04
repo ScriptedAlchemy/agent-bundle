@@ -86,7 +86,23 @@ it('compiles every canonical event family plus the MCP and CLI surfaces', () => 
   ]) {
     expect(routes, family).toContain(`event:${family}`);
   }
-  expect(routes).toEqual(expect.arrayContaining(['tool:host-test/dump', 'tool:host-test/reset', 'cli:dump']));
+  expect(routes).toEqual(expect.arrayContaining(['tool:host-test/dump', 'tool:host-test/reset', 'tool:host-test/slow', 'cli:dump']));
+  expect(manifest.routes['tool:host-test/slow']?.config).toMatchObject({ execution: { taskSupport: 'optional' } });
+});
+
+it('holds the slow probe open for the requested time, reporting one progress tick per tickMs, and records the call', async () => {
+  const slow = await render('tool:host-test/slow', { holdMs: 120, tickMs: 40 });
+  expect(slow.document.value).toMatchObject({ ticks: 3 });
+  expect((slow.document.value as { heldMs: number }).heldMs).toBeGreaterThanOrEqual(100);
+  expect(slow.progress.map((update) => update.completed)).toEqual([1, 2, 3]);
+  // The probe is recorded like every other MCP call; the dump that reads it records itself too.
+  const dumped = await render('tool:host-test/dump', {});
+  expect(dumped.document.value).toMatchObject({
+    records: [
+      expect.objectContaining({ event: 'mcp:slow', kind: 'mcp', observed: { holdMs: 120, tickMs: 40, tool: 'slow' } }),
+      expect.objectContaining({ event: 'mcp:dump', kind: 'mcp' }),
+    ],
+  });
 });
 
 it('records the complete native envelope, the request context, and env names for every event', async () => {

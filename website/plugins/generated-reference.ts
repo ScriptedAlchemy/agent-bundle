@@ -142,6 +142,9 @@ const messages = {
     installSurface: 'Install surface',
     pathTokens: 'Path tokens',
     mcpTransports: 'MCP transports and token fields',
+    mcpTasksIntro:
+      'The `tasks` column records whether the pinned host client issues task-augmented `tools/call` requests (the MCP `2025-11-25` Tasks utility: `params.task`, `CreateTaskResult`, `tasks/get`, `tasks/result`, `tasks/cancel`, `tasks/list`). Generated servers serve that lifecycle for any tool route that declares `config.execution.taskSupport`; the column is about the host, not the server. `unavailable` means the host is documented or observed to send ordinary calls only, with the reason and evidence below.',
+    mcpTasksDetails: 'Task-augmented calls by host',
     lineage: 'Conversation lineage',
     lineageIntro:
       'The `lineage` section of each table: what the host tells the warm runtime about the conversation tree behind `request.lineage`. `subagent-events` says whether the host emits subagent start/stop hooks at all, `root` whether every payload names the root conversation, `parent` and `depth` how a subagent is placed under its parent (`supported` only when the child\'s own payload names it, `degraded` when the runtime registry places it from spawn-call ordering and any later host confirmation), and `mcp-correlation` how a generated MCP tool call is matched to the hook window that produced it. A degraded row records what the registry does and how certain it is; a supported row records the evidence. The `resolution` field on `request.lineage` reports which path answered (`native`, `registry`, `confirmed`, `inferred`).',
@@ -164,6 +167,7 @@ const messages = {
       token: 'Token',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
+      tasks: 'Task-augmented calls',
       tokenFields: 'Fields accepting path tokens',
       canonicalEvent: 'Canonical event',
       payloadField: 'Payload field',
@@ -243,6 +247,9 @@ const messages = {
     installSurface: '安装方式',
     pathTokens: '路径令牌',
     mcpTransports: 'MCP 传输与令牌字段',
+    mcpTasksIntro:
+      '`tasks` 列记录固定版本的宿主客户端是否会发出任务增强的 `tools/call` 请求（MCP `2025-11-25` Tasks 工具：`params.task`、`CreateTaskResult`、`tasks/get`、`tasks/result`、`tasks/cancel`、`tasks/list`）。生成的服务器会为任何声明了 `config.execution.taskSupport` 的工具路由提供这一生命周期；本列描述的是宿主，而不是服务器。`unavailable` 表示文档或观测表明该宿主只发送普通调用，原因与证据见下表。',
+    mcpTasksDetails: '各宿主的任务增强调用',
     lineage: '会话谱系',
     lineageIntro:
       '每张表的 `lineage` 部分：宿主向常驻运行时提供了哪些关于 `request.lineage` 背后会话树的信息。`subagent-events` 表示宿主是否发出子代理 start/stop 钩子，`root` 表示每个载荷是否都给出根会话，`parent` 与 `depth` 表示子代理如何被放到其父节点之下（只有当子代理自己的载荷给出父节点时才是 `supported`；由运行时注册表按 spawn 调用顺序放置、再由宿主事后确认时为 `degraded`），`mcp-correlation` 表示生成的 MCP 工具调用如何匹配到产生它的钩子窗口。degraded 行记录注册表的做法及其确定程度；supported 行记录证据。`request.lineage` 上的 `resolution` 字段报告是哪条路径给出了答案（`native`、`registry`、`confirmed`、`inferred`）。',
@@ -265,6 +272,7 @@ const messages = {
       token: '令牌',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
+      tasks: '任务增强调用',
       tokenFields: '接受路径令牌的字段',
       canonicalEvent: '规范事件',
       payloadField: '载荷字段',
@@ -531,7 +539,7 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
   sections.push(`## ${m.mcpTransports}\n`);
   sections.push(
     table(
-      [m.headers.host, m.headers.stdio, m.headers.streamableHttp, m.headers.tokenFields],
+      [m.headers.host, m.headers.stdio, m.headers.streamableHttp, m.headers.tasks, m.headers.tokenFields],
       hosts.map(host => {
         const mcp = asObject(host.data.mcp);
         const fields = Object.entries(mcpPathTokenFields(host.data))
@@ -541,8 +549,30 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
           code(host.host),
           mcp.stdio === true ? 'supported' : m.unavailable,
           mcp.streamableHttp === true ? 'supported' : m.unavailable,
+          stateCell(capabilityRow(mcp.tasks), m),
           fields.length > 0 ? fields : mcpPathTokenLoweringNote(host.data) ?? m.notApplicable,
         ];
+      }),
+    ),
+  );
+  sections.push(m.mcpTasksIntro);
+  sections.push(`### ${m.mcpTasksDetails}\n`);
+  sections.push(
+    table(
+      [m.headers.host, m.headers.state, m.headers.detail],
+      hosts.flatMap(host => {
+        const entry = capabilityRow(asObject(host.data.mcp).tasks);
+        if (entry === undefined) {
+          return [];
+        }
+        const details: string[] = [];
+        if (entry.reason !== undefined) {
+          details.push(escapeProse(entry.reason));
+        }
+        if (Array.isArray(entry.evidence)) {
+          details.push(m.evidenceNotes(entry.evidence.length));
+        }
+        return [[code(host.host), entry.state ?? m.unavailable, details.length > 0 ? details.join('<br />') : m.notApplicable]];
       }),
     ),
   );

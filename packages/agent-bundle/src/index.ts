@@ -69,7 +69,9 @@ export type {
   RouteUiMeta,
   ScriptRouteProps,
   ToolConfig,
+  ToolExecutionConfig,
   ToolRouteProps,
+  ToolTaskSupport,
 } from './routes/public.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { specTypeSchemas as clientSchemas } from '@modelcontextprotocol/client';
 import { expect, it } from '@rstest/core';
 
 import { requestEventRuntime } from '../src/events/ipc.ts';
@@ -266,6 +267,32 @@ it('serves compiled routes and durable state across packed process restarts', as
           ],
           structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
         });
+      // Task-augmented tools/call over real stdio framing (#369): the same
+      // spawned process answers with a CreateTaskResult first and hands the
+      // ordinary CallToolResult to tasks/result; a tool that did not opt in
+      // refuses the augmentation.
+      expect(firstSession.client.getServerCapabilities()?.tasks).toEqual({ cancel: {}, list: {}, requests: { tools: { call: {} } } });
+      const created = await firstSession.client.request({
+        method: 'tools/call',
+        params: { arguments: { holdMs: 50 }, name: 'wait', task: { ttl: 60_000 } },
+      }, clientSchemas.CreateTaskResult);
+      expect(created.task).toMatchObject({ status: 'working', ttl: 60_000 });
+      await expect(firstSession.client.request({
+        method: 'tasks/result',
+        params: { taskId: created.task.taskId },
+      }, clientSchemas.CallToolResult)).resolves.toMatchObject({
+        _meta: { 'io.modelcontextprotocol/related-task': { taskId: created.task.taskId } },
+        content: [{ text: 'waited 50ms', type: 'text' }],
+        structuredContent: { waitedMs: 50 },
+      });
+      await expect(firstSession.client.request({
+        method: 'tasks/get',
+        params: { taskId: created.task.taskId },
+      }, clientSchemas.GetTaskResult)).resolves.toMatchObject({ status: 'completed', taskId: created.task.taskId });
+      await expect(firstSession.client.request({
+        method: 'tools/call',
+        params: { arguments: { message: 'no task' }, name: 'echo', task: {} },
+      }, clientSchemas.CreateTaskResult)).rejects.toMatchObject({ code: -32_601 });
       await expect(firstSession.client.callTool({
         arguments: { note: 'packed durable proof' },
         name: 'journal',
