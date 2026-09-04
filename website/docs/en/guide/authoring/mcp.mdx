@@ -175,6 +175,39 @@ as the second argument of `main` (see [Package entries](./package-entries.mdx#th
 In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
 and `context.terminal` injects any other one through the same seam as every identity axis.
 
+### Request context providers
+
+A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
+mounted at `(await agent()).providers.<camelCaseName>` on every generated surface. Beyond the
+surface-specific `invocation` and the request `signal`, the factory receives the request as the
+route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
+same `Observed` values with the same provenance — plus read-only views of the mounted handles:
+`state` (`read` only) when the project declares `src/state.ts`, `notices` (`inbox` and
+`published` only) when the scope mounts the notice ledger. A provider can therefore derive a view
+of shared state — a topology, a peers list, what became of the notices this agent published — but
+cannot dispatch a state event or publish a notice; those stay in routes.
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+Providers run once per request as the request's own resolver: after `runAgentRequest` has
+frozen the identity axes and opened the notice lease, before the route, in deterministic key
+order, outside the request's async context (`agent()` inside a factory throws
+`outside-invocation`). A factory that throws fails the request closed; expected degradation
+should return an honest unavailable-shaped value instead. The `agent-bundle/test` harness hands
+its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
+sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in

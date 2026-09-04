@@ -5,6 +5,7 @@ export const resultSchema = z.object({
   arguments: z.number().int().nonnegative(),
   keys: z.array(z.string()),
   libraryTooling: z.unknown().optional(),
+  requestView: z.unknown().optional(),
 }).strict();
 
 export default async function ToolingSummary({ argv, signal }: {
@@ -17,6 +18,7 @@ export default async function ToolingSummary({ argv, signal }: {
     arguments: argv.length,
     keys: Object.keys(providers).sort(),
     libraryTooling: providers['libraryTooling'] as JsonValue,
+    requestView: providers['requestView'] as JsonValue,
   };
   return (
     <Agent.Result value={value}>

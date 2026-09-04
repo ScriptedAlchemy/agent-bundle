@@ -253,14 +253,12 @@ export const invokeCli = async (
         const root = process.cwd();
         const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).
-        const providers = await mountProviders({
+        const providers = mountProviders({
           explicit: context.providers,
           invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
           manifest,
-          plugin,
           processHit: claimProcessHit(processLifetime),
           provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
-          signal: execution.signal,
         });
         const result = await runtime.runAgentRequest({
           capabilities: {
