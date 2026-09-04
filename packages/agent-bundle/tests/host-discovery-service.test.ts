@@ -58,10 +58,14 @@ const doctorReport = Object.freeze({
         status: 'unknown' as const,
       }),
       probe: Object.freeze({ status: 'available' as const, version: '2.1.250' }),
+      receipts: Object.freeze([]),
     }),
   ]),
   summary: Object.freeze({ errors: 0, infos: 1, warnings: 0 }),
 }) satisfies DoctorReport;
+
+/** What the discovery envelope carries per host: the Doctor report minus the CLI-only receipt store inventory. */
+const projectedHosts = doctorReport.hosts.map(({ receipts: _receipts, ...host }) => host);
 
 it('forwards Doctor options and projects the prepared bundle into the discovery envelope', async () => {
   const calls: DoctorOptions[] = [];
@@ -104,7 +108,8 @@ it('forwards Doctor options and projects the prepared bundle into the discovery 
     diagnostics: doctorReport.diagnostics,
     endpoints: doctorReport.endpoints,
     generatedAt: '2026-09-02T05:00:00.000Z',
-    hosts: doctorReport.hosts,
+    // The discovery envelope projects the Doctor host report; lifecycle receipts stay CLI-only (G6: no Workbench mutation surface).
+    hosts: projectedHosts,
     manifestDigest: 'revision-a',
     summary: doctorReport.summary,
   } satisfies HostDiscoveryReport);
@@ -130,7 +135,7 @@ it('reports an absent prepared build without treating it as an error', async () 
   expect(report).not.toHaveProperty('manifestDigest');
   expect(report.summary.errors).toBe(0);
   expect(report.diagnostics).toEqual(doctorReport.diagnostics);
-  expect(report.hosts).toEqual(doctorReport.hosts);
+  expect(report.hosts).toEqual(projectedHosts);
   expect(report.endpoints).toEqual(doctorReport.endpoints);
   expect(report.summary).toEqual(doctorReport.summary);
 });

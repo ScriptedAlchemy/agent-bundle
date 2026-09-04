@@ -275,7 +275,7 @@ const WIRE_IPC_REQUEST = `{
   "protocolVersion": 1,
   "artifactEpoch": "17903a885df8d142e2fc4457e61bb34479e81a8f4cc64e24cb92db49eaabe3f1",
   "event": "tool/before",
-  "hostContractRevision": "2.1.250",
+  "hostContractRevision": "2.1.260",
   "target": "claude",
   "native": { ...the validated stdin envelope, value-preserving (re-serialized JSON, not raw bytes)... }
 }
@@ -287,7 +287,7 @@ const WIRE_RENDER_PROPS = `props = {
     event: "tool/before",
     idempotencyKey: sha256({ event, native, target }),
     observedAt: "2026-09-01T23:41:07.512Z",
-    provenance: { host: "claude", hostContractRevision: "2.1.250",
+    provenance: { host: "claude", hostContractRevision: "2.1.260",
                   nativeEvent: "PreToolUse", source: "native" },
     sequence: 1,
   },
@@ -499,7 +499,7 @@ export default function AgentBundleWalkthrough() {
           silent guess.
         </Text>
         <Table
-          headers={["Surface", "Claude 2.1.250", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
+          headers={["Surface", "Claude 2.1.260", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
           columnAlign={["left", "left", "left", "left", "left"]}
           rows={[
             ["Plugin manifest",
@@ -644,7 +644,7 @@ export default function AgentBundleWalkthrough() {
             n={5}
             title="Thin client prints the host-native response and exits 0"
             channel="wrapper → Claude · stdout"
-            note="Claude blocks the Write and surfaces the reason to the model. On tool/before the wrapper always answers: an explicit hookSpecificOutput.permissionDecision ('allow' unless the route denied, optionally with updatedInput / additionalContext) — even when the route renders no decision. Silence is reserved for observation-only families such as session/end."
+            note="Claude blocks the Write and surfaces the reason to the model. On tool/before the wrapper always answers: an explicit hookSpecificOutput.permissionDecision ('allow' unless the route denied, optionally with updatedInput / additionalContext) — even when the route renders no decision. That explicit-allow rule is specific to Claude/Codex tool/before: other families, including decision-capable ones such as stop and prompt/submit, project undefined (silence) when the route neither denies nor adds context, and observation-only families such as session/end are always silent."
             payload={WIRE_STDOUT}
             last
           />
@@ -735,15 +735,15 @@ else try { output = await requestEventRuntime({ ... }); }
           Codex — with a written reason per host, not a silent gap.
         </Text>
         <Table
-          headers={["Canonical event", "Claude 2.1.250", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
+          headers={["Canonical event", "Claude 2.1.260", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
           rowTone={["success", "success", "success", "success", "success", "success", "warning"]}
           rows={[
             [<Text as="span" style={{ fontFamily: MONO }} size="small">session/start</Text>, "SessionStart", "SessionStart", "sessionStart", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">tool/before</Text>, "PreToolUse", "PreToolUse", "preToolUse", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">tool/after</Text>, "PostToolUse", "PostToolUse", "postToolUse", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">stop</Text>, "Stop", "Stop", "stop", "—"],
-            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/start</Text>, "SubagentStart", "SubagentStart (adds turn_id, model, permission_mode)", "subagentStart", "—"],
-            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/stop</Text>, "SubagentStop", "SubagentStop", "subagentStop", "—"],
+            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/start</Text>, "SubagentStart", "SubagentStart (adds turn_id, model, permission_mode)", "subagentStart (subagent_id/subagent_type envelope; permission deny)", "—"],
+            [<Text as="span" style={{ fontFamily: MONO }} size="small">agent/stop</Text>, "SubagentStop", "SubagentStop", "subagentStop (status/loop_count envelope; followup_message)", "—"],
             [<Text as="span" style={{ fontFamily: MONO }} size="small">workspace/open</Text>, "unavailable: no such event", "unavailable: no such event", "workspaceOpen (observe-only; optional pluginPaths return not modeled)", "unavailable: spec defines no hooks"],
           ]}
         />
@@ -758,8 +758,8 @@ else try { output = await requestEventRuntime({ ... }); }
                 ["tool/before", "yes, reason required", "yes (when not denying)", "Claude + Codex; dropped on Cursor"],
                 ["tool/after", "—", "—", "all hosts"],
                 ["stop", "yes — keeps the agent working (Cursor: followup_message)", "—", "—"],
-                ["agent/start", "no host can block subagent creation", "—", "all hosts"],
-                ["agent/stop", "Claude + Codex (keeps subagent running); Cursor cannot", "—", "Claude + Cursor; Codex schema rejects it"],
+                ["agent/start", "Cursor only (permission: deny + user_message); Claude + Codex cannot", "—", "Claude + Codex; Cursor documents no channel"],
+                ["agent/stop", "Claude + Codex (decision: block keeps subagent running); Cursor (followup_message auto-continue)", "—", "Claude only; Codex schema and Cursor docs reject it"],
                 ["workspace/open", "—", "—", "no channel — observation only (Cursor)"],
               ]}
             />
@@ -963,7 +963,7 @@ agent-bundle install cursor --from artifact/cursor   # staged copy`}
           docs/framework-mode.md · examples/&#123;hooks-and-scripts,audiobook-curator,rsc-agent-runtime&#125;.
           Wire payloads in section 4 are illustrative values over verified shapes. Reflects the
           post-PR-#280 split of React rendering (events/project.ts) from envelope projection
-          (events/projection.ts). Host capability facts pinned at Claude Code 2.1.250, Codex
+          (events/projection.ts). Host capability facts pinned at Claude Code 2.1.260, Codex
           0.147.0, Cursor 2026-08-28, Agent Plugins 1.0.0 (observed 2026-08-28 … 2026-09-01).
         </Text>
         <Text size="small" tone="quaternary">

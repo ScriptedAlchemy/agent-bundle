@@ -108,20 +108,3 @@ export const withWorkbenchServer = async <TServer, TProject, TResult>(
   if (cleanupFailure !== undefined) throw cleanupFailure;
   return result as TResult;
 };
-
-/** Convenience wrapper for the common case: a fresh `ProjectFixture` and the standard packaged dev server. */
-export const withWorkbenchProjectServer = <TResult>(
-  run: (server: WorkbenchServer, project: ProjectFixture) => Promise<TResult>,
-  options: Readonly<{
-    setup?: (project: ProjectFixture) => Promise<void>;
-    startOverrides?: Partial<StartDevServerOptions>;
-    teardown?: readonly (() => unknown)[];
-  }> = {},
-): Promise<TResult> => withWorkbenchServer({
-  close: (server) => server.close(),
-  createProject: createProjectFixture,
-  dispose: (project) => removeProjectFixture(project.root),
-  setup: options.setup,
-  start: (project) => startWorkbenchDevServer(project, options.startOverrides),
-  teardown: options.teardown,
-}, run);

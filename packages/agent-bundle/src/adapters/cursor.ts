@@ -15,10 +15,16 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  cliBinCapability,
+  featureCapabilitiesFrom,
+  frontmatterFeatureCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
   supportedCapability,
+  type CapabilityTableRow,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import {
@@ -56,6 +62,40 @@ import { withInstallSurface } from '../install/surface.ts';
 
 const cursorName = 'cursor';
 
+export interface CursorAuthorConfig {
+  readonly email?: string;
+  readonly name: string;
+}
+
+/**
+ * Cursor-only authored manifest metadata layered onto the generated
+ * `.cursor-plugin/plugin.json`. Every field is admitted by the pinned
+ * cursor/plugins@0701892 plugin schema; `author.url` is not (the schema's
+ * author object is closed), and Cursor documents no `nativeHooks` surface.
+ */
+export interface CursorHostConfig {
+  readonly author?: CursorAuthorConfig;
+  readonly category?: string;
+  readonly homepage?: string;
+  readonly keywords?: readonly string[];
+  readonly license?: string;
+  /** Minimum client versions keyed by client identifier, e.g. `{ cursor: '3.13.0' }`. */
+  readonly minClientVersions?: Readonly<Record<string, string>>;
+  readonly publisher?: string;
+  readonly repository?: string;
+  readonly tags?: readonly string[];
+}
+
+export interface CursorConfigExtension {
+  cursor?: CursorHostConfig;
+}
+
+declare module '../core/types.ts' {
+  interface AgentBundleConfigExtensions {
+    cursor?: CursorHostConfig;
+  }
+}
+
 /**
  * Cursor's local-plugin document paths, shared with the unified bundle
  * adapter. A known-loading physical install uses `.cursor-plugin/plugin.json`
@@ -74,6 +114,14 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateHooks = validator.compile(hooksSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
+/**
+ * The exact `format: "uri"` / `format: "email"` checks the pinned plugin
+ * schema applies to `homepage`/`repository` and `author.email`, so metadata is
+ * validated as the string that will be emitted rather than through a looser
+ * local approximation (`new URL()` normalizes; a hand regex admits `a@b..c`).
+ */
+const validateSchemaUri = validator.compile({ type: 'string', format: 'uri' });
+const validateSchemaEmail = validator.compile({ type: 'string', format: 'email' });
 
 /** The pinned Cursor document validators, shared with the unified bundle adapter. */
 export const cursorPluginValidator = validatePlugin;
@@ -254,11 +302,155 @@ export interface CursorManifestPointers {
   readonly variables?: Record<string, unknown>;
 }
 
+const isNonemptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const isAbsoluteUrl = (value: unknown): value is string => {
+  if (!isNonemptyString(value) || !validateSchemaUri(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isEmail = (value: unknown): value is string =>
+  isNonemptyString(value) && validateSchemaEmail(value) === true;
+
+const isNonemptyStringArray = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every(isNonemptyString);
+
+/** The pinned schema's strict `X.Y.Z[-prerelease]` semver for `minClientVersions` values. */
+const cursorSemverPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$/u;
+
+const cursorManifestMetadataFields = Object.freeze([
+  'author',
+  'category',
+  'homepage',
+  'keywords',
+  'license',
+  'minClientVersions',
+  'publisher',
+  'repository',
+  'tags',
+] as const);
+
+export interface CursorManifestMetadataPlan {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly document?: Readonly<Record<string, unknown>>;
+  readonly sourceInputs: readonly string[];
+}
+
+const noManifestMetadataPlan: CursorManifestMetadataPlan = Object.freeze({
+  diagnostics: Object.freeze([]),
+  sourceInputs: Object.freeze([]),
+});
+
+export interface CursorManifestMetadataPlanContext {
+  /** Diagnostic code prefix, e.g. `cursor` or the bundle's `plugin.cursor`. */
+  readonly codePrefix: string;
+  readonly errorDiagnostic: (code: string, message: string) => Diagnostic;
+}
+
+/**
+ * Validates the authored `cursor.*` manifest metadata against the pinned
+ * plugin schema's field shapes. A diagnostic never yields a partial document:
+ * either every authored field is valid and emitted verbatim, or none is.
+ */
+export const planCursorManifestMetadata = (
+  model: NormalizedPlugin,
+  { codePrefix, errorDiagnostic }: CursorManifestMetadataPlanContext,
+): CursorManifestMetadataPlan => {
+  const extension = model.extensions[cursorName];
+  if (extension === undefined || !isPlainDataRecord(extension.value)) return noManifestMetadataPlan;
+  const value = extension.value;
+  const diagnostics: Diagnostic[] = [];
+  const sourceInputs = Object.freeze([extension.provenance.sourcePath]);
+  const unknownFields = Object.keys(value).filter((field) =>
+    !(cursorManifestMetadataFields as readonly string[]).includes(field));
+  if (unknownFields.length > 0) {
+    diagnostics.push(errorDiagnostic(
+      `${codePrefix}.manifest.field.unknown`,
+      `Cursor config declares unsupported field${unknownFields.length === 1 ? '' : 's'} ${unknownFields.map((field) => JSON.stringify(field)).join(', ')}; the pinned Cursor plugin schema admits only ${cursorManifestMetadataFields.join(', ')} here.`,
+    ));
+  }
+  const document: Record<string, unknown> = {};
+  const author = value['author'];
+  if (author !== undefined) {
+    if (!isPlainDataRecord(author)) {
+      diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.invalid`, 'Cursor author must be a plain object with name and optional email.'));
+    } else {
+      const extra = Object.keys(author).filter((field) => !['email', 'name'].includes(field));
+      if (extra.length > 0) {
+        diagnostics.push(errorDiagnostic(
+          `${codePrefix}.manifest.author.invalid`,
+          `Cursor author contains unsupported field${extra.length === 1 ? '' : 's'} ${extra.map((field) => JSON.stringify(field)).join(', ')}; the pinned Cursor plugin schema admits only name and email.`,
+        ));
+      }
+      if (!isNonemptyString(author['name'])) {
+        diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.name.invalid`, 'Cursor author.name must be a nonempty string.'));
+      }
+      if (author['email'] !== undefined && !isEmail(author['email'])) {
+        diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.author.email.invalid`, "Cursor author.email must be an email address the pinned schema's email format admits."));
+      }
+      if (extra.length === 0 && isNonemptyString(author['name']) && (author['email'] === undefined || isEmail(author['email']))) {
+        document['author'] = Object.freeze({
+          ...(author['email'] === undefined ? {} : { email: author['email'] }),
+          name: author['name'],
+        });
+      }
+    }
+  }
+  for (const field of ['homepage', 'repository'] as const) {
+    const url = value[field];
+    if (url === undefined) continue;
+    if (isAbsoluteUrl(url)) document[field] = url;
+    else diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.${field}.invalid`, `Cursor ${field} must be an absolute HTTP or HTTPS URL written exactly as the pinned schema's uri format admits (no surrounding whitespace or unescaped characters).`));
+  }
+  for (const field of ['category', 'license', 'publisher'] as const) {
+    const text = value[field];
+    if (text === undefined) continue;
+    if (isNonemptyString(text)) document[field] = text;
+    else diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.${field}.invalid`, `Cursor ${field} must be a nonempty string.`));
+  }
+  for (const field of ['keywords', 'tags'] as const) {
+    const list = value[field];
+    if (list === undefined) continue;
+    if (isNonemptyStringArray(list)) document[field] = Object.freeze([...list]);
+    else diagnostics.push(errorDiagnostic(`${codePrefix}.manifest.${field}.invalid`, `Cursor ${field} must be an array of nonempty strings.`));
+  }
+  const minClientVersions = value['minClientVersions'];
+  if (minClientVersions !== undefined) {
+    const entries = isPlainDataRecord(minClientVersions) ? Object.entries(minClientVersions) : undefined;
+    const invalid = entries?.filter(([client, version]) => !isNonemptyString(client) || !isNonemptyString(version) || !cursorSemverPattern.test(version));
+    if (entries === undefined || entries.length === 0) {
+      diagnostics.push(errorDiagnostic(
+        `${codePrefix}.manifest.minClientVersions.invalid`,
+        'Cursor minClientVersions must be a plain object with at least one client identifier, e.g. { cursor: "3.13.0" }.',
+      ));
+    } else if (invalid !== undefined && invalid.length > 0) {
+      diagnostics.push(errorDiagnostic(
+        `${codePrefix}.manifest.minClientVersions.invalid`,
+        `Cursor minClientVersions ${invalid.map(([client]) => JSON.stringify(client)).join(', ')} must be strict X.Y.Z semver strings with an optional prerelease suffix.`,
+      ));
+    } else {
+      document['minClientVersions'] = Object.freeze(Object.fromEntries(entries.slice().sort(([left], [right]) => left.localeCompare(right))));
+    }
+  }
+  if (diagnostics.length > 0) return Object.freeze({ diagnostics: Object.freeze(diagnostics), sourceInputs });
+  if (Object.keys(document).length === 0) return Object.freeze({ diagnostics: Object.freeze([]), sourceInputs });
+  return Object.freeze({ diagnostics: Object.freeze([]), document: Object.freeze(document), sourceInputs });
+};
+
 /** Builds the `.cursor-plugin/plugin.json` manifest with explicit document pointers. */
 export const cursorManifest = (
   model: NormalizedPlugin,
   pointers: CursorManifestPointers,
+  manifestMetadata?: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> => ({
+  ...(manifestMetadata ?? {}),
   ...(pointers.commands === undefined ? {} : { commands: pointers.commands }),
   description: model.metadata.description ?? model.metadata.name,
   displayName: model.metadata.name,
@@ -273,7 +465,7 @@ export const cursorManifest = (
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.8.0',
+  adapterRevision: '1.13.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -400,6 +592,8 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const variables = cursorVariables(mcp);
   const marketplacePlan = planCursorMarketplace(model);
   diagnostics.push(...marketplacePlan.diagnostics);
+  const manifestMetadata = planCursorManifestMetadata(model, mcpPlanContext);
+  diagnostics.push(...manifestMetadata.diagnostics);
   const plugin = cursorManifest(model, {
     ...(selectedCommands.length === 0 ? {} : { commands: './commands/' }),
     ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
@@ -407,7 +601,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     ...(selectedRules.length === 0 ? {} : { rules: './rules/' }),
     ...(model.skills.some((skill) => isSelected(skill.targets)) ? { skills: './skills/' } : {}),
     ...(variables === undefined ? {} : { variables }),
-  });
+  }, manifestMetadata.document);
   diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const basePlan = standardPluginArtifactPlan({
@@ -415,6 +609,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
       ...selectedCommands.map((command) => command.source),
       ...selectedRules.map((rule) => rule.source),
       ...(model.metadata.logo === undefined ? [] : [model.metadata.logo.source]),
+      ...manifestMetadata.sourceInputs,
     ],
     diagnostics,
     hookDocument,
@@ -444,11 +639,59 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   }), model, 'cursor');
 };
 
+const { distributionPolicy, formats } = capabilityTable.plugin;
+const hookOptions = capabilityTable.hooks.options;
+
+/**
+ * Cursor-only capability rows (#189 contract matrix). Each key maps to one
+ * dated row in the pinned table so inspect and the composite bundle read the
+ * same judgment; the plugin adapter mirrors every key with an honest
+ * unavailable intersection for the hosts that lack the surface.
+ */
+export const cursorContractCapabilityRows = Object.freeze({
+  agentPluginFormat: formats.agentPlugin,
+  agents: capabilityTable.plugin.agents.component,
+  canvases: capabilityTable.plugin.canvases,
+  componentDiscovery: capabilityTable.plugin.componentDiscovery,
+  cursorPluginFormat: formats.cursorPlugin,
+  hookFailClosed: hookOptions.failClosed,
+  hookLoopLimit: hookOptions.loopLimit,
+  hookMatchers: hookOptions.matcher,
+  hookTimeout: hookOptions.timeout,
+  installModes: distributionPolicy.installModes,
+  localPluginImports: distributionPolicy.localPluginImports,
+  localSymlinkInstall: distributionPolicy.localSymlinkInstall,
+  manifestMetadata: capabilityTable.plugin.manifestMetadata,
+  marketplaceAccess: distributionPolicy.marketplaceAccess,
+  marketplaceAutoRefresh: distributionPolicy.autoRefresh,
+  marketplaceManifest: capabilityTable.plugin.marketplaceManifest,
+  marketplaceReview: distributionPolicy.marketplaceReview,
+  promptHooks: hookOptions.prompt,
+  rootSkill: capabilityTable.plugin.rootSkill,
+  teamMarketplaces: distributionPolicy.teamMarketplaces,
+  variables: capabilityTable.plugin.variables,
+} satisfies Readonly<Record<string, CapabilityTableRow>>);
+
+const contractCapabilities = Object.freeze(Object.fromEntries(
+  Object.entries(cursorContractCapabilityRows).map(([capability, row]) => [capability, capabilityFromTableRow(row, evidence)]),
+));
+
 export const cursorAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout,
   capabilities: Object.freeze({
+    ...contractCapabilities,
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): commands are frontmatter-free on Cursor
+    // (every field row unavailable), rules carry the documented .mdc fields.
+    ...frontmatterFeatureCapabilitiesFrom('commands', capabilityTable.plugin.commandFrontmatter, evidence),
+    // Hook feature rows reuse the #189 hooks.options rows (matcher, timeout).
+    ...featureCapabilitiesFrom('hooks', { timeout: hookOptions.timeout, toolMatchers: hookOptions.matcher }, evidence),
+    ...frontmatterFeatureCapabilitiesFrom('rules', capabilityTable.plugin.ruleFrontmatter, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,
@@ -456,12 +699,17 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
     ),
     hooks: supportedCapability(evidence),
     install: supportedCapability(evidence),
+    // Canonical component kinds with no Cursor Plugin surface (#100): the
+    // pinned schema has no LSP, diagnostics-provider, or extension pointer.
+    lsp: capabilityFromTableRow(capabilityTable.plugin.lsp, evidence),
     marketplace: supportedCapability(evidence),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
       'The pinned Cursor Plugin contract does not support both required modern MCP transports.',
     ),
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     rules: capabilityStateFromSupport(
       capabilityTable.plugin.rules,
       evidence,
@@ -473,9 +721,11 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
       'The pinned Cursor Plugin contract does not support skills.',
     ),
   }),
+  configExtension: Object.freeze({ key: cursorName }),
   hookContract,
   metadata,
   mcpRuntime,
   name: cursorName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(cursorName, capabilityTable.noticeDelivery),
   plan: planCursorArtifacts,
 });

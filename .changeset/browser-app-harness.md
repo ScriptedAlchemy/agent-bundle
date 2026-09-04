@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add the browser-app proof level to the consumer test harness (#103 stage 3).

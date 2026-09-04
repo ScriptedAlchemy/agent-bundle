@@ -13,6 +13,7 @@ import {
   type PlaygroundEventInput,
   type PlaygroundJsonObject,
   type PlaygroundServiceOptions,
+  type PlaygroundTraceEvent,
 } from '../src/dev/playground/playground-store.ts';
 
 interface SessionIndex {
@@ -549,33 +550,56 @@ it('sets an atomic subscription replay boundary, preserves reentrant order, and 
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'live' });
     await fixture.service.append('live', event('project', 'loaded', 'Project loaded.', { revision: 'a' }));
     const received: number[] = [];
+    // Every wait below is event-ordered: the deferreds settle from inside the
+    // subscriber, and appends are awaited, so no polling budget is involved.
+    const firstDelivered = deferred();
+    const secondDelivered = deferred();
+    let reentrant: Promise<PlaygroundTraceEvent> | undefined;
     const subscription = await fixture.service.subscribe('live', {
       afterSequence: 0,
       onEvent: (item) => {
         received.push(item.sequence);
-        if (item.sequence === 1) void fixture.service.append('live', event('build', 'completed', 'Build completed.', { epoch: 'epoch-7' }));
+        if (item.sequence === 1) {
+          // Issued while the replay backlog is being delivered: it must be
+          // ordered behind the subscription boundary and reach this subscriber.
+          reentrant = fixture.service.append('live', event('build', 'completed', 'Build completed.', { epoch: 'epoch-7' }));
+          firstDelivered.resolve();
+        }
+        if (item.sequence === 2) secondDelivered.resolve();
       },
     });
-    await eventually(() => expect(received).toEqual([1, 2]));
+    await firstDelivered.promise;
+    expect(received).toEqual([1]);
+    await expect(reentrant).resolves.toMatchObject({ sequence: 2 });
+    await secondDelivered.promise;
+    expect(received).toEqual([1, 2]);
     expect(subscription.closed).toBe(false);
 
     await fixture.service.openSession({ ...sessionInput(), sessionId: 'slow' });
     const release = deferred();
+    const slowFirstDelivered = deferred();
     const slowReceived: number[] = [];
     const slow = await fixture.service.subscribe('slow', {
       afterSequence: 0,
       onEvent: async (item) => {
         slowReceived.push(item.sequence);
+        if (item.sequence === 1) slowFirstDelivered.resolve();
         await release.promise;
       },
     });
     await fixture.service.append('slow', event('mcp', 'first', 'First.', { item: 1 }));
-    await eventually(() => expect(slowReceived).toEqual([1]));
+    await slowFirstDelivered.promise;
+    expect(slowReceived).toEqual([1]);
+    // The subscriber is blocked on `release`; the second event fills the
+    // one-slot queue and the third overflows it before its append resolves.
     await fixture.service.append('slow', event('mcp', 'second', 'Second.', { item: 2 }));
+    expect(slow.closed).toBe(false);
     await fixture.service.append('slow', event('mcp', 'third', 'Third.', { item: 3 }));
-    await eventually(() => expect(slow.closed).toBe(true));
+    expect(slow.closed).toBe(true);
     release.resolve();
     await expect(fixture.service.replay('slow')).resolves.toMatchObject({ events: [{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }] });
+    // Failing closed dropped the queued event instead of delivering it late.
+    expect(slowReceived).toEqual([1]);
   } finally {
     await fixture.close();
   }

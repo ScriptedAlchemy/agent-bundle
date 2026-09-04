@@ -1,0 +1,27 @@
+[
+  {
+    "text": "指南",
+    "link": "/guide/start/",
+    "activeMatch": "/zh/guide/"
+  },
+  {
+    "text": "参考",
+    "link": "/reference/",
+    "activeMatch": "/zh/reference/"
+  },
+  {
+    "text": "示例",
+    "link": "/examples/",
+    "activeMatch": "/zh/examples/"
+  },
+  {
+    "text": "参与贡献",
+    "link": "/contributing/",
+    "activeMatch": "/zh/contributing/"
+  },
+  {
+    "text": "类型 API",
+    "link": "/api/",
+    "activeMatch": "/zh/api/"
+  }
+]

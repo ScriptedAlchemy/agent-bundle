@@ -1,0 +1,201 @@
+---
+description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括已废弃的 plugin.version 字段。'
+---
+
+# 配置
+
+概念模型——配置拥有什么、`src/` 约定拥有什么——在[配置模型](../guide/authoring/index.mdx)中。本页是
+字段契约。
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+## 顶层字段
+
+| 字段 | 类型 | 默认值 |
+| --- | --- | --- |
+| `plugin` | `{ name, description?, logo?, ... }` | **必填。** |
+| `targets` | `string[]` | 由适配器选择。 |
+| `skills` | `string[]` | `src/skills/*` 约定。 |
+| `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | `src/hooks/*` 约定。 |
+| `mcp` | `{ servers: Record<string, ...> }` | `src/mcp/*` 约定。 |
+| `scripts` | `Record<string, string \| { entry, targets? }>` | `src/scripts/*` 约定。 |
+| `assets` | `string[]` | 根目录 `assets/` 约定。 |
+| `bin` | `false \| Record<string, string \| { entry }>` | `src/cli.ts` 约定。 |
+| `lib` | `false \| string \| { entry, dts? }` | `src/index.ts` 约定。 |
+| `routes` | 路由图策略 | 由约定推导。 |
+| `output` | `{ distPath? }` | 命令行下为 `artifact`；不带 `packageOutputs` 的 `build()` 下为 `dist`。 |
+| `runtime` | `{ node }` | Node 22.12。 |
+| `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
+| `state` | `false` | `src/state.ts` 约定。 |
+| `notices` | `{ retention?: { terminalTtl?, maxTerminal?, maxJournalBytes? } }` | 运行时默认值（`7d`、`500`、`16777216`）。 |
+| `marketplace` | `boolean` | 由适配器选择。 |
+| `dev` | `{ agentApi?, contracts?, runtime? }` | 无。 |
+| `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
+| `tools` | `{ rsbuild?, rspack? }` | 无。 |
+
+宿主作用域的扩展键（`claude`、`codex`、`cursor`、`portable`）由各 target 适配器通过对
+`AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
+留在各自的适配器中，而不进入编译器核心。每个适配器所拥有的键的逐字段清单见
+[宿主作用域声明](../guide/authoring/index.mdx#宿主作用域声明)。
+
+### 生成的类型定义
+
+配置是一份 TypeScript 契约，而不是运行时 schema：`defineConfig` 接受一个 `AgentBundleConfig`（或返回
+它的工厂函数），`validateSource` 则用结构化诊断强制执行本页的规则。下面这些精确形态在每次文档构建时由
+TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
+
+| 字段 | 类型定义 |
+| --- | --- |
+| 整个配置 | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
+| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `notices` | [`AgentBundleNoticesConfig`](../api/interfaces/index.AgentBundleNoticesConfig.md) · [`AgentBundleNoticeRetentionConfig`](../api/interfaces/index.AgentBundleNoticeRetentionConfig.md) |
+| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
+| 宿主扩展 | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
+| 校验 | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+
+## plugin
+
+| 字段 | 规则 |
+| --- | --- |
+| `name` | 必填。宿主原生的插件 slug，绝不是 npm 包名。 |
+| `description` | 一句话，会写进生成的清单中。 |
+| `logo` | 项目相对的图片路径。缺失、不是文件或位于项目之外报告 `AB4012`；在已构建产物中缺失或逃逸出部署树报告 `AB6025`。 |
+| `version` | **已废弃。** |
+
+`package.json` 对发布标识具有权威性。发布版本只在那里声明：与 `package.json` 不一致的 `plugin.version`
+会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付
+`0.0.0-dev.<short-revision>` 这个开发期回退值。该字段仅为兼容而保留，并将按照正常的破坏性变更策略移除。
+
+## hooks
+
+键是七个标准事件：`sessionStart`、`beforeTool`、`afterTool`、`stop`、`agentStart`、`agentStop`、
+`workspaceOpen`。值是一个条目或条目数组，每个条目要么是模块路径，要么是
+`{ handler, tools?, targets?, timeout?, args? }`。每个规范事件与工具选择器如何降级为宿主原生事件与
+匹配器，见生成的[事件与钩子矩阵](./events.md)。
+
+**钩子结果**契约完整地记录在[钩子](../guide/authoring/hooks.mdx)中。有一个字段值得在此重复，因为它很
+容易搞错：`reason` 是一个非空字符串，**仅**在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效，而拒绝
+其中之一却不给出 reason 会失败。
+
+## output 与 runtime
+
+`output.distPath` 是相对项目根目录的产物输出目录。命令行（`build`、`prepack`、`dev`）把它默认为 `artifact`，
+因为命令行同时运行包构建，而包构建拥有 `dist/`；编程式 `build()` 除非传入 `packageOutputs: true`，否则默认为
+`dist`。逐次调用的 `--output` 标志优先，但同样
+受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径
+均不受支持（`AB4707`–`AB4709`）。
+
+`runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
+绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在
+[配置模型](../guide/authoring/index.mdx)中介绍。
+
+## notices
+
+`notices.retention` 设置有状态项目在 `src/state.ts` 旁共同挂载的通知账本的保留策略。终态通知——
+`expired`、`unavailable`、`withdrawn`、`acknowledged`，以及重试预算已耗尽的 `attempted`——在结算满
+`terminalTtl` 后会从账本中清理；当终态通知超过 `maxTerminal` 条时，最早结算的会先被清理；存储的日志
+超过 `maxJournalBytes` 时会被压实到当前头部。清理只在被接纳的事件和显式的 `retain()` 调用时运行；
+不隐含任何定时器。
+
+| 字段 | 默认值 | 规则 |
+| --- | --- | --- |
+| `terminalTtl` | `'7d'` | 正整数毫秒，或形如 `<整数><ms\|s\|m\|h\|d>` 的时长，例如 `'7d'`、`'12h'`、`'30m'`。 |
+| `maxTerminal` | `500` | 正整数。 |
+| `maxJournalBytes` | `16777216` | 正整数字节数。 |
+
+其他任何情况——未知键、非正数或小数、语法之外的时长写法，或在没有状态模块的项目中声明策略——都是
+`AB4833`。`inspect --state` 与 Workbench 的 State 面板会显示解析后的策略以及它是声明的还是默认的；
+实时计数与最近一次压实属于每个已安装的存储（`AgentNoticeLedger.inspect()`）。
+
+## payload
+
+键是产物根目录下的目标目录——一个位于编译器自有命名空间之外的安全单路径段——值是已经构建好的源目录。
+payload 树按字节逐一复制，并且对编译器而言是**不透明的**：编译器无法改写其内部的同级引用，因此稳定的
+名字就是正确性契约。完整性仍然通过产物清单保持内容寻址。
+
+## evals
+
+只接受三个键；其他一律拒绝。
+
+| 字段 | 默认值 | 规则 |
+| --- | --- | --- |
+| `include` | `['evals/**/*.eval.ts']` | 非空的相对模式数组，且绝不逃逸出项目根目录。 |
+| `runsDir` | `.agent-bundle/runs` | 项目根目录下的相对子目录。 |
+| `semanticGrader` | 无 | 必须恰好包含 `harness` 与 `model`。`harness` 必须是 `'claude'`；`model` 必须是安全的模型标识符，而不是路径。 |
+
+`evals` 块中的提供方凭据材料会被直接拒绝（`EVAL_CREDENTIAL_REJECTED`）—— Agent Bundle 复用宿主 CLI 已有
+的已登录会话。见[安全](./security.mdx)。
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  evals: {
+    include: ['evals/**/*.eval.ts'],
+    runsDir: '.agent-bundle/runs',
+    semanticGrader: { harness: 'claude', model: 'claude-sonnet-4-5' },
+  },
+  plugin: { description: 'Evidence-backed project tools.', name: 'my-plugin' },
+  targets: ['portable', 'claude'],
+});
+```
+
+## dev
+
+仅用于开发、绝不会成为已构建产物一部分的设置。
+
+| 字段 | 含义 |
+| --- | --- |
+| `dev.agentApi` | 从 `agent-bundle dev` 暴露那个经过认证、仅 loopback 的 Agent API。`--agent-api` / `--no-agent-api` 标志会覆盖它。 |
+| `dev.contracts.fixtures` | **设置了 `dev.contracts` 时必填。** 项目相对路径的模块，其默认导出把路由 id 映射到契约夹具。声明 `dev.contracts` 会让 `agent-bundle dev` 从直接采用每个 epoch，改为以开发契约矩阵门控面向宿主的采用：检查失败的 epoch 仍会发布到 Workbench playground，但活跃的宿主连接与开发安装会保留最后一个通过的 epoch（`AB7211`）。块本身格式错误、夹具模块逃出项目根、无法加载或导出了错误的形状，则是 `AB7210`。 |
+| `dev.contracts.server` | 矩阵要检查的 MCP 服务器。仅当项目恰好编译一个服务器时可省略。 |
+| `dev.runtime.provider` | 开发期运行时 provider 模块：它导出 `createDevRuntimeProvider`（[`CreateDevRuntimeProvider`](../api/types/api.CreateDevRuntimeProvider.md)），返回一个 [`DevRuntimeProvider`](../api/interfaces/api.DevRuntimeProvider.md)，其 `start` 接收 [`DevRuntimeStartContext`](../api/interfaces/api.DevRuntimeStartContext.md) 并返回 [`DevRuntimeSession`](../api/interfaces/api.DevRuntimeSession.md)。provider 需要实现的整个协议都从 `agent-bundle/api` 发布——检视信封（[`DevRuntimeInspectionEnvelope`](../api/interfaces/api.DevRuntimeInspectionEnvelope.md)）、MCP 服务器描述符（[`DevRuntimeMcpServerDescriptor`](../api/interfaces/api.DevRuntimeMcpServerDescriptor.md)）、它要抛出的错误（[`DevRuntimeUnavailableError`](../api/classes/api.DevRuntimeUnavailableError.md)、[`DevRuntimeGenerationConflictError`](../api/classes/api.DevRuntimeGenerationConflictError.md)），以及会话所驱动的 generation store 与 MCP registry——以契约（[`DevRuntimeGenerationStore`](../api/interfaces/api.DevRuntimeGenerationStore.md)、[`DevRuntimeProviderMcpRegistry`](../api/interfaces/api.DevRuntimeProviderMcpRegistry.md)）及其构造函数（[`createRuntimeGenerationStore`](../api/functions/api.createRuntimeGenerationStore.md)、[`createRuntimeMcpRegistry`](../api/functions/api.createRuntimeMcpRegistry.md)）的形式提供。 |
+
+## tools
+
+唯一的打包器逃生舱。两个片段都会以「最后但有界」的方式合并进框架合成的每一份打包器配置，并且产物不变式
+断言仍会在合并之后运行，因此破坏产物契约的逃生舱取值是一条硬性诊断，而不是一次无声的覆盖（`AB472x`）。
+`AB4720`–`AB4723` 检查 `tools`、`tools.rsbuild` 与 `tools.rspack` 的形状；`AB4724` 会拒绝在
+`tools.rsbuild.plugins` 中再次添加框架自有插件（`@rsbuild/plugin-react`，`rsbuild:react`）的条目，
+因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。
+
+逃生舱在两份打包器引擎副本下执行：产物脚本、MCP 入口、钩子与包构建通过 Rslib 内嵌的 Rsbuild/Rspack 编译，
+而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。绝不要基于导入的 `@rspack/core` 构造插件或执行
+`instanceof` 检查——请使用传给 `tools.rspack` 变更函数的 `utils` 参数
+（`(config, { rspack }) => ...`），它总会交给你当前执行引擎自己的 `rspack` 对象。
+
+### 插件
+
+框架在它合成的配置中只注册一个 Rsbuild 插件：`@rsbuild/plugin-react`（插件名 `rsbuild:react`），
+它作用于每个产物入口（路由以 TSX 编写，该插件选择自动 JSX 运行时）以及每个源文件为 `.jsx`/`.tsx` 的
+MCP App 视图。这个集合就是 `packages/agent-bundle/src/build/framework-plugins.ts` 中的
+`frameworkOwnedRsbuildPlugins`；有一条单元测试从合成的配置中推导它，因此不会漂移，而 `validateTools`
+读取同一个映射，在 `tools.rsbuild.plugins` 条目重复添加其中某个名称时报告 `AB4724`。
+
+其他每个[官方 Rsbuild 插件](https://rslib.rs/config/rsbuild/plugins)都以自己的名称注册，可以通过
+`tools.rsbuild.plugins` 添加。该片段会到达每一份合成配置；下表说明每个插件与哪一类构建面相关：
+
+| 插件 | 相关范围 | 说明 |
+| --- | --- | --- |
+| `@rsbuild/plugin-babel` | 产物入口与 MCP App 视图 | 在 SWC 之外再加一道 Babel 转换。 |
+| `@rsbuild/plugin-svgr`、`@rsbuild/plugin-styled-components` | MCP App 视图 | 仅限 React 的关注点；JSX 仍由框架的 `@rsbuild/plugin-react` 负责。 |
+| `@rsbuild/plugin-sass`、`@rsbuild/plugin-less`、`@rsbuild/plugin-stylus`、`@rsbuild/plugin-tailwindcss`、`@rsbuild/plugin-typed-css-modules`、`@rsbuild/plugin-css-minimizer` | MCP App 视图 | CSS 只存在于浏览器包中；视图会把它内联进自包含的 HTML。 |
+| `@rsbuild/plugin-yaml`、`@rsbuild/plugin-toml`、`@rsbuild/plugin-mdx` | 产物入口与 MCP App 视图 | 额外的模块类型。 |
+| `@rsbuild/plugin-type-check`、`@rsbuild/plugin-eslint` | 产物入口与 MCP App 视图 | 独立进程中的检查；生产模式下失败会让构建失败。 |
+| `@rsbuild/plugin-check-syntax` | 仅 MCP App 视图 | 该插件会跳过非 `web` 环境，因此产物入口（`target: 'node'`）永远不会被它检查。 |
+| `@rsbuild/plugin-node-polyfill`、`@rsbuild/plugin-assets-retry`、`@rsbuild/plugin-image-compress` | MCP App 视图 | 仅限浏览器的关注点。 |
+
+不适用：Vue、Vue JSX、Preact、Solid 与 Svelte 插件（路由与视图都是 React；这些插件会重新配置
+React 插件所拥有的 JSX 转换）、`@rsbuild/plugin-umd`（框架输出 ESM），以及包发布检查
+`rsbuild-plugin-publint` 与 `rsbuild-plugin-arethetypeswrong`（它们在构建后检查构建根目录的
+`package.json`，而不是产物）。

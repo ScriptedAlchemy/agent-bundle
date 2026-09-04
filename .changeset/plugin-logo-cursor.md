@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add optional `plugin.logo` so Cursor artifacts can emit a `logo` field.

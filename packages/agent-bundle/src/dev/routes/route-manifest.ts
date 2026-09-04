@@ -4,7 +4,7 @@ import {
   stateDefinitionProjection,
   type StateDefinitionProjection,
 } from '../../core/state-inspection.ts';
-import type { NormalizedStateDefinition } from '../../core/types.ts';
+import type { NormalizedNotices, NormalizedStateDefinition } from '../../core/types.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -242,6 +242,7 @@ export const routeManifestFor = (
   graph: CompiledRouteGraph,
   sourceRevision: string,
   state?: NormalizedStateDefinition,
+  notices?: NormalizedNotices,
 ): RouteManifest => deepFreeze({
   ...(graph.cli === undefined ? {} : { cli: manifestCli(graph.cli) }),
   diagnostics: graph.diagnostics.map((diagnostic) => ({ ...diagnostic })),
@@ -250,6 +251,6 @@ export const routeManifestFor = (
   providers: graph.providers.map(manifestProvider),
   scripts: graph.scripts.map(manifestRoute),
   servers: graph.servers.map(manifestServer),
-  ...(state === undefined ? {} : { state: stateDefinitionProjection(state, 'src/state.ts') }),
+  ...(state === undefined ? {} : { state: stateDefinitionProjection(state, 'src/state.ts', notices) }),
   sourceRevision,
 });

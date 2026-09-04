@@ -1,6 +1,8 @@
 import {
   validateMcpAppDownloadRequest,
   validateMcpAppExternalLink,
+  validIcons,
+  validIsoDateTimeWithOffset,
   type McpAppValidatedDownload,
 } from '../mcp-app-action-validation.ts';
 import {
@@ -391,27 +393,6 @@ const validAppCapabilities = (value: unknown): McpAppBridgeJsonRecord | undefine
   if (capabilities.tools !== undefined && !validListChangedCapability(capabilities.tools)) return undefined;
   if (capabilities.availableDisplayModes !== undefined && validDisplayModeList(capabilities.availableDisplayModes) === undefined) return undefined;
   return capabilities;
-};
-
-const validIcon = (value: unknown): boolean => {
-  const icon = jsonRecord(value);
-  return icon !== undefined && nonempty(icon.src)
-    && (icon.mimeType === undefined || nonempty(icon.mimeType))
-    && (icon.sizes === undefined || (Array.isArray(icon.sizes) && icon.sizes.every(nonempty)))
-    && (icon.theme === undefined || icon.theme === 'light' || icon.theme === 'dark');
-};
-
-const validIcons = (value: unknown): boolean => Array.isArray(value) && value.every(validIcon);
-
-const validIsoDateTimeWithOffset = (value: unknown): boolean => {
-  if (typeof value !== 'string') return false;
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.exec(value);
-  if (match === null) return false;
-  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
-  if (year === undefined || month === undefined || day === undefined || hour === undefined || minute === undefined || second === undefined
-    || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day && !Number.isNaN(Date.parse(value));
 };
 
 const validAnnotations = (value: unknown): boolean => {

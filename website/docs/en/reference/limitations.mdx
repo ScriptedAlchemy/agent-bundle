@@ -1,0 +1,62 @@
+---
+description: 'Known agent-bundle limitations: unmigrated pre-0.1 durable records, loopback-only development, native harness requirements, inferred Codex activation evidence, and unverified comparison facets.'
+---
+
+# Limitations
+
+Stated plainly, so that a gap is never mistaken for a bug.
+
+## Durable records
+
+Development snapshots and exports written by pre-0.1 builds — before the unversioned
+durable-record cutover — are **not migrated**. Rebuild artifacts and discard those preview Eval and
+Playground records before upgrading. Current readers reject the superseded shapes instead of
+guessing at compatibility.
+
+## The development server
+
+The Workbench binds to loopback only and is a foreground development session, not a hosted
+service.
+
+## Native harnesses
+
+Native Claude and Codex harnesses require those CLIs to be installed and signed in. A missing,
+incompatible, or unauthenticated CLI is reported as a **harness failure**, which is distinct from a
+plugin failure. Their live smoke tests are opt-in and are not part of an ordinary test run.
+
+Semantic grading requires a native Claude harness and a signed-in Claude Code session; the
+deterministic and Codex selections are refused when it is configured.
+
+## Evidence that cannot be observed
+
+Codex exposes no authoritative Skill-activation event, so Codex activation evidence is `inferred`
+and is never reported as `observed`.
+
+Comparison facets that a run did not record — semantic grader identity, host CLI version,
+invocation — are labeled **unverified** rather than assumed aligned.
+
+## What the contract matrix does not prove
+
+No matrix boundary proves browser App HTML or artifact-rebuild replay. In-memory runs and compiled
+artifacts without event routes report runtime identity as honestly `not-applicable`.
+
+The packed boundaries cannot load project route modules — source may be deleted and verified
+absent — so serialized-round-trip, compat-probe, and version-skew checks are reported
+`not-applicable` with a stated reason rather than silently skipped. `host-install` reports
+module-backed checks the same way, because loading project modules would cross back into the
+source and build tree.
+
+When an advertised input schema declares `additionalProperties: false`, plain `z.object` tool
+routes may still strip unknown keys without a protocol failure. The negative-inputs check records
+that tolerance when other generated negatives still prove rejection paths.
+
+## Host validation
+
+Neither Codex nor Cursor publishes a plugin-validation developer verb, so their emitted documents
+are checked against vendored pinned schemas, and host schema generators are treated as a drift
+signal rather than a substitute contract. See
+[Artifact validation](../guide/distribution/validation.mdx).
+
+## Rendering
+
+Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are inert in the Workbench renderer.

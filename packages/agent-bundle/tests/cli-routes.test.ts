@@ -3,13 +3,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
+import { z } from 'zod';
 
 import { inspect } from '../src/api.ts';
 import {
   CliInputError,
+  cliInputError,
   projectCliDocumentToMarkdown,
   runGeneratedCliEntry,
   runGeneratedRenderedScript,
+  type AgentTerminal,
   type CliRenderedDocument,
   type CliRenderedEvent,
   type GeneratedCliRenderSession,
@@ -414,6 +417,79 @@ describe('compiled command graph', () => {
         routeId: 'tool:alpha/audit',
       }),
     ]);
+  });
+
+  describe('the render budget a route declares in config.render (#454)', () => {
+    const renderedCommandModule = (config: string): string => [
+      `export const config = ${config};`,
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n');
+
+    it('carries a valid budget on the compiled command, and a projected MCP command inherits its tool budget', async () => {
+      const root = await createRoot();
+      await writeTree(root, {
+        'src/cli/await.tsx': renderedCommandModule('{ render: { maxElapsedMs: 7_200_000 } }'),
+        'src/cli/plain.ts': plainCommandModule(),
+        'src/mcp/alpha/tools/poll.tsx': toolModule("{ annotations: { readOnlyHint: true }, render: { maxElapsedMs: 120000 } }"),
+        'src/mcp/alpha/tools/quick.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+      });
+
+      const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+      expect(graph.diagnostics).toEqual([]);
+      expect(graph.cli?.commands?.map((command) => [command.path.join(' '), command.render, command.rendered])).toEqual([
+        ['alpha poll', { maxElapsedMs: 120_000 }, true],
+        ['alpha quick', undefined, true],
+        ['await', { maxElapsedMs: 7_200_000 }, true],
+        ['plain', undefined, false],
+      ]);
+      // Absent budgets are absent keys, so pre-#454 graphs digest unchanged.
+      expect(graph.cli?.commands?.map((command) => Object.hasOwn(command, 'render'))).toEqual([true, false, true, false]);
+      // The compiled tool config keeps the budget for the generated server to read.
+      expect(graph.servers[0]!.routes.find((route) => route.id === 'tool:alpha/poll')?.config).toEqual({
+        annotations: { readOnlyHint: true },
+        render: { maxElapsedMs: 120_000 },
+      });
+    });
+
+    it('errors with AB4835 on a malformed budget, one over the 24-hour ceiling, or one on a plain command', async () => {
+      const root = await createRoot();
+      await writeTree(root, {
+        'src/cli/ceiling.tsx': renderedCommandModule('{ render: { maxElapsedMs: 86_400_001 } }'),
+        'src/cli/fraction.tsx': renderedCommandModule('{ render: { maxElapsedMs: 1.5 } }'),
+        'src/cli/negative.tsx': renderedCommandModule('{ render: { maxElapsedMs: -1 } }'),
+        'src/cli/plain.ts': plainCommandModule({ config: '{ render: { maxElapsedMs: 1000 } }' }),
+        // Type-valid but meaningless on a plain command: the declaration itself is the defect.
+        'src/cli/plain-empty.ts': plainCommandModule({ config: '{ render: {} }' }),
+        'src/cli/shape.tsx': renderedCommandModule("{ render: 'long' }"),
+        'src/cli/unknown.tsx': renderedCommandModule('{ render: { timeoutMs: 1000 } }'),
+        'src/mcp/alpha/tools/text.tsx': toolModule("{ render: { maxElapsedMs: '60000' } }"),
+      });
+
+      const graph = await compileRouteGraph(root, fixtureConfig());
+
+      expect(codesOf(graph.diagnostics)).toEqual(['AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835']);
+      const messages = graph.diagnostics.map((diagnostic) => diagnostic.message);
+      // Server routes are validated with their server, before the CLI surface compiles.
+      expect(messages).toEqual([
+        expect.stringContaining('MCP route src/mcp/alpha/tools/text.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/ceiling.tsx config.render.maxElapsedMs 86400001 exceeds the framework ceiling of 86400000 (24 hours)'),
+        expect.stringContaining('CLI route src/cli/fraction.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/negative.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/plain.ts declares config.render, but a plain .ts command executes without a render session'),
+        expect.stringContaining('CLI route src/cli/plain-empty.ts declares config.render, but a plain .ts command executes without a render session'),
+        expect.stringContaining('CLI route src/cli/shape.tsx config.render must be an object'),
+        expect.stringContaining('CLI route src/cli/unknown.tsx config.render declares unknown key "timeoutMs"'),
+      ]);
+      expect(graph.diagnostics[0]!.recovery).toContain('maxElapsedMs');
+      expect(graph.diagnostics[0]!.sourcePath).toBe(join(root, 'src/mcp/alpha/tools/text.tsx'));
+      // A route with a rejected config compiles no command; the route stays in the graph.
+      expect(graph.cli?.commands).toEqual([]);
+      expect(graph.cli?.routes.map((route) => route.id)).toContain('cli:plain');
+    });
   });
 
   it('selects projected tools with literal-star patterns and reports every unmatched pattern', async () => {
@@ -868,6 +944,129 @@ describe('generated CLI shell', () => {
     expect(invalid.stderr).toContain('for usage');
   });
 
+  describe('input-validation failures (#465)', () => {
+    const doctor = commands[0]!;
+    const audit = commands[1]!;
+    const doctorSchema = z.object({
+      maxFiles: z.number().int().max(55_000).default(8),
+      root: z.string().min(1),
+      verbose: z.boolean().optional(),
+    }).strict();
+    const failure = (schema: z.ZodType, input: Readonly<Record<string, unknown>>): unknown => {
+      const result = schema.safeParse(input);
+      if (result.success) throw new Error('fixture input unexpectedly valid');
+      return result.error;
+    };
+
+    it('spells each zod issue as the CLI argument, the expectation, and the received value', () => {
+      const error = cliInputError(doctor, { maxFiles: 300_000, root: '/library' }, failure(doctorSchema, { maxFiles: 300_000, root: '/library' }));
+      expect(error).toBeInstanceOf(CliInputError);
+      expect(error.issues).toEqual([{
+        expected: 'number <= 55000',
+        message: expect.stringContaining('55000'),
+        received: 300_000,
+        target: '--max-files',
+      }]);
+      expect(error.message).toBe('Invalid value for --max-files: expected number <= 55000; received 300000.');
+      expect(error.message).not.toContain('"code"');
+
+      const positional = cliInputError(doctor, { root: '' }, failure(doctorSchema, { root: '' }));
+      expect(positional.message).toBe('Invalid value for <root>: expected non-empty string; received "".');
+
+      const missing = cliInputError(doctor, {}, failure(doctorSchema, {}));
+      expect(missing.issues).toEqual([{ expected: 'string', message: expect.any(String), target: '<root>' }]);
+      expect(missing.message).toBe('Invalid value for <root>: expected string; received nothing.');
+
+      const type = cliInputError(doctor, { maxFiles: 'many', root: '/library' }, failure(doctorSchema, { maxFiles: 'many', root: '/library' }));
+      expect(type.message).toBe('Invalid value for --max-files: expected number; received "many".');
+    });
+
+    it('maps enum, length, unknown-key, and multi-issue failures one line per issue', () => {
+      const auditSchema = z.object({
+        format: z.enum(['json', 'table']).optional(),
+        report: z.string(),
+        sources: z.array(z.string()).max(2),
+      }).strict();
+      const input = { extra: true, format: 'xml', report: 'r', sources: ['a', 'b', 'c'] };
+      const error = cliInputError(audit, input, failure(auditSchema, input));
+      expect(error.issues.map((issue) => issue.target)).toEqual(['--format', '<sources>', 'input']);
+      expect(error.message.split('\n')).toEqual([
+        'Invalid value for --format: expected one of: "json", "table"; received "xml".',
+        'Invalid value for <sources>: expected array with at most 2 items; received ["a","b","c"].',
+        'Invalid value for input: expected no unknown key "extra"; received {"extra":true,"format":"xml","report":"r","sources":["a","b","c"]}.',
+      ]);
+    });
+
+    it('keeps the operand of every string refinement in the bounded grammar', () => {
+      const cases: readonly [schema: z.ZodType, value: string, expected: string][] = [
+        [z.object({ root: z.string().startsWith('/') }), 'relative', 'string starting with "/"'],
+        [z.object({ root: z.string().endsWith('.json') }), 'config.yaml', 'string ending with ".json"'],
+        [z.object({ root: z.string().includes('@') }), 'nobody', 'string containing "@"'],
+        [z.object({ root: z.string().regex(/^[a-z]+$/u) }), 'Nope', 'string matching /^[a-z]+$/u'],
+        [z.object({ root: z.string().length(4) }), 'abc', 'string with exactly 4 characters'],
+        [z.object({ root: z.url() }), 'not a url', 'URL'],
+      ];
+      for (const [schema, value, expected] of cases) {
+        const error = cliInputError(doctor, { root: value }, failure(schema, { root: value }));
+        expect(error.message).toBe(`Invalid value for <root>: expected ${expected}; received ${JSON.stringify(value)}.`);
+      }
+    });
+
+    it('spells a projected MCP command path as --input.<path>', () => {
+      const schema = z.object({ message: z.string(), nested: z.object({ count: z.number() }).optional() });
+      const input = { message: 42, nested: { count: 'x' } };
+      const error = cliInputError(readOnlyTool, input, failure(schema, input));
+      expect(error.message.split('\n')).toEqual([
+        'Invalid value for --input.message: expected string; received 42.',
+        'Invalid value for --input.nested.count: expected number; received "x".',
+      ]);
+    });
+
+    it('keeps a non-schema failure message-only', () => {
+      const error = cliInputError(doctor, {}, new Error('root must be absolute'));
+      expect(error.issues).toEqual([]);
+      expect(error.message).toBe('root must be absolute');
+    });
+
+    it('prints one line per issue, the exact usage line, and the help hint; exit 2', async () => {
+      const input = { maxFiles: 300_000, root: '/library' };
+      const invalid = await run(['doctor', '/library', '--max-files', '300000'], {
+        throws: cliInputError(doctor, input, failure(doctorSchema, input)),
+      });
+      expect(invalid.code).toBe(2);
+      expect(invalid.stdout).toBe('');
+      expect(invalid.stderr).toBe([
+        'Invalid value for --max-files: expected number <= 55000; received 300000.',
+        'Usage: curator doctor [options] <root>',
+        "Run 'curator doctor --help' for usage.",
+        '',
+      ].join('\n'));
+    });
+
+    it('emits one canonical error object on stderr under --json and keeps stdout empty', async () => {
+      const input = { maxFiles: 300_000, root: '/library' };
+      const invalid = await run(['doctor', '/library', '--max-files', '300000', '--json'], {
+        throws: cliInputError(doctor, input, failure(doctorSchema, input)),
+      });
+      expect(invalid.code).toBe(2);
+      expect(invalid.stdout).toBe('');
+      expect(invalid.stderr.endsWith('\n')).toBe(true);
+      expect(invalid.stderr.trimEnd().split('\n')).toHaveLength(1);
+      expect(JSON.parse(invalid.stderr)).toEqual({
+        error: {
+          code: 'CLI_INPUT_INVALID',
+          issues: [{
+            expected: 'number <= 55000',
+            message: expect.stringContaining('55000'),
+            received: 300_000,
+            target: '--max-files',
+          }],
+          usage: 'Usage: curator doctor [options] <root>',
+        },
+      });
+    });
+  });
+
   it('adopts the validated result exitCode under the result policy and fails closed otherwise', async () => {
     const three = await run(['library', 'audit', '--report', 'r', 'a'], { result: { exitCode: 3 } });
     expect(three.code).toBe(3);
@@ -1047,6 +1246,74 @@ describe('rendered command projection (#102 stage 3)', () => {
     const tty = await runRendered(['report', '/library'], { isTty: true });
     expect(tty.code).toBe(0);
     expect(tty.stdout).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
+  });
+
+  it('selects the output mode from the same terminal capability it hands the render host (#511)', async () => {
+    const terminal: AgentTerminal = {
+      hostSurface: 'cli',
+      sharesTarget: true,
+      stderr: { color: '256', columns: 132, kind: 'tty', rows: 50 },
+      stdout: { color: '256', columns: 132, kind: 'tty', rows: 50 },
+    };
+    const seen: AgentTerminal[] = [];
+    const stdout: string[] = [];
+    const code = await runGeneratedCliEntry({
+      argv: ['report', '/library'],
+      commands: [renderedCommand],
+      execute: async () => {
+        throw new Error('plain execute must not run for a rendered command');
+      },
+      name: 'curator',
+      render: (_command, _input, context) => {
+        seen.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      terminal,
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: (text) => void stdout.push(text),
+    });
+    expect(code).toBe(0);
+    // An explicit capability wins over probing and drives the interactive mode.
+    expect(seen).toEqual([terminal]);
+    expect(stdout.join('')).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
+
+    // `--json` changes what stdout carries, never what the terminal is.
+    seen.length = 0;
+    await runGeneratedCliEntry({
+      argv: ['report', '/library', '--json'],
+      commands: [renderedCommand],
+      execute: async () => undefined,
+      name: 'curator',
+      render: (_command, _input, context) => {
+        seen.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      terminal,
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    expect(seen).toEqual([terminal]);
+
+    // The legacy `isTty` knob still shapes a consistent capability for stdout.
+    const legacy: AgentTerminal[] = [];
+    await runGeneratedCliEntry({
+      argv: ['report', '/library'],
+      commands: [renderedCommand],
+      execute: async () => undefined,
+      isTty: () => false,
+      name: 'curator',
+      render: (_command, _input, context) => {
+        legacy.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    expect(legacy[0]?.hostSurface).toBe('cli');
+    expect(legacy[0]?.stdout.kind).not.toBe('tty');
   });
 
   it('emits the canonical validated final value under --json', async () => {

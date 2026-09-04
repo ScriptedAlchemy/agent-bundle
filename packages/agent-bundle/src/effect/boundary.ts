@@ -25,6 +25,11 @@ import { CodedError } from '../core/errors.ts';
  * diagnostic carrier `DiagnosticError`) ride the fail channel as ordinary
  * `Error` instances and rethrow unchanged, so callers of `runPromise` see
  * exactly the same types they see today.
+ *
+ * Platform failures (`PlatformError` from `FileSystem` / `Path`) are mapped
+ * by `src/effect/platform.ts`, which owns the platform layer, not here: this
+ * module is bundled into every emitted hook wrapper, and importing
+ * `effect/PlatformError` would ship `Data.TaggedError` to every host hook.
  */
 
 export interface RunPromiseOptions {

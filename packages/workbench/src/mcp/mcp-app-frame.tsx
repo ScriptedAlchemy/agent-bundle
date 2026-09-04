@@ -220,6 +220,16 @@ export class McpAppFrameRelay {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#state = 'closing';
     this.#closePromise = new Promise<void>((resolve) => { this.#finishClose = resolve; });
+    // Before the proxy signals readiness there is no app to tear down and no
+    // window that can acknowledge a teardown frame: the proxy document is
+    // still loading (or is the initial about:blank, whose origin never matches
+    // targetOrigin, so postMessage drops the frame silently). The graceful
+    // handshake could only wait out the force timer, so release the binding
+    // now instead of holding the closing state for the whole budget.
+    if (!this.#resourceProvided) {
+      void this.#forceClose();
+      return this.#closePromise;
+    }
     this.#closeTimer = setTimeout(() => { void this.#forceClose(); }, this.#closeTimeoutMs);
     this.#enqueue(() => this.#beginClose(), true);
     return this.#closePromise;

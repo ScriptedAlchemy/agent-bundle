@@ -1,22 +1,24 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
-import { available } from '@agent-bundle/runtime';
 import {
-  createGeneratedRuntimeState,
-  type GeneratedRuntimeState,
-} from '@agent-bundle/runtime/mount';
-import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
-import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+  agent,
+  available,
+  runAgentRequest,
+  type AgentLineage,
+  type AgentLineagePeer,
+  type Observed,
+} from '@agent-bundle/runtime';
+import {
+  createEventRouteInput,
+  expectDocument,
+  mountTestState,
+  renderRoute,
+  testManifest,
+  type MountedTestState,
+} from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
-import {
-  topologyStateDefinition,
-  type TopologyEvents,
-  type TopologyState,
-} from '../../src/state.js';
+import agentTopologyProvider from '../../src/providers/agent-topology.js';
+import type { IntentEvents, IntentState } from '../../src/state.js';
 
 const manifest = testManifest();
 
@@ -26,8 +28,10 @@ const worktrees = {
   b: '/repo/.worktrees/b',
 } as const;
 
-let stateRoot: string;
-let runtimeState: GeneratedRuntimeState<TopologyState, TopologyEvents>;
+// One mounted topology state (and notice ledger) per test: every event in a
+// journey records into it and the assertions read it back, exactly as one
+// generated runtime would serve the whole session.
+let mounted: MountedTestState<IntentState, IntentEvents>;
 let sequence = 0;
 
 const provider = (root: string) => ({
@@ -40,25 +44,34 @@ const provider = (root: string) => ({
   state: 'available' as const,
 });
 
+// The generated `.agent-bundle/routes.d.ts` (in this project's tsconfig program)
+// makes every declared provider key required on an explicit map, so the fixture
+// carries `agentTopology` too; its factory is pure and reports the same honest
+// unavailable value the harness would mount.
+const providers = (root: string) => ({
+  agentTopology: agentTopologyProvider(),
+  gitWorktree: provider(root),
+});
+
+// The harness projects the envelope into `canonical.payload` exactly as the
+// artifact does; the journeys keep their own readable idempotency keys and
+// clock. `validate: false` admits the deliberately partial envelopes below.
 const eventInput = (
-  event: 'agent/start' | 'session/start' | 'stop' | 'tool/after' | 'tool/before',
+  event: 'agent/start' | 'agent/stop' | 'session/start' | 'stop' | 'tool/after' | 'tool/before',
   native: Record<string, unknown>,
   id: string,
-) => ({
-  canonical: {
-    event,
-    idempotencyKey: id,
-    observedAt: `2026-09-01T20:00:${String(sequence++).padStart(2, '0')}.000Z`,
-    provenance: {
-      host: 'claude',
-      hostContractRevision: 'route-unit',
-      nativeEvent: native.hook_event_name as string,
-      source: 'native',
+) => {
+  const built = createEventRouteInput(event, native, { host: 'claude', validate: false });
+  return {
+    canonical: {
+      ...built.canonical,
+      idempotencyKey: id,
+      observedAt: `2026-09-01T20:00:${String(sequence++).padStart(2, '0')}.000Z`,
+      sequence,
     },
-    sequence,
-  },
-  native,
-});
+    native: built.native,
+  };
+};
 
 const renderEventInput = async (
   route: string,
@@ -66,29 +79,23 @@ const renderEventInput = async (
   id: string,
   worktreeRoot: string,
   actorId?: string,
-) => {
-  const bindings = await runtimeState.requestBindings();
-  try {
-    return await renderRoute(route, {
-      context: {
-        actor: actorId === undefined ? undefined : available({ id: actorId }, 'native'),
-        host: available({ name: 'claude' }, 'native'),
-        invocation: {
-          id: `invocation:${id}`,
-          startedAt: `2026-09-01T20:01:${String(sequence).padStart(2, '0')}.000Z`,
-        },
-        noticeLedger: bindings.noticeLedger,
-        providers: { gitWorktree: provider(worktreeRoot) },
-        session: available({ sessionId: 'root-session' }, 'native'),
-        state: bindings.state,
-        workspace: available({ root: worktreeRoot }, 'native'),
-      },
-      input,
-    });
-  } finally {
-    await bindings.close();
-  }
-};
+  lineage?: Observed<AgentLineage>,
+) => renderRoute(route, {
+  context: {
+    ...mounted.context(),
+    actor: actorId === undefined ? undefined : available({ id: actorId }, 'native'),
+    host: available({ name: 'claude' }, 'native'),
+    invocation: {
+      id: `invocation:${id}`,
+      startedAt: `2026-09-01T20:01:${String(sequence).padStart(2, '0')}.000Z`,
+    },
+    ...(lineage === undefined ? {} : { lineage }),
+    providers: providers(worktreeRoot),
+    session: available({ sessionId: 'root-session' }, 'native'),
+    workspace: available({ root: worktreeRoot }, 'native'),
+  },
+  input,
+});
 
 const renderEvent = (
   route: string,
@@ -97,13 +104,45 @@ const renderEvent = (
   id: string,
   worktreeRoot: string,
   actorId?: string,
+  lineage?: Observed<AgentLineage>,
 ) => renderEventInput(
   route,
   eventInput(event, native, id),
   id,
   worktreeRoot,
   actorId,
+  lineage,
 );
+
+/** A runtime-registry lineage placing `id` one level below `root-session`. */
+const childLineage = (id: string): Observed<AgentLineage> => available({
+  conversation: id,
+  depth: 1,
+  parent: 'root-session',
+  resolution: 'registry',
+  root: 'root-session',
+  subagent: { id },
+}, 'derived');
+
+const rootPeer: AgentLineagePeer = { conversation: 'root-session', depth: 0, resolution: 'native', startedAt: '2026-09-01T19:59:00.000Z' };
+const childPeer = (id: string): AgentLineagePeer => ({
+  conversation: id,
+  depth: 1,
+  parent: 'root-session',
+  resolution: 'registry',
+  startedAt: '2026-09-01T19:59:30.000Z',
+  subagent: { id, type: 'implementation' },
+});
+
+/** The same child lineage carrying the registry's live tree: the root plus the named live siblings. */
+const childLineageWithTree = (id: string, liveSiblings: readonly string[]): Observed<AgentLineage> => {
+  const own = childLineage(id);
+  if (own.state !== 'available') throw new Error('unreachable');
+  return available({
+    ...own.value,
+    tree: { children: [], roots: [], siblings: [rootPeer, ...liveSiblings.map(childPeer)] },
+  }, 'derived');
+};
 
 const bindActors = async (): Promise<void> => {
   await renderEvent(
@@ -112,7 +151,7 @@ const bindActors = async (): Promise<void> => {
     { cwd: worktrees.root, hook_event_name: 'SessionStart', session_id: 'root-session' },
     'root:start',
     worktrees.root,
-    'session:root-session',
+    'root-session',
   );
   await renderEvent(
     'event:agent/start',
@@ -144,6 +183,9 @@ const bindActors = async (): Promise<void> => {
   );
 };
 
+// Claude and Codex carry the subagent's `agent_id` on every one of its hook
+// payloads and the shared runtime resolves it as that agent's lineage
+// conversation, so a child's tool events arrive with `request.lineage` set.
 const recordIntent = (
   actorId: 'agent-a' | 'agent-b',
   root: string,
@@ -154,6 +196,7 @@ const recordIntent = (
   'event:tool/before',
   'tool/before',
   {
+    agent_id: actorId,
     cwd: root,
     hook_event_name: 'PreToolUse',
     session_id: 'root-session',
@@ -163,26 +206,46 @@ const recordIntent = (
   id,
   root,
   actorId,
+  childLineage(actorId),
+);
+
+const completeIntent = (
+  root: string,
+  path: string,
+  id: string,
+  actorId?: string,
+  lineage?: Observed<AgentLineage>,
+) => renderEvent(
+  'event:tool/after',
+  'tool/after',
+  {
+    ...(actorId === undefined ? {} : { agent_id: actorId }),
+    cwd: root,
+    hook_event_name: 'PostToolUse',
+    session_id: 'root-session',
+    tool_input: { file_path: path },
+    tool_name: 'Edit',
+  },
+  id,
+  root,
+  actorId,
+  lineage,
 );
 
 beforeEach(async () => {
-  stateRoot = await mkdtemp(join(tmpdir(), 'worktree-proximity-route-unit-'));
-  runtimeState = createGeneratedRuntimeState({
-    definition: topologyStateDefinition,
-    driver: createSqliteStateDriver({ root: stateRoot }),
-  });
+  mounted = await mountTestState<IntentState, IntentEvents>();
   sequence = 0;
 });
 
 afterEach(async () => {
-  await runtimeState.close();
-  await rm(stateRoot, { force: true, recursive: true });
+  await mounted.close();
 });
 
 it('compiles the complete shared-runtime route surface', () => {
   expect(manifest.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
   expect(Object.keys(manifest.routes)).toEqual(expect.arrayContaining([
     'event:agent/start',
+    'event:agent/stop',
     'event:session/start',
     'event:stop',
     'event:tool/after',
@@ -214,23 +277,19 @@ describe('worktree proximity journeys', () => {
       .toHaveStatus('success')
       .toContainContext('Proximity warning')
       .toContainContext('src/shared.ts');
-    expect(rendered.document.value).toMatchObject({
-      outcome: 'continue',
-      reason: expect.stringContaining('src/shared.ts'),
-    });
+    // The warning travels as context only; a pass-through result carries no
+    // decision and therefore no reason, so the host's permission flow is untouched.
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.noticeLedger.read();
-      expect(snapshot.notices).toEqual([
-        expect.objectContaining({
-          recipient: { workspace: { root: worktrees.a } },
-          state: 'pending',
-        }),
-      ]);
-    } finally {
-      await bindings.close();
-    }
+    const notices = await mounted.notices();
+    // The notice names the other agent's lineage conversation, not its
+    // worktree: only that agent thread admits it (#458).
+    expect(notices.notices).toEqual([
+      expect.objectContaining({
+        recipient: { conversation: 'agent-a' },
+        state: 'pending',
+      }),
+    ]);
   });
 
   it('attempts and surfaces a notice on the recipient next event (journey 6)', async () => {
@@ -238,36 +297,81 @@ describe('worktree proximity journeys', () => {
     await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
     await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
 
-    const delivered = await renderEvent(
-      'event:tool/after',
-      'tool/after',
-      {
-        cwd: worktrees.a,
-        hook_event_name: 'PostToolUse',
-        session_id: 'root-session',
-        tool_input: { file_path: 'src/shared.ts' },
-        tool_name: 'Edit',
-      },
-      'intent:a:after',
-      worktrees.a,
-      'agent-a',
-    );
+    const delivered = await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
 
     expectDocument(delivered)
       .toHaveStatus('success')
       .toContainContext('Directed proximity notice')
       .toContainContext('src/shared.ts');
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.noticeLedger.read();
-      expect(snapshot.notices[0]).toMatchObject({
-        attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
-        state: 'attempted',
-      });
-    } finally {
-      await bindings.close();
-    }
+    const notices = await mounted.notices();
+    expect(notices.notices[0]).toMatchObject({
+      attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
+      state: 'attempted',
+    });
+  });
+
+  it('delivers a conversation-addressed notice to one agent even when a sibling shares its worktree (#458)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
+
+    // agent-c works in agent-a's worktree: same host, session, and workspace
+    // as agent-a, so a workspace-addressed notice could not tell them apart.
+    const sibling = await completeIntent(worktrees.a, 'src/other.ts', 'intent:c:after', 'agent-c', childLineage('agent-c'));
+    expectDocument(sibling).toHaveStatus('success').toHaveNodeKinds(['result']);
+    // An event in that worktree whose lineage the runtime could not resolve
+    // is not the addressed agent either, even though the worktree binding
+    // attributes its intent to agent-a.
+    const unresolved = await completeIntent(worktrees.a, 'src/other.ts', 'intent:unresolved:after');
+    expectDocument(unresolved).toHaveStatus('success').toHaveNodeKinds(['result']);
+
+    expect((await mounted.notices()).notices).toEqual([expect.objectContaining({ attempts: [], state: 'pending' })]);
+    expect((await mounted.read()).state.bindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ actorId: 'agent-a', worktreeRoot: worktrees.a }),
+      expect.objectContaining({ actorId: 'agent-c', worktreeRoot: worktrees.a }),
+    ]));
+
+    const delivered = await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
+    expectDocument(delivered)
+      .toHaveStatus('success')
+      .toContainContext('Directed proximity notice')
+      .toContainContext('src/shared.ts');
+    expect((await mounted.notices()).notices[0]).toMatchObject({
+      attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
+      state: 'attempted',
+    });
+  });
+
+  it('addresses a derived actor through its worktree because it has no conversation', async () => {
+    await bindActors();
+    // No agent_id and no lineage in a worktree no actor is bound to: the
+    // application falls back to the derived `worktree:<root>` actor.
+    await renderEvent(
+      'event:tool/before',
+      'tool/before',
+      {
+        cwd: '/repo/.worktrees/c',
+        hook_event_name: 'PreToolUse',
+        session_id: 'root-session',
+        tool_input: { file_path: 'src/shared.ts' },
+        tool_name: 'Edit',
+      },
+      'intent:derived',
+      '/repo/.worktrees/c',
+    );
+    const rendered = await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    expectDocument(rendered).toHaveStatus('success').toContainContext('Proximity warning');
+
+    expect((await mounted.notices()).notices).toEqual([
+      expect.objectContaining({
+        recipient: { workspace: { root: '/repo/.worktrees/c' } },
+        state: 'pending',
+      }),
+    ]);
+
+    const delivered = await completeIntent('/repo/.worktrees/c', 'src/shared.ts', 'intent:derived:after');
+    expectDocument(delivered).toContainContext('Directed proximity notice');
   });
 
   it('deduplicates a repeated native intent envelope (journey 7)', async () => {
@@ -298,13 +402,8 @@ describe('worktree proximity journeys', () => {
       'agent-a',
     );
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.activities.filter((activity) => activity.actorId === 'agent-a')).toHaveLength(1);
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.activities.filter((activity) => activity.actorId === 'agent-a')).toHaveLength(1);
   });
 
   it('records a refusal and never fabricates an edge without native agent identity (journey 8)', async () => {
@@ -326,59 +425,260 @@ describe('worktree proximity journeys', () => {
       .toContainContext('Parent identity unavailable')
       .toContainContext('refused to fabricate');
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.actors).toEqual([]);
-      expect(snapshot.state.refusals).toEqual([
-        expect.objectContaining({
-          reason: 'agent/start omitted native agent_id; refused to fabricate a topology edge',
-        }),
-      ]);
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.bindings).toEqual([]);
+    expect(snapshot.state.refusals).toEqual([
+      expect.objectContaining({
+        reason: 'agent/start omitted native agent_id; refused to fabricate a topology edge',
+      }),
+    ]);
   });
 
-  it('renders the coordinator status from mounted topology state', async () => {
+  it('records the child and its parent from request.lineage when the envelope carries no agent_id', async () => {
+    await bindActors();
+    const rendered = await renderEvent(
+      'event:agent/start',
+      'agent/start',
+      {
+        agent_type: 'implementation',
+        cwd: worktrees.b,
+        hook_event_name: 'SubagentStart',
+        session_id: 'root-session',
+      },
+      'agent-c:start',
+      worktrees.b,
+      undefined,
+      childLineage('agent-c'),
+    );
+
+    expectDocument(rendered).toHaveStatus('success').toHaveNodeKinds(['result']);
+
+    const snapshot = await mounted.read();
+    expect(snapshot.state.refusals).toEqual([]);
+    // The edge (parent, depth) is the registry's; the application records only the worktree.
+    expect(snapshot.state.bindings).toEqual(expect.arrayContaining([
+      { actorId: 'agent-c', provenance: { actorId: 'registry', worktreeRoot: 'native' }, worktreeRoot: worktrees.b },
+    ]));
+  });
+
+  it('attributes a tool envelope to the lineage child ahead of the worktree binding', async () => {
+    await bindActors();
+    const rendered = await renderEvent(
+      'event:tool/before',
+      'tool/before',
+      {
+        cwd: worktrees.a,
+        hook_event_name: 'PreToolUse',
+        session_id: 'root-session',
+        tool_input: { file_path: 'src/shared.ts' },
+        tool_name: 'Edit',
+      },
+      'intent:c',
+      worktrees.a,
+      undefined,
+      childLineage('agent-c'),
+    );
+
+    expectDocument(rendered).toHaveStatus('success');
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
+
+    const snapshot = await mounted.read();
+    expect(snapshot.state.bindings).toEqual(expect.arrayContaining([
+      { actorId: 'agent-c', provenance: { actorId: 'registry', worktreeRoot: 'native' }, worktreeRoot: worktrees.a },
+    ]));
+    expect(snapshot.state.activities.map((activity) => activity.actorId)).toEqual(['agent-c']);
+  });
+
+  it('renders the coordinator status from mounted intent state, with the agent tree honestly absent without a lineage', async () => {
     await bindActors();
     await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
     await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
 
-    const bindings = await runtimeState.requestBindings();
-    let rendered: Awaited<ReturnType<typeof renderRoute>>;
-    try {
-      rendered = await renderRoute('tool:coordinator/status', {
-        context: {
-          noticeLedger: bindings.noticeLedger,
-          providers: { gitWorktree: provider(worktrees.root) },
-          state: bindings.state,
-        },
-        input: {},
-      });
-    } finally {
-      await bindings.close();
-    }
+    const rendered = await renderRoute('tool:coordinator/status', {
+      context: {
+        ...mounted.context(),
+        providers: providers(worktrees.root),
+      },
+      input: {},
+    });
 
     expectDocument(rendered)
       .toHaveStatus('success')
-      .toContainMarkdown('Worktree proximity status');
+      .toContainMarkdown('Worktree proximity status')
+      .toContainMarkdown('Agent tree unavailable: lineage unavailable (not-provided)');
     expect(rendered.result).toMatchObject({
       activeActivities: 2,
-      actors: expect.arrayContaining([
-        expect.objectContaining({ id: 'agent-a', worktreeRoot: worktrees.a }),
-        expect.objectContaining({ id: 'agent-b', worktreeRoot: worktrees.b }),
+      agents: { reason: 'lineage unavailable (not-provided)', state: 'unavailable' },
+      bindings: expect.arrayContaining([
+        expect.objectContaining({ actorId: 'agent-a', worktreeRoot: worktrees.a }),
+        expect.objectContaining({ actorId: 'agent-b', worktreeRoot: worktrees.b }),
       ]),
+      // A caller with no identity published nothing: the count is honestly
+      // zero, not the ledger's total.
+      notices: expect.objectContaining({ pending: 0, state: 'available', total: 0 }),
       refusals: 0,
       revision: expect.any(Number),
     });
+    expect((rendered.result as { bindings: readonly { actorId: string }[] }).bindings.map((binding) => binding.actorId))
+      .toEqual(['root-session', 'agent-a', 'agent-b']);
+  });
+
+  it('renders the live agent tree the runtime resolved for the call, never a tree of its own (#457)', async () => {
+    const rendered = await renderRoute('tool:coordinator/status', {
+      context: {
+        ...mounted.context(),
+        lineage: childLineageWithTree('agent-a', ['agent-b']),
+        providers: providers(worktrees.a),
+      },
+      input: {},
+    });
+    expectDocument(rendered)
+      .toHaveStatus('success')
+      .toContainMarkdown('This call: agent-a at depth 1 under root-session (registry)')
+      .toContainMarkdown('root-session (depth 0, native), agent-b (depth 1, registry)');
+    expect(rendered.result).toMatchObject({
+      agents: {
+        children: [],
+        conversation: 'agent-a',
+        depth: 1,
+        parent: 'root-session',
+        resolution: 'registry',
+        root: 'root-session',
+        roots: [],
+        siblings: [rootPeer, childPeer('agent-b')],
+        state: 'available',
+      },
+      bindings: [],
+      state: 'available',
+    });
+  });
+
+  it('warns about a sibling the lineage tree lists as alive and stops once the tree drops it (#457)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    const intentB = (id: string, lineage: Observed<AgentLineage>) => renderEvent(
+      'event:tool/before',
+      'tool/before',
+      {
+        cwd: worktrees.b,
+        hook_event_name: 'PreToolUse',
+        session_id: 'root-session',
+        tool_input: { file_path: 'src/shared.ts' },
+        tool_name: 'Edit',
+      },
+      id,
+      worktrees.b,
+      undefined,
+      lineage,
+    );
+    // agent-a is alive under the shared root: its claim on src/shared.ts is a real conflict.
+    const alive = await intentB('intent:b:alive', childLineageWithTree('agent-b', ['agent-a']));
+    expectDocument(alive).toHaveStatus('success').toContainContext('Proximity warning for agent-b');
+    // The registry no longer lists agent-a (it stopped): the same recorded intent is stale and warns nobody.
+    const gone = await intentB('intent:b:gone', childLineageWithTree('agent-b', []));
+    expectDocument(gone).toHaveStatus('success').toHaveNodeKinds(['result']);
+    expect(gone.document.value).toEqual({ outcome: 'continue' });
+    // A lineage without a tree presumes nothing about who stopped.
+    const unknown = await intentB('intent:b:unknown', childLineage('agent-b'));
+    expectDocument(unknown).toHaveStatus('success').toContainContext('Proximity warning for agent-b');
+  });
+
+  it('releases a child on agent/stop: its binding and intent go, and the notice ledger is read as usual', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    const rendered = await renderEvent(
+      'event:agent/stop',
+      'agent/stop',
+      {
+        agent_id: 'agent-a',
+        agent_type: 'implementation',
+        cwd: worktrees.a,
+        hook_event_name: 'SubagentStop',
+        session_id: 'root-session',
+      },
+      'agent-a:stop',
+      worktrees.a,
+      'agent-a',
+    );
+    expectDocument(rendered).toHaveStatus('success').toHaveNodeKinds(['result']);
+
+    const snapshot = await mounted.read();
+    expect(snapshot.state.bindings.map((binding) => binding.actorId)).toEqual(['root-session', 'agent-b']);
+    expect(snapshot.state.activities).toEqual([]);
+    // An identity-less stop releases nobody.
+    const anonymous = await renderEvent(
+      'event:agent/stop',
+      'agent/stop',
+      { agent_type: 'implementation', cwd: worktrees.b, hook_event_name: 'SubagentStop', session_id: 'root-session' },
+      'agent-?:stop',
+      worktrees.b,
+    );
+    expectDocument(anonymous).toHaveStatus('success').toContainContext('refused to release an actor by guess');
+  });
+
+  it('reports the publishing agent its own notice states through coordinator status (#460)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    // agent-b's intent publishes the proximity notice addressed to agent-a.
+    await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
+
+    // An MCP tool call from the same agent: the client name, MCP session id,
+    // and server cwd all differ from the hook that published — the lineage
+    // conversation is what identifies the publisher.
+    const statusFor = (conversation: string) => renderRoute('tool:coordinator/status', {
+      context: {
+        ...mounted.context(),
+        host: available({ name: 'claude-code' }, 'native'),
+        lineage: childLineage(conversation),
+        providers: providers(worktrees.root),
+        session: available({ sessionId: 'mcp-session' }, 'native'),
+        workspace: available({ root: worktrees.root }, 'derived'),
+      },
+      input: {},
+    });
+    const noticesOf = (conversation: string, worktreeRoot: string) => runAgentRequest({
+      ...mounted.context(),
+      host: available({ name: 'claude' }, 'native'),
+      invocation: { id: `invocation:notices:${conversation}:${String(sequence++)}`, kind: 'tool', startedAt: '2026-09-01T20:05:00.000Z' },
+      lineage: childLineage(conversation),
+      providers: providers(worktreeRoot),
+      session: available({ sessionId: 'root-session' }, 'native'),
+      workspace: available({ root: worktreeRoot }, 'native'),
+    }, async () => {
+      const handle = (await agent()).notices!;
+      return { inbox: await handle.inbox(), published: await handle.published() };
+    });
+
+    // Pending: the publisher sees it; its own inbox does not (it is not the recipient).
+    const pending = await statusFor('agent-b');
+    expectDocument(pending).toContainMarkdown('Published notices: 1 (pending 1, attempted 0, acknowledged 0)');
+    expect(pending.result).toMatchObject({ notices: { pending: 1, state: 'available', total: 1 } });
+    const publisherBefore = await noticesOf('agent-b', worktrees.b);
+    expect(publisherBefore.inbox).toEqual([]);
+    expect(publisherBefore.published).toEqual([expect.objectContaining({ recipient: { conversation: 'agent-a' }, state: 'pending' })]);
+    // The recipient sees it in its inbox and published nothing.
+    const recipientBefore = await noticesOf('agent-a', worktrees.a);
+    expect(recipientBefore.inbox).toHaveLength(1);
+    expect(recipientBefore.published).toEqual([]);
+    expect((await statusFor('agent-a')).result).toMatchObject({ notices: { state: 'available', total: 0 } });
+
+    // Admitted on agent-a's next event: the publisher now reads `attempted`,
+    // and the recipient's inbox is empty again.
+    await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
+    const attempted = await statusFor('agent-b');
+    expectDocument(attempted).toContainMarkdown('Published notices: 1 (pending 0, attempted 1, acknowledged 0)');
+    expect(attempted.result).toMatchObject({ notices: { attempted: 1, pending: 0, total: 1 } });
+    const recipientAfter = await noticesOf('agent-a', worktrees.a);
+    expect(recipientAfter.inbox).toEqual([]);
+    expect(recipientAfter.published).toEqual([]);
+    expect((await noticesOf('agent-b', worktrees.b)).inbox).toEqual([]);
   });
 
   it('renders state unavailability when an event module has no mounted handle', async () => {
     const rendered = await renderRoute({ default: BeforeTool }, {
       context: {
         actor: available({ id: 'agent-a' }, 'native'),
-        providers: { gitWorktree: provider(worktrees.a) },
+        providers: providers(worktrees.a),
       },
       input: eventInput(
         'tool/before',
@@ -398,9 +698,6 @@ describe('worktree proximity journeys', () => {
     expectDocument(rendered)
       .toHaveStatus('success')
       .toContainContext('state unavailable');
-    expect(rendered.document.value).toMatchObject({
-      outcome: 'continue',
-      reason: expect.stringContaining('state unavailable'),
-    });
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
   });
 });

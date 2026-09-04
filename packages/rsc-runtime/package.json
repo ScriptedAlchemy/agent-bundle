@@ -2,7 +2,7 @@
   "name": "@agent-bundle/runtime",
   "version": "0.0.0",
   "description": "Agent Document contracts and streaming React Flight dispatch for Agent Bundle runtimes.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "agent-bundle",
     "mcp"
@@ -27,6 +27,8 @@
   },
   "files": [
     "dist",
+    "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "exports": {
@@ -61,10 +63,14 @@
     "./mount": {
       "types": "./dist/mount/index.d.ts",
       "import": "./dist/mount.js"
+    },
+    "./lineage": {
+      "types": "./dist/lineage/index.d.ts",
+      "import": "./dist/lineage.js"
     }
   },
   "scripts": {
-    "build": "rslib build",
+    "build": "node ../../scripts/sync-license-files.mjs && rslib build",
     "test": "rstest tests",
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
@@ -77,6 +83,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
     "effect": "4.0.0-rc.112",
+    "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
     "rsc-markdown-stream": "github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47",
     "zod": "4.5.4"

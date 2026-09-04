@@ -2,11 +2,16 @@ import { createElement } from 'react';
 import { z } from 'zod';
 
 import { Agent, agent, type JsonValue } from '../index.js';
-import { AgentNoticeError, type AgentNotice } from './index.js';
+import {
+  AGENT_NOTICE_DEFAULT_SENSITIVITY,
+  AGENT_NOTICE_INBOX_URI,
+  AgentNoticeError,
+  type AgentNotice,
+} from './index.js';
 
+export { AGENT_NOTICE_INBOX_URI };
 export const AGENT_NOTICE_INBOX_ROUTE_ID = 'agent-bundle:notice-inbox';
 export const AGENT_NOTICE_INBOX_ROUTE_NAME = 'notice-inbox';
-export const AGENT_NOTICE_INBOX_URI = 'agent-bundle://notices/inbox';
 
 export const config = Object.freeze({
   description: 'Read recipient-scoped pending notices without acknowledging them or marking delivery attempted.',
@@ -24,15 +29,26 @@ export const resultSchema = z.object({
   }).strict()),
 }).strict();
 
-const projectNotice = (notice: AgentNotice) => Object.freeze({
-  content: notice.content,
-  createdAt: notice.createdAt,
-  ...(notice.expiresAt === undefined ? {} : { expiresAt: notice.expiresAt }),
-  exposure: notice.exposure,
-  id: notice.id,
-  priority: notice.priority,
-  state: notice.state,
-});
+const projectNotice = (notice: AgentNotice) => {
+  const sensitivity = notice.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY;
+  return Object.freeze({
+    // Receipts, not state claims: `availability` counts resources/updated
+    // signals sent for this notice; `exposure` counts inbox reads that served it.
+    availability: notice.availability,
+    // Already disclosed by the ledger for the `mcp-inbox` route: `internal`
+    // content has passed the secret pass, `public` is as authored, and a
+    // `secret` notice this host's row does not admit is not in the list.
+    content: notice.content,
+    createdAt: notice.createdAt,
+    disclosure: Object.freeze({ redacted: sensitivity === 'internal', route: 'mcp-inbox' as const }),
+    ...(notice.expiresAt === undefined ? {} : { expiresAt: notice.expiresAt }),
+    exposure: notice.exposure,
+    id: notice.id,
+    priority: notice.priority,
+    sensitivity,
+    state: notice.state,
+  });
+};
 
 export function noticeInboxRouteRecord<TModule>(module: TModule) {
   return Object.freeze({

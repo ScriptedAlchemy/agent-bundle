@@ -1,7 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/plugin.schema.json",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.260/plugin.schema.json",
   "$defs": {
+    "additionalHooksPath": {
+      "description": "A plugin-root-relative path to an additional hook configuration file: `./` followed by non-empty segments, none of which is `.` or `..`, so every accepted value is already normalized. Claude Code loads hooks/hooks.json on its own and refuses a plugin whose manifest names that file again (Duplicate hooks file detected), so the auto-loaded path is rejected here; aliases such as `./hooks/./hooks.json` or `./hooks/../hooks/hooks.json` fail the segment rule instead.",
+      "minLength": 3,
+      "not": { "const": "./hooks/hooks.json" },
+      "pattern": "^\\./(?:(?!\\.{1,2}/)[^/]+/)*(?!\\.{1,2}$)[^/]+$",
+      "type": "string"
+    },
     "channel": {
       "additionalProperties": false,
       "properties": {
@@ -147,7 +154,13 @@
       "type": "array"
     },
     "displayName": { "minLength": 1, "type": "string" },
-    "hooks": { "const": "./hooks/hooks.json", "type": "string" },
+    "hooks": {
+      "anyOf": [
+        { "$ref": "#/$defs/additionalHooksPath" },
+        { "items": { "$ref": "#/$defs/additionalHooksPath" }, "minItems": 1, "type": "array" },
+        { "type": "object" }
+      ]
+    },
     "lspServers": {
       "anyOf": [
         { "minLength": 1, "type": "string" },

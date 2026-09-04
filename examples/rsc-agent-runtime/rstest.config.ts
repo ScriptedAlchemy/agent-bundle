@@ -6,9 +6,8 @@ export default defineConfig({
   // Route-unit proofs need the framework-generated configuration
   // (rstest.route-unit.config.ts via `pnpm test:routes`), so they are not
   // swept into this plain Node pool where no test manifest is registered.
-  exclude: ['tests/route-unit/**'],
   include: ['tests/**/*.test.{ts,tsx}'],
-  exclude: ['tests/route-unit/**/*.test.{ts,tsx}'],
+  exclude: ['tests/route-unit/**'],
   pool: { maxWorkers: 1 },
   testEnvironment: 'node',
   // Every suite here runs real rsbuild compiles and spawned children, which a

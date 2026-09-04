@@ -45,7 +45,19 @@ export const mcpProbeFailureTextLimit = 2_048;
 
 const mcpProbeCapabilityLimit = 32;
 const mcpProbeNameTextLimit = 256;
-const mcpProbeTeardownWaitMs = 50;
+/** How long a probe response waits for transport teardown before detaching it. */
+export const mcpProbeTeardownWaitMs = 50;
+/**
+ * Upper bound a detached teardown may hold the plugin-data directory. The
+ * stdio transport's close runs its own TERM/KILL sequence, so this only guards
+ * against a transport whose close never settles.
+ */
+export const mcpProbePluginDataTeardownCapMs = 10_000;
+/**
+ * Delay before the one bounded removal retry that follows a teardown which
+ * settled while the child still held the directory for a moment (Windows).
+ */
+const mcpProbePluginDataRetryDelayMs = 250;
 const safeCapabilityName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 const connectionErrorCodes = new Set([
   'EACCES',
@@ -59,6 +71,33 @@ const connectionErrorCodes = new Set([
 ]);
 
 export type McpProbeTransport = Transport;
+
+/**
+ * Timer seam behind every probe delay — the total-budget timeout, the bounded
+ * teardown wait, the detached plugin-data cap, and the removal retry. Production
+ * uses Node timers; tests inject a manual scheduler and fire timers in event
+ * order so no wall-clock time is involved. `schedule` returns the cancel.
+ */
+export interface McpProbeTimers {
+  readonly schedule: (
+    callback: () => void,
+    delayMs: number,
+    options: Readonly<{
+      /** A timer that must not keep the process alive on its own (`timer.unref()`). */
+      readonly unref: boolean;
+    }>,
+  ) => () => void;
+}
+
+const nodeTimers: McpProbeTimers = {
+  schedule: (callback, delayMs, options) => {
+    const timer = setTimeout(callback, delayMs);
+    if (options.unref) timer.unref();
+    return () => {
+      clearTimeout(timer);
+    };
+  },
+};
 
 export interface McpProbeClient {
   close(): Promise<void>;
@@ -80,10 +119,16 @@ export interface McpProbeServiceOptions {
     options: RemoteTransportOptions,
   ) => McpProbeTransport;
   readonly now?: () => Date;
+  /** Testing seam for the detached teardown cap; production keeps the named constant. */
+  readonly pluginDataTeardownCapMs?: number;
+  /** Testing seam for plugin-data removal; production removes the directory recursively. */
+  readonly removePluginData?: (pluginData: string) => Promise<void>;
   readonly prepared: () => Readonly<{ readonly bundleSource: string }> | undefined;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
   readonly timeoutMs?: number;
+  /** Testing seam for every probe delay; production keeps Node timers. */
+  readonly timers?: McpProbeTimers;
 }
 
 export class McpProbeTargetNotFoundError extends Error {
@@ -126,16 +171,52 @@ const bundlePathPattern = (bundleRoot: string): RegExp => {
   return new RegExp(String.raw`(?:file:\/\/)?${root}${suffix}`, 'gu');
 };
 
+/**
+ * An absolute POSIX path starts the text or follows a separator; a `:` counts
+ * as a separator (`cwd:/private`) only when it is not the `://` of a URI
+ * scheme, so `https://example.com/docs` is link guidance, not a local path.
+ * That exemption is limited to network schemes (`http`, `https`, `ws`,
+ * `wss`): any other `scheme://…/…` — `unix:///home/…`, `vscode://file/home/…`,
+ * `file:` — may carry a machine-local path in its authority or path and fails
+ * closed like a bare absolute path. The scheme is anchored to the start of its
+ * own character run, not to a word boundary, so an identifier glued in front
+ * of it (`_unix:///home/…`, `id9unix:///home/…`) cannot hide the URI; the
+ * exemption looks through any such prefix to the network scheme that ends the
+ * run, so a glued `id9https://…` link still survives.
+ */
+const localUriPathPattern = /(?<![a-z0-9+.-])(?![a-z0-9+.-]*(?:https?|wss?):\/\/)[a-z][a-z0-9+.-]*:\/\/[^\s/]*\//iu;
+
 const hasAbsolutePath = (value: string): boolean =>
-  /(?:file:|(?:^|[\s"'([{=,:])\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
+  localUriPathPattern.test(value) ||
+  /(?:file:|(?:^|[\s"'([{=,]|:(?!\/\/))\/[^\s,;{}()[\]<>"']+|(?:^|[\s"'([{=,:])[A-Za-z]:[\\/]|\\\\)/u.test(value);
+
+/**
+ * URL userinfo (`scheme://user:secret@host`) is a credential that the generic
+ * credential redaction does not recognize; because URLs are exempt from the
+ * absolute-path fail-closed rule, the userinfo is stripped before that check.
+ * The authority runs until one of the terminators every WHATWG scheme shares
+ * (`/`, `?`, `#`); within it the match is greedy through the *final* `@`, the
+ * delimiter URL parsers honour, so a raw `@`, quote, backslash, or whitespace
+ * inside a password (parsers percent-encode spaces and strip embedded tabs and
+ * newlines) cannot leave part of the credential behind. Nothing short of those
+ * three terminators ends the run on purpose — `\` is userinfo for non-special
+ * schemes and whitespace is encoded rather than rejected — so a path-less URL
+ * followed on the same text by an `@` before any `/`, `?`, or `#` is masked
+ * as well: for a browser-facing report that over-redaction is the safe side.
+ * Like the local-URI rule, the scheme is anchored to the start of its own
+ * character run rather than to a word boundary, so a URL glued to a preceding
+ * identifier (`_https://user:secret@…`) is masked too.
+ */
+const urlUserinfoPattern = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/giu;
 
 /**
  * Probe text follows the Dev Log browser-wire precedent without coupling this
- * read-only service to log retention: credential text is removed first,
- * bundle paths become a label, and every other absolute path fails closed.
+ * read-only service to log retention: credential text is removed first, URL
+ * userinfo is masked, bundle paths become a label, and every other absolute
+ * path fails closed.
  */
 const redactProbeText = (value: string, bundleRoot: string, maximum: number): string => {
-  const redacted = redactCredentialText(value).replace(
+  const redacted = redactCredentialText(value).replace(urlUserinfoPattern, '$1[REDACTED]@').replace(
     bundlePathPattern(bundleRoot),
     (match) => {
       const normalized = match.replace(/^file:\/\//u, '').replaceAll('\\', '/');
@@ -231,6 +312,22 @@ const positiveTimeout = (value: number): number => {
   return value;
 };
 
+/**
+ * Invoke a close callback so that both a synchronous throw and a rejection
+ * become one settled promise; teardown chains must never depend on a close
+ * being well behaved.
+ */
+const removePluginData = (pluginData: string): Promise<void> =>
+  rm(pluginData, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 });
+
+const settledClose = (close: () => Promise<void>): Promise<void> => {
+  try {
+    return Promise.resolve(close()).then(() => undefined, () => undefined);
+  } catch {
+    return Promise.resolve();
+  }
+};
+
 export class McpProbeService {
   readonly #clock: () => number;
   readonly #createClient: () => McpProbeClient;
@@ -239,10 +336,14 @@ export class McpProbeService {
   readonly #createStreamableHttpTransport: NonNullable<McpProbeServiceOptions['createStreamableHttpTransport']>;
   readonly #inFlight = new Map<string, Promise<McpProbeReport>>();
   readonly #now: () => Date;
+  readonly #pendingTeardowns = new Set<Promise<void>>();
+  readonly #pluginDataTeardownCapMs: number;
   readonly #prepared: McpProbeServiceOptions['prepared'];
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
+  readonly #removePluginData: (pluginData: string) => Promise<void>;
   readonly #timeoutMs: number;
+  readonly #timers: McpProbeTimers;
 
   constructor(options: McpProbeServiceOptions) {
     this.#clock = options.clock ?? (() => performance.now());
@@ -262,10 +363,15 @@ export class McpProbeService {
           : { headers: transportOptions.headers },
       }));
     this.#now = options.now ?? (() => new Date());
+    this.#pluginDataTeardownCapMs = positiveTimeout(
+      options.pluginDataTeardownCapMs ?? mcpProbePluginDataTeardownCapMs,
+    );
     this.#prepared = options.prepared;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#removePluginData = options.removePluginData ?? removePluginData;
     this.#timeoutMs = positiveTimeout(options.timeoutMs ?? mcpProbeTimeoutMs);
+    this.#timers = options.timers ?? nodeTimers;
   }
 
   probe(options: {
@@ -282,6 +388,21 @@ export class McpProbeService {
     };
     void probe.then(settle, settle);
     return probe;
+  }
+
+  /**
+   * Resolve once every in-flight probe has answered and every detached
+   * teardown — a transport close that outlived its probe's response boundary,
+   * followed by that probe's plugin-data removal — has settled. In-flight
+   * probes are part of the fence because a probe registers its teardown only
+   * when it reaches its response boundary; a fence over teardowns alone would
+   * let shutdown finish while a still-connecting probe holds a transport and a
+   * plugin-data directory. Probe responses never wait on this.
+   */
+  async settle(): Promise<void> {
+    while (this.#inFlight.size > 0 || this.#pendingTeardowns.size > 0) {
+      await Promise.allSettled([...this.#inFlight.values(), ...this.#pendingTeardowns]);
+    }
   }
 
   async #run(options: {
@@ -305,8 +426,10 @@ export class McpProbeService {
     const runtime = this.#runtime(options.host);
     const server = await this.#server(bundleRoot, options.host, runtime, options.serverName);
     const pluginData = await this.#createPluginData();
+    let launch: ResolvedMcpSessionLaunch;
+    let projectedLaunch: McpProbeLaunch;
     try {
-      const launch = resolveMcpSessionLaunch({
+      launch = resolveMcpSessionLaunch({
         pluginData,
         resolved: {
           runtime,
@@ -316,21 +439,84 @@ export class McpProbeService {
         },
         workspaceRoot: this.#projectRoot,
       });
-      const projectedLaunch = inspectorLaunch(
+      projectedLaunch = inspectorLaunch(
         mcpSessionInspectorConfig(launch, bundleRoot).launch,
       );
-      return await this.#execute({
-        bundleRoot,
-        generatedAt,
-        host: options.host,
-        launch,
-        projectedLaunch,
-        serverName: options.serverName,
-        startedAt,
-      });
-    } finally {
+    } catch (error) {
+      // No transport was opened, so nothing can still hold the directory.
       await rm(pluginData, { force: true, recursive: true });
+      throw error;
     }
+    // From here on the transport teardown owns plugin-data removal (#execute):
+    // the launched server may have the directory open until its close settles.
+    return this.#execute({
+      bundleRoot,
+      generatedAt,
+      host: options.host,
+      launch,
+      pluginData,
+      projectedLaunch,
+      serverName: options.serverName,
+      startedAt,
+    });
+  }
+
+  /**
+   * Remove the probe's plugin-data directory once transport teardown has
+   * settled (or the teardown cap has elapsed), never at the response
+   * boundary: a stdio server that still holds the directory open while it
+   * shuts down would otherwise race the removal — on Windows the `rm` can
+   * reject outright and turn an honest timed-out report into a generic
+   * failure, elsewhere the directory can vanish under the exiting child.
+   * Removal failures stay on this detached path; they never reach the report.
+   *
+   * When the cap wins the race and the removal then fails — the transport is
+   * still alive and holds the directory, which on Windows is an `EPERM` — one
+   * more removal is chained to the teardown's eventual settlement instead of
+   * swallowing the failure for good. That retry is best-effort and stays
+   * outside the `settle()` fence on purpose: a transport that never settles
+   * would otherwise hold Workbench shutdown open indefinitely, which is the
+   * very case the cap bounds.
+   */
+  #removePluginDataAfter(teardown: Promise<unknown>, pluginData: string): Promise<void> {
+    let cancelCap: (() => void) | undefined;
+    let capWon = false;
+    // The cap stays referenced on purpose: it is the only handle guaranteeing
+    // the removal runs when a stalled teardown outlives Workbench shutdown,
+    // and it is cleared the moment the teardown settles.
+    const capped = new Promise<void>((resolvePromise) => {
+      cancelCap = this.#timers.schedule(() => {
+        capWon = true;
+        resolvePromise();
+      }, this.#pluginDataTeardownCapMs, { unref: false });
+    });
+    const pending = Promise.race([teardown, capped])
+      .then(() => {
+        cancelCap?.();
+        return this.#removePluginData(pluginData);
+      })
+      .then(() => undefined, () => {
+        if (capWon) {
+          void teardown.then(() => this.#removePluginData(pluginData)).catch(() => undefined);
+          return;
+        }
+        // The teardown settled (a close may have failed fast) but the child
+        // still held the directory for a moment: one bounded, fenced retry.
+        this.#track(
+          new Promise<void>((resolvePromise) => {
+            this.#timers.schedule(resolvePromise, mcpProbePluginDataRetryDelayMs, { unref: false });
+          })
+            .then(() => this.#removePluginData(pluginData))
+            .then(() => undefined, () => undefined),
+        );
+      });
+    this.#track(pending);
+    return pending;
+  }
+
+  #track(pending: Promise<void>): void {
+    this.#pendingTeardowns.add(pending);
+    void pending.then(() => this.#pendingTeardowns.delete(pending));
   }
 
   #runtime(host: McpProbeHost): TargetMcpRuntimeContract {
@@ -374,12 +560,29 @@ export class McpProbeService {
     readonly generatedAt: string;
     readonly host: McpProbeHost;
     readonly launch: ResolvedMcpSessionLaunch;
+    readonly pluginData: string;
     readonly projectedLaunch: McpProbeLaunch;
     readonly serverName: string;
     readonly startedAt: number;
   }): Promise<McpProbeReport> {
-    const client = this.#createClient();
-    const transport = this.#transport(options.launch);
+    let client: McpProbeClient;
+    let transport: McpProbeTransport;
+    try {
+      client = this.#createClient();
+      transport = this.#transport(options.launch);
+    } catch (error) {
+      // Nothing was launched, so the directory cannot be in use.
+      await rm(options.pluginData, { force: true, recursive: true });
+      throw error;
+    }
+    // One close promise per probe: a timeout starts the transport's TERM/KILL
+    // path early, and the teardown below must follow that same close rather
+    // than a duplicate call a non-reentrant transport answers immediately.
+    let transportClose: Promise<void> | undefined;
+    const closeTransport = (): Promise<void> => {
+      transportClose ??= settledClose(() => transport.close());
+      return transportClose;
+    };
     let report: McpProbeReport;
     try {
       try {
@@ -387,7 +590,7 @@ export class McpProbeService {
           client.connect(transport),
           options.startedAt,
           'connect',
-          () => transport.close(),
+          closeTransport,
         );
       } catch (error) {
         const failure = failureSnapshot(
@@ -419,7 +622,7 @@ export class McpProbeService {
           client.listTools(),
           options.startedAt,
           'protocol',
-          () => transport.close(),
+          closeTransport,
         );
       } catch (error) {
         const protocolError = error instanceof McpProbeTimeoutError
@@ -466,18 +669,27 @@ export class McpProbeService {
       });
       return report;
     } finally {
-      let timer: NodeJS.Timeout | undefined;
+      let cancelWait: (() => void) | undefined;
       // Keep transport teardown running through its TERM/KILL path without
-      // allowing a stalled close to extend the probe's total time budget.
-      const teardown = Promise.allSettled([client.close(), transport.close()]);
+      // allowing a stalled close to extend the probe's total time budget. The
+      // plugin-data removal is chained behind that teardown, so a close that
+      // outlives this wait detaches together with the removal it gates.
+      // Each close is invoked in isolation: a synchronously throwing close
+      // must neither skip the other close nor abort before the plugin-data
+      // removal below is registered. The transport close is the one a
+      // timeout may already have started.
+      const teardown = Promise.allSettled([
+        settledClose(() => client.close()),
+        closeTransport(),
+      ]);
+      const cleanup = this.#removePluginDataAfter(teardown, options.pluginData);
       const teardownWait = new Promise<void>((resolvePromise) => {
-        timer = setTimeout(resolvePromise, mcpProbeTeardownWaitMs);
-        timer.unref();
+        cancelWait = this.#timers.schedule(resolvePromise, mcpProbeTeardownWaitMs, { unref: true });
       });
       try {
-        await Promise.race([teardown, teardownWait]);
+        await Promise.race([cleanup, teardownWait]);
       } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        cancelWait?.();
       }
     }
   }
@@ -534,21 +746,23 @@ export class McpProbeService {
   ): Promise<T> {
     const remaining = Math.max(0, this.#timeoutMs - (this.#clock() - startedAt));
     if (remaining === 0) {
-      await onTimeout().catch(() => undefined);
+      // Same contract as the timer path below: the transport's own close
+      // (TERM/KILL for stdio) keeps running, but a stalled close never holds
+      // the timed-out report — #execute's bounded teardown owns that wait.
+      void settledClose(onTimeout);
       throw new McpProbeTimeoutError(kind);
     }
-    let timer: NodeJS.Timeout | undefined;
+    let cancelTimeout: (() => void) | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        void onTimeout().catch(() => undefined);
+      cancelTimeout = this.#timers.schedule(() => {
+        void settledClose(onTimeout);
         reject(new McpProbeTimeoutError(kind));
-      }, remaining);
-      timer.unref();
+      }, remaining, { unref: true });
     });
     try {
       return await Promise.race([operation, timedOut]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      cancelTimeout?.();
     }
   }
 }

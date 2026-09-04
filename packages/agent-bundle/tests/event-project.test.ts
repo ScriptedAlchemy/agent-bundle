@@ -39,12 +39,44 @@ it('validates native event envelopes with the generated wrapper error contract',
   };
 
   expect(validateNativeEventEnvelope(valid, options)).toBe(valid);
-  expect(() => validateNativeEventEnvelope({ ...valid, tool_response: 'not-an-object' }, options))
-    .toThrow('Agent Bundle event route error: native tool_response must be an object');
+  const { tool_response: _omitted, ...withoutResponse } = valid;
+  expect(() => validateNativeEventEnvelope(withoutResponse, options))
+    .toThrow('Agent Bundle event route error: native tool_response is required');
+  // Claude Code 2.1.257 delivers an MCP tool's result as a plain string (2026-09-03 capture).
+  expect(validateNativeEventEnvelope({ ...valid, tool_response: '{"ok":true}' }, options))
+    .toMatchObject({ tool_response: '{"ok":true}' });
   expect(() => validateNativeEventEnvelope({ ...valid, hook_event_name: 'BeforeToolUse' }, options))
     .toThrow('Agent Bundle event route error: native hook_event_name must equal PostToolUse');
   expect(() => validateNativeEventEnvelope([], options))
     .toThrow('Agent Bundle event route error: stdin JSON value must be an object');
+});
+
+it('accepts any JSON tool_input/tool_response for Codex tool events per the pinned generated schemas', () => {
+  const options = { canonicalEvent: 'tool/after' as const, nativeEvent: 'PostToolUse', target: 'codex' };
+  const base = {
+    cwd: '/tmp/lifecycle-replay',
+    hook_event_name: 'PostToolUse',
+    model: 'gpt-5-codex',
+    permission_mode: 'default',
+    session_id: 'session-1',
+    tool_name: 'Write',
+    tool_use_id: 'tool-1',
+    transcript_path: null,
+    turn_id: 'turn-1',
+  };
+
+  for (const value of ['text', 7, true, null, [1, 2], { ok: true }]) {
+    const native = { ...base, tool_input: value, tool_response: value };
+    expect(validateNativeEventEnvelope(native, options)).toBe(native);
+  }
+  expect(() => validateNativeEventEnvelope({ ...base, tool_input: {} }, options))
+    .toThrow('Agent Bundle event route error: native tool_response is required');
+  expect(() => validateNativeEventEnvelope({ ...base, tool_response: {} }, options))
+    .toThrow('Agent Bundle event route error: native tool_input is required');
+  expect(() => validateNativeEventEnvelope(
+    { ...base, hook_event_name: 'PreToolUse', tool_input: 'text' },
+    { canonicalEvent: 'tool/before', nativeEvent: 'PreToolUse', target: 'codex' },
+  )).not.toThrow();
 });
 
 it('validates Cursor workspaceOpen without inventing an agent session', () => {
@@ -69,8 +101,12 @@ it('validates Cursor workspaceOpen without inventing an agent session', () => {
   }
   expect(() => validateNativeEventEnvelope({ ...documented, cursor_version: '' }, options))
     .toThrow(/native cursor_version must be a nonempty string/u);
-  expect(() => validateNativeEventEnvelope({ ...documented, user_email: 7 }, options))
-    .toThrow(/native user_email must be a string or null/u);
+  // Operator identity is not a framework concern: the envelope validator never
+  // inspects `user_email`, whatever Cursor puts there.
+  for (const userEmail of [undefined, null, 'someone@example.com', 7]) {
+    const envelope = { ...documented, user_email: userEmail };
+    expect(validateNativeEventEnvelope(envelope, options)).toBe(envelope);
+  }
 
   expect(() => validateNativeEventEnvelope({
     ...documented,
@@ -80,6 +116,91 @@ it('validates Cursor workspaceOpen without inventing an agent session', () => {
     nativeEvent: 'sessionStart',
     target: 'cursor',
   })).toThrow(/native session_id or conversation_id must be a string/u);
+});
+
+it('validates the documented Cursor subagentStart and subagentStop envelopes fail closed', () => {
+  // https://cursor.com/docs/hooks#subagentstart / #subagentstop (retrieved 2026-09-02).
+  const start = {
+    conversation_id: 'conv-456',
+    git_branch: 'feature/auth',
+    hook_event_name: 'subagentStart',
+    is_parallel_worker: false,
+    parent_conversation_id: 'conv-456',
+    subagent_id: 'abc-123',
+    subagent_model: 'claude-sonnet-4-20250514',
+    subagent_type: 'generalPurpose',
+    task: 'Explore the authentication flow',
+    tool_call_id: 'tc-789',
+  };
+  const startOptions = { canonicalEvent: 'agent/start' as const, nativeEvent: 'subagentStart', target: 'cursor' };
+  expect(validateNativeEventEnvelope(start, startOptions)).toBe(start);
+  expect(() => validateNativeEventEnvelope({ ...start, subagent_type: '' }, startOptions))
+    .toThrow(/native subagent_type must be a nonempty string/u);
+  expect(() => validateNativeEventEnvelope({ ...start, subagent_id: undefined }, startOptions))
+    .toThrow(/native subagent_id must be a nonempty string/u);
+  expect(() => validateNativeEventEnvelope({ ...start, is_parallel_worker: 'no' }, startOptions))
+    .toThrow(/native is_parallel_worker must be a boolean/u);
+  // Only git_branch is documented "(optional)"; every other field must be present.
+  const { git_branch: _gitBranch, ...withoutGitBranch } = start;
+  expect(validateNativeEventEnvelope(withoutGitBranch, startOptions)).toBe(withoutGitBranch);
+  for (const [field, message] of [
+    ['parent_conversation_id', 'native parent_conversation_id must be a nonempty string'],
+    ['tool_call_id', 'native tool_call_id must be a nonempty string'],
+    ['subagent_model', 'native subagent_model must be a string'],
+    ['is_parallel_worker', 'native is_parallel_worker must be a boolean'],
+    ['task', 'native task must be a string'],
+  ] as const) {
+    const { [field]: _omitted, ...missing } = start;
+    expect(() => validateNativeEventEnvelope(missing, startOptions)).toThrow(message);
+  }
+  // Claude's agent_id/agent_type spelling is not the Cursor envelope.
+  expect(() => validateNativeEventEnvelope({
+    agent_id: 'abc-123',
+    agent_type: 'generalPurpose',
+    conversation_id: 'conv-456',
+    hook_event_name: 'subagentStart',
+  }, startOptions)).toThrow(/native subagent_id must be a nonempty string/u);
+
+  const stop = {
+    agent_transcript_path: '/path/to/subagent/transcript.txt',
+    conversation_id: 'conv-456',
+    description: 'Exploring auth flow',
+    duration_ms: 45_000,
+    hook_event_name: 'subagentStop',
+    loop_count: 0,
+    message_count: 12,
+    modified_files: ['src/auth.ts'],
+    status: 'completed',
+    subagent_type: 'generalPurpose',
+    summary: 'Found the login handler.',
+    task: 'Explore the authentication flow',
+    tool_call_count: 8,
+  };
+  const stopOptions = { canonicalEvent: 'agent/stop' as const, nativeEvent: 'subagentStop', target: 'cursor' };
+  expect(validateNativeEventEnvelope(stop, stopOptions)).toBe(stop);
+  expect(validateNativeEventEnvelope({ ...stop, agent_transcript_path: null }, stopOptions)).toBeDefined();
+  expect(() => validateNativeEventEnvelope({ ...stop, status: 'cancelled' }, stopOptions))
+    .toThrow(/native status is invalid/u);
+  expect(() => validateNativeEventEnvelope({ ...stop, loop_count: '0' }, stopOptions))
+    .toThrow(/native loop_count must be a number/u);
+  expect(() => validateNativeEventEnvelope({ ...stop, modified_files: 'src/auth.ts' }, stopOptions))
+    .toThrow(/native modified_files must be an array of strings/u);
+  expect(() => validateNativeEventEnvelope({ ...stop, agent_transcript_path: 7 }, stopOptions))
+    .toThrow(/native agent_transcript_path must be a string or null/u);
+  // The documented subagentStop input marks no field optional.
+  for (const [field, message] of [
+    ['task', 'native task must be a string'],
+    ['description', 'native description must be a string'],
+    ['summary', 'native summary must be a string'],
+    ['duration_ms', 'native duration_ms must be a number'],
+    ['message_count', 'native message_count must be a number'],
+    ['tool_call_count', 'native tool_call_count must be a number'],
+    ['modified_files', 'native modified_files must be an array of strings'],
+    ['agent_transcript_path', 'native agent_transcript_path must be a string or null'],
+  ] as const) {
+    const { [field]: _omitted, ...missing } = stop;
+    expect(() => validateNativeEventEnvelope(missing, stopOptions)).toThrow(message);
+  }
 });
 
 it('validates prompt/submit and session/end host envelopes fail closed', () => {
@@ -309,6 +430,33 @@ it('validates permission and stop-failure envelopes against the pinned host cont
     nativeEvent: 'PermissionRequest',
     target: 'codex',
   })).toThrow(/turn_id/u);
+
+  // Only the pinned Codex input schema declares `tool_input: true`: Codex
+  // admits every JSON shape while Claude's envelope stays object-shaped
+  // (#364 review).
+  for (const toolInput of [null, [], 'apply_patch', 7, false]) {
+    const shaped = { ...codexRequest, tool_input: toolInput };
+    expect(validateNativeEventEnvelope(shaped, {
+      canonicalEvent: 'permission/request',
+      nativeEvent: 'PermissionRequest',
+      target: 'codex',
+    })).toBe(shaped);
+    expect(() => validateNativeEventEnvelope({ ...claudeRequest, tool_input: toolInput }, {
+      canonicalEvent: 'permission/request',
+      nativeEvent: 'PermissionRequest',
+      target: 'claude',
+    })).toThrow(/native tool_input must be an object/u);
+  }
+  expect(() => validateNativeEventEnvelope({ ...codexRequest, tool_input: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'codex',
+  })).toThrow(/native tool_input is required/u);
+  expect(() => validateNativeEventEnvelope({ ...claudeRequest, tool_input: undefined }, {
+    canonicalEvent: 'permission/request',
+    nativeEvent: 'PermissionRequest',
+    target: 'claude',
+  })).toThrow(/native tool_input must be an object/u);
 
   const claudeDenied = {
     cwd: '/workspace',

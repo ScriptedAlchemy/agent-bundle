@@ -2,12 +2,15 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it } from '@rstest/core';
+import { agentNoticeStateDefinition } from '@agent-bundle/runtime/notices';
 import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
 import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 import { z } from 'zod';
 
 import stateDefinition from '../../fixtures/route-harness/src/state.ts';
+import { createDefaultRegistry } from '../../src/adapters/registry.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
 import {
   getMcpPrompt,
@@ -30,7 +33,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'journal', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'unavailable', 'wait']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'plugin-root', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -41,17 +44,34 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/catalog',
         'tool:harness/context',
         'tool:harness/echo',
+        'tool:harness/fault',
         'tool:harness/journal',
+        'tool:harness/layout-probe',
         'tool:harness/lifecycle',
         'tool:harness/mutation-probe',
+        'tool:harness/plugin-root',
         'tool:harness/publish-notice',
         'tool:harness/strict-report',
         'tool:harness/ticket',
+        'tool:harness/tooling',
         'tool:harness/unavailable',
         'tool:harness/wait',
       ],
       serverName: 'harness',
     });
+  });
+
+  it('composes the compiled layout chain around a tool while the route keeps its protocol result shape', async () => {
+    const invocation = await invokeMcpTool('layout-probe', { input: { label: 'wired' } });
+
+    expect(invocation.isError).toBe(false);
+    // The route's own text, then the server layout's addition for this route:
+    // the layout's container result merged with the route's valued result.
+    expect(invocation.content).toEqual([
+      { text: 'probe: wired', type: 'text' },
+      { text: 'layout: tool layout-probe via mcp:harness', type: 'text' },
+    ]);
+    expect(invocation.structuredContent).toEqual({ label: 'wired' });
   });
 
   it('projects a rendered Agent Document into the protocol content the server returns', async () => {
@@ -85,13 +105,56 @@ describe('the in-memory MCP projection level', () => {
         state: 'available',
         value: { name: 'agent-bundle-in-memory-projection' },
       },
+      lineage: { reason: 'not-provided', state: 'unavailable' },
       session: { reason: 'not-provided', state: 'unavailable' },
+      // The generated server's stdout is the protocol wire: no terminal, never probed (#511).
+      terminal: {
+        source: 'derived',
+        state: 'available',
+        value: {
+          hostSurface: 'mcp',
+          sharesTarget: false,
+          stderr: { color: 'none', kind: 'none' },
+          stdout: { color: 'none', kind: 'none' },
+        },
+      },
       workspace: {
         source: 'derived',
         state: 'available',
         value: { root: process.cwd() },
       },
     });
+  });
+
+  it('projects Agent.Result metadata to the result _meta beside the listing _meta', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const listed = await session.client.listTools();
+    expect(listed.tools.find((tool) => tool.name === 'strict-report')).toMatchObject({
+      _meta: { ui: { resourceUri: 'ui://route-harness/panel.html' } },
+      outputSchema: { type: 'object' },
+    });
+    // The route's own metadata reaches _meta merged with the fixture's root and
+    // server layout metadata (the layouts are containers, so the route's keys
+    // sit beside theirs); the metadata-free echo route carries only the
+    // layouts' keys. A layout-free document with no metadata projects no _meta
+    // at all — pinned by mcp-projector.test.ts and generated-route-server.test.ts.
+    const layoutMeta = (routeId: string) => ({
+      invocation: 'tool',
+      layout: 'harness',
+      route: routeId,
+      server: 'mcp:harness',
+      shell: 'route-harness',
+      wrapped: 'tool',
+    });
+    const invocation = await invokeMcpTool('strict-report', { input: { reportId: 'meta-1' } });
+    expect(invocation._meta).toEqual({
+      ...layoutMeta('tool:harness/strict-report'),
+      ui: { resourceUri: 'ui://route-harness/panel.html' },
+    });
+    expect(invocation.structuredContent).toEqual({ reportId: 'meta-1', summary: 'summary for meta-1' });
+    const echo = await invokeMcpTool('echo', { input: { message: 'no metadata' } });
+    expect(echo._meta).toEqual(layoutMeta('tool:harness/echo'));
   });
 
   it('carries a represented error to the protocol as isError rather than a transport failure', async () => {
@@ -102,6 +165,45 @@ describe('the in-memory MCP projection level', () => {
     expect(invocation.structuredContent).toEqual({ available: false });
   });
 
+  describe('a tool route that throws instead of rendering Agent.Error (#492)', () => {
+    it('reaches the wire as the SDK default tool error: message text, isError, no _meta, no structuredContent', async () => {
+      await using session = await openInMemoryMcpServer();
+
+      // No document exists, so nothing agent-bundle projects — layout `_meta`,
+      // `structuredContent`, a `[code]` prefix — can be present. The result is
+      // exactly what @modelcontextprotocol/server's `createToolError` builds
+      // from the thrown error's message.
+      const result = await session.client.callTool({ arguments: { mode: 'throw' }, name: 'fault' });
+      expect(result).toEqual({
+        content: [{ text: 'fault: route threw', type: 'text' }],
+        isError: true,
+      });
+      expect(result).not.toHaveProperty('_meta');
+      expect(result).not.toHaveProperty('structuredContent');
+
+      // The session is still usable: the failure was a result, not a transport error.
+      const ok = await session.client.callTool({ arguments: { mode: 'ok' }, name: 'fault' });
+      expect(ok).toMatchObject({ structuredContent: { mode: 'ok', settled: true } });
+      expect(ok).not.toHaveProperty('isError');
+    });
+
+    it('keeps the layout shell when only a nested Suspense boundary rejects: represented error with code "boundary"', async () => {
+      const invocation = await invokeMcpTool('fault', { input: { mode: 'reject-boundary' } });
+
+      // The reconciler folds the rejected boundary into the streamed document
+      // as an error node, so this is the same wire shape `<Agent.Error
+      // code="boundary">` would produce: layout `_meta` survives, the route's
+      // value is still `structuredContent`, and the text carries the code.
+      expect(invocation.isError).toBe(true);
+      expect(invocation._meta).toMatchObject({ layout: 'harness', route: 'tool:harness/fault', server: 'mcp:harness' });
+      expect(invocation.content).toEqual([
+        { text: 'fault: reject-boundary', type: 'text' },
+        { text: '[boundary] fault: boundary rejected', type: 'text' },
+      ]);
+      expect(invocation.structuredContent).toEqual({ mode: 'reject-boundary', settled: true });
+    });
+  });
+
   it('resolves a suspended boundary before the server projects the result', async () => {
     const invocation = await invokeMcpTool('catalog', { input: { genre: 'mystery' } });
 
@@ -110,6 +212,107 @@ describe('the in-memory MCP projection level', () => {
       { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
     ]);
     expect(invocation.structuredContent).toEqual({ genre: 'mystery', titles: ['Piranesi', 'Solaris'] });
+  });
+
+  it('notifies the client of a streamed Agent.Progress fallback under its own progress token (#448)', async () => {
+    await using session = await openInMemoryMcpServer();
+    const notifications: unknown[] = [];
+    session.client.setNotificationHandler('notifications/progress', (notification) => {
+      notifications.push(notification.params);
+    });
+
+    // Without a token the same render produces no notification at all.
+    await session.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' });
+    expect(notifications).toEqual([]);
+
+    // The catalog route never calls `progress.report()`; the request's own
+    // `_meta.progressToken` is what turns its streamed fallback into the wire
+    // notification, exactly as for an explicit report.
+    const result = await session.client.callTool({
+      arguments: { genre: 'mystery' },
+      name: 'catalog',
+      _meta: { progressToken: 'tok-448' },
+    });
+
+    expect(notifications).toEqual([
+      { message: 'loading mystery', progress: 0, progressToken: 'tok-448', total: 2 },
+    ]);
+    expect(result).toMatchObject({
+      content: [
+        { text: 'catalog: mystery', type: 'text' },
+        { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
+      ],
+      structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
+    });
+  });
+
+  describe('a tool that declares its own render budget (#454)', () => {
+    // The `wait` route declares `config.render.maxElapsedMs: 120_000`. With
+    // the server dispatcher's base lowered to 100ms, a 300ms hold completes
+    // only because the compiled budget reached the render session; a route
+    // without one (`catalog` here, held by its own Suspense boundary) is
+    // still bound by the base. The projector keeps forwarding progress for
+    // the whole render, which is what keeps a host's idle timer alive.
+    it('renders past the base limit under its declared budget and keeps progress notifications flowing', async () => {
+      await using session = await openInMemoryMcpServer({ limits: { maxElapsedMs: 100 } });
+      const notifications: { readonly progress: number; readonly total?: number }[] = [];
+      session.client.setNotificationHandler('notifications/progress', (notification) => {
+        notifications.push({ progress: notification.params.progress, ...(notification.params.total === undefined ? {} : { total: notification.params.total }) });
+      });
+
+      const result = await session.client.callTool({
+        _meta: { progressToken: 'tok-454' },
+        arguments: { holdMs: 300, tickMs: 100 },
+        name: 'wait',
+      });
+
+      expect(result).toMatchObject({ structuredContent: { waitedMs: 300 } });
+      expect(result).not.toHaveProperty('isError');
+      expect(notifications).toEqual([
+        { progress: 1, total: 3 },
+        { progress: 2, total: 3 },
+        { progress: 3, total: 3 },
+      ]);
+    });
+
+    it('still bounds a route without a declared budget by the dispatcher base', async () => {
+      await using session = await openInMemoryMcpServer({ limits: { maxElapsedMs: 1 } });
+
+      // The route reaches emit time past a 1ms budget on any machine; the
+      // contract error is the SDK's default tool error on the wire.
+      const result = await session.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' });
+      expect(result).toMatchObject({
+        content: [{ text: expect.stringContaining('elapsed time exceeds 1ms'), type: 'text' }],
+        isError: true,
+      });
+    });
+  });
+
+  it('publishes the plugin root the server process resolved on every tool call, and forwards a context override (#468)', async () => {
+    const anchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
+    const previous = process.env[anchor];
+    process.env[anchor] = '/installs/harness';
+    try {
+      // The server resolves the anchor once when it opens, exactly as the
+      // generated entry does at startup; every request then observes it.
+      await using session = await openInMemoryMcpServer();
+      const result = await session.client.callTool({ arguments: {}, name: 'plugin-root' });
+      expect(result).toMatchObject({
+        structuredContent: {
+          plugin: { source: 'native', state: 'available', value: { root: '/installs/harness', stateRoot: '/installs/harness/state' } },
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env[anchor];
+      else process.env[anchor] = previous;
+    }
+
+    const injected = await invokeMcpTool('plugin-root', {
+      context: { plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } } as never },
+    });
+    expect(injected.structuredContent).toEqual({
+      plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } },
+    });
   });
 
   it('reads a compiled resource route by its configured URI', async () => {
@@ -279,6 +482,220 @@ describe('the in-memory MCP projection level', () => {
     }
 
     expect((await listMcpSurface()).resources).not.toContain('agent-bundle://notices/inbox');
+  });
+
+  it('discloses inbox content per sensitivity under the host advertisement: redacted, full, or withheld (#99 item 7)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-redaction-'));
+    const secretText = 'Rotate token=abc123def456 at https://ops:hunter2@vault.example.test/x';
+    const readInbox = async (session: Awaited<ReturnType<typeof openInMemoryMcpServer>>) => {
+      const read = await session.client.readResource({ uri: 'agent-bundle://notices/inbox' });
+      const content = read.contents[0];
+      if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+      return (JSON.parse(content.text) as { notices: readonly Readonly<Record<string, unknown>>[] }).notices;
+    };
+    try {
+      // The claude advertisement admits `internal` on the inbox, so a secret
+      // notice is withheld there while it is still admitted on next-event.
+      const session = await openInMemoryMcpServer({
+        context: { session: { source: 'native', state: 'available', value: { sessionId: 's1' } } },
+        state: {
+          definition: stateDefinition,
+          driver: createSqliteStateDriver({ root }),
+          noticeDelivery: createDefaultRegistry().noticeDelivery('claude'),
+        },
+      });
+      try {
+        // The fixture keys idempotency on the message, so each class gets its own text.
+        for (const sensitivity of ['internal', 'public', 'secret'] as const) {
+          await expect(session.client.callTool({
+            arguments: { message: `${secretText} (${sensitivity})`, recipientSession: 's1', sensitivity },
+            name: 'publish-notice',
+          })).resolves.toMatchObject({ structuredContent: { sensitivity, state: 'pending' } });
+        }
+        const notices = await readInbox(session);
+        const shown = notices
+          .map((notice) => ({ disclosure: notice.disclosure, sensitivity: notice.sensitivity, text: (notice.content as { root: { text: string } }).root.text }))
+          .toSorted((left, right) => String(left.sensitivity).localeCompare(String(right.sensitivity)));
+        expect(shown).toEqual([
+          {
+            disclosure: { redacted: true, route: 'mcp-inbox' },
+            sensitivity: 'internal',
+            text: 'Rotate [REDACTED] at [REDACTED]vault.example.test/x (internal)',
+          },
+          {
+            disclosure: { redacted: false, route: 'mcp-inbox' },
+            sensitivity: 'public',
+            text: `${secretText} (public)`,
+          },
+        ]);
+      } finally {
+        await session.close();
+      }
+      // Reading the inbox exposed the disclosed notices and recorded the
+      // refusal on the withheld one; nothing was exposed for it. The store
+      // keeps every notice as authored: redaction happened on egress only.
+      const driver = createSqliteStateDriver({ root });
+      try {
+        const store = await driver.open(agentNoticeStateDefinition());
+        const durable = await store.read();
+        const byClass = new Map(durable.state.notices.map((notice) => [notice.sensitivity, notice]));
+        expect(byClass.get('internal')?.exposure?.count).toBe(1);
+        expect(byClass.get('public')?.exposure?.count).toBe(1);
+        expect(byClass.get('secret')?.exposure).toBeUndefined();
+        expect(byClass.get('secret')?.withheld).toEqual({
+          'mcp-inbox': expect.objectContaining({ count: 1, reason: 'sensitivity-exceeds-route' }),
+        });
+        expect(durable.state.notices.every((notice) => (notice.content.root as { text: string }).text.startsWith(secretText))).toBe(true);
+      } finally {
+        await driver.close();
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  // Issue #369: task-augmented tool calls are deferred until the MCP SDK ships
+  // a task runtime (docs/mcp-conformance.md). Until then the generated server
+  // must stay fail-closed — no `tasks` capability claim — and must process a
+  // task-augmented request as an ordinary one, which is what the 2025-11-25
+  // Tasks utility requires of a receiver that declared no task support.
+  it('never advertises the MCP Tasks capability', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const capabilities = session.client.getServerCapabilities();
+    expect(capabilities).toMatchObject({ tools: expect.any(Object) });
+    expect(Object.hasOwn(capabilities ?? {}, 'tasks')).toBe(false);
+  });
+
+  it('processes a task-augmented tools/call as an ordinary request', async () => {
+    await using session = await openInMemoryMcpServer();
+
+    const result = await session.client.request({
+      method: 'tools/call',
+      params: { arguments: { message: 'deferred' }, name: 'echo', task: { ttl: 60_000 } },
+    });
+
+    expect(result).toMatchObject({ structuredContent: { message: 'deferred' } });
+    for (const key of ['task', 'taskId', 'status', 'createdAt', 'ttl', 'pollInterval']) {
+      expect(Object.hasOwn(result, key)).toBe(false);
+    }
+  });
+
+  // Compile-time half of the #369 sentinel: the SDK's spec-method handler
+  // overload rejects task methods today. When a release admits them, this
+  // directive becomes unused, `pnpm typecheck` fails, and the deferral in
+  // docs/mcp-conformance.md must be re-audited. Never invoked at runtime.
+  const typedTaskSurfaceSentinel = (server: McpServer): void => {
+    // @ts-expect-error tasks/get is 2025-11-25 wire vocabulary without an SDK runtime.
+    server.server.setRequestHandler('tasks/get', async () => ({}));
+  };
+  void typedTaskSurfaceSentinel;
+
+  it('emits notifications/resources/updated for the notice inbox only to subscribed matching sessions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-updated-'));
+    const inboxUri = 'agent-bundle://notices/inbox';
+    const sessionIdentity = (sessionId: string) => ({
+      source: 'native' as const,
+      state: 'available' as const,
+      value: { sessionId },
+    });
+    const durable = (sessionId: string) => openInMemoryMcpServer({
+      context: { session: sessionIdentity(sessionId) },
+      state: { definition: stateDefinition, driver: createSqliteStateDriver({ root }) },
+    });
+    const settle = async (): Promise<void> => {
+      // The inbox observation is detached from the render that triggered it;
+      // a few turns of the event loop let it reserve, send, and record.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+    const signalled = async (session: 's1' | 's2', count: number): Promise<void> => {
+      for (let i = 0; i < 200 && updates[session].length < count; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // The availability receipt commits right after the wire write resolves.
+      await settle();
+    };
+    const readInbox = async (client: (typeof subscribed)['client']) => {
+      const read = await client.readResource({ uri: inboxUri });
+      const content = read.contents[0];
+      if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+      return (JSON.parse(content.text) as { notices: readonly Readonly<Record<string, unknown>>[] }).notices;
+    };
+    const subscribed = await durable('s1');
+    const bystander = await durable('s2');
+    const updates = { s1: [] as string[], s2: [] as string[] };
+    subscribed.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+      updates.s1.push(notification.params.uri);
+    });
+    bystander.client.setNotificationHandler('notifications/resources/updated', (notification) => {
+      updates.s2.push(notification.params.uri);
+    });
+    try {
+      expect(subscribed.client.getServerCapabilities()?.resources).toMatchObject({ subscribe: true });
+      // Only the inbox is subscribable: static resources never change per session.
+      await expect(subscribed.client.subscribeResource({ uri: 'harness://notes' })).rejects.toThrow(/does not support subscriptions/u);
+      await subscribed.client.subscribeResource({ uri: inboxUri });
+
+      // s1 publishes to itself: the subscribed session gets exactly one signal.
+      await subscribed.client.callTool({ arguments: { message: 'for s1', recipientSession: 's1' }, name: 'publish-notice' });
+      await signalled('s1', 1);
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+
+      // Availability is a receipt on the pending notice, not a state change;
+      // the client's re-read records exposure and triggers no further signal.
+      const inbox = await readInbox(subscribed.client);
+      expect(inbox).toEqual([expect.objectContaining({
+        availability: expect.objectContaining({ channel: 'mcp-resource-updated', count: 1 }),
+        exposure: expect.objectContaining({ channel: 'mcp-inbox', count: 1 }),
+        state: 'pending',
+      })]);
+      await subscribed.client.callTool({ arguments: { message: 'unrelated render' }, name: 'echo' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+
+      // An unsubscribed session is never signalled, even for its own notice;
+      // the subscribed session is not signalled for a notice it cannot read.
+      await bystander.client.callTool({ arguments: { message: 'for s2', recipientSession: 's2' }, name: 'publish-notice' });
+      await subscribed.client.callTool({ arguments: { message: 'observe' }, name: 'echo' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+      const bystanderInbox = await readInbox(bystander.client);
+      expect(bystanderInbox).toEqual([expect.objectContaining({ state: 'pending' })]);
+      expect(bystanderInbox[0]).not.toHaveProperty('availability');
+
+      // Unsubscribing stops delivery; the notice stays pending for the inbox route.
+      await subscribed.client.unsubscribeResource({ uri: inboxUri });
+      await subscribed.client.callTool({ arguments: { message: 'for s1 again', recipientSession: 's1' }, name: 'publish-notice' });
+      await settle();
+      expect(updates).toEqual({ s1: [inboxUri], s2: [] });
+      expect(await readInbox(subscribed.client)).toHaveLength(2);
+    } finally {
+      await subscribed.close();
+      await bystander.close();
+    }
+
+    // Volatile state lives in the render side's heap, so the server honestly
+    // advertises no subscription capability and registers no subscribe handler.
+    const volatile = await openInMemoryMcpServer({
+      state: {
+        definition: defineState({
+          events: { changed: z.object({ value: z.string() }).strict() },
+          id: 'mcp-in-memory/volatile',
+          initial: { value: '' },
+          lifetime: 'process',
+          reduce: (_state, event) => ({ value: event.payload.value }),
+          schema: z.object({ value: z.string() }).strict(),
+        }),
+        driver: createMemoryStateDriver({ lifetime: 'process' }),
+      },
+    });
+    try {
+      expect(volatile.client.getServerCapabilities()?.resources?.subscribe).toBeUndefined();
+      await expect(volatile.client.subscribeResource({ uri: inboxUri })).rejects.toThrow(/Method not found/u);
+    } finally {
+      await volatile.close();
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it('leaves the browser App surface off the in-memory server', async () => {

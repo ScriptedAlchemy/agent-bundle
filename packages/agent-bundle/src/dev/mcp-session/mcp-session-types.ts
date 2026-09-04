@@ -19,6 +19,7 @@ import type {
   McpSessionReplayOverflow,
 } from './mcp-session-protocol.ts';
 import type { McpSessionTraceSink } from './mcp-session-trace.ts';
+import { CodedError } from '../../core/errors.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
 
@@ -27,9 +28,16 @@ export interface McpRequestOptions {
   readonly timeout: number;
 }
 
+/**
+ * Request metadata carried on the wire as `params._meta`. `progressToken` is
+ * the MCP-defined key generated routes consult before sending progress; any
+ * other key travels untouched.
+ */
+export type McpRequestMeta = Readonly<{ readonly progressToken?: string | number } & Record<string, unknown>>;
+
 export interface McpClient {
   callTool(
-    params: { readonly arguments: Record<string, unknown>; readonly name: string },
+    params: { readonly _meta?: McpRequestMeta; readonly arguments: Record<string, unknown>; readonly name: string },
     options?: McpRequestOptions,
   ): Promise<CallToolResult>;
   close(): Promise<void>;
@@ -80,6 +88,8 @@ export interface McpSessionRequestOptions {
 }
 
 export interface McpSessionToolCallOptions extends McpSessionRequestOptions {
+  /** Forwarded verbatim as the request's `params._meta` (for example a `progressToken`). */
+  readonly _meta?: McpRequestMeta;
   readonly arguments: Record<string, unknown>;
   readonly name: string;
   /** A caller-chosen identifier used to cancel an in-flight tool call. */
@@ -135,6 +145,55 @@ export interface McpSessionServiceCloseFailure {
   readonly error: unknown;
   readonly resource: 'opening' | 'session';
   readonly sessionId?: McpSessionId;
+}
+
+export type McpSessionErrorCode =
+  | 'duplicate-request-id'
+  | 'invalid-request-id'
+  | 'invalid-server-name'
+  | 'not-initialized'
+  | 'service-closed'
+  | 'session-closed';
+
+/**
+ * Expected session-lifecycle failures on the Effect error channel: the
+ * session or its service is closed, a protocol call ran before `initialize`,
+ * or a request was admitted with an invalid or already-active `requestId`.
+ * These ride the fail channel as a `CodedError` (never `Effect.die`) and
+ * rethrow unchanged at `src/effect/boundary.ts`, so Promise callers keep the
+ * exact messages they saw before the class existed.
+ */
+export class McpSessionError extends CodedError<McpSessionErrorCode> {
+  constructor(code: McpSessionErrorCode, message: string) {
+    super('McpSessionError', code, message);
+  }
+
+  static closed(): McpSessionError {
+    return new McpSessionError('session-closed', 'MCP session is closed.');
+  }
+
+  static duplicateRequestId(requestId: string): McpSessionError {
+    return new McpSessionError(
+      'duplicate-request-id',
+      `MCP session request ${JSON.stringify(requestId)} is already active.`,
+    );
+  }
+
+  static invalidRequestId(): McpSessionError {
+    return new McpSessionError('invalid-request-id', 'MCP session requestId must be nonempty.');
+  }
+
+  static invalidServerName(): McpSessionError {
+    return new McpSessionError('invalid-server-name', 'MCP server name must be nonempty.');
+  }
+
+  static notInitialized(): McpSessionError {
+    return new McpSessionError('not-initialized', 'MCP session must initialize before protocol operations.');
+  }
+
+  static serviceClosed(): McpSessionError {
+    return new McpSessionError('service-closed', 'MCP session service is closed.');
+  }
 }
 
 /**

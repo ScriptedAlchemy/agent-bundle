@@ -1,12 +1,14 @@
-import { execFile as executeFile } from 'node:child_process';
+import { execFile as executeFile, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
 import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
 
@@ -14,6 +16,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 const cliPath = join(packageRoot, 'dist/cli.js');
+const recorderPath = join(packageRoot, 'tests/support/record-module-loads.mjs');
 let buildPackage: Promise<void> | undefined;
 
 const buildCliPackage = async (): Promise<void> => {
@@ -42,14 +45,10 @@ const runSourceCliWithOutput = async (
   args: string[],
   dependencies: CliDependencies = {},
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-  const code = await runSourceCli(args, {
-    stderr: { write: (chunk: string) => stderr.push(chunk) },
-    stdout: { write: (chunk: string) => stdout.push(chunk) },
-  }, dependencies);
-  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+  const code = await runSourceCli(args, terminal.output, dependencies);
+  return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
 const createCliProject = async (): Promise<{ readonly output: string; readonly root: string }> => {
@@ -130,7 +129,7 @@ const createPackedConsumer = async (): Promise<{ readonly cli: string; readonly 
   const { stdout } = await execFile(
     'npm', ['pack', '--json', '--pack-destination', root], { cwd: packageRoot },
   );
-  const packed = packOutputFromJson(stdout);
+  const packed = packOutputFromJson(stdout, 'agent-bundle');
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await execFile(
     'npm', ['install', ...cachedNpmInstallArguments, join(root, packed.filename)],
@@ -163,6 +162,18 @@ it('parses the nested development proxy command', async () => {
     serverName: 'fixture',
     url: 'http://127.0.0.1:4312',
   });
+});
+
+it('describes the operation-specific artifact default in build and prepack help', async () => {
+  // Both CLI commands build with package outputs, so their artifact default is
+  // `artifact/` (the npm package build owns `dist/`); the API-level `dist`
+  // default must not leak into --help (#319 review).
+  for (const command of ['build', 'prepack']) {
+    const result = await runSourceCliWithOutput([command, '--help']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/--output <path>[\s\S]*default artifact/u);
+    expect(result.stdout).not.toContain('default dist');
+  }
 });
 
 it('requires a server name for the nested development proxy command', async () => {
@@ -200,6 +211,67 @@ it('builds a selected target through the built executable from a path containing
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
+}, 30_000 * timeScale);
+
+/**
+ * Runs the built CLI under the module-load recorder and returns the process
+ * result plus every non-builtin module URL the invocation resolved.
+ */
+const runCliRecordingModuleLoads = async (
+  args: readonly string[],
+): Promise<{ readonly code: number; readonly modules: readonly string[]; readonly stderr: string; readonly stdout: string }> => {
+  const recordRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-module-loads-'));
+  const recordPath = join(recordRoot, 'modules.txt');
+  try {
+    const child = spawn(process.execPath, ['--import', pathToFileURL(recorderPath).href, cliPath, ...args], {
+      cwd: workspaceRoot,
+      env: { ...process.env, AGENT_BUNDLE_RECORD_MODULE_LOADS: recordPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const code = await new Promise<number>((settle, reject) => {
+      child.once('error', reject);
+      child.once('close', (exitCode) => settle(exitCode ?? 1));
+    });
+    const modules = (await readFile(recordPath, 'utf8')).split('\n').filter((line) => line.length > 0);
+    return { code, modules, stderr, stdout };
+  } finally {
+    await rm(recordRoot, { force: true, recursive: true });
+  }
+};
+
+const effectModulePattern = /\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:effect|@effect\/platform-node-shared)\//u;
+
+it('answers --version, --help, and an argv error without loading the Effect terminal runtime', async () => {
+  // The Effect module graph (`effect`, `effect/Terminal`, the
+  // platform-node-shared layers) measured ≈250 ms of module loading on
+  // rc.112 — more than the rest of the CLI's startup — so the trivial
+  // invocations must never reach it. Real commands build the runtime on
+  // their first write (checked last, so the recorder itself is proven).
+  await buildCliPackage();
+
+  const version = await runCliRecordingModuleLoads(['--version']);
+  expect(version).toMatchObject({ code: 0, stderr: '' });
+  expect(version.stdout).toMatch(/^\d+\.\d+\.\d+.*\n$/u);
+  expect(version.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const help = await runCliRecordingModuleLoads(['--help']);
+  expect(help).toMatchObject({ code: 0, stderr: '' });
+  expect(help.stdout).toContain('Usage: agent-bundle');
+  expect(help.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const argvError = await runCliRecordingModuleLoads(['mcp', 'list', '--server', 'fixture']);
+  expect(argvError).toMatchObject({ code: 2, stdout: '' });
+  expect(argvError.stderr).toContain("required option '--target <target>' not specified");
+  expect(argvError.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const command = await runCliRecordingModuleLoads(['hooks', 'list', '--artifact', join(workspaceRoot, 'missing artifact'), '--json']);
+  expect(command).toMatchObject({ code: 1, stdout: '' });
+  expect(JSON.parse(command.stderr)).toMatchObject([{ code: 'AB6000', severity: 'error' }]);
+  expect(command.modules.some((url) => effectModulePattern.test(url))).toBe(true);
 }, 30_000 * timeScale);
 
 it('runs MCP and hook operations from a packed consumer with explicit and temporary artifacts', async () => {
@@ -391,6 +463,46 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
   }
 }, 30_000 * timeScale);
 
+it('build requests the Claude host validator by default, opts out under --no-host-validation, and fails under --strict (#476)', async () => {
+  const calls: unknown[] = [];
+  const build = async (options: unknown) => {
+    calls.push(options);
+    const strict = (options as { strict?: boolean }).strict === true;
+    const skipped = (options as { hostValidation?: boolean }).hostValidation === false;
+    const diagnostics = skipped
+      ? []
+      : [{ code: 'AB6020', message: 'Claude plugin validation warning.', severity: strict ? 'error' as const : 'warning' as const }];
+    return {
+      build: { outputRoot: '/artifact' },
+      diagnostics,
+      ...(skipped ? {} : {
+        hostValidation: [{ diagnostics, host: 'claude', load: { status: 'loaded' }, status: strict ? 'failed' : 'warnings', target: 'claude', version: '2.1.259' }],
+      }),
+      model: { metadata: { name: 'fixture' } },
+    };
+  };
+
+  const human = await runSourceCliWithOutput(['build', '--root', '/project'], { build: build as never });
+  expect(human).toEqual({
+    code: 0,
+    stderr: '',
+    stdout: 'AB6020 (warning): Claude plugin validation warning.\nBuilt fixture to /artifact\nHost validation (claude): warnings (Claude Code 2.1.259), load check loaded\n',
+  });
+
+  const skipped = await runSourceCliWithOutput(['build', '--root', '/project', '--no-host-validation'], { build: build as never });
+  expect(skipped).toEqual({ code: 0, stderr: '', stdout: 'Built fixture to /artifact\n' });
+
+  const strict = await runSourceCliWithOutput(['build', '--root', '/project', '--strict', '--json'], { build: build as never });
+  expect(strict.code).toBe(1);
+  expect(strict.stderr).toContain('AB6020');
+
+  expect(calls).toEqual([
+    expect.objectContaining({ hostValidation: true, packageOutputs: true, root: '/project', strict: undefined }),
+    expect.objectContaining({ hostValidation: false, packageOutputs: true, root: '/project' }),
+    expect.objectContaining({ hostValidation: true, strict: true }),
+  ]);
+});
+
 it('enables bounded host validation for built artifacts and promotes warnings only under --strict', async () => {
   const calls: unknown[] = [];
   const validate = async (options: unknown) => {
@@ -469,12 +581,43 @@ it('explains selected and omitted components per target on human inspect output'
     expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
     expect(human.stdout).not.toContain('omitted skill review');
+    // A feature the host cannot express is reported on the shipped component
+    // (#100 feature sets): select Cursor too and add one command with a field
+    // Cursor's frontmatter-free commands surface drops.
+    const originalConfig = await readFile(join(project.root, 'agent-bundle.config.ts'), 'utf8');
+    await mkdir(join(project.root, 'src', 'commands'), { recursive: true });
+    await Promise.all([
+      writeFile(join(project.root, 'src', 'commands', 'deploy.md'), '---\nargumentHint: <env>\n---\nDeploy.\n'),
+      writeFile(join(project.root, 'agent-bundle.config.ts'), originalConfig.replace("['portable', 'codex']", "['portable', 'codex', 'cursor']")),
+    ]);
+    const withCursor = await runSourceCliWithOutput(['inspect', '--root', project.root, '--target', 'cursor']);
+    expect(withCursor).toMatchObject({ code: 0, stderr: '' });
+    expect(withCursor.stdout).toMatch(/^ {2}command deploy omits argumentHint: commands\.argumentHint unavailable — .*frontmatter-free.*$/mu);
+    await Promise.all([
+      rm(join(project.root, 'src', 'commands'), { force: true, recursive: true }),
+      writeFile(join(project.root, 'agent-bundle.config.ts'), originalConfig),
+    ]);
+    // The canonical kind matrix names every kind a host cannot emit, even
+    // kinds this project never declares (#100).
+    expect(human.stdout).toContain(
+      '  kinds this host cannot emit: agent (unavailable), command (unavailable), hook (unavailable), lsp (unavailable), '
+      + 'native-diagnostics (unavailable), native-extension (unavailable), rule (unavailable)\n',
+    );
+    expect(human.stdout).toMatch(
+      /^ {2}kinds this host cannot emit: agent \(unavailable\), command \(unavailable\), lsp \(unavailable\), native-diagnostics \(unavailable\), native-extension \(unavailable\), rule \(unavailable\)$/mu,
+    );
 
     // The JSON form carries the same accounting with the full judgment.
     const json = await runSourceCliWithOutput(['inspect', '--root', project.root, '--target', 'codex', '--json']);
     expect(json).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(json.stdout)).toMatchObject({
       plans: [{
+        kinds: expect.arrayContaining([
+          { capability: { evidence: { observedVersion: '0.147.0', target: 'codex' }, name: 'skills', state: 'supported' }, kind: 'skill', selected: 1, skipped: 0 },
+          { capability: { name: 'rules', reason: expect.any(String), state: 'unavailable' }, kind: 'rule', selected: 0, skipped: 1 },
+          { capability: { name: 'lsp', reason: expect.stringContaining('no LSP server surface'), state: 'unavailable' }, kind: 'lsp', selected: 0, skipped: 0 },
+          { capability: { name: 'nativeExtension', reason: expect.any(String), state: 'unavailable' }, kind: 'native-extension', selected: 0, skipped: 0 },
+        ]),
         selected: [expect.objectContaining({ capability: expect.objectContaining({ name: 'skills', state: 'supported' }), kind: 'skill', name: 'review' })],
         skipped: [expect.objectContaining({
           capability: { name: 'rules', reason: expect.any(String), state: 'unavailable' },
@@ -654,17 +797,13 @@ it('reports a generated Flight worker collision before compiling scripts', async
 }, 30_000 * timeScale);
 
 it('dispatches the install command through the native installer surface', async () => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
 
   const code = await runSourceCli(
     ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--json'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
+    terminal.output,
     {
       installBundle: async (options: unknown) => {
         calls.push(options);
@@ -681,15 +820,144 @@ it('dispatches the install command through the native installer surface', async 
   );
 
   expect(code).toBe(0);
-  expect(stderr.join('')).toBe('');
+  expect(terminal.stderr()).toBe('');
   expect(calls).toEqual([{
     from: '/tmp/example bundle',
     host: 'claude',
+    replace: false,
     scope: 'project',
   }]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({
+  expect(JSON.parse(terminal.stdout())).toMatchObject({
     host: 'claude',
     plugin: 'fixture',
     state: 'installed',
   });
+});
+
+it('maps serve-app argv onto serveApp, prints the served URL, and closes the host once on a termination signal', async () => {
+  const calls: unknown[] = [];
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removed: NodeJS.Signals[] = [];
+  let closeCalls = 0;
+  const closedGate = Promise.withResolvers<void>();
+  const result = await runSourceCliWithOutput([
+    'serve-app', 'hauler/dashboard',
+    '--root', '/project', '--artifact', 'artifact', '--target', 'claude',
+    '--tool', 'hauler_status', '--input', '{"scope":"all"}', '--port', '4941', '--profile', 'claude',
+    '--allow', 'call-tool', '--allow', 'open-external-link', '--open', '--env-file', '.env.dashboard', '--plugin-root', '/state',
+  ], {
+    serveApp: async (options) => {
+      calls.push(options);
+      return {
+        close: async () => {
+          closeCalls += 1;
+          closedGate.resolve();
+        },
+        closed: closedGate.promise,
+        resourceUri: 'ui://cargo-hauler/dashboard.html',
+        sandboxOrigin: 'http://127.0.0.1:4942',
+        server: 'hauler',
+        tool: 'hauler_status',
+        url: 'http://127.0.0.1:4941/',
+      };
+    },
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { removed.push(signal); },
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe('');
+  expect(result.stdout).toBe('MCP App hauler/dashboard at http://127.0.0.1:4941/ (tool hauler_status; Ctrl-C stops the server)\n');
+  expect(calls).toEqual([{
+    app: 'hauler/dashboard',
+    artifact: 'artifact',
+    autoApprove: ['call-tool', 'open-external-link'],
+    envFiles: ['.env.dashboard'],
+    input: { scope: 'all' },
+    mode: 'production',
+    open: true,
+    pluginRoot: '/state',
+    port: 4941,
+    profile: 'claude',
+    root: '/project',
+    target: 'claude',
+    tool: 'hauler_status',
+  }]);
+
+  handlers.get('SIGINT')?.();
+  handlers.get('SIGTERM')?.();
+  await closedGate.promise;
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  expect(closeCalls).toBe(1);
+  expect(removed).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM']));
+});
+
+it('reports the bound server exiting on its own as one diagnostic and releases the serve-app signal listeners', async () => {
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removed: NodeJS.Signals[] = [];
+  let closeCalls = 0;
+  const serverExit = Promise.withResolvers<void>();
+  const terminal = captureCliTerminal();
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const code = await runSourceCli(['serve-app', 'status/status', '--root', '/project', '--no-open'], terminal.output, {
+    serveApp: async () => ({
+      close: async () => { closeCalls += 1; },
+      closed: serverExit.promise,
+      resourceUri: 'ui://mcp-app-example/status.html',
+      sandboxOrigin: 'http://127.0.0.1:4102',
+      server: 'status',
+      tool: 'show-status',
+      url: 'http://127.0.0.1:4101/',
+    }),
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { removed.push(signal); },
+    },
+  });
+  expect(code).toBe(0);
+  expect(handlers.size).toBe(2);
+
+  serverExit.resolve();
+  for (let attempt = 0; attempt < 20 && closeCalls === 0; attempt += 1) {
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  }
+
+  expect(closeCalls).toBe(1);
+  expect(removed).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM']));
+  expect(JSON.parse(terminal.stderr())).toEqual([{
+    code: 'AB5000',
+    message: 'The MCP server behind status/status exited; the MCP App host closed.',
+    severity: 'error',
+  }]);
+});
+
+it('rejects serve-app argv that cannot be served before anything launches', async () => {
+  const launched: unknown[] = [];
+  const dependencies: CliDependencies = {
+    serveApp: async (options) => {
+      launched.push(options);
+      throw new Error('unreachable');
+    },
+  };
+  const missingApp = await runSourceCliWithOutput(['serve-app', '--root', '/project'], dependencies);
+  expect(missingApp.code).toBe(2);
+  expect(missingApp.stderr).toContain("missing required argument 'app'");
+  const badInput = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--input', '[1]'], dependencies);
+  expect(badInput.code).toBe(1);
+  expect(JSON.parse(badInput.stderr)).toEqual([{ code: 'AB5000', message: 'Input must be a JSON object.', severity: 'error' }]);
+  const bothEnv = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--no-env', '--env-file', '.env'], dependencies);
+  expect(bothEnv.code).toBe(1);
+  expect(JSON.parse(bothEnv.stderr)).toEqual([{ code: 'AB5000', message: 'Use either --env-file or --no-env, not both.', severity: 'error' }]);
+  const badProfile = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--profile', 'cursor'], dependencies);
+  expect(badProfile.code).toBe(2);
+  expect(badProfile.stderr).toContain('MCP App profile must be portable, claude, or chatgpt.');
+  const badCapability = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--allow', 'camera'], dependencies);
+  expect(badCapability.code).toBe(2);
+  expect(badCapability.stderr).toContain('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
+  const badPort = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--port', '70000'], dependencies);
+  expect(badPort.code).toBe(1);
+  expect(JSON.parse(badPort.stderr)).toEqual([{ code: 'AB5000', message: 'Port must be a TCP port number.', severity: 'error' }]);
+  expect(launched).toEqual([]);
 });

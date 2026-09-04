@@ -24,6 +24,49 @@ describe('rendered commands at the CLI dispatch level', () => {
     expect(run.stdout.endsWith('# Report: books\n\nGenerated for books.\n\nitems: 2\n')).toBe(true);
   });
 
+  it('shows a streamed Agent.Progress Suspense fallback on the TTY without an explicit report (#448)', async () => {
+    // The projected `harness catalog` command never calls `progress.report()`;
+    // its only progress surface is the `<Suspense fallback={<Agent.Progress …/>}>`.
+    const tty = await invokeCli(['harness', 'catalog', '--input', '{"genre":"mystery"}', '--yes'], { tty: true });
+
+    expect(tty.exitCode).toBe(0);
+    expect(tty.stderr).toBe('');
+    expect(tty.stdout).toContain('\r\u001B[2Kloading mystery (0/2)');
+    // Drawn once, although the shell and the replace both carried the node.
+    expect(tty.stdout.split('loading mystery (0/2)')).toHaveLength(2);
+    expect(tty.stdout.endsWith('catalog: mystery\n\n## mystery\n\n- Piranesi\n- Solaris\n')).toBe(true);
+
+    // Piped output is the final document only: the fallback never prints.
+    const piped = await invokeCli(['harness', 'catalog', '--input', '{"genre":"mystery"}', '--yes']);
+    expect(piped.stdout).toBe('catalog: mystery\n\n## mystery\n\n- Piranesi\n- Solaris\n');
+    expect(piped.stdout).not.toContain('loading mystery');
+  });
+
+  describe('a projected MCP command whose route throws (#492)', () => {
+    it('reports a root throw on stderr with exit 1 and nothing on stdout', async () => {
+      const run = await invokeCli(['harness', 'fault', '--input', '{"mode":"throw"}']);
+
+      expect(run.exitCode).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toBe('fault: route threw\n');
+      expect(run.value).toBeUndefined();
+    });
+
+    it('prints a rejected boundary as a represented error in Markdown, on stderr as the event, and never inside the --json value', async () => {
+      const markdown = await invokeCli(['harness', 'fault', '--input', '{"mode":"reject-boundary"}']);
+      expect(markdown.exitCode).toBe(1);
+      expect(markdown.stderr).toBe('[boundary] fault: boundary rejected\n');
+      expect(markdown.stdout).toBe('fault: reject-boundary\n\n**[boundary]** fault: boundary rejected\n');
+
+      const json = await invokeCli(['harness', 'fault', '--input', '{"mode":"reject-boundary"}', '--json']);
+      expect(json.exitCode).toBe(1);
+      expect(json.stderr).toBe('[boundary] fault: boundary rejected\n');
+      // The value is the route's own result; the boundary message is not in it.
+      expect(cliJson(json)).toEqual({ mode: 'reject-boundary', settled: true });
+      expect(json.stdout).not.toContain('boundary rejected');
+    });
+  });
+
   it('projects a rendered command to one canonical JSON line', async () => {
     const run = await invokeCli(['report', 'books', '--json']);
 

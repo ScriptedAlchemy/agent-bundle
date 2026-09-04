@@ -15,7 +15,8 @@
  * behavior, and previous-server payload acceptance. In-memory transport may
  * pass structured values without serialization; the explicit
  * `JSON.parse(JSON.stringify(...))` round-trip closes that gap. MCP Apps are
- * not registered at this level.
+ * not registered at this level: every app route reports `surface-completeness`
+ * as `not-applicable` and receives no coverage, sweep, or other check.
  *
  * **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
  * against an already-open packed session. It proves process stdio evidence for
@@ -26,6 +27,15 @@
  * and version-skew are reported `not-applicable`. The packed server validates
  * every tool result through its bundled `resultSchema` before returning; a
  * successful sweep invocation is that evidence.
+ *
+ * **MCP App coverage.** At every boundary that registers app resources
+ * (`packed-stdio`, `packed-deleted-source`, `host-install`, `dev-epoch`) app
+ * routes ARE part of the matrix: `surface-completeness` requires the compiled
+ * `ui://` URI in `listResources`, and `sweep` reads that resource. With the
+ * default `apps: 'auto'` an app route needs no fixture entry — `coverage`
+ * passes with a reason naming the auto-covered sweep. An explicit
+ * `{ kind: 'resource' }` (or legacy `{}`) fixture is always accepted;
+ * `apps: 'explicit'` restores the requirement that every app route be listed.
  *
  * Stateful lifecycle fixtures replay over one open client at every boundary.
  * Same-store restart callbacks add boundary-local durability evidence; a run
@@ -42,6 +52,7 @@
  * Boundaries without an event runtime report identity as not-applicable.
  */
 import type { Client } from '@modelcontextprotocol/client';
+import type { RegisteredRouteId, RegisteredRouteInput } from '@agent-bundle/runtime';
 
 import {
   requestEventRuntimeStatus,
@@ -82,20 +93,24 @@ export type ContractLifecyclePhase =
   | 'repeated-progress'
   | 'terminal';
 
-export interface ContractLifecycleTransition {
+/**
+ * One lifecycle phase's invocation. `Input` is the route's input, bound to
+ * its registered type by {@link ContractRouteFixtures} for a registered id.
+ */
+export interface ContractLifecycleTransition<Input = unknown> {
   readonly expectedStructuredContent: unknown;
-  readonly input: unknown;
+  readonly input: Input;
   readonly phase: ContractLifecyclePhase;
   readonly progressNotifications: number;
   readonly renderedTextIncludes?: string;
 }
 
-export interface ContractLifecycleFixture {
+export interface ContractLifecycleFixture<Input = unknown> {
   readonly state?: {
     readonly budget?: {
       readonly codePath: readonly string[];
       readonly expectedCode: string;
-      readonly input: unknown;
+      readonly input: Input;
       readonly revisionPath: readonly string[];
     };
     readonly catalog?: {
@@ -104,7 +119,7 @@ export interface ContractLifecycleFixture {
     };
     readonly durability?: {
       readonly expectedStructuredContent: unknown;
-      readonly input: unknown;
+      readonly input: Input;
     };
     readonly idempotency?: {
       readonly phase: ContractLifecyclePhase;
@@ -122,14 +137,37 @@ export interface ContractLifecycleFixture {
     };
   };
   /** Pure deterministic phase driver; transport and assertions remain framework-owned. */
-  readonly transitionDriver: () => readonly ContractLifecycleTransition[];
+  readonly transitionDriver: () => readonly ContractLifecycleTransition<Input>[];
 }
 
-export interface ContractRouteFixture {
+/**
+ * The explicit fixture form for a resource or MCP App route: the sweep reads
+ * the route's wire URI and no input, policy, or lifecycle applies. Declaring
+ * it on a tool or prompt route is a coverage failure.
+ */
+export interface ContractResourceFixture {
+  readonly kind: 'resource';
+}
+
+/**
+ * One route's contract fixture. Every `input` here is handed to the route as
+ * its tool or prompt input, so `Input` is that route's input type:
+ * {@link ContractRouteFixtures} binds it to the registered input for a
+ * registered route id and leaves it `unknown` otherwise. `previousResults`
+ * stays `unknown` by design — those payloads come from previous server
+ * versions and need not match the current schema's type.
+ */
+export interface ContractRouteFixture<Input = unknown> {
+  /**
+   * `'resource'` marks a resource/MCP App fixture (see `ContractResourceFixture`).
+   * Omit it for tool and prompt fixtures; a legacy `{}` still covers a
+   * resource or app route.
+   */
+  readonly kind?: ContractResourceFixture['kind'];
   /** Valid input for the sweep invocation (tools/prompts; resources need none). */
-  readonly input?: unknown;
+  readonly input?: Input;
   /** Additional valid inputs — e.g. one per declared status/discriminant value. */
-  readonly inputs?: readonly unknown[];
+  readonly inputs?: readonly Input[];
   /** Declared serialized-result compatibility policy. REQUIRED for tool routes. */
   readonly resultCompat?: ResultCompatPolicy;
   /**
@@ -139,17 +177,63 @@ export interface ContractRouteFixture {
   readonly previousResults?: readonly unknown[];
   /**
    * Cancellation case: invocation aborted mid-flight must settle rejected and
-   * leave the session usable.
+   * leave the session usable. The input must stay in flight past
+   * `abortAfterMs` (default 50ms); an invocation that settles before the abort
+   * fires is reported `not-applicable`, not `failed`.
    */
-  readonly cancellation?: { readonly abortAfterMs?: number; readonly input?: unknown };
+  readonly cancellation?: { readonly abortAfterMs?: number; readonly input?: Input };
   /** Optional stateful replay over this matrix run's single open client. */
-  readonly lifecycle?: ContractLifecycleFixture;
+  readonly lifecycle?: ContractLifecycleFixture<Input>;
+}
+
+/**
+ * Route id -> fixture, the `fixtures` member of every contract-matrix entry
+ * point. Once the generated `.agent-bundle/routes.d.ts` registers the
+ * project's routes, a registered id's fixture carries that route's registered
+ * input in `input`, `inputs`, `cancellation.input`, and its lifecycle
+ * transitions (a mistyped literal is rejected at the key), while any other
+ * key — an MCP App route, which the registration never lists, or a value typed
+ * `Record<string, ContractRouteFixture>` built dynamically — stays legal with
+ * `unknown` inputs, exactly as before. Without a registration every key is a
+ * string and every input `unknown`.
+ */
+export type ContractRouteFixtures = {
+  readonly [Id in RegisteredRouteId]?: ContractRouteFixture<RegisteredRouteInput<Id>>;
+} & {
+  readonly [routeId: string]: ContractRouteFixture;
+};
+
+/**
+ * How MCP App routes are covered at boundaries that register app resources.
+ *
+ * - `'auto'` (default): app routes need no fixture entry; `coverage` passes
+ *   and the sweep reads the compiled `ui://` resource. Explicit entries are
+ *   still accepted.
+ * - `'explicit'`: every compiled app route must have a fixture entry
+ *   (`{ kind: 'resource' }`), matching the rule for every other route kind.
+ *
+ * Has no effect at `mcp-in-memory`, where apps are never registered.
+ */
+export type ContractAppCoverage = 'auto' | 'explicit';
+
+/** The shape of one `notifications/progress` delivery a lifecycle fixture counts. */
+export interface ContractProgressNotification {
+  readonly params?: { readonly progressToken?: string | number };
+}
+
+/**
+ * The explicit progress path a non-SDK client exposes to lifecycle fixtures.
+ * Returns the unsubscribe; an SDK `Client` needs none because its handler map
+ * is observed directly.
+ */
+export interface ContractMatrixProgressSource {
+  readonly observeProgress: (listener: (notification: ContractProgressNotification) => void) => () => void;
 }
 
 export type ContractMatrixClient = Pick<
   Client,
   'callTool' | 'getPrompt' | 'listPrompts' | 'listResources' | 'listTools' | 'readResource'
->;
+> & Partial<ContractMatrixProgressSource>;
 
 export interface ContractMatrixRestartSession {
   readonly client: Client;
@@ -158,8 +242,14 @@ export interface ContractMatrixRestartSession {
 export interface ContractMatrixOptions extends InMemoryMcpSessionOptions {
   readonly manifest?: AgentBundleTestManifest;
   readonly server?: string;
-  /** Route id -> fixture. Every compiled non-app route on the server must be covered. */
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  /**
+   * Route id -> fixture. Every compiled tool, prompt, and resource route on
+   * the server must be covered. App routes are not registered at
+   * `mcp-in-memory`; entries for them are accepted and ignored.
+   */
+  readonly fixtures: ContractRouteFixtures;
+  /** Accepted for parity with the other entry points; apps are never registered here. */
+  readonly apps?: ContractAppCoverage;
   /** Reopens the same durable store after the matrix closes its initial in-memory session. */
   readonly restart?: () => Promise<ContractMatrixRestartSession>;
 }
@@ -192,9 +282,16 @@ export type ContractEventRuntimeAddress =
   | { readonly endpoint?: never; readonly endpointId: string };
 
 export interface PackedContractMatrixOptions {
+  /** App route coverage at this boundary; defaults to `'auto'`. */
+  readonly apps?: ContractAppCoverage;
   /** Read-only status address for the generated event runtime, when this artifact has one. */
   readonly eventRuntime?: ContractEventRuntimeAddress;
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  /**
+   * Route id -> fixture. Every compiled tool, prompt, and resource route on
+   * the server must be covered; app routes are auto-covered unless
+   * `apps: 'explicit'`.
+   */
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open packed session; this entry point never opens or closes it. */
@@ -217,7 +314,9 @@ export interface DevEpochContractMatrixSession {
 }
 
 export interface DevEpochContractMatrixOptions {
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  /** App route coverage at this boundary; defaults to `'auto'`. */
+  readonly apps?: ContractAppCoverage;
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open epoch-pinned generated stdio session; this entry point never opens or closes it. */
@@ -225,7 +324,9 @@ export interface DevEpochContractMatrixOptions {
 }
 
 export interface InstalledHostContractMatrixOptions {
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  /** App route coverage at this boundary; defaults to `'auto'`. */
+  readonly apps?: ContractAppCoverage;
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open installed-host session; this entry point never opens or closes it. */
@@ -861,7 +962,12 @@ const runSweep = async (
       if (uri === undefined) {
         return failed(`${descriptor.kind} route config exports no uri to read`);
       }
-      const read = await client.readResource({ uri }) as { contents?: unknown };
+      let read: { contents?: unknown };
+      try {
+        read = await client.readResource({ uri }) as { contents?: unknown };
+      } catch (error) {
+        return failed(`readResource threw for ${JSON.stringify(uri)}: ${error instanceof Error ? error.message : captured(error)}`);
+      }
       const contents = Array.isArray(read.contents) ? read.contents : [];
       return contents.length === 0
         ? failed(`readResource returned no contents for ${JSON.stringify(uri)}`)
@@ -1027,9 +1133,16 @@ const runCancellation = async (
     signal: controller.signal,
     timeout: settleWithinMs,
   });
-  const timer = setTimeout(() => controller.abort(), abortAfterMs);
+  // The timer and the settlement race; `abortFired` is read the moment the
+  // call settles so the verdict reflects whether the abort was ever delivered
+  // while the invocation was still in flight.
+  let abortFired = false;
+  const timer = setTimeout(() => {
+    abortFired = true;
+    controller.abort();
+  }, abortAfterMs);
   const result = await Promise.race([
-    call.then((settled) => ({ kind: 'settled' as const, settled })),
+    call.then((settled) => ({ abortedInFlight: abortFired, kind: 'settled' as const, settled })),
     new Promise<{ kind: 'timeout' }>((resolve) => {
       setTimeout(() => resolve({ kind: 'timeout' }), settleWithinMs);
     }),
@@ -1037,6 +1150,13 @@ const runCancellation = async (
   clearTimeout(timer);
   if (result.kind === 'timeout') {
     return failed(`callTool did not settle within ${String(settleWithinMs)}ms after abort`);
+  }
+  if (!result.abortedInFlight) {
+    return notApplicable(
+      result.settled.threw
+        ? `invocation rejected before abort (${result.settled.error instanceof Error ? result.settled.error.message : captured(result.settled.error)}); use an input that stays in flight past ${String(abortAfterMs)}ms.`
+        : `invocation completed before abort; use an input that stays in flight past ${String(abortAfterMs)}ms.`,
+    );
   }
   if (!result.settled.threw) {
     return failed('aborted callTool settled without throwing or rejecting.');
@@ -1107,6 +1227,43 @@ type ClientNotificationHandler = (
   ...arguments_: readonly unknown[]
 ) => void | Promise<void>;
 
+const progressMethod = 'notifications/progress';
+
+const sdkProgressObserver = (
+  notificationHandlers: Map<string, ClientNotificationHandler>,
+): ContractMatrixProgressSource['observeProgress'] => (listener) => {
+  const callerHandler = notificationHandlers.get(progressMethod);
+  notificationHandlers.set(progressMethod, async (...arguments_) => {
+    listener(arguments_[0] as ContractProgressNotification);
+    await callerHandler?.(...arguments_);
+  });
+  return () => {
+    if (callerHandler === undefined) {
+      notificationHandlers.delete(progressMethod);
+    } else {
+      notificationHandlers.set(progressMethod, callerHandler);
+    }
+  };
+};
+
+/**
+ * Resolves how lifecycle fixtures observe live progress: an explicit
+ * `observeProgress` seam wins, an SDK `Client` exposes its handler map, and
+ * anything else cannot gate a lifecycle fixture and says so instead of
+ * failing on a missing private field.
+ */
+export const contractProgressObserver = (
+  client: ContractMatrixClient,
+): ContractMatrixProgressSource['observeProgress'] => {
+  const { observeProgress } = client;
+  if (typeof observeProgress === 'function') return (listener) => observeProgress.call(client, listener);
+  const handlers = (client as { readonly _notificationHandlers?: unknown })._notificationHandlers;
+  if (handlers instanceof Map) return sdkProgressObserver(handlers as Map<string, ClientNotificationHandler>);
+  throw new Error(
+    'Contract matrix client exposes no progress notification path; lifecycle fixtures need an SDK Client or observeProgress.',
+  );
+};
+
 const executeLifecycleTransitions = async (
   client: ContractMatrixClient,
   descriptor: TestableRouteDescriptor,
@@ -1134,27 +1291,25 @@ const executeLifecycleTransitions = async (
   }
 
   const byPhase = new Map<ContractLifecyclePhase, LifecyclePhaseEvidence>();
-  const progressMethod = 'notifications/progress';
-  const notificationHandlers = (
-    client as unknown as {
-      readonly _notificationHandlers: Map<string, ClientNotificationHandler>;
-    }
-  )._notificationHandlers;
-  const callerHandler = notificationHandlers.get(progressMethod);
+  let observeProgress: ContractMatrixProgressSource['observeProgress'];
+  try {
+    observeProgress = contractProgressObserver(client);
+  } catch (error) {
+    return {
+      byPhase: new Map(),
+      orderFailure: error instanceof Error ? error.message : captured(error),
+    };
+  }
   let activeProgressToken: string | undefined;
   let settled = true;
   let liveProgress = 0;
-  notificationHandlers.set(progressMethod, async (...arguments_) => {
-    const notification = arguments_[0] as {
-      readonly params?: { readonly progressToken?: string | number };
-    };
+  const stopObserving = observeProgress((notification) => {
     if (
       notification.params?.progressToken === activeProgressToken
       && !settled
     ) {
       liveProgress += 1;
     }
-    await callerHandler?.(...arguments_);
   });
   try {
     for (const [index, transition] of transitions.entries()) {
@@ -1172,11 +1327,7 @@ const executeLifecycleTransitions = async (
       await runtimeIdentity.observe(`${descriptor.id}/${transition.phase}`);
     }
   } finally {
-    if (callerHandler === undefined) {
-      notificationHandlers.delete(progressMethod);
-    } else {
-      notificationHandlers.set(progressMethod, callerHandler);
-    }
+    stopObserving();
   }
   return { byPhase };
 };
@@ -1387,7 +1538,50 @@ const finalizeContractMatrixReport = (
   );
 };
 
+const AUTO_APP_FIXTURE: ContractResourceFixture = Object.freeze({ kind: 'resource' });
+
+const APP_AUTO_COVERAGE_REASON =
+  'app route auto-covered (apps: "auto"): the sweep reads its compiled MCP App resource URI.';
+
+interface ResolvedRouteFixture {
+  readonly coverage: ContractCheckOutcome;
+  readonly fixture: ContractRouteFixture | undefined;
+}
+
+const resolveRouteFixture = (
+  descriptor: TestableRouteDescriptor,
+  fixture: ContractRouteFixture | undefined,
+  apps: ContractAppCoverage,
+): ResolvedRouteFixture => {
+  if (fixture === undefined) {
+    if (descriptor.kind !== 'app') {
+      return { coverage: failed('compiled route has no fixture entry'), fixture };
+    }
+    switch (apps) {
+      case 'auto':
+        return { coverage: passedWithReason(APP_AUTO_COVERAGE_REASON), fixture: AUTO_APP_FIXTURE };
+      case 'explicit':
+        return {
+          coverage: failed('compiled app route has no fixture entry (apps: "explicit"); add { kind: "resource" } or use apps: "auto"'),
+          fixture,
+        };
+      default: {
+        const exhaustive: never = apps;
+        return { coverage: failed(`unsupported apps coverage mode ${String(exhaustive)}`), fixture: undefined };
+      }
+    }
+  }
+  if (fixture.kind === 'resource' && descriptor.kind !== 'resource' && descriptor.kind !== 'app') {
+    return {
+      coverage: failed(`fixture kind "resource" declared for a ${descriptor.kind} route; resource fixtures apply to resource and app routes only`),
+      fixture: undefined,
+    };
+  }
+  return { coverage: passed(), fixture };
+};
+
 const executeContractMatrix = async (options: {
+  readonly apps: ContractAppCoverage;
   readonly boundary: MatrixBoundaryCapabilities;
   readonly client: ContractMatrixClient;
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
@@ -1395,7 +1589,7 @@ const executeContractMatrix = async (options: {
   readonly provenance: ContractMatrixProvenance;
   readonly serverName: string;
 }): Promise<ContractMatrixReport> => {
-  const { boundary, client, fixtures, manifest, provenance, serverName } = options;
+  const { apps, boundary, client, fixtures, manifest, provenance, serverName } = options;
   const failures: ContractMatrixFailure[] = [];
   const matrixChecks: Record<string, ContractCheckOutcome> = {};
   const routeReports: Record<string, ContractRouteReport> = {};
@@ -1443,15 +1637,13 @@ const executeContractMatrix = async (options: {
     }
 
     const checks: Record<string, ContractCheckOutcome> = {};
-    const fixture = fixtures[descriptor.id];
+    const { coverage, fixture } = resolveRouteFixture(descriptor, fixtures[descriptor.id], apps);
 
     checks[CHECK_COVERAGE] = outcomeFromCheck(
       failures,
       descriptor.id,
       CHECK_COVERAGE,
-      fixture === undefined
-        ? failed('compiled route has no fixture entry')
-        : passed(),
+      coverage,
     );
 
     checks[CHECK_SURFACE] = outcomeFromCheck(
@@ -1731,6 +1923,7 @@ export const runContractMatrix = async (
         },
       });
     return await executeContractMatrix({
+      apps: options.apps ?? 'auto',
       boundary,
       client: session.client,
       fixtures: options.fixtures,
@@ -1753,6 +1946,7 @@ export const runDevEpochContractMatrix = async (
 ): Promise<ContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   return executeContractMatrix({
+    apps: options.apps ?? 'auto',
     boundary: DEV_EPOCH_BOUNDARY,
     client: options.session.client,
     fixtures: options.fixtures,
@@ -1765,12 +1959,15 @@ export const runDevEpochContractMatrix = async (
 /**
  * Runs the contract matrix against an already-open packed stdio session.
  * Never opens or closes the session; stamps the session's own proof level.
+ * Compiled MCP App routes are covered here (surface + `ui://` sweep) and
+ * auto-covered without a fixture entry unless `apps: 'explicit'`.
  */
 export const runPackedContractMatrix = async (
   options: PackedContractMatrixOptions,
 ): Promise<ContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   return executeContractMatrix({
+    apps: options.apps ?? 'auto',
     boundary: packedBoundaryFromSession(
       options.session,
       options.eventRuntime,
@@ -1794,6 +1991,7 @@ export const runInstalledHostContractMatrix = async (
 ): Promise<InstalledHostContractMatrixReport> => {
   const serverName = resolveServerName(options.manifest, options.server);
   const matrix = await executeContractMatrix({
+    apps: options.apps ?? 'auto',
     boundary: installedHostBoundaryFromSession(options.session),
     client: options.session.client,
     fixtures: options.fixtures,

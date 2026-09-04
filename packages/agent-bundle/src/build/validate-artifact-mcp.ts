@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { dirname, posix, resolve, win32 } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
@@ -8,6 +7,7 @@ import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { readTargetMcpServers } from '../services/mcp-runtime.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { matchesManifestFile, pathInTargetOutputLayout, targetArtifactPath } from './artifact-layout.ts';
 import type { ValidatedArtifactMcpServerEvidence } from './artifact-validation-types.ts';
 import type { ArtifactFile, ManifestFile } from './emit.ts';
@@ -140,7 +140,7 @@ export const validateMcpCoherence = async (options: {
     if (manifestFile !== undefined) {
       let document: unknown;
       try {
-        document = parseJsonWithoutDuplicateKeys(await readFile(resolve(artifactRoot, manifestPath), 'utf8'));
+        document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(resolve(artifactRoot, manifestPath))));
       } catch {
         diagnostics.push(diagnostic(
           'AB6017',
@@ -280,7 +280,7 @@ export const validateMcpCoherence = async (options: {
         const mainPath = path.slice(0, -'-flight.mjs'.length) + '.mjs';
         const mainReferences = referenceCounts.get(mainPath);
         if (mainReferences?.length === 1) {
-          const mainSource = await readFile(resolve(artifactRoot, mainPath), 'utf8');
+          const mainSource = await runWithPlatform(readFileString(resolve(artifactRoot, mainPath)));
           if (mainSource.includes(`./${posix.basename(path)}`)) continue;
         }
       }

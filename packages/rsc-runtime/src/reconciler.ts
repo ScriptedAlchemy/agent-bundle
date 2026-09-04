@@ -1,4 +1,4 @@
-import { Deferred, Duration, Effect, Exit, Option, Queue, Stream, type Scope } from 'effect';
+import { Clock, Deferred, Duration, Effect, Exit, Option, Queue, Stream, type Scope } from 'effect';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { createFromReadableStream } from 'react-server-dom-rspack/client.node';
 
@@ -285,18 +285,23 @@ type SettledBoundary = {
   readonly ok: boolean;
 };
 
+/**
+ * Waits for the first pending boundary to settle either way. The rejection
+ * reason is data, not a failure to normalize: React rejects a boundary with a
+ * `{ message, digest }` object that `renderErrorFrom` reads, so mapping it
+ * through `toRuntimeError` would erase the digest. Both settlements are folded
+ * inside the promise, which therefore cannot reject and never puts an
+ * `unknown` on the Effect error channel.
+ */
 const waitSettledBoundary = (
   pending: readonly PendingBoundary[],
-): Effect.Effect<SettledBoundary, Error> =>
+): Effect.Effect<SettledBoundary> =>
   Effect.raceAll(
     pending.map((boundary) =>
-      Effect.tryPromise({
-        catch: (error) => error,
-        try: () => Promise.resolve(boundary.thenable),
-      }).pipe(
-        Effect.map(() => ({ boundary, ok: true as const })),
-        Effect.catch((error) => Effect.succeed({ boundary, error, ok: false as const })),
-      ),
+      Effect.promise((): Promise<SettledBoundary> => Promise.resolve(boundary.thenable).then(
+        () => ({ boundary, ok: true as const }),
+        (error: unknown) => ({ boundary, error, ok: false as const }),
+      )),
     ),
   );
 
@@ -486,6 +491,12 @@ const progressInput = (update: AgentProgressUpdate): AgentRenderEventInput => ({
 });
 
 export interface AgentRenderEventStreamOptions {
+  /**
+   * Time source for the `maxElapsedMs` deadline: both the event sequence's
+   * elapsed check and the pending-boundary deadline sleep read it. Defaults to
+   * the runtime clock; tests inject a `TestClock` so no real time elapses.
+   */
+  readonly clock?: Clock.Clock;
   readonly demand: FlightDemand;
   readonly flight: Promise<ReadableStream<Uint8Array>>;
   readonly limits?: Partial<AgentRenderLimits>;
@@ -513,7 +524,11 @@ const handoffRequired = (): AgentContractError =>
 export const createAgentRenderEventSession = (
   options: AgentRenderEventStreamOptions,
 ): AgentRenderEventSession => {
-  const sequence = createAgentRenderEventSequence(options.limits);
+  const clock = options.clock;
+  const sequence = createAgentRenderEventSequence(
+    options.limits,
+    clock === undefined ? undefined : () => clock.currentTimeMillisUnsafe(),
+  );
   const maxBufferedProgress = resolveAgentRenderLimits(options.limits).maxEvents;
   let offerProgress: ((input: AgentRenderEventInput) => Effect.Effect<void, Error>) | undefined;
   let progressFailure: Error | undefined;
@@ -606,7 +621,10 @@ export const createAgentRenderEventSession = (
       );
     }),
   );
-  return { events, progress };
+  return {
+    events: clock === undefined ? events : Stream.provideService(events, Clock.Clock, clock),
+    progress,
+  };
 };
 
 

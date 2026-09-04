@@ -2,17 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { RouteManifestClient } from '../src/routes/route-manifest-client.ts';
-
-interface RecordedRequest {
-  readonly method: string;
-  readonly token: string | null;
-  readonly url: string;
-}
-
-const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
-  headers: { 'content-type': 'application/json' },
-  status,
-});
+import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';
 
 const manifest = {
   cli: {
@@ -98,30 +88,18 @@ const manifest = {
     durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
     id: 'library/catalog',
     lifetime: 'workspace-durable',
+    // The dev server's manifest carries the resolved notice retention policy
+    // (#99 item 7); the strict wire schema must admit it or the whole catalog
+    // reads as unavailable.
+    noticeRetention: {
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 604_800_000 },
+      source: 'defaults',
+    },
     notices: ['Generated runtimes co-mount the notice ledger store at the same lifetime.'],
     source: 'src/state.ts',
   },
   sourceRevision: 'r'.repeat(64),
 };
-
-const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
-  async (input, init) => {
-    const url = String(input);
-    if (url === '/api/project/session') {
-      return response({
-        cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
-        instanceId: 'foreground-instance-a',
-        origin: 'http://127.0.0.1:5173',
-        token: 'foreground-token',
-      });
-    }
-    calls.push({
-      method: init?.method ?? 'GET',
-      token: new Headers(init?.headers).get('x-agent-bundle-session'),
-      url,
-    });
-    return reply();
-  };
 
 const clientFor = (reply: () => Response, calls: RecordedRequest[] = []): RouteManifestClient =>
   new RouteManifestClient({ foreground: new ForegroundRouteClient({ fetch: recordingFetch(calls, reply) }) });

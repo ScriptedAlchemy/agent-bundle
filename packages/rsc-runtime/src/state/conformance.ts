@@ -653,4 +653,140 @@ export const stateDriverConformanceCases: readonly StateConformanceCase[] = Obje
       assert.equal(replayed.revision, 1);
     },
   },
+  {
+    name: 'compaction folds the journal onto the head, keeps revisions monotonic, and is idempotent',
+    run: async (context) => {
+      const store = await context.open(taskDefinition(context.lifetime));
+      const untouched = await store.inspect();
+      assert.deepEqual(untouched, { baselineRevision: 0, headRevision: 0, journalBytes: 0, records: 0 });
+      // Nothing to fold: an empty journal is already compact and no revision is spent.
+      const empty = await store.compact();
+      assert.deepEqual(empty, { baselineRevision: 0, prunedRecords: 0, revision: 0, state: { tasks: [], total: 0 } });
+      await addTask(store, 'a');
+      await addTask(store, 'b');
+      const before = await store.inspect();
+      assert.equal(before.records, 2);
+      assert.ok(before.journalBytes > 0);
+
+      const compacted = await store.compact();
+      assert.equal(compacted.prunedRecords, 2);
+      assert.equal(compacted.baselineRevision, 3);
+      assert.equal(compacted.revision, 3);
+      assert.deepEqual(compacted.state.tasks.map((task) => task.id), ['a', 'b']);
+      const head = await store.read();
+      assert.equal(head.revision, 3);
+      assert.deepEqual(head.state, compacted.state);
+      const after = await store.inspect();
+      assert.equal(after.records, 1);
+      assert.equal(after.baselineRevision, 3);
+      assert.equal(after.headRevision, 3);
+      assert.ok(after.journalBytes > 0);
+      assert.equal(after.lastCompaction?.revision, 3);
+      assert.ok(typeof after.lastCompaction?.at === 'string');
+
+      // A second compaction over a lone baseline is a no-op with no new revision.
+      const again = await store.compact();
+      assert.deepEqual(again, { baselineRevision: 3, prunedRecords: 0, revision: 3, state: head.state });
+      assert.equal((await store.read()).revision, 3);
+
+      // History before the baseline is gone, honestly: exact reads fail typed,
+      // the change cursor delivers the baseline as a discontinuity, and the
+      // head keeps its exact revision.
+      await assert.rejects(store.read({ revision: 1 }), rejectsWith('revision-unavailable'));
+      assert.deepEqual((await store.read({ revision: 3 })).state, head.state);
+      const changes = await store.changes({ afterRevision: 0 });
+      assert.equal(changes.headRevision, 3);
+      assert.deepEqual(changes.changes.map((change) => [change.kind, change.revision]), [['compact', 3]]);
+
+      // Commits continue past the baseline and replay from it.
+      const next = await addTask(store, 'c');
+      assert.equal(next.revision, 4);
+      assert.deepEqual((await store.read({ revision: 4 })).state.tasks.map((task) => task.id), ['a', 'b', 'c']);
+      assert.deepEqual((await store.read({ revision: 3 })).state.tasks.map((task) => task.id), ['a', 'b']);
+      const later = await store.compact({ expectedRevision: 4 });
+      assert.equal(later.prunedRecords, 2);
+      assert.equal(later.revision, 5);
+      await assert.rejects(store.compact({ expectedRevision: 4 }), rejectsWith('revision-conflict'));
+    },
+  },
+  {
+    name: 'compaction remembers pruned idempotency keys without their results',
+    run: async (context) => {
+      const store = await context.open(taskDefinition(context.lifetime));
+      await addTask(store, 'a');
+      await store.compact();
+      // The commit happened but compaction dropped its result: a retry cannot
+      // be answered with a fabricated replay, and must not run the reducer again.
+      await assert.rejects(addTask(store, 'a'), rejectsWith('revision-unavailable'));
+      assert.equal((await store.read()).revision, 2);
+      // Reusing the key with a different input is still a conflict.
+      await assert.rejects(
+        store.dispatch('taskAdded', { id: 'z', title: 'Task z' }, { idempotencyKey: 'add:a' }),
+        rejectsWith('idempotency-conflict'),
+      );
+      assert.equal((await store.read()).revision, 2);
+    },
+  },
+  {
+    name: 'a compaction baseline written before a migration is never replayed against the new schema',
+    run: async (context) => {
+      const storeV1 = await context.open(taskDefinition(context.lifetime));
+      await addTask(storeV1, 'a');
+      await storeV1.compact();
+      await addTask(storeV1, 'b');
+      // The migration appends its own baseline; the retained version-1
+      // compact record stays in the journal but must never be parsed again.
+      const storeV2 = await context.reopen(taskDefinitionV2(context.lifetime));
+      const migrated = await storeV2.read();
+      assert.equal(migrated.revision, 4);
+      assert.deepEqual(migrated.state, { labels: [], tasks: [{ id: 'a', title: 'Task a' }, { id: 'b', title: 'Task b' }], total: 2 });
+      assert.deepEqual((await storeV2.read({ revision: 4 })).state, migrated.state);
+      await assert.rejects(storeV2.read({ revision: 3 }), rejectsWith('revision-unavailable'));
+      const next = await storeV2.dispatch('taskAdded', { id: 'c', title: 'Task c' }, { idempotencyKey: 'add:c' });
+      assert.equal(next.revision, 5);
+      assert.deepEqual((await storeV2.read({ revision: 5 })).state.tasks.map((task) => task.id), ['a', 'b', 'c']);
+      if (context.durable) {
+        await storeV1.close();
+        await storeV2.close();
+        // Reopening runs the head-vs-replay check over a journal whose first
+        // record is the stale compact baseline and whose live baseline is the
+        // migration; only the latter may be parsed.
+        const reopened = await context.reopen(taskDefinitionV2(context.lifetime));
+        const snapshot = await reopened.read();
+        assert.equal(snapshot.revision, 5);
+        assert.deepEqual(snapshot.state.tasks.map((task) => task.id), ['a', 'b', 'c']);
+        const inspection = await reopened.inspect();
+        assert.equal(inspection.baselineRevision, 2);
+        assert.equal(inspection.lastCompaction?.revision, 2);
+        // Compacting again folds the stale baseline away with everything else.
+        const folded = await reopened.compact();
+        assert.equal(folded.revision, 6);
+        assert.equal((await reopened.inspect()).records, 1);
+      }
+    },
+  },
+  {
+    durableOnly: true,
+    name: 'a compacted store reopens with its head agreeing with journal replay',
+    run: async (context) => {
+      const writer = await context.open(taskDefinition(context.lifetime));
+      await addTask(writer, 'a');
+      await addTask(writer, 'b');
+      await writer.compact();
+      await addTask(writer, 'c');
+      await writer.close();
+      const reopened = await context.reopen(taskDefinition(context.lifetime));
+      const snapshot = await reopened.read();
+      assert.equal(snapshot.revision, 4);
+      assert.deepEqual(snapshot.state.tasks.map((task) => task.id), ['a', 'b', 'c']);
+      const inspection = await reopened.inspect();
+      assert.equal(inspection.baselineRevision, 3);
+      assert.equal(inspection.records, 2);
+      assert.equal(inspection.lastCompaction?.revision, 3);
+      await assert.rejects(addTask(reopened, 'a'), rejectsWith('revision-unavailable'));
+      const replayed = await addTask(reopened, 'c');
+      assert.equal(replayed.replayed, true);
+      assert.equal(replayed.revision, 4);
+    },
+  },
 ]);

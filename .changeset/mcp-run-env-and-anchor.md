@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 `mcp run` now owns the operator-environment seam the RFC #50 launchers were meant to retire, and stops fragmenting durable state per rebuild.

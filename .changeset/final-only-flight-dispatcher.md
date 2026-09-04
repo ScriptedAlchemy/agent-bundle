@@ -1,5 +1,5 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
 Add React-owned final-only Flight execution behind the public render-dispatcher

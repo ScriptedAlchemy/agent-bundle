@@ -9,6 +9,7 @@ import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.t
 import { parseArtifactManifest } from '../build/manifest.ts';
 import { digest, sha256Hex } from '../core/digest.ts';
 import { eventRuntimeEndpoint } from '../events/ipc.ts';
+import { cursorDefaultHooksPath, resolveCursorHooksSource } from '../host-contracts/cursor-plugin-validation.ts';
 import { resolveBundleRoot } from '../install/doctor.ts';
 import type { InstallHost } from '../install/install.ts';
 import { AgentTestError } from './errors.ts';
@@ -126,7 +127,28 @@ const hostManifestPath = (host: InstallHost): string => {
 const hostMcpPath = (host: InstallHost): string =>
   host === 'cursor' ? 'mcp.json' : '.mcp.json';
 
-const hostHookPath = (_host: InstallHost): string => 'hooks/hooks.json';
+/**
+ * The hook document the installed host loads. Claude and Codex read the
+ * pinned `hooks/hooks.json`; Cursor reads whatever the installed
+ * `.cursor-plugin/plugin.json` `hooks` field names (the unified `plugin`
+ * target points it at `hooks/hooks-cursor.json`, #438), falling back to
+ * `hooks/hooks.json` folder discovery when the field is absent.
+ */
+const hostHookPath = (host: InstallHost, installedManifest: Readonly<Record<string, unknown>>): string => {
+  switch (host) {
+    case 'claude':
+    case 'codex':
+      return 'hooks/hooks.json';
+    case 'cursor': {
+      const source = resolveCursorHooksSource(installedManifest);
+      return source.kind === 'file' ? source.path : cursorDefaultHooksPath;
+    }
+    default: {
+      const exhaustive: never = host;
+      throw new TypeError(`Unknown installed host ${String(exhaustive)}.`);
+    }
+  }
+};
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -371,7 +393,7 @@ export const openInstalledHostMcpServer = async (
   }
   if (installedHooks !== undefined && installedHooks.length > 0) {
     const hookDocument = await readJsonRecord(
-      join(installedRoot, hostHookPath(options.host)),
+      join(installedRoot, hostHookPath(options.host, installedManifest)),
       'hook-commands',
       'installed hook document',
       failures,

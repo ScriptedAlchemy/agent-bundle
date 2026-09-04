@@ -2,6 +2,9 @@ export { Agent, Hook, Mcp } from './elements.js';
 export type {
   AgentErrorProps,
   AgentJsonProps,
+  AgentLayoutProps,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentMediaProps,
   AgentProgressProps,
   AgentResourceProps,
@@ -94,6 +97,10 @@ export { lowerMcpResult } from './lower-mcp.js';
 export type { JsonObject, JsonValue } from './lower-mcp.js';
 export { createRscRequestContext } from './request-context.js';
 export type { AgentRenderInvocation } from './agent-request.js';
+// Registry-free lineage helpers: what a payload proves on its own. The
+// registry itself ships behind the './lineage' subpath with the state kernel.
+export { lineageCarrier, lineageHostFromClient, resolveNativeLineage, resolveStandaloneLineage } from './lineage-native.js';
+export type { LineageCarrier, LineageHost } from './lineage-native.js';
 // Type-only: the state kernel itself ships behind the './state' subpath so
 // stateless artifacts include none of it (#98).
 export type { AgentStateHandle, AgentStateLifetime } from './state/contract.js';

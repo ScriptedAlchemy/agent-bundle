@@ -16,7 +16,7 @@
  */
 import { Worker } from 'node:worker_threads';
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ProtocolError, ProtocolErrorCode, isJSONRPCRequest, type Transport } from '@modelcontextprotocol/server';
 import {
   AgentRuntimeError,
   agent,
@@ -24,26 +24,36 @@ import {
   available,
   createAgentRenderDispatcher,
   createWarmFlightHost,
+  lineageHostFromClient,
   projectMcpRenderStream,
   runAgentRequest,
+  unavailable,
 } from '@agent-bundle/runtime';
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
+import { routeRenderLimits } from './routes/render-budget.ts';
+import { noTerminal } from './terminal-capability.ts';
 import type {
   AgentActorIdentity,
   AgentDocument,
   AgentHostIdentity,
+  AgentLineage,
+  AgentPluginIdentity,
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
+  AgentRenderLimits,
   AgentSessionIdentity,
+  AgentTerminal,
   AgentWorkspaceIdentity,
+  LineageHost,
   McpProgressNotificationParams,
   McpProgressToken,
   Observed,
   WarmFlightHost,
 } from '@agent-bundle/runtime';
+import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 
 /** One route the generated server hosts, as the generated module records it. */
 export interface GeneratedRouteRecord {
@@ -76,7 +86,10 @@ export interface GeneratedMcpAppRecord {
 export interface GeneratedRouteRequestContext {
   readonly http?: { readonly authInfo?: { readonly clientId?: string } };
   readonly mcpReq: {
-    readonly _meta?: { readonly progressToken?: McpProgressToken };
+    /** Request `_meta`: the progress token plus host-specific correlation keys (`claudecode/toolUseId`, `x-codex-turn-metadata`). */
+    readonly _meta?: { readonly progressToken?: McpProgressToken } & Readonly<Record<string, unknown>>;
+    /** The JSON-RPC request id, the key the raw `tools/call` arguments were captured under. */
+    readonly id?: number | string;
     readonly notify?: (notification: {
       readonly method: 'notifications/progress';
       readonly params: McpProgressNotificationParams;
@@ -97,15 +110,101 @@ export interface RenderedGeneratedRoute {
 interface GeneratedRouteIdentity {
   readonly actor?: Observed<AgentActorIdentity>;
   readonly host?: Observed<AgentHostIdentity>;
+  readonly lineage: Observed<AgentLineage>;
+  readonly plugin?: Observed<AgentPluginIdentity>;
   readonly session?: Observed<AgentSessionIdentity>;
+  readonly terminal: Observed<AgentTerminal>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
-/** Identity the server derives from the transport's own request context. */
+/** A captured `tools/call` `params.arguments` value; `value` is `undefined` when the call carried none. */
+export interface RawToolArguments {
+  readonly value: unknown;
+}
+
+/** Raw `tools/call` arguments by request, consumed once by the tool callback that serves the request. */
+export interface RawToolArgumentsCapture {
+  take(requestId: number | string | undefined): RawToolArguments | undefined;
+}
+
+const requestKey = (requestId: number | string): string => `${typeof requestId}:${String(requestId)}`;
+/** Calls that never reach a registered tool (unknown tool, rejected params) are forgotten past this many. */
+const RAW_ARGUMENTS_RETENTION = 1024;
+
+/**
+ * Captures every `tools/call`'s arguments off the wire, before the SDK parses
+ * them against the route's input schema. Lineage correlates a Cursor call with
+ * its pre-tool hook by those raw arguments (the hook's `tool_input`); schema
+ * defaults would make two different calls look alike, so the parsed input is
+ * never what is compared. The capture wraps the transport's `onmessage` the
+ * moment the server connects and keeps one entry per request id until the
+ * tool callback takes it.
+ */
+const captureRawToolArguments = (server: McpServer): RawToolArgumentsCapture => {
+  const captured = new Map<string, RawToolArguments>();
+  const connect = server.connect.bind(server);
+  server.connect = async (transport: Transport): Promise<void> => {
+    await connect(transport);
+    const inner = transport.onmessage;
+    transport.onmessage = (message, extra) => {
+      if (isJSONRPCRequest(message) && message.method === 'tools/call') {
+        const params = message.params;
+        const value = params !== undefined && typeof params === 'object' && params !== null && !Array.isArray(params)
+          ? (params as { readonly arguments?: unknown }).arguments
+          : undefined;
+        captured.set(requestKey(message.id), Object.freeze({ value }));
+        if (captured.size > RAW_ARGUMENTS_RETENTION) captured.delete(captured.keys().next().value!);
+      }
+      inner?.(message, extra);
+    };
+  };
+  return Object.freeze({
+    take(requestId: number | string | undefined): RawToolArguments | undefined {
+      if (requestId === undefined) return undefined;
+      const key = requestKey(requestId);
+      const raw = captured.get(key);
+      captured.delete(key);
+      return raw;
+    },
+  });
+};
+
+/**
+ * Lineage for one MCP tool call: Codex names it in `_meta`, Claude names the
+ * pre-tool hook's `tool_use_id` in `_meta`, Cursor names nothing — so the
+ * registry falls back to the open `MCP:<tool>` pre-tool hook, told apart from
+ * a concurrent call in another conversation by the raw arguments the hook
+ * recorded. A call whose raw arguments were not captured (a transport the
+ * server did not connect itself) is correlated by tool name alone, never by
+ * its schema-parsed input. Without a registry (a project with no event
+ * routes, or the in-memory proof level) the axis is honestly absent.
+ */
+const toolCallLineage = async (
+  registry: AgentLineageRegistry | undefined,
+  context: GeneratedRouteRequestContext,
+  toolName: string,
+  rawArguments: RawToolArguments | undefined,
+  clientName: string | undefined,
+  fallbackHost: LineageHost | undefined,
+): Promise<Observed<AgentLineage>> => {
+  if (registry === undefined) return unavailable<AgentLineage>('not-provided');
+  return registry.resolveToolCall({
+    ...(rawArguments === undefined ? {} : { arguments: rawArguments.value }),
+    host: lineageHostFromClient(clientName) ?? fallbackHost,
+    meta: context.mcpReq._meta,
+    toolName,
+  });
+};
+
+/** Identity the server derives from the transport's own request context, plus the process's resolved plugin root. */
 const requestIdentity = (
   context: GeneratedRouteRequestContext,
   clientName: string | undefined,
+  lineage: Observed<AgentLineage>,
+  plugin: Observed<AgentPluginIdentity> | undefined,
 ): GeneratedRouteIdentity => ({
+  lineage,
+  ...(plugin === undefined ? {} : { plugin }),
   ...(context.http?.authInfo?.clientId === undefined
     ? {}
     : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
@@ -115,6 +214,9 @@ const requestIdentity = (
   ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
     ? { session: available({ sessionId: context.sessionId }, 'native') }
     : {}),
+  // An MCP server's stdout is the protocol wire and its stderr the host's
+  // log: no terminal, whatever the descriptors happen to be (#511).
+  terminal: available(noTerminal('mcp'), 'derived'),
   workspace: available({ root: process.cwd() }, 'derived'),
 });
 
@@ -155,17 +257,26 @@ export const renderGeneratedRoute = async (
   route: GeneratedRouteRecord,
   input: unknown,
   context: GeneratedRouteRequestContext,
-  identity?: { readonly clientName?: string },
+  identity?: {
+    readonly clientName?: string;
+    readonly lineage?: Observed<AgentLineage>;
+    /** The server process's resolved plugin root (#468), published on every request it opens. */
+    readonly plugin?: Observed<AgentPluginIdentity>;
+  },
 ): Promise<RenderedGeneratedRoute> => runAgentRequest({
-  ...requestIdentity(context, identity?.clientName),
+  ...requestIdentity(context, identity?.clientName, identity?.lineage ?? unavailable<AgentLineage>('not-provided'), identity?.plugin),
   invocation: { artifactEpoch, kind: 'tool', operationId: route.id, surface: route.name },
   signal: context.mcpReq.signal,
 }, async () => {
   // State and notice admission live only in the render scope. This host scope
   // establishes identity and forwards it so one invocation is admitted once.
+  // The route's compiled `config.render` budget (#454) bounds this render
+  // session; the projector keeps forwarding progress for as long as it runs.
+  const render = routeRenderLimits(route.config);
   const projected = await projectMcpRenderStream(dispatcher.stream({
     artifactEpoch,
     invocation: { kind: 'tool', props: { input: input as never, operationId: route.id } },
+    ...(render === undefined ? {} : { limits: render }),
     signal: context.mcpReq.signal,
   }), projectorOptions(context));
   return {
@@ -182,33 +293,121 @@ const selectedConfig = (
   keys.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]),
 );
 
+/** The JSON Schema draft the MCP SDK targets when it advertises a Standard Schema. */
+const JSON_SCHEMA_TARGET = 'draft-2020-12';
+
+interface StandardJsonSchemaSource {
+  readonly '~standard'?: {
+    readonly jsonSchema?: {
+      readonly output?: (options: { readonly target: string }) => unknown;
+    };
+  };
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * A typeless JSON Schema root is object-shaped when it carries object keywords
+ * or every member of its `oneOf`/`anyOf`/`allOf` composition is — the same
+ * judgment the MCP SDK applies before stamping `type: "object"`.
+ */
+const objectRootedJsonSchema = (schema: unknown): boolean => {
+  if (!isRecord(schema)) return false;
+  if (schema['type'] !== undefined) return schema['type'] === 'object';
+  if (['properties', 'patternProperties', 'additionalProperties', 'required'].some((key) => key in schema)) return true;
+  return ['oneOf', 'anyOf', 'allOf'].some((key) => {
+    const members = schema[key];
+    return Array.isArray(members) && members.length > 0 && members.every(objectRootedJsonSchema);
+  });
+};
+
+/**
+ * Advertises a tool `outputSchema` only when the route's `resultSchema`
+ * describes an object: the MCP specification requires every result of a tool
+ * that declares `outputSchema` to carry `structuredContent`, and the
+ * projection emits `structuredContent` only for object-valued documents. A
+ * text-only route (`z.undefined()`, `z.string()`, an array schema) therefore
+ * advertises none, while an object schema keeps the SDK's fail-closed output
+ * validation. A schema that cannot describe itself as JSON Schema is handed
+ * to the SDK unchanged so its own conversion decides.
+ */
+export const advertisedOutputSchema = (schema: unknown): unknown => {
+  const toJsonSchema = (schema as StandardJsonSchemaSource | null | undefined)?.['~standard']?.jsonSchema?.output;
+  if (typeof toJsonSchema !== 'function') return schema;
+  let jsonSchema: unknown;
+  try {
+    jsonSchema = toJsonSchema({ target: JSON_SCHEMA_TARGET });
+  } catch {
+    return undefined;
+  }
+  return objectRootedJsonSchema(jsonSchema) ? schema : undefined;
+};
+
+/**
+ * Runs after every render the server completes, successful or not: a route
+ * that published a notice and then failed still advanced the ledger. The hook
+ * never throws into the request path and resolves as soon as the follow-up
+ * work is scheduled, never waiting on another connection's wire.
+ */
+export type GeneratedRenderSettled = () => Promise<void>;
+
+const settled = async <T>(operation: () => Promise<T>, afterRender: GeneratedRenderSettled | undefined): Promise<T> => {
+  try {
+    return await operation();
+  } finally {
+    await afterRender?.();
+  }
+};
+
+export interface RegisterGeneratedRoutesOptions {
+  /** Runs after every render the server completes (notice delivery follow-up). */
+  readonly afterRender?: GeneratedRenderSettled;
+  /** The warm runtime's lineage registry; tool calls resolve their conversation through it. */
+  readonly lineage?: AgentLineageRegistry;
+  /** The artifact's host, used when the negotiated client name maps to none. */
+  readonly lineageHost?: LineageHost;
+  /** The process's resolved plugin root (#468); every request the server opens publishes it as `request.plugin`. */
+  readonly pluginRoot?: Observed<AgentPluginIdentity>;
+  /** Raw `tools/call` arguments captured off the wire, for lineage correlation. */
+  readonly rawArguments?: RawToolArgumentsCapture;
+}
+
 /** Registers the compiled MCP routes on a server, keyed by route kind. */
 export const registerGeneratedRoutes = (
   server: McpServer,
   routes: Readonly<Record<string, GeneratedRouteRecord>>,
   dispatcher: AgentRenderDispatcher,
   artifactEpoch: string,
+  options: RegisterGeneratedRoutesOptions = {},
 ): void => {
   for (const route of Object.values(routes)) {
     switch (route.kind) {
-      case 'tool':
+      case 'tool': {
+        const outputSchema = advertisedOutputSchema(route.module.resultSchema);
         server.registerTool(route.name, {
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
           inputSchema: route.module.inputSchema,
-          outputSchema: route.module.resultSchema,
-        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
+          ...(outputSchema === undefined ? {} : { outputSchema }),
+        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
+          const rawArguments = options.rawArguments?.take(context.mcpReq.id);
           const rendered = await renderGeneratedRoute(
             dispatcher,
             artifactEpoch,
             route,
             input,
             context,
-            { clientName },
+            {
+              clientName,
+              lineage: await toolCallLineage(options.lineage, context, route.name, rawArguments, clientName, options.lineageHost),
+              ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }),
+            },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
-        }) as never);
+        }, options.afterRender)) as never);
         break;
+      }
       case 'resource': {
         const uri = route.config['uri'];
         if (typeof uri !== 'string' || uri.trim() === '') {
@@ -218,7 +417,7 @@ export const registerGeneratedRoutes = (
           route.name,
           uri,
           selectedConfig(route.config, ['_meta', 'description', 'icons', 'mimeType', 'title']) as never,
-          (async (resourceUri: URL, context: GeneratedRouteRequestContext) => {
+          (async (resourceUri: URL, context: GeneratedRouteRequestContext) => settled(async () => {
             const clientName = server.server.getClientVersion()?.name;
             return (await renderGeneratedRoute(
               dispatcher,
@@ -226,9 +425,9 @@ export const registerGeneratedRoutes = (
               route,
               { uri: resourceUri.href },
               context,
-              { clientName },
+              { clientName, ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }) },
             )).result;
-          }) as never,
+          }, options.afterRender)) as never,
         );
         break;
       }
@@ -236,7 +435,7 @@ export const registerGeneratedRoutes = (
         server.registerPrompt(route.name, {
           ...selectedConfig(route.config, ['_meta', 'description', 'icons', 'title']),
           argsSchema: route.module.inputSchema,
-        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => {
+        } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
           return (await renderGeneratedRoute(
             dispatcher,
@@ -244,9 +443,9 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName },
+            { clientName, ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }) },
           )).result;
-        }) as never);
+        }, options.afterRender)) as never);
         break;
       default: {
         const unreachable: never = route.kind;
@@ -396,8 +595,11 @@ export const createFlightWorkerHost = (
             host: context.host,
             id,
             invocation,
+            lineage: context.lineage,
+            plugin: context.plugin,
             requestInvocation: context.invocation,
             session: context.session,
+            terminal: context.terminal,
             type: 'render',
             workspace: context.workspace,
           });
@@ -429,16 +631,220 @@ export interface GeneratedEventRuntimeBinding {
   readonly target: string;
 }
 
+/**
+ * The observed identity a notice inbox subscription is recorded under: the
+ * runtime's `AgentNoticePrincipal`, spelled here from the root runtime types
+ * so this declaration never resolves through the runtime's `notices` subpath.
+ */
+export interface GeneratedNoticePrincipal {
+  readonly actor: Observed<AgentActorIdentity>;
+  readonly host: Observed<AgentHostIdentity>;
+  /** Optional like the runtime's: absent is unavailable lineage. */
+  readonly lineage?: Observed<AgentLineage>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** Outcome of one post-render inbox observation; mirrors the runtime's `AgentNoticeInboxSignalOutcome`. */
+export type GeneratedNoticeInboxSignalOutcome =
+  | {
+    readonly kind: 'idle';
+    readonly reason: 'no-subscription' | 'nothing-eligible';
+    readonly revision: number | undefined;
+  }
+  | { readonly kind: 'signalled'; readonly noticeIds: readonly string[]; readonly revision: number }
+  | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' | 'send' };
+
+/**
+ * The `mcp-resource-updated` delivery route for the notice inbox (#99 stage
+ * 4): the server process's own handle on the durable notice store its Flight
+ * worker mounts, wrapped by the runtime's inbox signaller. Present only when
+ * the artifact's state is workspace-durable — that is the only lifetime two
+ * processes can share — so `resources.subscribe` is advertised exactly when a
+ * subscription can be honoured. Closed when the server closes.
+ *
+ * Structurally the runtime's `AgentNoticeInboxSignaller`, spelled locally so
+ * the emitted `mcp-server-runtime.d.ts` stays self-contained for a packed
+ * consumer without the optional runtime peer's `notices` subpath;
+ * `mcp-server-runtime.test.ts` pins the two mutually assignable.
+ */
+export interface GeneratedNoticeDeliveryBinding {
+  readonly inboxUri: string;
+  readonly subscribed: boolean;
+  close(): Promise<void>;
+  observe(send: () => Promise<void>): Promise<GeneratedNoticeInboxSignalOutcome>;
+  subscribe(principal: GeneratedNoticePrincipal): Promise<void>;
+  unsubscribe(): Promise<void>;
+}
+
 export interface CreateGeneratedRouteMcpServerOptions {
   readonly apps?: readonly GeneratedMcpAppRecord[];
   /** Identity every request carries, so a stale worker fails loudly. */
   readonly artifactEpoch: string;
+  /** Releases the lineage registry's durable store when the server closes. */
+  readonly disposeLineage?: () => Promise<void>;
   readonly events?: GeneratedEventRuntimeBinding;
   /** Renders one invocation to Flight bytes. Closed when the server closes. */
   readonly host: GeneratedRouteExecutionHost;
+  /**
+   * The runtime-held conversation registry (#host-lineage): subagent
+   * start/stop and pre-tool events feed it, and every event route and tool
+   * call reads `request.lineage` from it. Absent registries leave the axis
+   * `unavailable('not-provided')`.
+   */
+  /**
+   * The dispatcher's base render limits; a route's compiled `config.render`
+   * budget layers over them per call. Generated entries leave the runtime
+   * defaults in place; the in-memory proof level lowers them to observe a
+   * route's budget without waiting out the default.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
+  readonly lineage?: AgentLineageRegistry;
+  readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
+  /**
+   * The process's resolved plugin root / durable-state anchor (#468), the same
+   * value the entry mounted its state on; published as `request.plugin` on
+   * every tool call, resource read, prompt get, and shared-runtime event.
+   */
+  readonly pluginRoot?: Observed<AgentPluginIdentity>;
   readonly routes: Readonly<Record<string, GeneratedRouteRecord>>;
 }
+
+interface ResourceSubscriptionRequest {
+  readonly params: { readonly uri: string };
+}
+
+const noticeDiagnostic = (line: string): void => {
+  process.stderr.write(`[agent-bundle] notice inbox ${line}\n`);
+};
+
+const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Installs `resources/subscribe` / `resources/unsubscribe` for the notice
+ * inbox URI and returns the post-render observation that emits
+ * `notifications/resources/updated` to the subscribed connection. Only the
+ * inbox is subscribable: every other generated resource is static per
+ * request, so accepting a subscription for it would be a promise the server
+ * never keeps. Subscribing fails closed when the durable store is unreadable.
+ */
+const installNoticeInboxSubscriptions = (
+  server: McpServer,
+  notices: GeneratedNoticeDeliveryBinding,
+): GeneratedRenderSettled => {
+  const protocol = server.server;
+  protocol.assertCanSetRequestHandler('resources/subscribe');
+  protocol.assertCanSetRequestHandler('resources/unsubscribe');
+  protocol.registerCapabilities({ resources: { subscribe: true } });
+  const assertInboxUri = (uri: unknown): void => {
+    if (uri === notices.inboxUri) return;
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
+      `Resource ${String(uri)} does not support subscriptions; only ${notices.inboxUri} emits notifications/resources/updated.`,
+      { uri },
+    );
+  };
+  protocol.setRequestHandler('resources/subscribe', (async (
+    request: ResourceSubscriptionRequest,
+    context: GeneratedRouteRequestContext,
+  ) => {
+    assertInboxUri(request.params.uri);
+    // Subscriptions are not tool calls: no pre-tool hook precedes them, so
+    // there is no correlation window to resolve lineage through — a
+    // subscriber therefore never matches a `conversation`/`root` recipient.
+    const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'), undefined);
+    try {
+      await notices.subscribe({
+        actor: identity.actor ?? unavailable(),
+        host: identity.host ?? unavailable(),
+        lineage: identity.lineage,
+        session: identity.session ?? unavailable(),
+        workspace: identity.workspace,
+      });
+    } catch (error) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
+        `Notice inbox subscriptions are unavailable: ${describeError(error)}`,
+      );
+    }
+    return {};
+  }) as never);
+  protocol.setRequestHandler('resources/unsubscribe', (async (request: ResourceSubscriptionRequest) => {
+    assertInboxUri(request.params.uri);
+    // Acknowledged only once in-flight observations have settled, so the
+    // client never receives a signal after its unsubscribe succeeded.
+    await notices.unsubscribe();
+    return {};
+  }) as never);
+  const send = async (): Promise<void> => {
+    await protocol.sendResourceUpdated({ uri: notices.inboxUri });
+  };
+  const report = (outcome: GeneratedNoticeInboxSignalOutcome): void => {
+    switch (outcome.kind) {
+      case 'idle':
+      case 'signalled':
+        return;
+      case 'failed':
+        noticeDiagnostic(`resources/updated ${outcome.stage} failed: ${describeError(outcome.error)}`);
+        return;
+      default: {
+        const unreachable: never = outcome;
+        throw new TypeError(`Unhandled notice inbox signal outcome ${String(unreachable)}.`);
+      }
+    }
+  };
+  // Detached from the render that triggered it. The signaller serializes its
+  // observations and never rejects, and a notification write to a slow or
+  // wedged connection — renewed for as long as it takes — must not hold the
+  // completed render's response, or unrelated event handling, hostage.
+  // Observations coalesce: one is in flight and at most one more is owed,
+  // because an observation reads the whole ledger, so every render completing
+  // behind a pending write is covered by the single follow-up and a client
+  // that stops reading cannot grow a queue of closures per render.
+  let observing: Promise<void> | undefined;
+  let owed = false;
+  const observe = (): void => {
+    observing = notices.observe(send).then(report, (error: unknown) => {
+      noticeDiagnostic(`resources/updated observation failed: ${describeError(error)}`);
+    }).then(() => {
+      observing = undefined;
+      if (!owed) return;
+      owed = false;
+      observe();
+    });
+  };
+  return (): Promise<void> => {
+    if (observing === undefined) observe();
+    else owed = true;
+    return Promise.resolve();
+  };
+};
+
+const lineageHostFor = (target: string): LineageHost | undefined =>
+  target === 'claude' || target === 'codex' || target === 'cursor' ? target : undefined;
+
+/**
+ * Lineage for one hook event. Cloud Cursor agents run no user hooks at all, so
+ * a `sessionEnd`-less cloud payload can never feed the registry; the portable
+ * target has no subagent events by contract.
+ */
+const eventLineage = async (
+  registry: AgentLineageRegistry | undefined,
+  target: string,
+  event: CanonicalAgentEvent,
+  native: Readonly<Record<string, unknown>>,
+  idempotencyKey: string,
+  observedAt: string,
+): Promise<Observed<AgentLineage>> => {
+  const host = lineageHostFor(target);
+  if (host === undefined) return unavailable<AgentLineage>('no-subagent-events');
+  if (host === 'cursor' && native['is_background_agent'] === true) {
+    return unavailable<AgentLineage>('cloud-agent-no-user-hooks');
+  }
+  if (registry === undefined) return unavailable<AgentLineage>('not-provided');
+  return registry.observe({ event, host, idempotencyKey, native, observedAt });
+};
 
 const nativeString = (
   native: Readonly<Record<string, unknown>>,
@@ -467,12 +873,15 @@ const startEventRuntime = async (
   events: GeneratedEventRuntimeBinding,
   dispatcher: AgentRenderDispatcher,
   host: WarmFlightHost,
+  afterRender: GeneratedRenderSettled | undefined,
+  registry: AgentLineageRegistry | undefined,
+  pluginRoot: Observed<AgentPluginIdentity> | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
   return events.createEventRuntimeServer({
     artifactEpoch: events.artifactEpoch,
     endpointId: events.endpointId,
-    handle: async (request, signal) => {
+    handle: async (request, signal) => settled(async () => {
     const event = canonicalEvent(request.event);
     const target = events.allowedTargets.find((candidate) => candidate === request.target);
     if (target === undefined) {
@@ -496,6 +905,16 @@ const startEventRuntime = async (
       ?? (Array.isArray(workspaceRoots) && typeof workspaceRoots[0] === 'string'
         ? workspaceRoots[0]
         : undefined);
+    // The registry sees the event before the route renders, so the route
+    // observes its own subagent start/stop already applied.
+    const lineage = await eventLineage(
+      registry,
+      target,
+      event,
+      request.native,
+      props.canonical.idempotencyKey,
+      props.canonical.observedAt,
+    );
     return runAgentRequest({
       host: available({ name: target }, 'native'),
       invocation: {
@@ -505,8 +924,12 @@ const startEventRuntime = async (
         operationId: `event:${event}`,
         surface: event,
       },
+      lineage,
+      ...(pluginRoot === undefined ? {} : { plugin: pluginRoot }),
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
       signal,
+      // A hook's stdout is its host envelope: no terminal (#511).
+      terminal: available(noTerminal('hook'), 'derived'),
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
     }, async () => events.projectEventDocument(
       // The host scope remains ledger-free: the Flight worker owns the one
@@ -523,8 +946,9 @@ const startEventRuntime = async (
       event,
       target,
       nativeEvent,
+      props.native,
     ));
-    },
+    }, afterRender),
     status: () => ({
       artifactEpoch: host.identity.artifactEpoch,
       availability: host.availability(),
@@ -546,17 +970,55 @@ export const createGeneratedRouteMcpServer = async (
   options: CreateGeneratedRouteMcpServerOptions,
 ): Promise<McpServer> => {
   const server = new McpServer(options.plugin);
-  const dispatcher = createAgentRenderDispatcher(options.host);
+  const dispatcher = createAgentRenderDispatcher(
+    options.host,
+    options.limits === undefined ? {} : { limits: options.limits },
+  );
+  // The subscribe bit registers before any transport connects; the SDK merges
+  // its own resources.listChanged into the same capability object when the
+  // inbox resource route registers below.
+  const afterRender = options.notices === undefined
+    ? undefined
+    : installNoticeInboxSubscriptions(server, options.notices);
   const events = options.events === undefined
     ? undefined
-    : await startEventRuntime(options.events, dispatcher, options.host);
-  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch);
+    : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage, options.pluginRoot);
+  registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
+    ...(afterRender === undefined ? {} : { afterRender }),
+    ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
+    ...(options.lineage === undefined ? {} : { lineage: options.lineage, rawArguments: captureRawToolArguments(server) }),
+    ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
+      ? {}
+      : { lineageHost: lineageHostFor(options.events.target) }),
+  });
   registerGeneratedMcpApps(server, options.apps ?? []);
   const close = server.close.bind(server);
   server.close = async (): Promise<void> => {
-    await events?.close();
-    await options.host.close();
-    await close();
+    // The signaller drains any receipt still owed for a send that reached the
+    // wire, so it must close while the ledger it commits to is still open:
+    // the host owns (or shares) that store and closes after it. Its close
+    // abandons a notification write still pending rather than waiting on the
+    // client's wire, so a subscriber that stopped reading cannot wedge this
+    // teardown. Whatever fails on the way, the protocol and its transport are
+    // always closed; the teardown error surfaces once they are. The lineage
+    // journal closes after the host, once no render can observe into it.
+    try {
+      try {
+        await events?.close();
+      } finally {
+        try {
+          await options.notices?.close();
+        } finally {
+          try {
+            await options.host.close();
+          } finally {
+            await options.disposeLineage?.();
+          }
+        }
+      }
+    } finally {
+      await close();
+    }
   };
   return server;
 };

@@ -5,8 +5,21 @@ dist/
 coverage/
 artifacts/
 *.log
-examples/audiobook-curator/artifact/
-examples/worktree-proximity/artifact/
+# Every example's `pnpm build` (and `pnpm examples:check`) writes here.
+examples/*/artifact/
+
+# Build-time copies of the root LICENSE and NOTICE (scripts/sync-license-files.mjs)
+packages/*/LICENSE
+packages/*/NOTICE
 
 # Aborted runtime-playground fixture workspaces
 .runtime-playground-*/
+
+website/doc_build/
+website/docs/en/api/**/*.md
+website/docs/zh/api/**/*.md
+# Build-time reference pages rendered from capability tables and docs/diagnostics.md
+website/docs/*/reference/hosts.md
+website/docs/*/reference/events.md
+website/docs/*/reference/notices.md
+website/docs/*/reference/diagnostics.md

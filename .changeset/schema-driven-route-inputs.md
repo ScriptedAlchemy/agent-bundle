@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Project conventional route `inputSchema` exports into a deterministic,

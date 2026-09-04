@@ -9,9 +9,18 @@ import type {
   AgentEventRouteProps,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
+import { projectEventPayload } from './payload.ts';
 
+/**
+ * The route result vocabulary. `continue` (or no value at all) is the
+ * pass-through answer: the route has no opinion, so no decision reaches the
+ * host and its normal permission flow applies. `allow` and `ask` are explicit
+ * `tool/before` and `model-switch/before` decisions (`allow` also answers
+ * `permission/request`); `deny` blocks. Only an explicit decision is ever
+ * projected as one (#461).
+ */
 const resultValueSchema = z.object({
-  outcome: z.enum(['continue', 'deny']).optional(),
+  outcome: z.enum(['continue', 'allow', 'ask', 'deny']).optional(),
   reason: z.string().min(1).optional(),
   updatedInput: z.record(z.string(), z.unknown()).optional(),
 }).strict();
@@ -105,13 +114,9 @@ export const validateNativeEventEnvelope = (
         return nativeEventError('native workspace_roots must be a nonempty array of nonempty strings');
       }
       requireNativeString(native, 'cursor_version');
-      if (
-        Object.hasOwn(native, 'user_email')
-        && native.user_email !== null
-        && typeof native.user_email !== 'string'
-      ) {
-        return nativeEventError('native user_email must be a string or null');
-      }
+      // Cursor also sends the signed-in user's email on this envelope. The
+      // framework does not read, validate, or surface operator identity; the
+      // field passes through untouched inside the native payload.
       return native;
     }
     if (typeof native.session_id !== 'string' && typeof native.conversation_id !== 'string') {
@@ -183,6 +188,43 @@ export const validateNativeEventEnvelope = (
     if (canonicalEvent === 'stop' && typeof native.loop_count !== 'number') {
       return nativeEventError('native loop_count must be a number');
     }
+    if (canonicalEvent === 'agent/start') {
+      // https://cursor.com/docs/hooks#subagentstart (retrieved 2026-09-02).
+      // Only git_branch is documented "(optional)"; every other field is required.
+      requireNativeString(native, 'subagent_id');
+      requireNativeString(native, 'subagent_type');
+      requireNativeStringValue(native, 'task');
+      requireNativeString(native, 'parent_conversation_id');
+      requireNativeString(native, 'tool_call_id');
+      requireNativeStringValue(native, 'subagent_model');
+      requireNativeBoolean(native, 'is_parallel_worker');
+      if (Object.hasOwn(native, 'git_branch')) requireNativeStringValue(native, 'git_branch');
+    }
+    if (canonicalEvent === 'agent/stop') {
+      // https://cursor.com/docs/hooks#subagentstop (retrieved 2026-09-02).
+      requireNativeString(native, 'subagent_type');
+      if (!['completed', 'error', 'aborted'].includes(String(native.status))) {
+        return nativeEventError('native status is invalid');
+      }
+      // The documented subagentStop input marks no field optional;
+      // agent_transcript_path is `string | null`.
+      for (const field of ['task', 'description', 'summary']) {
+        requireNativeStringValue(native, field);
+      }
+      for (const field of ['duration_ms', 'message_count', 'tool_call_count']) {
+        requireNativeNumber(native, field);
+      }
+      requireNativeNumber(native, 'loop_count');
+      if (!Array.isArray(native.modified_files) || !native.modified_files.every((file) => typeof file === 'string')) {
+        return nativeEventError('native modified_files must be an array of strings');
+      }
+      if (
+        !Object.hasOwn(native, 'agent_transcript_path')
+        || (native.agent_transcript_path !== null && typeof native.agent_transcript_path !== 'string')
+      ) {
+        return nativeEventError('native agent_transcript_path must be a string or null');
+      }
+    }
     return native;
   }
   requireNativeString(native, 'session_id');
@@ -221,15 +263,22 @@ export const validateNativeEventEnvelope = (
   }
   if (canonicalEvent === 'permission/request') {
     requireNativeString(native, 'tool_name');
-    // The pinned permission-request input schema declares `"tool_input": true`
-    // (any JSON value), so presence is required but shape is tool-defined.
-    if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
-      return nativeEventError('native tool_input is required');
-    }
-    requirePermissionMode(native);
     if (target === 'codex') {
+      // Only the pinned Codex permission-request input schema declares
+      // `"tool_input": true` (any JSON value): presence is required but the
+      // shape is tool-defined. Claude's PermissionRequest envelope stays
+      // object-shaped like its other tool events.
+      if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
+        return nativeEventError('native tool_input is required');
+      }
+      requirePermissionMode(native);
       requireNativeString(native, 'turn_id');
       requireNativeString(native, 'model');
+    } else {
+      if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+        return nativeEventError('native tool_input must be an object');
+      }
+      requirePermissionMode(native);
     }
   }
   if (canonicalEvent === 'permission/denied') {
@@ -266,6 +315,35 @@ export const validateNativeEventEnvelope = (
     requireNativeString(native, 'teammate_name');
     requireNativeString(native, 'team_name');
   }
+  if (canonicalEvent === 'model-switch/before' || canonicalEvent === 'model-switch/after') {
+    // hooks reference "PreModelSwitch input" / "PostModelSwitch input"
+    // (uploaded 2026-09-03, v2.1.251+): PostModelSwitch adds the `auto` and
+    // `resume` sources for switches Claude Code makes on its own.
+    requireNativeString(native, 'from_model');
+    requireNativeString(native, 'to_model');
+    if (native.requested_model !== null && typeof native.requested_model !== 'string') {
+      return nativeEventError('native requested_model must be a string or null');
+    }
+    const sources = canonicalEvent === 'model-switch/before'
+      ? ['command', 'picker', 'sdk']
+      : ['command', 'picker', 'sdk', 'auto', 'resume'];
+    if (!sources.includes(String(native.source))) {
+      return nativeEventError('native source is invalid');
+    }
+    // The five cost fields describe what re-sending the conversation costs;
+    // the reference documents them on every switch, but no live envelope has
+    // been captured yet, so they are type-checked when present.
+    for (const field of ['context_tokens', 'estimated_cache_write_usd']) {
+      if (Object.hasOwn(native, field)) requireNativeNumber(native, field);
+    }
+    if (Object.hasOwn(native, 'prompt_cache_warm')) requireNativeBoolean(native, 'prompt_cache_warm');
+    if (Object.hasOwn(native, 'cache_ttl') && !['5m', '1h'].includes(String(native.cache_ttl))) {
+      return nativeEventError('native cache_ttl is invalid');
+    }
+    if (Object.hasOwn(native, 'pricing') && !['configured', 'catalog', 'default'].includes(String(native.pricing))) {
+      return nativeEventError('native pricing is invalid');
+    }
+  }
   if (canonicalEvent === 'compact/before' || canonicalEvent === 'compact/after') {
     requireCompactTrigger(native);
     if (target === 'codex') {
@@ -282,15 +360,26 @@ export const validateNativeEventEnvelope = (
   if (canonicalEvent === 'session/start') requireNativeString(native, 'source');
   if (canonicalEvent === 'tool/before' || canonicalEvent === 'tool/after') {
     requireNativeString(native, 'tool_name');
-    if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
+    // The pinned rust-v0.147.0 pre-tool-use/post-tool-use input schemas declare
+    // `"tool_input": true` and `"tool_response": true` (any JSON value), so Codex
+    // only guarantees presence; Claude documents both as objects.
+    if (target === 'codex') {
+      if (!Object.hasOwn(native, 'tool_input') || native.tool_input === undefined) {
+        return nativeEventError('native tool_input is required');
+      }
+    } else if (typeof native.tool_input !== 'object' || native.tool_input === null || Array.isArray(native.tool_input)) {
       return nativeEventError('native tool_input must be an object');
     }
     requireNativeString(native, 'tool_use_id');
-    if (
-      canonicalEvent === 'tool/after'
-      && (typeof native.tool_response !== 'object' || native.tool_response === null || Array.isArray(native.tool_response))
-    ) {
-      return nativeEventError('native tool_response must be an object');
+    if (canonicalEvent === 'tool/after') {
+      // Codex pins tool_response as any JSON value. Claude documents an object
+      // for built-in tools but delivers the tool's text as a plain string for
+      // MCP tools (observed on Claude Code 2.1.257,
+      // docs/audits/2026-09-03-host-lineage-matrix.md §3), so presence is the
+      // only host-independent guarantee.
+      if (!Object.hasOwn(native, 'tool_response') || native.tool_response === undefined) {
+        return nativeEventError('native tool_response is required');
+      }
     }
   }
   if (canonicalEvent === 'agent/start' || canonicalEvent === 'agent/stop') {
@@ -330,21 +419,32 @@ export const validateNativeEventEnvelope = (
   return native;
 };
 
-export const createCanonicalEventProps = (
-  event: CanonicalAgentEvent,
+/**
+ * Builds the props an event route receives from one validated native
+ * envelope: the frozen `native` snapshot beside the canonical identity, whose
+ * `payload` is the family's cross-host reading of that same envelope. Every
+ * surface that renders an event route — the standalone hook wrapper, the
+ * shared runtime, `agent-bundle/test`, and the Workbench replay — goes
+ * through here, so the payload can never disagree between them.
+ */
+export const createCanonicalEventProps = <E extends CanonicalAgentEvent>(
+  event: E,
   nativeInput: Readonly<Record<string, unknown>>,
   target: string,
   nativeEvent: string,
   hostContractRevision: string,
   signal: AbortSignal,
-): AgentEventRouteProps => {
+): AgentEventRouteProps<E> => {
   const native = snapshotNative(nativeInput);
-  const canonical: AgentEventCanonicalIdentity = Object.freeze({
+  const canonical: AgentEventCanonicalIdentity<E> = Object.freeze({
     event,
+    // The key hashes the envelope, not the payload: the payload is derived, so
+    // a mapping-table change never re-identifies an already-observed event.
     idempotencyKey: createHash('sha256')
       .update(JSON.stringify({ event, native, target }), 'utf8')
       .digest('hex'),
     observedAt: new Date().toISOString(),
+    payload: projectEventPayload(event, native, target),
     provenance: Object.freeze({
       host: target,
       hostContractRevision,
@@ -380,11 +480,18 @@ const appendContext = (node: AgentDocumentNode, contexts: string[]): void => {
   }
 };
 
+/**
+ * Projects a rendered event document to the host's native output. Pass the
+ * validated native envelope when the host's output contract depends on input
+ * state (Cursor consumes `subagentStop.followup_message` only for a completed
+ * subagent); the production callers always do.
+ */
 export const projectEventDocument = (
   document: AgentDocument,
   event: CanonicalAgentEvent,
   target: string,
   nativeEvent: string,
+  nativeInput?: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> | undefined => {
   if (target === 'plugin') {
     throw new TypeError('Composite plugin event projection must resolve the invoking host before projecting output.');
@@ -393,6 +500,14 @@ export const projectEventDocument = (
   appendContext(document.root, contexts);
   const additionalContext = contexts.length === 0 ? undefined : contexts.join('');
   const parsedValue = document.value === undefined ? undefined : resultValueSchema.parse(document.value);
+  if (
+    (parsedValue?.outcome === 'allow' && event !== 'tool/before' && event !== 'permission/request' && event !== 'model-switch/before')
+    || (parsedValue?.outcome === 'ask' && event !== 'tool/before' && event !== 'model-switch/before')
+  ) {
+    throw new TypeError(
+      `${event} does not accept outcome "${parsedValue.outcome}": allow is a tool/before, model-switch/before, or permission/request decision and ask is a tool/before or model-switch/before decision; continue leaves the host's own flow untouched.`,
+    );
+  }
   const requireDenyReason = (): string => {
     if (parsedValue?.outcome !== 'deny') {
       throw new TypeError(`${event} did not request a blocking outcome.`);
@@ -410,44 +525,69 @@ export const projectEventDocument = (
       : Object.freeze({ decision: 'block', reason: requireDenyReason() });
   }
   if (event === 'agent/start') {
-    if (parsedValue?.outcome === 'deny') {
-      throw new TypeError('agent/start cannot block subagent creation on any supported host.');
-    }
     if (parsedValue?.updatedInput !== undefined) {
       throw new TypeError('agent/start cannot replace native input.');
     }
+    if (target === 'cursor') {
+      // https://cursor.com/docs/hooks#subagentstart (retrieved 2026-09-02):
+      // output is { permission: allow | deny, user_message? }; there is no
+      // additional-context channel, and `ask` is treated as deny.
+      if (additionalContext !== undefined) {
+        throw new TypeError('Cursor subagentStart has no additional-context channel.');
+      }
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('agent/start reason is only valid when outcome is deny.');
+      }
+      return parsedValue?.outcome === 'deny'
+        ? Object.freeze({ permission: 'deny', user_message: requireDenyReason() })
+        : undefined;
+    }
+    if (parsedValue?.outcome === 'deny') {
+      throw new TypeError('agent/start cannot block subagent creation on Claude Code or Codex.');
+    }
     if (additionalContext === undefined) return undefined;
-    return target === 'cursor'
-      ? Object.freeze({ additional_context: additionalContext })
-      : deepFreeze({
-          hookSpecificOutput: {
-            additionalContext,
-            hookEventName: nativeEvent,
-          },
-        });
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'agent/stop') {
     if (parsedValue?.updatedInput !== undefined) {
       throw new TypeError('agent/stop cannot replace native input.');
     }
-    if (parsedValue?.outcome === 'deny') {
-      if (target === 'cursor') {
-        throw new TypeError('agent/stop cannot block subagent completion on cursor.');
+    if (target === 'cursor') {
+      // https://cursor.com/docs/hooks#subagentstop (retrieved 2026-09-02):
+      // output is { followup_message? }, consumed only when status is
+      // completed and capped by loop_limit; there is no context channel.
+      if (additionalContext !== undefined) {
+        throw new TypeError('Cursor subagentStop has no additional-context channel; only followup_message is documented.');
       }
+      if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
+        throw new TypeError('agent/stop reason is only valid when outcome is deny.');
+      }
+      if (parsedValue?.outcome !== 'deny') return undefined;
+      if (nativeInput !== undefined && nativeInput.status !== 'completed') {
+        throw new TypeError(
+          `Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported ${JSON.stringify(nativeInput.status)}, so the continuation would be ignored.`,
+        );
+      }
+      return Object.freeze({ followup_message: requireDenyReason() });
+    }
+    if (parsedValue?.outcome === 'deny') {
       return Object.freeze({ decision: 'block', reason: requireDenyReason() });
     }
     if (additionalContext === undefined) return undefined;
     if (target === 'codex') {
       throw new TypeError('agent/stop additional context is not supported by the Codex SubagentStop output schema.');
     }
-    return target === 'cursor'
-      ? Object.freeze({ additional_context: additionalContext })
-      : deepFreeze({
-          hookSpecificOutput: {
-            additionalContext,
-            hookEventName: nativeEvent,
-          },
-        });
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'session/end') {
     if (
@@ -565,7 +705,11 @@ export const projectEventDocument = (
     if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny') {
       throw new TypeError('permission/request reason is only valid when outcome is deny.');
     }
-    if (parsedValue?.outcome === undefined) return undefined;
+    // https://code.claude.com/docs/en/hooks#permissionrequest-decision-control:
+    // a hook that returns no decision leaves the prompt to the user, so
+    // `continue` (and an empty result) project nothing. Only an explicit
+    // `allow` answers on the user's behalf (#461).
+    if (parsedValue?.outcome === undefined || parsedValue.outcome === 'continue') return undefined;
     return deepFreeze({
       hookSpecificOutput: {
         decision: {
@@ -601,6 +745,53 @@ export const projectEventDocument = (
       throw new TypeError('stop/failure has no documented context/output channel.');
     }
     return undefined;
+  }
+  if (event === 'model-switch/before') {
+    // https://code.claude.com/docs/en/hooks#premodelswitch-decision-control
+    // (uploaded 2026-09-03): permissionDecision allow | deny | ask with
+    // permissionDecisionReason (shown for deny and ask, ignored for allow);
+    // no defer, updatedInput, or additionalContext. Precedence across hooks
+    // is deny > ask > allow, and `ask` is a refusal outside interactive /model.
+    if (parsedValue?.updatedInput !== undefined) {
+      throw new TypeError('model-switch/before cannot replace native input; PreModelSwitch accepts no updatedInput.');
+    }
+    if (additionalContext !== undefined) {
+      throw new TypeError('model-switch/before has no additional-context channel; PreModelSwitch accepts no additionalContext.');
+    }
+    if (parsedValue?.reason !== undefined && parsedValue.outcome !== 'deny' && parsedValue.outcome !== 'ask') {
+      throw new TypeError('model-switch/before reason is only valid when outcome is deny or ask.');
+    }
+    if (parsedValue?.outcome === undefined || parsedValue.outcome === 'continue') return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        hookEventName: nativeEvent,
+        permissionDecision: parsedValue.outcome,
+        ...(parsedValue.outcome === 'deny'
+          ? { permissionDecisionReason: requireDenyReason() }
+          : parsedValue.outcome === 'ask' && parsedValue.reason !== undefined
+            ? { permissionDecisionReason: parsedValue.reason }
+            : {}),
+      },
+    });
+  }
+  if (event === 'model-switch/after') {
+    // https://code.claude.com/docs/en/hooks#postmodelswitch-decision-control:
+    // the model has already changed; only additionalContext reaches Claude,
+    // with the next request after the switch.
+    if (
+      parsedValue?.outcome === 'deny'
+      || parsedValue?.reason !== undefined
+      || parsedValue?.updatedInput !== undefined
+    ) {
+      throw new TypeError('model-switch/after observes a completed model switch and cannot deny or replace native input.');
+    }
+    if (additionalContext === undefined) return undefined;
+    return deepFreeze({
+      hookSpecificOutput: {
+        additionalContext,
+        hookEventName: nativeEvent,
+      },
+    });
   }
   if (event === 'file/change') {
     if (
@@ -657,26 +848,48 @@ export const projectEventDocument = (
       : undefined;
   }
   if (event === 'tool/before') {
+    // A pass-through result (`continue` or no value) carries no decision: the
+    // host keeps its own permission flow, and a rewrite is evaluated by that
+    // flow against the rewritten input. Only an explicit allow/ask/deny is
+    // projected as one (#461). `reason` has no channel without a decision.
+    const decision = parsedValue?.outcome === undefined || parsedValue.outcome === 'continue'
+      ? undefined
+      : parsedValue.outcome;
+    if (parsedValue?.reason !== undefined && decision === undefined) {
+      throw new TypeError('tool/before reason is only valid when outcome is allow, ask, or deny.');
+    }
     if (target === 'cursor') {
-      if (parsedValue?.outcome === 'deny') {
+      // https://cursor.com/docs/hooks#pretooluse (retrieved 2026-09-03):
+      // output is { permission: allow | deny, user_message?, agent_message?,
+      // updated_input? }; "ask" is accepted by the schema but not enforced,
+      // and the messages are shown only when denied.
+      if (decision === 'ask') {
+        throw new TypeError('Cursor preToolUse accepts permission "ask" in its schema but does not enforce it; ask is not projected on Cursor.');
+      }
+      if (decision === 'deny') {
         return Object.freeze({
-          agent_message: parsedValue.reason,
+          agent_message: parsedValue?.reason,
           permission: 'deny',
-          user_message: parsedValue.reason,
+          user_message: parsedValue?.reason,
         });
       }
-      return parsedValue?.updatedInput === undefined
-        ? undefined
-        : Object.freeze({ permission: 'allow', updated_input: parsedValue.updatedInput });
+      // Cursor documents updated_input only alongside a permission, so a
+      // rewrite without an explicit decision is delivered as allow here; on
+      // Claude and Codex the same rewrite carries no decision.
+      if (decision === undefined && parsedValue?.updatedInput === undefined) return undefined;
+      return Object.freeze({
+        permission: 'allow',
+        ...(parsedValue?.updatedInput === undefined ? {} : { updated_input: parsedValue.updatedInput }),
+      });
     }
     const output = {
       ...(additionalContext === undefined ? {} : { additionalContext }),
       hookEventName: nativeEvent,
-      permissionDecision: parsedValue?.outcome === 'deny' ? 'deny' : 'allow',
+      ...(decision === undefined ? {} : { permissionDecision: decision }),
       ...(parsedValue?.reason === undefined ? {} : { permissionDecisionReason: parsedValue.reason }),
       ...(parsedValue?.updatedInput === undefined ? {} : { updatedInput: parsedValue.updatedInput }),
     };
-    return deepFreeze({ hookSpecificOutput: output });
+    return Object.keys(output).length === 1 ? undefined : deepFreeze({ hookSpecificOutput: output });
   }
   if (event === 'session/start' || event === 'tool/after') {
     if (additionalContext === undefined) return undefined;

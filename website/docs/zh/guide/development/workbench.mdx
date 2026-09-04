@@ -1,0 +1,165 @@
+---
+description: 'agent-bundle 开发者 Workbench：loopback 边界、按 epoch 固定的 MCP 会话、Playground 轨迹、开发期宿主安装，以及可选的 Agent API。'
+---
+
+# 开发者 Workbench
+
+`agent-bundle dev` 通过 loopback 提供一个预构建的开发者 Workbench。它是你查看编译器实际输出了什么
+（逐宿主、逐 epoch），以及运行输出的包装层的地方，而不是仅凭构建通过就相信插件可用。
+
+```sh
+npx agent-bundle dev --root .
+npx agent-bundle dev --root . --port 3100 --no-open
+```
+
+## 边界
+
+这些是契约，不是默认值：
+
+- **仅 loopback。** 服务器只绑定 loopback，绝不会暴露到本机之外。
+- **前台开发会话，而不是托管服务。** 关闭进程即结束会话。
+- **按 epoch 固定的读取。** 没有任何东西会隐式跟随一次新构建；读取产物的表面会指明自己读取的 epoch。
+- **只做可信本地操作。** 浏览器绝不提供命令、工作目录、原生模型或凭据。见[安全](../../reference/security.mdx)。
+
+## 它展示什么
+
+| 页面 | 内容 |
+| --- | --- |
+| Overview | 项目标识、规范化模型与诊断。 |
+| Skills | 每个 Skill 文档，包括各宿主降级后的输出。 |
+| Artifacts | 带 provenance 与 epoch 对比的产物树。 |
+| MCP | 绑定到产物的 playground，带原始协议轨迹。 |
+| Hooks | 运行输出的钩子包装层的 playground。 |
+| Playground | 可重放、可导出的持久有序轨迹。 |
+| Evals | eval 运行与运行对比。 |
+| Logs | 按生产者分组的精简事件与原始 stdout、stderr、协议流：规范化、构建、诊断、MCP、钩子、宿主试验与 grader。 |
+
+## MCP 会话绑定到一个 epoch
+
+Workbench 的 MCP 会话在打开时绑定 `{ epochId, target, serverName }`，并且绝不会自动迁移到新的
+epoch。这正是协议轨迹有意义的原因：其中每一帧都来自同一个由同一批输入构建出的生成式服务器。
+
+- **Restart MCP session** 会在它*所选*的那个 epoch 上重新启动该生成式服务器。
+- 要使用新发布的 epoch，请打开一个**新**会话。
+- 兼容的 MCP App 通过同一个已绑定会话预览。同一套宿主栈也能通过 `agent-bundle serve-app` 在一个普通
+  浏览器标签页里独立提供某个 App；见[独立提供 App](../authoring/mcp.mdx#独立提供-app)。
+
+## Playground 拥有自己的轨迹
+
+只有在 Playground 中发起的操作才会加入它的持久有序轨迹。即使 Playground 会话处于打开状态，Hooks 与
+MCP 页面的操作也保持独立——轨迹记录的是一段刻意为之的序列，而不是所有被点过的东西。
+
+从一条 Playground 轨迹出发，你可以重放或导出原始证据，或者把选定的持久 outcome 与断言证据提升为一份
+草稿 eval case。
+
+`script.run` 是生产环境挂载、可信本地的 Playground 操作：它只在受管工作区中、为所选 target 运行选定的、
+由清单拥有的输出脚本，并保留有界的 stdout 与 stderr、退出码、取消状态与原始事件引用。见
+[脚本与资源](../authoring/scripts-assets.mdx)。
+
+原生提示词为所选 epoch 选择一份服务器目录选择——case、fixture、宿主与固定模型——而不是接受浏览器提供的
+命令或模型。
+
+## 以编程方式使用同一个会话
+
+公开的 `startDevServer` 导出接受 CLI 标志所映射的那些选项（`root`、`port`、`open`、`agentApi`、
+`installHosts`），并解析为一个 `DevServerSession`，它暴露 loopback 的 `url`、一个 `status()` 快照
+以及 `close()`：
+
+```ts twoslash
+import { startDevServer } from 'agent-bundle';
+
+export const serve = async (): Promise<void> => {
+  const session = await startDevServer({ port: 3100, root: process.cwd() });
+  console.log(session.url);
+  await session.close();
+};
+```
+
+## 开发期宿主安装
+
+多次传入 `--install-host <claude|codex|cursor>`，即可把开发变体安装到所选宿主：
+
+```sh
+npx agent-bundle dev --install-host cursor --install-host claude
+```
+
+第一个成功的 epoch 使用普通的宿主安装器，因此 Claude 与 Codex 会正常注册插件，并从宿主自有的
+`plugins/cache/<marketplace>/<plugin>/<version>` 目录读取它的文件；Cursor 读取
+`~/.cursor/plugins/local/<plugin>`。被安装的根目录带有一份 `.agent-bundle-dev.json`，其中记录 schema
+版本 `1`、项目根目录、宿主以及已安装的 epoch。
+
+它的 MCP 文档始终通过运行中的开发服务器的 Node 可执行文件启动框架 CLI：
+
+```sh
+agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host>
+```
+
+重建绝不会用某个 epoch 路径替换这条稳定命令，而宿主进程 `PATH` 的内容也不影响项目本地的框架能否被
+启动。
+
+之后每个 `artifact.available` 事件都会把新的 target 复制成一个不可变的已安装世代。顶层目录通过原子的
+符号链接（或 Windows junction）重命名切换，顶层文件通过原子的同级文件重命名切换，因此宿主看到的要么是
+旧的、要么是新的完整条目，任何被同步的目录都不会在两个世代之间消失。发布失败会把指针回滚到先前世代，
+并在 `dev.host.sync` 上发出一条 `AB7202` 诊断；构建失败则根本不会发出 `artifact.available`，因此
+最后一次可用的安装不受影响。重新同步会直接写入宿主缓存，不会再次调用 Claude 或 Codex CLI。
+
+停止开发服务器会把标记为开发用的安装留在原处。钩子与 Skill 仍留在磁盘上，而那条稳定的 proxy 命令会
+失败关闭（fail closed），直到该项目的开发服务器再次运行。
+
+## 实时宿主 MCP 代理
+
+在 `dev` 于其背后重建生成式服务器的同时，宿主可以让一个 stdio MCP 进程保持连接。该命令、
+`/mcp/host/<serverName>` 端点，以及它如何通过项目的开发锁完成发现，都记录在
+[MCP 服务器与 MCP App](../authoring/mcp.mdx)中。
+
+这里有一条重建规则值得注意：崩溃的生成式服务器**不会**在同一个 epoch 内被静默重启。在一次成功的重建
+换入一个新预热的 epoch 会话之前，调用会一直保持失败。
+
+## 可选的 Agent API
+
+Agent API 是面向 Codex 客户端的、独立且需要认证的 Streamable HTTP MCP 端点。它**默认关闭**，并且只
+挂载在既有 loopback 前台服务器的 `/mcp` 上：
+
+```sh
+AGENT_BUNDLE_AGENT_API_TOKEN='replace-with-a-secret' \
+  npx agent-bundle dev --agent-api --no-open --port 3100
+```
+
+`dev: { agentApi: true }` 可从配置启用它，而 `--no-agent-api` 会覆盖该设置。如果端点被启用却没有
+`AGENT_BUNDLE_AGENT_API_TOKEN`，启动会在**开始服务之前**失败。这个固定 token 只被读取一次，绝不会被
+记录日志、持久化或返回，并且必须以标准的 `Authorization: Bearer` 认证方式提供。客户端可以省略
+`Origin`；一旦提供了 origin，它必须与前台 URL 完全一致。端点被禁用时是不存在的，而不只是未授权。
+
+它恰好有十三个固定且有序的工具：
+
+| # | 工具 | # | 工具 |
+| --- | --- | --- | --- |
+| 1 | `project_status` | 8 | `hooks_list` |
+| 2 | `skills_list` | 9 | `hook_simulate` |
+| 3 | `skill_inspect` | 10 | `evals_list` |
+| 4 | `artifacts_list` | 11 | `eval_run` |
+| 5 | `artifact_inspect` | 12 | `eval_get` |
+| 6 | `mcp_servers_list` | 13 | `diagnostics_list` |
+| 7 | `mcp_invoke` | | |
+
+`eval_run` 仅限确定性 harness；它无法选择原生宿主。工具 schema 会拒绝未声明的 root、path、command、
+cwd、environment、harness、evidence 与 outcome 字段。以产物为后端的调用可以指名一个 epoch id；否则
+它们会原子地租借当前活跃的 epoch，因此一次热重建会把之后的调用送往新的 epoch，而已被受理的调用仍固定
+在它原本的 epoch 上。传输是无状态的，因此前台服务器恢复之后，已完成初始化的客户端可以在同一个固定 URL
+上继续发起请求。
+
+## 贡献者 UI 的 HMR
+
+开发 Workbench 界面本身，与消费一个已发布的 Workbench 是两个不同的循环。只在前台服务器运行时启动它：
+
+```sh
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
+```
+
+`packages/workbench/scripts/dev.mjs` 要求提供该代理 URL。已发布的 `agent-bundle dev` 提供的是预构建
+资源与项目事件；它不会运行 Rsbuild 开发服务器。
+
+## 下一步
+
+- [测试](./testing.mdx) —— Workbench 所演练表面背后的证明级别。
+- [评测](./evaluations.mdx) —— eval 运行、对比与 Eval 页面。

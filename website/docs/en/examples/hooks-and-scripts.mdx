@@ -1,0 +1,89 @@
+---
+description: 'The Hooks and Scripts example: a session-start hook, two emitted scripts including a blocking exit code, durable Playground traces, and a reversible diagnostic walkthrough.'
+---
+
+# Hooks and Scripts
+
+A credential-free release-preparation session. It proves the two contracts that are easiest to
+get wrong by hand: the generated hook wrapper, and the process envelope the framework puts around
+an authored script.
+
+- **Run from the repository root:** `pnpm example:hooks`
+- **Package:** `@agent-bundle-example/hooks-and-scripts`
+- **Public dependencies:** `agent-bundle` (`workspace:*`)
+- **Targets:** `portable`, `codex`, `claude`
+- **Credentials:** none — the example reads only checked-in JSON under `release/`
+- **Source:** [`examples/hooks-and-scripts`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/hooks-and-scripts)
+
+## What it proves
+
+- **A hook is authored as a handler, not a host document.** `src/hooks/session-start.ts` is one
+  module. The build lowers it into each host's own hook document shape and emits the wrapper that
+  runs it. See [Hooks](../guide/authoring/hooks.mdx).
+- **Both script declaration modes.** `verify-release` ships by convention — any unclaimed plain
+  script under `src/scripts/` is discovered — while `detect-risk` stays explicitly configured
+  because it restricts its targets to `portable`. The example keeps both modes covered on
+  purpose.
+- **The framework owns the process envelope.** Both scripts export `main` and return an exit
+  code. Argv handling, awaiting, and exit-code adoption belong to the generated envelope, so a
+  nonzero return becomes a real blocking exit rather than a swallowed value. See
+  [Scripts and assets](../guide/authoring/scripts-assets.mdx).
+- **Emitted scripts resolve their own assets.** `assets: ['release/*.json']` copies the release
+  manifest and risk register into every target, and each emitted script reads them relative to
+  its own module — never relative to the shell's working directory.
+- **A failed rebuild keeps the last-good artifact.** That is the reversible walkthrough below.
+
+## What is authored
+
+| Path | What it is |
+| --- | --- |
+| `src/hooks/session-start.ts` | The `sessionStart` handler that directs a release session through both checks. |
+| `src/scripts/verify-release.ts` | The manifest-backed packaging check, discovered by convention. |
+| `src/scripts/detect-risk.ts` | The risk-register check, explicitly configured to restrict its targets. |
+| `release/release-manifest.json` | The packaged release manifest, copied as an asset. |
+| `release/risk-register.json` | The risk register the blocking check reads. |
+
+## Working in the Workbench
+
+1. **Overview** relates the authored hook to its emitted artifact, its exercise trace, and its
+   evaluation pages. Its status is the authoritative current-or-stale epoch state.
+2. **Hooks** defaults to the Claude `sessionStart` binding with populated inline canonical JSON,
+   including `"source": "workbench"`. Run the simulation, then use **Replay saved simulation** to
+   rerun exactly that epoch-bound input.
+3. **Playground** defaults to Script execution, the Claude target, and `verify-release`. Run it
+   and wait for the session to be finalized: the emitted script reads the packaged
+   `release/release-manifest.json` beside its own module and reports release 2.4.0 ready for
+   packaging.
+4. Switch the target to portable and select `detect-risk`. It reads `release/risk-register.json`,
+   reports high-severity `REL-204`, exits with code 2, and finalizes a durable blocking trace.
+5. **Logs** filters those producer records by producer, level, kind, or context; open a record to
+   inspect raw details. **Artifacts** is the emitted file and provenance view, while
+   **Comparisons** aligns outcomes only after two recorded eval runs.
+
+## The reversible diagnostic walkthrough
+
+The checked-in project is healthy, so seeing last-good behavior means breaking it on purpose.
+Temporarily replace the body of `src/hooks/session-start.ts` with a syntactically incomplete
+handler, press **Rebuild**, and wait for the completed **Failed** state. The Workbench reports
+the new diagnostic while continuing to serve the last-good artifact. Restore the checked-in
+handler, press **Rebuild** again, and wait for **Idle**: a new active epoch replaces the stale
+state and clears the diagnostic.
+
+Do not read a Building state as a completed repair — the new active epoch is the evidence.
+
+## Noninteractive checks
+
+After the repository-level `pnpm build`:
+
+```sh
+cd examples/hooks-and-scripts
+pnpm validate
+pnpm build
+```
+
+`pnpm check` is the same validation-and-build pair in one command. To exercise the emitted hook
+wrapper without the Workbench, use the CLI's own hook surface:
+
+```sh
+pnpm exec agent-bundle hooks list --artifact artifact
+```

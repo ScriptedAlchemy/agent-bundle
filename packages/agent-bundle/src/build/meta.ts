@@ -1,18 +1,56 @@
+import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { isErrno } from '../core/errors.ts';
+
 import type { AgentBundleMeta } from '../meta.ts';
-import type { NormalizedMetadata } from '../core/types.ts';
 
 /**
- * The reserved namespace (under each build's output root) whose paths
+ * The reserved namespace (directly under the project root) whose paths
  * identify generated module sources — wrapper entries, registry modules, and
  * the project-identity module. Nothing ever writes these paths: they are
- * guaranteed-nonexistent module ids served from memory by Rspack's
- * `experiments.VirtualModulesPlugin`, chosen to be deterministic for
+ * module ids served from memory by Rspack's `experiments.VirtualModulesPlugin`
+ * (each compiler keeps its own virtual file store, so one path may serve
+ * every compiler of a build), chosen to be deterministic for
  * `inspect --bundler` and collision-safe across entries. The namespace stays
  * excluded from authored-source provenance.
+ *
+ * It is rooted at the project root — the bundler `context` — rather than at
+ * the per-build staged output root on purpose: Rspack derives the readable
+ * module identifiers it writes into emitted bundles (the `// NAMESPACE
+ * OBJECT: ./…` comments of concatenated modules) from a module's path
+ * relative to `context`, so a namespace under `.artifact.stage-XXXXXX` would
+ * stamp that per-build token into the artifact and break byte-reproducible
+ * builds. Under the project root the identifier is always
+ * `./.agent-bundle-virtual/<module>.mjs`, whatever the output root.
  */
 export const generatedModulesDirname = '.agent-bundle-virtual';
+
+/** The reserved generated-module namespace of one project. */
+export const generatedModulesRoot = (projectRoot: string): string =>
+  join(projectRoot, generatedModulesDirname);
+
+/**
+ * Refuses to compile while anything occupies the reserved namespace on disk.
+ * The virtual paths are predictable (`meta.mjs`, `<entry>-entry.mjs`, …), so
+ * an authored file at one of them would be shadowed by the generated module
+ * it names — or serve as an authored entry that compiles from generated
+ * source. Reserving the whole directory keeps both impossible, as the
+ * per-build staging root once did.
+ */
+export const assertGeneratedModulesRootAbsent = async (projectRoot: string): Promise<void> => {
+  const root = generatedModulesRoot(projectRoot);
+  try {
+    await lstat(root);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return;
+    throw error;
+  }
+  throw new Error(
+    `${JSON.stringify(generatedModulesDirname)} under the project root ${JSON.stringify(projectRoot)} is reserved for `
+      + 'generated module sources served from memory; remove it before building.',
+  );
+};
 
 /**
  * The reserved specifier every compiled plugin surface resolves to the
@@ -26,15 +64,27 @@ export const metaModuleSpecifier = 'agent-bundle/meta';
 
 /**
  * The generated path serving {@link metaModuleSpecifier}. One build stamps
- * one identity, so every entry under an output root shares one module — the
- * path carries no entry name and never shifts as other generated modules
- * come and go.
+ * one identity, so every entry of a project shares one module — the path
+ * carries no entry name and never shifts as other generated modules come
+ * and go.
  */
-export const generatedMetaModulePath = (outputRoot: string): string =>
-  join(outputRoot, generatedModulesDirname, 'meta.mjs');
+export const generatedMetaModulePath = (projectRoot: string): string =>
+  join(generatedModulesRoot(projectRoot), 'meta.mjs');
+
+/**
+ * The identity axes {@link projectMeta} reads. Normalized project metadata
+ * satisfies it directly, and so does the test manifest's plugin identity, so
+ * the build and the Rstest presets stamp one identity through one function.
+ */
+export interface ProjectMetaSource {
+  readonly name: string;
+  readonly packageName?: string | undefined;
+  readonly packageVersion?: string | undefined;
+  readonly version: string;
+}
 
 /** The exact identity a build stamps into every compiled surface. */
-export const projectMeta = (metadata: NormalizedMetadata): AgentBundleMeta => Object.freeze({
+export const projectMeta = (metadata: ProjectMetaSource): AgentBundleMeta => Object.freeze({
   name: metadata.name,
   packageName: metadata.packageName,
   packageVersion: metadata.packageVersion,
@@ -59,3 +109,36 @@ export const generatedMetaModuleSource = (meta: AgentBundleMeta): string => [
   'export default meta;',
   '',
 ].join('\n');
+
+/** The shape both Rspack engines expose the experimental virtual-module surface through. */
+interface VirtualModulesEngine {
+  readonly experiments?: { readonly VirtualModulesPlugin?: unknown };
+}
+
+/**
+ * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
+ * of throwaway files on disk — an accepted design decision: the experimental
+ * surface is the cost of never touching the artifact tree with build-time
+ * scratch files. This narrow feature check turns an upstream rename or
+ * removal into an actionable diagnostic instead of an opaque resolution
+ * failure deep inside a build. Rsbuild and Rslib carry independent Rspack
+ * copies (the dual-engine reality documented on `AgentBundleToolsConfig`),
+ * so each build path checks its own `rspack` and names its own package.
+ */
+export const virtualModulesPluginConstructor = <Engine extends VirtualModulesEngine>(
+  rspack: Engine,
+  /** The package whose nested Rspack is checked, as the consumer pins it. */
+  packageName: string,
+  /** What agent-bundle serves through the plugin on this path, completing "uses to …". */
+  purpose: string,
+): NonNullable<NonNullable<Engine['experiments']>['VirtualModulesPlugin']> => {
+  const constructor = rspack.experiments?.VirtualModulesPlugin;
+  if (typeof constructor !== 'function') {
+    throw new Error(
+      `The Rspack engine nested in ${packageName} no longer exposes experiments.VirtualModulesPlugin, `
+        + `which agent-bundle uses to ${purpose}. `
+        + `Pin ${packageName} to a version whose Rspack ships the plugin, or update agent-bundle.`,
+    );
+  }
+  return constructor as NonNullable<NonNullable<Engine['experiments']>['VirtualModulesPlugin']>;
+};

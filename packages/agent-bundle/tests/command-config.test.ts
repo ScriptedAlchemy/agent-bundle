@@ -177,6 +177,54 @@ it('discovers flat non-ignored commands deterministically and omits the collecti
   });
 });
 
+it('enforces command feature sets: explicit Cursor targets fail closed, implicit ones omit with the host reason (#100)', async () => {
+  await withProject(async (root) => {
+    const registry = createDefaultRegistry();
+    const command = (authoredTargets?: readonly string[]): CommandDocument => ({
+      ...(authoredTargets === undefined ? {} : { authoredTargets }),
+      body: '# Deploy\n',
+      diagnostics: [],
+      frontmatter: { argumentHint: '<env>', description: 'Deploy the service' },
+      markdown: '---\nargumentHint: <env>\ndescription: Deploy the service\n---\n# Deploy\n',
+      source: join(root, 'src', 'commands', 'deploy.md'),
+    });
+
+    // Cursor's documented commands surface is frontmatter-free: every field
+    // row is unavailable, so an author-required Cursor target fails closed.
+    const explicit = validateSource(loadedProject(root, ['claude', 'cursor']), { commands: [command(['cursor'])], skills: [] }, registry);
+    expect(explicit).toEqual([
+      expect.objectContaining({
+        code: 'AB4927',
+        message: expect.stringMatching(/uses argumentHint and explicitly targets "cursor", whose commands\.argumentHint capability is unavailable: .*frontmatter-free/u),
+        recovery: expect.stringContaining('Remove argumentHint'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+      expect.objectContaining({ code: 'AB4927', message: expect.stringContaining('uses description'), severity: 'error', target: 'cursor' }),
+    ]);
+
+    // Implicit selection ships the command everywhere the kind is supported and
+    // records each omitted feature per host as a warning; Claude expresses both.
+    const implicit = validateSource(loadedProject(root, ['claude', 'cursor', 'codex']), { commands: [command()], skills: [] }, registry);
+    expect(implicit).toEqual([
+      expect.objectContaining({
+        code: 'AB4928',
+        message: expect.stringMatching(/^Command "deploy" uses argumentHint, which cursor omits \(commands\.argumentHint unavailable\): /u),
+        recovery: expect.stringContaining('Accept the omission'),
+        severity: 'warning',
+        target: 'cursor',
+      }),
+      expect.objectContaining({ code: 'AB4928', message: expect.stringContaining('uses description, which cursor omits'), severity: 'warning', target: 'cursor' }),
+    ]);
+    expect(implicit.some((diagnostic) => diagnostic.target === 'claude' || diagnostic.target === 'codex')).toBe(false);
+
+    // A Claude-only command uses only features Claude documents: silence.
+    expect(validateSource(loadedProject(root, ['claude']), { commands: [command()], skills: [] }, registry)).toEqual([]);
+    // The composite emits Claude-format commands, so its feature rows follow the Claude half.
+    expect(validateSource(loadedProject(root, ['plugin']), { commands: [command()], skills: [] }, registry)).toEqual([]);
+  });
+});
+
 it('normalizes peeled targets and reports unknown, unavailable, and duplicate commands', async () => {
   await withProject(async (root) => {
     const command = (

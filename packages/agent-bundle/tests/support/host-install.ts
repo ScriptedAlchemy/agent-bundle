@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -11,6 +11,7 @@ import { parse as parseYaml } from 'yaml';
 
 import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
 import portablePluginSchema from '../../src/adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
+import { codexArtifactPaths, codexInterfaceFields, codexPluginDocumentValidator } from '../../src/adapters/codex.ts';
 import {
   cursorHooksValidator,
   cursorMcpValidator,
@@ -35,11 +36,14 @@ import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-in
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
+import { runDoctor } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
+import { readInstallReceipt } from '../../src/install/receipt.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
 } from './packed-native-smoke.ts';
+import { diffTreeSnapshots, snapshotTree, treesIdentical } from './tree-snapshot.ts';
 import { replaceWatchedSource } from './watched-files.ts';
 
 const execFile = promisify(executeFile);
@@ -63,7 +67,32 @@ const portableMcpSchemaIdentifier =
 const portablePluginSchemaIdentifier =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const skillSidecarPath = join('skills', 'probe', 'agents', 'openai.yaml');
+const codexManifestPath = codexArtifactPaths.plugin;
+const validateCodexPluginManifest = codexPluginDocumentValidator(codexArtifactPaths.mcp);
 const portableSchemaValidator = createAdapterValidator();
+
+/**
+ * The `interface` fields the host-install fixture is pinned to emit for Codex,
+ * shared by the source-built and packed-tarball proofs so an emission change
+ * is re-pinned in exactly one place (#364 changed `logo` and only the proof a
+ * lane happened to run locally caught it; #367 repaired the second copy).
+ *
+ * The proof also checks the installed set against the adapter's own declared
+ * `codexInterfaceFields`, so an undeclared field fails before this snapshot
+ * does, and against the built artifact, so install fidelity and emission are
+ * reported separately.
+ */
+export const expectedCodexInterfaceFields = Object.freeze([
+  'capabilities',
+  'category',
+  'defaultPrompt',
+  'developerName',
+  'displayName',
+  // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
+  'logo',
+  'longDescription',
+  'shortDescription',
+]);
 const portableMcpValidator = portableSchemaValidator.compile(portableMcpSchema);
 const portablePluginValidator = portableSchemaValidator.compile(portablePluginSchema);
 
@@ -94,10 +123,12 @@ interface CommandResult {
 
 interface InstallResult {
   readonly bundleRoot?: unknown;
+  readonly contentHash?: unknown;
   readonly destination?: unknown;
   readonly host?: unknown;
   readonly marketplace?: unknown;
   readonly plugin?: unknown;
+  readonly previousContentHash?: unknown;
   readonly state?: unknown;
   readonly version?: unknown;
 }
@@ -118,7 +149,8 @@ export interface BuiltFixtureProject {
 }
 
 export interface BuiltHostInstallFixture extends BuiltFixtureProject {
-  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor', string>>;
+  /** Per-host bundles plus the unified `plugin` bundle (one root, three host manifests). */
+  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor' | 'plugin', string>>;
 }
 
 export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
@@ -166,9 +198,16 @@ interface HostInstallProofOptions {
   readonly installCommand?: HostInstallCommand;
 }
 
+/** The same-version rebuild round trip every host proof performs after its first install. */
+export type SameVersionRebuildProof = 'replaced';
+
 export interface ClaudeHostInstallReport {
   readonly host: 'claude';
-  readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
+  readonly install: {
+    readonly sameVersionRebuild: SameVersionRebuildProof;
+    readonly state: 'installed';
+    readonly version: '1.0.0';
+  };
   readonly inventory: { readonly hooks: 1; readonly mcpServers: 1; readonly skills: 1 };
   readonly proofLevel: string;
   readonly registration: {
@@ -185,11 +224,18 @@ export interface ClaudeHostInstallReport {
 
 export interface CodexHostInstallReport {
   readonly host: 'codex';
-  readonly install: { readonly state: 'installed'; readonly version: '1.0.0' };
+  readonly install: {
+    readonly sameVersionRebuild: SameVersionRebuildProof;
+    readonly state: 'installed';
+    readonly version: '1.0.0';
+  };
   readonly manifest: {
     readonly interfaceCapabilities: readonly string[];
+    /** Sorted installed `interface` keys; every one is in the adapter's declared `codexInterfaceFields`. */
     readonly interfaceFields: readonly string[];
+    readonly matchesBuiltArtifact: true;
     readonly path: string;
+    readonly schema: 'schema-valid';
   };
   readonly proofLevel: string;
   readonly registration: {
@@ -214,11 +260,27 @@ export interface CursorHostInstallReport {
     readonly mcp: 'schema-valid';
     readonly plugin: 'schema-valid';
   };
+  /** Doctor's read-only registration proof for the installed plugin's manifest hooks (#407). */
+  readonly hooksRegistration: {
+    readonly events: readonly string[];
+    readonly state: 'registered';
+    readonly userHooksJson: 'absent';
+  };
   readonly host: 'cursor';
   readonly install: {
     readonly first: 'installed';
+    readonly sameVersionRebuild: SameVersionRebuildProof;
     readonly second: 'already-installed';
     readonly version: '1.0.0';
+  };
+  /** The emitted `install.mjs --mode marketplace` staging proof in the same isolated home (#407). */
+  readonly marketplace: {
+    readonly commit: 'git-sha';
+    readonly first: 'staged';
+    readonly imported: false;
+    readonly manifest: 'marketplace.json lists the plugin';
+    readonly repository: string;
+    readonly second: 'already-staged';
   };
   readonly logo: {
     readonly path: string;
@@ -233,6 +295,17 @@ export interface CursorHostInstallReport {
   readonly proofLevel: string;
   readonly skill: string;
   readonly status: 'passed';
+  /**
+   * The unified `plugin` bundle installed as a Cursor local plugin in its own isolated home: Doctor's
+   * static validation must follow the manifest to `hooks/hooks-cursor.json` and report zero
+   * AB7320/AB6027 findings even though a Claude-format `hooks/hooks.json` sits beside it (#438).
+   */
+  readonly unifiedBundle: {
+    readonly hooksDocument: 'hooks/hooks-cursor.json';
+    readonly hooksRegistration: 'registered';
+    readonly install: 'installed';
+    readonly staticFindings: { readonly AB6027: 0; readonly AB7320: 0 };
+  };
 }
 
 export interface PortableHostInstallReport {
@@ -247,15 +320,27 @@ export interface PortableHostInstallReport {
   readonly host: 'cursor';
   readonly install: {
     readonly first: 'installed';
+    readonly sameVersionRebuild: SameVersionRebuildProof;
     readonly second: 'already-installed';
     readonly version: '1.0.0';
   };
   readonly manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config';
+  /**
+   * The bundle's `mcp.json` is the spec-conformant document (`locations`,
+   * `reservedEnvKeys` describe it); the Cursor copy is its install-time
+   * expansion, since Cursor 3.18.25 expands no Agent Plugins placeholder (#426).
+   */
   readonly pluginVariables: {
     readonly allowedLocations: 'args/env values/cwd only';
+    readonly cursorExpansion: {
+      readonly doctor: 'AB7326 expanded';
+      readonly installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left';
+      readonly pluginData: string;
+      readonly receipt: 'cursorExpansion records the bundle mcp.json verbatim';
+    };
     readonly locations: readonly string[];
     readonly reservedEnvKeys: 'absent';
-    readonly resolvedAtInstall: false;
+    readonly resolvedAtInstall: true;
     readonly sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface';
   };
   readonly proofLevel: string;
@@ -347,25 +432,30 @@ const runNodeCli = (
   { ...options, timeout: 180_000 },
 );
 
-const runInstallCommand = (
+/** Runs `install` or `uninstall` through the source-built CLI (`--from <bundle>`) or the packed package bin. */
+const runLifecycleCommand = (
   fixture: BuiltHostInstallFixture,
+  verb: 'install' | 'uninstall',
   host: 'claude' | 'codex' | 'cursor',
   bundle: string,
   options: HostInstallProofOptions,
+  extraArguments: readonly string[] = [],
 ): Promise<CommandResult> => {
   if (options.installCommand === undefined) {
     return runNodeCli(fixture, [
-      'install',
+      verb,
       host,
       '--from',
       bundle,
+      ...extraArguments,
       '--json',
     ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
   }
   return run(options.installCommand.executable, [
     ...(options.installCommand.prefixArguments ?? []),
-    'install',
+    verb,
     host,
+    ...extraArguments,
     '--json',
   ], {
     cwd: options.installCommand.cwd ?? bundle,
@@ -373,6 +463,13 @@ const runInstallCommand = (
     timeout: 180_000,
   });
 };
+
+const runInstallCommand = (
+  fixture: BuiltHostInstallFixture,
+  host: 'claude' | 'codex' | 'cursor',
+  bundle: string,
+  options: HostInstallProofOptions,
+): Promise<CommandResult> => runLifecycleCommand(fixture, 'install', host, bundle, options);
 
 const parseJson = <T>(text: string, context: string): T => {
   try {
@@ -406,12 +503,18 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const normalizedRelative = (root: string, path: string): string =>
   relative(root, path).split(sep).join('/');
 
+/**
+ * Isolates a scenario's home. `os.homedir()` follows `HOME` on POSIX but
+ * `USERPROFILE` on Windows, so an isolated `HOME` alone would leave a Windows
+ * developer's real `~/.cursor/plugins/local` as the install destination.
+ */
 const isolatedEnvironment = (
   environment: Readonly<NodeJS.ProcessEnv>,
   values: Readonly<NodeJS.ProcessEnv>,
 ): NodeJS.ProcessEnv => ({
   ...packedNativeEnvironment(environment),
   ...values,
+  ...(values.HOME === undefined ? {} : { USERPROFILE: values.HOME }),
 });
 
 const stringEnvironment = (
@@ -423,14 +526,52 @@ const stringEnvironment = (
 const assertInstallResult = (
   document: InstallResult,
   host: 'claude' | 'codex' | 'cursor',
-  state: 'already-installed' | 'installed',
+  state: 'already-installed' | 'installed' | 'replaced',
 ): void => {
   assertProof(document.host === host, `${host} install result did not identify the host.`);
   assertProof(document.plugin === plugin, `${host} install result did not identify ${plugin}.`);
   assertProof(document.version === version, `${host} install result did not identify version ${version}.`);
   assertProof(document.state === state, `${host} install result state was not ${state}.`);
+  assertProof(
+    typeof document.contentHash === 'string' && /^[0-9a-f]{64}$/u.test(document.contentHash),
+    `${host} install result carried no artifact content hash.`,
+  );
   if (host !== 'cursor') {
     assertProof(document.marketplace === marketplace, `${host} install result did not identify ${marketplace}.`);
+  }
+};
+
+const sameVersionRebuildMarker = 'REBUILD-SAME-VERSION.md';
+
+/**
+ * Same-version rebuild against the real host: one file is added to the built
+ * bundle (content changes, `version` does not), the installer runs again and
+ * must report `replaced`, the host's cached copy must carry the new file, and
+ * a third run must be the `already-installed` no-op. The marker is removed
+ * afterwards so the shared built fixture is unchanged for later proofs.
+ */
+const proveSameVersionRebuild = async (options: {
+  readonly bundle: string;
+  readonly host: 'claude' | 'codex' | 'cursor';
+  readonly install: () => Promise<InstallResult>;
+  readonly installedRoot: string;
+}): Promise<SameVersionRebuildProof> => {
+  const marker = join(options.bundle, sameVersionRebuildMarker);
+  await writeFile(marker, '# same-version rebuild\n');
+  try {
+    const replaced = await options.install();
+    assertInstallResult(replaced, options.host, 'replaced');
+    assertProof(
+      typeof replaced.previousContentHash === 'string' && replaced.previousContentHash !== replaced.contentHash,
+      `${options.host} replace did not report the superseded content hash.`,
+    );
+    await access(join(options.installedRoot, sameVersionRebuildMarker)).catch(() =>
+      fail(`${options.host} installed copy was not refreshed by the same-version rebuild.`));
+    const again = await options.install();
+    assertInstallResult(again, options.host, 'already-installed');
+    return 'replaced';
+  } finally {
+    await rm(marker, { force: true });
   }
 };
 
@@ -481,7 +622,7 @@ export const buildHostInstallFixture = async (options: {
 }): Promise<BuiltHostInstallFixture> => {
   const built = await buildFixtureProject({
     ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
-    bundleNames: ['claude', 'codex', 'cursor'],
+    bundleNames: ['claude', 'codex', 'cursor', 'plugin'],
     environment: options.environment,
     fixture: 'host-install',
     ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
@@ -492,6 +633,7 @@ export const buildHostInstallFixture = async (options: {
       claude: join(built.artifactRoot, 'claude'),
       codex: join(built.artifactRoot, 'codex'),
       cursor: join(built.artifactRoot, 'cursor'),
+      plugin: join(built.artifactRoot, 'plugin'),
     }),
   });
 };
@@ -831,9 +973,19 @@ export const runClaudeHostInstallProof = async (
 
     const skillPath = join(expectedInstallPath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Claude cache did not contain skills/probe/SKILL.md.'));
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.claude,
+      host: 'claude',
+      install: async () => {
+        const result = await runInstallCommand(fixture, 'claude', fixture.bundles.claude, { ...options, environment });
+        assertProof(result.exitCode === 0, `Claude same-version reinstall failed: ${commandDetail(result)}`);
+        return parseJson<InstallResult>(result.stdout, 'Claude reinstall');
+      },
+      installedRoot: expectedInstallPath,
+    });
     return Object.freeze({
       host: 'claude',
-      install: Object.freeze({ state: 'installed', version }),
+      install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
       inventory: Object.freeze({ hooks: 1, mcpServers: 1, skills: 1 }),
       proofLevel,
       registration: Object.freeze({
@@ -905,11 +1057,32 @@ export const runCodexHostInstallProof = async (
     );
     const sidecarSections = Object.keys(sidecar).sort();
 
-    const manifestPath = join(cachePath, '.codex-plugin', 'plugin.json');
-    const manifest = record(await readJson(manifestPath, 'Codex installed plugin manifest'));
+    const manifestPath = join(cachePath, codexManifestPath);
+    const installedManifestText = await readText(manifestPath, 'Codex installed plugin manifest');
+    const builtManifestText = await readText(
+      join(fixture.bundles.codex, codexManifestPath),
+      'Codex built plugin manifest',
+    );
+    assertProof(
+      installedManifestText === builtManifestText,
+      `Codex install did not copy ${codexManifestPath} byte-identically from the built bundle.`,
+    );
+    const manifestDocument = parseJson<unknown>(installedManifestText, 'Codex installed plugin manifest');
+    const manifest = record(manifestDocument);
     assertProof(manifest !== undefined, 'Codex installed plugin manifest was not a JSON object.');
+    const manifestIssues = validateCodexPluginManifest(manifestDocument);
+    assertProof(
+      manifestIssues.length === 0,
+      `Codex installed plugin manifest failed its pinned schema: ${JSON.stringify(manifestIssues)}`,
+    );
     const manifestInterface = record(manifest.interface);
     assertProof(manifestInterface !== undefined, 'Codex installed plugin manifest carried no interface block.');
+    const interfaceFields = Object.keys(manifestInterface).sort();
+    const undeclaredFields = interfaceFields.filter((field) => !codexInterfaceFields.includes(field));
+    assertProof(
+      undeclaredFields.length === 0,
+      `Codex installed plugin manifest interface carried fields the adapter does not declare: ${undeclaredFields.join(', ')}.`,
+    );
     assertProof(
       manifestInterface.displayName === plugin,
       'Codex installed plugin manifest interface did not carry the plugin display name.',
@@ -926,14 +1099,26 @@ export const runCodexHostInstallProof = async (
         `Codex installed plugin manifest interface did not advertise ${capability}.`,
       );
     }
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.codex,
+      host: 'codex',
+      install: async () => {
+        const result = await runInstallCommand(fixture, 'codex', fixture.bundles.codex, { ...options, environment });
+        assertProof(result.exitCode === 0, `Codex same-version reinstall failed: ${commandDetail(result)}`);
+        return parseJson<InstallResult>(result.stdout, 'Codex reinstall');
+      },
+      installedRoot: cachePath,
+    });
 
     return Object.freeze({
       host: 'codex',
-      install: Object.freeze({ state: 'installed', version }),
+      install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
       manifest: Object.freeze({
         interfaceCapabilities: Object.freeze(interfaceCapabilities),
-        interfaceFields: Object.freeze(Object.keys(manifestInterface).sort()),
+        interfaceFields: Object.freeze(interfaceFields),
+        matchesBuiltArtifact: true,
         path: normalizedRelative(cachePath, manifestPath),
+        schema: 'schema-valid',
       }),
       proofLevel,
       registration: Object.freeze({
@@ -1004,6 +1189,162 @@ const assertCursorPluginRootVariable = (input: {
   ]);
 };
 
+const assertCursorHooksRegistration = async (
+  home: string,
+  destination: string,
+): Promise<CursorHostInstallReport['hooksRegistration']> => {
+  await access(join(home, '.cursor', 'hooks.json')).then(
+    () => fail('Cursor install must not create ~/.cursor/hooks.json; plugin hooks are manifest-registered.'),
+    () => undefined,
+  );
+  const report = await runDoctor({ home, hosts: ['cursor'] });
+  const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+  const finding = cursor?.inventory.findings.find((entry) => entry.path === destination);
+  assertProof(finding !== undefined, 'Doctor did not inventory the installed Cursor plugin.');
+  assertProof(finding.hooks?.state === 'registered', `Doctor reported hooks ${JSON.stringify(finding.hooks)} instead of registered.`);
+  assertProof(finding.hooks.events.includes('sessionStart'), 'Doctor did not see the emitted sessionStart hook registration.');
+  assertProof(finding.hooks.duplicates.length === 0, 'Doctor reported duplicate user-level hook delivery.');
+  const proof = report.diagnostics.filter((entry) => entry.code === 'AB7322');
+  assertProof(
+    proof.length === 1 && proof[0]?.severity === 'info' && proof[0].message.includes('plugin-scoped hooks'),
+    `Doctor did not report AB7322 hook registration proof: ${JSON.stringify(proof)}`,
+  );
+  return Object.freeze({ events: finding.hooks.events, state: 'registered', userHooksJson: 'absent' });
+};
+
+const assertCursorMarketplaceStaging = async (
+  fixture: BuiltHostInstallFixture,
+  home: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<CursorHostInstallReport['marketplace']> => {
+  const installer = join(fixture.bundles.cursor, 'install.mjs');
+  const repository = join(home, '.cursor', 'agent-bundle', 'marketplaces', plugin);
+  const stage = async (expected: 'Already staged' | 'Staged'): Promise<string> => {
+    const result = await run(process.execPath, [installer, '--mode', 'marketplace'], {
+      cwd: fixture.bundles.cursor,
+      environment,
+    });
+    assertProof(result.exitCode === 0, `Cursor emitted installer (marketplace mode) failed: ${commandDetail(result)}`);
+    const [summary, marketplaceLine] = result.stdout.split('\n');
+    assertProof(
+      summary?.startsWith(`${expected} ${plugin}@${version} for cursor (marketplace mode) at ${repository}`) === true,
+      `Cursor emitted installer did not report ${expected.toLowerCase()}: ${JSON.stringify(summary)}`,
+    );
+    const commit = /@ ([0-9a-f]{40})$/u.exec(marketplaceLine ?? '')?.[1];
+    assertProof(commit !== undefined, `Cursor emitted installer did not print the marketplace commit: ${JSON.stringify(marketplaceLine)}`);
+    assertProof(
+      result.stdout.includes('Add Plugins from Local Repository') && result.stdout.includes(repository),
+      'Cursor emitted installer did not print the Customize import step.',
+    );
+    return commit;
+  };
+  const first = await stage('Staged');
+  const manifest = record(await readJson(join(repository, '.cursor-plugin', 'marketplace.json'), 'staged marketplace manifest'));
+  const plugins = manifest?.plugins;
+  assertProof(
+    manifest?.name === `${plugin}-marketplace` &&
+      Array.isArray(plugins) &&
+      record(plugins[0])?.name === plugin &&
+      record(plugins[0])?.source === `plugins/${plugin}` &&
+      Object.keys(record(plugins[0]) ?? {}).every((key) => ['description', 'minClientVersions', 'name', 'source'].includes(key)),
+    `Staged marketplace manifest did not list the plugin with pinned-schema entry fields only: ${JSON.stringify(manifest)}`,
+  );
+  const stagedPlugin = record(
+    await readJson(join(repository, 'plugins', plugin, '.cursor-plugin', 'plugin.json'), 'staged plugin manifest')
+      .catch(() => fail('Staged marketplace repository did not contain the plugin copy.')),
+  );
+  assertProof(
+    stagedPlugin?.name === plugin && stagedPlugin.version === version,
+    `Staged plugin copy did not carry the plugin version: ${JSON.stringify(stagedPlugin)}`,
+  );
+  await access(join(repository, '.git', 'HEAD')).catch(() => fail('Staged marketplace repository is not a git repository.'));
+  const second = await stage('Already staged');
+  assertProof(first === second, 'Re-running marketplace staging changed the commit.');
+
+  const report = await runDoctor({ from: fixture.bundles.cursor, home, hosts: ['cursor'] });
+  const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+  const staged = cursor?.inventory.findings.find((entry) => entry.path === repository);
+  assertProof(
+    staged?.state === 'unregistered' && staged.commit === first && staged.marketplace === `${plugin}-marketplace`,
+    `Doctor did not report the staged marketplace as awaiting import: ${JSON.stringify(staged)}`,
+  );
+  const pending = report.diagnostics.filter((entry) => entry.code === 'AB7324');
+  assertProof(
+    pending.length > 0 && pending.every((entry) => entry.severity === 'warning' && entry.recovery?.includes('Add Plugins from Local Repository') === true),
+    `Doctor did not report AB7324 import guidance: ${JSON.stringify(pending)}`,
+  );
+  return Object.freeze({
+    commit: 'git-sha',
+    first: 'staged',
+    imported: false,
+    manifest: 'marketplace.json lists the plugin',
+    repository: normalizedRelative(home, repository),
+    second: 'already-staged',
+  });
+};
+
+/**
+ * Installs the unified `plugin` bundle as a Cursor local plugin in a fresh isolated home and asks Doctor
+ * for the static and registration verdicts. The bundle carries both `hooks/hooks.json` (Claude/Codex
+ * format) and `hooks/hooks-cursor.json` (Cursor format, named by `.cursor-plugin/plugin.json`), so a
+ * validator that ignored the manifest would report AB7320/AB6027 against a byte-for-byte install (#438).
+ */
+const assertUnifiedBundleCursorInstall = async (
+  fixture: BuiltHostInstallFixture,
+  options: HostInstallProofOptions,
+): Promise<CursorHostInstallReport['unifiedBundle']> => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-install-cursor-unified-'));
+  try {
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.bundles.plugin, '--json'], {
+      cwd: fixture.bundles.plugin,
+      environment,
+    });
+    assertProof(result.exitCode === 0, `Unified bundle Cursor install failed: ${commandDetail(result)}`);
+    const installed = parseJson<InstallResult>(result.stdout, 'unified bundle Cursor install');
+    assertInstallResult(installed, 'cursor', 'installed');
+    const destination = join(home, '.cursor', 'plugins', 'local', plugin);
+    assertProof(installed.destination === destination, 'Unified bundle Cursor install did not report the isolated destination.');
+
+    const manifest = record(await readJson(join(destination, '.cursor-plugin', 'plugin.json'), 'unified bundle Cursor manifest'));
+    assertProof(
+      manifest?.hooks === './hooks/hooks-cursor.json',
+      `Unified bundle Cursor manifest did not name hooks/hooks-cursor.json: ${JSON.stringify(manifest?.hooks)}`,
+    );
+    await access(join(destination, 'hooks', 'hooks.json')).catch(() => fail('Unified bundle install lacks the Claude/Codex hooks/hooks.json.'));
+    const cursorHooks = parseJson<unknown>(
+      await readText(join(destination, 'hooks', 'hooks-cursor.json'), 'unified bundle Cursor hooks document'),
+      'unified bundle Cursor hooks document',
+    );
+    assertProof(cursorHooksValidator(cursorHooks), `Unified bundle Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
+
+    const report = await runDoctor({ home, hosts: ['cursor'] });
+    const staticFindings = report.diagnostics.filter((entry) => entry.code === 'AB7320');
+    const schemaFindings = report.diagnostics.filter((entry) => entry.message.includes('AB6027'));
+    assertProof(
+      staticFindings.length === 0 && schemaFindings.length === 0,
+      `Doctor reported static findings against a byte-for-byte unified bundle install: ${JSON.stringify([...staticFindings, ...schemaFindings])}`,
+    );
+    const cursor = report.hosts.find((entry) => entry.host === 'cursor');
+    const finding = cursor?.inventory.findings.find((entry) => entry.path === destination);
+    assertProof(finding?.state === 'installed', `Doctor reported the unified bundle install as ${JSON.stringify(finding?.state)} instead of installed.`);
+    assertProof(
+      finding.hooks?.state === 'registered' && finding.hooks.source === join(destination, 'hooks', 'hooks-cursor.json'),
+      `Doctor did not register hooks from hooks/hooks-cursor.json: ${JSON.stringify(finding.hooks)}`,
+    );
+    assertProof(finding.hooks.events.includes('sessionStart'), 'Doctor did not see the unified bundle sessionStart hook registration.');
+    return Object.freeze({
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: Object.freeze({ AB6027: 0, AB7320: 0 }),
+    });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
+};
+
 export const runCursorHostInstallProof = async (
   fixture: BuiltHostInstallFixture,
   options: HostInstallProofOptions,
@@ -1056,6 +1397,16 @@ export const runCursorHostInstallProof = async (
     const second = await install();
     assertInstallResult(second, 'cursor', 'already-installed');
     assertProof(second.destination === destination, 'Cursor idempotent install reported a different destination.');
+    const sameVersionRebuild = await proveSameVersionRebuild({
+      bundle: fixture.bundles.cursor,
+      host: 'cursor',
+      install,
+      installedRoot: destination,
+    });
+
+    const hooksRegistration = await assertCursorHooksRegistration(home, destination);
+    const marketplace = await assertCursorMarketplaceStaging(fixture, home, environment);
+    const unifiedBundle = await assertUnifiedBundleCursorInstall(fixture, options);
 
     return Object.freeze({
       destination: normalizedRelative(home, destination),
@@ -1064,12 +1415,15 @@ export const runCursorHostInstallProof = async (
         mcp: 'schema-valid',
         plugin: 'schema-valid',
       }),
+      hooksRegistration,
       host: 'cursor',
       install: Object.freeze({
         first: 'installed',
+        sameVersionRebuild,
         second: 'already-installed',
         version,
       }),
+      marketplace,
       logo: Object.freeze({
         path: logo,
         resolvesInsideDeployTree: true as const,
@@ -1083,6 +1437,7 @@ export const runCursorHostInstallProof = async (
       proofLevel,
       skill: normalizedRelative(home, skillPath),
       status: 'passed',
+      unifiedBundle,
     });
   } finally {
     await rm(home, { force: true, recursive: true });
@@ -1098,7 +1453,7 @@ export const runPortableHostInstallProof = async (
     await mkdir(join(home, '.cursor'), { recursive: true });
     const environment = isolatedEnvironment(options.environment, { HOME: home });
     const installer = join(fixture.portableBundle, 'install.mjs');
-    const install = async (state: 'Already installed' | 'Installed'): Promise<void> => {
+    const install = async (state: 'Already installed' | 'Installed' | 'Replaced'): Promise<void> => {
       const result = await run(process.execPath, [installer], {
         cwd: fixture.portableBundle,
         environment,
@@ -1115,6 +1470,7 @@ export const runPortableHostInstallProof = async (
 
     await install('Installed');
     const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
+    const pluginData = join(home, '.cursor', 'agent-bundle', 'plugin-data', portablePlugin);
     const pluginDocument = await readJson(
       join(destination, 'plugin.json'),
       'Portable installed plugin manifest',
@@ -1123,14 +1479,56 @@ export const runPortableHostInstallProof = async (
       portablePluginValidator(pluginDocument),
       `Portable plugin manifest failed its pinned schema: ${JSON.stringify(portablePluginValidator.errors)}`,
     );
-    const mcpDocument = await readJson(
-      join(destination, 'mcp.json'),
-      'Portable installed MCP document',
-    );
+    // The bundle's mcp.json is the spec-conformant document; the Cursor copy is its install-time expansion
+    // (Cursor 3.18.25 expands no Agent Plugins placeholder itself), recorded verbatim in the receipt.
+    const bundleMcpText = await readFile(join(fixture.portableBundle, 'mcp.json'), 'utf8');
+    const mcpDocument = JSON.parse(bundleMcpText) as unknown;
     assertProof(
       portableMcpValidator(mcpDocument),
       `Portable MCP document failed its pinned schema: ${JSON.stringify(portableMcpValidator.errors)}`,
     );
+    const receipt = await readInstallReceipt(destination);
+    assertProof(receipt !== undefined, 'Portable emitted installer wrote no receipt.');
+    assertProof(
+      receipt.cursorExpansion !== undefined &&
+        receipt.cursorExpansion.pluginRoot === destination &&
+        receipt.cursorExpansion.pluginData === pluginData &&
+        receipt.cursorExpansion.documents['mcp.json'] === bundleMcpText,
+      `Portable receipt did not record the Cursor expansion of the bundle mcp.json: ${JSON.stringify(receipt.cursorExpansion)}`,
+    );
+    const pluginDataMetadata = await lstat(pluginData).catch(() => fail('Portable installer did not create the PLUGIN_DATA directory.'));
+    assertProof(pluginDataMetadata.isDirectory(), 'Portable PLUGIN_DATA is not a directory.');
+    const installedMcp = record(await readJson(join(destination, 'mcp.json'), 'Portable installed MCP document'));
+    assertProof(installedMcp !== undefined, 'Portable installed MCP document was not a JSON object.');
+    const installedServers = record(installedMcp.mcpServers);
+    assertProof(installedServers !== undefined, 'Portable installed MCP document had no server map.');
+    let expandedStdioServers = 0;
+    for (const [serverName, serverValue] of Object.entries(installedServers)) {
+      const server = record(serverValue);
+      assertProof(server !== undefined, `Portable installed MCP server ${serverName} was not an object.`);
+      if (server.type !== 'stdio') continue;
+      expandedStdioServers += 1;
+      const text = JSON.stringify(server);
+      assertProof(
+        !text.includes(portablePluginRootVariable) && !text.includes(portablePluginDataVariable),
+        `Portable installed MCP server ${serverName} still carries an Agent Plugins placeholder Cursor would not expand.`,
+      );
+      assertProof(server.cwd === destination, `Portable installed MCP server ${serverName} cwd is not the plugin root.`);
+      const environment = record(server.env);
+      assertProof(
+        environment?.PLUGIN_ROOT === destination && environment.PLUGIN_DATA === pluginData,
+        `Portable installed MCP server ${serverName} lacks the expanded PLUGIN_ROOT/PLUGIN_DATA variables.`,
+      );
+      assertProof(
+        environment.AGENT_BUNDLE_PLUGIN_ROOT === destination,
+        `Portable installed MCP server ${serverName} AGENT_BUNDLE_PLUGIN_ROOT was not expanded to the plugin root.`,
+      );
+      for (const argument of Array.isArray(server.args) ? server.args : []) {
+        if (typeof argument !== 'string' || !argument.startsWith(`${destination}${sep}`)) continue;
+        await access(argument).catch(() => fail(`Portable installed MCP server ${serverName} argument ${argument} does not exist.`));
+      }
+    }
+    assertProof(expandedStdioServers > 0, 'Portable fixture emitted no stdio server to expand.');
 
     const pluginManifest = record(pluginDocument);
     const mcpManifest = record(mcpDocument);
@@ -1249,13 +1647,48 @@ export const runPortableHostInstallProof = async (
       );
     }
 
-    const contractDiagnostics = await validatePortablePluginFiles({ pluginDirectory: destination, target: 'portable' });
+    // The byte lane validates the shipped document (the receipt copy), exactly as Doctor does for an expanded install.
+    const contractDiagnostics = await validatePortablePluginFiles({
+      documents: { 'mcp.json': bundleMcpText },
+      pluginDirectory: destination,
+      target: 'portable',
+    });
     assertProof(
       contractDiagnostics.length === 0,
       `Portable installed bytes failed the pinned Agent Plugins byte lane: ${JSON.stringify(contractDiagnostics)}`,
     );
+    const doctorReport = await runDoctor({ home, hosts: ['cursor'] });
+    const launchFindings = doctorReport.diagnostics.filter((entry) => entry.code === 'AB7326');
+    assertProof(
+      launchFindings.length === 1 && launchFindings[0]?.severity === 'info' && launchFindings[0].message.includes('were expanded for Cursor at install'),
+      `Doctor did not prove the Cursor expansion (AB7326): ${JSON.stringify(launchFindings)}`,
+    );
+    assertProof(
+      !doctorReport.diagnostics.some((entry) => entry.code === 'AB7320' && entry.severity === 'error'),
+      `Doctor reported Agent Plugins contract errors for the expanded install: ${JSON.stringify(doctorReport.diagnostics.filter((entry) => entry.code === 'AB7320'))}`,
+    );
+    const portableFinding = doctorReport.hosts.find((entry) => entry.host === 'cursor')?.inventory.findings
+      .find((entry) => entry.name === portablePlugin);
+    assertProof(
+      portableFinding?.state === 'installed' && portableFinding.launch?.state === 'expanded',
+      `Doctor inventory did not report the portable install as expanded: ${JSON.stringify(portableFinding)}`,
+    );
 
     await install('Already installed');
+
+    // Same-version rebuild through the emitted install.mjs: owned files replaced in place, then a no-op.
+    const marker = join(fixture.portableBundle, sameVersionRebuildMarker);
+    await writeFile(marker, '# same-version rebuild\n');
+    let sameVersionRebuild: SameVersionRebuildProof;
+    try {
+      await install('Replaced');
+      await access(join(destination, sameVersionRebuildMarker)).catch(() =>
+        fail('Portable emitted installer did not refresh the installed copy for the same-version rebuild.'));
+      await install('Already installed');
+      sameVersionRebuild = 'replaced';
+    } finally {
+      await rm(marker, { force: true });
+    }
 
     return Object.freeze({
       contract: 'agent-plugins-1.0.0 byte lane clean (AB6035–AB6037)',
@@ -1268,15 +1701,22 @@ export const runPortableHostInstallProof = async (
       host: 'cursor',
       install: Object.freeze({
         first: 'installed',
+        sameVersionRebuild,
         second: 'already-installed',
         version,
       }),
       manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: Object.freeze({
         allowedLocations: 'args/env values/cwd only',
+        cursorExpansion: Object.freeze({
+          doctor: 'AB7326 expanded',
+          installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
+          pluginData: normalizedRelative(home, pluginData),
+          receipt: 'cursorExpansion records the bundle mcp.json verbatim',
+        }),
         locations: Object.freeze(placeholderLocations),
         reservedEnvKeys: 'absent',
-        resolvedAtInstall: false,
+        resolvedAtInstall: true,
         sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
       }),
       proofLevel: portableProofLevel,
@@ -1649,6 +2089,10 @@ export const runClaudeLiveDevSessionProof = async (
   options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
 ): Promise<ClaudeLiveDevSessionReport> => {
   const sessionId = randomUUID();
+  // Captured before runLiveHostScenario swaps process.env.HOME for the isolated
+  // scenario home: the spawned claude turn runs against the developer's real
+  // home, so the unchanged-state guard must digest that same home.
+  const normalHome = homedir();
   const normalEnvironment = { ...packedNativeEnvironment(options.environment) };
   delete normalEnvironment.CLAUDE_CONFIG_DIR;
   const toolOutputs: string[] = [];
@@ -1684,6 +2128,7 @@ export const runClaudeLiveDevSessionProof = async (
             timeout: 300_000,
           });
         },
+        { homeDirectory: normalHome },
       );
       assertProof(result !== undefined, `Claude ${liveVersion} inline live development turn did not run.`);
       const rawOutput = result.stdout.trim();
@@ -1887,4 +2332,401 @@ export const runClaudeTokenSessionProof = async (
     }),
     status: 'passed',
   });
+};
+
+interface UninstallResultDocument {
+  readonly data?: { readonly outcome?: unknown; readonly policy?: unknown };
+  readonly receipt?: { readonly status?: unknown };
+  readonly registrations?: readonly { readonly action?: unknown; readonly kind?: unknown }[];
+  readonly remnantReceipt?: unknown;
+  readonly state?: unknown;
+}
+
+interface DiagnosticDocument {
+  readonly code?: unknown;
+}
+
+/**
+ * Host-owned residue an uninstall cannot and must not remove, classified per
+ * host from what the real CLIs leave behind (observed 2026-09-03 against
+ * Claude Code 2.1.257 and codex-cli 0.147.0 in isolated homes). Anything
+ * outside these classes fails the proof: it would mean Agent Bundle left
+ * something of its own behind, or the host changed its bookkeeping.
+ */
+export type HostResidueClass =
+  | 'claude-orphaned-cache-copy'
+  | 'claude-plugin-registry-files'
+  | 'claude-session-bookkeeping'
+  | 'claude-settings'
+  | 'codex-empty-config'
+  | 'codex-empty-directories';
+
+export interface HostUninstallProofReport {
+  /** Entries under the Agent Bundle namespace (`agent-bundle/`) or receipts left behind: always empty. */
+  readonly agentBundleResidue: readonly string[];
+  readonly homeByteIdentical: boolean;
+  readonly host: InstallHost;
+  /** Classified host-owned residue after uninstall, relative to the host root; empty when byte-identical. */
+  readonly hostResidue: readonly HostResidueClass[];
+  readonly keepData: 'kept' | 'retained-by-host' | 'unavailable';
+  readonly plan: 'no-op';
+  readonly proofLevel: string;
+  readonly purgeData: 'purged' | 'removed-by-host';
+  readonly refusals: {
+    readonly foreignOrMismatch: 'AB7007';
+    readonly missingReceipt: 'AB7009';
+    readonly unconfirmedPurge: 'AB7008';
+  };
+  readonly registrations: Readonly<Record<string, 'already-absent' | 'removed'>>;
+  readonly rerun: 'not-installed';
+  readonly status: 'passed';
+}
+
+const parseDiagnostics = (stderr: string, context: string): readonly DiagnosticDocument[] => {
+  const document = parseJson<unknown>(stderr, context);
+  return Array.isArray(document) ? document as readonly DiagnosticDocument[] : fail(`${context} did not return a diagnostics array.`);
+};
+
+const expectRefusal = async (
+  attempt: Promise<CommandResult>,
+  code: string,
+  context: string,
+): Promise<void> => {
+  const result = await attempt;
+  assertProof(result.exitCode !== 0, `${context} was not refused.`);
+  const diagnostics = parseDiagnostics(result.stderr, context);
+  assertProof(diagnostics.some((entry) => entry.code === code), `${context} was refused without ${code}: ${JSON.stringify(diagnostics)}`);
+};
+
+const classifyClaudeResidue = (path: string, plugin: string, marketplace: string): HostResidueClass | undefined => {
+  if (path === '.claude.json' || path === '.claude.json.lock' || path === 'backups' || path.startsWith('backups/')) {
+    return 'claude-session-bookkeeping';
+  }
+  if (path === 'settings.json') return 'claude-settings';
+  if (
+    path === 'plugins' || path === 'plugins/installed_plugins.json' || path === 'plugins/known_marketplaces.json' ||
+    path === 'plugins/marketplaces' || path === 'plugins/cache' || path === `plugins/cache/${marketplace}` ||
+    path === `plugins/cache/${marketplace}/${plugin}`
+  ) {
+    return 'claude-plugin-registry-files';
+  }
+  if (path.startsWith(`plugins/cache/${marketplace}/${plugin}/`)) return 'claude-orphaned-cache-copy';
+  return undefined;
+};
+
+const classifyCodexResidue = (path: string, marketplace: string): HostResidueClass | undefined => {
+  if (path === 'config.toml') return 'codex-empty-config';
+  if (
+    path === '.tmp' || path === '.tmp/marketplaces' || path === 'plugins' || path === 'plugins/cache' ||
+    path === `plugins/cache/${marketplace}`
+  ) {
+    return 'codex-empty-directories';
+  }
+  return undefined;
+};
+
+const agentBundleResidueOf = (added: readonly string[]): readonly string[] =>
+  added.filter((path) => path === 'agent-bundle' || path.startsWith('agent-bundle/') || path.endsWith('/.agent-bundle-install.json'));
+
+/**
+ * Proves the receipt-owned uninstall against a real host in an isolated home:
+ * install → `--plan` (no-op) → uninstall → the host's own inventory no longer
+ * names the plugin or its marketplace → rerun is `not-installed`; then the
+ * `--keep-data` / `--purge-data` policy, the missing-receipt and mismatch
+ * refusals, and finally a snapshot diff of the host root against the state
+ * before the first install. Cursor is byte-identical; Claude and Codex leave
+ * only classified host-owned bookkeeping.
+ */
+export const runHostUninstallProof = async (
+  fixture: BuiltHostInstallFixture,
+  host: 'claude' | 'codex' | 'cursor',
+  options: HostInstallProofOptions,
+): Promise<HostUninstallProofReport> => {
+  const root = await mkdtemp(join(tmpdir(), `agent-bundle-host-uninstall-${host}-`));
+  const home = join(root, 'home');
+  const config = join(root, 'config');
+  await Promise.all([mkdir(home, { recursive: true }), mkdir(config, { recursive: true })]);
+  if (host === 'cursor') await mkdir(join(home, '.cursor'), { recursive: true });
+  const environment = isolatedEnvironment(options.environment, {
+    ...(host === 'claude' ? { CLAUDE_CONFIG_DIR: config } : {}),
+    ...(host === 'codex' ? { CODEX_HOME: config } : {}),
+    HOME: home,
+  });
+  const hostRoot = host === 'cursor' ? home : config;
+  const bundle = fixture.bundles[host];
+  const lifecycle = (verb: 'install' | 'uninstall', extra: readonly string[] = []): Promise<CommandResult> =>
+    runLifecycleCommand(fixture, verb, host, bundle, { ...options, environment }, extra);
+  const uninstall = async (extra: readonly string[] = []): Promise<UninstallResultDocument> => {
+    const result = await lifecycle('uninstall', extra);
+    assertProof(result.exitCode === 0, `${host} uninstall ${extra.join(' ')} failed: ${commandDetail(result)}`);
+    return parseJson<UninstallResultDocument>(result.stdout, `${host} uninstall`);
+  };
+  const install = async (): Promise<void> => {
+    const result = await lifecycle('install');
+    assertProof(result.exitCode === 0, `${host} install failed: ${commandDetail(result)}`);
+  };
+  const installedRoot = host === 'cursor'
+    ? join(home, '.cursor', 'plugins', 'local', plugin)
+    : join(config, 'plugins', 'cache', marketplace, plugin, version);
+  const receiptPath = host === 'cursor'
+    ? join(installedRoot, '.agent-bundle-install.json')
+    : join(config, 'agent-bundle', 'receipts', `${plugin}.${marketplace}.user.json`);
+  const stateDirectory = join(installedRoot, 'state');
+  try {
+    const untouched = await snapshotTree(hostRoot);
+    const homeBefore = await snapshotTree(home);
+
+    // Nothing installed yet: an honest no-op. Claude's and Codex's own read-only `plugin list --json` verbs
+    // create their session bookkeeping on first contact, so the baseline for the byte-level comparison is
+    // taken after this probe; Cursor needs no host verb and stays exactly as it was.
+    assertProof((await uninstall()).state === 'not-installed', `${host} uninstall on a fresh home was not a not-installed no-op.`);
+    const before = await snapshotTree(hostRoot);
+    if (host === 'cursor') {
+      assertProof(treesIdentical(untouched, before), 'Cursor uninstall on a fresh home changed the host root.');
+    } else {
+      for (const path of diffTreeSnapshots(untouched, before).added) {
+        const classified = host === 'claude' ? classifyClaudeResidue(path, plugin, marketplace) : classifyCodexResidue(path, marketplace);
+        assertProof(classified !== undefined, `${host} read-only inventory probe created an unclassified entry: ${path}`);
+      }
+    }
+
+    await install();
+    await access(receiptPath).catch(() => fail(`${host} install wrote no receipt at ${receiptPath}.`));
+    const afterInstall = await snapshotTree(hostRoot);
+
+    // --plan names the exact paths and registrations and writes nothing.
+    const plan = await uninstall(['--plan']);
+    assertProof(plan.state === 'planned', `${host} uninstall --plan did not report planned.`);
+    assertProof(plan.receipt?.status === 'consumed', `${host} uninstall --plan did not find the receipt: ${JSON.stringify(plan.receipt)}`);
+    assertProof(treesIdentical(afterInstall, await snapshotTree(hostRoot)), `${host} uninstall --plan changed the host root.`);
+
+    // --purge-data without confirmation is refused before anything changes.
+    await expectRefusal(lifecycle('uninstall', ['--purge-data']), 'AB7008', `${host} uninstall --purge-data without --confirm-purge`);
+    assertProof(treesIdentical(afterInstall, await snapshotTree(hostRoot)), `${host} refused purge still changed the host root.`);
+
+    const uninstalled = await uninstall();
+    assertProof(uninstalled.state === 'uninstalled', `${host} uninstall did not report uninstalled: ${JSON.stringify(uninstalled)}`);
+    const registrations: Record<string, 'already-absent' | 'removed'> = {};
+    for (const registration of uninstalled.registrations ?? []) {
+      assertProof(
+        (registration.action === 'removed' || registration.action === 'already-absent') && typeof registration.kind === 'string',
+        `${host} uninstall reported an unexpected registration action: ${JSON.stringify(registration)}`,
+      );
+      registrations[registration.kind] = registration.action;
+    }
+    await access(receiptPath).then(
+      () => fail(`${host} uninstall left the receipt at ${receiptPath}.`),
+      () => undefined,
+    );
+    if (host === 'claude') {
+      const listed = await run('claude', ['plugin', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(listed.exitCode === 0, `Claude plugin list failed after uninstall: ${commandDetail(listed)}`);
+      const rows = parseJson<readonly ClaudePluginRow[]>(listed.stdout, 'Claude plugin list');
+      assertProof(!rows.some((row) => row.id === `${plugin}@${marketplace}`), 'Claude still lists the plugin after uninstall.');
+      const marketplaces = await run('claude', ['plugin', 'marketplace', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(!marketplaces.stdout.includes(marketplace), 'Claude still lists the marketplace after uninstall.');
+    } else if (host === 'codex') {
+      const listed = await run('codex', ['plugin', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(listed.exitCode === 0, `Codex plugin list failed after uninstall: ${commandDetail(listed)}`);
+      assertProof(!listed.stdout.includes(`${plugin}@${marketplace}`), 'Codex still lists the plugin after uninstall.');
+      const marketplaces = await run('codex', ['plugin', 'marketplace', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(!marketplaces.stdout.includes(marketplace), 'Codex still lists the marketplace after uninstall.');
+    } else {
+      await access(installedRoot).then(
+        () => fail('Cursor uninstall left the local plugin directory behind.'),
+        () => undefined,
+      );
+    }
+    assertProof((await uninstall()).state === 'not-installed', `${host} uninstall rerun was not a not-installed no-op.`);
+
+    // The host root after uninstall against the host root before install. Nothing that existed before may be
+    // removed; every added or rewritten entry must be classified host-owned bookkeeping (Claude rewrites its
+    // registries and settings in place), and none of it may be Agent Bundle's.
+    const afterUninstall = await snapshotTree(hostRoot);
+    const difference = diffTreeSnapshots(before, afterUninstall);
+    assertProof(difference.removed.length === 0, `${host} uninstall removed pre-existing entries: ${JSON.stringify(difference)}`);
+    const agentBundleResidue = agentBundleResidueOf([...difference.added, ...difference.changed]);
+    assertProof(agentBundleResidue.length === 0, `${host} uninstall left Agent Bundle-owned entries behind: ${agentBundleResidue.join(', ')}`);
+    const residueClasses = new Set<HostResidueClass>();
+    for (const path of [...difference.added, ...difference.changed]) {
+      const classified = host === 'claude'
+        ? classifyClaudeResidue(path, plugin, marketplace)
+        : host === 'codex'
+          ? classifyCodexResidue(path, marketplace)
+          : undefined;
+      assertProof(classified !== undefined, `${host} uninstall left an unclassified entry behind: ${path}`);
+      residueClasses.add(classified);
+    }
+    if (host === 'claude') {
+      await access(join(installedRoot, '.orphaned_at')).catch(() =>
+        fail('Claude did not mark its retained cache copy as orphaned (.orphaned_at); the residue is not the documented grace-period copy.'));
+      const registry = await readJson(join(config, 'plugins', 'installed_plugins.json'), 'Claude installed_plugins.json');
+      assertProof(!JSON.stringify(registry).includes(plugin), 'Claude installed_plugins.json still names the plugin.');
+      const settings = await readJson(join(config, 'settings.json'), 'Claude settings.json');
+      assertProof(!JSON.stringify(settings).includes(`${plugin}@${marketplace}`), 'Claude settings.json still enables the plugin.');
+    }
+    if (host === 'codex') {
+      const configToml = await readText(join(config, 'config.toml'), 'Codex config.toml');
+      assertProof(!configToml.includes(plugin) && !configToml.includes(marketplace), 'Codex config.toml still names the plugin or marketplace.');
+    }
+    // HOME itself (distinct from the host config root for Claude and Codex) is untouched in every case.
+    assertProof(treesIdentical(homeBefore, await snapshotTree(home)) || host === 'cursor', `${host} uninstall changed HOME outside the host root.`);
+    const homeByteIdentical = treesIdentical(before, afterUninstall);
+    assertProof(host !== 'cursor' || homeByteIdentical, `Cursor uninstall did not leave the home byte-identical: ${JSON.stringify(difference)}`);
+
+    // Data policy: --keep-data preserves durable state (or says honestly why it cannot), a confirmed purge removes it.
+    await install();
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
+    const kept = await uninstall(['--keep-data']);
+    const keepOutcome = kept.data?.outcome;
+    assertProof(
+      keepOutcome === 'kept' || keepOutcome === 'retained-by-host' || keepOutcome === 'unavailable',
+      `${host} --keep-data reported an unexpected outcome: ${JSON.stringify(kept.data)}`,
+    );
+    if (keepOutcome !== 'unavailable') {
+      await access(join(stateDirectory, 'plugin.sqlite')).catch(() => fail(`${host} --keep-data did not preserve state/plugin.sqlite.`));
+    }
+    if (host === 'cursor') {
+      assertProof(kept.remnantReceipt === receiptPath, 'Cursor --keep-data wrote no remnant receipt beside the preserved state.');
+    }
+    await install();
+    if (host !== 'cursor') {
+      // Codex deletes the cache on remove and Claude's reinstall rewrites the cached copy from the bundle, so
+      // the host itself discarded the marker; recreate it so the purge run has state to report on.
+      await mkdir(stateDirectory, { recursive: true });
+      await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
+    }
+    const purged = await uninstall(['--purge-data', '--confirm-purge']);
+    const purgeOutcome = purged.data?.outcome;
+    assertProof(purgeOutcome === 'purged' || purgeOutcome === 'removed-by-host', `${host} --purge-data reported an unexpected outcome: ${JSON.stringify(purged.data)}`);
+    await access(stateDirectory).then(
+      () => fail(`${host} --purge-data --confirm-purge left state/ behind.`),
+      () => undefined,
+    );
+    if (host === 'cursor') {
+      assertProof(treesIdentical(before, await snapshotTree(hostRoot)), 'Cursor keep→reinstall→purge cycle did not restore the home byte-identically.');
+    }
+
+    // Refusals: a missing receipt (AB7009) and a mismatch between the installed copy and the receipt (AB7007).
+    await install();
+    await rm(receiptPath);
+    await expectRefusal(lifecycle('uninstall'), 'AB7009', `${host} uninstall without a receipt`);
+    // A receipt-less Cursor copy is the pre-receipt legacy layout (`forced-legacy`); a host-CLI install with no
+    // store receipt is `forced-missing`. Both need --force and both remove only what the receipt (or, for the
+    // legacy layout, the inventory) proves is this plugin's.
+    const forced = await uninstall(['--force']);
+    assertProof(
+      forced.state === 'uninstalled' && (forced.receipt?.status === 'forced-missing' || forced.receipt?.status === 'forced-legacy'),
+      `${host} uninstall --force did not proceed: ${JSON.stringify(forced)}`,
+    );
+    await install();
+    await writeFile(join(installedRoot, 'INSTALL.md'), '# tampered\n');
+    await expectRefusal(lifecycle('uninstall'), 'AB7007', `${host} uninstall of a modified copy`);
+    const forcedMismatch = await uninstall(['--force']);
+    assertProof(forcedMismatch.state === 'uninstalled' && forcedMismatch.receipt?.status === 'forced-mismatch', `${host} uninstall --force after a mismatch did not proceed: ${JSON.stringify(forcedMismatch)}`);
+
+    return Object.freeze({
+      agentBundleResidue: Object.freeze(agentBundleResidue),
+      homeByteIdentical,
+      host,
+      hostResidue: Object.freeze([...residueClasses].sort()),
+      keepData: keepOutcome,
+      plan: 'no-op',
+      proofLevel,
+      purgeData: purgeOutcome,
+      refusals: Object.freeze({ foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' }),
+      registrations: Object.freeze(registrations),
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+};
+
+export interface PortableUninstallProofReport {
+  readonly homeByteIdentical: true;
+  readonly host: 'cursor';
+  readonly installer: 'emitted install.mjs --uninstall';
+  readonly keepData: 'kept';
+  readonly plan: 'no-op';
+  readonly proofLevel: string;
+  readonly purgeData: 'purged';
+  readonly refusals: { readonly foreign: 'refused'; readonly missingReceipt: 'refused'; readonly unconfirmedPurge: 'refused' };
+  readonly rerun: 'not-installed';
+  readonly status: 'passed';
+}
+
+/** The emitted standalone installer's `--uninstall` against an isolated Cursor home for the Agent Plugins pack. */
+export const runPortableUninstallProof = async (
+  fixture: BuiltPortableHostInstallFixture,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+): Promise<PortableUninstallProofReport> => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-uninstall-portable-'));
+  try {
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const installer = join(fixture.portableBundle, 'install.mjs');
+    const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
+    const receiptPath = join(destination, '.agent-bundle-install.json');
+    const runInstaller = (args: readonly string[]): Promise<CommandResult> =>
+      run(process.execPath, [installer, ...args], { cwd: fixture.portableBundle, environment });
+    const expectOk = async (args: readonly string[], prefix: string): Promise<string> => {
+      const result = await runInstaller(args);
+      assertProof(result.exitCode === 0, `Portable installer ${args.join(' ')} failed: ${commandDetail(result)}`);
+      assertProof(result.stdout.startsWith(prefix), `Portable installer ${args.join(' ')} did not report "${prefix}": ${JSON.stringify(result.stdout)}`);
+      return result.stdout;
+    };
+    const before = await snapshotTree(home);
+    await expectOk(['--uninstall'], `Not installed ${portablePlugin}@${version}`);
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    const afterInstall = await snapshotTree(home);
+    const plan = await expectOk(['--uninstall', '--plan'], `Would uninstall ${portablePlugin}@${version}`);
+    assertProof(plan.includes(receiptPath), 'Portable --plan did not name the receipt path.');
+    assertProof(treesIdentical(afterInstall, await snapshotTree(home)), 'Portable --plan changed the home.');
+    const unconfirmed = await runInstaller(['--uninstall', '--purge-data']);
+    assertProof(unconfirmed.exitCode === 2 && unconfirmed.stderr.includes('--confirm-purge'), 'Portable --purge-data without confirmation was not refused.');
+    await expectOk(['--uninstall'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(treesIdentical(before, await snapshotTree(home)), `Portable uninstall did not leave the home byte-identical: ${JSON.stringify(diffTreeSnapshots(before, await snapshotTree(home)))}`);
+    await expectOk(['--uninstall'], `Not installed ${portablePlugin}@${version}`);
+
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    const kept = await expectOk(['--uninstall', '--keep-data'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(kept.includes('Data (keep): kept'), 'Portable --keep-data did not report kept state.');
+    await access(join(destination, 'state', 'plugin.sqlite')).catch(() => fail('Portable --keep-data did not preserve state/.'));
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    const purged = await expectOk(['--uninstall', '--purge-data', '--confirm-purge'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(purged.includes('Data (purge): purged'), 'Portable confirmed purge did not report purged state.');
+    assertProof(treesIdentical(before, await snapshotTree(home)), 'Portable keep→reinstall→purge did not restore the home byte-identically.');
+
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    await rm(receiptPath);
+    const missing = await runInstaller(['--uninstall']);
+    assertProof(missing.exitCode === 1 && missing.stderr.includes('predates install receipts'), 'Portable uninstall without a receipt was not refused.');
+    await expectOk(['--uninstall', '--force'], `Uninstalled ${portablePlugin}@${version}`);
+    await rm(join(home, '.cursor', 'plugins'), { force: true, recursive: true });
+    await mkdir(destination, { recursive: true });
+    await writeFile(join(destination, 'payload.txt'), 'someone else\n');
+    const foreign = await runInstaller(['--uninstall', '--force']);
+    assertProof(foreign.exitCode === 1 && foreign.stderr.includes('Refusing to uninstall foreign directory'), 'Portable uninstall of a foreign directory was not refused.');
+    await access(join(destination, 'payload.txt')).catch(() => fail('Portable refused uninstall still removed the foreign file.'));
+
+    return Object.freeze({
+      homeByteIdentical: true,
+      host: 'cursor',
+      installer: 'emitted install.mjs --uninstall',
+      keepData: 'kept',
+      plan: 'no-op',
+      proofLevel: portableProofLevel,
+      purgeData: 'purged',
+      refusals: Object.freeze({ foreign: 'refused', missingReceipt: 'refused', unconfirmedPurge: 'refused' }),
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
 };

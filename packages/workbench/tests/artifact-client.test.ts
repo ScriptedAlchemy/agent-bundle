@@ -2,17 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
-
-interface RecordedRequest {
-  readonly method: string;
-  readonly token: string | null;
-  readonly url: string;
-}
-
-const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
-  headers: { 'content-type': 'application/json' },
-  status,
-});
+import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';
 
 const inspection = {
   epochId: 'epoch-1',
@@ -53,22 +43,6 @@ const diff = {
   removed: [],
   unchanged: [],
 };
-
-const recordingFetch = (calls: RecordedRequest[], reply: () => Response): typeof fetch =>
-  async (input, init) => {
-    const url = String(input);
-    if (url === '/api/project/session') return response({
-      cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef', instanceId: 'foreground-instance-a',
-      origin: 'http://127.0.0.1:5173',
-      token: 'foreground-token',
-    });
-    calls.push({
-      method: init?.method ?? 'GET',
-      token: new Headers(init?.headers).get('x-agent-bundle-session'),
-      url,
-    });
-    return reply();
-  };
 
 const foreground = (fetch: typeof globalThis.fetch): ForegroundRouteClient => new ForegroundRouteClient({ fetch });
 

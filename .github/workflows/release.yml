@@ -5,8 +5,12 @@ on:
     branches:
       - main
 
-# id-token is required for npm package provenance once publishing starts; it is
-# inert while the NPM_TOKEN gate below keeps the publish steps skipped.
+# contents: write and pull-requests: write let changesets/action push the
+# changeset-release/main branch and open/update the "Version Packages" PR.
+# id-token: write is required for npm package provenance once publishing is
+# enabled; it is inert while PUBLISH_ENABLED below is false. The repository
+# setting "Allow GitHub Actions to create and approve pull requests" must
+# also be on, or the PR step fails after the branch is pushed.
 permissions:
   contents: write
   id-token: write
@@ -17,36 +21,71 @@ concurrency:
 
 jobs:
   release:
+    name: Version Packages / release
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # npm publishing is opt-in and off by default: previews ship through
+      # pkg.pr.new (docs/preview-packages.md) until the package-name and
+      # access decisions are made. Set the repository variable
+      # AGENT_BUNDLE_NPM_PUBLISH=true *and* the NPM_TOKEN secret to let the
+      # action run `pnpm release` (release gates + `changeset publish`) when
+      # the Version Packages PR merges. While off, the action still opens and
+      # updates the Version Packages PR, and merging that PR only runs the
+      # release gates (`pnpm check:release`) so the tree stays publishable.
+      PUBLISH_ENABLED: ${{ vars.AGENT_BUNDLE_NPM_PUBLISH == 'true' && secrets.NPM_TOKEN != '' }}
     steps:
+      # The action pushes and opens the PR through the GitHub API with the
+      # token passed below, so the checkout must not persist GITHUB_TOKEN.
       - uses: actions/checkout@v7
-      # No npm release is cut yet; skip publishing until an NPM_TOKEN secret
-      # exists instead of failing every push to main. Previews stay on
-      # pkg.pr.new (docs/preview-packages.md).
-      - id: gate
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "enabled=${{ env.NPM_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
-      - if: steps.gate.outputs.enabled == 'true'
-        uses: pnpm/setup@v2
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@v2
         with:
           cache: true
           install: false
           runtime: node@22.19.0
-      - if: steps.gate.outputs.enabled == 'true'
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+      # Release gates run packed Playwright tests; reuse the runner image's
+      # Chrome (same rationale as the CI Verify job).
+      - name: Ensure branded Chrome for Playwright
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Using preinstalled $(google-chrome --version)"
+          else
+            pnpm exec playwright install --with-deps chrome
+          fi
       # changesets/action v2 no longer writes .npmrc from an NPM_TOKEN env
       # variable; expose the token via npm config so `changeset publish`
       # (pnpm publish) can authenticate. The ${NPM_TOKEN} placeholder is kept
       # literal here and expanded by npm/pnpm from the step environment.
-      - if: steps.gate.outputs.enabled == 'true'
+      - if: env.PUBLISH_ENABLED == 'true'
         run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> "$HOME/.npmrc"
-      - if: steps.gate.outputs.enabled == 'true'
+      - id: changesets
         uses: changesets/action@v2
         with:
-          publish-script: pnpm release
           version-script: pnpm version-packages
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Empty publish-script means "version only": the action opens or
+          # refreshes the Version Packages PR and never publishes.
+          publish-script: ${{ env.PUBLISH_ENABLED == 'true' && 'pnpm release' || '' }}
+          commit-message: Version Packages
+          pr-title: Version Packages
+          # Events created with the built-in GITHUB_TOKEN never start other
+          # workflows, so a Version Packages PR opened with it gets no PR CI.
+          # Provide CHANGESETS_GITHUB_TOKEN (a fine-grained PAT or GitHub App
+          # installation token with contents: write + pull-requests: write on
+          # this repository) to have CI run on that PR; without it the action
+          # still works and the PR can be closed/reopened to trigger CI.
+          github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+      # Publishing disabled: when the Version Packages PR lands (no pending
+      # changesets, "Version Packages" merge commit), prove the versioned
+      # tree still passes the pre-publish gates that `pnpm release` would run.
+      - name: Release gates (publish disabled)
+        if: >-
+          env.PUBLISH_ENABLED != 'true' &&
+          steps.changesets.outputs.has-changesets == 'false' &&
+          startsWith(github.event.head_commit.message, 'Version Packages')
+        run: pnpm check:release

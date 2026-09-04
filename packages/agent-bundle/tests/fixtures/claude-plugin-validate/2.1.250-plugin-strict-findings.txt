@@ -1,0 +1,21 @@
+Validating plugin manifest: /bundle/claude/.claude-plugin/plugin.json
+
+⚠ Found 2 warnings:
+
+  ❯ displayNme: Unknown field 'displayNme' — did you mean 'displayName'? Claude Code ignores unrecognized fields at load time, so this field has no effect.
+  ❯ bogus: Unknown field 'bogus'. Claude Code ignores it at load time.
+
+Validating agent: /bundle/claude/agents/bad.md
+
+⚠ Found 1 warning:
+
+  ❯ description: No description in frontmatter. A description helps users and Claude understand when to use this agent.
+
+Validating hooks: /bundle/claude/hooks/hooks.json
+
+✘ Found 2 errors:
+
+  ❯ hooks.Stop.0.hooks.0.type: Invalid input
+  ❯ hooks.postToolUse: Invalid key in record
+
+✘ Validation failed

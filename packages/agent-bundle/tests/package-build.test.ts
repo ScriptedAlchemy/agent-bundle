@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { build, runMcp } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { mcpServerStateDirectory } from '../src/services/mcp-run.ts';
 
 const execFile = promisify(executeFile);
@@ -113,6 +114,45 @@ describe('framework-owned package build', () => {
 
     const rebuilt = await build({ output: 'artifact', packageOutputs: true, root });
     expect(rebuilt.packageBuild?.files).toEqual(packageBuild!.files);
+  }, 120_000);
+
+  it('ships a bin-claimed src/scripts module as both the npm bin and the artifact script (#389)', async () => {
+    const root = await fixtureRoot({
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  bin: { hauler: './src/scripts/hauler.ts' },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'src/scripts/hauler.ts': [
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`hauled:${argv.join(',')}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const result = await build({ output: 'artifact', packageOutputs: true, root });
+
+    // The same entry is visible on both surfaces of the inspect model, and
+    // the claim itself raises no diagnostic: this is the intended shape.
+    expect(result.diagnostics).toEqual([]);
+    expect(result.model.packageBuild).toMatchObject({
+      bins: [{ name: 'hauler', provenance: { kind: 'config' }, source: join(root, 'src/scripts/hauler.ts') }],
+    });
+    expect(result.model.scripts).toMatchObject([
+      { name: 'hauler', provenance: { kind: 'conventional' }, source: join(root, 'src/scripts/hauler.ts') },
+    ]);
+
+    // Both outputs exist and run.
+    expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/hauler.js');
+    await expect(execFile(join(root, 'dist', 'bin', 'hauler.js'), ['alpha'])).resolves.toMatchObject({ stdout: 'hauled:alpha\n' });
+    expect(result.build.outputProvenance.map((record) => record.path)).toContain('portable/scripts/hauler.mjs');
+    const script = join(root, 'artifact', 'portable', 'scripts', 'hauler.mjs');
+    await expect(execFile(process.execPath, [script, 'beta'])).resolves.toMatchObject({ stdout: 'hauled:beta\n' });
   }, 120_000);
 
   it('wraps factory-exporting MCP entries in the lifecycle shell and leaves self-connecting entries alone', async () => {
@@ -221,14 +261,11 @@ describe('framework-owned package build', () => {
     });
     await installTypescriptToolchain(root);
 
-    const stderr: string[] = [];
-    const exitCode = await runCli(
-      ['build', '--root', root, '--output', 'artifact'],
-      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
-    );
+    const terminal = captureCliTerminal();
+    const exitCode = await runCli(['build', '--root', root, '--output', 'artifact'], terminal.output);
     expect(exitCode).toBe(1);
 
-    const diagnostics = JSON.parse(stderr.join('')) as readonly {
+    const diagnostics = JSON.parse(terminal.stderr()) as readonly {
       code: string;
       message: string;
       recovery?: string;
@@ -437,13 +474,13 @@ describe('mcp run', () => {
   }, 120_000);
 
   it('rejects --env-file combined with --no-env', async () => {
-    const stderr: string[] = [];
+    const terminal = captureCliTerminal();
     const exitCode = await runCli(
       ['mcp', 'run', '--root', '.', '--artifact', 'artifact', '--target', 'portable', '--server', 's', '--env-file', 'x.env', '--no-env'],
-      { stderr: { write: (chunk: string) => stderr.push(chunk) }, stdout: { write: () => undefined } },
+      terminal.output,
     );
     expect(exitCode).toBe(1);
-    expect(stderr.join('')).toContain('Use either --env-file or --no-env, not both.');
+    expect(terminal.stderr()).toContain('Use either --env-file or --no-env, not both.');
   });
 
   it('runs a built server end to end through the CLI and forwards its exit code', async () => {

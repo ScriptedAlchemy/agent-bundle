@@ -2,15 +2,23 @@ import { appendFile, readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 /**
- * Hosted CI docs-only allowlist. Nested markdown outside docs/ and
- * agent-patterns/ is code: examples and packages ship compiled SKILL.md
+ * Hosted CI docs-only allowlist. Nested markdown outside docs/, website/,
+ * and agent-patterns/ is code: examples and packages ship compiled SKILL.md
  * artifacts, and package markdown is part of npm pack audits.
+ *
+ * website/ is the Rspress documentation site. Its own workflow (docs.yml)
+ * typechecks and builds it on every PR, so website-only PRs skip the heavy
+ * package jobs here without losing validation.
  *
  * Globs match the workflow `case` that this script replaced: `*` matches
  * slashes, so `.changeset/*.md` includes nested changeset markdown.
  */
 export const isDocsOnlyPath = (filePath) => {
-  if (filePath.startsWith('docs/') || filePath.startsWith('agent-patterns/')) {
+  if (
+    filePath.startsWith('docs/')
+    || filePath.startsWith('agent-patterns/')
+    || filePath.startsWith('website/')
+  ) {
     return true;
   }
   if (filePath.startsWith('.changeset/') && filePath.endsWith('.md')) {

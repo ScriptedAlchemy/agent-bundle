@@ -1,5 +1,6 @@
 import type { ClaudeConfigExtension } from '../adapters/claude.ts';
 import type { CodexConfigExtension } from '../adapters/codex.ts';
+import type { CursorConfigExtension } from '../adapters/cursor.ts';
 import type { PortableConfigExtension } from '../adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.ts';
 
@@ -33,9 +34,32 @@ export { parseSkillIr } from '../skills/parse-ir.ts';
 export { lowerSkillIr } from '../skills/lower.ts';
 export type { SkillIr, SkillHostDocument, SkillTreeLayoutDecision } from '../skills/ir.ts';
 export { validateModel, validateSource } from './validate.ts';
+// The config hook handler contract (#488), re-exported where `hooks.<event>.handler` is declared.
+export { hookEventFields, hookHandlerEventNames, hookResultContract } from '../adapters/hook-handler.ts';
+export type {
+  AfterToolHookEvent,
+  AgentStartHookEvent,
+  AgentStopHookEvent,
+  BeforeToolHookEvent,
+  HookContinueResult,
+  HookDenyResult,
+  HookEvent,
+  HookEventBase,
+  HookEventPayloads,
+  HookHandler,
+  HookHandlerContext,
+  HookHandlerEventName,
+  HookResult,
+  HookResultContract,
+  HookResultRule,
+  SessionStartHookEvent,
+  StopHookEvent,
+} from '../adapters/hook-handler.ts';
+export type { AgentBundleHookEntry, AgentBundleHookInput, CanonicalHookEvent } from '../core/types.ts';
 export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension
   & CodexConfigExtension
+  & CursorConfigExtension
   & PortableConfigExtension;
 export type {
   AgentBundleConfigExtensions,

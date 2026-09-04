@@ -25,6 +25,10 @@ const docsOnlyPaths = [
   '.changeset/nested/still-markdown.md',
   'README.md',
   'AGENTS.md',
+  'website/docs/en/guide/start/index.mdx',
+  'website/docs/zh/reference/_meta.json',
+  'website/rspress.config.ts',
+  'website/package.json',
 ] as const;
 
 const codePaths = [
@@ -32,7 +36,9 @@ const codePaths = [
   'examples/skills-starter/skills/release-review/SKILL.md',
   '.changeset/config.json',
   'docs',
+  'website',
   '.github/workflows/ci.yml',
+  '.github/workflows/docs.yml',
   'package.json',
   'scripts/classify-docs-only.mjs',
 ] as const;
@@ -94,6 +100,24 @@ it('classifies mixed, nested-markdown, and rename pairs from a GitHub files list
     ].join('\n')),
     listingOk: true,
   })).toMatchObject({ docsOnly: false, reason: 'non-docs-path', path: 'packages/agent-bundle/README.md' });
+
+  expect(classifyDocsOnlyListing({
+    changedFilesCount: '2',
+    entries: parseGhFilesListing([
+      'website/docs/en/guide/authoring/hooks.mdx\t',
+      'website/docs/zh/guide/authoring/hooks.mdx\t',
+    ].join('\n')),
+    listingOk: true,
+  })).toMatchObject({ docsOnly: true, reason: 'docs-only' });
+
+  expect(classifyDocsOnlyListing({
+    changedFilesCount: '2',
+    entries: parseGhFilesListing([
+      'website/docs/en/reference/configuration.mdx\t',
+      'packages/agent-bundle/src/core/types.ts\t',
+    ].join('\n')),
+    listingOk: true,
+  })).toMatchObject({ docsOnly: false, reason: 'non-docs-path', path: 'packages/agent-bundle/src/core/types.ts' });
 
   expect(classifyDocsOnlyListing({
     changedFilesCount: '1',

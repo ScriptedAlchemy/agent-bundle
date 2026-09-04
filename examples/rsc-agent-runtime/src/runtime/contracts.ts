@@ -1,9 +1,9 @@
 import type { ZodType } from 'zod';
+import type { JsonObject } from 'agent-bundle';
 import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeMcpServerDescriptor,
-} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject } from '../../../../packages/agent-bundle/src/dev/types.ts';
+} from 'agent-bundle/api';
 
 export interface EditEvent {
   eventId: string;
@@ -113,7 +113,6 @@ export interface DevRuntimeInspectionResponse {
   readonly inspection: DevRuntimeInspectionEnvelope;
 }
 
-export type McpTimeline = RuntimeSnapshot;
 
 export interface ToolAnnotations {
   readOnlyHint: boolean;

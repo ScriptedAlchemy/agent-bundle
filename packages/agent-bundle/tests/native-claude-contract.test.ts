@@ -3,13 +3,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, it } from '@rstest/core';
+import { describe, expect, it } from '@rstest/core';
 
 const loadNativeClaudeContract = async () => import('../src/host-contracts/native-claude-contract.ts').catch(() => undefined);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE === '1' ? it : it.skip;
 const candidatePluginName = 'agent-bundle-native-smoke';
 const candidateSkillName = 'agent-bundle-native-smoke';
 const candidateSkillEventName = `${candidatePluginName}:${candidateSkillName}`;
+
+/**
+ * Every enabled `runNativeClaudeSmoke` digests the normal Claude home before
+ * and after the run. Without an injected `homeDirectory` (or
+ * `CLAUDE_CONFIG_DIR`) that is the developer's real `~/.claude`, which on a
+ * machine with the Claude CLI installed holds gigabytes of plugin caches and
+ * pushes a stubbed smoke past its 5 s budget. Each test gets an empty home.
+ */
+const withIsolatedHome = async <T>(run: (homeDirectory: string) => Promise<T>): Promise<T> => {
+  const homeDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-contract-home-'));
+  try {
+    return await run(homeDirectory);
+  } finally {
+    await rm(homeDirectory, { force: true, recursive: true });
+  }
+};
 
 it('builds a subscription-authenticated Claude command with the explicit candidate plugin', async () => {
   const harness = await loadNativeClaudeContract();
@@ -96,8 +112,7 @@ it('runs strict validation before the subscription-backed stream command and ret
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const homeDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-contract-home-'));
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
@@ -124,8 +139,7 @@ it('runs strict validation before the subscription-backed stream command and ret
           ].join('\n'),
         };
     },
-  });
-  await rm(homeDirectory, { force: true, recursive: true });
+  }));
 
   expect(report).toEqual({
     diagnostics: [],
@@ -179,7 +193,7 @@ it('runs strict validation before the subscription-backed stream command and ret
       executable: 'claude',
     },
     {
-      args: ['plugin', 'validate', '--strict', '/candidate/plugin'],
+      args: ['plugin', 'validate', '--strict', '/candidate/plugin/.claude-plugin/plugin.json'],
       cwd: '/fresh/fixture',
       environment: { PATH: '/usr/bin' },
       executable: 'claude',
@@ -295,20 +309,29 @@ it('proves the normal Claude config, settings, and plugins stay unchanged withou
   }
 });
 
-it('protects the default sibling Claude state file without retaining its opaque contents', async () => {
-  const harness = await loadNativeClaudeContract();
-  expect(harness).toBeDefined();
+/**
+ * The sibling `.claude.json` is host bookkeeping Claude Code rewrites on every
+ * signed-in turn (#439); the guard digests only its user-scope `mcpServers`
+ * registrations, never its opaque contents.
+ */
+describe('the default sibling Claude state file', () => {
+  const successfulStream = [
+    '{"type":"system","subtype":"init","apiKeySource":"none","plugins":[{"name":"agent-bundle-native-smoke"}]}',
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"agent-bundle-native-smoke:agent-bundle-native-smoke"}}]}}',
+    '{"type":"result","subtype":"success"}',
+  ].join('\n');
 
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-default-home-contract-'));
-  const defaultHome = join(root, 'home');
-  const normalClaudeHome = join(defaultHome, '.claude');
-  try {
-    await mkdir(normalClaudeHome, { recursive: true });
-    await writeFile(join(defaultHome, '.claude.json'), '{"marker":"normal-sibling-marker"}\n');
-    const result = await harness!.runNativeClaudeSmoke({
+  /** Runs the smoke against `defaultHome`, letting the fake Claude rewrite `.claude.json` as `rewrite` describes. */
+  const smokeWithStateRewrite = async (
+    defaultHome: string,
+    rewrite: (stateFile: string) => Promise<void>,
+  ) => {
+    const harness = await loadNativeClaudeContract();
+    expect(harness).toBeDefined();
+    return harness!.runNativeClaudeSmoke({
       candidatePluginName,
       candidateSkillName,
-      cwd: root,
+      cwd: defaultHome,
       enabled: true,
       environment: { AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: '1', PATH: '/usr/bin' },
       homeDirectory: defaultHome,
@@ -320,26 +343,88 @@ it('protects the default sibling Claude state file without retaining its opaque 
           return { exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro"}\n' };
         }
         if (request.args[0] === 'plugin') return { exitCode: 0, stderr: '', stdout: 'Plugin is valid.\n' };
-        await writeFile(join(defaultHome, '.claude.json'), '{"marker":"normal-sibling-changed-marker"}\n');
-        return {
-          exitCode: 0,
-          stderr: '',
-          stdout: [
-            '{"type":"system","subtype":"init","apiKeySource":"none","plugins":[{"name":"agent-bundle-native-smoke"}]}',
-            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"agent-bundle-native-smoke:agent-bundle-native-smoke"}}]}}',
-            '{"type":"result","subtype":"success"}',
-          ].join('\n'),
-        };
+        await rewrite(join(defaultHome, '.claude.json'));
+        return { exitCode: 0, stderr: '', stdout: successfulStream };
       },
     });
+  };
 
-    expect(result.status).toBe('harness-failure');
-    expect((result as unknown as { readonly normalHome?: unknown }).normalHome).not.toBe('unchanged');
-    expect(JSON.stringify(result)).not.toContain(root);
-    expect(JSON.stringify(result)).not.toMatch(/normal-sibling-(?:changed-)?marker/iu);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
+  const withDefaultHome = async (
+    initialState: string | undefined,
+    operation: (defaultHome: string) => Promise<void>,
+  ): Promise<void> => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-default-home-contract-'));
+    const defaultHome = join(root, 'home');
+    try {
+      await mkdir(join(defaultHome, '.claude'), { recursive: true });
+      if (initialState !== undefined) await writeFile(join(defaultHome, '.claude.json'), initialState);
+      await operation(defaultHome);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  };
+
+  it('tolerates the bookkeeping rewrite of a signed-in turn and a first start creating the file', async () => {
+    // Keys observed moving on Claude Code 2.1.257–2.1.260 between turns, with
+    // the user-scope registrations left alone.
+    const before = {
+      cachedGrowthBookFeatures: { flag: 'normal-sibling-marker' },
+      firstStartTime: '2026-09-01T00:00:00.000Z',
+      machineID: 'normal-sibling-machine-marker',
+      mcpServers: { registered: { command: 'normal-sibling-mcp-marker' } },
+      numStartups: 41,
+      projects: { '/elsewhere': { allowedTools: [], lastSessionId: 'old' } },
+      seenNotifications: ['a'],
+    };
+    await withDefaultHome(`${JSON.stringify(before)}\n`, async (defaultHome) => {
+      const result = await smokeWithStateRewrite(defaultHome, (stateFile) => writeFile(stateFile, JSON.stringify({
+        ...before,
+        cachedExperimentData: { experiment: 'normal-sibling-changed-marker' },
+        cachedGrowthBookFeatures: { flag: 'normal-sibling-changed-marker' },
+        numStartups: 42,
+        pluginUsage: { 'agent-bundle-native-smoke': 1 },
+        projects: { ...before.projects, [defaultHome]: { allowedTools: [], lastSessionId: 'new', mcpServers: {} } },
+        seenNotifications: ['a', 'b'],
+        skillUsage: { 'agent-bundle-native-smoke:agent-bundle-native-smoke': 1 },
+      })));
+      expect(result).toMatchObject({ normalHome: 'unchanged', status: 'passed' });
+      expect(JSON.stringify(result)).not.toContain(defaultHome);
+      expect(JSON.stringify(result)).not.toMatch(/normal-sibling-[a-z-]*marker/iu);
+    });
+
+    // A fresh home: the first start writes the file (observed on 2.1.260 even
+    // signed out) without registering anything.
+    await withDefaultHome(undefined, async (defaultHome) => {
+      const result = await smokeWithStateRewrite(defaultHome, (stateFile) => writeFile(
+        stateFile,
+        '{"firstStartTime":"2026-09-04T05:36:00.000Z","machineID":"normal-sibling-marker","numStartups":1}\n',
+      ));
+      expect(result).toMatchObject({ normalHome: 'unchanged', status: 'passed' });
+    });
+  });
+
+  it('still fails when the smoke adds, changes, or removes user-scope MCP registrations', async () => {
+    const registered = '{"mcpServers":{"registered":{"command":"normal-sibling-mcp-marker"}},"numStartups":1}\n';
+    const cases: readonly (readonly [string | undefined, string])[] = [
+      [registered, '{"mcpServers":{"registered":{"command":"normal-sibling-changed-marker"}},"numStartups":2}\n'],
+      [registered, '{"mcpServers":{},"numStartups":2}\n'],
+      [registered, '{"numStartups":2}\n'],
+      ['{"numStartups":1}\n', '{"mcpServers":{"added":{"command":"normal-sibling-changed-marker"}},"numStartups":2}\n'],
+      [undefined, '{"mcpServers":{"added":{"command":"normal-sibling-changed-marker"}}}\n'],
+      // Corrupting the state file is a change too.
+      [registered, 'not json\n'],
+    ];
+    for (const [initial, rewritten] of cases) {
+      await withDefaultHome(initial, async (defaultHome) => {
+        const result = await smokeWithStateRewrite(defaultHome, (stateFile) => writeFile(stateFile, rewritten));
+        expect(result.status).toBe('harness-failure');
+        expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['claude-native.normal-home.changed']);
+        expect((result as unknown as { readonly normalHome?: unknown }).normalHome).not.toBe('unchanged');
+        expect(JSON.stringify(result)).not.toContain(defaultHome);
+        expect(JSON.stringify(result)).not.toMatch(/normal-sibling-[a-z-]*marker/iu);
+      });
+    }
+  });
 });
 
 it('reports an incompatible Claude version as a harness failure before candidate validation', async () => {
@@ -347,19 +432,20 @@ it('reports an incompatible Claude version as a harness failure before candidate
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after the preflight failure',
     run: async (request: unknown) => {
       calls.push(request);
       return { exitCode: 0, stderr: '', stdout: '2.1.231 (Claude Code)\n' };
     },
-  });
+  }));
 
   expect(report).toEqual({
     diagnostics: [{
@@ -429,7 +515,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
@@ -441,6 +527,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
       CLAUDE_CODE_USE_BEDROCK: '1',
       PATH: '/usr/bin',
     },
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the candidate skill.',
     run: async (request: unknown) => {
@@ -461,7 +548,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
               ].join('\n'),
             };
     },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [],
@@ -478,7 +565,7 @@ it('requires the signed-in subscription preflight, loaded candidate plugin, and 
   expect(calls).toEqual([
     { args: ['--version'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
     { args: ['auth', 'status', '--json'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
-    { args: ['plugin', 'validate', '--strict', '/candidate/plugin'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
+    { args: ['plugin', 'validate', '--strict', '/candidate/plugin/.claude-plugin/plugin.json'], cwd: '/fresh/fixture', environment: { PATH: '/usr/bin' }, executable: 'claude' },
     expect.objectContaining({ executable: 'claude' }),
   ]);
 });
@@ -501,12 +588,13 @@ it('fails closed when the candidate plugin, exact Skill event, or subscription a
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
 
-  const smokeWithExecution = async (execution: string) => harness!.runNativeClaudeSmoke({
+  const smokeWithExecution = async (execution: string) => withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'Use the candidate skill.',
     run: async (request: { readonly args: readonly string[] }) => {
@@ -517,7 +605,7 @@ it('fails closed when the candidate plugin, exact Skill event, or subscription a
       if (request.args[0] === 'plugin') return { exitCode: 0, stderr: '', stdout: 'Plugin is valid.\n' };
       return { exitCode: 0, stderr: '', stdout: execution };
     },
-  });
+  }));
 
   await expect(smokeWithExecution([
     '{"type":"system","plugins":[]}',
@@ -551,12 +639,13 @@ it('rejects an API-key or alternate-provider auth status before plugin validatio
   expect(harness).toBeDefined();
 
   const calls: unknown[] = [];
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after authentication fails',
     run: async (request: unknown) => {
@@ -565,7 +654,7 @@ it('rejects an API-key or alternate-provider auth status before plugin validatio
         ? { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' }
         : { exitCode: 0, stderr: '', stdout: '{"loggedIn":true,"authMethod":"api-key","subscriptionType":"pro"}\n' };
     },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [{ code: 'claude-native.auth.unsupported' }],
@@ -578,18 +667,19 @@ it('reports a signed-out Claude execution as a redacted harness failure', async 
   const harness = await loadNativeClaudeContract();
   expect(harness).toBeDefined();
 
-  const report = await harness!.runNativeClaudeSmoke({
+  const report = await withIsolatedHome((homeDirectory) => harness!.runNativeClaudeSmoke({
     candidatePluginName: 'agent-bundle-native-smoke',
     candidateSkillName: 'agent-bundle-native-smoke',
     cwd: '/fresh/fixture',
     enabled: true,
     environment: {},
+    homeDirectory,
     pluginDirectory: '/candidate/plugin',
     prompt: 'irrelevant after authentication fails',
     run: async (request: { readonly args: readonly string[] }) => request.args[0] === '--version'
       ? { exitCode: 0, stderr: '', stdout: '2.1.232 (Claude Code)\n' }
       : { exitCode: 0, stderr: '', stdout: '{"loggedIn":false}\n' },
-  });
+  }));
 
   expect(report).toMatchObject({
     diagnostics: [{

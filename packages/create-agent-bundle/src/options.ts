@@ -27,7 +27,7 @@ export interface ParsedFlags {
 }
 
 export const templateSummaries: Readonly<Record<TemplateName, string>> = {
-  'cli-tool': 'an installable CLI: src/cli.ts bin convention plus a src/index.ts library export',
+  'cli-tool': 'an installable routed CLI: src/cli/<command>.ts routes, a src/scripts/<name>.ts script, and a src/index.ts library export',
   'mcp-server': 'a stdio MCP server: one conventional src/mcp/<id>.ts entry plus a script',
   minimal: 'a skills-only plugin: one Skill and nothing else',
 };
@@ -144,7 +144,7 @@ export interface ProjectName {
  * (`/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), which the
  * unified `plugin` target enforces too and which is also a valid safe
  * package-output name — so every selectable target validates and the
- * `src/cli.ts` bin convention always applies.
+ * `plugin.name`-derived package executable convention always applies.
  */
 export const formatProjectName = (input: string): ProjectName => {
   const formatted = input.trim().replace(/\/+$/u, '');

@@ -2,6 +2,7 @@
   "name": "agent-bundle",
   "version": "0.1.0",
   "description": "Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts.",
+  "license": "Apache-2.0",
   "keywords": [
     "agent",
     "claude-code",
@@ -24,13 +25,15 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "pnpm build:workbench && rslib build",
+    "build": "node ../../scripts/sync-license-files.mjs && pnpm build:workbench && rslib build",
     "build:workbench": "pnpm --filter agent-bundle-workbench build"
   },
   "files": [
     "bin",
     "dist",
     "!dist/workbench/**/*.map",
+    "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "bin": {
@@ -69,6 +72,10 @@
       "types": "./dist/mcp-entry.d.ts",
       "import": "./dist/mcp-entry.js"
     },
+    "./routes": {
+      "types": "./dist/routes/public.d.ts",
+      "import": "./dist/routes.js"
+    },
     "./rstest": {
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"
@@ -90,6 +97,7 @@
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
     "@rslint/core": "0.8.2",
+    "@effect/platform-node-shared": "4.0.0-rc.112",
     "@rstackjs/load-config": "0.1.2",
     "acorn": "8.18.0",
     "ajv": "8.20.0",
@@ -102,7 +110,6 @@
     "ignore": "7.0.7",
     "jiti": "2.7.0",
     "open": "11.0.2",
-    "typescript-5": "npm:typescript@5.6.1-rc",
     "ws": "8.21.3",
     "yaml": "2.9.0"
   },
@@ -112,6 +119,7 @@
     "@types/ws": "8.18.1",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
     "react": "19.2.8",
+    "typescript-5": "npm:typescript@5.9.3",
     "zod": "4.5.4"
   },
   "peerDependencies": {

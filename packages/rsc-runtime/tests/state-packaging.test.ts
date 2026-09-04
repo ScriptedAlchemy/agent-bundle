@@ -86,6 +86,7 @@ describe.sequential('state kernel packaging boundaries', () => {
       './notices',
       './notices/inbox-route',
       './mount',
+      './lineage',
     ]);
     for (const subpath of Object.keys(packageJson.exports)) {
       const target = packageJson.exports[subpath]!;

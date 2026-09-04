@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveEvalAssertions } from './assertions.ts';
 import { redactEvalCredentialText, withoutEvalCredentialEnvironment } from './credentials.ts';
@@ -152,7 +152,7 @@ const runProbe = async (probe: EvalProcessProbe, cwd: string): Promise<ProbeResu
 const readMcpCallLog = async (fixturePath: string, logPath: string): Promise<McpCallLogResult> => {
   let contents: string;
   try {
-    contents = await readFile(join(fixturePath, logPath), 'utf8');
+    contents = await runWithPlatform(readFileString(join(fixturePath, logPath)));
   } catch {
     return Object.freeze({ calls: Object.freeze([]), level: 'unavailable' });
   }
@@ -327,7 +327,7 @@ export const reproduceEvalTrialAssertions = async (
     );
   }
   const evidence = parseJsonWithoutDuplicateKeys(
-    await readFile(join(options.directory, ...reference.split('/')), 'utf8'),
+    await runWithPlatform(readFileString(join(options.directory, ...reference.split('/')))),
   ) as EvalTrialEvidence;
   return resolveEvalAssertions(options.evalCase.assertions, evidence);
 };

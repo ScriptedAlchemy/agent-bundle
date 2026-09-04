@@ -92,6 +92,8 @@ it('lays both host manifests over one shared bundle root', () => {
 
   const claudePlugin = JSON.parse(documents['.claude-plugin/plugin.json']!) as Record<string, unknown>;
   expect(claudePlugin).toMatchObject({ name: 'bundle-example', version: '2.0.0' });
+  // Claude Code auto-loads hooks/hooks.json and reports a manifest pointer at
+  // the same file as a duplicate hooks file, so the manifest never names it.
   expect(claudePlugin).not.toHaveProperty('hooks');
 
   const codexPlugin = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
@@ -805,7 +807,9 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
   try {
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     const bundleRoot = join(outputRoot, 'plugin');
-    await expect(readFile(join(bundleRoot, '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('bundle-example');
+    const claudePlugin = JSON.parse(await readFile(join(bundleRoot, '.claude-plugin', 'plugin.json'), 'utf8')) as Record<string, unknown>;
+    expect(claudePlugin).toMatchObject({ name: 'bundle-example' });
+    expect(claudePlugin).not.toHaveProperty('hooks');
     await expect(readFile(join(bundleRoot, '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('./skills/');
     await expect(readFile(join(bundleRoot, 'AGENTS.md'), 'utf8')).resolves.toContain('multi-host agent plugin bundle');
     await expect(readFile(join(bundleRoot, 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);

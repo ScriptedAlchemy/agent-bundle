@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { Effect, FileSystem, Path } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
+import { liftTry } from './effect/lift.ts';
 import { defaultTargets, UsageError, type TargetName } from './options.ts';
 import { assertLocalFrameworkTarball, validatedRuntimeSpecForFramework } from './framework.ts';
 
@@ -40,19 +41,24 @@ export interface ScaffoldRequest {
   readonly templateRoot: string;
 }
 
+/** `ENOENT` on the platform error channel. */
+const isNotFound = (error: PlatformError): boolean => error.reason._tag === 'NotFound';
+
 /** The target directory must be absent, empty, or hold nothing but `.git`. */
-export const assertScaffoldTarget = async (targetDirectory: string, displayName: string): Promise<void> => {
-  let entries: readonly string[];
-  try {
-    entries = await readdir(targetDirectory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
+export const assertScaffoldTarget = Effect.fnUntraced(function* (
+  targetDirectory: string,
+  displayName: string,
+): Effect.fn.Return<void, PlatformError | UsageError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  const entries = yield* fs.readDirectory(targetDirectory).pipe(
+    Effect.catch((error) => (isNotFound(error) ? Effect.succeed([]) : Effect.fail(error))),
+  );
   if (entries.some((entry) => entry !== '.git')) {
-    throw new UsageError(`Target directory "${displayName}" is not empty. Choose a new directory or empty it first.`);
+    return yield* Effect.fail(
+      new UsageError(`Target directory "${displayName}" is not empty. Choose a new directory or empty it first.`),
+    );
   }
-};
+});
 
 interface TemplateManifest {
   bin?: Record<string, string>;
@@ -99,46 +105,127 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
   return contents.replace(defaultTargetsLiteral, `targets: [${renderTargets(targets)}]`);
 };
 
+/** The hosts the generated installer bin accepts, in the package build's order. */
+const installableHosts = (targets: readonly TargetName[]): readonly TargetName[] =>
+  (['claude', 'codex', 'cursor'] as const)
+    .filter((host) => targets.some((target) => target === host || target === 'plugin'));
+
+/**
+ * Template READMEs are written against the default targets, so their install
+ * example names `claude`. The checked-in shape is one shell comment followed
+ * by `npx <installer-bin> install claude`, plus the prose sentence naming the
+ * `<installer-bin> install <host>` command; both markers are drift-checked.
+ */
+const readmeInstallExample = /^(# after publishing[^\n]*)\n(npx \S+) install claude\n/mu;
+const readmeInstallProse = /^Installing the npm package does not mutate any host; run the generated\n`(\S+) install <host>` command explicitly\.\n/mu;
+
+/**
+ * Rewrite a template README's install instructions for the selected targets:
+ * one example line per installable host, or — when no `claude`, `codex`,
+ * `cursor`, or `plugin` target is selected and therefore no installer bin is
+ * generated — an explanation of how to get one. Templates without an install
+ * section (the skills-only template) pass through unchanged.
+ */
+const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]): string => {
+  const example = readmeInstallExample.exec(contents);
+  const prose = readmeInstallProse.exec(contents);
+  if (example === null && prose === null) return contents;
+  if (example === null || prose === null) {
+    throw new Error('Template drift: README.md install example and prose must both be present or both absent.');
+  }
+  const hosts = installableHosts(targets);
+  // Every group is unconditional in the patterns above.
+  const comment = example[1] ?? '';
+  const exampleBin = example[2] ?? '';
+  const proseBin = prose[1] ?? '';
+  if (hosts.length === 0) {
+    // The scaffold also dropped this bin mapping from package.json, and the
+    // build never restores manifest entries, so re-enabling installers needs
+    // both edits: the config target and the bin entry the npx command resolves.
+    const binEntry = `"${proseBin}": "./dist/bin/${proseBin}.js"`;
+    return contents
+      .replace(readmeInstallExample, [
+        '# no installer bin is generated for these targets; add claude, codex, or cursor',
+        '# to `targets` in agent-bundle.config.ts and restore the package.json bin entry',
+        `# ${binEntry} to get one`,
+        '',
+      ].join('\n'))
+      .replace(readmeInstallProse, [
+        'Installing the npm package does not mutate any host. This project selects',
+        `no installable host target (${renderTargets(targets)}), so no \`${proseBin} install\``,
+        'command is generated and its `bin` entry was dropped from `package.json`. To',
+        'generate one, add `claude`, `codex`, or `cursor` to `targets` in',
+        `\`agent-bundle.config.ts\` and restore \`${binEntry}\` under \`bin\` in`,
+        '`package.json`; the build emits the installer file but never edits the manifest.',
+        '',
+      ].join('\n'));
+  }
+  return contents
+    .replace(readmeInstallExample, [
+      comment,
+      ...hosts.map((host) => `${exampleBin} install ${host}`),
+      '',
+    ].join('\n'))
+    .replace(readmeInstallProse, [
+      'Installing the npm package does not mutate any host; run the generated',
+      `\`${proseBin} install <host>\` command explicitly. The installer accepts the`,
+      `selected host targets only: ${hosts.map((host) => `\`${host}\``).join(', ')}.`,
+      '',
+    ].join('\n'));
+};
+
 /**
  * Copy one template directory into the target, substituting the placeholder
  * project name in every file, rewriting `package.json` (real package name,
  * `workspace:*` framework placeholder pinned to the resolved spec, installer
- * bins omitted when no installable host is selected) and the config's target
- * list. Returns the emitted project-relative paths, sorted.
+ * bins omitted when no installable host is selected), the config's target
+ * list, and the README's install instructions. Returns the emitted
+ * project-relative paths, sorted.
  */
-export const scaffold = async (request: ScaffoldRequest): Promise<readonly string[]> => {
-  const templateManifest = JSON.parse(
-    await readFile(join(request.templateRoot, 'package_json'), 'utf8'),
-  ) as TemplateManifest;
+export const scaffold = Effect.fnUntraced(function* (
+  request: ScaffoldRequest,
+): Effect.fn.Return<readonly string[], PlatformError | UsageError | Error, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const manifestSource = yield* fs.readFileString(path.join(request.templateRoot, 'package_json'));
+  const templateManifest = yield* liftTry(() => JSON.parse(manifestSource) as TemplateManifest);
   const usesWorkspaceRuntime = [templateManifest.dependencies, templateManifest.devDependencies]
     .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
   let runtimeSpec: string | undefined;
   if (usesWorkspaceRuntime) {
-    runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
+    runtimeSpec = yield* validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
   } else {
-    await assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
+    yield* assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
   }
   const emitted: string[] = [];
-  const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {
-    await mkdir(to, { recursive: true });
-    for (const entry of await readdir(from, { withFileTypes: true })) {
-      const name = renamedEntries[entry.name] ?? entry.name;
-      const source = join(from, entry.name);
-      const destination = join(to, name);
+  const copyDirectory: (
+    from: string,
+    to: string,
+    relative: string,
+  ) => Effect.Effect<void, PlatformError> = Effect.fnUntraced(function* (from, to, relative) {
+    yield* fs.makeDirectory(to, { recursive: true });
+    for (const entryName of yield* fs.readDirectory(from)) {
+      const name = renamedEntries[entryName] ?? entryName;
+      const source = path.join(from, entryName);
+      const destination = path.join(to, name);
       const relativePath = relative === '' ? name : `${relative}/${name}`;
-      if (entry.isDirectory()) {
-        await copyDirectory(source, destination, relativePath);
+      const info = yield* fs.stat(source);
+      if (info.type === 'Directory') {
+        yield* copyDirectory(source, destination, relativePath);
         continue;
       }
-      let contents = (await readFile(source, 'utf8')).replaceAll(placeholderName, request.pluginName);
+      let contents = (yield* fs.readFileString(source)).replaceAll(placeholderName, request.pluginName);
+      // Template drift is a checked-in-template bug: the rewrites throw and
+      // the defect crosses the boundary as the same Error it always was.
       if (relativePath === 'package.json') contents = rewriteManifest(contents, request, runtimeSpec);
       if (relativePath === 'agent-bundle.config.ts') contents = rewriteConfigTargets(contents, request.targets);
-      await writeFile(destination, contents);
+      if (relativePath === 'README.md') contents = rewriteReadmeInstall(contents, request.targets);
+      yield* fs.writeFileString(destination, contents);
       emitted.push(relativePath);
     }
-  };
-  await copyDirectory(request.templateRoot, request.targetDirectory, '');
+  });
+  yield* copyDirectory(request.templateRoot, request.targetDirectory, '');
   // Code-unit order, not localeCompare: the emitted inventory must be stable
   // across machines and locales.
   return emitted.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-};
+});

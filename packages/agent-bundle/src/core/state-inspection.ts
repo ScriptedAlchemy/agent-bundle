@@ -1,5 +1,6 @@
+import { noticeRetentionDefaults } from '../config/notice-retention.ts';
 import { deepFreeze } from './freeze.ts';
-import type { NormalizedStateDefinition } from './types.ts';
+import type { NormalizedNoticeRetentionPolicy, NormalizedNotices, NormalizedStateDefinition } from './types.ts';
 
 export type StateProjectionDriver = 'memory' | 'sqlite';
 
@@ -20,6 +21,17 @@ export const agentStateDefaultBudgets: StateProjectionBudgets = Object.freeze({
   maxStateBytes: 1_048_576,
 });
 
+/**
+ * The notice ledger's retention policy as the generated runtime will mount it:
+ * the runtime defaults unless `notices.retention` declared otherwise. Live
+ * counts and the last compaction are runtime facts of one installed store
+ * (`AgentNoticeLedger.inspect()`); static inspection shows the policy only.
+ */
+export interface StateNoticeRetentionProjection {
+  readonly resolved: NormalizedNoticeRetentionPolicy;
+  readonly source: 'declared' | 'defaults';
+}
+
 export interface StateDefinitionProjection {
   readonly budgets:
     | {
@@ -33,6 +45,8 @@ export interface StateDefinitionProjection {
   readonly durableLocation?: string;
   readonly id: string;
   readonly lifetime: NormalizedStateDefinition['lifetime'];
+  /** Retention policy of the co-mounted notice ledger; absent on projections built before it was inspected. */
+  readonly noticeRetention?: StateNoticeRetentionProjection;
   readonly notices: readonly string[];
   readonly source: string;
 }
@@ -42,6 +56,9 @@ const durableStateLocation =
 
 const noticeLedgerInspection =
   'Generated runtimes co-mount the notice ledger store at the same lifetime under reserved id @agent-bundle/runtime/agent-notice-ledger/v1.';
+
+const noticeRetentionInspection =
+  'Notice retention prunes settled notices on admitted events and compacts the ledger journal past its byte bound; live counts and the last compaction belong to each installed store (AgentNoticeLedger.inspect()).';
 
 const stateDriver = (
   lifetime: NormalizedStateDefinition['lifetime'],
@@ -63,7 +80,11 @@ const stateDriver = (
 export const stateDefinitionProjection = (
   definition: NormalizedStateDefinition,
   source = definition.source,
+  notices?: NormalizedNotices,
 ): StateDefinitionProjection => {
+  const noticeRetention: StateNoticeRetentionProjection = notices === undefined
+    ? Object.freeze({ resolved: noticeRetentionDefaults, source: 'defaults' })
+    : Object.freeze({ resolved: notices.retention.resolved, source: 'declared' });
   const budgets: StateDefinitionProjection['budgets'] = definition.budgets === 'dynamic'
     ? Object.freeze({ source: 'dynamic' })
     : Object.freeze({
@@ -79,7 +100,8 @@ export const stateDefinitionProjection = (
     ...(definition.lifetime === 'workspace-durable' ? { durableLocation: durableStateLocation } : {}),
     id: definition.id,
     lifetime: definition.lifetime,
-    notices: [noticeLedgerInspection],
+    noticeRetention,
+    notices: [noticeLedgerInspection, noticeRetentionInspection],
     source,
   });
 };

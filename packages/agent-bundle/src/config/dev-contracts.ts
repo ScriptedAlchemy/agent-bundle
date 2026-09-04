@@ -131,9 +131,12 @@ const validateFixture = (value: unknown, routeId: string): ContractRouteFixture 
   if (!isRecord(value)) return invalid(`Fixture ${JSON.stringify(routeId)} must be an object.`);
   fields(
     value,
-    ['cancellation', 'input', 'inputs', 'lifecycle', 'previousResults', 'resultCompat'],
+    ['cancellation', 'input', 'inputs', 'kind', 'lifecycle', 'previousResults', 'resultCompat'],
     `Fixture ${JSON.stringify(routeId)}`,
   );
+  if (value.kind !== undefined && value.kind !== 'resource') {
+    return invalid(`Fixture ${JSON.stringify(routeId)} kind must be "resource" when provided.`);
+  }
   if (value.resultCompat !== undefined && value.resultCompat !== 'additive' && value.resultCompat !== 'closed') {
     return invalid(`Fixture ${JSON.stringify(routeId)} resultCompat must be "additive" or "closed".`);
   }

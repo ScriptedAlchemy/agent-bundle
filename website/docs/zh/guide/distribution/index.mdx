@@ -1,0 +1,73 @@
+---
+description: 'agent-bundle 项目如何变成宿主可以安装的东西：构建、校验，并把每个 target 目录作为可独立分发的捆绑包交付。'
+---
+
+# 交付捆绑包
+
+`agent-bundle build` 让每个 target 目录都**可独立分发**。构建之后没有额外的打包步骤，也没有逐宿主的
+重新打包脚本：target 目录就是你复制、发布或交给宿主 CLI 的那个单位。
+
+```sh
+npx agent-bundle build --root . --output artifact
+```
+
+## 流水线
+
+| 步骤 | 命令 | 产出什么 |
+| --- | --- | --- |
+| 构建 | `agent-bundle build` | 每个所选 target 一个目录；当项目声明了 `bin`/`lib` 时，还有 `dist/` 包构建。 |
+| 校验 | `agent-bundle validate --artifact <dir> --strict` | 内容寻址地证明输出字节与清单一致，外加在宿主发布了校验器时的宿主工具结论。 |
+| 安装 | `agent-bundle install <host> --from <dir>` | 把捆绑包注册进 Claude、Codex 或 Cursor。 |
+
+构建在写出任何东西之前就已经校验过项目，因此针对源码单独运行一次 `validate` 更像是快速的预检，而不是
+必需的阶段。真正有意思的是校验**产物**，因为它完全不需要项目源码。
+
+### 一个 target 如何编译
+
+构建先为每个 target 做规划，然后把该 target 的输出最多分两个阶段降级到同一个暂存根目录，待产物校验通过后
+原子地发布：
+
+1. **MCP Apps**——浏览器环境，通过 `@rsbuild/core` 编译。只有当项目声明了 App 路由时这一阶段才存在，并且
+   始终最先运行：MCP 入口会内嵌它产出的 HTML。
+2. **智能体宿主面**——路由式 CLI bin、打包的脚本、hook 包装器、MCP stdio 入口，以及每个面各自的
+   react-server Flight worker，全部一起通过**每个 target 一个 Rslib 实例**降级（每个输出一个 Rsbuild
+   environment，一个 Rspack 多编译器）。宿主面在运行时按文件名找到它的 worker，因此阶段内二者无需排序；
+   每个面为清单保留各自的源码证据。
+
+两个阶段与 `dist/` 包构建以同样的方式合成打包器配置——profile、`tools.rsbuild`、`tools.rspack`，最后是
+框架不变量——见 [`tools`](../../reference/configuration.mdx#tools)。`agent-bundle inspect --bundler` 会
+打印合成结果。
+
+## 一个 target 目录里发布了什么
+
+每个已构建 target 都包含一份生成的 `INSTALL.md`，其中使用捆绑包**真实的**插件名与市场名——而不是
+占位符——因此这份文件可以逐字照做。多宿主的 `plugin` target 还带有一份生成的 `AGENTS.md`，说明如何把它
+安装到各个宿主。
+
+Claude 与 Codex target 始终包含本地市场清单，正是这一点让它们的公开 CLI 能够直接安装输出的目录。
+Cursor、portable 与组合 target 则包含一个独立的 `install.mjs`，因为 Cursor 提供了市场管理能力，却没有
+非交互式的插件安装动词。
+
+`agent-bundle.manifest.json` 记录每个输出文件及其 SHA-256，因此校验比对的是真实字节，而不是检查某个
+路径是否存在。各 target 自身的布局在[项目结构](../start/project-structure.mdx)中介绍。
+
+构建是可复现的：对同一份未改动的源码树构建两次，会得到逐字节相同的产物——相同的清单、相同的摘要——
+无论 `--output` 叫什么名字，也无论每次构建的暂存目录叫什么名字。打包器写进编译入口里的模块标识只由
+项目根目录推导，绝不会来自暂存目录、输出目录或构建机器上的任何绝对路径，因此已安装的副本、预览包与
+[`doctor`](./installation.mdx) 的比对在同一源码下看到的都是相同的字节。这些标识所命名的生成模块从内存
+中提供，位于项目根目录下保留的 `.agent-bundle-virtual/` 目录；只要有任何东西占用该目录，构建就会拒绝编译。
+
+## 面向 npm 的那一半
+
+同时作为 npm 包发布的项目还有第二份输出：`dist/bin/<name>.js` 可执行文件与一个库入口，见
+[包入口](../authoring/package-entries.mdx)。当包输出与至少一个宿主包被一起构建时，框架还会输出一个
+相对包的安装器 bin ——见[宿主安装](./installation.mdx)。
+
+`agent-bundle prepack` 是这一半的门禁：它运行发布构建、以不执行脚本的方式 dry-run `npm pack`，并核实
+打包后的输出、产物哈希、bin 与版本号。
+
+## 本章内容
+
+- [产物校验](./validation.mdx) —— 源码与产物校验，以及各宿主自有工具的贡献。
+- [宿主安装](./installation.mdx) —— 安装到 Claude、Codex 与 Cursor，以及各自接受的安装作用域。
+- [预览包](./preview-packages.mdx) —— 目前代替 npm 的 pkg.pr.new 发布通道。

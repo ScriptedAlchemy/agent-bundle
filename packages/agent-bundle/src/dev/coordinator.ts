@@ -1,9 +1,9 @@
-import { Deferred, Effect, Semaphore } from 'effect';
+import { Cause, Deferred, Effect, Exit, Result, Semaphore } from 'effect';
 import { resolve } from 'node:path';
 
 import { freezeDiagnostics, hasErrors } from '../core/diagnostics.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
-import { liftPromise } from '../effect/lift.ts';
+import { liftPromise, liftTry } from '../effect/lift.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { ArtifactService, type ArtifactEpochResult, type FailedArtifactEpochResult } from './artifacts/artifact-service.ts';
 import { DiagnosticService, type DiagnosticReport } from './diagnostic-service.ts';
@@ -26,6 +26,7 @@ import {
   type SourceStatus,
   type SucceededBuildAttempt,
 } from './types.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 export interface DevLockHandle {
   close(): Promise<void>;
@@ -57,7 +58,7 @@ export interface DevCoordinatorCloseFailure {
 }
 
 /** Reports every resource that could not be released during coordinator shutdown. */
-export class DevCoordinatorCloseError extends Error {
+export class DevCoordinatorCloseError extends YieldableFrameworkError {
   readonly failures: readonly DevCoordinatorCloseFailure[];
 
   constructor(failures: readonly DevCoordinatorCloseFailure[]) {
@@ -199,7 +200,6 @@ const artifactStatusFor = (
 export class DevCoordinator {
   readonly #acquireLock: (options: DevLockOptions) => Promise<DevLockHandle>;
   readonly #artifactService: ArtifactBuilder;
-  readonly #cancelStartup: () => void;
   readonly #createAttemptId: () => string;
   readonly #createWatcher: (options: ProjectWatcherOptions) => DevelopmentWatcher;
   readonly #diagnosticService: AffectedFileDiagnostics;
@@ -216,7 +216,11 @@ export class DevCoordinator {
   /** Serializes build passes; admission below guarantees one holder, the permit makes the invariant structural. */
   readonly #buildPermit: Semaphore.Semaphore = runSync(Semaphore.make(1));
   readonly #startRebuildToken = Symbol('DevCoordinator initial rebuild');
-  readonly #startupCancellation: Promise<void>;
+  /**
+   * Fails once `close()` cancels a startup that is still blocked before its
+   * first build; every startup step races against it (`#awaitStartup`).
+   */
+  readonly #startupClosed: Deferred.Deferred<never, Error> = runSync(Deferred.make<never, Error>());
   #activeEpoch: ArtifactEpoch | undefined;
   #closing = false;
   #closePromise: Promise<void> | undefined;
@@ -236,11 +240,6 @@ export class DevCoordinator {
     this.#acquireLock = options.acquireLock ?? acquireDevLock;
     this.#epochStore = options.epochStore ?? new EpochStore({ projectRoot: this.#root });
     this.#artifactService = options.artifactService ?? new ArtifactService({ epochStore: this.#epochStore });
-    let cancelStartup: () => void = () => undefined;
-    this.#startupCancellation = new Promise<void>((resolvePromise) => {
-      cancelStartup = resolvePromise;
-    });
-    this.#cancelStartup = cancelStartup;
     this.#createAttemptId = options.createAttemptId ?? (() => crypto.randomUUID());
     this.#createWatcher = options.createWatcher ?? ((watcherOptions) => new ProjectWatcher(watcherOptions));
     this.#diagnosticService = options.diagnosticService ?? new DiagnosticService({ root: this.#root });
@@ -264,7 +263,7 @@ export class DevCoordinator {
   async start(): Promise<DevSession> {
     if (this.#startPromise !== undefined) return this.#startPromise;
     if (this.#closing) throw new Error('DevCoordinator is closed.');
-    this.#startPromise = this.#start();
+    this.#startPromise = runPromise(this.#startEffect());
     return this.#startPromise;
   }
 
@@ -312,68 +311,89 @@ export class DevCoordinator {
     return this.#closePromise;
   }
 
-  async #start(): Promise<DevSession> {
-    try {
-      await this.#acquireStartupLock();
-      this.#assertOpen();
-      await this.#awaitStartup(this.#epochStore.recoverStaging());
-      this.#assertOpen();
-      this.#activeEpoch = await this.#awaitStartup(this.#epochStore.readActiveEpoch());
-      this.#assertOpen();
-      const projectIgnoreRules = await this.#awaitStartup(readProjectIgnoreRules(this.#root));
-      this.#assertOpen();
-      this.#watcher = this.#createWatcher({
+  /**
+   * Startup as one Effect: every blocking step races the close signal
+   * (`#awaitStartup`), and a failed startup releases whatever it acquired —
+   * watcher and lock concurrently, outcomes ignored — before re-raising the
+   * original error. Sync steps are lifted so a throw is a typed failure the
+   * cleanup handler sees, never a defect that skips it.
+   */
+  #startEffect(): Effect.Effect<DevSession, unknown> {
+    const startup = Effect.gen({ self: this }, function* (this: DevCoordinator) {
+      yield* this.#acquireStartupLock();
+      yield* this.#assertOpenEffect();
+      yield* this.#awaitStartup(() => this.#epochStore.recoverStaging());
+      yield* this.#assertOpenEffect();
+      this.#activeEpoch = yield* this.#awaitStartup(() => this.#epochStore.readActiveEpoch());
+      yield* this.#assertOpenEffect();
+      const projectIgnoreRules = yield* this.#awaitStartup(() => readProjectIgnoreRules(this.#root));
+      yield* this.#assertOpenEffect();
+      const watcher = yield* liftTry(() => this.#createWatcher({
         ignoredPaths: this.#ignoredPaths,
         isIgnored: (source) => isProjectPathIgnored(projectIgnoreRules, this.#root, source),
         now: this.#now,
         onInvalidation: async (invalidation) => this.rebuild(invalidation),
         outputPaths: this.#outputPaths,
         root: this.#root,
-      });
-      await this.#awaitStartup(this.#watcher.ready?.() ?? Promise.resolve());
-      this.#assertOpen();
-      await this.#rebuild(nowInvalidation(this.#now, 'initial', []), this.#startRebuildToken);
+      }));
+      this.#watcher = watcher;
+      yield* this.#awaitStartup(() => watcher.ready?.() ?? Promise.resolve());
+      yield* this.#assertOpenEffect();
+      yield* liftPromise(() => this.#rebuild(nowInvalidation(this.#now, 'initial', []), this.#startRebuildToken));
       const session: DevSession = Object.freeze({
         close: () => this.close(),
         status: () => this.status(),
       });
       this.#session = session;
       return session;
-    } catch (error) {
-      await Promise.allSettled([
-        this.#releaseWatcher(),
-        this.#releaseLock(),
-      ]);
+    });
+    return startup.pipe(Effect.catch((error) => Effect.gen({ self: this }, function* (this: DevCoordinator) {
+      yield* Effect.forEach(
+        [() => this.#releaseWatcher(), () => this.#releaseLock()],
+        (release) => Effect.exit(liftPromise(release)),
+        { concurrency: 'unbounded' },
+      );
       this.#watcher = undefined;
       this.#lock = undefined;
-      throw error;
-    }
+      return yield* Effect.fail(error);
+    })));
   }
 
-  #assertOpen(): void {
-    if (this.#closing) throw new Error('DevCoordinator is closed.');
+  #assertOpenEffect(): Effect.Effect<void, Error> {
+    return Effect.suspend(() => this.#closing
+      ? Effect.fail(new Error('DevCoordinator is closed.'))
+      : Effect.void);
   }
 
-  async #acquireStartupLock(): Promise<void> {
-    const acquisition = this.#acquireLock({ projectRoot: this.#root });
-    try {
-      this.#lock = await this.#awaitStartup(acquisition);
-    } catch (error) {
-      void acquisition.then(
-        (lock) => lock.close().catch(() => undefined),
-        () => undefined,
+  /**
+   * A lock that resolves after startup was cancelled is released, not kept:
+   * the acquisition is started once, raced against close, and drained when
+   * it loses.
+   */
+  #acquireStartupLock(): Effect.Effect<void, unknown> {
+    return Effect.suspend(() => {
+      const acquisition = this.#acquireLock({ projectRoot: this.#root });
+      return this.#awaitStartup(() => acquisition).pipe(
+        Effect.flatMap((lock) => Effect.sync(() => {
+          this.#lock = lock;
+        })),
+        Effect.tapError(() => Effect.sync(() => {
+          void acquisition.then(
+            (lock) => lock.close().catch(() => undefined),
+            () => undefined,
+          );
+        })),
       );
-      throw error;
-    }
+    });
   }
 
-  async #awaitStartup<T>(operation: Promise<T>): Promise<T> {
-    return Promise.race([
-      operation,
-      this.#startupCancellation.then(() => {
-        throw new Error('DevCoordinator is closed.');
-      }),
-    ]);
+  /** One startup step raced against `close()`; the loser is interrupted. */
+  #awaitStartup<T>(operation: () => Promise<T>): Effect.Effect<T, unknown> {
+    return Effect.raceFirst(liftPromise(operation), Deferred.await(this.#startupClosed));
+  }
+
+  #cancelStartup(): void {
+    runSync(Deferred.fail(this.#startupClosed, new Error('DevCoordinator is closed.')));
   }
 
   #releaseLock(): Promise<void> {
@@ -399,7 +419,7 @@ export class DevCoordinator {
    */
   #startBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
     const current = runPromise(this.#buildPermit.withPermit(
-      liftPromise(() => this.#performBuild(invalidation)).pipe(
+      this.#performBuild(invalidation).pipe(
         Effect.onExit(() => Effect.sync(() => this.#drainQueuedBuild())),
       ),
     ));
@@ -473,53 +493,63 @@ export class DevCoordinator {
     return result;
   }
 
-  async #performBuild(invalidation: Invalidation): Promise<ArtifactEpochResult> {
-    let prepared: PreparedProject;
-    try {
-      const initial = this.#nextPreparedProject;
-      this.#nextPreparedProject = undefined;
-      prepared = initial ?? await this.#projectService.prepare(this.#prepareCommand);
-    } catch (error) {
-      const source = withDiagnostics(this.#status.source, [phaseDiagnostic('prepare', error)]);
+  /**
+   * One serialized build pass. Only the leaf I/O is lifted — prepare, the
+   * prepared-project hook, lint, the artifact build, and the package build —
+   * and each phase's failure is exposed as a `Result` so it completes the
+   * attempt as a failed build result. Status and event bookkeeping stays
+   * synchronous inside the fiber; the program itself never fails.
+   */
+  readonly #performBuild = Effect.fnUntraced(function* (
+    this: DevCoordinator,
+    invalidation: Invalidation,
+  ): Effect.fn.Return<ArtifactEpochResult, unknown> {
+    const initial = this.#nextPreparedProject;
+    this.#nextPreparedProject = undefined;
+    const preparation = yield* Effect.result(initial === undefined
+      ? liftPromise(() => this.#projectService.prepare(this.#prepareCommand))
+      : Effect.succeed(initial));
+    if (Result.isFailure(preparation)) {
+      const source = withDiagnostics(this.#status.source, [phaseDiagnostic('prepare', preparation.failure)]);
       return this.#completeFailure(this.#beginBuild(invalidation, source), source, source.diagnostics);
     }
+    const prepared = preparation.success;
 
     this.#watcher?.addOutputPaths?.([prepared.artifactDistPath, ...prepared.outputRoots]);
     const running = this.#beginBuild(invalidation, prepared.source);
-    try {
-      await this.#onPreparedProject?.(prepared);
-    } catch (error) {
-      const source = withDiagnostics(prepared.source, [phaseDiagnostic('prepare', error)]);
+    const onPrepared = this.#onPreparedProject;
+    const hook = yield* Effect.result(onPrepared === undefined
+      ? Effect.void
+      : liftPromise(() => onPrepared(prepared)));
+    if (Result.isFailure(hook)) {
+      const source = withDiagnostics(prepared.source, [phaseDiagnostic('prepare', hook.failure)]);
       return this.#completeFailure(running, source, source.diagnostics);
     }
-    let lintDiagnostics: readonly Diagnostic[];
-    try {
-      const report = await this.#diagnosticService.lint(invalidation.paths);
-      lintDiagnostics = freezeDiagnostics(report.diagnostics);
-    } catch (error) {
-      const source = withDiagnostics(prepared.source, [phaseDiagnostic('lint', error)]);
+    const lint = yield* Effect.result(liftPromise(() => this.#diagnosticService.lint(invalidation.paths)));
+    if (Result.isFailure(lint)) {
+      const source = withDiagnostics(prepared.source, [phaseDiagnostic('lint', lint.failure)]);
       return this.#completeFailure(running, source, source.diagnostics);
     }
+    const lintDiagnostics: readonly Diagnostic[] = freezeDiagnostics(lint.success.diagnostics);
 
     const source = withDiagnostics(prepared.source, lintDiagnostics);
     if (hasErrors(lintDiagnostics)) {
       return this.#completeFailure(running, source, source.diagnostics);
     }
 
-    let result: ArtifactEpochResult;
-    try {
-      result = await this.#artifactService.build(prepared);
-    } catch (error) {
+    const built = yield* Effect.result(liftPromise(() => this.#artifactService.build(prepared)));
+    if (Result.isFailure(built)) {
       return this.#completeFailure(running, source, [
         ...source.diagnostics,
-        phaseDiagnostic('artifact', error),
+        phaseDiagnostic('artifact', built.failure),
       ]);
     }
+    const result = built.success;
     // The package build (bin/lib) rebuilds inside the same serialized pass,
     // after the artifact epoch committed: its failure never invalidates the
     // epoch and surfaces as warning diagnostics on the succeeded attempt.
     const packageDiagnostics = result.outcome === 'succeeded'
-      ? (await this.#packageBuildService.build(prepared, invalidation)).diagnostics
+      ? (yield* liftPromise(() => this.#packageBuildService.build(prepared, invalidation))).diagnostics
       : Object.freeze([]);
     const diagnostics = freezeDiagnostics([...lintDiagnostics, ...result.diagnostics, ...packageDiagnostics]);
     if (result.outcome === 'succeeded') {
@@ -546,9 +576,16 @@ export class DevCoordinator {
       return Object.freeze({ diagnostics, epoch: result.epoch, outcome: 'succeeded' });
     }
     return this.#completeFailure(running, source, diagnostics);
-  }
+  });
 
-  async #close(): Promise<void> {
+  /**
+   * Shutdown as one Effect: wait for the in-flight build or startup to
+   * settle, then release every resource concurrently, capturing each `Exit`
+   * so no failure short-circuits another release. Every failure is reported
+   * together as `DevCoordinatorCloseError` (build first, then resources in
+   * declaration order).
+   */
+  #close(): Promise<void> {
     const hasBuildInFlight = this.#currentBuild !== undefined;
     const startupBlockedBeforeBuild = !hasBuildInFlight &&
       this.#session === undefined && this.#startPromise !== undefined;
@@ -557,8 +594,7 @@ export class DevCoordinator {
       void this.#releaseWatcher().catch(() => undefined);
       void this.#releaseLock().catch(() => undefined);
     }
-    const inFlight = this.#currentBuild ?? this.#startPromise;
-    const buildResult = await Promise.allSettled([inFlight ?? Promise.resolve()]);
+    const inFlight: Promise<unknown> = this.#currentBuild ?? this.#startPromise ?? Promise.resolve();
     const resources: readonly Readonly<{
       readonly close: () => Promise<unknown>;
       readonly resource: DevCoordinatorCloseFailure['resource'];
@@ -567,19 +603,23 @@ export class DevCoordinator {
       { close: () => this.#diagnosticService.close(), resource: 'diagnostics' },
       { close: () => this.#releaseLock(), resource: 'lock' },
     ];
-    const results = await Promise.allSettled(resources.map(async ({ close }) => close()));
-    const failures = [
-      ...buildResult.flatMap((result): readonly DevCoordinatorCloseFailure[] =>
-        hasBuildInFlight && result.status === 'rejected'
-          ? [Object.freeze({ error: result.reason, resource: 'build' })]
-          : [],
-      ),
-      ...results.flatMap((result, index): readonly DevCoordinatorCloseFailure[] =>
-        result.status === 'rejected'
-          ? [Object.freeze({ error: result.reason, resource: resources[index]!.resource })]
-          : [],
-      ),
-    ];
-    if (failures.length > 0) throw new DevCoordinatorCloseError(failures);
+    const closeFailure = (
+      exit: Exit.Exit<unknown, unknown>,
+      resource: DevCoordinatorCloseFailure['resource'],
+    ): readonly DevCoordinatorCloseFailure[] =>
+      Exit.isFailure(exit) ? [Object.freeze({ error: Cause.squash(exit.cause), resource })] : [];
+    return runPromise(Effect.gen(function* () {
+      const buildExit = yield* Effect.exit(liftPromise(() => inFlight));
+      const releases = yield* Effect.forEach(
+        resources,
+        ({ close }) => Effect.exit(liftPromise(close)),
+        { concurrency: 'unbounded' },
+      );
+      const failures = [
+        ...(hasBuildInFlight ? closeFailure(buildExit, 'build') : []),
+        ...releases.flatMap((exit, index) => closeFailure(exit, resources[index]!.resource)),
+      ];
+      if (failures.length > 0) return yield* new DevCoordinatorCloseError(failures);
+    }));
   }
 }

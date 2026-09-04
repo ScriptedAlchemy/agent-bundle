@@ -30,9 +30,21 @@ export const subscribeToEpochAdoption = (
   },
 );
 
+/** A held epoch-store reference; releasing it lets retention reclaim the epoch. */
+export interface EpochAdoptionLease {
+  close(): Promise<void>;
+}
+
 export interface EpochAdoptionPolicyOptions {
   readonly contracts: () => PreparedDevContractMatrix | undefined;
   readonly eventHub: ProjectEventHub;
+  /**
+   * Leases the adopted epoch for as long as hosts are told to serve it. Store
+   * retention keeps only the active epoch, referenced epochs, and a handful of
+   * recent unreferenced ones, so without this lease a run of failing rebuilds
+   * would delete the last passing epoch while it is still advertised.
+   */
+  readonly lease?: (epochId: string) => Promise<EpochAdoptionLease>;
   readonly run: (
     epochId: string,
     contracts: PreparedDevContractMatrix,
@@ -40,7 +52,7 @@ export interface EpochAdoptionPolicyOptions {
 }
 
 interface PendingEpoch {
-  readonly contracts: PreparedDevContractMatrix;
+  readonly contracts: PreparedDevContractMatrix | undefined;
   readonly epochId: string;
   readonly sequence: number;
 }
@@ -62,6 +74,21 @@ const failedEvaluation = (epochId: string, error: unknown): EpochContractEvaluat
   summary: 'Development contract matrix could not complete.',
 });
 
+const leaseFailedEvaluation = (epochId: string, error: unknown): EpochContractEvaluation => Object.freeze({
+  diagnostics: Object.freeze([Object.freeze({
+    code: 'AB7211',
+    message: `Epoch ${epochId} could not be leased for host adoption: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+    recovery: 'Rebuild so a new epoch is published; the last leased host epoch remains active.',
+    severity: 'error',
+  } satisfies Diagnostic)]),
+  epochId,
+  failures: Object.freeze([]),
+  state: 'failed',
+  summary: 'Adopted epoch could not be leased.',
+});
+
 /**
  * One host-facing epoch gate. Workbench playground surfaces continue to follow
  * artifact.available directly; only subscribers here wait for contract proof.
@@ -69,11 +96,13 @@ const failedEvaluation = (epochId: string, error: unknown): EpochContractEvaluat
 export class EpochAdoptionPolicy implements EpochAdoptionSource {
   readonly #contracts: () => PreparedDevContractMatrix | undefined;
   readonly #eventHub: ProjectEventHub;
+  readonly #lease: EpochAdoptionPolicyOptions['lease'];
   readonly #listeners = new Set<EpochAdoptionListener>();
   readonly #run: EpochAdoptionPolicyOptions['run'];
   readonly #subscription: ProjectEventSubscription;
   #closed = false;
   #currentEpochId: string | undefined;
+  #currentLease: EpochAdoptionLease | undefined;
   #latestEvaluation: EpochContractEvaluation | undefined;
   #observed = false;
   #pending: PendingEpoch | undefined;
@@ -83,6 +112,7 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
   constructor(options: EpochAdoptionPolicyOptions) {
     this.#contracts = options.contracts;
     this.#eventHub = options.eventHub;
+    this.#lease = options.lease;
     this.#run = options.run;
     this.#subscription = options.eventHub.subscribe(
       { afterSequence: options.eventHub.latestSequence },
@@ -119,20 +149,25 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
   #consider(epochId: string): void {
     if (this.#closed) return;
     this.#observed = true;
-    const contracts = this.#contracts();
-    if (contracts === undefined) {
-      this.#latestEvaluation = undefined;
-      this.#adopt(epochId);
-      return;
-    }
     this.#sequence += 1;
     this.#pending = Object.freeze({
-      contracts,
+      contracts: this.#contracts(),
       epochId,
       sequence: this.#sequence,
     });
+    this.#schedule();
+  }
+
+  /**
+   * Starts a drain unless one is running. A candidate that arrives after the
+   * running drain saw an empty queue but before its completion handler clears
+   * `#processing` would otherwise sit in `#pending` until the next rebuild, so
+   * the handler restarts the drain when it finds work left behind.
+   */
+  #schedule(): void {
     this.#processing ??= this.#drain().finally(() => {
       this.#processing = undefined;
+      if (!this.#closed && this.#pending !== undefined) this.#schedule();
     });
   }
 
@@ -144,8 +179,9 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
     });
   }
 
-  settled(): Promise<void> {
-    return this.#processing ?? Promise.resolve();
+  /** Resolves once no drain is running, including any drain restarted during a handoff. */
+  async settled(): Promise<void> {
+    while (this.#processing !== undefined) await this.#processing;
   }
 
   async close(): Promise<void> {
@@ -155,30 +191,81 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
     this.#pending = undefined;
     await this.#processing;
     this.#listeners.clear();
+    const lease = this.#currentLease;
+    this.#currentLease = undefined;
+    await lease?.close();
   }
 
+  /**
+   * Evaluates, then leases, then publishes, then announces. Leasing before the
+   * status publish keeps "passed" synonymous with "adopted" for status readers,
+   * and announcing synchronously with the publish preserves the ordering hosts
+   * observed before leases existed.
+   */
   async #drain(): Promise<void> {
     while (!this.#closed && this.#pending !== undefined) {
       const candidate = this.#pending;
       this.#pending = undefined;
-      let evaluation: EpochContractEvaluation;
-      try {
-        evaluation = await this.#run(candidate.epochId, candidate.contracts);
-      } catch (error) {
-        evaluation = failedEvaluation(candidate.epochId, error);
+      let evaluation: EpochContractEvaluation | undefined;
+      if (candidate.contracts !== undefined) {
+        try {
+          evaluation = await this.#run(candidate.epochId, candidate.contracts);
+        } catch (error) {
+          evaluation = failedEvaluation(candidate.epochId, error);
+        }
+        if (this.#closed || candidate.sequence !== this.#sequence) continue;
       }
-      if (this.#closed || candidate.sequence !== this.#sequence) continue;
+      let lease: EpochAdoptionLease | undefined;
+      if (evaluation === undefined || evaluation.state === 'passed') {
+        const leased = await this.#acquireLease(candidate);
+        if (leased === 'superseded') continue;
+        if (leased instanceof Error) evaluation = leaseFailedEvaluation(candidate.epochId, leased);
+        else lease = leased.lease;
+        // A newer epoch may have been queued between #acquireLease's own check
+        // and this resumption; an obsolete candidate is never published or adopted.
+        if (this.#closed || candidate.sequence !== this.#sequence) {
+          await lease?.close().catch(() => undefined);
+          continue;
+        }
+      }
       this.#latestEvaluation = evaluation;
-      this.#eventHub.publish({
-        epochId: candidate.epochId,
-        payload: evaluation,
-        type: 'dev.contract.status',
-      });
-      if (evaluation.state === 'passed') this.#adopt(candidate.epochId);
+      if (evaluation !== undefined) {
+        this.#eventHub.publish({
+          epochId: candidate.epochId,
+          payload: evaluation,
+          type: 'dev.contract.status',
+        });
+      }
+      if (evaluation === undefined || evaluation.state === 'passed') await this.#adopt(candidate.epochId, lease);
     }
   }
 
-  #adopt(epochId: string): void {
+  async #acquireLease(
+    candidate: PendingEpoch,
+  ): Promise<Error | 'superseded' | { readonly lease: EpochAdoptionLease | undefined }> {
+    if (this.#lease === undefined) return { lease: undefined };
+    let lease: EpochAdoptionLease;
+    try {
+      lease = await this.#lease(candidate.epochId);
+    } catch (error) {
+      if (this.#closed || candidate.sequence !== this.#sequence) return 'superseded';
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    if (this.#closed || candidate.sequence !== this.#sequence) {
+      await lease.close().catch(() => undefined);
+      return 'superseded';
+    }
+    return { lease };
+  }
+
+  /**
+   * Pins the candidate before announcing it and releases the previous pin only
+   * afterwards, so there is never a moment where the advertised epoch is
+   * unleased.
+   */
+  async #adopt(epochId: string, lease: EpochAdoptionLease | undefined): Promise<void> {
+    const previous = this.#currentLease;
+    this.#currentLease = lease;
     this.#currentEpochId = epochId;
     for (const listener of this.#listeners) {
       try {
@@ -187,6 +274,7 @@ export class EpochAdoptionPolicy implements EpochAdoptionSource {
         // Adoption consumers own their async failure reporting; one cannot starve its peers.
       }
     }
+    await previous?.close().catch(() => undefined);
   }
 }
 

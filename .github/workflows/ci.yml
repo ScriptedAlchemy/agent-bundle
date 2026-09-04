@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Merge queue: every job that is a required check on main must also run on
+  # merge_group, or a queued entry waits until the queue times it out. The
+  # event never fires while this repository is user-owned (GitHub offers the
+  # queue only to organization-owned repositories: creating a `merge_queue`
+  # ruleset here returns 422 "Invalid rule 'merge_queue'"), so this trigger
+  # is dormant until the repository moves to an organization.
+  merge_group:
+    branches: [main]
   # Nightly release-boundary matrix (packed-matrix job): the scaffolder
   # template tests beyond the per-PR minimal-template smoke.
   schedule:
@@ -14,19 +22,23 @@ permissions:
   contents: read
 
 # PR pushes cancel the superseded run of the same PR (only the latest commit
-# matters). Pushes to main, the nightly schedule, and manual dispatches get
-# SHA-keyed groups with no cancellation, so a new main push can never kill an
-# in-flight main or nightly run. Same pattern as package-preview.yml.
+# matters). Pushes to main, merge-queue entries, the nightly schedule, and
+# manual dispatches get SHA-keyed groups with no cancellation, so a new main
+# push can never kill an in-flight main, queue, or nightly run. Same pattern
+# as package-preview.yml.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # PR-only docs allowlist: docs/**, agent-patterns/**, .changeset/*.md, and
-  # top-level *.md. Nested markdown elsewhere is code because examples and
-  # packages contain compiled SKILL.md artifacts, and package markdown affects
-  # npm pack audits. Classification fails open so uncertain PRs run every heavy
-  # job; pushes to main never skip any job based on changed paths.
+  # PR-only docs allowlist: docs/**, agent-patterns/**, website/** (the
+  # Rspress site, validated by docs.yml), .changeset/*.md, and top-level *.md.
+  # Nested markdown elsewhere is code because examples and packages contain
+  # compiled SKILL.md artifacts, and package markdown affects npm pack audits.
+  # Classification fails open so uncertain PRs run every heavy job; pushes to
+  # main and merge-queue entries never skip any job based on changed paths
+  # (this job does not run for them, and the heavy jobs treat the missing
+  # output as "run").
   # Path rules and fail-open listing checks live in
   # scripts/classify-docs-only.mjs (unit-tested). This job sparse-checkouts
   # only that script so the vendored Effect subtree never lands on the
@@ -109,12 +121,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Measured PR Verify cost was 3 legs × ~7 minutes, about 75% of PR
-    # runner-minutes. PRs run newest-LTS Node 24; every main push and manual
-    # dispatch still gates on the full supported matrix.
+    # runner-minutes. PRs and merge-queue entries run newest-LTS Node 24 (the
+    # "Verify (Node 24)" context is the required check on main); every main
+    # push and manual dispatch still gates on the full supported matrix.
     strategy:
       fail-fast: false
       matrix:
-        node-version: ${{ github.event_name == 'pull_request' && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
+        node-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/setup@v2
@@ -139,12 +152,41 @@ jobs:
           fi
       # Build first: checked-in suites and API tests import the package's built type
       # declarations, so typecheck requires dist (same order as `pnpm check`).
+      # publint runs inside each publishable package's `rslib build`
+      # (rsbuild-plugin-publint, throwOn: 'warning'), so a manifest warning
+      # already fails this step; there is no separate publint step.
       - run: pnpm build
-      - name: Package lint (publint)
-        run: pnpm lint:package
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+
+  # Required-check anchor for the Verify matrix. When a matrix job is skipped
+  # (docs-only PRs), GitHub reports it under its unexpanded name
+  # "Verify (Node ${{ matrix.node-version }})", so a branch protection that
+  # requires "Verify (Node 24)" never sees that context and blocks the PR for
+  # good. This job has a static name and always runs after Verify: it passes
+  # when every leg passed or the matrix was skipped (a skipped job satisfies
+  # a required check, like the other docs-only skips) and fails when a leg
+  # failed or was cancelled. Require "Verify gate" on main, not a leg name.
+  verify-gate:
+    needs: verify
+    if: always() && github.event_name != 'schedule'
+    name: Verify gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Verify leg to have passed or been skipped
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          echo "Verify matrix result: $VERIFY_RESULT"
+          case "$VERIFY_RESULT" in
+            success|skipped) exit 0 ;;
+            *)
+              echo "::error::Verify matrix result is '$VERIFY_RESULT'; see the Verify (Node …) jobs."
+              exit 1
+              ;;
+          esac
 
   release-gates:
     needs: changes
@@ -174,6 +216,66 @@ jobs:
       # minimal-template scaffolder smoke. The full template matrix runs in
       # the nightly packed-matrix job and in pre-publish `pnpm check:release`.
       - run: pnpm check:release:ci
+
+  # Binary-gated real-host install proofs. The proof suites skip their Claude
+  # and Codex legs when the CLIs are absent, which is how #364 changed the
+  # Codex `interface.logo` emission and broke both proofs on main without CI
+  # noticing (#367/#368 repaired them from local runs). This job installs the
+  # exact CLI versions pinned in each adapter's schema PROVENANCE.json
+  # (`hostCli`, kept equal to `observedCliVersion` by scripts/host-cli-pins.mjs),
+  # fails closed if `claude`/`codex --version` differs from the pin, and runs
+  # the source-built proofs, the packed-tarball proofs, and the packed Claude
+  # plugin validation. Nothing here needs a login: every proof runs against an
+  # isolated HOME / CLAUDE_CONFIG_DIR / CODEX_HOME and no secrets are passed.
+  # Signed-in smokes (`claude -p`, `codex exec`, the Eval harnesses) stay in
+  # the opt-in native-host-smoke workflow.
+  host-install-proofs:
+    needs: changes
+    if: >-
+      ${{ !cancelled() && github.event_name != 'schedule' &&
+      (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
+    name: Host install proofs (Node 22.19)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+          runtime: node@22.19.0
+      - run: pnpm install --frozen-lockfile
+      - name: Read pinned host CLI versions
+        id: pins
+        run: node scripts/host-cli-pins.mjs print
+      # The global npm prefix holding both CLIs (Claude Code and Codex ship
+      # platform-native binaries), keyed by OS, arch, and the exact pins
+      # (package name and version per host) so a deliberate re-pin of either
+      # misses the cache and installs fresh.
+      - name: Restore pinned host CLIs
+        id: host-cli-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/host-cli
+          key: host-cli-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.pins }}
+      - name: Install pinned host CLIs
+        if: steps.host-cli-cache.outputs.cache-hit != 'true'
+        run: node scripts/host-cli-pins.mjs install --prefix "$RUNNER_TEMP/host-cli"
+      # ubuntu runner: npm's global executables live in <prefix>/bin (the
+      # script's globalBinDirectory rule; Windows would be the prefix itself).
+      - name: Expose host CLIs on PATH
+        run: echo "$RUNNER_TEMP/host-cli/bin" >> "$GITHUB_PATH"
+      - name: Verify host CLI versions match the schema pins
+        run: node scripts/host-cli-pins.mjs verify
+      - run: pnpm build
+      - name: Host install proofs (source-built bundle)
+        run: pnpm test:host-install
+      - name: Host install proofs (packed tarball)
+        run: pnpm test:host-install:packed
+      - name: Packed Claude plugin validation proof
+        env:
+          AGENT_BUNDLE_PACKAGE_PREBUILT: '1'
+        run: pnpm test:packed:native
 
   # Release-boundary scaffolder template matrix (mcp-server, cli-tool) plus
   # the full packed pool — the nightly form of pre-publish `check:release`.
@@ -207,7 +309,8 @@ jobs:
   rsc-runtime-micro-eval:
     # Deterministic end-to-end spot-check of the built RSC runtime artifacts
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
-    # any real Claude/Codex host. Real native-host smokes stay skip-gated in
+    # any real Claude/Codex host. Login-free real-host install proofs run in
+    # the host-install-proofs job; signed-in native smokes stay skip-gated in
     # the manually dispatched native-host-smoke workflow on purpose.
     needs: changes
     if: >-

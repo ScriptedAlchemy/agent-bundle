@@ -133,6 +133,8 @@ export const findingPresentationFor = (state: DiscoveryFindingState): DiscoveryP
       return presentation('Conflicted', 'warning');
     case 'corrupt':
       return presentation('Corrupt', 'warning');
+    case 'disabled':
+      return presentation('Disabled', 'warning');
     case 'drifted':
       return presentation('Drifted', 'warning');
     case 'failed':
@@ -181,7 +183,7 @@ const endpointPresentationFor = (report: DiscoveryEndpointReport): DiscoveryPres
   }
 };
 
-const hostLabelFor = (host: DiscoveryHost): string => {
+export const hostLabelFor = (host: DiscoveryHost): string => {
   switch (host) {
     case 'claude':
       return 'Claude';

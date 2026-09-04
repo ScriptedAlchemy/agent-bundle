@@ -1,5 +1,6 @@
 import type { ClaudeConfigExtension } from './adapters/claude.ts';
 import type { CodexConfigExtension } from './adapters/codex.ts';
+import type { CursorConfigExtension } from './adapters/cursor.ts';
 import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
@@ -19,26 +20,54 @@ export type {
   SkillTokenId,
   SkillTreeLayoutDecision,
 } from './skills/index.ts';
-export { canonicalAgentEvents } from './routes/public.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  canonicalAgentEvents,
+  MAX_ROUTE_RENDER_ELAPSED_MS,
+} from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
+  AgentTerminal,
+  AgentTerminalColor,
+  AgentTerminalStream,
+  AgentTerminalStreamKind,
+  AgentTerminalSurface,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,
   CliRouteProps,
+  ExecutableMainContext,
   PromptConfig,
   ResourceConfig,
+  RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
+  RouteUiMeta,
+  ScriptRouteProps,
   ToolConfig,
   ToolRouteProps,
 } from './routes/public.ts';
@@ -104,9 +133,34 @@ export type {
 export type AgentBundleConfig = CoreAgentBundleConfig
   & ClaudeConfigExtension
   & CodexConfigExtension
+  & CursorConfigExtension
   & PortableConfigExtension;
 
 export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
+
+// The config hook handler contract (#488): the payload a `hooks.<event>.handler`
+// receives and the result the generated wrapper admits, per canonical event.
+export { hookEventFields, hookHandlerEventNames, hookResultContract } from './adapters/hook-handler.ts';
+export type {
+  AfterToolHookEvent,
+  AgentStartHookEvent,
+  AgentStopHookEvent,
+  BeforeToolHookEvent,
+  HookContinueResult,
+  HookDenyResult,
+  HookEvent,
+  HookEventBase,
+  HookEventPayloads,
+  HookHandler,
+  HookHandlerContext,
+  HookHandlerEventName,
+  HookResult,
+  HookResultContract,
+  HookResultRule,
+  SessionStartHookEvent,
+  StopHookEvent,
+} from './adapters/hook-handler.ts';
+export type { AgentBundleHookEntry, AgentBundleHookInput, CanonicalHookEvent } from './core/types.ts';
 
 export type {
   AgentBundleConfigExtensions,
@@ -116,6 +170,8 @@ export type {
   AgentBundleMcpApp,
   AgentBundleMcpConfig,
   AgentBundleMcpServer,
+  AgentBundleNoticeRetentionConfig,
+  AgentBundleNoticesConfig,
   AgentBundlePayloadConfig,
   AgentBundlePayloadEntry,
   AgentBundlePayloadInput,

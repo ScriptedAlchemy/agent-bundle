@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
@@ -22,20 +23,45 @@ export interface PackOutput {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export const packOutputFromJson = (stdout: string): PackOutput => {
+const packEntryName = (entry: unknown, key: string | undefined): string | undefined =>
+  isRecord(entry) && typeof entry.name === 'string' ? entry.name : key;
+
+/**
+ * Parses `npm pack --json` output into one pack entry. npm emits either an
+ * array or a package-keyed object depending on version; both are accepted.
+ *
+ * When `packageName` is given, the entry is selected by package name rather
+ * than by position, so a pack that also lists sibling workspace packages
+ * still resolves the intended tarball deterministically. Without it, the
+ * output must contain exactly one entry.
+ */
+export const packOutputFromJson = (stdout: string, packageName?: string): PackOutput => {
   const parsed: unknown = JSON.parse(stdout);
-  const entries = Array.isArray(parsed)
-    ? parsed
+  const entries: readonly (readonly [string | undefined, unknown])[] | undefined = Array.isArray(parsed)
+    ? parsed.map((entry: unknown) => [undefined, entry] as const)
     : isRecord(parsed)
-      ? Object.values(parsed)
+      ? Object.entries(parsed)
       : undefined;
   if (entries === undefined) {
     throw new TypeError('npm pack --json returned neither an array nor a package-keyed object.');
   }
-  if (entries.length !== 1) {
-    throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
+  let entry: unknown;
+  if (packageName === undefined) {
+    if (entries.length !== 1) {
+      throw new TypeError(`npm pack --json returned ${String(entries.length)} entries; expected exactly one.`);
+    }
+    entry = entries[0]?.[1];
+  } else {
+    const named = entries.filter(([key, candidate]) => packEntryName(candidate, key) === packageName);
+    if (named.length !== 1) {
+      const seen = entries.map(([key, candidate]) => packEntryName(candidate, key) ?? '<unnamed>');
+      throw new TypeError(
+        `npm pack --json returned ${String(named.length)} entries named ${JSON.stringify(packageName)}; `
+        + `expected exactly one (saw: ${seen.map((name) => JSON.stringify(name)).join(', ')}).`,
+      );
+    }
+    entry = named[0]?.[1];
   }
-  const [entry] = entries;
   if (!isRecord(entry) || typeof entry.filename !== 'string' || !Array.isArray(entry.files)) {
     throw new TypeError('npm pack --json returned an invalid pack entry; expected one object.');
   }
@@ -51,6 +77,7 @@ export const packOutputFromJson = (stdout: string): PackOutput => {
 const toPosixRelative = (root: string, path: string): string =>
   relative(resolve(root), resolve(path)).replaceAll('\\', '/');
 
+/** Stays on `lstat`: a dangling symlink at a host manifest path still counts as present. */
 const exists = async (path: string): Promise<boolean> => {
   try {
     await lstat(path);
@@ -62,7 +89,7 @@ const exists = async (path: string): Promise<boolean> => {
 };
 
 const jsonRecord = async (path: string): Promise<Readonly<Record<string, unknown>>> => {
-  const value: unknown = JSON.parse(await readFile(path, 'utf8'));
+  const value: unknown = JSON.parse(await runWithPlatform(readFileString(path)));
   if (!isRecord(value)) throw new TypeError(`Expected a JSON object at ${JSON.stringify(path)}.`);
   return value;
 };
@@ -115,7 +142,7 @@ export const packInventoryDiagnostics = async (options: {
   const artifactPrefix = toPosixRelative(projectRoot, artifactRoot);
   const packagePrefix = toPosixRelative(projectRoot, options.packageBuild.outputRoot);
   const manifestPath = join(artifactRoot, artifactManifestName);
-  const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+  const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
   const packageDocument = await jsonRecord(join(projectRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
   const expected = new Set<string>([
@@ -139,7 +166,7 @@ export const packInventoryDiagnostics = async (options: {
 
   const stale: string[] = [];
   for (const file of manifest.files) {
-    const bytes = await readFile(join(artifactRoot, file.path));
+    const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
     if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
   }
   if (stale.length > 0) {

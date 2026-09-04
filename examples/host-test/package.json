@@ -1,0 +1,41 @@
+{
+  "name": "@agent-bundle-example/host-test",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "A host-probing agent-bundle plugin: every hook family, an MCP server, and a CLI that record exactly what each host sends.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "artifact",
+    "README.md"
+  ],
+  "bin": {
+    "host-test": "./dist/bin/host-test.js"
+  },
+  "scripts": {
+    "build": "agent-bundle build --output artifact",
+    "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",
+    "dev": "agent-bundle dev",
+    "probe:install": "node scripts/probe.mjs install",
+    "probe:uninstall": "node scripts/probe.mjs uninstall",
+    "probe:capture": "node scripts/probe.mjs capture",
+    "probe:status": "node scripts/probe.mjs status",
+    "test": "rstest --config rstest.route-unit.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "validate": "agent-bundle validate"
+  },
+  "dependencies": {
+    "@agent-bundle/runtime": "workspace:*",
+    "@modelcontextprotocol/server": "2.0.0",
+    "react": "19.2.8",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@rstest/core": "0.11.10",
+    "@types/react": "19.2.18",
+    "agent-bundle": "workspace:*"
+  }
+}

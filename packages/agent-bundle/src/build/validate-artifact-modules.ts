@@ -1,14 +1,14 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parse as parseJavaScript } from 'acorn';
-import { init, parse } from 'es-module-lexer';
-
+import { sha256Hex } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { readFileBytes, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
+import { readModuleImports, rememberedModuleImports, type ModuleSyntaxCheck } from './module-imports.ts';
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
 const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
@@ -98,13 +98,19 @@ const resolveJavaScriptImport = async (options: {
 
 export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
+  /**
+   * Modules the framework compiled (manifest kind `bundle`), checked at
+   * `bundleSyntaxCheck`; every other module is parsed in full (`parsed`).
+   */
+  readonly bundledPaths?: ReadonlySet<string>;
+  /** How a bundled module's syntax is checked; `lexed` unless a caller knows the bundler output may have been rewritten. */
+  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
   readonly prebuiltPaths?: ReadonlySet<string>;
   readonly validJson: ReadonlySet<string>;
 }): Promise<readonly Diagnostic[]> => {
-  await init;
   const artifactRoot = await realpath(options.artifactRoot);
   const files = new Map(options.files
     .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
@@ -120,29 +126,34 @@ export const validateJavaScriptModules = async (options: {
       return;
     }
     visiting.add(path);
-    let source: string;
+    const check = options.bundledPaths?.has(path) === true ? options.bundleSyntaxCheck ?? 'lexed' : 'parsed';
+    let bytes: Buffer;
     try {
-      source = await readFile(resolve(artifactRoot, path), 'utf8');
+      bytes = await runWithPlatform(readFileBytes(resolve(artifactRoot, path)));
     } catch {
       diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
       visiting.delete(path);
       visited.add(path);
       return;
     }
-
-    let imports: ReturnType<typeof parse>[0];
-    try {
-      parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
-      [imports] = parse(source);
-    } catch {
-      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
-      visiting.delete(path);
-      visited.add(path);
-      return;
+    // Keyed by the digest of the bytes just read — not the inspection's — so
+    // a module rewritten between the two is never answered from the cache,
+    // while the same bytes scanned earlier in this process are not lexed twice.
+    const sha256 = sha256Hex(bytes);
+    let imports = rememberedModuleImports(check, sha256);
+    if (imports === undefined) {
+      try {
+        imports = await readModuleImports(bytes.toString('utf8'), { check, sha256 });
+      } catch {
+        diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+        visiting.delete(path);
+        visited.add(path);
+        return;
+      }
     }
     for (const imported of imports) {
-      if (imported.d === -2) continue;
-      if (imported.n === undefined) {
+      if (imported.kind === 'meta') continue;
+      if (imported.specifier === undefined) {
         diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
         continue;
       }
@@ -150,7 +161,7 @@ export const validateJavaScriptModules = async (options: {
         artifactRoot,
         files,
         importer: path,
-        specifier: imported.n,
+        specifier: imported.specifier,
         validJson: options.validJson,
       });
       if (resolved.diagnostic !== undefined) diagnostics.push(resolved.diagnostic);

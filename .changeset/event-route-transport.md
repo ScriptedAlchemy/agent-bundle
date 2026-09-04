@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Compile semantic event routes into native hook clients that render through the

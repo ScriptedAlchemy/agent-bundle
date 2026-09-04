@@ -2,6 +2,7 @@
   "name": "@agent-bundle-example/worktree-proximity",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "An advanced worktree-proximity coordination reference for agent-bundle.",
   "type": "module",
   "engines": {

@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Add a first-class `cursor` compile target. The standalone Cursor artifact

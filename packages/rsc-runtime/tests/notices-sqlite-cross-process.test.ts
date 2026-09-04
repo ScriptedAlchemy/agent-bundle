@@ -18,7 +18,7 @@ const fixture = join(packageRoot, 'tests', 'fixtures', 'notices-sqlite-process.m
 
 const runProcess = async (
   file: string,
-  mode: 'deliver' | 'publish',
+  mode: 'deliver' | 'publish' | 'retain',
 ): Promise<unknown> => {
   const child = spawn(process.execPath, [fixture, file, mode], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -39,6 +39,22 @@ describe.sequential('notice ledger cross-process proof', () => {
     try {
       const published = await runProcess(file, 'publish') as { readonly id: string; readonly state: string };
       expect(published.state).toBe('pending');
+
+      // A third process compacts the journal between publish and delivery:
+      // the head is materialized as the baseline and the publish record is
+      // gone, yet the delivering process must see exactly the same ledger.
+      const retained = await runProcess(file, 'retain') as {
+        readonly compacted: boolean;
+        readonly journal: { readonly baselineRevision: number; readonly records: number };
+        readonly prunedIds: readonly string[];
+        readonly revision: number;
+      };
+      expect(retained).toMatchObject({
+        compacted: true,
+        journal: { baselineRevision: 2, records: 1 },
+        prunedIds: [],
+        revision: 2,
+      });
 
       const observed = await runProcess(file, 'deliver') as readonly [{
         readonly notice: { readonly id: string; readonly state: string };
@@ -68,6 +84,16 @@ describe.sequential('notice ledger cross-process proof', () => {
           invocationId: 'delivery-process',
         })],
       })]);
+      // Opening in this process re-ran the head-vs-replay check over the
+      // compacted journal; the baseline is the retained first record and the
+      // admission landed on top of it.
+      expect(await store.inspect()).toMatchObject({
+        baselineRevision: 2,
+        headRevision: 3,
+        lastCompaction: { revision: 2 },
+        records: 2,
+      });
+      await expect(store.read({ revision: 1 })).rejects.toMatchObject({ code: 'revision-unavailable' });
       await driver.close();
     } finally {
       await rm(root, { force: true, recursive: true });

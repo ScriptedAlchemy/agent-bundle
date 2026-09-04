@@ -6,6 +6,8 @@ import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { capabilityIsSupported } from '../adapters/capability-state.ts';
+import { componentKindCapabilityName } from '../core/components.ts';
 import { isInside } from '../core/paths.ts';
 import {
   defaultGeneratedRuntime,
@@ -13,8 +15,9 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { developmentFallbackVersion, snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { conventionalEntryAt } from './conventional-entry.ts';
+import { pluginIdentity } from './plugin-identity.ts';
 import {
   canonicalHookEvents,
   isPrebuiltEntryInput,
@@ -44,6 +47,7 @@ import type {
   NormalizedHostBinFile,
   NormalizedHostPayloadDirectory,
   NormalizedLibEntry,
+  NormalizedLspServer,
   NormalizedMcpApp,
   NormalizedMcpServer,
   NormalizedNativeHook,
@@ -59,6 +63,7 @@ import type {
   NormalizedStateDefinition,
   SourceProvenance,
 } from '../core/types.ts';
+import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
@@ -67,6 +72,7 @@ import type { SkillIr } from '../skills/ir.ts';
 import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
 import { parseSkillIr } from '../skills/parse-ir.ts';
 import type { SkillHost } from '../skills/tokens.ts';
+import { normalizeNoticeRetention } from './notice-retention.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 
 const isSkillHost = (name: string): name is SkillHost =>
@@ -121,6 +127,8 @@ const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEven
   'task/create': 'taskCreate',
   'task/complete': 'taskComplete',
   'agent/idle': 'agentIdle',
+  'model-switch/before': 'modelSwitchBefore',
+  'model-switch/after': 'modelSwitchAfter',
   'workspace/open': 'workspaceOpen',
 });
 
@@ -150,21 +158,6 @@ const mcpEntryName = (name: string): string => {
 
 /** Anchored alias contract for generated target-local MCP entry modules. */
 export const mcpEntryAliasPattern = /^mcp\/(mcp-[a-z0-9-]+-[a-f\d]{8}\.mjs)$/u;
-
-const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
-
-const conventionalEntryAt = (root: string, ...segments: string[]): string | undefined => {
-  const stem = resolve(root, ...segments);
-  for (const extension of conventionalEntryExtensions) {
-    const candidate = `${stem}${extension}`;
-    try {
-      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-    } catch {
-      // A racing deletion means the convention does not apply.
-    }
-  }
-  return undefined;
-};
 
 /**
  * The `src/mcp/<server-id>.ts` convention: the stdio entry for a declared MCP
@@ -878,6 +871,11 @@ const normalizeMcpApps = (
         : server.targets;
       const metadata = route.config['_meta'];
       const template = route.config['template'];
+      // Route-relative first, legacy project-root-relative when unambiguous;
+      // the route-graph compiler already reported AB4827 for the other cases.
+      const templatePath = typeof template === 'string'
+        ? appRouteTemplatePath(resolveAppRouteTemplate(loaded.context.projectRoot, route.source, template))
+        : undefined;
       apps.push({
         ...(isRecord(metadata) ? { _meta: structuredClone(metadata) } : {}),
         id: `mcp-app:${surface.name}:${name}`,
@@ -888,7 +886,7 @@ const normalizeMcpApps = (
         serverName: surface.name,
         source: route.source,
         targets: sortedUnique(targets),
-        ...(typeof template === 'string' ? { template: resolve(loaded.context.projectRoot, template) } : {}),
+        ...(templatePath === undefined ? {} : { template: templatePath }),
       });
     }
   }
@@ -1049,6 +1047,66 @@ const normalizeExtensions = (
   return deepFreeze(extensions);
 };
 
+/**
+ * Enumerates `lsp` components (#100) from every selected host extension's
+ * `lspServers` record. Server configuration stays opaque here — the declaring
+ * adapter validates and lowers it — so a malformed record yields no component
+ * and the adapter's own diagnostics explain it. The declaration is host-scoped:
+ * a component targets only the selected adapters that lower its extension key
+ * (the declaring host and composites that plan that host's side), so a host
+ * whose planner never reads the key is excluded by the declaration and its
+ * pinned `lsp` row still explains the omission in inspection.
+ */
+/** The emission judgment for one component kind: the adapter's component override when published, else its top-level row. */
+const hostsComponent = (registry: NormalizationTargetRegistry, target: string, capability: string): boolean => {
+  const state = registry.componentCapabilityState?.(target, capability) ?? registry.capabilityState?.(target, capability);
+  return state === undefined ? registry.supports(target, capability) : capabilityIsSupported(state);
+};
+
+/**
+ * Total, injective escape for one `lsp:` id segment: `%` first, then the `:`
+ * separator. Unlike `encodeURIComponent` it accepts every JavaScript string
+ * (lone surrogates included), so a computed key can never abort normalization.
+ */
+const lspIdSegment = (segment: string): string => segment.replaceAll('%', '%25').replaceAll(':', '%3A');
+
+const normalizeLspServers = (
+  extensions: Readonly<Record<string, NormalizedConfigExtension>>,
+  targetNames: readonly string[],
+  registry: NormalizationTargetRegistry,
+): readonly NormalizedLspServer[] => {
+  const servers: NormalizedLspServer[] = [];
+  for (const extension of Object.values(extensions)) {
+    if (!isRecord(extension.value)) continue;
+    const declared = extension.value['lspServers'];
+    if (!isRecord(declared)) continue;
+    // The declaring host always judges its own declaration; a composite that
+    // lowers the extension inherits it only when the declaring host can lower
+    // LSP servers at all — a composite planning a host with no LSP surface
+    // (Codex) emits nothing for that host's `lspServers`.
+    const declaringHostLowersLsp = hostsComponent(registry, extension.target, componentKindCapabilityName('lsp')!);
+    const targets = targetNames.filter((target) => target === extension.target || (
+      declaringHostLowersLsp &&
+      registry.lowersConfigExtension !== undefined &&
+      registry.lowersConfigExtension(target, extension.key)
+    ));
+    for (const name of Object.keys(declared).sort((left, right) => left.localeCompare(right))) {
+      servers.push({
+        declaredBy: extension.key,
+        // Extension keys and server names are unrestricted on advanced
+        // adapters, so each segment escapes the separator to keep the tuple
+        // unambiguous (`a` + `b:c` never collides with `a:b` + `c`); the
+        // common `lsp:claude:typescript` shape is unchanged.
+        id: `lsp:${lspIdSegment(extension.key)}:${lspIdSegment(name)}`,
+        name,
+        provenance: { ...extension.provenance },
+        targets,
+      });
+    }
+  }
+  return servers.sort((left, right) => left.id.localeCompare(right.id));
+};
+
 const selectedTargetNames = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
@@ -1145,22 +1203,6 @@ const normalizeRules = (
   };
 });
 
-/**
- * The one plugin version every surface agrees on (issue #94 stage 3): an
- * authored `plugin.version` still wins so a legacy declaration never changes
- * meaning mid-migration (a disagreement with package.json is the AB4008
- * warning), an omitted one derives the release version from package.json,
- * and a project with neither carries the development fallback that
- * `agent-bundle build` refuses to package (AB4013).
- */
-const resolvePluginVersion = (
-  authored: unknown,
-  packageVersion: string | undefined,
-): string =>
-  (typeof authored === 'string' && authored.trim().length > 0 ? authored : undefined)
-  ?? packageVersion
-  ?? developmentFallbackVersion;
-
 /** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
 const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
   const node = loaded.config.runtime?.node;
@@ -1216,9 +1258,9 @@ export const normalizeProject = async (
   const logo = normalizePluginLogo(loaded);
   // The npm package axes are derived, never authored in config: package.json
   // is authoritative for release identity (issue #94), while plugin.version
-  // remains the host-facing declared version during the migration.
-  const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
-  const version = resolvePluginVersion(loaded.config.plugin.version, packageIdentity.packageVersion);
+  // remains the host-facing declared version during the migration. The same
+  // derivation serves `agent-bundle/meta` to rendered skills at discovery.
+  const identity = pluginIdentity(loaded.context.projectRoot, loaded.config);
   const hostBins = await normalizeHostBins(loaded, targetNames, registry);
   const hostOutputStyles = await normalizeHostPayloadDirectories(
     loaded,
@@ -1235,6 +1277,7 @@ export const normalizeProject = async (
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const commands = normalizeCommands(discovered, targetNames);
   const providers = discovered.routeGraph?.providers ?? [];
+  const layouts = discovered.routeGraph?.layouts ?? [];
   const rules = normalizeRules(discovered, targetNames);
   const state: NormalizedStateDefinition | undefined = discovered.state?.definition === undefined
     ? undefined
@@ -1243,34 +1286,40 @@ export const normalizeProject = async (
       provenance: { kind: 'conventional', sourcePath: discovered.state.source },
       source: discovered.state.source,
     };
+  const notices = normalizeNoticeRetention(loaded.config, loaded.configPath, state !== undefined).retention;
   const packageBuild = normalizePackageBuild(
     loaded.config,
     loaded.context.projectRoot,
     loaded.configPath,
     discovered.routeGraph?.cli,
   );
+  const extensions = normalizeExtensions(loaded, registry, configProvenance);
+  const lspServers = normalizeLspServers(extensions, targetNames, registry);
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
     ...(commands.length === 0 ? {} : { commands }),
     ...(loaded.config.marketplace === true ? { marketplace: true as const } : {}),
-    extensions: normalizeExtensions(loaded, registry, configProvenance),
+    extensions,
     ...(hostBins.length === 0 ? {} : { hostBins }),
     ...(hostOutputStyles.length === 0 ? {} : { hostOutputStyles }),
     ...(hostWorkflows.length === 0 ? {} : { hostWorkflows }),
+    ...(layouts.length === 0 ? {} : { layouts }),
+    ...(lspServers.length === 0 ? {} : { lspServers }),
     metadata: {
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,
       ...(logo === undefined ? {} : { logo }),
-      name: loaded.config.plugin.name,
-      ...(packageIdentity.packageName === undefined ? {} : { packageName: packageIdentity.packageName }),
-      ...(packageIdentity.packageVersion === undefined ? {} : { packageVersion: packageIdentity.packageVersion }),
+      name: identity.name,
+      ...(identity.packageName === undefined ? {} : { packageName: identity.packageName }),
+      ...(identity.packageVersion === undefined ? {} : { packageVersion: identity.packageVersion }),
       provenance: configProvenance,
-      version,
+      version: identity.version,
     },
     mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
     mcpServers,
     hooks: normalizeHooks(loaded, discovered, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
+    ...(notices === undefined ? {} : { notices: { retention: notices } }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
     ...(payloads.length === 0 ? {} : { payloads }),
     ...(providers.length === 0 ? {} : { providers }),

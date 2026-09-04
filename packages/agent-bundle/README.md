@@ -2,6 +2,8 @@
 
 Compile a typed Agent Bundle configuration into portable, Codex, Claude Code, and Cursor artifacts. Node.js 22.19 or later is required.
 
+Full documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/).
+
 ```sh
 npm install --save-dev agent-bundle
 agent-bundle dev --root .
@@ -15,6 +17,8 @@ agent-bundle dev --root .
 ```
 
 `inspect` reads source configuration; use `validate --artifact artifact` for source-free artifact validation. `dev.runtime.provider` is an advanced optional extension: a normal project starts the dev server and Workbench without loading an RSC provider.
+
+The artifact root defaults to `artifact` for the `agent-bundle build` and `agent-bundle prepack` commands (they also emit the npm package build into `dist/`) and to `dist` for the programmatic `build()` API; set `output: { distPath: '<path>' }` in `agent-bundle.config.ts` to relocate it (Rsbuild/Rslib naming, string shorthand only) — `--output` still wins per invocation. See [Framework mode](../../docs/framework-mode.md#output).
 
 Generated executables target Node.js 22.12 or newer by default. `runtime: { node: '24.0' }` raises
 that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
@@ -35,7 +39,8 @@ assets against this anchor rather than the process working directory: Claude Cod
 launches stdio servers from the host's own working directory and ignores stdio `cwd` at runtime,
 and its placeholder-substitution table excludes `cwd`, so the Claude adapter emits no `cwd` for a
 plugin-root working directory (the absolute `${CLAUDE_PLUGIN_ROOT}/mcp/...` entry path plus this
-env anchor carry the guarantee) and rejects token-bearing `cwd` values outright. A server's own
+env anchor carry the guarantee). That canonical plugin-root `cwd` is the one accepted token-bearing
+value on Claude; any other `cwd` that carries a path token is rejected. A server's own
 `env` entries win over the injected value, so declaring
 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` replaces the anchor. The `pluginRootEnvAnchor` export
 names the variable for consumer code.
@@ -58,11 +63,40 @@ a `matcher` on `UserPromptSubmit` or `Stop`, and a `codex:WebSearch`-style hoste
 Hook trust (review by current hash in `/hooks`, plugin hooks skipped until trusted, managed hooks
 immutable) is host-owned and is recorded as unavailable rather than claimed.
 
+The Codex artifact is also its own repo marketplace: `.agents/plugins/marketplace.json` carries one
+local `./` entry whose `category` follows the plugin's interface category and whose
+`policy.installation` / `policy.authentication` default to `AVAILABLE` / `ON_INSTALL`.
+`codex.marketplace` authors the picker `displayName`, the `category`, and the documented policy
+values, except `installation: NOT_AVAILABLE`, which fails the build
+(`codex.marketplace.policy.installation.not-installable`) because live `codex plugin add` refuses
+such entries and that is exactly the command the emitted `INSTALL.md` and `installBundle()` run.
+The pinned marketplace schema also admits Git root (`url`), `git-subdir`, and `npm` sources for
+validating real-world marketplaces (Git and registry URLs must carry a syntactically valid
+host (DNS, IPv4, or bracketed IPv6), port, and path rather than a bare scheme prefix, and
+npm `version` must be a semver version, range, or dist-tag, and Git `ref` must satisfy
+`git check-ref-format`), but the adapter never emits them. Personal and legacy
+`.claude-plugin/marketplace.json` discovery, the `~/.codex/plugins/cache` layout, `config.toml`
+enable state, `features.plugins` / `features.hooks`, inline `[hooks]` TOML, `requirements.toml`
+managed hooks, `allow_managed_hooks_only`, and `restrict_to_allowed_sources` are host- or
+admin-owned and are recorded in `codex-0.147.0.json` (`distribution`) with dated evidence instead of
+being claimed. The overview-level plugin parts get the same treatment (`plugin.overviewSurfaces`):
+optional MCP UI is `degraded` (the compiled MCP server serves `ui://` resources per the open MCP
+Apps standard that ChatGPT renders, while Codex CLI renders no components and every tool stays
+usable without UI), and browser extensions and scheduled task templates are `unavailable`
+because no package or manifest contract publishes an authoring field for them, so nothing is
+inferred.
+
 agent-bundle also owns the npm-facing package build: `bin` entries become self-executing
 `dist/bin/<name>.js` bundles (shebang, executable bit, generated `main(argv)` envelope) and the
 optional `lib` entry becomes `dist/<stem>.js` with declarations (resolving `typescript` from the
 project). The `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts` conventions fill these in
-when the config is silent; config always wins and `bin: false` / `lib: false` opt out. MCP server
+when the config is silent; config always wins and `bin: false` / `lib: false` opt out. An explicit
+`scripts`, `hooks`, `lib`, or `mcp` entry claims the module it references out of conventional route
+discovery, but a `bin` entry does not claim a `src/scripts/<name>.ts` module: the same file
+ships as both `dist/bin/<name>.js` and the artifact `scripts/<name>.mjs` (the module must export
+`main` or be self-executing: a `default`-only plain script is `AB4738`, and a rendered `.tsx` script
+must export both its default component and `main` or it is `AB4737`; prefix a path segment with `_`
+for a bin-only module). MCP server
 entries that default-export a server factory are wrapped in the framework stdio lifecycle shell
 (console-to-stderr guard with raw stdout restored for protocol frames, SIGINT 130 / SIGTERM 143,
 stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from
@@ -83,7 +117,9 @@ manifests at files inside those payloads without compiling them. Payload files c
 | --- | --- |
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
-| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, and `--json` supported). |
+| `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, `--mode local\|marketplace` for Cursor, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
+| `agent-bundle uninstall <host>` | Remove a receipt-owned install and nothing else: the receipt's files and directories, the host registrations it recorded (`claude plugin uninstall --keep-data` + `marketplace remove`, `codex plugin remove` + `marketplace remove`, the Cursor local directory or staged marketplace). `--plan` prints the exact paths without changing anything; durable `state/` is kept unless `--purge-data --confirm-purge`; a missing receipt or content mismatch is refused unless `--force`; a rerun is `not-installed`. |
+| `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
@@ -97,11 +133,21 @@ manifests at files inside those payloads without compiling them. Payload files c
 
 ### Validate Claude bundles with Claude Code
 
-Artifact validation runs `claude plugin validate <bundle-dir> --strict` for emitted `claude`
-and unified `plugin` targets when Claude Code is on `PATH`. Host errors become Agent Bundle
-errors; host warnings remain warnings unless `agent-bundle validate --strict` is set. A missing
-binary is reported as an explicit informational skip, never as fabricated success. Use
-`--no-host-validation` when a deterministic schema-only check is required.
+When Claude Code is on `PATH`, artifact validation runs its validator for emitted `claude` and
+unified `plugin` targets. Claude Code treats a directory that holds both `.claude-plugin/plugin.json`
+and `.claude-plugin/marketplace.json` as a marketplace and then never opens the plugin's hook,
+skill, agent, or command files, so Agent Bundle names each manifest:
+
+```sh
+claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+```
+
+On Claude Code 2.1.259 or later both runs use `--json`; older releases are parsed from the text
+report. Host errors become Agent Bundle errors (`AB6021`); host warnings remain warnings
+(`AB6020`) unless `agent-bundle validate --strict` is set, and every finding names the validated
+file. A missing binary is reported as an explicit informational skip (`AB6019`), never as
+fabricated success. Use `--no-host-validation` when a deterministic schema-only check is required.
 
 CI should use strict validation:
 
@@ -140,18 +186,151 @@ agent-bundle install cursor --from artifact/cursor
 node ./install.mjs
 ```
 
+Cursor loads the copied `.cursor-plugin/plugin.json` and its manifest-declared
+`hooks/hooks.json` from that directory; plugin hooks run from the plugin root
+with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json`
+entry. `--mode marketplace` instead stages a committed local marketplace
+repository at `~/.cursor/agent-bundle/marketplaces/<name>` and prints the
+Customize -> Plugins -> "Add Plugins from Local Repository" step that makes
+Cursor manage the plugin as a marketplace install; `agent-bundle doctor --host
+cursor` reports hook registration (`AB7322`), duplicate user-level delivery
+(`AB7323`), and marketplace import state (`AB7324`).
+
+The `portable` target's `install.mjs` copies the Agent Plugins package to the
+same `~/.cursor/plugins/local/<name>` location and, because Cursor 3.18.25
+expands none of the standard's placeholders (`${PLUGIN_ROOT}` /
+`${PLUGIN_DATA}` in `args`, `env`, `cwd`; no `PLUGIN_ROOT` / `PLUGIN_DATA`
+variables; omitted `cwd` → home directory; `./` commands → workspace folder),
+rewrites `mcp.json` in that copy only with absolute paths
+(`PLUGIN_DATA` = `~/.cursor/agent-bundle/plugin-data/<name>`, created), keeps
+the shipped document in the install receipt (`cursorExpansion`), and
+`agent-bundle doctor --host cursor` proves the expansion (`AB7326`). The bundle
+itself stays spec-conformant for other Agent Plugins clients.
+
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. A source-free artifact root is accepted
 by `--from` when it contains the selected host target directory.
+
+### Reinstall after a same-version rebuild
+
+Rebuilding a plugin without bumping its `version` is the normal local loop, and
+every host treats it differently. `agent-bundle install` and the emitted
+`install.mjs` share one replace policy:
+
+- **Receipt.** Every Cursor copy an agent-bundle installer places carries
+  `.agent-bundle-install.json` beside the plugin manifest: the plugin name,
+  version, host, the sha256 content hash of the artifact tree, when it was
+  installed, the exact list of files the installer owns, and the directories
+  it created (the only ones it will ever prune). The receipt never
+  participates in the content hash, so an installed copy hashes like the
+  artifact it came from.
+- **No-op.** Re-running install on an identical artifact reports
+  `already-installed` and changes nothing, even with `--replace`.
+- **Automatic same-version replace.** When the installed copy is an
+  agent-bundle install of the same plugin at the same version but its content
+  hash differs (a stale copy), install replaces it without a flag. Cursor
+  replacement is in place and touches owned files only: stale owned files are
+  removed, new files are renamed over their predecessors, and unowned entries
+  such as workspace-durable `state/` stores survive; if a rebuilt artifact
+  introduces a path an existing unowned file already occupies, replacement
+  aborts before any change and names it. Claude replacement runs
+  `claude plugin uninstall <plugin>@<marketplace> --scope <scope> --keep-data`
+  before `marketplace add` + `install`, because Claude's `plugin update` is
+  version-gated and a plain reinstall reports "already installed" while the
+  cache stays stale. Codex replacement runs `codex plugin remove` before
+  `marketplace add` + `add`, so files a rebuild removed do not linger.
+- **`--replace` (alias `--force`).** Also replaces an agent-bundle install of
+  the same plugin at a *different* version, and adopts a Cursor copy that was
+  installed before receipts existed (recognised by its emitted `INSTALL.md` +
+  `install.mjs` and matching manifest name). A legacy copy has no owned-file
+  inventory, so adoption rewrites the files the new artifact ships and leaves
+  every other file in place (operator files, files an earlier rebuild dropped,
+  `state/`); those leftovers stay unowned under the new receipt, and later
+  same-version rebuilds replace automatically. A byte-identical legacy copy
+  under `--replace` reports `adopted` and changes no plugin file.
+- **Foreign installs are always refused.** A directory under the plugin name
+  that is not an agent-bundle install of this plugin fails with `AB7005` and a
+  content-hash comparison (`installed <name>@<version> content <hash> vs
+  artifact <name>@<version> content <hash> (same version, different content)`),
+  even with `--replace`. Remove it manually.
+
+For Claude and Codex the installed copy is located through the host's own
+`plugin list --json` inventory (Claude reports the cache path; Codex confirms
+the install and its pinned `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>`
+layout supplies the path). When that inventory is unusable, a plain install
+proceeds as before and `--replace` fails closed rather than guessing.
+
+`agent-bundle doctor --from <bundle-dir>` reports the same comparison per host
+without changing anything: the installed version and content hash versus the
+built artifact, summarised as `current`, `stale (same version, different
+content)` (`AB7308`), `version mismatch` (`AB7309`), `foreign install`
+(`AB7321`), `not installed` (`AB7307`), or `unknown` when the host inventory
+could not be read.
 
 When package outputs ship one of those host packs, the build also emits a
 package-relative installer bin. It uses the plugin name when no configured bin
 claims it and `<plugin-name>-install` otherwise. Map that name to the generated
 `dist/bin/*.js` file in `package.json`; consumers run
-`<bin> install <host> [--scope <scope>] [--json]`. The executable locates the
-artifact directory beside the installed package, so it works from
-`node_modules` regardless of the current directory. No npm lifecycle performs
-an installation.
+`<bin> install <host> [--scope <scope>] [--replace|--force] [--json]` and
+`<bin> uninstall <host> [--scope <scope>] [--mode local|marketplace] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]`.
+The executable locates the artifact directory beside the installed package, so
+it works from `node_modules` regardless of the current directory. No npm
+lifecycle performs an installation.
+
+### Uninstall by receipt
+
+Receipts (`agent-bundle-install-receipt/2`) are the single source of truth for
+an install's lifecycle: version, content hash, delivery mode, scope, owned files
+and directories, the host directories the installer created, the host
+registrations it performed in order, and install/update timestamps. Cursor
+local copies carry the receipt in-tree; Claude, Codex, and Cursor
+marketplace-mode installs keep theirs under `<host root>/agent-bundle/receipts/`
+(`~/.claude`, `~/.codex`, `~/.cursor`, honouring `CLAUDE_CONFIG_DIR` and
+`CODEX_HOME`). `agent-bundle uninstall <host> --from <bundle-dir>`, the package
+bin's `uninstall <host>`, and the emitted `install.mjs --uninstall` consume that
+receipt and remove exactly what it owns:
+
+- Cursor local: the receipt's files, its installer-created directories and the
+  plugin root once empty, then the `~/.cursor/plugins[/local]` directories the
+  install itself created. Unowned entries are retained and listed; when the
+  root survives, a remnant receipt (owning no files) keeps the created host
+  directories accountable for a later purge and lets Doctor explain the
+  directory. Reinstalling around preserved state is an `installed`, not a
+  foreign refusal.
+- Cursor marketplace: the staged repository after its `HEAD` matches the
+  recorded commit, plus the receipt; a copy Cursor imported is Cursor-owned and
+  reported `manual` with the Customize step.
+- Claude / Codex: `claude plugin uninstall <id> --scope <scope> --keep-data` /
+  `codex plugin remove <id>`, then `plugin marketplace remove <marketplace>`
+  unless another installed plugin still uses it (live row, another store
+  receipt, or — Claude — an install at another scope or in another project
+  recorded in `plugins/installed_plugins.json`), then the store receipt. An
+  unusable `plugin list --json` fails closed (`AB7004`); a registration the
+  host no longer holds is `already-absent`, so an orphaned receipt is consumed
+  without running a host verb.
+
+Durable runtime state (`state/`: state kernel, notices journal; for a Cursor
+copy of an Agent Plugins pack, also the `PLUGIN_DATA` directory the receipt
+records) is kept by default; `--purge-data --confirm-purge` removes it
+(`AB7008` without the confirmation). The typed `data.outcome` is honest per host: Cursor `kept` /
+`purged` / `absent`; Claude `retained-by-host` (Claude 2.1.257 orphans the
+cached copy for its ~14-day grace period; a purge also removes `state/` and
+`plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (codex-cli
+0.147.0 deletes the cached tree on `plugin remove` and has no keep-data option).
+`--plan` reports the same exact paths and host verbs without opening a writer.
+A missing receipt (`AB7009`) or an owned-content, version, or `HEAD` mismatch
+(`AB7007`) is refused unless `--force`; a receipt or manifest naming another
+plugin is refused regardless; a second run is a `not-installed` no-op.
+
+`agent-bundle doctor` inventories the receipt store per host and flags receipts
+the host no longer honours (`AB7328`), reports receipts that predate format 2 as
+migrated (`AB7329`; an identical `install` rerun rewrites them), and with
+`--from` reports the lifecycle stage per host (`AB7330`): placed → registered →
+enabled → active, each observed from `plugin list --json` (Claude/Codex
+`enabled` flags), the Cursor local directory, or the Cursor marketplace import
+cache, or typed `unavailable` with the reason (no host exposes what a live
+session loaded; Cursor's enabled state is server-assigned and gated by
+`enable_cc_plugin_import`).
 
 ## Developer workbench
 
@@ -350,6 +529,15 @@ their own Rstest run, because rendering a route requires Node's `react-server`
 condition for the whole worker process. Keep them out of the project's ordinary
 `rstest` run.
 
+The same configuration aliases `agent-bundle/meta` to a generated module
+carrying the project identity the compiler pass reported (`name`,
+`packageName`, `packageVersion`, `version`, exactly what a build stamps), so
+source that imports it loads under the pool without a build. A pool that is
+not built from `agentBundleRstest()` (or `agentBundleBrowserRstest()`) has no
+such alias, and importing that source raises `AB4760`; build the pool that
+reaches it from the preset too — `agentBundleRstest({ include: ['tests/unit/**/*.test.ts'] })`
+— or add the alias the diagnostic names.
+
 `agent-bundle/test` holds the helpers. `renderRoute` executes a route — by
 compiled route id, or by importing the module directly — through the real
 renderer and the real request store, and resolves to the final Agent Document:
@@ -377,7 +565,85 @@ its own. `testManifest()` exposes the
 compiled route inventory, so a suite can iterate every route in process rather
 than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target
-kind, and the module provenance.
+kind, and the module provenance. `loadRouteModule(id)` returns the evaluated
+module behind one compiled id through the same registered loader `renderRoute`
+uses — the module object itself, so `inputSchema`, `resultSchema`, `config`,
+and `default` are the route's own exports by reference — which replaces a
+hand-maintained list of static route imports in a schema-identity suite; it
+fails closed with `manifest-unavailable` outside an `agentBundleRstest()` pool
+or against a manifest the registered loaders did not come from.
+
+The same generated `.agent-bundle/routes.d.ts` registers the route contracts on
+`@agent-bundle/runtime`'s `Register` interface. With that file in the project's
+TypeScript program (`create-agent-bundle` templates list it in `tsconfig.json`
+`include` by default; `agent-bundle validate` warns with `AB4834` when a routed
+project's tsconfig leaves it out), a string-literal route
+id is checked against the compiled ids, `input` is typed from the route's
+`inputSchema`, and `result` from its `resultSchema` (an event route's `input`
+is its `{ canonical, native }` payload and its `result` `undefined`);
+`RegisteredRouteId`,
+`RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime`
+name that surface for wrappers. A value typed `string`, a module target, or a
+program without the generated file sees the previous types — any id, `unknown`
+input and result.
+
+The registration flows to every harness surface that takes a route id or
+payload, not only `renderRoute`: `invokeMcpTool('find', { input })` and
+`getMcpPrompt` check the wire name against the registered tool/prompt names and
+type `input` from that route — of the literal `server`, when passed
+(`RegisteredMcpServerName`, `RegisteredMcpRouteName`,
+and `RegisteredMcpRouteId` name what a `tool:<server>/<name>` id encodes); the
+contract matrices type each registered key of `fixtures` while an MCP App key
+or a dynamic `Record<string, ContractRouteFixture>` stays legal; `invokeCli`
+reports `routeId` as a registered id (`argv` is untouched); and
+`agent-bundle/eval`'s `expectMcpCall` checks a literal `tool` against the
+registered tools of a literal project `server`. `readMcpResource` (a URI),
+`runScript` (scripts register no contract), and `structuredContent` (carried
+only for object-valued documents) deliberately stay untyped.
+
+Conventional request context providers (`src/providers/*`, see
+[entry conventions](../../docs/entry-conventions.md#request-context-providers-power-tier))
+are mounted automatically for every manifest-backed helper — `renderRoute`,
+`renderRouteEvents`, `invokeCli`, `runScript` (rendered scripts), and the
+in-memory MCP helpers — exactly as the
+generated request scopes mount them: discovered from the compiled manifest,
+executed once per request in the same deterministic key order, handed the same
+surface-specific `invocation` (`tool`, `event`, `cli`, `script`), and failing the
+request closed when a factory throws. `providers.processLifetime` is scoped the
+way the artifact scopes it: each `invokeCli` call, each `runScript` run, and
+each `renderRoute` render is a fresh simulated executable (hit 1, new
+`instanceId`), while one open
+`openInMemoryMcpServer` session shares a single identity across every request
+it handles, like the artifact's warm Flight worker. Pass `context.providers` to opt out: an explicit map is mounted
+verbatim and no conventional provider runs, which is how a test stubs a provider
+that would otherwise reach the network or the file system.
+
+```ts
+// Real providers, as the artifact would mount them.
+const real = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+
+// Stubbed providers: nothing under src/providers/ executes.
+const stubbed = await invokeCli(['library', 'audit', './books'], {
+  context: { providers: { libraryTooling: { tool: 'ffprobe 6.1' } } },
+});
+```
+
+`context` (and `context.providers`) stays optional even once the generated
+`.agent-bundle/routes.d.ts` augmentation declares provider keys: omitting it
+runs the real providers, which is what the artifact does, while an explicit map
+must carry every declared key, so a fixture cannot leave a promised value
+`undefined`. Only a direct `runAgentRequest` requires `providers` in that case,
+because nothing else would supply them.
+
+The harness simulates the process identity per executable, not module
+evaluation: one Rstest worker evaluates each provider module once, so
+module-level state in a provider is shared across every simulated CLI
+invocation, render, and in-memory server in that worker (as it is for the route
+modules themselves), whereas a real artifact evaluates the module afresh in
+every CLI process and Flight worker. A provider's module-level cache, counter,
+or singleton is therefore only proven by the packed and projected proof levels
+that spawn the artifact; a route-unit test that needs cold state should stub
+the provider through `context.providers` or reset that state between calls.
 
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`,
 `toContainText`, `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
@@ -397,6 +663,8 @@ is never a receipt for another.
 | `route-unit` | `renderRoute`, `renderRouteEvents` | a route module renders to the document (and render-event stream) it claims |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a plain or rendered argv vector resolved and run through the routed CLI's own shell, including rendered Markdown, explicit TTY, JSON, and NDJSON modes, in-process |
+| `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, explicit TTY, `--json`, `--ndjson`), a plain `.ts` script through the `main` process envelope as a Node process of its own over the source — fresh module state, real `process.exit`, its own argv, exit code, and streams — without bundling |
+| `workbench-surface` | `inspectWorkbenchSurface`, `workbenchSurfaceFromRouteGraph` | what the dev server would hand the Workbench for this project — the route manifest, the grouped route catalog, the state declaration, lifecycle-replay fixtures per host, and page availability — from the same compiler pass and projection functions, with no browser and no dev server |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | a built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout |
@@ -422,6 +690,106 @@ const tty = await invokeCli(['library', 'report', './books'], { tty: true });
 expect(tty.stdout).toContain('\r\u001B[2K');
 ```
 
+`runScript` is the same idea for the `src/scripts/*` convention. The manifest
+carries every conventional script with its extension contract
+(`testManifest().scripts`), and the helper runs the module through what its
+generated `scripts/<name>.mjs` would do — never by bundling it: a rendered
+`.tsx` script runs in-process through the same shell the executable uses,
+and a plain `.ts` script runs as a Node process of its own, as the
+executable does (see below):
+
+```ts
+import { runScript, scriptJson, scriptNdjson } from 'agent-bundle/test';
+
+// script-dispatch, rendered .tsx script: `--json` / `--ndjson` are reserved by
+// the framework, everything else reaches the component's `argv` prop.
+const summary = await runScript('summary', ['./books', '--json']);
+expect(summary.exitCode).toBe(0);
+expect(scriptJson(summary)).toMatchObject({ arguments: ['./books'] });
+expect(scriptNdjson(await runScript('summary', ['./books', '--ndjson'])).at(-1)?.type).toBe('complete');
+
+// script-dispatch, plain .ts script exporting main(argv): the envelope adopts
+// a numeric return as the exit code; stdout and stderr are captured.
+const checksum = await runScript('checksum', ['./books']);
+expect(checksum.exitCode).toBe(0);
+expect(checksum.stdout).toBe('Fixture checksum: 7\n');
+```
+
+A plain script runs as a Node process of its own over the source module, so
+the process contract is Node's rather than a simulation of it: every run
+evaluates the module afresh (module-level state never survives between runs,
+as it never survives between processes), `process.argv` is
+`[node, <source>, ...argv]`, `process.exit` ends the script for real — work
+queued after it never runs, whether or not the script caught the call —
+process-level APIs such as `process.chdir` work and affect only the script, a
+numeric `main` return goes through the real `process.exitCode` setter (`300`
+reports `44`; `1.5` exits 1 with the setter's `RangeError`), a signal that
+ends the process reports as `128 +` its number, and the test process's own
+argv, exit code, cwd, and streams are never touched, so plain runs may overlap
+each other and any other test. The builder's static export scan decides
+between the `main` envelope and a self-executing module, and a non-callable
+`main` fails the way the generated executable fails. The process resolves
+relative `.js` specifiers to their TypeScript sources, transforms `.ts` with
+Node's own type transform, lowers the `.tsx` and `.jsx` helpers a plain
+script imports with the bundler's SWC — the same lowering the generated
+executable was built with — and serves `agent-bundle/meta` as the identity the build stamps from the
+manifest's `plugin`. Explicit `scripts:` configuration entries are bundled
+entries rather than routes and stay with the packed level. A rendered script
+composes the project's root layout (a script belongs to no server, so no
+server layout applies) and mounts the project's conventional providers with the `script` invocation the
+generated executable passes (`context.providers` substitutes a fixture map, as
+everywhere); a plain script opens no request scope, so it accepts no `context`
+at all. A rendered script's declared state mounts on a disposable root for
+the run, as at every harness level (`renderRoute`, `invokeCli`): the
+`AGENT_BUNDLE_PLUGIN_ROOT` / `.agent-bundle` anchor a `workspace-durable`
+store keeps between executable runs is the packed artifact's, and the packed
+level proves it; a test that needs one store across several rendered runs
+passes the same `context.state` and `context.noticeLedger` bindings to each.
+`stdin` pipes input to a plain script (omitted,
+it reads end-of-file at once); `process.execArgv` is empty as under plain
+`node`; an aborted `signal` sends SIGTERM and, should the script trap it,
+kills the process after a one-second grace before the run rejects. A rendered
+script's own `console` and stream writes during the run land on the
+invocation's `stderr` — the generated executable forwards its render worker's
+stdout and stderr there — so `stdout` holds machine output only and nothing
+escapes into the test runner. `process.exit` from rendered code is that
+worker's exit, never the test process's: the run fails as the executable's
+shell reports it (`Generated render worker exited with code N.` on `stderr`,
+exit code 1, `0` included), the call unwinds the caller, and whatever code
+that catches it writes afterwards is discarded, as a worker that has exited
+writes nothing. Once a rendered run's `signal` aborts, no state mount or
+module load that has not begun is started on its behalf. Every `ScriptInvocation` carries
+`provenance.execution` (`rendered-shell`, `main-envelope`, or
+`self-executing`) beside the level.
+
+`inspectWorkbenchSurface` answers "what would the Workbench show for this
+project?" without a browser. It runs the dev server's own preparation as the
+Workbench server constructs it — `development` mode for a configuration
+factory that branches on `context.mode`, the selected `configPath` for both
+the compiler pass and eval-suite discovery — and the same projection functions
+the dev server serves — `GET /api/routes/manifest` and `GET /api/lifecycles`
+byte for byte — then applies the Workbench's own grouping and navigation
+rules:
+
+```ts
+import { inspectWorkbenchSurface, workbenchPageLabel } from 'agent-bundle/test';
+
+const surface = await inspectWorkbenchSurface({ root: projectRoot });
+expect(surface.catalog.groups.map((group) => group.label)).toContain('curator · Tools');
+expect(surface.catalog.stateDefinition).toMatchObject({ driver: 'sqlite', lifetime: 'workspace-durable' });
+expect(surface.lifecycles[0]?.targets.map((target) => target.target)).toEqual(['claude', 'codex']);
+expect(surface.pages.map(workbenchPageLabel)).not.toContain('Playground');
+```
+
+`counts` are the artifact inventory the Workbench counts, derived without a
+build: one instance per hook, MCP server, or script declaration per selected
+target it names (a declaration whose `targets` select none of the project's
+targets is emitted nowhere and counts nothing), plus the declared Skills, eval
+suites, and targets. Page availability depends only on whether each count is
+zero and on what the compiled graph declares. Host discovery, live MCP probes, published epochs,
+and the RSC runtime page are artifact- or process-bound and are not projected
+here.
+
 `expectEvents` asserts over a render-event stream. `toContainSequence` is
 sequence-tolerant — an extra `progress` or `replace` frame is legal and cannot
 turn a passing render red — while a missing frame, a reordering, or a regressed
@@ -437,7 +805,12 @@ prove native-host install or dispatch, or an install mode that copies the
 artifact elsewhere. `host-install` is separate installed-layout process
 evidence: its deterministic adapter-simulator lane is unconditional, available
 Claude and Codex binaries also prove their public install paths, and Cursor
-records its unavailable non-interactive host-session surface explicitly.
+records its unavailable non-interactive host-session surface explicitly. The
+Claude and Codex legs skip when those binaries are absent, so the repository's
+CI runs them on every change against the exact CLI versions pinned beside each
+adapter's schema provenance (`hostCli` in `src/adapters/schemas/*/PROVENANCE.json`),
+signed out and with no secrets; only the `claude -p` session and Eval smokes
+remain login-gated.
 
 ### Contract matrix (`runContractMatrix` / `runPackedContractMatrix` / `runInstalledHostContractMatrix`)
 
@@ -459,8 +832,9 @@ the current schema, rejection of negative inputs derived from the advertised
 `listTools` input JSON Schema, and mid-flight cancellation hygiene. In-memory
 transport may pass structured values without serialization; the matrix closes
 that gap with an explicit `JSON.parse(JSON.stringify(...))` round-trip before
-validation. MCP Apps are reported as not-applicable for surface registration
-because the in-memory level does not register them.
+validation. MCP Apps are not registered at this level: every app route reports
+`surface-completeness` as `not-applicable` and receives no coverage or sweep
+check, and app fixture entries are accepted and ignored.
 
 **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
 against an already-open packed session (the single packed journey owns session
@@ -473,6 +847,24 @@ version-skew (including their per-lifecycle-phase variants) are reported
 `not-applicable` with an honest reason. The packed
 server validates every tool result through its bundled `resultSchema` before
 returning; a successful sweep invocation is that evidence.
+
+**MCP App coverage per level.** Fixtures must cover every compiled tool, prompt,
+and resource route on the server. App routes are covered at every boundary that
+registers app resources — `packed-stdio`, `packed-deleted-source`,
+`host-install`, and `dev-epoch` — where `surface-completeness` requires the
+compiled `ui://` URI in `listResources` and `sweep` reads that resource. With
+the default `apps: 'auto'` an app route needs no fixture entry: `coverage`
+passes with a reason naming the auto-covered sweep. An explicit
+`{ kind: 'resource' }` (or legacy `{}`) entry is always accepted, and
+`apps: 'explicit'` makes a missing app entry a `coverage` failure again. At
+`mcp-in-memory` apps are never registered, so `apps` has no effect there.
+
+The `cancellation` fixture aborts the invocation after `abortAfterMs`
+(default 50ms) and requires it to settle rejected. Its input must stay in
+flight past that point: when the invocation settles before the abort fires
+the check is `not-applicable` ("invocation completed before abort; use an
+input that stays in flight"), and it only `fails` when the abort was delivered
+mid-flight and the call still settled without rejecting.
 
 Lifecycle fixtures replay
 `unknown → queued → running → first-progress → repeated-progress → terminal`
@@ -532,11 +924,12 @@ await runContractMatrix({
 });
 
 // Packed: pass an already-open session and a manifest compiled before source removal.
+// App routes are auto-covered here; `{ kind: 'resource' }` names one explicitly.
 await runPackedContractMatrix({
   eventRuntime: { endpointId: packedEventRuntimeEndpointId },
   session: packedSession,
   manifest: compiledManifest,
-  fixtures: { /* same shape */ },
+  fixtures: { /* same shape, optionally 'app:library/dashboard': { kind: 'resource' } */ },
 });
 
 await using installedSession = await openInstalledHostMcpServer({
@@ -602,6 +995,15 @@ Skill Markdown are inert in the workbench renderer.
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
 
+A project with routed `src/cli/**` commands also ships that CLI inside every host artifact as
+`<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when a command renders), a
+self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>` — so a script
+route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
+`${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in target
+publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
+the manifest records both files with bundle provenance. The npm package bin under `dist/bin/` is
+unchanged. See `docs/entry-conventions.md` for the layout and diagnostics (`AB4765`, `AB4766`).
+
 ### What gets hashed
 
 Hash pins cover vendored external content whose ground truth lives outside this repository and can
@@ -614,7 +1016,7 @@ observed host version (`observedVersion`) and target, while adapters carry a mon
 `adapterRevision`. Git already versions repository-owned content; hashing it again inside the
 repository is self-referential and causes churn on every table edit.
 
-`AgentBundleConfig` merges bundled portable, Codex, and Claude declarations
+`AgentBundleConfig` merges bundled portable, Codex, Claude, and Cursor declarations
 through `AgentBundleConfigExtensions`. `TargetRegistry` owns the unique
 extension descriptor and adapter for each target. Ordinary projects need no
 extension key; extension values are strict finite JSON and host-specific values
@@ -654,7 +1056,11 @@ pnpm test:packed:native:codex
 ```
 
 Each command builds and installs one production-only tarball, removes provider API-key and
-credential-shaped environment values, and fails if the selected host's normal home state changes.
+credential-shaped environment values, and fails if the selected host's normal configuration,
+settings, or installed-plugin state changes (for Claude: `~/.claude/config.json`, `settings.json`,
+`settings.local.json`, and `plugins/`; the source contract smoke additionally guards the
+user-scope `mcpServers` registrations in `~/.claude.json`, whose other keys are host bookkeeping
+Claude Code rewrites on every start).
 Do not add provider API keys to the project configuration or use them as a fallback for either
 harness.
 
@@ -678,6 +1084,13 @@ harness.
 Third-party notices, including the vendored MCP Inspector snapshot's license and provenance, ship in
 the published package.
 
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE); third-party material keeps
+its own notices under `dist/workbench/`.
+
 ## Contributor delivery and release gates
 
 The public examples live at [`../../examples`](../../examples). They are private
@@ -686,9 +1099,9 @@ then Hooks and Scripts, then the interactive MCP App.
 
 Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 `pnpm check:release` is release-only: its exact package-script components are
-`pnpm pack:dry-run`, `pnpm audit:release`, and `pnpm test:packed:release`, and it does not replace
+`pnpm pack:dry-run`, `pnpm lint:release`, and `pnpm test:packed:release`, and it does not replace
 `pnpm check`. `pnpm release` runs that release gate before `changeset publish`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
-npm publishing is deferred until the release owner picks the final package name/scope and
-license; pkg.pr.new previews are the interim channel, and the first npm release will use npm
+npm publishing is deferred until the release owner picks the final package name/scope;
+pkg.pr.new previews are the interim channel, and the first npm release will use npm
 package provenance (`publishConfig.provenance` is already set).

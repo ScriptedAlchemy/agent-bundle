@@ -1,7 +1,10 @@
 import {
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
+  type AgentNoticeDeliveryAdvertisement,
   type AgentNoticeLedger,
+  type AgentNoticeRetentionInput,
+  resolveNoticeRetentionPolicy,
 } from '../notices/index.js';
 import {
   AgentStateError,
@@ -10,13 +13,24 @@ import {
   type AgentStateDriver,
   type AgentStateEventSchemas,
   type AgentStateHandle,
+  type AgentStateLifetime,
   type AgentStateStore,
 } from '../state/index.js';
+
+/**
+ * Notice ledger policy a generated runtime mounts beside the project state:
+ * the host's delivery advertisement (whose per-route `sensitivity` ceilings
+ * the ledger honours) and the project's retention overrides.
+ */
+export interface GeneratedNoticePolicyOptions {
+  readonly noticeDelivery?: AgentNoticeDeliveryAdvertisement;
+  readonly noticeRetention?: AgentNoticeRetentionInput;
+}
 
 export interface CreateGeneratedRuntimeStateOptions<
   TState,
   TEvents extends AgentStateEventSchemas,
-> {
+> extends GeneratedNoticePolicyOptions {
   readonly definition: AgentStateDefinition<TState, TEvents>;
   readonly driver: AgentStateDriver;
 }
@@ -31,21 +45,35 @@ export interface GeneratedRuntimeRequestBindings<
   close(): Promise<void>;
 }
 
+/**
+ * A process-lifetime handle on the notice ledger, outside any request scope.
+ * The generated MCP server process uses it to observe the ledger its render
+ * worker mounts (for `resources/updated` delivery); request-lifetime notices
+ * have no cross-request ledger, so the handle fails typed for that lifetime.
+ */
+export interface GeneratedNoticeRuntime {
+  close(): Promise<void>;
+  noticeLedger(): Promise<AgentNoticeLedger>;
+}
+
 export interface GeneratedRuntimeState<
   TState,
   TEvents extends AgentStateEventSchemas,
-> {
-  close(): Promise<void>;
+> extends GeneratedNoticeRuntime {
   requestBindings(
     options?: { readonly signal?: AbortSignal },
   ): Promise<GeneratedRuntimeRequestBindings<TState, TEvents>>;
+}
+
+export interface CreateGeneratedNoticeRuntimeOptions extends GeneratedNoticePolicyOptions {
+  readonly driver: AgentStateDriver;
+  readonly lifetime: AgentStateLifetime;
 }
 
 type OpenResult<T> =
   | { readonly kind: 'opened'; readonly value: T }
   | { readonly error: AgentStateError; readonly kind: 'failed' };
 
-type NoticeStore = Parameters<typeof createAgentNoticeLedger>[0];
 type ClosableStore = { close(): Promise<void> };
 
 const asStateError = (error: unknown, definitionId: string): AgentStateError =>
@@ -67,45 +95,66 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
   const reject = async <T>(): Promise<T> => Promise.reject(failure);
   return Object.freeze({
     expire: reject,
+    inspect: reject,
     openRequest: async () => Object.freeze({
       close: () => undefined,
       handle: Object.freeze({
         acknowledge: reject,
         inbox: reject,
         publish: reject,
+        published: reject,
         read: reject,
       }),
     }),
     read: reject,
+    recordWithholding: reject,
+    releaseAvailability: reject,
+    reserveAvailability: reject,
+    retain: reject,
     signalAvailability: reject,
     withdraw: reject,
   });
 };
 
 /**
- * Owns the state kernel and notice ledger used by generated request scopes.
- *
  * The v1 authorizer admits every publish and delivery request. Recipient
  * matching remains enforced by the ledger itself; application-specific
  * authorization is future embedder policy.
  */
-export const createGeneratedRuntimeState = <
-  TState,
-  TEvents extends AgentStateEventSchemas,
->(
-  options: CreateGeneratedRuntimeStateOptions<TState, TEvents>,
-): GeneratedRuntimeState<TState, TEvents> => {
-  const { definition, driver } = options;
-  const noticeDefinition = agentNoticeStateDefinition(definition.lifetime);
-  const shared = definition.lifetime !== 'request';
+const generatedNoticeAuthorizer = { authorize: () => ({ state: 'authorized' as const }) };
+
+type NoticeStore = Parameters<typeof createAgentNoticeLedger>[0];
+
+const ledgerFrom = (result: OpenResult<NoticeStore>, policy: GeneratedNoticePolicyOptions): AgentNoticeLedger =>
+  result.kind === 'opened'
+    ? createAgentNoticeLedger(result.value, {
+      ...generatedNoticeAuthorizer,
+      ...(policy.noticeDelivery === undefined ? {} : { delivery: policy.noticeDelivery }),
+      ...(policy.noticeRetention === undefined ? {} : { retention: policy.noticeRetention }),
+    })
+    : failedLedger(result.error);
+
+interface StoreSlot<TSlotState, TSlotEvents extends AgentStateEventSchemas> {
+  open(): Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>>;
+  readonly pending: Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> | undefined;
+}
+
+/**
+ * Owns one driver, the stores lazily opened from it, and their ordered
+ * teardown. Each slot owns its cached failure and, when its lifetime is
+ * shared, its single open; request-lifetime slots open per call and hand the
+ * store back to the caller to release.
+ */
+const createStoreOwner = (driver: AgentStateDriver) => {
   const liveStores = new Set<ClosableStore>();
+  const slots: { readonly pending: Promise<unknown> | undefined }[] = [];
   let closing: Promise<void> | undefined;
   let closed = false;
 
-  /** One lazily-opened store slot owning its cached failure and, when shared, its single open. */
   const createSlot = <TSlotState, TSlotEvents extends AgentStateEventSchemas>(
     slotDefinition: AgentStateDefinition<TSlotState, TSlotEvents>,
-  ) => {
+  ): StoreSlot<TSlotState, TSlotEvents> => {
+    const shared = slotDefinition.lifetime !== 'request';
     let failure: AgentStateError | undefined;
     let pending: Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> | undefined;
 
@@ -136,7 +185,7 @@ export const createGeneratedRuntimeState = <
       }
     };
 
-    return {
+    const slot: StoreSlot<TSlotState, TSlotEvents> = {
       open(): Promise<OpenResult<AgentStateStore<TSlotState, TSlotEvents>>> {
         if (!shared) return openOnce();
         pending ??= openOnce();
@@ -146,37 +195,66 @@ export const createGeneratedRuntimeState = <
         return pending;
       },
     };
+    slots.push(slot);
+    return slot;
   };
-
-  const projectSlot = createSlot(definition);
-  const noticeSlot = createSlot(noticeDefinition);
 
   const closeStore = async (store: ClosableStore): Promise<void> => {
     if (!liveStores.delete(store)) return;
     await store.close();
   };
 
+  const close = (): Promise<void> => {
+    if (closing !== undefined) return closing;
+    closed = true;
+    closing = (async () => {
+      await Promise.allSettled(slots.flatMap((slot) => (slot.pending === undefined ? [] : [slot.pending])));
+      const storeClosures = await Promise.allSettled([...liveStores].map((store) => closeStore(store)));
+      let driverFailure: unknown;
+      try {
+        await driver.close();
+      } catch (error) {
+        driverFailure = error;
+      }
+      const storeFailure = storeClosures.find((result) => result.status === 'rejected');
+      if (storeFailure?.status === 'rejected') throw storeFailure.reason;
+      if (driverFailure !== undefined) throw driverFailure;
+    })();
+    return closing;
+  };
+
+  return { close, closeStore, createSlot };
+};
+
+const requestLifetimeLedger = (): AgentNoticeLedger => failedLedger(new AgentStateError(
+  'lifetime-mismatch',
+  'Request-lifetime notices have no ledger outside a request scope',
+));
+
+/**
+ * Owns the state kernel and notice ledger used by generated request scopes.
+ */
+export const createGeneratedRuntimeState = <
+  TState,
+  TEvents extends AgentStateEventSchemas,
+>(
+  options: CreateGeneratedRuntimeStateOptions<TState, TEvents>,
+): GeneratedRuntimeState<TState, TEvents> => {
+  const { definition, driver } = options;
+  const owner = createStoreOwner(driver);
+  const shared = definition.lifetime !== 'request';
+  const projectSlot = owner.createSlot(definition);
+  const noticeSlot = owner.createSlot(agentNoticeStateDefinition(definition.lifetime));
+  // The retention policy is validated once, when the runtime is created, so a
+  // malformed override fails the process at startup rather than the first request.
+  resolveNoticeRetentionPolicy(options.noticeRetention);
+
   return Object.freeze({
-    close(): Promise<void> {
-      if (closing !== undefined) return closing;
-      closed = true;
-      closing = (async () => {
-        await Promise.allSettled([
-          ...(projectSlot.pending === undefined ? [] : [projectSlot.pending]),
-          ...(noticeSlot.pending === undefined ? [] : [noticeSlot.pending]),
-        ]);
-        const storeClosures = await Promise.allSettled([...liveStores].map((store) => closeStore(store)));
-        let driverFailure: unknown;
-        try {
-          await driver.close();
-        } catch (error) {
-          driverFailure = error;
-        }
-        const storeFailure = storeClosures.find((result) => result.status === 'rejected');
-        if (storeFailure?.status === 'rejected') throw storeFailure.reason;
-        if (driverFailure !== undefined) throw driverFailure;
-      })();
-      return closing;
+    close: owner.close,
+
+    async noticeLedger(): Promise<AgentNoticeLedger> {
+      if (!shared) return requestLifetimeLedger();
+      return ledgerFrom(await noticeSlot.open(), options);
     },
 
     async requestBindings(
@@ -190,11 +268,7 @@ export const createGeneratedRuntimeState = <
       const state = project.kind === 'opened'
         ? createAgentStateHandle(project.value, bindingOptions)
         : failedHandle<TState, TEvents>(definition.lifetime, project.error);
-      const noticeLedger = notices.kind === 'opened'
-        ? createAgentNoticeLedger(notices.value, {
-          authorize: () => ({ state: 'authorized' }),
-        })
-        : failedLedger(notices.error);
+      const noticeLedger = ledgerFrom(notices, options);
       let released = false;
       return Object.freeze({
         noticeLedger,
@@ -202,9 +276,31 @@ export const createGeneratedRuntimeState = <
         async close() {
           if (released) return;
           released = true;
-          for (const store of requestStores) await closeStore(store);
+          for (const store of requestStores) await owner.closeStore(store);
         },
       });
+    },
+  });
+};
+
+/**
+ * Owns only the notice ledger over a driver: the handle a generated MCP
+ * server process holds on the durable store its Flight worker mounts, so it
+ * can observe ledger revisions and emit `resources/updated` to subscribed
+ * connections without evaluating the project's state definition twice.
+ */
+export const createGeneratedNoticeRuntime = (
+  options: CreateGeneratedNoticeRuntimeOptions,
+): GeneratedNoticeRuntime => {
+  const owner = createStoreOwner(options.driver);
+  const shared = options.lifetime !== 'request';
+  const noticeSlot = owner.createSlot(agentNoticeStateDefinition(options.lifetime));
+  resolveNoticeRetentionPolicy(options.noticeRetention);
+  return Object.freeze({
+    close: owner.close,
+    async noticeLedger(): Promise<AgentNoticeLedger> {
+      if (!shared) return requestLifetimeLedger();
+      return ledgerFrom(await noticeSlot.open(), options);
     },
   });
 };

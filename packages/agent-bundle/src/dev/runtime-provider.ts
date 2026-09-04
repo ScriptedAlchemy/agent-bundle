@@ -203,3 +203,27 @@ export class DevRuntimeGenerationConflictError extends Error {
     this.actualGenerationId = actualGenerationId;
   }
 }
+
+const errorCode = (error: unknown): unknown =>
+  error instanceof Error ? (error as { readonly code?: unknown }).code : undefined;
+
+/**
+ * Whether `error` is the provider's "runtime unavailable" signal. A provider
+ * module imports these classes from the published `agent-bundle/api` (#485),
+ * which may be a different installation of the package than the one serving
+ * the Workbench, so the documented AB8201 response cannot hinge on
+ * constructor identity: the class's `name` and `code` are the contract.
+ */
+export const isDevRuntimeUnavailableError = (error: unknown): error is DevRuntimeUnavailableError =>
+  error instanceof DevRuntimeUnavailableError
+  || (error instanceof Error && error.name === 'DevRuntimeUnavailableError' && errorCode(error) === 'AB8201');
+
+/** Whether `error` is the provider's generation-conflict signal; see {@link isDevRuntimeUnavailableError}. */
+export const isDevRuntimeGenerationConflictError = (error: unknown): error is DevRuntimeGenerationConflictError =>
+  error instanceof DevRuntimeGenerationConflictError
+  || (
+    error instanceof Error
+    && error.name === 'DevRuntimeGenerationConflictError'
+    && errorCode(error) === 'AB8204'
+    && typeof (error as { readonly expectedGenerationId?: unknown }).expectedGenerationId === 'string'
+  );

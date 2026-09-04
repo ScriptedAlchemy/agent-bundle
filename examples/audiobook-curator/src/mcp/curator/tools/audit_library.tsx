@@ -1,8 +1,7 @@
-import { Agent, agent } from '@agent-bundle/runtime';
+import { Agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { libraryAuditHeadline } from '../../../components/headlines.js';
 import { LibraryAnalysis } from '../../../components/library-analysis.js';
 import { AuditFileCards, AuditSummary } from '../../../components/library-shelf.js';
@@ -21,22 +20,17 @@ export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as LibraryAuditReceipt;
-  const context = await agent();
-  await context.progress.report({
-    completed: 0,
-    message: 'Analyzing duplicate and multipart groups',
-    total: 1,
-  });
+  // The Suspense fallback is the progress surface: the MCP projector turns the
+  // streamed `Agent.Progress` node into `notifications/progress` for a client
+  // that sent a progress token, so no `progress.report()` repeats the message.
   return (
-    <CuratorDocument
-      headline={libraryAuditHeadline(receipt)}
-      receipt={receipt}
-    >
+    <Agent.Result value={receipt}>
+      <Agent.Text>{libraryAuditHeadline(receipt)}</Agent.Text>
       <AuditSummary receipt={receipt} />
       <AuditFileCards receipt={receipt} />
       <Suspense fallback={<Agent.Progress completed={0} message="Analyzing duplicate and multipart groups" />}>
         <LibraryAnalysis receipt={receipt} signal={signal} />
       </Suspense>
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { prepack } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -72,6 +73,30 @@ it('parses npm 11 arrays and npm 12 package-keyed pack output', () => {
   expect(packOutputFromJson(JSON.stringify({ 'installer-fixture': entry }))).toEqual(entry);
 });
 
+it('selects the intended pack entry by package name when npm lists sibling workspace packages', () => {
+  const runtime = { filename: 'agent-bundle-runtime-0.1.0.tgz', files: [{ path: 'dist/runtime.js' }], name: '@agent-bundle/runtime' };
+  const bundle = { filename: 'agent-bundle-0.1.0.tgz', files: [{ path: 'dist/index.js' }], name: 'agent-bundle' };
+  const scaffolder = { filename: 'create-agent-bundle-0.1.0.tgz', files: [{ path: 'dist/cli.js' }], name: 'create-agent-bundle' };
+  const expected = { filename: bundle.filename, files: bundle.files };
+
+  expect(packOutputFromJson(JSON.stringify([runtime, bundle, scaffolder]), 'agent-bundle')).toEqual(expected);
+  expect(packOutputFromJson(JSON.stringify({
+    '@agent-bundle/runtime': runtime,
+    'agent-bundle': bundle,
+    'create-agent-bundle': scaffolder,
+  }), 'agent-bundle')).toEqual(expected);
+  // npm 12 keys the object by name even when entries omit `name`.
+  const { name: _name, ...unnamedBundle } = bundle;
+  expect(packOutputFromJson(JSON.stringify({ 'agent-bundle': unnamedBundle }), 'agent-bundle')).toEqual(expected);
+
+  expect(() => packOutputFromJson(JSON.stringify([runtime, bundle, scaffolder])))
+    .toThrow(/returned 3 entries; expected exactly one/u);
+  expect(() => packOutputFromJson(JSON.stringify([runtime, scaffolder]), 'agent-bundle'))
+    .toThrow(/0 entries named "agent-bundle".*"@agent-bundle\/runtime", "create-agent-bundle"/u);
+  expect(() => packOutputFromJson(JSON.stringify([bundle, bundle]), 'agent-bundle'))
+    .toThrow(/2 entries named "agent-bundle"/u);
+});
+
 it('prepack validates the complete dry-run inventory', async () => {
   expect(await diagnostics()).toEqual([]);
   expect(result.pack.files.map((file) => file.path)).toContain('dist/bin/installer-fixture.js');
@@ -80,11 +105,11 @@ it('prepack validates the complete dry-run inventory', async () => {
 
 it('exposes --root, --output, and --json through the prepack command', async () => {
   const calls: unknown[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runCli(
     ['prepack', '--root', projectRoot, '--output', 'host-packs', '--json'],
-    { stderr: { write: () => undefined }, stdout: { write: (chunk: string) => stdout.push(chunk) } },
+    terminal.output,
     {
       prepack: async (options) => {
         calls.push(options);
@@ -98,7 +123,7 @@ it('exposes --root, --output, and --json through the prepack command', async () 
     packageOutputs: true,
     root: projectRoot,
   })]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({
+  expect(JSON.parse(terminal.stdout())).toMatchObject({
     build: { model: { metadata: { name: 'installer-fixture' } } },
     pack: { files: expect.any(Array) },
   });

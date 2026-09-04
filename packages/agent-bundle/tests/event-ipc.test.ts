@@ -12,10 +12,27 @@ import {
   createEventRuntimeServer,
   createEventRuntimeServerForTest,
   eventRuntimeEndpoint,
+  type EventRuntimeServer,
   EventRuntimeTransportError,
   requestEventRuntime,
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
+
+type ContenderOutcome =
+  | Readonly<{ readonly server: EventRuntimeServer; readonly status: 'opened' }>
+  | Readonly<{ readonly error: unknown; readonly status: 'failed' }>;
+
+/**
+ * Attaches the settlement handler the moment a racing server is created. The
+ * losing contender rejects as soon as the winner listens, while the test only
+ * reaches its `await` after the winner has fully resolved; on a loaded machine
+ * that gap is wide enough for the rejection to surface as an unhandled
+ * file-level "already has a live server" failure.
+ */
+const settleContender = (server: Promise<EventRuntimeServer>): Promise<ContenderOutcome> => server.then(
+  (opened): ContenderOutcome => ({ server: opened, status: 'opened' }),
+  (error: unknown): ContenderOutcome => ({ error, status: 'failed' }),
+);
 
 interface EndpointClaimOwner {
   readonly linuxStartTime?: string;
@@ -261,6 +278,66 @@ it.live('rejects a second live server without disturbing the endpoint owner', ()
   }));
 }));
 
+it.live('reports a failed endpoint removal from close() after the server has stopped listening', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-close-failure-${crypto.randomUUID()}`;
+  const removalFailure = new Error('endpoint removal failed');
+  let removals = 0;
+  const server = yield* Effect.promise(() => createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => undefined,
+  }, {
+    beforeEndpointRemoval: async () => {
+      removals += 1;
+      throw removalFailure;
+    },
+  }));
+
+  const closeFailure = yield* Effect.tryPromise({ try: () => server.close(), catch: (error) => error }).pipe(Effect.flip);
+  expect(closeFailure).toMatchObject({
+    cause: removalFailure,
+    code: 'runtime-failed',
+    message: 'Unable to remove the event runtime endpoint.',
+    name: EventRuntimeTransportError.name,
+  });
+  // The server stopped listening before the removal ran, and a repeated close
+  // returns the same settled teardown instead of retrying it.
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({ endpoint: server.endpoint, timeoutMs: 500 })))
+    .toEqual({ status: 'unavailable' });
+  expect(yield* Effect.tryPromise({ try: () => server.close(), catch: (error) => error }).pipe(Effect.flip)).toBe(closeFailure);
+  expect(removals).toBe(1);
+  yield* Effect.promise(() => rm(server.endpoint, { force: true }));
+}));
+
+it.live('reports a failed claim release from open() and shuts down the server it had started', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-claim-release-failure-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const releaseFailure = new Error('claim release failed');
+  const openFailure = yield* Effect.tryPromise({
+    try: () => createEventRuntimeServerForTest({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    }, {
+      beforeEndpointClaimRelease: async () => { throw releaseFailure; },
+    }),
+    catch: (error) => error,
+  }).pipe(Effect.flip);
+  expect(openFailure).toMatchObject({
+    cause: releaseFailure,
+    code: 'runtime-failed',
+    message: 'Unable to release the event runtime endpoint claim.',
+    name: EventRuntimeTransportError.name,
+  });
+  // The listening server that had come up under the claim is shut down again.
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({ endpoint, timeoutMs: 500 })))
+    .toEqual({ status: 'unavailable' });
+  yield* Effect.promise(() => rm(`${endpoint}.lock`, { force: true }));
+  yield* Effect.promise(() => rm(endpoint, { force: true }));
+}));
+
 it.live('replaces a stale event runtime socket file', () => Effect.gen(function*() {
   if (process.platform === 'win32') return;
   const endpointId = `event-ipc-stale-${crypto.randomUUID()}`;
@@ -331,7 +408,7 @@ it.live('does not unlink a concurrent winner after both servers probe a stale en
   let releaseSecond!: () => void;
   const secondProbed = new Promise<void>((resolve) => { markSecondProbed = resolve; });
   const secondCanContinue = new Promise<void>((resolve) => { releaseSecond = resolve; });
-  const secondServer = createEventRuntimeServerForTest({
+  const secondServer = settleContender(createEventRuntimeServerForTest({
     artifactEpoch: 'epoch-1',
     endpointId,
     handle: async () => ({ owner: 'second' }),
@@ -341,7 +418,7 @@ it.live('does not unlink a concurrent winner after both servers probe a stale en
       markSecondProbed();
       await secondCanContinue;
     },
-  });
+  }));
   yield* Effect.promise(() => secondProbed);
 
   releaseFirst();
@@ -352,13 +429,7 @@ it.live('does not unlink a concurrent winner after both servers probe a stale en
   expect(winner.endpoint).toBe(endpoint);
 
   releaseSecond();
-  const loser = yield* Effect.promise(async () => {
-    try {
-      return { server: await secondServer, status: 'opened' as const };
-    } catch (error) {
-      return { error, status: 'failed' as const };
-    }
-  });
+  const loser = yield* Effect.promise(() => secondServer);
   if (loser.status === 'opened') {
     yield* Effect.promise(() => loser.server.close());
     expect(loser.status).toBe('failed');
@@ -450,7 +521,7 @@ it.live('serializes concurrent reclamation before either contender can unlink a 
   const secondSnapshot = new Promise<void>((resolve) => { markSecondSnapshot = resolve; });
   const secondCanReclaim = new Promise<void>((resolve) => { releaseSecondSnapshot = resolve; });
   const secondReclamation = new Promise<void>((resolve) => { markSecondReclamation = resolve; });
-  const secondServer = createEventRuntimeServerForTest({
+  const secondServer = settleContender(createEventRuntimeServerForTest({
     artifactEpoch: 'epoch-1',
     endpointId,
     handle: async () => ({ owner: 'second' }),
@@ -464,7 +535,7 @@ it.live('serializes concurrent reclamation before either contender can unlink a 
       markSecondSnapshot();
       await secondCanReclaim;
     },
-  });
+  }));
 
   yield* Effect.promise(() => Promise.all([firstSnapshot, secondSnapshot]));
   expect(firstSnapshotIdentity).toEqual({ device: originalClaim.dev, inode: originalClaim.ino });
@@ -486,13 +557,7 @@ it.live('serializes concurrent reclamation before either contender can unlink a 
     Effect.promise(() => firstServer),
     (server) => Effect.promise(() => server.close()),
   );
-  const loser = yield* Effect.promise(async () => {
-    try {
-      return { server: await secondServer, status: 'opened' as const };
-    } catch (error) {
-      return { error, status: 'failed' as const };
-    }
-  });
+  const loser = yield* Effect.promise(() => secondServer);
   if (loser.status === 'opened') {
     yield* Effect.promise(() => loser.server.close());
     expect(loser.status).toBe('failed');
@@ -566,7 +631,7 @@ it.live('excludes a second orphan-claim remover while the recovery gate is held'
   const secondCanAttemptReclamation = new Promise<void>((resolve) => { releaseSecondSnapshot = resolve; });
   const secondReclamation = new Promise<void>((resolve) => { markSecondReclamation = resolve; });
   const secondCanRetry = new Promise<void>((resolve) => { releaseSecondReclamation = resolve; });
-  const secondServer = createEventRuntimeServerForTest({
+  const secondServer = settleContender(createEventRuntimeServerForTest({
     artifactEpoch: 'epoch-1',
     endpointId,
     handle: async () => ({ owner: 'second' }),
@@ -580,7 +645,7 @@ it.live('excludes a second orphan-claim remover while the recovery gate is held'
       markSecondSnapshot();
       await secondCanAttemptReclamation;
     },
-  });
+  }));
 
   yield* Effect.promise(() => Promise.all([firstSnapshot, secondSnapshot]));
   releaseFirstSnapshot();
@@ -604,13 +669,7 @@ it.live('excludes a second orphan-claim remover while the recovery gate is held'
     (server) => Effect.promise(() => server.close()),
   );
   releaseSecondReclamation();
-  const loser = yield* Effect.promise(async () => {
-    try {
-      return { server: await secondServer, status: 'opened' as const };
-    } catch (error) {
-      return { error, status: 'failed' as const };
-    }
-  });
+  const loser = yield* Effect.promise(() => secondServer);
   if (loser.status === 'opened') {
     yield* Effect.promise(() => loser.server.close());
     expect(loser.status).toBe('failed');

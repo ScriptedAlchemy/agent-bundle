@@ -1,0 +1,66 @@
+---
+description: 'Skills 起步项目示例：三个按约定发现的工程运维 Skill，配有确定性 eval 证据，且不需要任何凭据。'
+---
+
+# Skills 起步项目
+
+一个只有 Skill 的插件。它证明：一个值得安装的捆绑包，除了自身标识与 target 之外可以什么都不声明——
+而 Skill 的质量仍然可以由记录下来的证据支撑，而不只是一句声称。
+
+- **在仓库根目录运行：** `pnpm example:skills`
+- **包名：** `@agent-bundle-example/skills-starter`
+- **公开依赖：** `agent-bundle`（`workspace:*`）
+- **Target：** `portable`、`codex`、`claude`
+- **凭据：** 不需要——两个 eval 套件都是确定性的，只读取签入的夹具
+- **源码：** [`examples/skills-starter`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/skills-starter)
+
+## 它证明什么
+
+- **约定发现。** `agent-bundle.config.ts` 只声明插件与它的三个 target，别的什么都没有。每个
+  `src/skills/*/SKILL.md` 目录都按约定被发现，因此配置从不列出任何 Skill。这正是
+  [Skills](../guide/authoring/skills.mdx) 中描述的编写模型。
+- **一份源码，三种宿主布局。** 同一批编写好的文档被降级到 portable、Codex 与 Claude 三棵输出树中。
+  Workbench 的 Source 与 Generated 视图会显示某个 target 究竟是复制还是改写了一份文档。
+- **确定性的 eval 证据。** eval 套件通过确定性 harness 针对签入夹具运行，因此某个 Skill 的覆盖是一次
+  记录下来的运行，而不是一句断言。覆盖被标记为*间接*，因为确定性 harness 无法观察宿主端的 Skill 激活。
+
+## 编写了什么
+
+| 路径 | 是什么 |
+| --- | --- |
+| `src/skills/incident-triage/` | 一次生产事故，从最初信号到止损、证据收集，直到可直接交接的进展更新。 |
+| `src/skills/dependency-upgrade/` | 依赖升级规划，包含 API、运行时、灰度与回滚检查。 |
+| `src/skills/release-review/` | 一次显式发布评审所需的证据、严重级别、流程与最终报告要求。 |
+| `evals/release-readiness.eval.ts` | `release-readiness` 套件及其确定性用例 `release-artifact-is-ready`。 |
+| `evals/engineering-operations.eval.ts` | `engineering-operations` 套件：`incident-handoff-is-actionable` 与 `upgrade-plan-has-rollback`。 |
+
+每个 Skill 都链接自己的 `references/` 清单或运行手册，以及一份可复用的 `assets/` 交接或规划模板，
+因此 Skill 正文保持简短，长篇材料只在需要时才被加载。
+
+## 在 Workbench 中操作
+
+1. **Overview** 打开时是 Bundle 仪表盘：三个 Skill、生成的 target、构建健康状况，以及下一步值得做的
+   操作。
+2. **Skills** 列出 `dependency-upgrade`、`incident-triage` 与 `release-review`。浏览它们链接的清单与
+   报告模板，并按 target 在 Source 与 Generated 之间切换。
+3. **Artifacts** 默认选中 Claude target。切换 target 即可对比 portable、Codex 与 Claude 的输出树及其
+   来源信息。
+4. **Evals** 默认选中 `release-readiness` 套件。运行 `release-artifact-is-ready` 并查看通过的试次；
+   它只消费签入的证据夹具。
+5. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
+   状态。恢复签入的策略并重建。此时先前那次 eval 对改动后的构建已经过期——重新运行
+   `release-readiness`，记录当前已修复状态下的证据。
+
+## 非交互检查
+
+在仓库级 `pnpm build` 之后：
+
+```sh
+cd examples/skills-starter
+pnpm validate
+pnpm build
+pnpm exec agent-bundle eval --case release-artifact-is-ready --trials 1
+```
+
+`pnpm check` 就是不打开 Workbench 的“校验加构建”这一对。生成的输出落在 `artifact/`，其根契约是
+`artifact/agent-bundle.manifest.json`。`.agent-bundle/` 目录存放开发期状态，不是源码材料。

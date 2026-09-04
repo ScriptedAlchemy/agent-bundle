@@ -178,6 +178,36 @@ it('normalizes registered extensions and validates registered script and hook ta
   expect(Object.isFrozen(extensions.example?.value.nested)).toBe(true);
 });
 
+it('enumerates lsp components with unambiguous ids for any server name (#100)', async () => {
+  const model = await normalizeProject(loadedProject({
+    claude: {
+      lspServers: {
+        'a:b': { command: 'first-ls', extensionToLanguage: { '.a': 'a' } },
+        'pct%': { command: 'second-ls', extensionToLanguage: { '.b': 'b' } },
+        typescript: { command: 'typescript-language-server', extensionToLanguage: { '.ts': 'typescript' } },
+        '\uD800': { command: 'third-ls', extensionToLanguage: { '.c': 'c' } },
+      },
+    },
+    plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
+    targets: ['claude', 'cursor', 'plugin'],
+  }), { skills: [] }, createDefaultRegistry());
+
+  // Separator and escape characters are escaped so the (key, name) tuple is
+  // recoverable; a lone surrogate is accepted rather than aborting normalization.
+  expect(new Set(model.lspServers?.map((server) => server.id))).toEqual(new Set([
+    'lsp:claude:\uD800',
+    'lsp:claude:a%3Ab',
+    'lsp:claude:pct%25',
+    'lsp:claude:typescript',
+  ]));
+  expect(model.lspServers).toHaveLength(4);
+  // Only adapters that lower the `claude` extension are targeted.
+  for (const server of model.lspServers ?? []) {
+    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude', 'plugin'] });
+  }
+  expect(Object.isFrozen(model.lspServers)).toBe(true);
+});
+
 it('normalizes the typed Claude LSP source surface through the strict JSON extension seam', async () => {
   const model = await normalizeProject(loadedProject({
     claude: {
@@ -1183,6 +1213,39 @@ it('gates nested and conflicting conventional script routes as AB4808/AB4809 and
       sourcePath: `${root}/src/scripts/release/tag.ts`,
     },
   ]);
+});
+
+it('ships a bin-claimed plain conventional script as both surfaces and refuses a bin-claimed rendered one with AB4737 (#389)', async () => {
+  const root = '/workspace/project';
+  const loaded = loadedProject({
+    bin: {
+      hauler: './src/scripts/hauler.ts',
+      notes: { entry: './src/scripts/render-notes.tsx' },
+      'notes-again': './src/scripts/render-notes.tsx',
+    },
+    plugin: { name: 'review-tools', version: '1.0.0' },
+  });
+  const discovered: DiscoveredProject = {
+    routeGraph: routeGraphWithScripts(root, ['src/scripts/hauler.ts', 'src/scripts/render-notes.tsx']),
+    skills: [],
+  };
+
+  // The fixture root has no files, so the export scan finds neither export and the gate fires.
+  const gate = validateSource(loaded, discovered, registry).filter(({ code }) => code === 'AB4737');
+  expect(gate).toEqual([
+    {
+      code: 'AB4737',
+      message: 'Rendered script src/scripts/render-notes.tsx is also the entry of bin "notes", "notes-again" but exports neither an async default Server Component nor a named main; the artifact script renders the default component and the bin envelope calls main(argv).',
+      recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+      severity: 'error',
+      sourcePath: `${root}/src/scripts/render-notes.tsx`,
+    },
+  ]);
+
+  // The plain script stays in the model beside its bin; nothing about it is gated.
+  const model = await normalizeProject(loaded, discovered, registry);
+  expect(model.scripts.map((script) => script.name)).toEqual(['hauler', 'render-notes']);
+  expect(model.packageBuild?.bins.map((bin) => bin.name)).toEqual(['hauler', 'notes', 'notes-again']);
 });
 
 it('normalizes rendered conventional script routes onto the renderer pipeline (#102 stage 3)', async () => {

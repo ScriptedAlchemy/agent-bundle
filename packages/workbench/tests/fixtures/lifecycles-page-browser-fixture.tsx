@@ -77,6 +77,7 @@ const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
       event: 'tool/after',
       idempotencyKey: `${request.binding.target}-receipt`,
       observedAt: '2026-09-01T12:00:00.000Z',
+      payload: { toolName: { nativeKey: 'tool_name', value: 'Write' } },
       provenance: {
         host: request.binding.target,
         hostContractRevision: target.hostContractRevision,
@@ -103,6 +104,9 @@ const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
         operationId: request.binding.routeId,
         surface: 'tool/after',
       },
+      lineage: sessionId === undefined
+        ? { reason: 'no-shared-runtime', state: 'unavailable' }
+        : { source: 'receipt', state: 'available', value: { conversation: sessionId, depth: 0, resolution: 'native', root: sessionId } },
       session: sessionId === undefined
         ? { reason: 'not-provided', state: 'unavailable' }
         : { source: 'receipt', state: 'available', value: { sessionId } },

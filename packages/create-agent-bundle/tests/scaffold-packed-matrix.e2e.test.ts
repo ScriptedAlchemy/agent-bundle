@@ -74,28 +74,44 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
   });
 }, 600_000);
 
-it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, and artifact script', async () => {
+it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artifact script', async () => {
   const projectRoot = await scaffoldProject('cli-tool', 'greeter', ['--no-install']);
   await execFile('npm', ['install', ...npmInstallArguments], {
     cwd: projectRoot,
     env: installedEnvironment(),
   });
 
-  // This template ships no framework test pool on purpose: its CLI is a
-  // config-declared script bundle rather than a compiled route, so there is
-  // nothing for the route-unit or cli-dispatch levels to address (README:
-  // "Tests"). What `check` does run is asserted rather than assumed.
+  // The template's own harness pool ran inside `check`, and it is asserted
+  // positively — a silent `check` would also pass if the pool were dropped or
+  // matched no files. Each pool names the proof level it carries.
   const checked = await npmRun(projectRoot, 'check');
-  expect(checked).toContain('tests/cli.test.ts');
+  expect(checked).toContain('tests/greet.test.ts');
+  expect(checked).toContain('tests/projection/cli-dispatch.test.ts');
+  expect(checked).toContain('tests/projection/script-dispatch.test.ts');
   await expectCleanValidate(projectRoot);
   await npmRun(projectRoot, 'prepack');
+  // The projection pool dispatches through the framework's own generated
+  // setup, resolved from the packed tarball's `agent-bundle/rstest` export.
+  const projection = await npmRun(projectRoot, 'test:projection');
+  expect(projection).toContain('greets through the routed CLI shell and prints one canonical JSON line');
+  expect(projection).toContain('greets through the main process envelope');
+  expect(projection).toContain('"failedTests": 0');
 
-  // The src/cli.ts convention produced the executable package bin.
+  // The src/cli/** convention produced the routed executable package bin:
+  // generated help, the compiled argv grammar, and one canonical JSON line.
   const bin = join(projectRoot, 'dist', 'bin', 'greeter.js');
   expect((await stat(bin)).mode & 0o111).not.toBe(0);
   expect((await readFile(bin, 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true);
-  await expect(execFile(bin, ['World'], { cwd: projectRoot, env: installedEnvironment() }))
-    .resolves.toMatchObject({ stdout: 'Hello, World!\n' });
+  const environment = installedEnvironment();
+  const help = await execFile(bin, ['--help'], { cwd: projectRoot, env: environment });
+  expect(help.stdout).toContain('greeter 0.1.0');
+  expect(help.stdout).toContain('greet');
+  await expect(execFile(bin, ['greet', 'World'], { cwd: projectRoot, env: environment }))
+    .resolves.toMatchObject({ stdout: '{"message":"Hello, World!","name":"World"}\n' });
+  await expect(execFile(bin, ['greet', 'World', '--shout'], { cwd: projectRoot, env: environment }))
+    .resolves.toMatchObject({ stdout: '{"message":"HELLO, WORLD!","name":"World"}\n' });
+  await expect(execFile(bin, ['greet'], { cwd: projectRoot, env: environment }))
+    .rejects.toMatchObject({ code: 2, stderr: expect.stringContaining('Missing required argument: <name>.') });
 
   // The src/index.ts convention produced the library export with declarations.
   const library = await import(pathToFileURL(join(projectRoot, 'dist', 'index.js')).href) as {
@@ -104,10 +120,13 @@ it.concurrent('scaffolds the cli-tool template with a framework-built bin, lib, 
   expect(library.greet('World').message).toBe('Hello, World!');
   await expect(readFile(join(projectRoot, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('Greeting');
 
-  // The same CLI also shipped inside the host artifact as a script.
-  await expect(execFile(process.execPath, [
-    join(projectRoot, 'artifact', 'portable', 'scripts', 'greeter.mjs'), 'World',
-  ], { cwd: projectRoot, env: installedEnvironment() })).resolves.toMatchObject({ stdout: 'Hello, World!\n' });
+  // The conventional plain script shipped inside the host artifact with the
+  // framework process envelope around its `main` export.
+  const script = join(projectRoot, 'artifact', 'portable', 'scripts', 'hello.mjs');
+  await expect(execFile(process.execPath, [script, 'World'], { cwd: projectRoot, env: environment }))
+    .resolves.toMatchObject({ stdout: 'Hello, World!\n' });
+  await expect(execFile(process.execPath, [script], { cwd: projectRoot, env: environment }))
+    .rejects.toMatchObject({ code: 2, stderr: 'Usage: hello <name>\n' });
 
   const packDestination = await mkdtemp(join(tmpdir(), 'create-agent-bundle-cli-pack-'));
   try {

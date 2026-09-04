@@ -37,6 +37,7 @@ import type {
 } from '../core/types.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
 import { writeRouteTypes } from '../routes/typegen.ts';
+import { routeTypesProgramDiagnostics } from '../routes/typegen-program.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
 import type { DevRuntimePreparedMcpApp, DevRuntimePreparedMcpServer, DevRuntimePreparedProject } from './runtime-provider.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue, type SourceStatus } from './types.ts';
@@ -920,9 +921,12 @@ export class ProjectService {
       // `validate`, where an operator asks for exactly this judgment.
       // Development flows keep running without them — a payload that has not
       // been built yet is a normal dev state — and builds are separately
-      // guarded by their own hard refusals.
+      // guarded by their own hard refusals. The AB4834 program check judges
+      // the declaration `writeRouteTypes` just published, so it runs here,
+      // after the write, and only for `validate` like every other nudge.
       diagnostics = [
         ...(command === 'validate' ? sourceDiagnostics : []),
+        ...(command === 'validate' ? routeTypesProgramDiagnostics(root) : []),
         ...validateModel(model, registry),
       ];
       for (const target of model.targets) {

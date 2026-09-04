@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "",
+            "tool": "t"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -67,22 +67,61 @@ describe('the compiled test manifest', () => {
       'cli:db/migrate',
       'cli:inventory',
       'cli:report',
+      'cli:tooling/inspect',
+      'cli:tooling/report',
       'event:tool/after',
       'prompt:harness/summarize',
       'resource:harness/notes',
+      'script:badge',
+      'script:banner',
+      'script:blank',
+      'script:broken',
+      'script:checksum',
+      'script:constant',
+      'script:identity',
+      'script:stalled',
+      'script:summary',
+      'script:tooling-summary',
       'tool:harness/catalog',
       'tool:harness/context',
       'tool:harness/echo',
+      'tool:harness/fault',
       'tool:harness/journal',
+      'tool:harness/layout-probe',
       'tool:harness/lifecycle',
       'tool:harness/mutation-probe',
+      'tool:harness/plugin-root',
       'tool:harness/publish-notice',
       'tool:harness/strict-report',
       'tool:harness/ticket',
+      'tool:harness/tooling',
       'tool:harness/unavailable',
       'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
+    expect(manifest.providers).toEqual([{
+      id: 'provider:library-tooling',
+      key: 'libraryTooling',
+      name: 'library-tooling',
+      relativePath: 'src/providers/library-tooling.ts',
+      source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
+    }]);
+    // Layouts are never routes; the manifest carries them separately, ordered by id.
+    expect(manifest.layouts).toEqual([
+      {
+        id: 'layout:mcp:harness',
+        relativePath: 'src/mcp/harness/layout.tsx',
+        scope: 'server',
+        serverId: 'mcp:harness',
+        source: resolve(fixtureRoot, 'src/mcp/harness/layout.tsx'),
+      },
+      {
+        id: 'layout:root',
+        relativePath: 'src/layout.tsx',
+        scope: 'root',
+        source: resolve(fixtureRoot, 'src/layout.tsx'),
+      },
+    ]);
     expect(manifest.routes['tool:harness/echo']).toEqual({
       config: {
         annotations: { readOnlyHint: true },
@@ -104,6 +143,80 @@ describe('the compiled test manifest', () => {
       source: resolve(fixtureRoot, 'src/state.ts'),
     });
     expect(manifest.targets).toEqual(['claude']);
+    // Script descriptors carry the extension contract: `.tsx` renders, `.ts`
+    // is a plain executable module; the name is the path-derived identity.
+    expect(manifest.scripts).toEqual([
+      {
+        name: 'badge',
+        relativePath: 'src/scripts/badge.ts',
+        rendered: false,
+        routeId: 'script:badge',
+        source: resolve(fixtureRoot, 'src/scripts/badge.ts'),
+      },
+      {
+        name: 'banner',
+        relativePath: 'src/scripts/banner.ts',
+        rendered: false,
+        routeId: 'script:banner',
+        source: resolve(fixtureRoot, 'src/scripts/banner.ts'),
+      },
+      {
+        name: 'blank',
+        relativePath: 'src/scripts/blank.tsx',
+        rendered: true,
+        routeId: 'script:blank',
+        source: resolve(fixtureRoot, 'src/scripts/blank.tsx'),
+      },
+      {
+        name: 'broken',
+        relativePath: 'src/scripts/broken.tsx',
+        rendered: true,
+        routeId: 'script:broken',
+        source: resolve(fixtureRoot, 'src/scripts/broken.tsx'),
+      },
+      {
+        name: 'checksum',
+        relativePath: 'src/scripts/checksum.ts',
+        rendered: false,
+        routeId: 'script:checksum',
+        source: resolve(fixtureRoot, 'src/scripts/checksum.ts'),
+      },
+      {
+        name: 'constant',
+        relativePath: 'src/scripts/constant.ts',
+        rendered: false,
+        routeId: 'script:constant',
+        source: resolve(fixtureRoot, 'src/scripts/constant.ts'),
+      },
+      {
+        name: 'identity',
+        relativePath: 'src/scripts/identity.ts',
+        rendered: false,
+        routeId: 'script:identity',
+        source: resolve(fixtureRoot, 'src/scripts/identity.ts'),
+      },
+      {
+        name: 'stalled',
+        relativePath: 'src/scripts/stalled.tsx',
+        rendered: true,
+        routeId: 'script:stalled',
+        source: resolve(fixtureRoot, 'src/scripts/stalled.tsx'),
+      },
+      {
+        name: 'summary',
+        relativePath: 'src/scripts/summary.tsx',
+        rendered: true,
+        routeId: 'script:summary',
+        source: resolve(fixtureRoot, 'src/scripts/summary.tsx'),
+      },
+      {
+        name: 'tooling-summary',
+        relativePath: 'src/scripts/tooling-summary.tsx',
+        rendered: true,
+        routeId: 'script:tooling-summary',
+        source: resolve(fixtureRoot, 'src/scripts/tooling-summary.tsx'),
+      },
+    ]);
     expect(manifest.apps).toEqual({
       panel: {
         id: 'mcp-app:harness:panel',
@@ -157,6 +270,24 @@ describe('the compiled test manifest', () => {
         rendered: true,
         routeId: 'cli:report',
       },
+      {
+        aliases: [],
+        description: 'Reports the request providers a plain command observes.',
+        exitCode: 'zero',
+        options: [],
+        path: ['tooling', 'inspect'],
+        rendered: false,
+        routeId: 'cli:tooling/inspect',
+      },
+      {
+        aliases: [],
+        description: 'Renders the request providers a rendered command observes.',
+        exitCode: 'zero',
+        options: [],
+        path: ['tooling', 'report'],
+        rendered: true,
+        routeId: 'cli:tooling/report',
+      },
     ]);
     const inputOption = {
       description: 'Tool input as one JSON object.',
@@ -178,6 +309,7 @@ describe('the compiled test manifest', () => {
       tool: string,
       description: string | undefined,
       confirm: boolean,
+      render?: { readonly maxElapsedMs: number },
     ) => ({
       aliases: [],
       ...(description === undefined ? {} : { description }),
@@ -185,6 +317,7 @@ describe('the compiled test manifest', () => {
       mcp: { confirm, server: 'harness', tool },
       options: confirm ? [inputOption, confirmationOption] : [inputOption],
       path: ['harness', tool],
+      ...(render === undefined ? {} : { render }),
       rendered: true,
       routeId: `tool:harness/${tool}`,
     });
@@ -192,14 +325,19 @@ describe('the compiled test manifest', () => {
       projected('catalog', 'Streams the harness catalog behind one Suspense boundary.', true),
       projected('context', 'Returns the request identity axes observed by this route.', true),
       projected('echo', 'Echoes one message back with the observed workspace root.', false),
+      projected('fault', 'Throws from the route or from a nested Suspense boundary, for thrown-error projection proof.', false),
       projected('journal', 'Records and reads durable route-harness journal entries.', true),
+      projected('layout-probe', 'Renders a bare valued result so the layout chain around it is observable.', false),
       projected('lifecycle', 'Replays a deterministic durable lifecycle through mounted state.', true),
       projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
+      projected('plugin-root', 'Reports the plugin root and durable-state anchor this route observes.', false),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
+      projected('tooling', 'Reports the request providers an MCP tool observes.', false),
       projected('unavailable', 'Returns a typed unavailable result for projection checks.', true),
-      projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true),
+      // The projected command inherits the tool's declared render budget (#454).
+      projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true, { maxElapsedMs: 120_000 }),
     ]);
   });
 
@@ -258,6 +396,36 @@ describe('the compiled test manifest', () => {
     expect(Object.isFrozen(projected.routes)).toBe(true);
   });
 
+  it('lists only the conventional scripts normalization ships, never a nested or configuration-conflicting route', async () => {
+    const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
+    const checksum = graph.scripts.find((route) => route.id === 'script:checksum');
+    if (checksum === undefined) throw new Error('fixture must compile script:checksum');
+    const nested = {
+      ...checksum,
+      id: 'script:release/verify',
+      provenance: { ...checksum.provenance, relativePath: 'src/scripts/release/verify.ts' },
+      source: resolve(fixtureRoot, 'src/scripts/release/verify.ts'),
+    };
+    const projected = testManifestFromRouteGraph({
+      graph: { ...graph, scripts: [...graph.scripts, nested] },
+      projectRoot: fixtureRoot,
+      scripts: [{
+        id: 'script:banner',
+        mode: 'bundle',
+        name: 'banner',
+        provenance: { kind: 'config', sourcePath: resolve(fixtureRoot, 'agent-bundle.config.ts') },
+        source: resolve(fixtureRoot, 'tools/banner.ts'),
+        targets: ['claude'],
+      }],
+    });
+
+    // `banner` is claimed by configuration (AB4809) and `release/verify` is
+    // nested (AB4808): neither becomes a scripts/<name>.mjs executable, so
+    // neither is a script-dispatch target.
+    expect(projected.scripts.map((script) => script.name)).toEqual(['badge', 'blank', 'broken', 'checksum', 'constant', 'identity', 'stalled', 'summary', 'tooling-summary']);
+    expect(manifest.scripts.map((script) => script.name)).toEqual(['badge', 'banner', 'blank', 'broken', 'checksum', 'constant', 'identity', 'stalled', 'summary', 'tooling-summary']);
+  });
+
   it('rejects a shared app name whose compile-relevant declaration differs', async () => {
     const graph = await compileRouteGraph(fixtureRoot, { targets: ['claude'] } as never);
     const app = {
@@ -297,6 +465,24 @@ describe('the generated route registry', () => {
     // The manifest still inventories every compiled route; only the loaders,
     // which decide what enters the Node test bundle, are filtered.
     expect(source).toContain('app:harness/panel');
+  });
+
+  it('registers a loader for every conventional provider so the harness mounts them like the entry shell', () => {
+    const providerLoaders = /providerLoaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
+
+    expect(providerLoaders).toContain('"provider:library-tooling": () => import(');
+    expect(providerLoaders).toContain('/src/providers/library-tooling.ts');
+    // A project without providers emits no loader table at all.
+    expect(routeTestSetupSource({ ...manifest, providers: undefined })).not.toContain('providerLoaders');
+  });
+
+  it('registers one loader per compiled layout so renders compose the same chain the workers bake', () => {
+    const layoutLoaders = /layoutLoaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
+
+    expect(layoutLoaders).toContain('"layout:root": () => import(');
+    expect(layoutLoaders).toContain('"layout:mcp:harness": () => import(');
+    expect(layoutLoaders).toContain('/src/layout.tsx")');
+    expect(layoutLoaders).toContain('/src/mcp/harness/layout.tsx")');
   });
 
   it('carries the manifest and the registry version the helpers require', () => {

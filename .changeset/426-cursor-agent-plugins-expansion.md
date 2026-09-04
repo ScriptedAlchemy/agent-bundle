@@ -1,0 +1,5 @@
+---
+"agent-bundle": patch
+---
+
+Expand Agent Plugins placeholders for Cursor at install time. The `install.mjs` emitted with a `portable` bundle now rewrites `mcp.json` in the `~/.cursor/plugins/local/<name>` copy — `${PLUGIN_ROOT}` to the absolute plugin root, `${PLUGIN_DATA}` to `~/.cursor/agent-bundle/plugin-data/<name>` (created), an omitted `cwd` to the plugin root, plugin-relative `./` commands to absolute paths, and `PLUGIN_ROOT`/`PLUGIN_DATA` into every stdio server's `env` — because Cursor 3.18.25 performs none of that resolution and every spec-shaped stdio server failed to spawn there. The bundle itself is untouched, the pre-expansion document is recorded in the install receipt (`cursorExpansion`), reruns stay idempotent and older unexpanded copies are replaced on the next run. `agent-bundle doctor --host cursor` validates the Agent Plugins contract (`AB7320`) against the recorded document and adds `AB7326` (`expanded` / `unexpanded` / `drifted`) for the launch proof; `cursor`-target bundles are never rewritten. (#482)

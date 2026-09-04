@@ -3,35 +3,63 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { Effect, type Scope } from 'effect';
+
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
+import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
   type PackOutput,
 } from './build/pack-inventory.ts';
-import type { CapabilityState } from './core/capabilities.ts';
+import type { CapabilityEvidence, CapabilityState } from './core/capabilities.ts';
+import {
+  agentComponentKinds,
+  componentKindCapabilityName,
+  featureCapabilityName,
+  type AgentComponentKind,
+} from './core/components.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
+  type StateNoticeRetentionProjection,
   type StateProjectionBudgets,
   type StateProjectionDriver,
 } from './core/state-inspection.ts';
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
+import { parseServeAppSelector, serveMcpApp } from './serve-app/serve-mcp-app.ts';
+import type { ServedMcpApp, ServeMcpAppPublicOptions } from './serve-app/types.ts';
+export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/types.ts';
+export type { OpenBrowser } from './dev/mcp-apps/mcp-app-preview-host.ts';
+export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
 import { deepFreeze } from './core/freeze.ts';
 
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
-export { canonicalAgentEvents } from './routes/public.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  canonicalAgentEvents,
+} from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
@@ -99,6 +127,7 @@ import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
 import {
   validateClaudePlugin,
+  type ClaudePluginCommandRunner,
   type ClaudePluginValidationReport,
 } from './host-contracts/claude-plugin-validation.ts';
 import {
@@ -153,6 +182,11 @@ import {
   type McpListOptions,
   type McpListResult,
 } from './services/mcp-service.ts';
+// Imported after the service modules on purpose: the position of
+// `effect/lift.ts` in the module graph fixes its position in the emitted
+// hook bundles, and this order keeps those bundles byte-identical.
+import { runWithPlatform, withTempDirectory } from './effect/platform.ts';
+import { liftPromise } from './effect/lift.ts';
 
 export {
   compareInstalledHostContract,
@@ -191,6 +225,9 @@ export type { HookListOptions, HookSimulationOptions } from './services/hook-ser
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
+  NoticeDeliveryAdvertisement,
+  NoticeDeliveryRoute,
+  NoticeDeliveryRouteState,
   TargetAdapter,
   TargetAdapterMetadata,
   TargetArtifactCopy,
@@ -234,10 +271,99 @@ export type {
   AgentBundleDevContractsConfig,
   AgentBundleDevRuntimeConfig,
 } from './core/types.ts';
+// The `dev.runtime.provider` protocol (#485): everything a provider module
+// accepts through `start()` or hands back through its session, the two errors
+// a provider throws to get the documented Workbench behaviour, and the
+// generation store and MCP registry a session drives (below). Test-only
+// services (`ProjectService`, `EpochStore`, the provider loader) stay internal.
+export {
+  DevRuntimeGenerationConflictError,
+  DevRuntimeUnavailableError,
+} from './dev/runtime-provider.ts';
 export type {
   CreateDevRuntimeProvider,
+  DevRuntimeClientSurfaceEndpoint,
+  DevRuntimeEventInput,
+  DevRuntimeMcpRegistry,
+  DevRuntimeMcpRegistryListener,
+  DevRuntimeMcpRegistryMessage,
+  DevRuntimeMcpRegistrySubscription,
+  DevRuntimeMcpSession,
+  DevRuntimeMcpSessionCloseObservation,
+  DevRuntimeMcpSessionExecuteOptions,
+  DevRuntimeMcpSessionView,
+  DevRuntimePreparedMcpApp,
+  DevRuntimePreparedMcpServer,
+  DevRuntimePreparedProject,
   DevRuntimeProvider,
+  DevRuntimeSession,
+  DevRuntimeStartContext,
 } from './dev/runtime-provider.ts';
+export type {
+  DevRuntimeAsset,
+  DevRuntimeAssetRequest,
+  DevRuntimeDescriptor,
+  DevRuntimeDiagnostic,
+  DevRuntimeDiagnosticPhase,
+  DevRuntimeFixture,
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeInvocationRequest,
+  DevRuntimeMcpAppRunBinding,
+  DevRuntimeMcpConnectionState,
+  DevRuntimeMcpInvalidatedBinding,
+  DevRuntimeMcpOperationRequest,
+  DevRuntimeMcpOperationResult,
+  DevRuntimeMcpRegistryReconcileInput,
+  DevRuntimeMcpRegistryReconcileResult,
+  DevRuntimeMcpRegistryReplayGap,
+  DevRuntimeMcpRegistrySnapshot,
+  DevRuntimeMcpServerDescriptor,
+  DevRuntimeMcpSessionBinding,
+  DevRuntimeMcpSessionControlRequest,
+  DevRuntimeMcpSessionRequest,
+  DevRuntimeMcpSessionSnapshot,
+  DevRuntimeReplayRequest,
+  DevRuntimeRun,
+  DevRuntimeStateIdentity,
+  DevRuntimeStateResetRequest,
+  DevRuntimeStatus,
+  DevRuntimeSurface,
+  DevRuntimeTraceSpan,
+  DevRuntimeTreeNode,
+  RuntimeVector,
+} from './dev/runtime-protocol.ts';
+// The generation store and MCP registry a session drives, as effect-free
+// contracts plus their constructors: the classes behind them throw
+// `YieldableFrameworkError`s and so may not enter a public declaration graph.
+export { createRuntimeGenerationStore, createRuntimeMcpRegistry } from './dev/runtime-store-factories.ts';
+export type {
+  DevRuntimeGenerationStore,
+  DevRuntimeProviderMcpRegistry,
+  RuntimeGeneration,
+  RuntimeGenerationActivationGuard,
+  RuntimeGenerationAsset,
+  RuntimeGenerationCandidate,
+  RuntimeGenerationCloseFailure,
+  RuntimeGenerationLease,
+  RuntimeGenerationManifest,
+  RuntimeGenerationManifestInput,
+  RuntimeGenerationMetadataCodec,
+  RuntimeGenerationPrepareOptions,
+  RuntimeGenerationPreparedActivation,
+  RuntimeGenerationStoreErrorCode,
+  RuntimeGenerationStoreOptions,
+  RuntimeGenerationValidationInput,
+  RuntimeGenerationValidator,
+  RuntimeMcpCommittedActivationReconcile,
+  RuntimeMcpConnection,
+  RuntimeMcpConnector,
+  RuntimeMcpExecutionContext,
+  RuntimeMcpExecutionValue,
+  RuntimeMcpPreparedActivationReconcile,
+  RuntimeMcpRegistryCloseFailure,
+  RuntimeMcpRegistryErrorCode,
+  RuntimeMcpRegistryOptions,
+} from './dev/runtime-store-contracts.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;
@@ -274,14 +400,33 @@ export interface ValidateResult {
 
 export type InspectionSkipReason = 'excluded-by-targets' | 'unsupported-capability';
 
-export type InspectionComponentKind = 'command' | 'hook' | 'mcp-app' | 'mcp-server' | 'rule' | 'script' | 'skill';
+export type { AgentComponentKind } from './core/components.ts';
+export { agentComponentKinds, componentKindCapability, componentKindCapabilityName } from './core/components.ts';
+
+/**
+ * The canonical component kinds inspection accounts for (#100). `hook` is a
+ * config-declared hook escape hatch; `event-route` is a filesystem
+ * `src/events` route judged per canonical event (`event:<name>` rows).
+ */
+export type InspectionComponentKind = AgentComponentKind;
 
 /**
  * The target's own four-state judgment of the capability a component needs,
  * named so a reader can find the pinned row. Scripts need no host capability
- * and carry none.
+ * and carry none; the routed CLI bin (`cli`) needs the target's `cli` row
+ * (#387).
  */
 export type InspectionComponentCapability = CapabilityState & { readonly name: string };
+
+/**
+ * One host feature a selected component uses that this target cannot express
+ * (#100 feature sets): the component still ships, minus the feature, and the
+ * host's own `<kind>.<feature>` row explains why.
+ */
+export interface InspectionOmittedFeature {
+  readonly capability: InspectionComponentCapability;
+  readonly feature: string;
+}
 
 /** One component the plan emits for this target. */
 export interface InspectionSelectedComponent {
@@ -289,6 +434,8 @@ export interface InspectionSelectedComponent {
   readonly id: string;
   readonly kind: InspectionComponentKind;
   readonly name: string;
+  /** Features this target omits from the emitted component, in feature order; absent when none. */
+  readonly omittedFeatures?: readonly InspectionOmittedFeature[];
 }
 
 /**
@@ -305,10 +452,27 @@ export interface InspectionSkippedComponent {
   readonly reason: InspectionSkipReason;
 }
 
+/**
+ * The target's judgment of one canonical component kind, whether or not the
+ * project declares a component of that kind: `capability` is the host's own
+ * four-state row for the kind (absent for `script`, which needs no host
+ * surface, and for `event-route`, whose rows are per canonical event and
+ * travel on each component instead), and the counts are this target's
+ * selected and omitted components of the kind.
+ */
+export interface InspectionComponentKindReport {
+  readonly capability?: InspectionComponentCapability;
+  readonly kind: InspectionComponentKind;
+  readonly selected: number;
+  readonly skipped: number;
+}
+
 export interface InspectionPlan {
   readonly diagnostics: readonly Diagnostic[];
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
+  /** Every canonical component kind with this target's judgment and counts, in kind order. */
+  readonly kinds: readonly InspectionComponentKindReport[];
   /** Components this target emits, in the same deterministic order as `skipped`. */
   readonly selected: readonly InspectionSelectedComponent[];
   readonly skipped: readonly InspectionSkippedComponent[];
@@ -323,6 +487,8 @@ export interface InspectOptions extends ProjectOptions {
 export type StateInspectionDriver = StateProjectionDriver;
 
 export type StateInspectionBudgets = StateProjectionBudgets;
+
+export type { StateNoticeRetentionProjection };
 
 export type StateInspection =
   | {
@@ -342,6 +508,7 @@ export type StateInspection =
     readonly durableLocation?: string;
     readonly id: string;
     readonly lifetime: NonNullable<NormalizedPlugin['state']>['lifetime'];
+    readonly noticeRetention?: StateNoticeRetentionProjection;
     readonly notices: readonly string[];
     readonly provenance: NonNullable<NormalizedPlugin['state']>['provenance'];
     readonly source: string;
@@ -378,6 +545,18 @@ export interface InvalidInspectResult {
 export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
+  /**
+   * After the artifact is written, run the installed Claude developer
+   * validator (`claude plugin validate --strict` against the emitted
+   * `plugin.json` and `marketplace.json`) for every built `claude` and
+   * `plugin` target, exactly as `validate --artifact` does. The CLI `build`
+   * command requests this by default; programmatic artifact operations
+   * (temporary artifacts, dev, evals) never do. Without `claude` on `PATH`
+   * the run costs one failed spawn and reports a single `AB6019` info.
+   */
+  readonly hostValidation?: boolean;
+  /** Injectable only to make the Claude host validator deterministic in tests; production always spawns `claude`. */
+  readonly hostValidationRunner?: ClaudePluginCommandRunner;
   readonly output?: string;
   /**
    * Also produce the framework-owned npm package build (`dist/` bin + lib
@@ -386,11 +565,16 @@ export interface BuildOptions extends ProjectOptions {
    * operations (temporary artifacts, dev, evals) never do.
    */
   readonly packageOutputs?: boolean;
+  /** Promote host-tool warnings to errors (`hostValidation` only). */
+  readonly strict?: boolean;
 }
 
 export interface BuildProjectResult {
   readonly build: BuildResult;
+  /** Project diagnostics followed by the host-validation findings (`AB6019`–`AB6022`) when `hostValidation` ran. */
   readonly diagnostics: readonly Diagnostic[];
+  /** One report per built `claude`/`plugin` target; present only when `hostValidation` was requested. */
+  readonly hostValidation?: readonly ClaudePluginValidationReport[];
   readonly model: NormalizedPlugin;
   readonly packageBuild?: PackageBuildResult;
   readonly projectContext: ProjectContext;
@@ -450,6 +634,19 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   readonly target: string;
 }
 
+export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPublicOptions {
+  /** The MCP App to serve: `<server>/<app>` (for example `status/status`), or `<server>/ui://...` for an exact resource URI. */
+  readonly app: string;
+  /** Explicit `.env` files replacing the conventional project-root set; see {@link RunMcpOptions.envFiles}. */
+  readonly envFiles?: readonly string[];
+  /** Set false to launch the server without any `.env` layer. */
+  readonly loadEnvFiles?: boolean;
+  /** Root the env-declared plugin-root anchors expand to; see {@link RunMcpOptions.pluginRoot}. */
+  readonly pluginRoot?: string;
+  /** The artifact target whose generated server to bind; defaults to `portable`. */
+  readonly target?: string;
+}
+
 export interface ListHooksOptions extends ArtifactOperationOptions {
   readonly target?: string;
 }
@@ -499,21 +696,24 @@ const temporaryArtifact = async <Result>(
 ): Promise<Result> => {
   if (options.artifact !== undefined) return operation(resolve(options.artifact));
 
-  const artifact = await mkdtemp(join(resolve(options.root), '.agent-bundle-artifact-'));
-  try {
-    await build({
-      configPath: options.configPath,
-      logger: options.logger,
-      mode: options.mode,
-      output: artifact,
-      registry: options.registry,
-      root: options.root,
-      targets: options.targets,
-    });
-    return await operation(artifact);
-  } finally {
-    await rm(artifact, { force: true, recursive: true });
-  }
+  // The staging directory lives exactly as long as the operation: created
+  // next to the project (same filesystem as a real `artifact/`), removed
+  // when the build or the operation settles, success, failure or interrupt.
+  return runWithPlatform(withTempDirectory(
+    { directory: resolve(options.root), prefix: '.agent-bundle-artifact-' },
+    (artifact) => Effect.gen(function* () {
+      yield* liftPromise(() => build({
+        configPath: options.configPath,
+        logger: options.logger,
+        mode: options.mode,
+        output: artifact,
+        registry: options.registry,
+        root: options.root,
+        targets: options.targets,
+      }));
+      return yield* liftPromise(() => operation(artifact));
+    }),
+  ));
 };
 
 type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
@@ -588,21 +788,110 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
 
 interface InspectableComponent {
   readonly capability?: string;
+  /** Host features the component uses, judged per target by `<capability>.<feature>` rows. */
+  readonly features?: readonly string[];
   readonly id: string;
   readonly kind: InspectionComponentKind;
   readonly name: string;
   readonly targets: readonly string[];
 }
 
-const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
-  ...(model.commands ?? []).map((command) => ({ capability: 'commands', id: command.id, kind: 'command' as const, name: command.name, targets: command.targets })),
-  ...model.hooks.map((hook) => ({ capability: 'hooks', id: hook.id, kind: 'hook' as const, name: hook.event, targets: hook.targets })),
-  ...(model.mcpApps ?? []).map((app) => ({ capability: 'mcp', id: app.id, kind: 'mcp-app' as const, name: app.name, targets: app.targets })),
-  ...model.mcpServers.map((server) => ({ capability: 'mcp', id: server.id, kind: 'mcp-server' as const, name: server.name, targets: server.targets })),
-  ...(model.rules ?? []).map((rule) => ({ capability: 'rules', id: rule.id, kind: 'rule' as const, name: rule.name, targets: rule.targets })),
-  ...model.scripts.map((script) => ({ id: script.id, kind: 'script' as const, name: script.name, targets: script.targets })),
-  ...model.skills.map((skill) => ({ capability: 'skills', id: skill.id, kind: 'skill' as const, name: skill.name, targets: skill.targets })),
+const fixedKindComponent = (
+  kind: Exclude<InspectionComponentKind, 'event-route'>,
+  component: { readonly id: string; readonly name: string; readonly targets: readonly string[] },
+  features: readonly string[] = [],
+): InspectableComponent => {
+  const capability = componentKindCapabilityName(kind);
+  return {
+    ...(capability === undefined ? {} : { capability }),
+    ...(features.length === 0 ? {} : { features: [...features].sort((left, right) => left.localeCompare(right)) }),
+    id: component.id,
+    kind,
+    name: component.name,
+    targets: component.targets,
+  };
+};
+
+/** Frontmatter keys are the features a command or rule uses (the closed sets from #219/#207). */
+const frontmatterFeatures = (frontmatter: Readonly<Record<string, unknown>>): readonly string[] =>
+  Object.keys(frontmatter);
+
+const hookFeatures = (hook: NormalizedPlugin['hooks'][number]): readonly string[] => [
+  ...(hook.timeoutMs === undefined ? [] : ['timeout']),
+  ...(hook.tools.length === 0 && (hook.nativeTools ?? []).length === 0 ? [] : ['toolMatchers']),
 ];
+
+/**
+ * Skill features follow the Skill IR (#108): typed host frontmatter extensions
+ * and Skill Markdown placeholder tokens. The IR already fails closed per host
+ * (AB3006/AB3008/AB3010); inspection reports the same classes against the
+ * host's `skills.*` rows.
+ */
+const skillFeatures = (skill: NormalizedPlugin['skills'][number]): readonly string[] => {
+  const ir = skill.skillIr;
+  if (ir === undefined) return [];
+  return [
+    ...(ir.extensions.claude === undefined && ir.extensions.codex === undefined && ir.extensions.cursor === undefined
+      ? []
+      : ['hostFrontmatter']),
+    ...(ir.placeholders.length === 0 ? [] : ['markdownTokens']),
+  ];
+};
+
+/**
+ * Every project component in canonical-kind terms. Config-declared hooks stay
+ * `hook` (judged by the host's `hooks` row); filesystem event routes are the
+ * distinct `event-route` kind, judged by the host's row for their canonical
+ * event (#258 matrix) so `inspect` reports them separately. The `agent` kind
+ * has no producer while the G5 deferral (#220) holds.
+ */
+const inspectableComponents = (model: NormalizedPlugin): readonly InspectableComponent[] => [
+  // The routed CLI bin is offered to every selected target; the host's `cli`
+  // capability row decides whether the artifact hosts it (#387).
+  ...routedCliBins(model).map((bin) => fixedKindComponent('cli', {
+    id: bin.id,
+    name: bin.name,
+    targets: model.targets.map((target) => target.name),
+  })),
+  ...(model.commands ?? []).map((command) => fixedKindComponent('command', command, frontmatterFeatures(command.frontmatter))),
+  ...model.hooks.map((hook) => hook.eventRoute === undefined
+    ? fixedKindComponent('hook', { id: hook.id, name: hook.event, targets: hook.targets }, hookFeatures(hook))
+    : {
+      capability: `event:${hook.eventRoute.event}`,
+      id: hook.id,
+      kind: 'event-route' as const,
+      name: hook.eventRoute.event,
+      targets: hook.targets,
+    }),
+  ...(model.lspServers ?? []).map((server) => fixedKindComponent('lsp', server)),
+  ...(model.mcpApps ?? []).map((app) => fixedKindComponent('mcp-app', app)),
+  ...model.mcpServers.map((server) => fixedKindComponent('mcp-server', server)),
+  ...(model.rules ?? []).map((rule) => fixedKindComponent('rule', rule, frontmatterFeatures(rule.frontmatter))),
+  ...model.scripts.map((script) => fixedKindComponent('script', script)),
+  ...model.skills.map((skill) => fixedKindComponent('skill', skill, skillFeatures(skill))),
+];
+
+/**
+ * The features a selected component uses that this target's `<kind>.<feature>`
+ * rows do not support. A host with no row for a feature has not evidenced it,
+ * so the feature reads as omitted `unavailable` rather than silently kept.
+ */
+const omittedFeaturesFor = (
+  component: InspectableComponent,
+  target: string,
+  capabilities: Readonly<Record<string, CapabilityState>>,
+): readonly InspectionOmittedFeature[] => {
+  if (component.capability === undefined || component.features === undefined) return Object.freeze([]);
+  const kindCapability = component.capability;
+  return Object.freeze(component.features.flatMap((feature) => {
+    const capability = componentCapabilityFor(
+      { ...component, capability: featureCapabilityName(kindCapability, feature) },
+      target,
+      capabilities,
+    );
+    return capability === undefined || capabilityIsSupported(capability) ? [] : [Object.freeze({ capability, feature })];
+  }));
+};
 
 /**
  * The target's judgment for one component capability. An adapter that
@@ -616,19 +905,94 @@ const componentCapabilityFor = (
   capabilities: Readonly<Record<string, CapabilityState>>,
 ): InspectionComponentCapability | undefined => {
   if (component.capability === undefined) return undefined;
-  const state = capabilities[component.capability];
-  return Object.freeze({
-    name: component.capability,
-    ...(state ?? unavailableCapability(
-      `The ${target} adapter publishes no ${component.capability} capability row.`,
-    )),
-  });
+  const state = capabilities[component.capability] ?? unavailableCapability(
+    `The ${target} adapter publishes no ${component.capability} capability row.`,
+  );
+  return Object.freeze({ ...capabilityContract(state), name: component.capability });
+};
+
+/**
+ * Projects only the four-state contract fields of an adapter-owned capability
+ * row. `isCapabilityState` admits extension fields on JavaScript and third-party
+ * adapters, and copying them would let one named `name` shadow the canonical
+ * capability name or a cyclic one break `inspect --json`.
+ */
+const capabilityContract = (state: CapabilityState): CapabilityState => {
+  switch (state.state) {
+    case 'supported':
+      return { evidence: capabilityEvidenceContract(state.evidence), state: state.state };
+    case 'degraded':
+      return {
+        ...(state.evidence === undefined ? {} : { evidence: capabilityEvidenceContract(state.evidence) }),
+        reason: state.reason,
+        state: state.state,
+      };
+    case 'unavailable':
+    case 'prohibited':
+      return { reason: state.reason, state: state.state };
+    default: {
+      const exhaustive: never = state;
+      throw new Error(`Unhandled capability state ${JSON.stringify(exhaustive)}`);
+    }
+  }
+};
+
+const capabilityEvidenceContract = (evidence: CapabilityEvidence): CapabilityEvidence =>
+  Object.freeze({ observedVersion: evidence.observedVersion, target: evidence.target });
+
+/**
+ * Whether the target's judgment lets a component ship. Event routes follow the
+ * validation rule in `config/validate.ts`, which admits a `degraded` `event:*`
+ * row (the route lowers with a documented limitation), so an emitted degraded
+ * route is accounted as selected rather than omitted; every other kind ships
+ * only on a `supported` row.
+ */
+const admitsComponent = (kind: InspectionComponentKind, capability: CapabilityState): boolean => {
+  switch (capability.state) {
+    case 'supported':
+      return true;
+    case 'degraded':
+      return kind === 'event-route';
+    case 'unavailable':
+    case 'prohibited':
+      return false;
+    default: {
+      const exhaustive: never = capability;
+      throw new Error(`Unhandled capability state ${JSON.stringify(exhaustive)}`);
+    }
+  }
 };
 
 interface AccountedComponents {
+  readonly kinds: readonly InspectionComponentKindReport[];
   readonly selected: readonly InspectionSelectedComponent[];
   readonly skipped: readonly InspectionSkippedComponent[];
 }
+
+/**
+ * The per-kind matrix: every canonical kind, the target's row for it, and how
+ * many components of the kind this target selected and omitted. Kinds the
+ * project never declares still report the host's judgment, so a host with no
+ * `lsp`, `native-diagnostics`, or `native-extension` surface says so in its
+ * own words rather than by silence.
+ */
+const componentKindReports = (
+  target: string,
+  capabilities: Readonly<Record<string, CapabilityState>>,
+  selected: readonly InspectionSelectedComponent[],
+  skipped: readonly InspectionSkippedComponent[],
+): readonly InspectionComponentKindReport[] => Object.freeze(agentComponentKinds.map((kind) => {
+  const capabilityName = componentKindCapabilityName(kind);
+  const capability = capabilityName === undefined
+    ? undefined
+    : componentCapabilityFor({ capability: capabilityName, id: kind, kind, name: kind, targets: [] }, target, capabilities);
+  return Object.freeze({
+    ...(capability === undefined ? {} : { capability }),
+    kind,
+    selected: selected.filter((component) => component.kind === kind).length,
+    skipped: skipped.filter((component) => component.kind === kind).length,
+  });
+}));
 
 /**
  * Splits the project's components into the ones this target emits and the
@@ -653,19 +1017,27 @@ const accountComponentsFor = (
     };
     if (!component.targets.includes(target)) {
       skipped.push(Object.freeze({ ...identity, reason: 'excluded-by-targets' satisfies InspectionSkipReason }));
-    } else if (capability !== undefined && !capabilityIsSupported(capability)) {
+    } else if (capability !== undefined && !admitsComponent(component.kind, capability)) {
       skipped.push(Object.freeze({ ...identity, reason: 'unsupported-capability' satisfies InspectionSkipReason }));
     } else {
-      selected.push(Object.freeze(identity));
+      const omittedFeatures = omittedFeaturesFor(component, target, capabilities);
+      selected.push(Object.freeze({
+        ...identity,
+        ...(omittedFeatures.length === 0 ? {} : { omittedFeatures }),
+      }));
     }
   }
-  return { selected: Object.freeze(selected), skipped: Object.freeze(skipped) };
+  return {
+    kinds: componentKindReports(target, capabilities, selected, skipped),
+    selected: Object.freeze(selected),
+    skipped: Object.freeze(skipped),
+  };
 };
 
 const inspectState = (model: NormalizedPlugin): StateInspection => {
   const definition = model.state;
   if (definition === undefined) return Object.freeze({ declared: false });
-  const projection = stateDefinitionProjection(definition);
+  const projection = stateDefinitionProjection(definition, definition.source, model.notices);
   return deepFreeze({
     declared: true,
     ...projection,
@@ -710,6 +1082,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
           diagnostics: freezeDiagnostics(plan.diagnostics),
           entries: Object.freeze([...plan.entries]),
           hookEntries: Object.freeze([...(plan.hookEntries ?? [])]),
+          kinds: accounted.kinds,
           selected: accounted.selected,
           skipped: accounted.skipped,
           target: target.name,
@@ -730,7 +1103,16 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     try {
       bundler = await composeBundlerInspection({
         model,
-        targets: plans.map((plan) => ({ hookEntries: plan.hookEntries, name: plan.target })),
+        projectRoot: prepared.root,
+        targets: plans.map((plan) => {
+          const noticeDelivery = prepared.registry.noticeDelivery(plan.target);
+          return {
+            cliBin: targetHostsCliBin(prepared.registry, plan.target),
+            hookEntries: plan.hookEntries,
+            name: plan.target,
+            ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+          };
+        }),
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
     } catch {
@@ -837,12 +1219,55 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     });
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
   }
+  const hostValidation = options.hostValidation === true
+    ? await buildHostValidation(result.manifest.targets.map((target) => target.name), output, options)
+    : undefined;
   return Object.freeze({
     build: result,
-    diagnostics: prepared.diagnostics,
+    diagnostics: hostValidation === undefined
+      ? prepared.diagnostics
+      : freezeDiagnostics([...prepared.diagnostics, ...hostValidation.diagnostics]),
+    ...(hostValidation === undefined ? {} : { hostValidation: hostValidation.reports }),
     model,
     ...(packageBuild === undefined ? {} : { packageBuild }),
     projectContext,
+  });
+};
+
+const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude', 'plugin']);
+
+/**
+ * `build --host-validation`: the Claude developer validator (`plugin validate`
+ * over both manifests, then the `--plugin-dir … plugin list --json` load check)
+ * over every built `claude`/`plugin` target (#476). Targets run one after
+ * another: once the CLI proves absent (`AB6019`), the remaining targets are
+ * marked `unavailable` without another spawn, so a build without `claude` on
+ * `PATH` costs one failed spawn and reports the skip once.
+ */
+const buildHostValidation = async (
+  targets: readonly string[],
+  output: string,
+  options: Pick<BuildOptions, 'hostValidationRunner' | 'strict'>,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly reports: readonly ClaudePluginValidationReport[] }> => {
+  const reports: ClaudePluginValidationReport[] = [];
+  let unavailable = false;
+  for (const target of targets.filter((name) => claudeValidatedTargets.has(name))) {
+    if (unavailable) {
+      reports.push(Object.freeze({ diagnostics: freezeDiagnostics([]), host: 'claude', status: 'unavailable', target }));
+      continue;
+    }
+    const report = await validateClaudePlugin({
+      pluginDirectory: join(output, target),
+      ...(options.hostValidationRunner === undefined ? {} : { run: options.hostValidationRunner }),
+      ...(options.strict === undefined ? {} : { strict: options.strict }),
+      target,
+    });
+    reports.push(report);
+    unavailable = report.status === 'unavailable';
+  }
+  return Object.freeze({
+    diagnostics: freezeDiagnostics(reports.flatMap((report) => report.diagnostics)),
+    reports: Object.freeze(reports),
   });
 };
 
@@ -1036,6 +1461,68 @@ export const runMcp = async (options: RunMcpOptions): Promise<number> => {
     target: options.target,
     workspaceRoot,
   }));
+};
+
+/**
+ * A throwaway artifact whose lifetime is the served App's: built into a
+ * staging directory beside the project when the App is served, removed when
+ * `close()` finalizes the scope. Ownership transfers to the served App, so
+ * this is a scoped `acquireRelease` rather than `withTempDirectory`.
+ */
+const scopedThrowawayArtifact = (
+  options: ArtifactOperationOptions,
+): Effect.Effect<string, unknown, Scope.Scope> => Effect.acquireRelease(
+  liftPromise(() => mkdtemp(join(resolve(options.root), '.agent-bundle-artifact-'))),
+  (artifact) => Effect.promise(() => rm(artifact, { force: true, recursive: true }).catch(() => undefined)),
+).pipe(Effect.tap((artifact) => liftPromise(() => build({
+  configPath: options.configPath,
+  logger: options.logger,
+  mode: options.mode,
+  output: artifact,
+  registry: options.registry,
+  root: options.root,
+  targets: options.targets,
+}))));
+
+/**
+ * Serves one built MCP App standalone in a browser, bound to the plugin's
+ * own packed MCP server. The server launches exactly as {@link runMcp}
+ * launches it (same artifact resolution, same `.env` layering, same
+ * plugin-data root under `.agent-bundle/mcp-run/<target>/<server>`), the App
+ * is hosted through the Workbench's MCP App host stack (sandbox proxy,
+ * consent authority, bridge), and the result's `url` renders it. Call
+ * `close()` to tear down the host and the server; `closed` settles when the
+ * server connection ends for any reason.
+ *
+ * This runs in a dev-time or CLI process — a plugin's own routed CLI can
+ * call it from a `hauler dashboard`-style route — never inside the MCP
+ * server shell.
+ */
+export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
+  const registry = registryFor(options);
+  const workspaceRoot = resolve(options.root);
+  const target = options.target ?? 'portable';
+  const { server } = parseServeAppSelector(options.app);
+  return serveMcpApp({
+    app: options.app,
+    artifact: options.artifact === undefined ? scopedThrowawayArtifact({ ...options, registry }) : resolve(options.artifact),
+    ...(options.autoApprove === undefined ? {} : { autoApprove: options.autoApprove }),
+    ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
+    ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
+    ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.open === undefined ? {} : { open: options.open }),
+    ...(options.openBrowser === undefined ? {} : { openBrowser: options.openBrowser }),
+    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', target, mcpServerStateDirectory(server)),
+    ...(options.port === undefined ? {} : { port: options.port }),
+    ...(options.profile === undefined ? {} : { profile: options.profile }),
+    registry,
+    target,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.tool === undefined ? {} : { tool: options.tool }),
+    workspaceRoot,
+  });
 };
 
 export const listHooks = async (options: ListHooksOptions) => {

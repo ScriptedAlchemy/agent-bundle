@@ -113,6 +113,37 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       'export const wrong = async (): Promise<number> => (await agent()).providers.library;',
       '',
     ].join('\n')),
+    // A custom runAgentRequest host runs no src/providers/*, so it must supply
+    // the declared keys, or the handler's typed `providers.library` would
+    // dereference undefined at runtime. The harness mounts the project's
+    // providers itself, so a call without `context` is legal and observes the
+    // real values; an explicit `context.providers` fixture must be complete.
+    writeProjectFile(root, 'custom-scope.ts', [
+      "import { runAgentRequest } from '@agent-bundle/runtime';",
+      "import { renderRoute } from 'agent-bundle/test';",
+      "import type { LibraryContext } from './src/providers/library.js';",
+      '',
+      "const library: LibraryContext = { stages: ['discover'], surface: 'tool' };",
+      'export const complete = async (): Promise<void> => {',
+      "  await runAgentRequest({ invocation: { kind: 'tool' }, providers: { buildNumber: 7, library } }, async () => undefined);",
+      "  await renderRoute('tool:curator/status', { context: { providers: { buildNumber: 7, library } } });",
+      "  await renderRoute('tool:curator/status');",
+      "  await renderRoute('tool:curator/status', { input: {} });",
+      '};',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'missing-providers.ts', [
+      "import { runAgentRequest } from '@agent-bundle/runtime';",
+      "export const omitted = runAgentRequest({ invocation: { kind: 'tool' } }, async () => undefined);",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'missing-fixture.ts', [
+      "import { renderRoute } from 'agent-bundle/test';",
+      "import type { LibraryContext } from './src/providers/library.js';",
+      "const library: LibraryContext = { stages: ['discover'], surface: 'tool' };",
+      "export const partial = renderRoute('tool:curator/status', { context: { providers: { library } } });",
+      '',
+    ].join('\n')),
   ]);
 
   const result = await inspect({ root });
@@ -126,4 +157,12 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
   const mismatch = typecheck(root, 'mismatch.ts');
   expect(mismatch).toHaveLength(1);
   expect(mismatch[0]).toContain("Type 'LibraryContext' is not assignable to type 'number'");
+
+  expect(typecheck(root, 'custom-scope.ts')).toEqual([]);
+  const missingProviders = typecheck(root, 'missing-providers.ts');
+  expect(missingProviders).toHaveLength(1);
+  expect(missingProviders[0]).toContain("Property 'providers' is missing");
+  const missingFixture = typecheck(root, 'missing-fixture.ts');
+  expect(missingFixture).toHaveLength(1);
+  expect(missingFixture[0]).toContain("Property '\"buildNumber\"' is missing");
 });

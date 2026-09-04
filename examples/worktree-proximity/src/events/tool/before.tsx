@@ -3,12 +3,15 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
+import { withIntent, withNotices } from '../../coordination.js';
 import { findProximity } from '../../domain/proximity.js';
 import {
   actorForWorktree,
   deliveryContexts,
   extractIntent,
+  liveConversations,
+  noticeRecipientFor,
+  requestLineage,
 } from '../../event-support.js';
 
 export const config = {
@@ -18,8 +21,7 @@ export const config = {
 
 export default async function BeforeTool({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'tool/before'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -28,10 +30,16 @@ export default async function BeforeTool({
       </Agent.Result>
     );
   }
-  const intent = extractIntent(native);
-  const topologyResult = await withTopology(async (topology) => {
-    const { actor } = await actorForWorktree(topology, currentWorktree, canonical);
-    const committed = await topology.dispatch('intentRecorded', {
+  // `canonical.payload` is the framework's cross-host reading of the envelope:
+  // `toolName`/`toolInput` under Claude's PreToolUse and Codex's alike.
+  const intent = extractIntent(canonical.payload);
+  // Who else is alive comes from the runtime's lineage registry, not from
+  // this application's bookkeeping: an intent left behind by an agent the
+  // registry no longer lists under our root is stale and warns nobody.
+  const live = liveConversations(await requestLineage());
+  const intentResult = await withIntent(async (store) => {
+    const { actor } = await actorForWorktree(store, currentWorktree, canonical);
+    const committed = await store.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],
       idempotencyKey: canonical.idempotencyKey,
@@ -47,25 +55,33 @@ export default async function BeforeTool({
     });
     return {
       actor,
+      bindings: committed.state.bindings,
       conflicts: findProximity(committed.state, currentWorktree.root, {
         actorId: actor.id,
         dependencies: intent.dependencies,
         paths: intent.paths,
-      }),
+      }, live === undefined ? {} : { liveConversations: live }),
     };
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
-      <Agent.Result value={{ outcome: 'continue', reason: topologyResult.reason }}>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+      <Agent.Result value={{ outcome: 'continue' }}>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }
-  const resolution = topologyResult.value;
+  const resolution = intentResult.value;
 
   const noticeResult = await withNotices(async (notices) => {
     const deliveries = await notices.read();
     for (const [index, conflict] of resolution.conflicts.entries()) {
+      // The other actor's conversation is the recipient: only that agent
+      // thread admits the notice, even when a sibling shares its worktree.
+      // A derived actor has no conversation, so its worktree is addressed.
+      const recipient = noticeRecipientFor(
+        resolution.bindings.find((binding) => binding.actorId === conflict.actorId),
+        conflict.worktreeRoot,
+      );
       await notices.publish({
         content: {
           root: {
@@ -77,9 +93,7 @@ export default async function BeforeTool({
         },
         dedupeKey: `proximity:${resolution.actor.id}:${conflict.actorId}:${conflict.summary}`,
         priority: 'high',
-        recipient: {
-          workspace: { root: conflict.worktreeRoot },
-        },
+        recipient,
       }, {
         idempotencyKey: `${canonical.idempotencyKey}:notice:${String(index)}`,
       });
@@ -91,10 +105,10 @@ export default async function BeforeTool({
     : [noticeResult.reason];
   const warnings = resolution.conflicts.map((conflict) =>
     `Proximity warning for ${resolution.actor.id}: ${conflict.summary}`);
-  const reason = warnings.join(' ');
-  const value: JsonValue = reason === ''
-    ? { outcome: 'continue' as const }
-    : { outcome: 'continue' as const, reason };
+  // Proximity warns; it never decides. `continue` leaves the host's own
+  // permission flow untouched, and the warnings reach the agent as context
+  // (a `reason` needs a decision to travel with, so none is attached).
+  const value: JsonValue = { outcome: 'continue' as const };
 
   return (
     <Agent.Result value={value}>

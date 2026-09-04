@@ -80,6 +80,10 @@ const manifest: RouteManifest = {
     durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state',
     id: 'library/catalog',
     lifetime: 'workspace-durable',
+    noticeRetention: {
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 172_800_000 },
+      source: 'declared',
+    },
     notices: ['The notice ledger is co-mounted at the same lifetime.'],
     source: 'src/state.ts',
   },
@@ -116,7 +120,22 @@ it('renders the declared state catalog as read-only facts', () => {
   expect(statePanel).toContain('$AGENT_BUNDLE_PLUGIN_ROOT/state');
   expect(statePanel).toContain('notice ledger is co-mounted');
   expect(statePanel).toContain('src/state.ts');
+  // The notice retention policy is static configuration, shown in the units
+  // the config author used and in the runtime's milliseconds.
+  expect(statePanel).toContain('Notice retention');
+  expect(statePanel).toContain('terminalTtl');
+  expect(statePanel).toContain('2d (172800000ms)');
+  expect(statePanel).toContain('maxTerminal');
+  expect(statePanel).toContain('16777216');
   expect(statePanel).not.toMatch(/<(?:button|input|select|textarea)\b/u);
+});
+
+it('omits the notice retention block for manifests that predate it', () => {
+  const { noticeRetention: _retention, ...legacyState } = manifest.state!;
+  const markup = render(routeCatalogFor({ ...manifest, state: legacyState }));
+  const statePanel = markup.match(/<section[^>]*aria-label="State"[^>]*>(.*?)<\/section>/u)?.[1] ?? '';
+  expect(statePanel).toContain('library/catalog');
+  expect(statePanel).not.toContain('Notice retention');
 });
 
 it('renders honest state absence without an alert', () => {

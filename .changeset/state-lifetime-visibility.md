@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Expose declared state lifetime, driver, budgets, and provenance through

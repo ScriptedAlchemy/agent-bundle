@@ -1,9 +1,14 @@
-import { createElement, type PropsWithChildren, type ReactElement } from 'react';
+import { createElement, type PropsWithChildren, type ReactElement, type ReactNode } from 'react';
 
 import type { JsonValue } from './lower-mcp.js';
 
 export interface AgentResultProps extends PropsWithChildren {
+  /**
+   * Result-level metadata. On MCP it is the `CallToolResult._meta` object,
+   * so it must be a JSON object there; the projection fails closed otherwise.
+   */
   readonly metadata?: JsonValue;
+  /** The document value; on MCP it is `structuredContent` when it is a JSON object. */
   readonly value?: JsonValue;
 }
 
@@ -34,6 +39,43 @@ export interface AgentResourceProps {
 
 export interface AgentErrorProps extends AgentTextProps {
   readonly code: string;
+}
+
+/** The route kinds a conventional layout wraps; event routes are host protocol responses and stay unwrapped. */
+export type AgentLayoutRouteKind = 'tool' | 'resource' | 'prompt' | 'cli' | 'script';
+
+/**
+ * Stable identity of the route a layout is wrapping, baked at compile time
+ * from the agent-bundle route graph. `name` is the protocol-facing name: the
+ * MCP tool, resource, or prompt name, the space-joined CLI command path, or
+ * the script name. Mirrors `AgentLayoutRoute` in `agent-bundle`, whose root
+ * declarations stay React-free.
+ */
+export interface AgentLayoutRoute {
+  readonly id: string;
+  readonly kind: AgentLayoutRouteKind;
+  readonly name: string;
+  /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
+  readonly serverId?: string;
+}
+
+/**
+ * Props received by a conventional layout module's default component
+ * (`src/layout.{ts,tsx}` or `src/mcp/<server>/layout.{ts,tsx}` in an
+ * agent-bundle project).
+ *
+ * `children` is the route's rendered element. The layout renders an
+ * `Agent.Result` around it: a result without a `value` is a container, and
+ * the document decoder merges the route's own valued `Agent.Result` into it,
+ * so the document keeps the route's result value and protocol projection
+ * while the layout owns the shared shell. Layouts render inside the same
+ * request scope as the route, so `await agent()` exposes the invocation,
+ * host, session, actor, workspace, and provider axes.
+ */
+export interface AgentLayoutProps {
+  readonly children: ReactNode;
+  readonly route: AgentLayoutRoute;
+  readonly signal: AbortSignal;
 }
 
 const AgentResult = ({ children, metadata, value }: AgentResultProps): ReactElement =>

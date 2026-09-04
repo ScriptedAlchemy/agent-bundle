@@ -1,7 +1,19 @@
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { lstat, readdir, realpath } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
+
+import { Effect, FileSystem, Option } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
 import capabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
+import {
+  containedPortableRelativePath,
+  portableCommandIssues,
+  portableCwdIssues,
+  portableEnvKeyIssues,
+  portableHeaderIssues,
+  portableRemoteUrlIssues,
+  type PortableMcpRuleIssue,
+} from '../adapters/portable-mcp-rules.ts';
 import schemaProvenance from '../adapters/schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from '../adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from '../adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
@@ -14,6 +26,7 @@ import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
+import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 
 /**
  * Agent Plugins 1.0.0 bytes-at-rest validation for the `portable` target.
@@ -40,6 +53,14 @@ export interface PortablePluginValidationReport {
 }
 
 export interface ValidatePortablePluginFilesOptions {
+  /**
+   * Document text validated in place of the on-disk bytes, by plugin-relative
+   * path. Doctor passes the pre-expansion `mcp.json` an emitted `install.mjs`
+   * recorded for a Cursor copy, whose on-disk document carries the absolute
+   * paths Cursor needs and is Agent Plugins-conformant only in this form.
+   * The file must still exist as a regular file at the plugin root.
+   */
+  readonly documents?: Readonly<Partial<Record<DocumentPath, string>>>;
   readonly pluginDirectory: string;
   readonly target: string;
 }
@@ -71,9 +92,6 @@ const pinnedDocumentContracts = Object.freeze<PinnedDocumentContract[]>([
   }),
 ]);
 
-const placeholderPattern = /\$\{PLUGIN_(?:ROOT|DATA)\}/u;
-const headerNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
-const loopbackIpv4Pattern = /^127(?:\.\d{1,3}){3}$/u;
 const schemaVersionPattern = /^https:\/\/agent-plugins\.org\/schemas\/([^/]+)\//u;
 
 const recoveryFor = (code: PortableDiagnosticCode): string => {
@@ -114,41 +132,47 @@ const displayPath = (root: string, path: string): string => relative(root, path)
 const schemaVersion = (identifier: unknown): string | undefined =>
   typeof identifier === 'string' ? schemaVersionPattern.exec(identifier)?.[1] : undefined;
 
-const fileKind = async (path: string): Promise<'directory' | 'file' | 'missing' | 'other'> => {
-  try {
-    const metadata = await stat(path);
-    if (metadata.isDirectory()) return 'directory';
-    if (metadata.isFile()) return 'file';
-    return 'other';
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR') || isErrno(error, 'ELOOP')) return 'missing';
-    throw error;
-  }
-};
+type FileKind = 'directory' | 'file' | 'missing' | 'other';
+
+/** `stat` follows symlinks, as the §6.2 "resolves to a regular file" wording requires. */
+const fileKind = Effect.fnUntraced(function* (path: string): Effect.fn.Return<FileKind, PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.stat(path).pipe(
+    Effect.map((metadata): FileKind =>
+      metadata.type === 'Directory' ? 'directory' : metadata.type === 'File' ? 'file' : 'other'),
+    Effect.catch((error) => isPlatformErrno(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
+      ? Effect.succeed<FileKind>('missing')
+      : Effect.fail(error)),
+  );
+});
 
 /**
- * §4.1 plugin-relative path: begins with `./`, resolves against the plugin
- * root, and stays inside it after lexical normalization. Filesystem symlink
- * containment is the separate §4.1 symlink lane.
+ * §4.1 plugin-relative path: begins with `./` and stays inside the plugin root
+ * after platform-independent lexical normalization (shared with the planner).
+ * Filesystem symlink containment is the separate §4.1 symlink lane.
  */
 const pluginRelativeTarget = (pluginDirectory: string, value: string): string | undefined => {
-  if (!value.startsWith('./') || value.includes('\\') || value.includes('\0')) return undefined;
-  const candidate = resolve(pluginDirectory, normalize(value));
-  return isInsideOrEqual(pluginDirectory, candidate) ? candidate : undefined;
+  if (!value.startsWith('./')) return undefined;
+  const contained = containedPortableRelativePath(value);
+  return contained === undefined ? undefined : join(pluginDirectory, contained);
 };
 
-const readDocuments = async (
-  pluginDirectory: string,
-  target: string,
-): Promise<Readonly<{
+interface ReadDocumentsResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly documents: readonly ParsedDocument[];
-}>> => {
+}
+
+const readDocuments = Effect.fnUntraced(function* (
+  pluginDirectory: string,
+  target: string,
+  overrides: Readonly<Partial<Record<DocumentPath, string>>>,
+): Effect.fn.Return<ReadDocumentsResult, PlatformError, FileSystem.FileSystem> {
   const diagnostics: Diagnostic[] = [];
   const documents: ParsedDocument[] = [];
   for (const contract of pinnedDocumentContracts) {
     const file = join(pluginDirectory, contract.path);
-    const kind = await fileKind(file);
+    const kind = yield* fileKind(file);
+    const override = overrides[contract.path];
     if (kind === 'missing') {
       if (contract.required) {
         diagnostics.push(diagnostic(
@@ -170,16 +194,20 @@ const readDocuments = async (
       continue;
     }
     let source: string;
-    try {
-      source = await readFile(file, 'utf8');
-    } catch {
-      diagnostics.push(diagnostic(
-        'AB6035',
-        `${contract.path} could not be read for pinned-schema validation.`,
-        'error',
-        target,
-      ));
-      continue;
+    if (override !== undefined) {
+      source = override;
+    } else {
+      const read = yield* readFileString(file).pipe(Effect.option);
+      if (Option.isNone(read)) {
+        diagnostics.push(diagnostic(
+          'AB6035',
+          `${contract.path} could not be read for pinned-schema validation.`,
+          'error',
+          target,
+        ));
+        continue;
+      }
+      source = read.value;
     }
     let value: unknown;
     try {
@@ -202,7 +230,7 @@ const readDocuments = async (
     diagnostics: freezeDiagnostics(diagnostics),
     documents: Object.freeze(documents),
   });
-};
+});
 
 const versionAgreementDiagnostics = (
   documents: readonly ParsedDocument[],
@@ -226,209 +254,63 @@ const versionAgreementDiagnostics = (
   )]);
 };
 
-const isLoopbackHost = (hostname: string): boolean =>
-  hostname === 'localhost' ||
-  hostname === '[::1]' ||
-  hostname === '::1' ||
-  loopbackIpv4Pattern.test(hostname);
+const ruleDiagnostics = (
+  serverName: string,
+  issues: readonly PortableMcpRuleIssue[],
+  target: string,
+): readonly Diagnostic[] => freezeDiagnostics(issues.map((entry) => diagnostic(
+  'AB6036',
+  `mcp.json/mcpServers/${serverName}/${entry.field} ${entry.message}.`,
+  'error',
+  target,
+)));
 
 const remoteUrlDiagnostics = (
   serverName: string,
   url: unknown,
   target: string,
-): readonly Diagnostic[] => {
-  if (typeof url !== 'string') return Object.freeze([]);
-  const location = `mcp.json/mcpServers/${serverName}/url`;
-  if (placeholderPattern.test(url)) {
-    return freezeDiagnostics([diagnostic(
-      'AB6036',
-      `${location} contains an Agent Plugins placeholder, but clients never expand placeholders in url (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    )]);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return freezeDiagnostics([diagnostic(
-      'AB6036',
-      `${location} must be an absolute HTTP or HTTPS URL (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    )]);
-  }
-  const diagnostics: Diagnostic[] = [];
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must use the http or https scheme (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (parsed.username.length > 0 || parsed.password.length > 0) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must not contain user information (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (url.includes('#')) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} must not contain a fragment (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-    diagnostics.push(diagnostic(
-      'AB6036',
-      `${location} uses plain HTTP against non-loopback host ${JSON.stringify(parsed.hostname)}; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).`,
-      'error',
-      target,
-    ));
-  }
-  return freezeDiagnostics(diagnostics);
-};
+): readonly Diagnostic[] => ruleDiagnostics(serverName, portableRemoteUrlIssues(url), target);
 
 const headerDiagnostics = (
   serverName: string,
   headers: unknown,
   target: string,
-): readonly Diagnostic[] => {
-  if (!isRecord(headers)) return Object.freeze([]);
-  const diagnostics: Diagnostic[] = [];
-  const seen = new Map<string, string>();
-  for (const [name, value] of Object.entries(headers)) {
-    const location = `mcp.json/mcpServers/${serverName}/headers/${name}`;
-    if (!headerNamePattern.test(name)) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} is not a valid HTTP header field name (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    if (typeof value === 'string' && /[\r\n\0]/u.test(value)) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} is not a valid HTTP header field value (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    if (placeholderPattern.test(name) || (typeof value === 'string' && placeholderPattern.test(value))) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} contains an Agent Plugins placeholder, but clients never expand placeholders in headers (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    }
-    const folded = name.toLowerCase();
-    const previous = seen.get(folded);
-    if (previous !== undefined) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location} repeats header ${JSON.stringify(previous)} under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    } else {
-      seen.set(folded, name);
-    }
-  }
-  return freezeDiagnostics(diagnostics);
-};
+): readonly Diagnostic[] => ruleDiagnostics(serverName, portableHeaderIssues(headers), target);
 
-const stdioDiagnostics = async (
+const stdioDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   serverName: string,
   server: Readonly<Record<string, unknown>>,
   target: string,
-): Promise<readonly Diagnostic[]> => {
-  const diagnostics: Diagnostic[] = [];
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
   const command = server['command'];
-  const location = `mcp.json/mcpServers/${serverName}`;
-  if (typeof command === 'string') {
-    if (placeholderPattern.test(command)) {
+  const diagnostics: Diagnostic[] = [
+    ...ruleDiagnostics(serverName, portableCommandIssues(command), target),
+  ];
+  // Only the byte lane can prove a plugin-relative command is a bundled regular file.
+  if (typeof command === 'string' && command.startsWith('./') && diagnostics.length === 0) {
+    const resolved = pluginRelativeTarget(pluginDirectory, command);
+    if (resolved !== undefined && (yield* fileKind(resolved)) !== 'file') {
       diagnostics.push(diagnostic(
         'AB6036',
-        `${location}/command contains an Agent Plugins placeholder, but clients never expand placeholders in command (Agent Plugins 1.0.0 §7.2.1).`,
-        'error',
-        target,
-      ));
-    } else if (command.startsWith('./')) {
-      const resolved = pluginRelativeTarget(pluginDirectory, command);
-      if (resolved === undefined) {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/command ${JSON.stringify(command)} escapes the plugin root (Agent Plugins 1.0.0 §4.1).`,
-          'error',
-          target,
-        ));
-      } else if ((await fileKind(resolved)) !== 'file') {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/command ${JSON.stringify(command)} does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).`,
-          'error',
-          target,
-        ));
-      }
-    } else if (/[\s/\\]/u.test(command) || isAbsolute(command) || command.startsWith('.')) {
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location}/command ${JSON.stringify(command)} is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).`,
+        `mcp.json/mcpServers/${serverName}/command ${JSON.stringify(command)} does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).`,
         'error',
         target,
       ));
     }
   }
-  const cwd = server['cwd'];
-  if (typeof cwd === 'string') {
-    const relativePart = cwd.startsWith('./')
-      ? cwd
-      : cwd.startsWith('${PLUGIN_ROOT}')
-        ? `.${cwd.slice('${PLUGIN_ROOT}'.length)}`
-        : cwd.startsWith('${PLUGIN_DATA}')
-          ? `.${cwd.slice('${PLUGIN_DATA}'.length)}`
-          : undefined;
-    if (relativePart !== undefined) {
-      const anchor = join(pluginDirectory, 'anchor');
-      const candidate = resolve(anchor, normalize(relativePart === '.' ? './' : relativePart));
-      if (!isInsideOrEqual(anchor, candidate)) {
-        diagnostics.push(diagnostic(
-          'AB6036',
-          `${location}/cwd ${JSON.stringify(cwd)} escapes its ${cwd.startsWith('${PLUGIN_DATA}') ? 'plugin data directory' : 'plugin root'} after resolution (Agent Plugins 1.0.0 §7.2.1).`,
-          'error',
-          target,
-        ));
-      }
-    }
-  }
-  const env = server['env'];
-  if (isRecord(env)) {
-    for (const key of Object.keys(env)) {
-      if (!placeholderPattern.test(key)) continue;
-      diagnostics.push(diagnostic(
-        'AB6036',
-        `${location}/env key ${JSON.stringify(key)} contains an Agent Plugins placeholder, but expansion never applies to env keys (Agent Plugins 1.0.0 §9.2).`,
-        'error',
-        target,
-      ));
-    }
-  }
+  diagnostics.push(
+    ...ruleDiagnostics(serverName, portableCwdIssues(server['cwd']), target),
+    ...ruleDiagnostics(serverName, portableEnvKeyIssues(server['env']), target),
+  );
   return freezeDiagnostics(diagnostics);
-};
+});
 
-const serverDiagnostics = async (
+const serverDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   documents: readonly ParsedDocument[],
   target: string,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
   const mcp = documents.find((document) => document.path === 'mcp.json');
   if (mcp === undefined || !isRecord(mcp.value) || !isRecord(mcp.value['mcpServers'])) return Object.freeze([]);
   const diagnostics: Diagnostic[] = [];
@@ -436,7 +318,7 @@ const serverDiagnostics = async (
     if (!isRecord(server)) continue;
     switch (server['type']) {
       case 'stdio':
-        diagnostics.push(...await stdioDiagnostics(pluginDirectory, serverName, server, target));
+        diagnostics.push(...yield* stdioDiagnostics(pluginDirectory, serverName, server, target));
         break;
       case 'sse':
       case 'streamable-http':
@@ -449,14 +331,15 @@ const serverDiagnostics = async (
     }
   }
   return freezeDiagnostics(diagnostics);
-};
+});
 
-const skillDiagnostics = async (
+const skillDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   target: string,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
   const skillsRoot = join(pluginDirectory, 'skills');
-  const kind = await fileKind(skillsRoot);
+  const kind = yield* fileKind(skillsRoot);
   if (kind === 'missing') return Object.freeze([]);
   if (kind !== 'directory') {
     return freezeDiagnostics([diagnostic(
@@ -467,23 +350,51 @@ const skillDiagnostics = async (
     )]);
   }
   const diagnostics: Diagnostic[] = [];
-  const entries = (await readdir(skillsRoot, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const skillDirectory = join(skillsRoot, entry.name);
-    if ((await fileKind(skillDirectory)) !== 'directory') continue;
+  const entries = (yield* fs.readDirectory(skillsRoot))
+    .sort((left, right) => left.localeCompare(right));
+  for (const name of entries) {
+    const skillDirectory = join(skillsRoot, name);
+    if ((yield* fileKind(skillDirectory)) !== 'directory') continue;
     const skillFile = join(skillDirectory, 'SKILL.md');
-    if ((await fileKind(skillFile)) === 'file') continue;
+    if ((yield* fileKind(skillFile)) === 'file') continue;
     diagnostics.push(diagnostic(
       'AB6036',
-      `skills/${entry.name} has no regular SKILL.md file, so clients skip it (Agent Plugins 1.0.0 §7.1).`,
+      `skills/${name} has no regular SKILL.md file, so clients skip it (Agent Plugins 1.0.0 §7.1).`,
       'error',
       target,
     ));
   }
   return freezeDiagnostics(diagnostics);
-};
+});
 
+/**
+ * The document, server, and skill lanes as one `FileSystem` program;
+ * `validatePortablePluginFiles` runs it beside the raw symlink lane. Not
+ * exported: an Effect-typed export would put `effect` on the public
+ * declaration graph (`public-api.test.ts`).
+ */
+const portablePluginByteDiagnostics = Effect.fnUntraced(function* (
+  pluginDirectory: string,
+  target: string,
+  overrides: Readonly<Partial<Record<DocumentPath, string>>>,
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
+  const [documents, skills] = yield* Effect.all([
+    readDocuments(pluginDirectory, target, overrides),
+    skillDiagnostics(pluginDirectory, target),
+  ], { concurrency: 'unbounded' });
+  return freezeDiagnostics([
+    ...documents.diagnostics,
+    ...versionAgreementDiagnostics(documents.documents, target),
+    ...yield* serverDiagnostics(pluginDirectory, documents.documents, target),
+    ...skills,
+  ]);
+});
+
+/**
+ * Stays on `node:fs`: §4.1 containment is about link identity (`Dirent`
+ * symlink types, `lstat` of the root), which the pinned `FileSystem` cannot
+ * express — `stat` follows links and `readDirectory` returns names only.
+ */
 const symlinkDiagnostics = async (
   pluginDirectory: string,
   target: string,
@@ -551,18 +462,11 @@ export const validatePortablePluginFiles = async (
   options: ValidatePortablePluginFilesOptions,
 ): Promise<readonly Diagnostic[]> => {
   const pluginDirectory = resolve(options.pluginDirectory);
-  const [documents, skills, symlinks] = await Promise.all([
-    readDocuments(pluginDirectory, options.target),
-    skillDiagnostics(pluginDirectory, options.target),
+  const [bytes, symlinks] = await Promise.all([
+    runWithPlatform(portablePluginByteDiagnostics(pluginDirectory, options.target, options.documents ?? {})),
     symlinkDiagnostics(pluginDirectory, options.target),
   ]);
-  return freezeDiagnostics([
-    ...documents.diagnostics,
-    ...versionAgreementDiagnostics(documents.documents, options.target),
-    ...await serverDiagnostics(pluginDirectory, documents.documents, options.target),
-    ...skills,
-    ...symlinks,
-  ]);
+  return freezeDiagnostics([...bytes, ...symlinks]);
 };
 
 export const validatePortablePlugin = async (
@@ -580,7 +484,11 @@ export const validatePortablePlugin = async (
   );
   const diagnostics = freezeDiagnostics([
     transparency,
-    ...await validatePortablePluginFiles({ pluginDirectory, target: options.target }),
+    ...await validatePortablePluginFiles({
+      ...(options.documents === undefined ? {} : { documents: options.documents }),
+      pluginDirectory,
+      target: options.target,
+    }),
   ]);
   return Object.freeze({
     diagnostics,

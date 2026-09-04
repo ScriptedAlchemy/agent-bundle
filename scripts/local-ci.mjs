@@ -8,7 +8,7 @@
  *
  * Hosted job → local leg mapping:
  * - verify (Node 22.19 / 24 / 26) → legs `verify-node22|24|26`: install,
- *   playwright chrome, build, lint:package, typecheck, lint, test:unit,
+ *   playwright chrome, build (publint runs inside it), typecheck, lint, test:unit,
  *   test:integration — the same package scripts in the same order.
  * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.19)
  *   → leg `gates-node22`: examples:check, check:release, eval:spot run
@@ -16,8 +16,10 @@
  *   `pnpm build`, so folding three hosted checkouts into one worktree keeps
  *   every artifact expectation they have.
  * - dependency-review (GitHub-side action), package-preview and the release
- *   publish (publish-side), native-host-smoke (opt-in, needs signed-in host
- *   CLIs) are intentionally not mirrored — see docs/local-ci.md.
+ *   publish (publish-side), host-install-proofs (needs the pinned claude and
+ *   codex CLIs on PATH; `pnpm check:host-cli` + the test:host-install
+ *   scripts run it by hand), and native-host-smoke (opt-in, needs signed-in
+ *   host CLIs) are intentionally not mirrored — see docs/local-ci.md.
  *
  * Isolation model: every leg gets its own git worktree pinned to HEAD with
  * its own node_modules — node_modules trees with native modules must never
@@ -33,7 +35,11 @@
  * it (#110). The temp roots deliberately live under the SYSTEM temp
  * directory, not the repo worktree: Chrome creates AF_UNIX sockets inside
  * TMPDIR, and the kernel caps socket paths at 108 bytes — a repo-nested
- * TMPDIR overflows that and crashes every browser test at launch.
+ * TMPDIR overflows that and crashes every browser test at launch. Rstest in
+ * turn derives per-worker roots (/tmp/ab-rstest-<hash16>) BESIDE the leg
+ * TMPDIR for the same reason; those roots carry an owner marker naming the
+ * leg TMPDIR, and the runner removes the ones it owns before and after each
+ * leg (scripts/rstest-worker-roots.mjs) so reruns cannot accumulate them.
  */
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -44,6 +50,8 @@ import { availableParallelism, homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+
+import { removeOwnedRstestWorkerRoots } from './rstest-worker-roots.mjs';
 
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -280,17 +288,40 @@ const runStep = async (leg, step, stepIndex) => {
 };
 
 /** Steps run sequentially inside a leg; a failure skips the leg's remaining steps (matching a hosted job's step semantics). */
+/**
+ * Rstest derives each worker's temp root as `/tmp/ab-rstest-<hash16>` beside
+ * (not inside) the leg's private TMPDIR — see rstest.worker-isolation.ts and
+ * docs/local-ci.md — so recreating the leg TMPDIR alone would let worker
+ * caches and interrupted-test fixtures accumulate under /tmp across reruns.
+ * Each root carries an owner marker naming the host TMPDIR it was derived
+ * from; removing the roots owned by this leg's TMPDIR (whose creating
+ * processes have exited) ties their lifetime to the leg without touching any
+ * other run's live roots.
+ */
+const removeLegWorkerRoots = async (temporaryDirectory, legName, phase) => {
+  const { removed, retained } = await removeOwnedRstestWorkerRoots({ temporaryRoot: temporaryDirectory });
+  if (removed.length > 0) console.log(`  ${legName}: removed ${removed.length} ${phase} rstest worker root(s) under /tmp`);
+  if (retained.length > 0) {
+    console.warn(`  ${legName}: retained ${retained.length} rstest worker root(s) whose owning process is still alive`);
+  }
+  return { removed, retained };
+};
+
 const runLeg = async (leg) => {
   const results = [];
   let failed = false;
-  for (const [index, step] of leg.steps.entries()) {
-    if (failed) {
-      results.push({ leg: leg.name, step: step.id, hostedJob: step.hostedJob, status: 'skipped', durationMs: 0 });
-      continue;
+  try {
+    for (const [index, step] of leg.steps.entries()) {
+      if (failed) {
+        results.push({ leg: leg.name, step: step.id, hostedJob: step.hostedJob, status: 'skipped', durationMs: 0 });
+        continue;
+      }
+      const result = await runStep(leg, step, index);
+      results.push(result);
+      if (result.status === 'fail') failed = true;
     }
-    const result = await runStep(leg, step, index);
-    results.push(result);
-    if (result.status === 'fail') failed = true;
+  } finally {
+    await removeLegWorkerRoots(leg.temporaryDirectory, leg.name, 'finished');
   }
   return results;
 };
@@ -326,8 +357,8 @@ const main = async () => {
     // apt/root-only and the OS packages are a one-time machine setup, so the
     // local step installs/validates the browser only.
     { id: 'browsers', hostedJob: 'verify', command: ['pnpm', 'exec', 'playwright', 'install', 'chrome'] },
+    // publint runs inside each package's `rslib build` (rsbuild-plugin-publint).
     { id: 'build', hostedJob: 'verify', command: ['pnpm', 'build'] },
-    { id: 'lint:package', hostedJob: 'verify', command: ['pnpm', 'lint:package'] },
     { id: 'typecheck', hostedJob: 'verify', command: ['pnpm', 'typecheck'] },
     { id: 'lint', hostedJob: 'verify', command: ['pnpm', 'lint'] },
     { id: 'test:unit', hostedJob: 'verify', command: ['pnpm', 'test:unit', ...unitCapArguments] },
@@ -401,11 +432,15 @@ const main = async () => {
     const repositoryHash = createHash('sha256').update(repositoryRoot).digest('hex').slice(0, 8);
     const temporaryDirectory = join(tmpdir(), `abci-${repositoryHash}-${plan.name}`);
     await rm(temporaryDirectory, { recursive: true, force: true });
+    // Hashed rstest worker roots a crashed or interrupted prior run of this
+    // same leg left under /tmp are owned by this TMPDIR too.
+    await removeLegWorkerRoots(temporaryDirectory, plan.name, 'stale');
     await mkdir(temporaryDirectory, { recursive: true });
     legs.push({
       ...plan,
       directory,
       syntheticBinDirectory,
+      temporaryDirectory,
       environment: buildLegEnvironment(syntheticBinDirectory, {
         ...plan.environmentOverrides,
         TMPDIR: temporaryDirectory,

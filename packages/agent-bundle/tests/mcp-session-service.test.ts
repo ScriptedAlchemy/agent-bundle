@@ -13,7 +13,12 @@ import { normalizeProject } from '../src/config/normalize.ts';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import { McpAppBindingService, type McpAppSessionAuthority } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
-import { mcpAppClientCapabilities, McpSession, McpSessionService } from '../src/dev/mcp-session/mcp-session-service.ts';
+import {
+  mcpAppClientCapabilities,
+  McpSession,
+  McpSessionError,
+  McpSessionService,
+} from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type NormalizationTargetRegistry } from '../src/core/types.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
@@ -154,7 +159,9 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
       mcp: {
         servers: {
           http: {
-            headers: { Authorization: 'Bearer ${PLUGIN_DATA}' },
+            // Agent Plugins §7.2.1: clients never expand placeholders in
+            // headers, and the build now fails closed on one (AB6036).
+            headers: { Authorization: 'Bearer fixture-token' },
             transport: 'streamable-http',
             url: 'https://mcp.example.test/tools',
           },
@@ -283,6 +290,7 @@ it('keeps one generated server and plugin-data directory bound to the selected e
 it('uses the admitted session timeout for initialization, catalog, operations, and restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-timeout-'));
   const observed: Array<readonly [string, number | undefined]> = [];
+  const callToolParams: unknown[] = [];
   const capture = (operation: string, options: { readonly timeout?: number } | undefined): void => {
     observed.push([operation, options?.timeout]);
   };
@@ -291,7 +299,8 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     const epochStore = await publishFixtureEpoch(root, 'epoch-timeout');
     service = new McpSessionService({
       createClient: () => ({
-        callTool: async (_params, options) => {
+        callTool: async (params, options) => {
+          callToolParams.push(params);
           capture('callTool', options);
           return { content: [] };
         },
@@ -345,6 +354,7 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
     await session.getPrompt({ name: 'fixture' });
     await session.readResource({ uri: 'ui://fixture/resource.txt' });
     await session.callTool({ arguments: {}, name: 'fixture' });
+    await session.callTool({ _meta: { progressToken: 'lifecycle:fixture:0' }, arguments: {}, name: 'fixture' });
     await session.listTools({ timeoutMs: 321 });
     await session.restart();
     await expect(session.listTools({ timeoutMs: Number.NaN })).rejects.toThrow(
@@ -362,8 +372,14 @@ it('uses the admitted session timeout for initialization, catalog, operations, a
       ['getPrompt', 12_345],
       ['readResource', 12_345],
       ['callTool', 12_345],
+      ['callTool', 12_345],
       ['listTools', 321],
       ['connect', 12_345],
+    ]);
+    // `_meta` reaches the wire request only when the caller supplies it.
+    expect(callToolParams).toEqual([
+      { arguments: {}, name: 'fixture' },
+      { _meta: { progressToken: 'lifecycle:fixture:0' }, arguments: {}, name: 'fixture' },
     ]);
     await session.close();
   } finally {
@@ -1067,6 +1083,90 @@ it('fails and closes the session as soon as stderr exceeds its output bound', as
   }
 }, 30_000);
 
+it('fails admission, lifecycle, and service misuse closed with coded McpSessionError values', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-typed-errors-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-1');
+    const releases: Array<() => void> = [];
+    const signals: AbortSignal[] = [];
+    const service = new McpSessionService({
+      createClient: () => ({
+        callTool: async (_params: unknown, options?: { readonly signal?: AbortSignal }) => {
+          if (options?.signal !== undefined) signals.push(options.signal);
+          await new Promise<void>((resolvePromise) => {
+            releases.push(resolvePromise);
+          });
+          return { content: [] };
+        },
+        close: async () => undefined,
+        connect: async () => undefined,
+        ...mcpCatalogStub(),
+      }),
+      createStdioTransport: () => stdioTransportStub() as never,
+      epochStore,
+      projectRoot: root,
+    });
+
+    const expectSessionError = async (
+      rejection: Promise<unknown>,
+      code: string,
+      message: string,
+    ): Promise<void> => {
+      const error = await rejection.then(
+        () => { throw new Error(`Expected ${code} to reject.`); },
+        (failure: unknown) => failure,
+      );
+      expect(error).toBeInstanceOf(McpSessionError);
+      expect(error).toEqual(expect.objectContaining({ code, message, name: 'McpSessionError' }));
+    };
+
+    await expectSessionError(
+      service.open({ epochId: 'epoch-1', serverName: '  ', target: 'portable' }),
+      'invalid-server-name',
+      'MCP server name must be nonempty.',
+    );
+
+    const session = await service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' });
+    await expectSessionError(
+      session.callTool({ arguments: {}, name: 'fixture', requestId: ' ' }),
+      'invalid-request-id',
+      'MCP session requestId must be nonempty.',
+    );
+
+    const first = session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    expect(signals).toHaveLength(1);
+    await expectSessionError(
+      session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' }),
+      'duplicate-request-id',
+      'MCP session request "shared" is already active.',
+    );
+    expect(signals[0]?.aborted).toBe(false);
+    releases.shift()?.();
+    await expect(first).resolves.toEqual({ content: [] });
+    // Releasing the request slot aborts its controller and frees the id.
+    expect(signals[0]?.aborted).toBe(true);
+    const reused = session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    expect(signals).toHaveLength(2);
+    releases.shift()?.();
+    await expect(reused).resolves.toEqual({ content: [] });
+
+    await session.close();
+    await expectSessionError(session.restart(), 'session-closed', 'MCP session is closed.');
+    await expectSessionError(session.listTools(), 'session-closed', 'MCP session is closed.');
+
+    await service.close();
+    await expectSessionError(
+      service.open({ epochId: 'epoch-1', serverName: 'fixture', target: 'portable' }),
+      'service-closed',
+      'MCP session service is closed.',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('opens a generated streamable HTTP server through its modern transport', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-remote-'));
   try {
@@ -1090,8 +1190,7 @@ it('opens a generated streamable HTTP server through its modern transport', asyn
     const httpSession = await service.open({ epochId: 'epoch-remote', serverName: 'http', target: 'portable' });
 
     expect(http[0]?.url).toBe('https://mcp.example.test/tools');
-    expect(http[0]?.headers?.Authorization).toMatch(/^Bearer \/.+/u);
-    expect(http[0]?.headers?.Authorization).not.toContain('${PLUGIN_DATA}');
+    expect(http[0]?.headers).toEqual({ Authorization: 'Bearer fixture-token' });
 
     await Promise.all([httpSession.close(), service.close()]);
   } finally {

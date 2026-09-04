@@ -1,0 +1,85 @@
+---
+description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js 版本下限、宿主路径 token、AGENT_BUNDLE 环境变量、.env 优先级与持久状态位置。'
+---
+
+# 运行时环境
+
+## Node.js
+
+编译器与 Workbench 需要 **Node.js 22.19 或更高**；除非 `runtime.node` 抬高下限，生成式可执行文件面向
+**Node.js 22.12 或更高**。两者都在[安装](../guide/start/installation.mdx)中说明，而所选的可执行文件下限
+会作为 `runtime.node` 记录在产物清单中。
+
+## 宿主路径 token
+
+生成的文档通过各宿主会替换的那个 token 引用插件根目录，编译器按 target 写出正确的拼写，而不是假定只有
+一种：
+
+| 宿主 | 插件根 | 插件数据 |
+| --- | --- | --- |
+| Claude Code | `${CLAUDE_PLUGIN_ROOT}` | `${CLAUDE_PLUGIN_DATA}` |
+| Cursor | `${CURSOR_PLUGIN_ROOT}` | — （拒绝：没有文档化的宿主等价物） |
+| Codex | `${PLUGIN_ROOT}`（仅钩子命令） | — （拒绝：没有文档化的宿主等价物） |
+| portable | `${PLUGIN_ROOT}` | `${PLUGIN_DATA}` |
+
+替换是**按位置的，而不是全局的**。Codex 的 `${PLUGIN_ROOT}` 只是其生成的钩子命令的命令根，别无他用：
+Codex 的 MCP 运行时不插值任何路径 token，因此 MCP `command`、`args` 或 `env` 取值中的插件根 token
+只有在位于取值开头、且该服务器的 `cwd` 就是插件根时才被接受，此时编译器会把它改写为 `cwd: "./"`
+之下的 `./` 相对路径；嵌在中间的 token、缺少该 `cwd` 的 token，以及任何插件数据或工作区根 token
+都是构建错误。Claude Code 只在 Skill 与 agent 内容、钩子与 monitor 命令、MCP 服务器
+以及 LSP 服务器中替换 `${CLAUDE_PLUGIN_ROOT}` 及其同类——绝不在 `settings.json` 中替换，这正是
+`claude.settings` 直接拒绝路径 token 的原因。Cursor 被固定的加载器有自己的可替换字段表，位于该表之外的
+token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
+
+## 环境变量
+
+| 变量 | 由谁读取 | 含义 |
+| --- | --- | --- |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录与持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
+| `AGENT_BUNDLE_HOOK_HOST` | 生成的钩子 wrapper | 显式指定声明的宿主，而不去探测。 |
+| `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的钩子 playground 会设置它。 |
+| `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | 贡献者测试套件 | `1` 用于比对已安装宿主 CLI 的契约。 |
+| `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Claude 原生冒烟测试。 |
+| `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Codex 原生冒烟测试。 |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | 贡献者 HMR（`packages/workbench/scripts/dev.mjs`） | 启动 Workbench 界面 HMR 之前必须设置的、正在运行的 Agent Bundle 前台服务器 URL。见[开发者 Workbench](../guide/development/workbench.mdx)。 |
+
+这三个原生冒烟测试的开关之所以存在，是因为那些运行需要一个真实的、已登录的 CLI；它们绝不属于日常测试
+运行的一部分。
+
+## `mcp run` 下的 .env 优先级
+
+`agent-bundle mcp run` 按三层组合启动环境，优先级由低到高：
+
+1. **生成式服务器自身的 env**，其中路径 token 已经解析完毕。
+2. **`.env` 文件层**。
+3. 操作者真实的 `process.env`，因此已导出的变量总是胜出。
+
+`.env` 层是项目根目录下（运行时称之为工作区根目录）Rsbuild 的约定集合 —— `.env`、`.env.local`、
+`.env.<mode>`、`.env.<mode>.local` —— 除非 `--env-file <path>` 用你指定的那些文件替换它，或者
+`--no-env` 把它移除。
+这两个标志互斥。文件被读入一个临时对象，因此真实的 `process.env` 绝不会被改动。
+
+## 持久状态
+
+持久状态解析到 `$AGENT_BUNDLE_PLUGIN_ROOT/state`，回退到产物根目录，对 CLI bin 则回退到
+`./.agent-bundle/state`。只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
+不在磁盘上留下任何东西。每个生成的进程只解析该锚点一次（`@agent-bundle/runtime` 的
+`resolvePluginRoot`），并以 `(await agent()).plugin` 发布——`{ root, stateRoot }`，来自变量时
+`source: 'native'`，来自回退时为 `'derived'`——因此把自己的文件放在框架状态旁边的路由或 provider
+读取 `plugin.value.stateRoot` 即可，不必再自行推导路径。
+
+在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
+一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
+启动」，请传入指向产物 target 根目录的 `--plugin-root <path>`。
+
+当服务器名是单个安全路径段时，逐服务器状态目录直接使用该名字；其他任何名字都会变成内容寻址的
+`server-<digest>` 段，因此像 `../shared` 这样的名字绝不可能穿出状态根目录。
+
+默认的状态投影预算为：每次提交 5,000 毫秒、每个事件 262,144 字节、状态 1,048,576 字节、100,000 次修订。
+`agent-bundle inspect --state` 会为每个定义报告解析出的驱动、生命期、持久位置与预算来源。
+
+## 下一步
+
+- [安全](./security.mdx) —— 这些进程周围的凭据与网络边界。
+- [命令行](./cli.mdx) —— 上文引用的那些标志。

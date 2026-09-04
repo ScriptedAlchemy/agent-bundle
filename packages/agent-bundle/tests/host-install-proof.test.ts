@@ -9,11 +9,14 @@ import {
   buildHostInstallFixture,
   buildPortableHostInstallFixture,
   disposeHostInstallFixture,
+  expectedCodexInterfaceFields,
   runInstalledHostContractMatrixProof,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
+  runHostUninstallProof,
   runPortableHostInstallProof,
+  runPortableUninstallProof,
   type BuiltHostInstallFixture,
   type BuiltPortableHostInstallFixture,
 } from './support/host-install.ts';
@@ -62,7 +65,7 @@ beforeAll(async () => {
           "    version: '1.0.0',",
           '  },',
           '  routes: { mcpCommands: true },',
-          "  targets: ['claude', 'codex', 'cursor'],",
+          "  targets: ['claude', 'codex', 'cursor', 'plugin'],",
           '};',
           '',
         ].join('\n'));
@@ -241,6 +244,7 @@ it('accepts an installed artifact whose manifest declares no resource components
         claude: join(artifactRoot, 'claude'),
         codex: join(artifactRoot, 'codex'),
         cursor: join(artifactRoot, 'cursor'),
+        plugin: join(artifactRoot, 'plugin'),
       }),
       cli: builtFixture().cli,
       root: cloneRoot,
@@ -304,7 +308,7 @@ claudePluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'claude',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       inventory: { hooks: 1, mcpServers: 1, skills: 1 },
       proofLevel: proofLabel,
       registration: {
@@ -352,21 +356,13 @@ codexPluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'codex',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       manifest: {
         interfaceCapabilities: ['hooks', 'mcp', 'skills'],
-        interfaceFields: [
-          'capabilities',
-          'category',
-          'defaultPrompt',
-          'developerName',
-          'displayName',
-          // The fixture declares `plugin.logo`; Codex projects it as `interface.logo` (#246 / #364).
-          'logo',
-          'longDescription',
-          'shortDescription',
-        ],
+        interfaceFields: [...expectedCodexInterfaceFields],
+        matchesBuiltArtifact: true,
         path: '.codex-plugin/plugin.json',
+        schema: 'schema-valid',
       },
       proofLevel: proofLabel,
       registration: {
@@ -418,11 +414,20 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
       mcp: 'schema-valid',
       plugin: 'schema-valid',
     },
+    hooksRegistration: { events: ['sessionStart'], state: 'registered', userHooksJson: 'absent' },
     host: 'cursor',
-    install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
     logo: {
       path: './assets/docs/media/logo.svg',
       resolvesInsideDeployTree: true,
+    },
+    marketplace: {
+      commit: 'git-sha',
+      first: 'staged',
+      imported: false,
+      manifest: 'marketplace.json lists the plugin',
+      repository: '.cursor/agent-bundle/marketplaces/host-install-proof',
+      second: 'already-staged',
     },
     pluginRootVariable: {
       locations: [
@@ -437,6 +442,12 @@ it('installs into an isolated Cursor home, validates schemas, and is idempotent'
     proofLevel: proofLabel,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',
+    unifiedBundle: {
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: { AB6027: 0, AB7320: 0 },
+    },
   });
   expectHygienicReport(report);
 
@@ -477,16 +488,22 @@ it(
       },
       hooks: 'not-emitted',
       host: 'cursor',
-      install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+      install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
       manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',
+        cursorExpansion: {
+          doctor: 'AB7326 expanded',
+          installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
+          pluginData: '.cursor/agent-bundle/plugin-data/host-install-portable-proof',
+          receipt: 'cursorExpansion records the bundle mcp.json verbatim',
+        },
         locations: [
           'mcp.json#/mcpServers/probe/cwd',
           'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
         ],
         reservedEnvKeys: 'absent',
-        resolvedAtInstall: false,
+        resolvedAtInstall: true,
         sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
       },
       proofLevel: 'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)',
@@ -499,3 +516,101 @@ it(
   },
   180_000,
 );
+
+claudePluginIt(
+  claudeAvailable
+    ? 'uninstalls through Claude by its receipt, leaving only classified host-owned bookkeeping behind'
+    : `uninstalls through Claude by its receipt, leaving only classified host-owned bookkeeping behind [${claudeMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'claude', { environment: process.env });
+
+    expect(report, proofLabel).toEqual({
+      agentBundleResidue: [],
+      // Claude 2.1.257 orphans the cached copy (.orphaned_at, ~14-day grace), keeps its empty registries and
+      // settings, and writes session bookkeeping; none of it is Agent Bundle's, all of it is enumerated.
+      homeByteIdentical: false,
+      host: 'claude',
+      hostResidue: [
+        'claude-orphaned-cache-copy',
+        'claude-plugin-registry-files',
+        'claude-session-bookkeeping',
+        'claude-settings',
+      ],
+      keepData: 'retained-by-host',
+      plan: 'no-op',
+      proofLevel: proofLabel,
+      purgeData: 'purged',
+      refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+      registrations: { 'claude-marketplace': 'removed', 'claude-plugin': 'removed' },
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+codexPluginIt(
+  codexAvailable
+    ? 'uninstalls through Codex by its receipt, leaving only empty host directories and an empty config.toml behind'
+    : `uninstalls through Codex by its receipt, leaving only empty host directories and an empty config.toml behind [${codexMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'codex', { environment: process.env });
+
+    expect(report, proofLabel).toEqual({
+      agentBundleResidue: [],
+      homeByteIdentical: false,
+      host: 'codex',
+      hostResidue: ['codex-empty-config', 'codex-empty-directories'],
+      // codex-cli 0.147.0 deletes the cached tree (state/ included) on `plugin remove` and has no keep-data option.
+      keepData: 'unavailable',
+      plan: 'no-op',
+      proofLevel: proofLabel,
+      purgeData: 'removed-by-host',
+      refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+      registrations: { 'codex-marketplace': 'removed', 'codex-plugin': 'removed' },
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+it('uninstalls the Cursor local copy by its receipt and leaves the isolated home byte-identical', async () => {
+  const report = await runHostUninstallProof(builtFixture(), 'cursor', { environment: process.env });
+
+  expect(report, proofLabel).toEqual({
+    agentBundleResidue: [],
+    homeByteIdentical: true,
+    host: 'cursor',
+    hostResidue: [],
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: proofLabel,
+    purgeData: 'purged',
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    registrations: { 'cursor-local-plugin': 'removed' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
+  expectHygienicReport(report);
+}, 180_000);
+
+it('uninstalls the emitted Agent Plugins package through install.mjs --uninstall and leaves the isolated home byte-identical', async () => {
+  const report = await runPortableUninstallProof(builtPortableFixture(), { environment: process.env });
+
+  expect(report, proofLabel).toEqual({
+    homeByteIdentical: true,
+    host: 'cursor',
+    installer: 'emitted install.mjs --uninstall',
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: 'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)',
+    purgeData: 'purged',
+    refusals: { foreign: 'refused', missingReceipt: 'refused', unconfirmedPurge: 'refused' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
+  expectHygienicReport(report);
+}, 180_000);

@@ -1,0 +1,24 @@
+{
+  "success": false,
+  "strict": true,
+  "target": "/bundle/claude/.claude-plugin/marketplace.json",
+  "manifest": {
+    "file": "/bundle/claude/.claude-plugin/marketplace.json",
+    "type": "marketplace",
+    "errors": [],
+    "warnings": [
+      {
+        "path": "plugins[0] plugin.json → displayNme",
+        "message": "Unknown field 'displayNme' — did you mean 'displayName'? Claude Code ignores unrecognized fields at load time, so this field has no effect.",
+        "code": null
+      },
+      {
+        "path": "plugins[0] plugin.json → bogus",
+        "message": "Unknown field 'bogus'. Claude Code ignores it at load time.",
+        "code": null
+      }
+    ],
+    "notes": []
+  },
+  "contents": []
+}

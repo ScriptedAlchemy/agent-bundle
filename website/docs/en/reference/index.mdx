@@ -1,0 +1,52 @@
+---
+description: 'Reference material for agent-bundle: the CLI surface, configuration fields, target artifacts, runtime environment, security boundaries, limitations, and the generated type API.'
+---
+
+# Reference
+
+The Guide explains how to build and ship a bundle. This section is the lookup half: exact flags,
+exact field names, exact defaults, and the boundaries the framework refuses to cross.
+
+Nothing here repeats a walkthrough. Where a concept is already explained in the Guide — the
+configuration model, the seven hook events, the proof levels — these pages link to it and record
+only the contract.
+
+| Page | Answers |
+| --- | --- |
+| [CLI](./cli.mdx) | Every command, argument, option, default, and exit code. |
+| [Configuration](./configuration.mdx) | Every `agent-bundle.config.ts` field, its type, and its validation rule. |
+| [Targets and artifacts](./targets-artifacts.mdx) | What each target emits, and the artifact manifest contract. |
+| [Host capability matrix](./hosts.md) | The pinned per-host capability tables: versions, manifests, install surfaces, path tokens, MCP transports, plugin components. Generated at build time. |
+| [Event and hook matrix](./events.md) | Canonical events to native events per host, tool selectors to native matchers, deferred native events. Generated at build time. |
+| [Notice delivery matrix](./notices.md) | Which notice channels each host supports and why the rest are unavailable. Generated at build time. |
+| [Diagnostics reference](./diagnostics.md) | Every `AB` code family, trigger, severity, and recovery hint. Generated at build time from the repository contract. |
+| [Runtime environment](./runtime-environment.mdx) | Node floors, path tokens, environment variables, `.env` layering, and durable state locations. |
+| [Security](./security.mdx) | The credential, network, and trust boundaries. |
+| [Limitations](./limitations.mdx) | What the framework does not currently do or prove. |
+| [Type API](./api.mdx) | The generated symbol reference for every public export. |
+
+## Reading the diagnostics
+
+Every command reports structured diagnostics rather than prose errors. One diagnostic is a stable
+`AB` code, a severity, a message, and usually a `sourcePath` and a `recovery` hint. For the
+diagnostic-gated commands — `build`, `prepack`, `validate`, `doctor`, `install`, and `dev` — only
+an **error** severity makes the command exit nonzero; warnings and infos never gate a build, a
+validation, or a dev rebuild. `eval` and `inspect` have an extra, non-diagnostic reason to exit
+`1`: a failing or inconclusive trial, or an invalid model — see the
+[CLI exit codes](./cli.mdx#exit-codes).
+
+The full code catalog is the [Diagnostics reference](./diagnostics.md), rendered at build time
+from the repository's
+[`docs/diagnostics.md`](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/diagnostics.md).
+
+| Family | Area |
+| --- | --- |
+| `AB30xx` | Skill documents: Markdown parsing and rendered-skill compilation. |
+| `AB40xx`–`AB47xx` | Plugin metadata, normalized model invariants, hooks, MCP, scripts, assets, package build, and the bundler escape hatch. |
+| `AB48xx`–`AB49xx` | Route graph, state, layout, and provider conventions: route module discovery, `config` extraction, shared layouts (`AB4830`–`AB4832`), and the compiled command surface. |
+| `AB5000` | General CLI and adapter failures. |
+| `AB60xx` | Built-artifact validation, including host schema documents and referenced files. |
+| `AB700x`–`AB7013` | Host installation and the npm prepack gate. |
+| `AB7xxx` | Project preparation and development rebuilds, plus the read-only Doctor at `AB7300`–`AB7320`. |
+| `AB8xxx` | Development server configuration and Workbench routes. |
+| `AB9xxx` | Eval selection, harnesses, and persisted runs. |

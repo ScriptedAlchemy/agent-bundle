@@ -2,7 +2,7 @@ import type { AgentStateDefinition, AgentStateEventSchemas } from '@agent-bundle
 
 import { AgentTestError } from './errors.ts';
 import type { AgentBundleTestManifest } from './manifest.ts';
-import type { AgentRouteModuleLoader } from './types.ts';
+import type { AgentLayoutModule, AgentRouteModuleLoader } from './types.ts';
 
 /**
  * The realm bridge between the generated Rstest configuration and the test
@@ -16,16 +16,30 @@ export const AGENT_TEST_REGISTRY_SYMBOL_KEY = 'agent-bundle/test-route-registry'
 
 const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
 
-export const AGENT_TEST_REGISTRY_VERSION = 3;
+/**
+ * Bumped whenever the registry layout changes so a setup module and the
+ * helpers reading it never silently disagree about what the registry carries.
+ * 4: `providerLoaders` (conventional context providers mounted by the harness).
+ * 5: `layoutLoaders` (conventional layouts composed around manifest renders).
+ * 6: `manifest.scripts` (the script-dispatch level's inventory).
+ */
+export const AGENT_TEST_REGISTRY_VERSION = 6;
 
 export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;
 }>;
 
+export type AgentProviderModuleLoader = () => Promise<{ readonly default?: unknown }>;
+export type AgentLayoutModuleLoader = () => Promise<AgentLayoutModule>;
+
 export interface AgentTestRouteRegistry {
+  /** Lazy loaders keyed by compiled layout id (`layout:root`, `layout:mcp:<server>`). */
+  readonly layoutLoaders?: Readonly<Record<string, AgentLayoutModuleLoader>>;
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */
   readonly loaders: Readonly<Record<string, AgentRouteModuleLoader>>;
   readonly manifest: AgentBundleTestManifest;
+  /** Lazy loaders keyed by compiled provider id; present only when the project declares providers. */
+  readonly providerLoaders?: Readonly<Record<string, AgentProviderModuleLoader>>;
   readonly stateLoader?: AgentStateModuleLoader;
   readonly version: number;
 }
@@ -112,6 +126,26 @@ export const registeredStateLoader = (
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
   return registry.stateLoader;
+};
+
+/** The provider-module loader generated beside the registered manifest for one compiled provider id. */
+export const registeredProviderLoader = (
+  manifest: AgentBundleTestManifest,
+  providerId: string,
+): AgentProviderModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.providerLoaders?.[providerId];
+};
+
+/** The layout-module loader generated beside the registered manifest for one compiled layout id. */
+export const registeredLayoutLoader = (
+  manifest: AgentBundleTestManifest,
+  layoutId: string,
+): AgentLayoutModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.layoutLoaders?.[layoutId];
 };
 
 /** The registered manifest's identity, so a loader miss can name the mismatch that caused it. */

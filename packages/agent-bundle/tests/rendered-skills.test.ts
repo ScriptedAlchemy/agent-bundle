@@ -231,6 +231,96 @@ describe('rendered skill compilation', () => {
     ].join('\n'));
   });
 
+  it('serves agent-bundle/meta to a rendered skill with the identity the model stamps (#440)', async () => {
+    const skillSource = [
+      "import { meta, name, packageName, packageVersion, version } from 'agent-bundle/meta';",
+      '',
+      "export const frontmatter = { description: 'Prints the plugin identity.', name: 'identity' };",
+      'export default () => (',
+      '  <>',
+      '    <h1>{name}</h1>',
+      '    <p>Version <code>{version}</code>; package <code>{String(packageName)}@{String(packageVersion)}</code>.</p>',
+      '    <p>Aggregate: <code>{JSON.stringify(meta)}</code></p>',
+      '  </>',
+      ');',
+      '',
+    ].join('\n');
+    const root = await projectRoot({
+      'package.json': '{ "name": "@acme/identity-plugin", "version": "3.4.5", "type": "module" }\n',
+      'src/skills/identity/SKILL.tsx': skillSource,
+    });
+    const loaded = loadedProject({ plugin: { name: 'identity-plugin' } }, root);
+
+    const discovered = await discoverProject(root, loaded.config);
+    const [skill] = discovered.skills;
+    expect(skill?.diagnostics).toEqual([]);
+    expect(skill?.body).toBe([
+      '# identity-plugin',
+      '',
+      'Version `3.4.5`; package `@acme/identity-plugin@3.4.5`.',
+      '',
+      'Aggregate: `{"name":"identity-plugin","packageName":"@acme/identity-plugin","packageVersion":"3.4.5","version":"3.4.5"}`',
+      '',
+    ].join('\n'));
+
+    // The skill observed exactly the identity normalization stamps.
+    const model = await normalizeProject(loaded, discovered, registry);
+    expect(model.metadata).toMatchObject({
+      name: 'identity-plugin',
+      packageName: '@acme/identity-plugin',
+      packageVersion: '3.4.5',
+      version: '3.4.5',
+    });
+
+    // An authored plugin.version wins over package.json, for the skill too.
+    const authored = await discoverProject(root, { plugin: { name: 'identity-plugin', version: '9.0.0' } });
+    expect(authored.skills[0]?.body).toContain('Version `9.0.0`; package `@acme/identity-plugin@3.4.5`.');
+
+    // Without a caller-supplied identity the reserved specifier is not aliased:
+    // it resolves however the project resolves `agent-bundle` — here, not at all.
+    const direct = await parseSkill(join(root, 'src', 'skills', 'identity'), root);
+    expect(direct.diagnostics).toEqual([expect.objectContaining({ code: 'AB3003' })]);
+
+    // A config with no usable plugin.name is the validator's AB4000: discovery
+    // still completes, and the skill is served no fabricated identity.
+    for (const malformed of [{}, { plugin: null }, { plugin: { name: '' } }, { plugin: 'x' }]) {
+      const config = malformed as unknown as AgentBundleConfig;
+      const withoutIdentity = await discoverProject(root, config);
+      expect(withoutIdentity.skills[0]?.diagnostics).toEqual([expect.objectContaining({ code: 'AB3003' })]);
+      expect(validateSource(loadedProject(config, root), withoutIdentity, registry).map(({ code }) => code))
+        .toContain('AB4000');
+    }
+  });
+
+  it('compiles JSX against the loader element factory, not the consumer react/jsx-runtime (#441)', async () => {
+    // A `react` whose jsx runtime throws stands in for the react-server
+    // condition mismatch: the loader never resolves the consumer's runtime.
+    const root = await projectRoot({
+      'node_modules/react/index.js': 'module.exports = { Fragment: Symbol.for("react.fragment") };\n',
+      'node_modules/react/jsx-dev-runtime.js': "throw new Error('consumer jsx-dev-runtime resolved');\n",
+      'node_modules/react/jsx-runtime.js': "throw new Error('consumer jsx-runtime resolved');\n",
+      'node_modules/react/package.json': '{ "name": "react", "version": "0.0.0-test", "main": "index.js" }\n',
+      'src/skills/keyed/SKILL.tsx': [
+        "import React from 'react';",
+        '',
+        "export const frontmatter = { description: 'Keyed list items.', name: 'keyed' };",
+        "const items = ['one', 'two'];",
+        'export default () => (',
+        '  <>',
+        '    <h1>Keyed</h1>',
+        '    <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>',
+        '    <p>{React.Fragment === Symbol.for("react.fragment") ? "react resolved" : "react missing"}</p>',
+        '  </>',
+        ');',
+        '',
+      ].join('\n'),
+    });
+
+    const skill = await parseSkill(join(root, 'src', 'skills', 'keyed'), root);
+    expect(skill.diagnostics).toEqual([]);
+    expect(skill.body).toBe('# Keyed\n\n- one\n- two\n\nreact resolved\n');
+  });
+
   it('reports AB3003 for a module that fails to load', async () => {
     const root = await projectRoot({
       'src/skills/broken/SKILL.ts': "throw new Error('boom');\nexport default () => null;\n",

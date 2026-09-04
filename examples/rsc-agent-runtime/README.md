@@ -14,16 +14,18 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
 
 ```tsx
-// The semantic event route receives canonical identity plus the complete native payload.
+// The semantic event route receives canonical identity — including the family's
+// cross-host `payload` — plus the complete native envelope for host-specific fields.
 import { Agent } from '@agent-bundle/runtime';
 import type { AgentEventRouteProps } from 'agent-bundle';
 
 export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };
 
-export default async function AfterFileEdit({ canonical, native }: AgentEventRouteProps) {
+export default async function AfterFileEdit({ canonical }: AgentEventRouteProps<'tool/after'>) {
+  const toolName = canonical.payload.toolName?.value ?? 'an unnamed tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded ${String(native.tool_name)} from ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>{`Recorded ${toolName} from ${canonical.provenance.host}.`}</Agent.Context>
     </Agent.Result>
   );
 }
@@ -227,7 +229,7 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 
 ### Semantic event-route support
 
-| Event family | Cursor | Claude Code 2.1.250 | Codex 0.147.0 |
+| Event family | Cursor | Claude Code 2.1.260 | Codex 0.147.0 |
 | --- | --- | --- | --- |
 | `session/start` | Supported | `SessionStart` | `SessionStart` |
 | `session/end` | `sessionEnd` (observe-only; desktop only) | `SessionEnd` (observe-only) | `SessionEnd` (observe-only) |
@@ -246,8 +248,10 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `task/create` | Unavailable | `TaskCreated` (deny) | Unavailable |
 | `task/complete` | Unavailable | `TaskCompleted` (observe-only; blocking is exit-code-only) | Unavailable |
 | `agent/idle` | Unavailable | `TeammateIdle` (deny via continue:false) | Unavailable |
-| `agent/start` | `subagentStart` | `SubagentStart` | `SubagentStart` |
-| `agent/stop` | `subagentStop` | `SubagentStop` | `SubagentStop` |
+| `model-switch/before` | Unavailable | `PreModelSwitch` (allow/ask/deny; 2.1.251+) | Unavailable |
+| `model-switch/after` | Unavailable | `PostModelSwitch` (observe-only + context; 2.1.251+) | Unavailable |
+| `agent/start` | `subagentStart` (deny via `permission: "deny"`; no context channel) | `SubagentStart` (context) | `SubagentStart` (context) |
+| `agent/stop` | `subagentStop` (deny via `followup_message`; no context channel) | `SubagentStop` (deny + context) | `SubagentStop` (deny) |
 | `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |
 
 Cursor's native `workspaceOpen` is sessionless and its optional `pluginPaths`
@@ -260,7 +264,15 @@ block subagent creation. Their `agent/stop` routes can continue the subagent
 with the native `decision: "block"` plus `reason` contract. Codex
 `SubagentStop` exit-0 output is always JSON; its generated 0.147.0 output
 schema has no `additionalContext` field, so the route projection rejects that
-unsupported effect rather than silently fabricating one.
+unsupported effect rather than silently fabricating one. Cursor inverts the
+pair: its `subagentStart` envelope (`subagent_id`, `subagent_type`, `task`,
+`parent_conversation_id`, `tool_call_id`, `subagent_model`,
+`is_parallel_worker`) accepts `permission: "deny"` plus `user_message`, and its
+`subagentStop` envelope (`status`, `loop_count`, `summary`, `modified_files`,
+`agent_transcript_path`) accepts only `followup_message`, which Cursor consumes
+when `status` is `completed` and caps with `loop_limit` (default 5). Neither
+Cursor event documents an additional-context channel, so `Agent.Context` fails
+closed on Cursor for both.
 `session/end` and `prompt/submit` are event-route-only families and do not add
 `config.hooks.sessionEnd` or `config.hooks.promptSubmit` handler keys.
 `session/end` rejects every result effect because each native event is

@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import { validate } from '../src/api.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from '../src/adapters/hook-contract.ts';
 import {
   validateModernMcpDocument,
@@ -847,6 +848,118 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
   }
 });
 
+it('fails ordinary artifact validation when an emitted portable tree breaks the Agent Plugins normative text', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const files = [
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated' as const,
+      path: 'portable/plugin.json',
+    },
+    {
+      contents: JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+        mcpServers: {
+          headers: {
+            headers: { 'X-Tenant': 'a', 'x-tenant': 'b' },
+            type: 'streamable-http',
+            url: 'http://mcp.example.test/mcp',
+          },
+          server: { command: 'bin/server', cwd: '${PLUGIN_ROOT}/../elsewhere', type: 'stdio' },
+        },
+      }) + '\n',
+      kind: 'generated' as const,
+      path: 'portable/mcp.json',
+    },
+  ];
+  const root = await writeArtifact(files, true, [portable]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    const normative = diagnostics.filter((entry) => entry.code === 'AB6036');
+    expect(normative.map((entry) => entry.message)).toEqual([
+      'Target "portable": mcp.json/mcpServers/headers/url uses plain HTTP against non-loopback host "mcp.example.test"; non-loopback endpoints must use HTTPS (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/headers/headers/x-tenant repeats header "X-Tenant" under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/server/command "bin/server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).',
+      'Target "portable": mcp.json/mcpServers/server/cwd "${PLUGIN_ROOT}/../elsewhere" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).',
+    ]);
+    expect(normative.every((entry) => entry.severity === 'error' && entry.target === 'portable' && entry.recovery !== undefined)).toBe(true);
+    expect(diagnostics).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'AB6012' })]));
+
+    // --host-validation runs host reports only over an artifact the ordinary lane
+    // accepted, so a failing byte lane is reported exactly once and never as a report.
+    const hostValidated = await validate({ artifact: root, hostValidation: true, registry, root });
+    expect(hostValidated.hostValidation).toBeUndefined();
+    expect(hostValidated.diagnostics.filter((entry) => entry.code === 'AB6036').map((entry) => entry.message))
+      .toEqual(normative.map((entry) => entry.message));
+    expect(hostValidated.diagnostics.some((entry) => entry.code === 'AB6038')).toBe(false);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('does not follow a symlinked portable document into the byte lane once the inspection refused it', async () => {
+  const registry = createDefaultRegistry();
+  const portable = targetFromRegistry(registry, 'portable');
+  const root = await writeArtifact([
+    { contents: '# Install portable-test\n', kind: 'generated', path: 'portable/INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated', path: 'portable/install.mjs' },
+    {
+      contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
+      kind: 'generated',
+      path: 'portable/plugin.json',
+    },
+  ], true, [portable]);
+  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-mcp-'));
+
+  try {
+    await writeFile(join(outside, 'forged-mcp.json'), JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: { forged: { command: 'bin/server', type: 'stdio' } },
+    }));
+    await symlink(join(outside, 'forged-mcp.json'), join(root, 'portable', 'mcp.json'));
+
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'portable/mcp.json' }),
+    ]));
+    // The forged content was never read: no schema or normative finding from behind the link.
+    expect(diagnostics.filter((entry) => ['AB6035', 'AB6036', 'AB6037'].includes(entry.code))).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
+  }
+});
+
+it('leaves an advanced registry adapter that reuses the portable name to its own artifact contract', async () => {
+  const registry = new TargetRegistry().register({
+    artifactValidation: {
+      documents: [{ path: 'document.json', required: true, schema: 'document' }],
+      schemas: [{ name: 'document', validate: validateCustomDocument }],
+    },
+    capabilities: {},
+    metadata: customMetadata,
+    name: 'portable',
+    plan: () => ({ diagnostics: [], entries: [] }),
+  } satisfies TargetAdapter);
+  const target = targetFromRegistry(registry, 'portable');
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'portable/document.json' },
+  ], true, [target]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry });
+    // No AB6035 for the absent Agent Plugins plugin.json: the byte lane keys on the
+    // built-in adapter identity. Only the name-keyed install-surface requirement remains.
+    expect(diagnostics.map((entry) => entry.code).sort()).toEqual(['AB6023', 'AB6024']);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('admits nested project assets in the target-owned recursive asset namespace', async () => {
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
@@ -1007,8 +1120,11 @@ it('rejects a canonical manifest that omits an executable file mode', async () =
 });
 
 it('preserves structural artifact diagnostics after a strict manifest passes', async () => {
+  // A compiler bundle's syntax is the ESM lexer's to reject: an unterminated
+  // template is invalid to it, where a bare `export const broken = ;` is not.
+  const brokenBundle = 'export const broken = `;\n';
   const files = [
-    { contents: 'export const broken = ;\n', kind: 'bundle' as const, path: 'broken.mjs' },
+    { contents: brokenBundle, kind: 'bundle' as const, path: 'broken.mjs' },
     { contents: '{', kind: 'generated' as const, path: 'invalid.json' },
     { contents: '{"mcpServers":{"local":{"args":["mcp/mcp-local-deadbeef.mjs"]}}}', kind: 'generated' as const, path: 'mcp.json' },
   ];
@@ -1017,7 +1133,7 @@ it('preserves structural artifact diagnostics after a strict manifest passes', a
   try {
     await writeFile(join(root, 'mcp.json'), '{"mcpServers":{"local":{"args":["mcp/mcp-local-deadbeef.mjs"]}}}\n');
     await writeFile(join(root, 'invalid.json'), '{');
-    await writeFile(join(root, 'broken.mjs'), 'export const broken = ;\n');
+    await writeFile(join(root, 'broken.mjs'), brokenBundle);
     const diagnostics = await validateArtifact({ artifactRoot: root });
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6005', generatedPath: 'broken.mjs' }),
@@ -1682,7 +1798,7 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
   const root = await writeArtifact(files, true, [customManifestTarget]);
   const modulePath = join(root, 'custom', 'scripts', 'mutable.mjs');
   const registry = customRegistry(() => {
-    writeFileSync(modulePath, 'export const broken = ;\n');
+    writeFileSync(modulePath, 'export const broken = `;\n');
     return [];
   });
 
@@ -1690,6 +1806,49 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+/**
+ * The syntax check a module gets follows who produced it. A module the
+ * framework compiled (manifest kind `bundle`) is the bundler's own output:
+ * only the ESM lexer runs over it, so re-parsing megabytes of bundler output
+ * no longer dominates every build, and a bare `export const broken = ;` —
+ * which no bundler emits — passes while unterminated input still fails. A
+ * module the framework did not compile (a copied consumer script, a
+ * generated installer) is parsed in full and keeps the complete check.
+ */
+it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
+  const brokenStatement = 'export const broken = ;\n';
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: brokenStatement, kind: 'copy', path: 'custom/scripts/copied.mjs' },
+    { contents: brokenStatement, kind: 'generated', path: 'custom/scripts/generated.mjs' },
+    { contents: brokenStatement, kind: 'bundle', path: 'custom/scripts/bundled.mjs' },
+    { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'custom/scripts/unterminated.mjs' },
+    { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'custom/scripts/dangling.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics.filter((entry) => entry.code === 'AB6005').map((entry) => [entry.generatedPath, entry.message])).toEqual([
+      ['custom/scripts/copied.mjs', 'Generated JavaScript import from "custom/scripts/copied.mjs" has invalid syntax.'],
+      ['custom/scripts/dangling.mjs', 'Generated JavaScript import from "custom/scripts/dangling.mjs" is missing "./missing.mjs".'],
+      ['custom/scripts/generated.mjs', 'Generated JavaScript import from "custom/scripts/generated.mjs" has invalid syntax.'],
+      ['custom/scripts/unterminated.mjs', 'Generated JavaScript import from "custom/scripts/unterminated.mjs" has invalid syntax.'],
+    ]);
+    // A build whose consumer hatch may have rewritten the emitted assets asks
+    // for the full parse of bundles too; nothing else changes.
+    const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
+    expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
+      'custom/scripts/bundled.mjs',
+      'custom/scripts/copied.mjs',
+      'custom/scripts/dangling.mjs',
+      'custom/scripts/generated.mjs',
+      'custom/scripts/unterminated.mjs',
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

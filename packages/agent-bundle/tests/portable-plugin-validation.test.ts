@@ -88,7 +88,7 @@ it('passes a conformant Agent Plugins 1.0.0 bundle and reports the pinned proven
     severity: 'info',
     target: 'portable',
   })]);
-  expect(report.diagnostics[0]?.message).toContain('re-verified 2026-09-02');
+  expect(report.diagnostics[0]?.message).toContain('re-verified 2026-09-03');
 });
 
 it('requires the root plugin.json and rejects documents the pinned schemas refuse', async () => {
@@ -146,6 +146,10 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
   await writeJson(join(root, 'mcp.json'), {
     $schema: mcpSchema,
     mcpServers: {
+      anchorCommand: { command: './../anchor/server', type: 'stdio' },
+      anchorCwd: { command: 'node', cwd: '${PLUGIN_ROOT}/../anchor', type: 'stdio' },
+      backslashCommand: { command: './bin\\..\\..\\outside', type: 'stdio' },
+      backslashCwd: { command: 'node', cwd: './safe\\..\\..\\outside', type: 'stdio' },
       escapingCommand: { command: './../outside', type: 'stdio' },
       escapingCwd: { command: 'node', cwd: '${PLUGIN_ROOT}/../elsewhere', type: 'stdio' },
       escapingData: { command: 'node', cwd: '${PLUGIN_DATA}/../elsewhere', type: 'stdio' },
@@ -155,6 +159,7 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
         type: 'streamable-http',
         url: 'https://mcp.example.test/mcp',
       },
+      driveRelativeCommand: { command: 'C:server', type: 'stdio' },
       missingBundled: { command: './bin/absent', type: 'stdio' },
       pathCommand: { command: 'bin/server', type: 'stdio' },
       placeholderCommand: { command: '${PLUGIN_ROOT}/bin/launch', type: 'stdio' },
@@ -169,6 +174,10 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
 
   expect(new Set(codes(diagnostics))).toEqual(new Set(['AB6036']));
   expect(messages(diagnostics)).toEqual([
+    'mcp.json/mcpServers/anchorCommand/command "./../anchor/server" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',
+    'mcp.json/mcpServers/anchorCwd/cwd "${PLUGIN_ROOT}/../anchor" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).',
+    'mcp.json/mcpServers/backslashCommand/command "./bin\\\\..\\\\..\\\\outside" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',
+    'mcp.json/mcpServers/backslashCwd/cwd "./safe\\\\..\\\\..\\\\outside" must use forward-slash separators without backslashes or NUL so every consuming platform resolves it identically (Agent Plugins 1.0.0 §4.1).',
     'mcp.json/mcpServers/escapingCommand/command "./../outside" escapes the plugin root (Agent Plugins 1.0.0 §4.1).',
     'mcp.json/mcpServers/escapingCwd/cwd "${PLUGIN_ROOT}/../elsewhere" escapes its plugin root after resolution (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/escapingData/cwd "${PLUGIN_DATA}/../elsewhere" escapes its plugin data directory after resolution (Agent Plugins 1.0.0 §7.2.1).',
@@ -176,6 +185,7 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
     'mcp.json/mcpServers/headers/headers/Bad Header is not a valid HTTP header field name (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/headers/headers/x-tenant repeats header "X-Tenant" under different casing; header names are case-insensitive (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/headers/headers/X-Token contains an Agent Plugins placeholder, but clients never expand placeholders in headers (Agent Plugins 1.0.0 §7.2.1).',
+    'mcp.json/mcpServers/driveRelativeCommand/command "C:server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/missingBundled/command "./bin/absent" does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/pathCommand/command "bin/server" is neither a bare executable name nor a plugin-relative ./ path (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/placeholderCommand/command contains an Agent Plugins placeholder, but clients never expand placeholders in command (Agent Plugins 1.0.0 §7.2.1).',
@@ -185,6 +195,36 @@ it('applies the normative text where the schemas are silent: commands, cwd, URLs
     'mcp.json/mcpServers/relativeUrl/url must be an absolute HTTP or HTTPS URL (Agent Plugins 1.0.0 §7.2.1).',
     'mcp.json/mcpServers/userInfo/url must not contain user information (Agent Plugins 1.0.0 §7.2.1).',
   ]);
+});
+
+it('rejects every forbidden control character in HTTP header values while permitting horizontal tab', async () => {
+  const root = await conformantBundle();
+  const invalidValues: Record<string, string> = {
+    'X-Bell': 'a\u0007b',
+    'X-Cr': 'a\rb',
+    'X-Del': 'a\u007fb',
+    'X-Lf': 'a\nb',
+    'X-Nul': 'a\u0000b',
+    'X-Soh': 'a\u0001b',
+    'X-Unicode': 'a\u2014b',
+    'X-Vt': 'a\u000bb',
+  };
+  await writeJson(join(root, 'mcp.json'), {
+    $schema: mcpSchema,
+    mcpServers: {
+      invalid: { headers: invalidValues, type: 'streamable-http', url: 'https://mcp.example.test/mcp' },
+      valid: {
+        headers: { 'X-ObsText': 'caf\u00e9', 'X-Tab': 'a\tb', 'X-Visible': 'Bearer token-1 ~' },
+        type: 'streamable-http',
+        url: 'https://mcp.example.test/mcp',
+      },
+    },
+  });
+  const diagnostics = await validatePortablePluginFiles({ pluginDirectory: root, target: 'portable' });
+
+  expect(new Set(codes(diagnostics))).toEqual(new Set(['AB6036']));
+  expect(messages(diagnostics)).toEqual(Object.keys(invalidValues).map((name) =>
+    `mcp.json/mcpServers/invalid/headers/${name} is not a valid HTTP header field value: only visible ASCII, space, horizontal tab and obs-text bytes are allowed (Agent Plugins 1.0.0 §7.2.1).`));
 });
 
 it('reports fixed component locations of the wrong filesystem kind and skill directories without SKILL.md', async () => {

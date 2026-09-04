@@ -1,6 +1,6 @@
 ---
-"@agent-bundle/runtime": minor
-"agent-bundle": minor
+"@agent-bundle/runtime": patch
+"agent-bundle": patch
 ---
 
 Expose a recipient-scoped, read-only notice inbox through generated stateful

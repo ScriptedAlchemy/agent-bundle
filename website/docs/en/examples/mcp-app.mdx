@@ -1,0 +1,108 @@
+---
+description: 'The MCP App example: one service-readiness workflow expressed as a generated stdio MCP server, a typed tool, an interactive MCP App resource, a Skill, a hook, a script, and a deterministic eval.'
+---
+
+# MCP App
+
+One service-readiness workflow, expressed once and emitted as every surface a host can reach: a
+real local MCP server, a typed tool, an interactive MCP App resource, a Skill, a session-start
+hook, a fixture-check script, and a deterministic eval. It is the example to read when you want
+to see how the surfaces fit together instead of studying one of them alone.
+
+- **Run from the repository root:** `pnpm example:mcp-app`
+- **Package:** `@agent-bundle-example/mcp-app`
+- **Public dependencies:** `agent-bundle` (`workspace:*`), `@modelcontextprotocol/server`,
+  `@modelcontextprotocol/ext-apps`, `zod`; `@rstest/browser`, `@rstest/core`,
+  `@rstest/playwright`, and `playwright` for the browser-app test
+- **Targets:** `portable`, `codex`, `claude` — the MCP App resource stays portable
+- **Credentials:** none — the eval and the fixture check read only checked-in data
+- **Source:** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
+
+## What it proves
+
+- **The MCP entry convention.** `src/mcp/status.ts` default-exports the `status` server factory,
+  and the config declares no server `entry` — the build discovers it through the
+  `src/mcp/<server-id>.ts` convention. See
+  [MCP servers and MCP Apps](../guide/authoring/mcp.mdx).
+- **The generated stdio lifecycle is not yours to write.** The build wraps that factory in the
+  lifecycle shell: the console-to-stderr guard, signal handling, stdin-EOF exit, bounded
+  shutdown, and the heartbeat.
+- **An MCP App is a compiled resource, not a served page.** The declared app compiles to
+  `mcp-apps/status.html` under the portable target with a stable `resourceUri`. Codex and Claude
+  keep their host artifacts but not this portable App resource.
+- **Degraded evidence is first-class.** The `status` server serves immutable `compiler` and
+  `payments-api` health records, and `payments-api` deliberately returns degraded latency. The
+  interesting output is a failing check that is reported honestly, not a green screenshot.
+- **A browser surface is its own proof level.** `tests/browser-app/status-panel.browser.test.ts`
+  mounts the production-compiled App HTML over the product bridge through
+  `agent-bundle/test/browser` — the `browser-app` level in
+  [Testing](../guide/development/testing.mdx).
+
+## What is authored
+
+| Path | What it is |
+| --- | --- |
+| `src/mcp/status.ts` | The `status` server factory, discovered by convention, serving the two health records. |
+| `views/status-panel.ts` / `views/status-panel.html` | The MCP App entry and template compiled to `mcp-apps/status.html`. |
+| `src/skills/service-readiness/` | The evidence, checks, and report needed for a service-readiness decision. |
+| `src/hooks/session-start.ts` | Adds the readiness workflow to compatible host sessions. |
+| `src/scripts/check-service-fixture.ts` | Validates the checked-in compiler fixture before a release walkthrough. |
+| `evals/status.eval.ts` | The deterministic `mcp-app-status` suite and its `status-is-healthy` case. |
+
+## Working in the Workbench
+
+1. **Overview** opens on the Bundle dashboard. Its Author, Build, Exercise, and Evaluate stages
+   connect the source capability to its emitted artifact, runtime evidence, and eval result.
+2. **Skills** defaults to `service-readiness`; compare its authored status policy and
+   readiness-report resource with the generated output and its explicit eval coverage.
+   **Hooks** defaults to a populated Claude `sessionStart` canonical input.
+3. **Playground** defaults to Script execution, the Claude target, and `check-service-fixture`.
+   Run it and wait for the finalized session: the emitted checker resolves the packaged status
+   fixture beside its emitted module, so it succeeds independently of the shell's working
+   directory.
+4. **Artifacts** with the portable target selected is where `mcp-apps/status.html` appears.
+   Before two eval runs exist, **Comparisons** deliberately shows
+   `At least two recorded runs are needed before a comparison can be aligned.` — the precise
+   empty state, not an error.
+5. **MCP playground** defaults to portable and the `status` server. Open the session, list tools,
+   select `show-status`, choose `payments-api`, and invoke it. Invocation history shows the
+   degraded summary with labelled Availability and P95 latency checks, the latter failing. Open
+   the App preview: the rendered panel shows the same record through the MCP Apps bridge, with a
+   text-labelled amber `degraded` indicator. Inspect the protocol trace, use
+   **Restart MCP session**, then close, reset, and reopen the session to exercise the lifecycle.
+6. **Evals** defaults to `mcp-app-status`. Run `status-is-healthy` and inspect the completed
+   passing trial attributed to `service-readiness`.
+
+If you edit a source file, rebuild and wait for a Failed or Idle state before judging the
+result; a Building state is still in progress.
+
+## Noninteractive checks
+
+After the repository-level `pnpm build`:
+
+```sh
+cd examples/mcp-app
+pnpm validate
+pnpm build
+pnpm typecheck
+pnpm exec agent-bundle eval --case status-is-healthy --trials 1
+```
+
+`pnpm check` runs validation, build, and typecheck without the Workbench.
+
+## Running the server on stdio
+
+```sh
+pnpm exec agent-bundle mcp run --server status --target portable
+```
+
+`mcp run` resolves the generated entry from the portable target's MCP manifest, building a
+temporary artifact first; pass `--artifact artifact` to reuse the `pnpm build` output instead.
+Closing stdin exits 0 and Ctrl-C exits 130, and per-server state persists under
+`.agent-bundle/mcp-run/portable/status`.
+
+The command loads the project-root `.env` set — including the selected `--mode` variants — by
+default. Launch environment precedence is manifest env, then `.env` files, then exported operator
+variables. Repeatable `--env-file <path>` replaces the conventional files, `--no-env` skips them,
+and `--plugin-root <path>` is only for a copied-artifact rehearsal. The full contract is in
+[Runtime environment](../reference/runtime-environment.mdx).

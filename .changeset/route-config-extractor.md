@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Statically extract each route module's `config` export into the route-graph IR (#93, PR-2).

@@ -19,13 +19,18 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  featureCapabilitiesFrom,
+  frontmatterFeatureCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
+  cliBinCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
-import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
+import capabilityTable from './capabilities/claude-2.1.260.json' with { type: 'json' };
 import {
   createNativeEventStarter,
   mergeHookDocuments,
@@ -145,7 +150,7 @@ export interface ClaudeSubagentStatusLineConfig {
 
 /**
  * Default configuration Claude Code applies when the plugin is enabled,
- * emitted as `settings.json` at the plugin root. The pinned 2.1.250 contract
+ * emitted as `settings.json` at the plugin root. The pinned 2.1.260 contract
  * supports exactly two keys, and `settings.json` takes priority over
  * `settings` declared in the manifest.
  *
@@ -426,7 +431,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.22.0',
+  adapterRevision: '1.28.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -3150,13 +3155,18 @@ export const planClaudeArtifacts = (
   const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
 
+  // Claude Code loads the conventional `hooks/hooks.json` on its own; the
+  // manifest `hooks` field is only for *additional* documents. Naming the
+  // conventional file there makes Claude Code (2.1.259 observed) record a
+  // `hook-load-failed` plugin error, "Duplicate hooks file detected ... The
+  // standard hooks/hooks.json is loaded automatically, so manifest.hooks
+  // should only reference additional hook files", so no pointer is emitted.
   const plugin = {
     author: { name: model.metadata.name },
     ...manifestMetadata.document,
     ...(channels.document === undefined ? {} : { channels: channels.document }),
     ...(dependencies.document === undefined ? {} : { dependencies: dependencies.document }),
     description: model.metadata.description ?? model.metadata.name,
-    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
     name: model.metadata.name,
     ...(userConfig.document === undefined ? {} : { userConfig: userConfig.document }),
     version: model.metadata.version,
@@ -3257,6 +3267,12 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   capabilities: Object.freeze({
     ...agentCapabilities,
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // Component feature sets (#100): the host features each kind may use,
+    // one row per feature, enforced at build time (AB4927/AB4928 commands)
+    // and reported by inspect as omitted features.
+    ...frontmatterFeatureCapabilitiesFrom('commands', capabilityTable.plugin.commandFrontmatter, evidence),
+    ...featureCapabilitiesFrom('hooks', capabilityTable.hooks.features, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     bin: capabilityStateFromSupport(
       capabilityTable.plugin.bin.directory === 'bin' &&
         capabilityTable.plugin.bin.bashPath &&
@@ -3272,6 +3288,9 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude plugin contract does not document message channel declarations.',
     ),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,
@@ -3379,6 +3398,11 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
       evidence,
       'The pinned Claude contract does not support both required modern MCP transports.',
     ),
+    // Canonical component kinds the pinned Claude contract does not document
+    // (#100): diagnostics reach Claude only as an LSP server option, and no
+    // editor/native extension component exists.
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     monitors: capabilityStateFromSupport(
       capabilityTable.plugin.monitors.commandTokens.length === 4 &&
         ['${CLAUDE_PLUGIN_ROOT}', '${CLAUDE_PLUGIN_DATA}', '${CLAUDE_PROJECT_DIR}', '${ENV_VAR}']
@@ -3408,7 +3432,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     pluginReload: unavailableCapability(distributionPolicy.pluginReload.reason),
     pluginTrustGates: unavailableCapability(distributionPolicy.pluginTrustGates.reason),
     rules: unavailableCapability(
-      'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
+      'The pinned Claude Code plugin contract (2.1.260) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     ),
     settings: capabilityStateFromSupport(
       capabilityTable.plugin.settings.config === claudeArtifactPaths.settings &&
@@ -3467,6 +3491,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: claudeName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(claudeName, capabilityTable.noticeDelivery),
   binSource: (config: Readonly<AgentBundleConfig>) => config.claude?.bin,
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.claude?.nativeHooks,
   outputStylesSource: (config: Readonly<AgentBundleConfig>) => config.claude?.outputStyles,

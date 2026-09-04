@@ -27,8 +27,19 @@ import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/play
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
+import {
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic as writeDiagnosticResponse,
+  responseJson as writeJsonResponse,
+  singleHeader,
+  type RequestDiagnostic,
+} from './http.ts';
 
-const bodyLimit = 64 * 1024;
 const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
@@ -166,12 +177,6 @@ export interface ForegroundServerOptions {
   readonly testing?: ForegroundServerTesting;
 }
 
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
-
 type SkillRoute =
   | Readonly<{ readonly kind: 'source-tree' }>
   | Readonly<{ readonly kind: 'source-document'; readonly skillId: string }>
@@ -180,48 +185,17 @@ type SkillRoute =
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-document'; readonly skillId: string; readonly target: string }>
   | Readonly<{ readonly epochId: string; readonly kind: 'generated-resource'; readonly resource: readonly string[]; readonly skillId: string; readonly target: string }>;
 
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
 /** Route groups may attach structured diagnostics that are the answer, not an internal detail. */
 const attachedDiagnostics = (value: RequestDiagnostic): readonly unknown[] | undefined => {
   const diagnostics = (value as Partial<{ readonly diagnostics: unknown }>).diagnostics;
   return Array.isArray(diagnostics) ? diagnostics : undefined;
 };
 
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  const diagnostics = attachedDiagnostics(value);
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({
-    diagnostic: { code: value.code, message: value.message },
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-  }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
+const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void =>
+  writeDiagnosticResponse(response, value, attachedDiagnostics(value));
 
 const attachmentHeader = (relativePath: string): string =>
   `attachment; filename*=UTF-8''${encodeURIComponent(basename(relativePath)).replaceAll("'", '%27')}`;
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
 
 const cookieValue = (request: IncomingMessage, name: string): string | undefined => {
   const header = singleHeader(request.headers.cookie);
@@ -232,49 +206,6 @@ const cookieValue = (request: IncomingMessage, name: string): string | undefined
     if (pair.slice(0, index).trim() === name) return pair.slice(index + 1).trim();
   }
   return undefined;
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  const rawValue = parameter.slice(equals + 1).trim();
-  const value = unquoteHeaderValue(rawValue);
-  return value?.toLowerCase() === 'utf-8';
-};
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
 };
 
 const decodedAssetPath = (requestTarget: string | undefined): string => {
@@ -301,9 +232,6 @@ const decodedAssetPath = (requestTarget: string | undefined): string => {
   });
   return parts.join('/');
 };
-
-const rawPathname = (requestTarget: string | undefined): string =>
-  requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
 const decodedSkillSegment = (segment: string): string => {
   let decoded: string;
@@ -803,7 +731,7 @@ export class ForegroundServer {
     if (route !== undefined) return this.#serveSkill(route, response, method);
     if (pathname === '/api/project/status') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { status: this.#coordinator.status() });
+      return writeJsonResponse(response, { status: this.#coordinator.status() });
     }
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -825,7 +753,7 @@ export class ForegroundServer {
         return responseDiagnostic(response, diagnostic('AB8009', 'Request body must use application/json.', 415));
       }
       await this.#coordinator.rebuild(manualInvalidation(await readBody(request), this.#now));
-      return responseJson(response, { status: this.#coordinator.status() });
+      return writeJsonResponse(response, { status: this.#coordinator.status() });
     }
     if (pathname === '/api/project/events') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
@@ -844,13 +772,13 @@ export class ForegroundServer {
       return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     }
     try {
-      if (route.kind === 'source-tree') return responseJson(response, await service.sourceTree());
-      if (route.kind === 'source-document') return responseJson(response, { document: await service.source(route.skillId) });
+      if (route.kind === 'source-tree') return writeJsonResponse(response, await service.sourceTree());
+      if (route.kind === 'source-document') return writeJsonResponse(response, { document: await service.source(route.skillId) });
       if (route.kind === 'generated-tree') {
-        return responseJson(response, await service.generatedTree(route.epochId, route.target));
+        return writeJsonResponse(response, await service.generatedTree(route.epochId, route.target));
       }
       if (route.kind === 'generated-document') {
-        return responseJson(response, { document: await service.generated(route.epochId, route.target, route.skillId) });
+        return writeJsonResponse(response, { document: await service.generated(route.epochId, route.target, route.skillId) });
       }
       const value = route.kind === 'source-resource'
         ? await service.sourceResource(route.skillId, route.resource)

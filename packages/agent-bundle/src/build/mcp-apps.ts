@@ -6,35 +6,31 @@ import { extname, resolve } from 'node:path';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
+  assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
   generatedMetaModuleSource,
-  generatedModulesDirname,
+  generatedModulesRoot,
   metaModuleSpecifier,
+  virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
 export const mcpAppMimeType = 'text/html;profile=mcp-app';
 
 /**
- * Rsbuild and Rslib carry independent Rspack copies (the dual-engine reality
- * documented on `AgentBundleToolsConfig`), so the browser path checks its own
- * engine for the experimental virtual-module surface rather than borrowing
- * the Rslib guard.
+ * This engine's virtual-module plugin: the browser path checks the workspace
+ * `@rsbuild/core`'s own Rspack rather than borrowing the Rslib guard (see
+ * {@link virtualModulesPluginConstructor}).
  */
-const virtualModulesPluginConstructor = (): typeof rspack.experiments.VirtualModulesPlugin => {
-  const constructor = (rspack as { readonly experiments?: { readonly VirtualModulesPlugin?: unknown } })
-    .experiments?.VirtualModulesPlugin;
-  if (typeof constructor !== 'function') {
-    throw new Error(
-      'The Rspack engine nested in @rsbuild/core no longer exposes experiments.VirtualModulesPlugin, '
-      + 'which agent-bundle uses to serve the generated agent-bundle/meta module to browser MCP App bundles. '
-      + 'Pin @rsbuild/core to a version whose Rspack ships the plugin, or update agent-bundle.',
-    );
-  }
-  return constructor as typeof rspack.experiments.VirtualModulesPlugin;
-};
+const rsbuildVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPlugin =>
+  virtualModulesPluginConstructor(
+    rspack,
+    '@rsbuild/core',
+    'serve the generated agent-bundle/meta module to browser MCP App bundles',
+  );
 
 export interface CompiledMcpApp {
   readonly _meta?: Readonly<Record<string, unknown>>;
@@ -171,21 +167,23 @@ export const planCompiledMcpApps = (
 /**
  * One Rsbuild instance with one environment per app compiles every view in
  * a single parallel run instead of a sequential per-app build loop. The
- * consumer escape hatch merges over this synthesized profile with the
- * framework invariant hook appended last; the resolved-config assertions in
- * `compileMcpApps` bound what the hatch may change. `inspect --bundler`
- * surfaces exactly this composition.
+ * consumer escape hatch merges over this synthesized profile in the shared
+ * `composeToolsLayers` order, framework invariant hook last; the
+ * resolved-config assertions in `compileMcpApps` bound what the hatch may
+ * change. `inspect --bundler` surfaces exactly this composition.
  */
 export const composeMcpAppsRsbuildConfig = (
   sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
   options: {
+    /** The project root: the bundler `context` and the root of the generated-module namespace. */
+    readonly cwd: string;
     /** The project identity served to widget source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   },
 ): RsbuildConfig => {
-  const metaModulePath = generatedMetaModulePath(options.outDir);
+  const metaModulePath = generatedMetaModulePath(options.cwd);
   const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
@@ -221,22 +219,23 @@ export const composeMcpAppsRsbuildConfig = (
     };
     // Added after the hatch mutator (this hook is merged last), so a consumer
     // cannot strip the generated identity module out of the compiler.
-    const VirtualModulesPlugin = virtualModulesPluginConstructor();
+    const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
     ];
     return config;
   };
-  return mergeRsbuildConfig<RsbuildConfig>(
+  // The hatch types are this engine's own, so the layers lift unchanged.
+  return mergeRsbuildConfig<RsbuildConfig>(...composeToolsLayers<RsbuildConfig>({
+    invariants: frameworkInvariantLayer(enforceInvariants),
+    lift: {
+      rsbuild: (fragment) => fragment,
+      rspack: (hatch) => ({ tools: { rspack: hatch } }),
+    },
     profile,
-    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild]),
-    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } }]),
-    // Merged last so the hatch cannot reach either invariant: dist cleaning
-    // would delete sibling outputs already emitted into the shared staged
-    // target root, so it stays off no matter what the consumer asks for.
-    { output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } },
-  );
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
+  }));
 };
 
 export const compileMcpApps = async (
@@ -256,6 +255,7 @@ export const compileMcpApps = async (
   if (compiled.length === 0) {
     return compiled;
   }
+  await assertGeneratedModulesRootAbsent(options.cwd);
 
   const sources = compiled.map((app) => {
     const source = apps.find((candidate) => candidate.id === app.id);
@@ -268,6 +268,7 @@ export const compileMcpApps = async (
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
     config: composeMcpAppsRsbuildConfig(sources, {
+      cwd: options.cwd,
       meta: options.meta,
       outDir: options.outDir,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
@@ -287,7 +288,7 @@ export const compileMcpApps = async (
       })),
       // The generated identity module is virtual, but it still surfaces in
       // stats as a module under this reserved namespace.
-      ignoredSourcePaths: [resolve(options.outDir, generatedModulesDirname)],
+      ignoredSourcePaths: [resolve(generatedModulesRoot(options.cwd))],
       projectRoot: options.cwd,
       stats: result.stats,
     });

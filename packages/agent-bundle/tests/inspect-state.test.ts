@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 
 import { runCli } from '../src/cli.ts';
 import { agentStateDefaultBudgets } from '../src/core/state-inspection.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 
 it('keeps static inspection defaults aligned with the runtime package', () => {
   expect(agentStateDefaultBudgets).toEqual({
@@ -39,17 +40,10 @@ const inspectCli = async (
   root: string,
   args: readonly string[],
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-  const code = await runCli(
-    ['inspect', '--root', root, ...args],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
-  );
-  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+  const code = await runCli(['inspect', '--root', root, ...args], terminal.output);
+  return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
 it('inspects volatile and workspace-durable state without inventing runtime paths', async () => {
@@ -82,7 +76,15 @@ it('inspects volatile and workspace-durable state without inventing runtime path
           driver: 'memory',
           id: 'fixture/process-state',
           lifetime: 'process',
-          notices: [expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1')],
+          // Retention is static policy: the runtime defaults until `notices.retention` says otherwise.
+          noticeRetention: {
+            resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 604_800_000 },
+            source: 'defaults',
+          },
+          notices: [
+            expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1'),
+            expect.stringContaining('AgentNoticeLedger.inspect()'),
+          ],
           provenance: { kind: 'conventional', sourcePath: stateSource },
           source: stateSource,
         },
@@ -152,6 +154,49 @@ it('inspects volatile and workspace-durable state without inventing runtime path
       },
     });
     expect(JSON.parse(dynamic.stdout).selected.state.budgets).not.toHaveProperty('resolved');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports the declared notice retention policy and rejects a malformed one as AB4833', { timeout: 20_000 }, async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'src', 'state.ts'), [
+      'export default defineState({',
+      "  id: 'fixture/retained-state',",
+      "  lifetime: 'workspace-durable',",
+      '});',
+      '',
+    ].join('\n'));
+    // A declared `notices.retention` resolves over the defaults and is reported as declared.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { maxTerminal: 12, terminalTtl: '2d' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const retaining = await inspectCli(root, ['--state', '--json']);
+    expect(retaining).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(retaining.stdout).selected.state.noticeRetention).toEqual({
+      resolved: { maxJournalBytes: 16_777_216, maxTerminal: 12, terminalTtlMs: 172_800_000 },
+      source: 'declared',
+    });
+
+    // A malformed policy is an AB4833 source error, never a silently defaulted one.
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  notices: { retention: { terminalTtl: 'soon' } },",
+      "  plugin: { name: 'state-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '};',
+      '',
+    ].join('\n'));
+    const malformed = await inspectCli(root, ['--state', '--json']);
+    expect(malformed.code).not.toBe(0);
+    expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4833');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

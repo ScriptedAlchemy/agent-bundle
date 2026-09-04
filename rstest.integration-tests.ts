@@ -14,9 +14,12 @@
 export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/agent-api.test.ts',
   'packages/agent-bundle/tests/api.test.ts',
+  'packages/agent-bundle/tests/artifact-cli-bin.test.ts',
   'packages/agent-bundle/tests/artifact-validator.test.ts',
   'packages/agent-bundle/tests/browser-stdio-bridge-spike.test.ts',
+  'packages/agent-bundle/tests/build-reproducibility.test.ts',
   'packages/agent-bundle/tests/build.test.ts',
+  'packages/agent-bundle/tests/claude-plugin-validate-acceptance.test.ts',
   'packages/agent-bundle/tests/cli-routes-build.test.ts',
   'packages/agent-bundle/tests/cli.test.ts',
   'packages/agent-bundle/tests/dev-contract-adoption.test.ts',
@@ -25,6 +28,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-live-host.test.ts',
   'packages/agent-bundle/tests/dev-package-build.test.ts',
   'packages/agent-bundle/tests/dev-workbench.test.ts',
+  'packages/agent-bundle/tests/emitted-artifact-effect-surface.test.ts',
   'packages/agent-bundle/tests/eval-claude-harness.test.ts',
   'packages/agent-bundle/tests/eval-cli.test.ts',
   'packages/agent-bundle/tests/eval-fixtures.test.ts',
@@ -44,6 +48,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-install-session.test.ts',
   'packages/agent-bundle/tests/installer-entry.test.ts',
   'packages/agent-bundle/tests/integration-matrix.test.ts',
+  'packages/agent-bundle/tests/layout-build.test.ts',
   'packages/agent-bundle/tests/lifecycle-replay-dev-server.test.ts',
   'packages/agent-bundle/tests/mcp-probe-dev-server.test.ts',
   'packages/agent-bundle/tests/mcp-session-service.test.ts',
@@ -54,10 +59,15 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/prepack.test.ts',
   'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
+  'packages/agent-bundle/tests/publint-gate.test.ts',
+  'packages/agent-bundle/tests/route-register-typegen.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
+  'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
+  'packages/agent-bundle/tests/serve-app.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
+  'packages/agent-bundle/tests/workbench-surface-dev-server.test.ts',
   'packages/agent-bundle/tests/worktree-proximity-journeys.test.ts',
   'packages/rsc-runtime/tests/markdown-content-flight.test.ts',
   'packages/rsc-runtime/tests/notices-sqlite-cross-process.test.ts',
@@ -130,11 +140,11 @@ export const mcpConformanceTestFiles: readonly string[] = [
 export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-workbench-packaging.test.ts',
   'packages/agent-bundle/tests/packed-consumer.test.ts',
+  'packages/agent-bundle/tests/packed-consumer-typescript.test.ts',
   'packages/agent-bundle/tests/packed-host-install-proof.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
-  'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
   'packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',
@@ -182,4 +192,15 @@ export const projectionTestFiles: readonly string[] = [
  */
 export const templateTestFiles: readonly string[] = [
   'packages/create-agent-bundle/templates/**',
+];
+
+/**
+ * Fixture projects that carry their own Rstest pools: their test files run
+ * inside the fixture through its own configuration (the spawning repository
+ * test drives them, e.g. rstest-meta-consumer.test.ts over
+ * `fixtures/meta-consumer`), never through the workspace pools, whose include
+ * glob would otherwise collect them without the preset that makes them load.
+ */
+export const fixtureProjectTestFiles: readonly string[] = [
+  'packages/agent-bundle/fixtures/**/tests/**',
 ];

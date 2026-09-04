@@ -168,6 +168,40 @@ it('opaquely detects default ~/.claude.json mutation without extending custom co
   }
 });
 
+it('guards Claude settings and plugins across a real turn while tolerating the .claude.json rewrite', async () => {
+  const harness = await loadPackedNativeSmoke() as undefined | {
+    readonly normalClaudeSettingsAndPluginsUnchanged?: (
+      environment: Readonly<NodeJS.ProcessEnv>,
+      operation: () => Promise<void>,
+      options?: Readonly<{ readonly homeDirectory: string }>,
+    ) => Promise<boolean>;
+  };
+  expect(harness?.normalClaudeSettingsAndPluginsUnchanged).toBeDefined();
+
+  const userHome = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-claude-turn-'));
+  try {
+    await mkdir(join(userHome, '.claude', 'plugins'), { recursive: true });
+    await Promise.all([
+      writeFile(join(userHome, '.claude.json'), '{"opaque":"before"}\n'),
+      writeFile(join(userHome, '.claude', 'settings.json'), '{"model":"subscription"}\n'),
+      writeFile(join(userHome, '.claude', 'plugins', 'installed.json'), '{"plugins":[]}\n'),
+    ]);
+    // Claude Code 2.1.257 rewrites its session bookkeeping on every signed-in
+    // turn (observed 2026-09-03); that alone must not fail the packed smoke.
+    await expect(harness!.normalClaudeSettingsAndPluginsUnchanged!({}, async () => {
+      await writeFile(join(userHome, '.claude.json'), '{"opaque":"after"}\n');
+    }, { homeDirectory: userHome })).resolves.toBe(true);
+    await expect(harness!.normalClaudeSettingsAndPluginsUnchanged!({}, async () => {
+      await writeFile(join(userHome, '.claude', 'settings.json'), '{"model":"changed"}\n');
+    }, { homeDirectory: userHome })).resolves.toBe(false);
+    await expect(harness!.normalClaudeSettingsAndPluginsUnchanged!({}, async () => {
+      await writeFile(join(userHome, '.claude', 'plugins', 'installed.json'), '{"plugins":["changed"]}\n');
+    }, { homeDirectory: userHome })).resolves.toBe(false);
+  } finally {
+    await rm(userHome, { force: true, recursive: true });
+  }
+});
+
 claudePluginIt('builds, strictly validates, and smoke-loads a packed Claude artifact', async () => {
   const harness = await loadPackedNativeSmoke();
   expect(harness).toBeDefined();

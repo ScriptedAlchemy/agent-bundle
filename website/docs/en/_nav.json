@@ -1,0 +1,27 @@
+[
+  {
+    "text": "Guide",
+    "link": "/guide/start/",
+    "activeMatch": "/guide/"
+  },
+  {
+    "text": "Reference",
+    "link": "/reference/",
+    "activeMatch": "/reference/"
+  },
+  {
+    "text": "Examples",
+    "link": "/examples/",
+    "activeMatch": "/examples/"
+  },
+  {
+    "text": "Contributing",
+    "link": "/contributing/",
+    "activeMatch": "/contributing/"
+  },
+  {
+    "text": "Type API",
+    "link": "/api/",
+    "activeMatch": "/api/"
+  }
+]

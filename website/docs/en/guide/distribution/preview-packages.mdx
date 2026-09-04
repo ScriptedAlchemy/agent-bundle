@@ -1,0 +1,74 @@
+---
+description: 'The pkg.pr.new preview channel that stands in for npm: how previews are published, how to pin them, and what changes at the first npm release.'
+---
+
+# Preview packages
+
+Nothing is published to npm yet, deliberately. The current package names are placeholders, and
+npm publishing is deferred until the final name is chosen. Until then, **pkg.pr.new is the
+release channel**: every CI package-preview run publishes real, installable tarballs of all three
+publishable workspace packages to a free continuous-release registry keyed by commit SHA and pull
+request.
+
+The install commands and the runtime pairing rule are in
+[Installation](../start/installation.mdx). This page is the channel itself: where previews come
+from, how far you can trust them, and what pinning actually guarantees.
+
+## Where previews come from
+
+`.github/workflows/package-preview.yml` runs `pnpm preview:publish` after a full build, on every
+pull request and on every push to `main`. It publishes `packages/agent-bundle`,
+`packages/rsc-runtime`, and `packages/create-agent-bundle` with `--previewVersion --peerDeps
+--no-compact --no-template`.
+
+Runs for `main` pushes use a **per-commit** concurrency group, so overlapping pushes cannot
+cancel one another and every `main` commit has an installable snapshot. PR runs do cancel
+superseded builds for the same PR, because only the latest preview of a PR matters.
+
+The "Publish pkg.pr.new preview" check on a PR or commit links to the exact URLs for that build.
+Previews are built from the same `pnpm build` output the release gates verify — but they are not
+npm releases, and they carry preview version strings.
+
+## Pinning, and one historical caveat
+
+The pairing rule and the install commands live in
+[Installation](../start/installation.mdx); two details belong to the channel itself.
+
+A PR reference resolves to the **last preview published for that PR**, so `@1` means "PR #1's most
+recent build" rather than a fixed commit. Short SHAs never move, which is why a lockfile should
+carry one.
+
+Previews published before the peer rewrite landed (PR #46) still carry the original
+`agent-bundle@^0.1.0` peer range, so pair-installing those older SHAs with npm still requires
+`--legacy-peer-deps`. Anything newer installs with stock npm.
+
+The scaffolder ships on the same channel and is meant to be run rather than installed:
+
+```sh
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+```
+
+A scaffolded project pins `agent-bundle` to the preview of the same commit the scaffolder came
+from, so both sides of the pairing rule hold automatically.
+
+## What changes at the first npm release
+
+The first npm release will use
+[npm package provenance](https://docs.npmjs.com/generating-provenance-statements): the publish
+step exports `NPM_CONFIG_PROVENANCE=true` and runs the packed release gates before
+`changeset publish`. `publishConfig.provenance` is already set.
+
+Before that path is enabled, the release owner has to resolve two things: the final package name
+and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
+not currently overridden with `publishConfig.access`.
+
+`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release` (`attw` on the
+packed `agent-bundle` tarball with the `esm-only` profile), and `pnpm test:packed:release` — before
+publishing. publint is not a separate gate: every publishable package's `rslib build` runs it
+through `rsbuild-plugin-publint` and fails the build on a warning. That gate is release-only and
+does not replace the ordinary `pnpm check` delivery gate.
+
+## Next
+
+- [Installation](../start/installation.mdx) — the exact install and pairing commands.
+- [Artifact validation](./validation.mdx) — the `prepack` inventory gate these previews run through.

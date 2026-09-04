@@ -20,7 +20,10 @@ import {
   capabilityEvidence,
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
+  featureCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
+  cliBinCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -90,6 +93,21 @@ export interface CodexAuthorConfig {
   readonly url?: string;
 }
 
+/** Documented install and authentication policy for the emitted local marketplace entry. */
+export interface CodexMarketplacePolicyConfig {
+  readonly authentication?: 'ON_INSTALL' | 'ON_USE';
+  readonly installation?: 'AVAILABLE' | 'INSTALLED_BY_DEFAULT' | 'NOT_AVAILABLE';
+}
+
+/** Authored fields of the emitted `.agents/plugins/marketplace.json`; the source stays the local plugin root. */
+export interface CodexMarketplaceConfig {
+  /** Marketplace-entry category; defaults to the plugin's interface category. */
+  readonly category?: string;
+  /** Marketplace picker title; defaults to the plugin name. */
+  readonly displayName?: string;
+  readonly policy?: CodexMarketplacePolicyConfig;
+}
+
 /** Codex-only authored package metadata and install-surface config layered onto the generated manifest. */
 export interface CodexHostConfig extends AgentBundleHostConfig {
   /** Registered MCP connection mappings emitted to the root `.app.json` compatibility document. */
@@ -100,6 +118,7 @@ export interface CodexHostConfig extends AgentBundleHostConfig {
   readonly interface?: CodexInterfaceConfig;
   readonly keywords?: readonly string[];
   readonly license?: string;
+  readonly marketplace?: CodexMarketplaceConfig;
   readonly repository?: string;
 }
 
@@ -159,7 +178,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.7.0',
+  adapterRevision: '1.13.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -180,6 +199,9 @@ const tableCapability = (row: { readonly reason?: string; readonly state: string
 };
 
 const hookContractTable = capabilityTable.hooks.contract;
+const distributionTable = capabilityTable.distribution;
+const overviewSurfacesTable = capabilityTable.plugin.overviewSurfaces;
+const componentsTable = capabilityTable.plugin.components;
 const codexReleaseHookEvents: readonly string[] = capabilityTable.hooks.releaseEvents;
 const codexHookRules = Object.freeze({
   additionalContextEvents: hookContractTable.additionalContextLimit.additionalContextEvents as readonly string[],
@@ -241,7 +263,12 @@ const isAbsoluteUrl = (value: unknown): value is string => {
   }
 };
 
-const codexInterfaceFields = Object.freeze([
+/**
+ * Every `interface` field the adapter can emit — generated or authored through
+ * the `codex.interface` extension. The host-install proofs check installed
+ * manifests against this declared set so an undeclared emission cannot land.
+ */
+export const codexInterfaceFields = Object.freeze([
   'brandColor',
   'capabilities',
   'category',
@@ -808,6 +835,125 @@ const planCodexApps = (model: NormalizedPlugin): CodexAppsPlan => {
   };
 };
 
+const marketplaceTable = capabilityTable.marketplace;
+const marketplaceAuthenticationPolicies: readonly string[] = marketplaceTable.policy.authentication;
+const marketplaceInstallationPolicies: readonly string[] = marketplaceTable.policy.installation;
+const marketplaceNotInstallablePolicy: string = marketplaceTable.policy.notInstallable;
+const marketplaceConfigFields = Object.freeze(['category', 'displayName', 'policy']);
+const marketplacePolicyFields = Object.freeze(['authentication', 'installation']);
+
+interface CodexMarketplacePlan {
+  readonly category: string;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly displayName: string;
+  readonly policy: { readonly authentication: string; readonly installation: string };
+  readonly sourceInputs: readonly string[];
+}
+
+const planCodexMarketplace = (model: NormalizedPlugin, interfaceCategory: string): CodexMarketplacePlan => {
+  const defaults = {
+    category: interfaceCategory,
+    diagnostics: [] as readonly Diagnostic[],
+    displayName: model.metadata.name,
+    policy: { authentication: 'ON_INSTALL', installation: 'AVAILABLE' },
+    sourceInputs: [] as readonly string[],
+  };
+  const extension = model.extensions[codexName];
+  const declared = extension !== undefined && isPlainDataRecord(extension.value)
+    ? extension.value['marketplace']
+    : undefined;
+  if (declared === undefined || extension === undefined) return defaults;
+  const inputs = sourceInputs(extension.provenance.sourcePath);
+  if (!isPlainDataRecord(declared)) {
+    return {
+      ...defaults,
+      diagnostics: [errorDiagnostic(
+        'codex.marketplace.invalid',
+        'Codex marketplace must be a plain object containing only category, displayName, and policy.',
+      )],
+      sourceInputs: inputs,
+    };
+  }
+  const diagnostics: Diagnostic[] = [];
+  for (const key of Object.keys(declared)) {
+    if (!marketplaceConfigFields.includes(key)) {
+      diagnostics.push(errorDiagnostic(
+        'codex.marketplace.field.unknown',
+        `Codex marketplace field ${JSON.stringify(key)} is not documented; the emitted local marketplace supports category, displayName, and policy.`,
+      ));
+    }
+  }
+  let category = defaults.category;
+  let displayName = defaults.displayName;
+  for (const [field, code] of [['category', 'category'], ['displayName', 'display-name']] as const) {
+    const authored = declared[field];
+    if (authored === undefined) continue;
+    if (!isNonemptyString(authored)) {
+      diagnostics.push(errorDiagnostic(
+        `codex.marketplace.${code}.invalid`,
+        `Codex marketplace ${field} must be a nonempty string.`,
+      ));
+    } else if (field === 'category') {
+      category = authored;
+    } else {
+      displayName = authored;
+    }
+  }
+  const policy = { ...defaults.policy };
+  const declaredPolicy = declared['policy'];
+  if (declaredPolicy !== undefined) {
+    if (!isPlainDataRecord(declaredPolicy)) {
+      diagnostics.push(errorDiagnostic(
+        'codex.marketplace.policy.invalid',
+        'Codex marketplace policy must be a plain object containing installation and authentication.',
+      ));
+    } else {
+      for (const key of Object.keys(declaredPolicy)) {
+        if (!marketplacePolicyFields.includes(key)) {
+          diagnostics.push(errorDiagnostic(
+            'codex.marketplace.policy.field.unknown',
+            `Codex marketplace policy field ${JSON.stringify(key)} is not documented.`,
+          ));
+        }
+      }
+      const authentication = declaredPolicy['authentication'];
+      if (authentication !== undefined) {
+        if (typeof authentication !== 'string' || !marketplaceAuthenticationPolicies.includes(authentication)) {
+          diagnostics.push(errorDiagnostic(
+            'codex.marketplace.policy.authentication.invalid',
+            `Codex marketplace policy.authentication must be one of ${marketplaceAuthenticationPolicies.join(', ')}.`,
+          ));
+        } else {
+          policy.authentication = authentication;
+        }
+      }
+      const installation = declaredPolicy['installation'];
+      if (installation !== undefined) {
+        if (typeof installation !== 'string' || !marketplaceInstallationPolicies.includes(installation)) {
+          diagnostics.push(errorDiagnostic(
+            'codex.marketplace.policy.installation.invalid',
+            `Codex marketplace policy.installation must be one of ${marketplaceInstallationPolicies.join(', ')}.`,
+          ));
+        } else if (installation === marketplaceNotInstallablePolicy) {
+          // The emitted marketplace exists to install this artifact: INSTALL.md and
+          // installBundle() both run `codex plugin add`, which the host refuses for
+          // NOT_AVAILABLE entries, so a self-installing bundle cannot honestly carry it.
+          diagnostics.push(errorDiagnostic(
+            'codex.marketplace.policy.installation.not-installable',
+            `Codex marketplace policy.installation ${marketplaceNotInstallablePolicy} makes the emitted bundle refuse its own codex plugin add install path; use ${
+              marketplaceInstallationPolicies.filter((value) => value !== marketplaceNotInstallablePolicy).join(' or ')
+            }.`,
+          ));
+        } else {
+          policy.installation = installation;
+        }
+      }
+    }
+  }
+  if (diagnostics.length > 0) return { ...defaults, diagnostics, sourceInputs: inputs };
+  return { category, diagnostics, displayName, policy, sourceInputs: inputs };
+};
+
 const hasLeadingPluginRoot = (value: string): boolean =>
   value === pathTokens.pluginRoot || value.startsWith(`${pathTokens.pluginRoot}/`);
 
@@ -1051,18 +1197,26 @@ export const planCodexArtifacts = (
   const pluginValidator = pluginValidatorFor(mcpRelativePath);
   diagnostics.push(...schemaDiagnostics('plugin', pluginValidator(plugin), pluginValidator.errors));
 
+  const interfaceCategory = interfacePlan.value['category'];
+  const marketplacePlan = planCodexMarketplace(
+    model,
+    typeof interfaceCategory === 'string' ? interfaceCategory : generatedInterface.category,
+  );
+  diagnostics.push(...marketplacePlan.diagnostics);
   const marketplace = {
-    interface: { displayName: model.metadata.name },
+    interface: { displayName: marketplacePlan.displayName },
     name: `${model.metadata.name}-marketplace`,
     plugins: [{
-      category: 'Productivity',
+      category: marketplacePlan.category,
       name: model.metadata.name,
-      policy: { authentication: 'ON_INSTALL', installation: 'AVAILABLE' },
+      policy: marketplacePlan.policy,
       source: { path: './', source: 'local' },
     }],
   };
-  const marketplaceValid = validateMarketplace(marketplace);
-  diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
+  const marketplaceValid = marketplacePlan.diagnostics.length === 0 && validateMarketplace(marketplace);
+  if (marketplacePlan.diagnostics.length === 0) {
+    diagnostics.push(...schemaDiagnostics('marketplace', marketplaceValid, validateMarketplace.errors));
+  }
 
   const basePlan = standardPluginArtifactPlan({
     additionalPluginSourceInputs: sourceInputs(
@@ -1085,6 +1239,7 @@ export const planCodexArtifacts = (
     isSelected,
     marketplace,
     marketplaceRelativePath: codexArtifactPaths.marketplace,
+    marketplaceSourceInputs: sourceInputs(...marketplacePlan.sourceInputs, ...interfacePlan.sourceInputs),
     marketplaceValid,
     mcp,
     mcpRelativePath,
@@ -1108,6 +1263,12 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   artifactLayout: standardArtifactLayout,
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.hooks.eventRoutes, evidence),
+    // The routed CLI bin rides the same plugin-root directory the pinned
+    // contract already executes `mcp/` and `scripts/` files from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): one row per host feature a kind may use.
+    ...featureCapabilitiesFrom('hooks', capabilityTable.hooks.features, evidence),
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: unavailableCapability(
       'The pinned Codex plugin contract (0.147.0) defines no commands component.',
     ),
@@ -1158,6 +1319,27 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     ),
     install: supportedCapability(evidence),
     marketplace: supportedCapability(evidence),
+    allowManagedHooksOnly: tableCapability(distributionTable.allowManagedHooksOnly),
+    featureHooks: tableCapability(distributionTable.featureHooks),
+    featurePlugins: tableCapability(distributionTable.featurePlugins),
+    inlineHooksToml: tableCapability(distributionTable.inlineHooksToml),
+    installCacheLayout: tableCapability(distributionTable.installCacheLayout),
+    legacyClaudeMarketplaceCompatibility: tableCapability(distributionTable.legacyClaudeMarketplaceCompatibility),
+    managedRequirements: tableCapability(distributionTable.managedRequirements),
+    marketplaceCategory: tableCapability(distributionTable.marketplaceCategory),
+    marketplaceCliLifecycle: tableCapability(distributionTable.marketplaceCliLifecycle),
+    marketplaceInterface: tableCapability(distributionTable.marketplaceInterface),
+    marketplacePolicy: tableCapability(distributionTable.marketplacePolicy),
+    marketplaceSources: tableCapability(distributionTable.marketplaceSources),
+    personalMarketplaceDiscovery: tableCapability(distributionTable.personalMarketplaceDiscovery),
+    pluginCliLifecycle: tableCapability(distributionTable.pluginCliLifecycle),
+    pluginEnableState: tableCapability(distributionTable.pluginEnableState),
+    repoMarketplaceDiscovery: tableCapability(distributionTable.repoMarketplaceDiscovery),
+    restrictToAllowedSources: tableCapability(distributionTable.restrictToAllowedSources),
+    workspacePublishing: tableCapability(distributionTable.workspacePublishing),
+    browserExtensions: tableCapability(overviewSurfacesTable.browserExtensions),
+    mcpUi: tableCapability(overviewSurfacesTable.mcpUi),
+    scheduledTaskTemplates: tableCapability(overviewSurfacesTable.scheduledTaskTemplates),
     hooks: supportedCapability(evidence),
     hookAdditionalContextLimit: tableCapability(hookContractTable.additionalContextLimit),
     hookAsyncCommands: tableCapability(hookContractTable.asyncCommandHooks),
@@ -1174,10 +1356,11 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     hookTrustReview: tableCapability(hookContractTable.trustReview),
     // The pinned Codex plugin contract documents no LSP surface at all, so
     // this is an absent host capability rather than a degraded one: nothing
-    // of Claude's `.lsp.json` is copied to the Codex manifest.
-    lsp: unavailableCapability(
-      'The pinned Codex plugin contract publishes no LSP server surface; language-server configuration reaches Claude Code only.',
-    ),
+    // of Claude's `.lsp.json` is copied to the Codex manifest. The same
+    // closed manifest schema rules out the other canonical native kinds (#100).
+    lsp: tableCapability(componentsTable.lsp),
+    nativeDiagnostics: tableCapability(componentsTable.nativeDiagnostics),
+    nativeExtension: tableCapability(componentsTable.nativeExtension),
     mcp: capabilityStateFromSupport(
       capabilityTable.mcp.stdio && capabilityTable.mcp.streamableHttp,
       evidence,
@@ -1233,6 +1416,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: codexName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(codexName, capabilityTable.noticeDelivery),
   nativeHookSource: (config: Readonly<AgentBundleConfig>) => config.codex?.nativeHooks,
   plan: planCodexArtifacts,
 });

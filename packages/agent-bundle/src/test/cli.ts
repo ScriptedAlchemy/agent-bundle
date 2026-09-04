@@ -18,29 +18,43 @@
  * wire behavior.
  */
 import type * as AgentRuntime from '@agent-bundle/runtime';
+import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
-import { CliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
+import { cliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
+import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
+import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import { prepareCliRenderHost, type RenderRouteContext } from './render.ts';
+import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
+import { harnessTerminal } from './terminal.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
 export type { CliRenderedEvent };
 
-export interface InvokeCliOptions {
-  /** Request-scope overrides for the dispatched command, over the runtime's request contract. */
-  readonly context?: RenderRouteContext;
+export interface InvokeCliOptionsBase {
   readonly manifest?: AgentBundleTestManifest;
   readonly signal?: AbortSignal;
   /**
-   * Selects interactive rendered output explicitly. Generated binaries use
-   * `process.stdout.isTTY`; the in-process harness defaults to piped output.
+   * Selects interactive rendered output explicitly. Generated binaries probe
+   * `process.stdout`; the in-process harness defaults to piped output. The
+   * same knob shapes the `request.terminal` the command observes (#511): a
+   * synthetic 80×24 basic-color terminal on both streams, or two color-free
+   * pipes. Inject `context.terminal` to choose other values.
    */
   readonly tty?: boolean;
 }
+
+/**
+ * Dispatch options; `context` carries the request-scope overrides for the
+ * dispatched command over the runtime's request contract; omitting it (or its
+ * `providers`) mounts the project's conventional providers exactly as the
+ * generated executable does (see {@link RenderRouteContextInit}).
+ */
+export type InvokeCliOptions = InvokeCliOptionsBase & RenderRouteContextInit;
 
 export interface CliInvocation {
   /** The argv vector as dispatched, including the command path segments. */
@@ -54,7 +68,15 @@ export interface CliInvocation {
    */
   readonly exitCode: number;
   readonly provenance: CliDispatchProvenance;
-  readonly routeId?: string;
+  /**
+   * The compiled route the shell executed: a `cli:` route, or the `tool:`
+   * route behind a projected MCP command. Typed from the project's route
+   * registration once `.agent-bundle/routes.d.ts` is in the program (both
+   * kinds register), `string` without it; absent for help, `--version`, and
+   * usage failures. `argv` itself stays `readonly string[]` — it is the shell's
+   * input, not a route id.
+   */
+  readonly routeId?: RegisteredRouteId;
   /** Everything the shell wrote to its diagnostic stream. */
   readonly stderr: string;
   /** Everything the shell wrote to stdout, including rendered Markdown, TTY, JSON, or NDJSON output. */
@@ -94,6 +116,7 @@ const noCommands = (manifest: AgentBundleTestManifest): AgentTestError => new Ag
 
 interface Runtime {
   readonly available: typeof AgentRuntime.available;
+  readonly resolvePluginRoot: typeof AgentRuntime.resolvePluginRoot;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
   readonly unavailable: typeof AgentRuntime.unavailable;
 }
@@ -109,6 +132,7 @@ const loadRuntime = async (): Promise<Runtime> => {
   runtimePromise ??= import('@agent-bundle/runtime')
     .then((runtime) => ({
       available: runtime.available,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
       unavailable: runtime.unavailable,
     }))
@@ -150,7 +174,7 @@ const moduleFor = async (
  */
 export const invokeCli = async (
   argv: readonly string[],
-  options: InvokeCliOptions = {},
+  ...[options = {}]: HarnessOptionsArguments<InvokeCliOptions>
 ): Promise<CliInvocation> => {
   const manifest = options.manifest ?? testManifest();
   if (manifest.cliCommands.length === 0) throw noCommands(manifest);
@@ -158,6 +182,9 @@ export const invokeCli = async (
   const runtime = await loadRuntime();
   const context = options.context ?? {};
   const signal = options.signal ?? new AbortController().signal;
+  // One simulated executable per invocation: the generated CLI creates its
+  // process identity at module load, so every separate run starts at hit 1.
+  const processLifetime = createProviderProcessLifetime();
   const renderedCommands = manifest.cliCommands.filter((command) => command.rendered);
 
   let executed: CompiledCliCommand | undefined;
@@ -178,6 +205,7 @@ export const invokeCli = async (
       manifest,
       modules: renderedModules,
       onValidated: (validated) => { value = validated; },
+      processLifetime,
       provenance: {
         kind: 'cli',
         manifestDigest: manifest.digest,
@@ -220,9 +248,20 @@ export const invokeCli = async (
         try {
           parsed = module.inputSchema.parse(input);
         } catch (error) {
-          throw new CliInputError(error instanceof Error ? error.message : String(error));
+          throw cliInputError(command, input, error);
         }
         const root = process.cwd();
+        const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
+        // Same provider invocation the generated plain-command path builds (#366).
+        const providers = await mountProviders({
+          explicit: context.providers,
+          invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
+          manifest,
+          plugin,
+          processHit: claimProcessHit(processLifetime),
+          provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
+          signal: execution.signal,
+        });
         const result = await runtime.runAgentRequest({
           capabilities: {
             command: runtime.unavailable(),
@@ -231,8 +270,11 @@ export const invokeCli = async (
             projectRoot: runtime.available({ root }, 'derived'),
           },
           host: runtime.unavailable('unsupported-surface'),
+          plugin,
+          terminal: runtime.available(execution.terminal, 'native'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
+          providers,
           invocation: {
             kind: 'cli',
             operationId: command.routeId,
@@ -248,7 +290,6 @@ export const invokeCli = async (
         value = module.resultSchema.parse(result);
         return value;
       },
-      isTty: () => options.tty === true,
       name: manifest.plugin.name,
       ...(renderHost === undefined
         ? {}
@@ -259,6 +300,7 @@ export const invokeCli = async (
             },
           }),
       signal,
+      terminal: harnessTerminal('cli', options.tty === true),
       version: manifest.plugin.version,
       writeErr: (text) => { err += text; },
       writeOut: (text) => { out += text; },
@@ -269,7 +311,8 @@ export const invokeCli = async (
 
   return Object.freeze({
     argv: Object.freeze([...argv]),
-    ...(executed === undefined ? {} : { command: commandPath(executed), routeId: executed.routeId }),
+    // The compiled command graph's ids are the ones the registration lists.
+    ...(executed === undefined ? {} : { command: commandPath(executed), routeId: executed.routeId as RegisteredRouteId }),
     exitCode,
     provenance,
     stderr: err,
@@ -281,7 +324,7 @@ export const invokeCli = async (
 /** The parsed canonical JSON line a successful command wrote to stdout. */
 export const cliJson = (invocation: CliInvocation): unknown => {
   try {
-    return JSON.parse(invocation.stdout) as unknown;
+    return parseCanonicalJsonLine(invocation.stdout);
   } catch (error) {
     throw new AgentTestError('projection-failed', 'The dispatched command did not write one canonical JSON line to stdout.', {
       cause: error,
@@ -305,33 +348,7 @@ export const cliJson = (invocation: CliInvocation): unknown => {
 /** The ordered render events a successful `--ndjson` invocation wrote to stdout. */
 export const cliNdjson = (invocation: CliInvocation): readonly CliRenderedEvent[] => {
   try {
-    const lines = invocation.stdout.endsWith('\n')
-      ? invocation.stdout.slice(0, -1).split('\n')
-      : invocation.stdout.split('\n');
-    if (lines.length === 0 || lines.some((line) => line.trim() === '')) {
-      throw new SyntaxError('NDJSON output must contain one non-empty JSON object per line.');
-    }
-    return Object.freeze(lines.map((line) => {
-      const event = JSON.parse(line) as unknown;
-      if (typeof event !== 'object' || event === null || Array.isArray(event)) {
-        throw new SyntaxError('NDJSON output lines must be JSON objects.');
-      }
-      const record = event as Record<string, unknown>;
-      if (!Number.isInteger(record['sequence'])) {
-        throw new SyntaxError('NDJSON render events must carry an integer sequence.');
-      }
-      switch (record['type']) {
-        case 'shell':
-        case 'progress':
-        case 'replace':
-        case 'error':
-        case 'complete':
-          break;
-        default:
-          throw new SyntaxError('NDJSON output contains an unknown render-event type.');
-      }
-      return event as CliRenderedEvent;
-    }));
+    return parseRenderedEventLines(invocation.stdout);
   } catch (error) {
     throw new AgentTestError('projection-failed', 'The dispatched command did not write one JSON object per line to stdout.', {
       cause: error,

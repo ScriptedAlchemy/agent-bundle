@@ -1,22 +1,30 @@
-import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 
 import fastGlob from 'fast-glob';
 
+import { conventionalEntryAt } from '../config/conventional-entry.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
   compileMcpCliCommands,
   type McpCommandSelection,
 } from './cli-commands.ts';
-import { extractRouteConfig } from './config-extract.ts';
+import {
+  type AppReferenceTarget,
+  type ExtractedRouteConfig,
+  extractRouteConfig,
+  resolveRouteConfigAppReferences,
+} from './config-extract.ts';
 import {
   validateEventRouteModuleContract,
+  validateLayoutModuleContract,
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
 import { extractInputSchema } from './input-schema.ts';
+import { isLayoutRouteKind } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -24,11 +32,13 @@ import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './public.ts';
+import { validateRouteRenderConfig } from './render-budget.ts';
 import {
   emptyRouteConfig,
   type CompiledAgentRoute,
   type CompiledCliMode,
   type CompiledCliSurface,
+  type CompiledLayout,
   type CompiledProvider,
   type CompiledRouteGraph,
   type CompiledRouteKind,
@@ -46,6 +56,8 @@ type ProjectIgnoreRules = Awaited<ReturnType<typeof readProjectIgnoreRules>>;
  * flat collection.
  */
 const routeGlobs = [
+  'src/layout.{ts,tsx}',
+  'src/mcp/*/layout.{ts,tsx}',
   'src/mcp/*/{tools,resources,prompts,apps}/*.{ts,tsx}',
   'src/events/*/*.{ts,tsx}',
   'src/events/stop.{ts,tsx}',
@@ -68,25 +80,22 @@ const safeIdentitySegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
 const serverModeOverrides = new Set(['generated', 'custom', 'command', 'remote']);
 
-const conventionalEntryExtensions = ['.ts', '.tsx'] as const;
-
-/**
- * Local copy of the conventional-entry probe from config/normalize.ts.
- * Importing it would close the cycle discover.ts -> routes/graph.ts ->
- * normalize.ts -> discover.ts, so the probe is duplicated here with the
- * same .ts/.tsx rule.
- */
-const conventionalEntryAt = (root: string, ...segments: string[]): string | undefined => {
-  const stem = resolve(root, ...segments);
-  for (const extension of conventionalEntryExtensions) {
-    const candidate = `${stem}${extension}`;
-    try {
-      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-    } catch {
-      // A racing deletion means the convention does not apply.
+/** True when a `routes.servers.<name>` override keeps the server's own entry instead of compiling its routes. */
+const isNonGeneratedServerOverride = (override: CompiledServerMode | undefined): boolean => {
+  switch (override) {
+    case 'custom':
+    case 'command':
+    case 'remote':
+      return true;
+    case 'generated':
+    case 'conflict':
+    case undefined:
+      return false;
+    default: {
+      const unreachable: never = override;
+      throw new TypeError(`Unhandled server mode override ${String(unreachable)}.`);
     }
   }
-  return undefined;
 };
 
 const routeError = (code: string, message: string, recovery: string, sourcePath?: string): Diagnostic => ({
@@ -118,6 +127,17 @@ interface DiscoveredProviderModule {
   readonly surface: 'provider';
 }
 
+interface DiscoveredLayoutModule {
+  readonly id: string;
+  /** The path-derived name segments; each must satisfy the safe-identity rule. */
+  readonly identitySegments: readonly string[];
+  readonly relativePath: string;
+  readonly scope: CompiledLayout['scope'];
+  readonly serverName?: string;
+  readonly source: string;
+  readonly surface: 'layout';
+}
+
 interface DiscoveredRouteModule {
   readonly event?: CanonicalAgentEvent;
   readonly id: string;
@@ -130,15 +150,39 @@ interface DiscoveredRouteModule {
   readonly surface: 'route';
 }
 
-type DiscoveredModule = DiscoveredProviderModule | DiscoveredRouteModule;
+type DiscoveredModule = DiscoveredLayoutModule | DiscoveredProviderModule | DiscoveredRouteModule;
 
 const stemOf = (fileName: string): string => fileName.slice(0, -extname(fileName).length);
+
+const layoutStem = 'layout';
 
 /** Derives kind and identity from one glob-matched route path; the globs guarantee segment shape. */
 const classifyModule = (source: string, relativePath: string): DiscoveredModule => {
   const segments = relativePath.split('/');
   const collection = segments[1]!;
   const stem = stemOf(segments[segments.length - 1]!);
+  if (segments.length === 2 && stem === layoutStem) {
+    return {
+      id: 'layout:root',
+      identitySegments: [],
+      relativePath,
+      scope: 'root',
+      source,
+      surface: 'layout',
+    };
+  }
+  if (collection === 'mcp' && segments.length === 4 && stem === layoutStem) {
+    const serverName = segments[2]!;
+    return {
+      id: `layout:mcp:${serverName}`,
+      identitySegments: [serverName],
+      relativePath,
+      scope: 'server',
+      serverName,
+      source,
+      surface: 'layout',
+    };
+  }
   if (collection === 'mcp') {
     const serverName = segments[2]!;
     const kind = mcpRouteKinds[segments[3]!]!;
@@ -197,23 +241,43 @@ const claimedModuleEntry = (value: unknown): string | undefined => {
   return undefined;
 };
 
+interface ConfigClaimedSources {
+  /**
+   * Modules an explicit `scripts`, `hooks`, `lib`, or `mcp` declaration
+   * references. They belong to that declaration and never become
+   * conventional routes.
+   */
+  readonly artifact: ReadonlySet<string>;
+  /**
+   * Modules explicit `bin` entries compile. They leave route discovery too,
+   * except a direct `src/scripts/<name>` child: `dist/bin/<name>.js` and
+   * `<target>/scripts/<name>.mjs` are disjoint outputs and both envelopes
+   * run the same `main`, so one entry ships as both an npm bin and an
+   * artifact script instead of silently losing the script (#389).
+   */
+  readonly bin: ReadonlySet<string>;
+}
+
 /**
  * Absolute module paths explicit configuration already claims. Config always
  * wins — the rule the entry conventions established — so a module an explicit
- * `scripts`, `hooks`, `bin`, `lib`, or `mcp` declaration references belongs
- * to that declaration and never becomes a conventional route. Two shipped
- * examples declare `scripts` entries under `src/scripts/`; this rule keeps
- * their layouts route-free without a migration.
+ * `scripts`, `hooks`, `lib`, or `mcp` declaration references belongs to that
+ * declaration and never becomes a conventional route. Two shipped examples
+ * declare `scripts` entries under `src/scripts/`; this rule keeps their
+ * layouts route-free without a migration. `bin` claims are reported
+ * separately because a bin coexists with a conventional script.
  */
 const configClaimedSources = (
   projectRoot: string,
   config: Readonly<AgentBundleConfig>,
-): ReadonlySet<string> => {
-  const claimed = new Set<string>();
-  const claim = (value: unknown): void => {
+): ConfigClaimedSources => {
+  const artifact = new Set<string>();
+  const bin = new Set<string>();
+  const claimInto = (claimed: Set<string>, value: unknown): void => {
     const entry = claimedModuleEntry(value);
     if (entry !== undefined && entry.trim().length > 0) claimed.add(resolve(projectRoot, entry));
   };
+  const claim = (value: unknown): void => claimInto(artifact, value);
   const scripts = configValue(config, 'scripts');
   if (isRecord(scripts)) {
     for (const value of Object.values(scripts)) claim(value);
@@ -226,9 +290,9 @@ const configClaimedSources = (
       }
     }
   }
-  const bin = configValue(config, 'bin');
-  if (isRecord(bin)) {
-    for (const value of Object.values(bin)) claim(value);
+  const bins = configValue(config, 'bin');
+  if (isRecord(bins)) {
+    for (const value of Object.values(bins)) claimInto(bin, value);
   }
   claim(configValue(config, 'lib'));
   const mcp = configValue(config, 'mcp');
@@ -243,7 +307,22 @@ const configClaimedSources = (
       claim(app.template);
     }
   }
-  return claimed;
+  return { artifact, bin };
+};
+
+/**
+ * True for a direct child of the conventional scripts root whose stem is a
+ * safe route identity — the only shape the flat scripts artifact can ship. A
+ * nested or unsafely named module a `bin` entry names stays claimed: keeping
+ * it discovered would only turn a valid bin-only configuration into an
+ * AB4808 or AB4803 error.
+ */
+const isConventionalScriptPath = (relativePath: string): boolean => {
+  const segments = relativePath.split('/');
+  return segments.length === 3
+    && segments[0] === 'src'
+    && segments[1] === 'scripts'
+    && safeIdentitySegment.test(stemOf(segments[2]!));
 };
 
 interface RouteModeOverrides {
@@ -348,6 +427,38 @@ const declaredMcpServer = (
   return isRecord(server) ? server : undefined;
 };
 
+interface ServerModeDecision {
+  /** The conventional `src/mcp/<name>.{ts,tsx}` entry module, when one exists. */
+  readonly conventionalEntry?: string;
+  readonly mode: CompiledServerMode;
+}
+
+/**
+ * Decides how one MCP server that owns route modules is packaged: an
+ * explicit `routes.servers.<name>` override wins; otherwise the routes
+ * generate the server unless an existing entry claim (conventional entry
+ * module, or declared `entry`/`command`/`url`) makes the choice a
+ * `conflict` the caller reports as AB4800. Shared between App-reference
+ * resolution and server assembly so both see the same mode.
+ */
+const decideServerMode = (
+  projectRoot: string,
+  config: Readonly<AgentBundleConfig>,
+  overrides: RouteModeOverrides,
+  name: string,
+): ServerModeDecision => {
+  const override = overrides.servers.get(name);
+  const declared = declaredMcpServer(config, name);
+  const declaredEntry = declared !== undefined &&
+    (declared.entry !== undefined || declared.command !== undefined || declared.url !== undefined);
+  const conventionalEntry = conventionalEntryAt(projectRoot, 'src', 'mcp', name);
+  const withEntry = (mode: CompiledServerMode): ServerModeDecision =>
+    conventionalEntry === undefined ? { mode } : { conventionalEntry, mode };
+  if (override === 'custom' || override === 'command' || override === 'remote') return withEntry(override);
+  if (override === 'generated' || (conventionalEntry === undefined && !declaredEntry)) return withEntry('generated');
+  return withEntry('conflict');
+};
+
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
@@ -377,31 +488,58 @@ const readRouteModuleText = async (source: string): Promise<string | undefined> 
 
 /**
  * Statically extracts one route module's `config` export from already-read
- * source text. A module a racing deletion removed simply has no config;
- * extraction diagnostics (AB4805/AB4806) accumulate beside the discovery
- * diagnostics.
+ * source text. A module a racing deletion removed simply has no config.
+ * Extraction diagnostics (AB4805/AB4806) are reported once every module is
+ * extracted, beside the App-reference resolution (AB4826) that needs the
+ * whole discovered tree.
  */
 interface ExtractedModuleMetadata {
-  readonly config: Readonly<Record<string, unknown>>;
+  readonly extracted: ExtractedRouteConfig;
   readonly inputSchema?: RouteInputSchema;
 }
+
+const emptyExtractedRouteConfig: ExtractedRouteConfig = deepFreeze({
+  appReferences: [],
+  config: emptyRouteConfig,
+  diagnostics: [],
+});
 
 const extractedModuleMetadata = (
   module: DiscoveredRouteModule,
   moduleText: string | undefined,
-  diagnostics: Diagnostic[],
+  projectRoot: string,
 ): ExtractedModuleMetadata => {
   if (moduleText === undefined) {
-    return { config: emptyRouteConfig };
+    return { extracted: emptyExtractedRouteConfig };
   }
-  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source);
-  diagnostics.push(...extracted.diagnostics);
+  const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
   const inputSchema = extractInputSchema(moduleText, module.relativePath);
   return {
-    config: extracted.config,
+    extracted,
     ...(inputSchema === undefined ? {} : { inputSchema }),
   };
 };
+
+/**
+ * Every App route of a generated server whose `resourceUri` extracted to a
+ * non-empty literal string, so `appResourceUri()` references elsewhere in
+ * the tree resolve to it. Apps of servers packaged as `custom`, `command`,
+ * `remote`, or left in `conflict` are never built or registered, and Apps
+ * whose own config was rejected (or whose `resourceUri` is itself an App
+ * reference) have no literal URI: a reference to any of them is AB4826
+ * rather than a silently unavailable resource.
+ */
+const appReferenceTargets = (
+  pending: readonly { readonly metadata: ExtractedModuleMetadata; readonly module: DiscoveredRouteModule }[],
+  serverModes: ReadonlyMap<string, ServerModeDecision>,
+): readonly AppReferenceTarget[] => pending.flatMap(({ metadata, module }) => {
+  if (module.kind !== 'app' || serverModes.get(module.serverName!)?.mode !== 'generated') return [];
+  if (metadata.extracted.appReferences.some((reference) => reference.path[0] === 'resourceUri')) return [];
+  const resourceUri = metadata.extracted.config['resourceUri'];
+  return typeof resourceUri === 'string' && resourceUri.trim() !== ''
+    ? [{ id: module.id, resourceUri, source: module.source }]
+    : [];
+});
 
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
   config: route.config,
@@ -432,6 +570,7 @@ export const isEmptyRouteGraph = (graph: CompiledRouteGraph): boolean =>
   graph.cli === undefined &&
   graph.diagnostics.length === 0 &&
   graph.events.length === 0 &&
+  (graph.layouts?.length ?? 0) === 0 &&
   graph.providers.length === 0 &&
   graph.scripts.length === 0 &&
   graph.servers.length === 0;
@@ -465,10 +604,22 @@ export const compileRouteGraph = async (
   const modulesById = new Map<string, DiscoveredModule>();
   const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
   for (const source of sources) {
-    if (claimed.has(source)) continue;
+    if (claimed.artifact.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
+    if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
     const module = classifyModule(source, relativePath);
+    // The documented opt-out: a server pinned to custom, command, or remote
+    // keeps its own entry, so its layout never enters the graph — it is not
+    // duplicate-checked, validated, or retained, because no generated worker
+    // composes it.
+    if (
+      module.surface === 'layout' &&
+      module.scope === 'server' &&
+      isNonGeneratedServerOverride(overrides.servers.get(module.serverName!))
+    ) {
+      continue;
+    }
     if (
       module.surface === 'route' &&
       module.kind === 'event-route' &&
@@ -517,6 +668,15 @@ export const compileRouteGraph = async (
     }
     const existing = modulesById.get(module.id);
     if (existing !== undefined) {
+      if (module.surface === 'layout') {
+        diagnostics.push(routeError(
+          'AB4831',
+          `Layout ${JSON.stringify(module.id)} is declared by both ${existing.relativePath} and ${relativePath}.`,
+          'Keep exactly one layout module per scope (one of .ts or .tsx), then inspect again.',
+          source,
+        ));
+        continue;
+      }
       diagnostics.push(routeError(
         'AB4802',
         `Route id ${JSON.stringify(module.id)} is declared by both ${existing.relativePath} and ${relativePath}.`,
@@ -534,8 +694,31 @@ export const compileRouteGraph = async (
   const scripts: CompiledAgentRoute[] = [];
   const cliRoutes: CompiledAgentRoute[] = [];
   const providers: CompiledProvider[] = [];
+  const layouts: CompiledLayout[] = [];
   const moduleTextBySource = new Map<string, string>();
+  // Config extraction runs over the whole tree before any route compiles:
+  // an `appResourceUri()` reference resolves against every App route the
+  // tree declares, wherever the App module sorts relative to its referrer.
+  const pending: { readonly metadata: ExtractedModuleMetadata; readonly module: DiscoveredRouteModule }[] = [];
   for (const module of modules) {
+    if (module.surface === 'layout') {
+      layouts.push({
+        id: module.id,
+        provenance: { kind: 'conventional', relativePath: module.relativePath },
+        scope: module.scope,
+        ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
+        source: module.source,
+      });
+      const layoutText = await readRouteModuleText(module.source);
+      if (layoutText !== undefined) {
+        diagnostics.push(...validateLayoutModuleContract(
+          layoutText,
+          module.relativePath,
+          module.source,
+        ));
+      }
+      continue;
+    }
     if (module.surface === 'provider') {
       providers.push({
         id: module.id,
@@ -557,8 +740,35 @@ export const compileRouteGraph = async (
     if (moduleText !== undefined) {
       moduleTextBySource.set(module.source, moduleText);
     }
-    const metadata = extractedModuleMetadata(module, moduleText, diagnostics);
-    const route = compiledRoute(module, metadata.config, metadata.inputSchema);
+    pending.push({ metadata: extractedModuleMetadata(module, moduleText, projectRoot), module });
+  }
+  const serverModes = new Map<string, ServerModeDecision>();
+  for (const { module } of pending) {
+    if (module.serverName !== undefined && !serverModes.has(module.serverName)) {
+      serverModes.set(module.serverName, decideServerMode(projectRoot, config, overrides, module.serverName));
+    }
+  }
+  const appTargets = appReferenceTargets(pending, serverModes);
+  for (const { metadata, module } of pending) {
+    const moduleText = moduleTextBySource.get(module.source);
+    // Routes of a server that is not generated never ship their config: the
+    // mode diagnostic (AB4800) or explicit override is the actionable fact,
+    // so their App references are left as authored rather than reported.
+    const shipsConfig = module.serverName === undefined
+      || serverModes.get(module.serverName)?.mode === 'generated';
+    const resolved = shipsConfig
+      ? resolveRouteConfigAppReferences(
+        metadata.extracted,
+        {
+          relativePath: module.relativePath,
+          ...(module.serverName === undefined ? {} : { serverName: module.serverName }),
+          source: module.source,
+        },
+        appTargets,
+      )
+      : metadata.extracted;
+    diagnostics.push(...resolved.diagnostics);
+    const route = compiledRoute(module, resolved.config, metadata.inputSchema);
     if (route.kind === 'event-route' && moduleText !== undefined) {
       diagnostics.push(...validateEventRouteModuleContract(
         moduleText,
@@ -594,18 +804,9 @@ export const compileRouteGraph = async (
 
   const servers: CompiledServerSurface[] = [];
   for (const [name, routes] of [...serverRoutes.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    const override = overrides.servers.get(name);
-    const declared = declaredMcpServer(config, name);
-    const declaredEntry = declared !== undefined &&
-      (declared.entry !== undefined || declared.command !== undefined || declared.url !== undefined);
-    const conventionalEntry = conventionalEntryAt(projectRoot, 'src', 'mcp', name);
-    let mode: CompiledServerMode;
-    if (override === 'custom' || override === 'command' || override === 'remote') {
-      mode = override;
-    } else if (override === 'generated' || (conventionalEntry === undefined && !declaredEntry)) {
-      mode = 'generated';
-    } else {
-      mode = 'conflict';
+    // Every server with routes was decided before App references resolved.
+    const { conventionalEntry, mode } = serverModes.get(name)!;
+    if (mode === 'conflict') {
       const claim = conventionalEntry === undefined
         ? 'an explicit entry, command, or url in config'
         : `the conventional src/mcp/${name} entry module`;
@@ -617,6 +818,11 @@ export const compileRouteGraph = async (
       ));
     }
     if (mode === 'generated') {
+      // A generated server registers each App under its resourceUri, so two
+      // App routes of one server claiming the same URI would otherwise
+      // resolve first-wins (AB4829). The same URI on another server is a
+      // different registry and never collides here.
+      const appRoutesByResourceUri = new Map<string, CompiledAgentRoute>();
       for (const route of routes) {
         if (route.kind === 'app') {
           const resourceUri = route.config['resourceUri'];
@@ -627,6 +833,51 @@ export const compileRouteGraph = async (
               'Export const config with the App resourceUri, then inspect again.',
               route.source,
             ));
+          } else {
+            const claimed = appRoutesByResourceUri.get(resourceUri);
+            if (claimed === undefined) {
+              appRoutesByResourceUri.set(resourceUri, route);
+            } else {
+              diagnostics.push(routeError(
+                'AB4829',
+                `MCP App routes ${claimed.provenance.relativePath} and ${route.provenance.relativePath} of MCP server ${JSON.stringify(name)} both declare config.resourceUri ${JSON.stringify(resourceUri)}; a generated server registers one App per resource URI and never chooses silently.`,
+                'Give each App route of the server a distinct config.resourceUri, or remove the duplicate route module, then inspect again.',
+                route.source,
+              ));
+            }
+          }
+          const template = route.config['template'];
+          if (typeof template === 'string') {
+            const resolution = resolveAppRouteTemplate(projectRoot, route.source, template);
+            switch (resolution.kind) {
+              case 'resolved':
+                break;
+              case 'ambiguous':
+                diagnostics.push(routeError(
+                  'AB4827',
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, which names two different existing files: ${resolution.routeRelative} (route-relative) and ${resolution.projectRelative} (project-root-relative).`,
+                  'Templates resolve relative to the route module; rewrite the path so it names the route-relative file only (or remove the project-root-relative duplicate), then inspect again.',
+                  route.source,
+                ));
+                break;
+              case 'missing': {
+                // An absolute template has one candidate; name it once.
+                const candidates = resolution.routeRelative === resolution.projectRelative
+                  ? `${resolution.routeRelative} does not exist`
+                  : `neither ${resolution.routeRelative} (route-relative) nor ${resolution.projectRelative} (project-root-relative) exists`;
+                diagnostics.push(routeError(
+                  'AB4827',
+                  `MCP App route ${route.provenance.relativePath} declares config.template ${JSON.stringify(template)}, but ${candidates}.`,
+                  'Templates resolve relative to the route module; point config.template at an existing HTML file beside the route (for example \'./dashboard.html\'), then inspect again.',
+                  route.source,
+                ));
+                break;
+              }
+              default: {
+                const unreachable: never = resolution;
+                throw new TypeError(`Unhandled template resolution ${String(unreachable)}.`);
+              }
+            }
           }
           continue;
         }
@@ -638,6 +889,9 @@ export const compileRouteGraph = async (
             route.source,
           ));
         }
+        // The route's render budget (#454) is read by the generated server
+        // from this compiled config, so it is validated here, once.
+        diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
       }
     }
     servers.push({
@@ -646,6 +900,21 @@ export const compileRouteGraph = async (
       name,
       routes: mode === 'custom' || mode === 'command' || mode === 'remote' ? [] : routes,
     });
+  }
+
+  for (const layout of layouts) {
+    if (layout.scope !== 'server') continue;
+    const server = servers.find((candidate) => candidate.id === layout.serverId);
+    // App routes are browser builds and never take a layout, so a server that
+    // declares only apps has nothing for its layout to wrap.
+    if (server === undefined || !server.routes.some((route) => isLayoutRouteKind(route.kind))) {
+      diagnostics.push(routeError(
+        'AB4832',
+        `Layout module ${layout.provenance.relativePath} names MCP server ${JSON.stringify(layout.serverId!.slice('mcp:'.length))}, which declares no tool, resource, or prompt route modules.`,
+        'Add tools, resources, or prompts under that server directory, move the layout to the server that owns the routes, prefix the file with _ to opt out, or set routes.servers.<server> to custom, command, or remote.',
+        layout.source,
+      ));
+    }
   }
 
   const projected = overrides.mcpCommands === undefined
@@ -708,6 +977,11 @@ export const compileRouteGraph = async (
           },
         }),
     events: events.map(routeIdentity),
+    // Layouts join the identity only when declared, so pre-layout projects
+    // keep their recorded graph digests.
+    ...(layouts.length === 0
+      ? {}
+      : { layouts: layouts.map((layout) => ({ id: layout.id, relativePath: layout.provenance.relativePath })) }),
     providers: providers.map((provider) => ({ id: provider.id, relativePath: provider.provenance.relativePath })),
     scripts: scripts.map(routeIdentity),
     servers: servers.map((server) => ({
@@ -722,6 +996,7 @@ export const compileRouteGraph = async (
     diagnostics,
     digest: digest(identity),
     events,
+    ...(layouts.length === 0 ? {} : { layouts }),
     providers,
     scripts,
     servers,

@@ -1,7 +1,7 @@
+import { Agent } from '@agent-bundle/runtime';
 import React from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
-import { CuratorDocument } from '../../../components/curator-document.js';
 import { AcousticTrail } from '../../../components/evidence-trail.js';
 import type { AcousticReceipt } from '../../../evidence.js';
 import { defaultEvidenceOperations, evidenceOperations } from '../../../operations/evidence.js';
@@ -22,8 +22,9 @@ export default async function Route({ input, signal }: ToolRouteProps<typeof inp
     ? `Audiolocate matched Audible ${receipt.asin} to the local recording.`
     : `Audiolocate did not match Audible ${receipt.asin}; review is required.`;
   return (
-    <CuratorDocument headline={headline} receipt={receipt}>
+    <Agent.Result value={receipt}>
+      <Agent.Text>{headline}</Agent.Text>
       <AcousticTrail receipt={receipt} />
-    </CuratorDocument>
+    </Agent.Result>
   );
 }

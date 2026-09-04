@@ -1,0 +1,113 @@
+{
+  "description": "Every documented handler type and field.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre.mjs",
+              "--fix"
+            ],
+            "timeout": 30,
+            "if": "Bash(git *)",
+            "statusMessage": "Checking git",
+            "once": true
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/pre.sh",
+            "shell": "bash",
+            "asyncRewake": true
+          },
+          {
+            "type": "http",
+            "url": "http://localhost:8080/hooks/pre",
+            "timeout": 30,
+            "headers": {
+              "Authorization": "Bearer $MY_TOKEN"
+            },
+            "allowedEnvVars": [
+              "MY_TOKEN"
+            ]
+          },
+          {
+            "type": "mcp_tool",
+            "server": "plugin:fixture:db",
+            "tool": "security_scan",
+            "input": {
+              "file_path": "${tool_input.file_path}"
+            },
+            "timeout": 20
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/run-tests.sh",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "pwsh-thing",
+            "shell": "powershell"
+          }
+        ],
+        "matcher": "Write|Edit"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate if Claude should stop: $ARGUMENTS",
+            "model": "haiku",
+            "timeout": 30,
+            "continueOnBlock": true
+          },
+          {
+            "type": "agent",
+            "prompt": "Verify that all unit tests pass. $ARGUMENTS",
+            "model": "sonnet",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hi"
+          }
+        ],
+        "matcher": "^fixture:reviewer$"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hi"
+          },
+          {
+            "type": "mcp_tool",
+            "server": "db",
+            "tool": "warm"
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ]
+  }
+}

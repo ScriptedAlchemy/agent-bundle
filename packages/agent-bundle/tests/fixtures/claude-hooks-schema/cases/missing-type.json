@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "echo hi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,8 +1,9 @@
 import { loadEnv } from '@rsbuild/core';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
+
+import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
@@ -10,7 +11,11 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { runPromise } from '../effect/boundary.ts';
+import { liftPromise } from '../effect/lift.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
+import { forwardingSignals } from './mcp-run-signals.ts';
 import {
   readTargetMcpServer,
   type ModernMcpStdioServer,
@@ -85,7 +90,7 @@ export const resolveMcpStdioLaunch = async (
   const manifestPath = joinArtifact(targetRoot, runtime.manifestPath);
   let document: unknown;
   try {
-    document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
+    document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(manifestPath)));
   } catch {
     throw new Error(`MCP manifest for target ${JSON.stringify(options.target)} is not valid JSON.`);
   }
@@ -140,7 +145,7 @@ export const resolveMcpStdioLaunch = async (
   });
 };
 
-export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
+export interface McpLaunchEnvironmentOptions extends ResolveMcpStdioLaunchOptions {
   /**
    * Explicit `.env` files replacing the conventional workspace-root set.
    * Files use Node's `--env-file` dialect and load in order, later files
@@ -152,6 +157,9 @@ export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
   readonly loadEnvFiles?: boolean;
   /** Configuration mode selecting `.env.<mode>` variants of the conventional set. */
   readonly mode?: string;
+}
+
+export interface RunMcpForegroundOptions extends McpLaunchEnvironmentOptions {
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: (
     command: string,
@@ -169,7 +177,7 @@ export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
  * still seeds `${VAR}` interpolation inside env-file values.
  */
 const loadLaunchFileEnv = async (
-  options: RunMcpForegroundOptions,
+  options: McpLaunchEnvironmentOptions,
   processEnv: Readonly<Record<string, string>>,
 ): Promise<Record<string, string>> => {
   if (options.loadEnvFiles === false) return {};
@@ -179,7 +187,7 @@ const loadLaunchFileEnv = async (
       const path = resolve(file);
       let contents: string;
       try {
-        contents = await readFile(path, 'utf8');
+        contents = await runWithPlatform(readFileString(path));
       } catch {
         throw new Error(`Cannot read env file ${JSON.stringify(path)}.`);
       }
@@ -195,49 +203,64 @@ const loadLaunchFileEnv = async (
 };
 
 /**
- * Resolves the server's generated entry from the built artifact and runs it
- * in the foreground with inherited stdio. SIGINT/SIGTERM forward to the
- * child; the child's exit code (or 128 + signal number) is returned.
- *
- * Launch environment precedence, lowest to highest: manifest env (declared
- * entries plus the injected plugin-root anchor, path tokens expanded), the
- * `.env` file layer, then the operator's real `process.env` — an exported
- * variable always beats every file- or manifest-declared value.
+ * The complete launch of one stdio server out of a built artifact: the
+ * resolved command plus the layered environment `mcp run` and `serve-app`
+ * share. Precedence, lowest to highest: manifest env (declared entries plus
+ * the injected plugin-root anchor, path tokens expanded), the `.env` file
+ * layer, then the operator's real `process.env` — an exported variable
+ * always beats every file- or manifest-declared value. The plugin-data root
+ * is created so the server's durable-state anchor exists before it starts.
  */
-export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
+export const resolveMcpLaunchEnvironment = async (
+  options: McpLaunchEnvironmentOptions,
+): Promise<ResolvedMcpStdioLaunch> => {
   const launch = await resolveMcpStdioLaunch(options);
-  await mkdir(resolve(options.pluginDataRoot), { recursive: true });
+  await runWithPlatform(Effect.flatMap(
+    FileSystem.FileSystem,
+    (fs) => fs.makeDirectory(resolve(options.pluginDataRoot), { recursive: true }),
+  ));
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   const fileEnv = await loadLaunchFileEnv(options, inheritedEnv);
+  return Object.freeze({
+    args: launch.args,
+    command: launch.command,
+    cwd: launch.cwd,
+    env: Object.freeze({ ...launch.env, ...fileEnv, ...inheritedEnv }),
+  });
+};
+
+/** The child's exit code, or 128 + signal number for the two forwarded signals. */
+const childExitCode = (child: ChildProcess): Promise<number> => new Promise<number>((resolveExit, rejectExit) => {
+  child.once('error', rejectExit);
+  child.once('exit', (code, signal) => {
+    if (code !== null) {
+      resolveExit(code);
+      return;
+    }
+    resolveExit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1);
+  });
+});
+
+/**
+ * Resolves the server's generated entry from the built artifact and runs it
+ * in the foreground with inherited stdio. SIGINT/SIGTERM forward to the
+ * child (a scoped resource, `forwardingSignals`, released however the wait
+ * ends); the child's exit code (or 128 + signal number) is returned. The
+ * launch environment is {@link resolveMcpLaunchEnvironment}'s.
+ */
+export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
+  const launch = await resolveMcpLaunchEnvironment(options);
   const spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, [...args], spawnOptions));
   const child = spawnProcess(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: { ...launch.env, ...fileEnv, ...inheritedEnv },
+    env: { ...launch.env },
     stdio: 'inherit',
   });
 
-  const forward = (signal: NodeJS.Signals): void => {
-    child.kill(signal);
-  };
-  const onSigint = (): void => forward('SIGINT');
-  const onSigterm = (): void => forward('SIGTERM');
-  process.on('SIGINT', onSigint);
-  process.on('SIGTERM', onSigterm);
-  try {
-    return await new Promise<number>((resolveExit, rejectExit) => {
-      child.once('error', rejectExit);
-      child.once('exit', (code, signal) => {
-        if (code !== null) {
-          resolveExit(code);
-          return;
-        }
-        resolveExit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1);
-      });
-    });
-  } finally {
-    process.off('SIGINT', onSigint);
-    process.off('SIGTERM', onSigterm);
-  }
+  return runPromise(Effect.scoped(Effect.gen(function* () {
+    yield* forwardingSignals(child);
+    return yield* liftPromise(() => childExitCode(child));
+  })));
 };

@@ -7,7 +7,7 @@ import type {
   Tool,
   Transport,
 } from '@modelcontextprotocol/client';
-import { Effect, Semaphore } from 'effect';
+import { Effect, type Scope, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import type { Stream } from 'node:stream';
@@ -36,6 +36,7 @@ import {
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
 import { RecordingTransport } from './mcp-recording-transport.ts';
 import {
+  McpSessionError,
   McpSessionStaleEpochError,
   type McpClient,
   type McpRequestOptions as RequestOptions,
@@ -145,6 +146,11 @@ export class McpSession {
   readonly #workspaceRoot: string;
   readonly #frames: McpSessionFrame[] = [];
   readonly #events: McpSessionEvent[] = [];
+  /**
+   * In-flight tool calls by `requestId`. Each controller is owned by its
+   * request's scope (see {@link #admitRequest}); `cancel()` and `#cancelAll`
+   * abort it with their reason and the SDK decides how the call rejects.
+   */
   readonly #requests = new Map<string, AbortController>();
   #capture: StderrCapture | undefined;
   #client: McpClient | undefined;
@@ -313,6 +319,19 @@ export class McpSession {
     return this.#operation('callTool', () => runPromise(this.#callToolEffect(options)));
   }
 
+  /**
+   * One tool call as a scoped Effect. The request slot is the scoped
+   * resource: `acquireRelease` admits the `requestId` (failing closed on a
+   * duplicate) and owns its `AbortController`; release aborts the controller
+   * and frees the slot, so an interrupted fiber can no longer leak a live SDK
+   * request. `cancel()` and `#cancelAll` abort the same controller with their
+   * reason, and the host signal is composed in with `AbortSignal.any`, so the
+   * SDK still decides how an aborted request rejects — exactly as before.
+   *
+   * `scopedAbortSignal` (`Effect.abortSignal`) is the same
+   * `acquireRelease(new AbortController, abort)` shape, but it exposes only
+   * the signal and aborts without a reason; this contract needs both.
+   */
   #callToolEffect(options: McpSessionToolCallOptions): Effect.Effect<CallToolResult, unknown> {
     return this.#assertEpochCurrentEffect().pipe(Effect.andThen(Effect.suspend(() => {
       if (options.signal?.aborted) {
@@ -320,33 +339,48 @@ export class McpSession {
       }
       const requestId = options.requestId ?? randomUUID();
       if (requestId.trim().length === 0) {
-        return Effect.fail(new Error('MCP session requestId must be nonempty.'));
+        return Effect.fail(McpSessionError.invalidRequestId());
       }
-      if (this.#requests.has(requestId)) {
-        return Effect.fail(new Error(`MCP session request ${JSON.stringify(requestId)} is already active.`));
-      }
-      const controller = new AbortController();
-      const onAbort = () => controller.abort(options.signal?.reason);
-      options.signal?.addEventListener('abort', onAbort, { once: true });
-      this.#requests.set(requestId, controller);
-      return Effect.gen({ self: this }, function* (this: McpSession) {
+      const call = Effect.gen({ self: this }, function* (this: McpSession) {
+        const controller = yield* this.#admitRequest(requestId);
         const client = yield* liftTry(() => this.#clientFor());
-        const result = yield* liftPromise(() => client.callTool({ arguments: options.arguments, name: options.name }, {
-          signal: controller.signal,
+        const result = yield* liftPromise(() => client.callTool({
+          ...(options._meta === undefined ? {} : { _meta: options._meta }),
+          arguments: options.arguments,
+          name: options.name,
+        }, {
+          signal: options.signal === undefined ? controller.signal : AbortSignal.any([controller.signal, options.signal]),
           timeout: requestOptions(options, this.#timeoutMs).timeout,
         }));
         yield* liftTry(() => {
           this.#throwIfStderrExceeded();
         });
         return result;
-      }).pipe(
+      });
+      return Effect.scoped(call).pipe(
         Effect.catch((error) => this.#substituteStaleEpochFailure(error)),
-        Effect.ensuring(Effect.sync(() => {
-          options.signal?.removeEventListener('abort', onAbort);
-          this.#requests.delete(requestId);
-        })),
       );
     })));
+  }
+
+  /**
+   * Admits one in-flight request as a scoped resource. Acquire fails closed
+   * when the `requestId` is already active; release aborts the request's
+   * controller (a no-op once the SDK call settled) and frees the slot.
+   */
+  #admitRequest(requestId: string): Effect.Effect<AbortController, McpSessionError, Scope.Scope> {
+    return Effect.acquireRelease(
+      Effect.suspend(() => {
+        if (this.#requests.has(requestId)) return Effect.fail(McpSessionError.duplicateRequestId(requestId));
+        const controller = new AbortController();
+        this.#requests.set(requestId, controller);
+        return Effect.succeed(controller);
+      }),
+      (controller) => Effect.sync(() => {
+        this.#requests.delete(requestId);
+        controller.abort();
+      }),
+    );
   }
 
   /**
@@ -440,12 +474,12 @@ export class McpSession {
   }
 
   #assertOpen(): void {
-    if (this.#closed) throw new Error('MCP session is closed.');
+    if (this.#closed) throw McpSessionError.closed();
   }
 
-  #assertOpenEffect(): Effect.Effect<void, Error> {
+  #assertOpenEffect(): Effect.Effect<void, McpSessionError> {
     return Effect.suspend(() => this.#closed
-      ? Effect.fail(new Error('MCP session is closed.'))
+      ? Effect.fail(McpSessionError.closed())
       : Effect.void);
   }
 
@@ -491,9 +525,7 @@ export class McpSession {
 
   #clientFor(): McpClient {
     this.#assertOpen();
-    if (this.#connection === undefined) {
-      throw new Error('MCP session must initialize before protocol operations.');
-    }
+    if (this.#connection === undefined) throw McpSessionError.notInitialized();
     this.#throwIfStderrExceeded();
     return this.#client!;
   }

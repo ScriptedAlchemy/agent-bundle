@@ -16,17 +16,31 @@ import {
 import { createTargetMcpRuntime } from '../services/mcp-runtime.ts';
 import {
   capabilityEvidence,
+  capabilityFromTableRow,
   capabilityStateFromSupport,
+  cliBinCapability,
   eventRouteCapabilitiesFrom,
+  noticeDeliveryAdvertisementFrom,
+  supportedCapability,
+  featureCapabilitiesFrom,
   unavailableCapability,
 } from './capability-state.ts';
 import capabilityTable from './capabilities/portable-1.0.0.json' with { type: 'json' };
+import {
+  portableCommandIssues,
+  portableCwdIssues,
+  portableEnvKeyIssues,
+  portableHeaderIssues,
+  portableRemoteUrlIssues,
+  type PortableMcpRuleIssue,
+} from './portable-mcp-rules.ts';
 import schemaProvenance from './schemas/portable/PROVENANCE.json' with { type: 'json' };
 import mcpSchema from './schemas/portable/mcp.schema.json' with { type: 'json' };
 import pluginSchema from './schemas/portable/plugin.schema.json' with { type: 'json' };
 import {
   createAdapterValidator,
   payloadCopyEntries,
+  routedCliBinLayout,
   schemaDescriptorsFrom,
   sourceInputs,
   validateJsonSchemaDocument,
@@ -80,7 +94,7 @@ const schemaValidator = createAdapterValidator();
 const validatePlugin = schemaValidator.compile(pluginSchema);
 const validateMcp = schemaValidator.compile(mcpSchema);
 const metadata = Object.freeze({
-  adapterRevision: '1.6.0',
+  adapterRevision: '1.10.0',
   observedVersion: capabilityTable.observedSpecificationVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.version),
 });
@@ -141,6 +155,19 @@ const unsupportedTokenDiagnostic = (
 };
 
 const { errorDiagnostic, schemaDiagnostics } = createTargetDiagnostics(portableName, 'Portable');
+
+/**
+ * Agent Plugins 1.0.0 normative MCP rules the schema cannot express, applied
+ * to the values as they will be written so ordinary `build` and `validate`
+ * fail closed instead of deferring to `--host-validation`.
+ */
+const normativeRuleDiagnostics = (
+  server: NormalizedMcpServer,
+  issues: readonly PortableMcpRuleIssue[],
+): readonly Diagnostic[] => issues.map((issue) => errorDiagnostic(
+  `portable.mcp.${issue.field.split('/')[0] ?? issue.field}.standard`,
+  `Portable MCP server "${server.name}" ${issue.field} ${issue.message}.`,
+));
 
 const hasPortableTarget = (targets: readonly string[]): boolean =>
   targets.includes(portableName);
@@ -424,6 +451,15 @@ const planMcpServer = (
       return { diagnostics };
     }
 
+    diagnostics.push(
+      ...normativeRuleDiagnostics(server, portableCommandIssues(server.command)),
+      ...normativeRuleDiagnostics(server, portableCwdIssues(cwd)),
+      ...normativeRuleDiagnostics(server, portableEnvKeyIssues(declaredEnv)),
+    );
+    if (diagnostics.length > 0) {
+      return { diagnostics };
+    }
+
     return {
       diagnostics,
       value: {
@@ -455,6 +491,14 @@ const planMcpServer = (
   }
 
   if (diagnostics.length > 0 || server.url === undefined) {
+    return { diagnostics };
+  }
+
+  diagnostics.push(
+    ...normativeRuleDiagnostics(server, portableRemoteUrlIssues(server.url)),
+    ...normativeRuleDiagnostics(server, portableHeaderIssues(server.headers)),
+  );
+  if (diagnostics.length > 0) {
     return { diagnostics };
   }
 
@@ -570,6 +614,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   artifactValidation,
   artifactLayout: Object.freeze({
     assets: 'assets',
+    cliBin: routedCliBinLayout,
     mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     rootDocuments: Object.freeze(['INSTALL.md', 'install.mjs']),
@@ -578,12 +623,21 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   }),
   capabilities: Object.freeze({
     ...eventRouteCapabilitiesFrom(capabilityTable.eventRoutes, evidence),
+    // The routed CLI bin is not an Agent Plugins component; like `scripts/`
+    // it rides the plugin-root directory the standard's stdio MCP servers
+    // already execute from (#387).
+    [cliBinCapability]: supportedCapability(evidence),
+    // Component feature sets (#100): the portable Skill document carries only
+    // the Agent Skills fields and no interpolation placeholders.
+    ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),
     commands: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     ),
     extensionDirectories: unavailableCapability(capabilityTable.plugin.extensionDirectories.reason),
     hooks: unavailableCapability('Agent Plugins 1.0.0 does not define a hooks component.'),
     install: unavailableCapability(capabilityTable.install.reason),
+    // Canonical component kinds outside the Agent Plugins 1.0.0 component set (#100).
+    lsp: capabilityFromTableRow(capabilityTable.plugin.lsp, evidence),
     manifestExtensions: capabilityStateFromSupport(
       capabilityTable.plugin.extensions.state === 'supported',
       evidence,
@@ -601,6 +655,8 @@ export const portableAdapter: TargetAdapter = Object.freeze({
       'Agent Plugins 1.0.0 does not support both required modern MCP transports.',
     ),
     mcpLegacySse: unavailableCapability(capabilityTable.mcp.legacySse.reason),
+    nativeDiagnostics: capabilityFromTableRow(capabilityTable.plugin.nativeDiagnostics, evidence),
+    nativeExtension: capabilityFromTableRow(capabilityTable.plugin.nativeExtension, evidence),
     rules: unavailableCapability(
       'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
     ),
@@ -614,5 +670,6 @@ export const portableAdapter: TargetAdapter = Object.freeze({
   metadata,
   mcpRuntime,
   name: portableName,
+  noticeDelivery: noticeDeliveryAdvertisementFrom(portableName, capabilityTable.noticeDelivery),
   plan,
 });

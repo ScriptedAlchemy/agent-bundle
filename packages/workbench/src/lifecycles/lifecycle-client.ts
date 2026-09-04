@@ -105,10 +105,18 @@ const bindingSchema = z.strictObject({
   routeId: textSchema,
   target: textSchema,
 });
+// The canonical payload: each mapped field carries its value beside the host
+// key it was read from (#466). Field names are the framework's vocabulary and
+// are not re-enumerated here so a new family field never invalidates a replay.
+const payloadFieldSchema = z.strictObject({
+  nativeKey: textSchema,
+  value: z.json(),
+});
 const canonicalSchema = z.strictObject({
   event: canonicalEventSchema,
   idempotencyKey: textSchema,
   observedAt: textSchema,
+  payload: z.record(z.string(), payloadFieldSchema),
   provenance: z.strictObject({
     host: textSchema,
     hostContractRevision: textSchema,

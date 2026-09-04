@@ -9,6 +9,36 @@
     "source": "https://agent-plugins.org/",
     "state": "unavailable"
   },
+  "lifecycle": {
+    "uninstall": {
+      "evidence": [
+        "2026-09-03: the emitted install.mjs --uninstall removes the receipt-owned files and installer-created directories from ~/.cursor/plugins/local/<name>, leaving an isolated Cursor home byte-identical to its pre-install snapshot (tests/host-install-proof.test.ts); other Agent Plugins clients own their own install locations and are uninstalled through the client (#101)."
+      ],
+      "state": "degraded",
+      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; native clients other than Cursor manage their own copies."
+    },
+    "keepData": {
+      "evidence": [
+        "2026-09-03: `state/` under the Cursor local copy is kept by default and removed only under --purge-data --confirm-purge, exactly as for the Cursor target."
+      ],
+      "state": "supported"
+    },
+    "activationState": {
+      "evidence": [
+        "2026-09-03: placement and directory registration are observable for the Cursor local copy; Cursor exposes no read-only enabled or live-activation surface, and the Agent Plugins 1.0.0 standard defines no activation registry."
+      ],
+      "observable": [
+        "placed",
+        "registered"
+      ],
+      "reason": "The standard defines no activation state; Cursor exposes none read-only.",
+      "state": "degraded",
+      "unavailable": [
+        "enabled",
+        "active"
+      ]
+    }
+  },
   "eventRoutes": {
     "agent/idle": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native TeammateIdle equivalent (https://agent-plugins.org/).",
@@ -30,6 +60,14 @@
     },
     "file/change": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native FileChanged equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "model-switch/after": {
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and therefore no native PostModelSwitch equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "model-switch/before": {
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and therefore no native PreModelSwitch equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
     },
     "permission/denied": {
@@ -75,7 +113,9 @@
     "evidence": [
       "2026-09-02: Cursor 3.18.25 (stable, 280eca2911f1) discovers the emitted plugin, its skill, and its mcp.json from ~/.cursor/plugins/local and spawns the configured stdio server (docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md).",
       "2026-09-02: Cursor 3.18.25 does not expand ${PLUGIN_ROOT} in cwd or args and does not default an omitted cwd to the plugin root (spec 7.2.1/9.2 MUSTs), so spec-conformant stdio servers fail to launch there; its proprietary ${CURSOR_PLUGIN_ROOT} expands and connects.",
-      "2026-09-02: With a launchable configuration the Cursor IDE completed the stdio handshake (connect_success with stable heartbeat), so the launch pipeline itself consumes this format."
+      "2026-09-02: With a launchable configuration the Cursor IDE completed the stdio handshake (connect_success with stable heartbeat), so the launch pipeline itself consumes this format.",
+      "2026-09-03: Re-verified on the same Cursor 3.18.25 build (realCommit 280eca2911f1…af3; no newer stable release): the cwd, args, and default-cwd gaps reproduce, and single-variable probes additionally show ${PLUGIN_ROOT}/${PLUGIN_DATA} unexpanded in env values (spec 9.2), the reserved PLUGIN_ROOT/PLUGIN_DATA subprocess variables absent (spec 9.1), and plugin-relative ./ commands resolved against the workspace folder (spec 7.2.1); recorded with log excerpts and captures in docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md; not submitted to Cursor by maintainer decision.",
+      "2026-09-03: framework-side support for the Cursor gap (#426): the emitted install.mjs detects an Agent Plugins pack (root plugin.json with an agent-plugins.org $schema, no .cursor-plugin/plugin.json) and rewrites mcp.json in the ~/.cursor/plugins/local/<name> copy only — ${PLUGIN_ROOT} → the absolute plugin root, ${PLUGIN_DATA} → ~/.cursor/agent-bundle/plugin-data/<name> (created by the installer), an omitted cwd → the plugin root, ./ commands → absolute paths under it, and PLUGIN_ROOT/PLUGIN_DATA added to every stdio server's env — because Cursor's spawn honours absolute command, args, cwd and env verbatim (the control run that connected). The bundle stays spec-conformant; the pre-expansion mcp.json is kept in the install receipt (cursorExpansion) and Doctor validates it against the Agent Plugins contract while AB7326 proves the expanded paths (expanded / unexpanded / drifted). Provenance: derived — Cursor still expands nothing itself, so the pathTokens rows above describe the bundle, not what Cursor resolves."
     ],
     "legacySse": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 §7.2.1 defines the deprecated HTTP+SSE variant as OPTIONAL for clients; the compiler emits only the required modern transports and rejects a legacy transport with AB4339 (https://agent-plugins.org/specification).",
@@ -112,9 +152,13 @@
       "state": "unavailable"
     },
     "mcp-inbox": {
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): inbox identity is derived from the MCP transport only (authInfo clientId / transport sessionId), which this pinned host does not authenticate to the plugin, and a bare stdio inbox is honestly empty; secret content is withheld and internal content is secret-passed before the resource is served.",
       "state": "supported"
     },
     "mcp-resource-updated": {
+      "sensitivity": "internal",
+      "sensitivityEvidence": "2026-09-03 (#99 close-out): notifications/resources/updated carries only the inbox URI (MCP 2025-11-25 server/resources, retrieved 2026-09-02) and is sent only for notices the inbox route may itself disclose, so it can never leak content above the inbox ceiling.",
       "state": "supported"
     },
     "next-event": {
@@ -122,8 +166,42 @@
       "state": "unavailable"
     }
   },
+  "lineage": {
+    "subagent-events": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks, so no subagent start/stop event exists; request.lineage reports no-subagent-events."
+    },
+    "root": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and the MCP request carries no conversation identity."
+    },
+    "parent": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks."
+    },
+    "depth": {
+      "state": "unavailable",
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks."
+    },
+    "mcp-correlation": {
+      "state": "unavailable",
+      "reason": "2026-09-03: no pre-tool hook exists to open a correlation window and tools/call _meta is host-defined."
+    }
+  },
   "observedSpecificationVersion": "1.0.0",
   "plugin": {
+    "cursorLocalInstall": {
+      "placeholderExpansion": {
+        "evidence": [
+          "2026-09-02/03: Cursor 3.18.25 (docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md) fails every spec-shaped stdio launch (cwd \"${PLUGIN_ROOT}\" → spawn node ENOENT; args \"${PLUGIN_ROOT}/…\" → MODULE_NOT_FOUND under $HOME; omitted cwd → $HOME; env values and the §9.1 variables unexpanded/absent; \"./…\" commands resolved against the workspace) while the same server with absolute paths connects (connect_success, stable heartbeat).",
+          "2026-09-03: the emitted install.mjs performs that expansion for the Cursor copy at install time and records it in the receipt; tests/install-surface.test.ts (bundle untouched, copy expanded, idempotent rerun, same-version re-expansion, older unexpanded copies repaired, skills-only and Cursor Plugin bundles untouched), tests/doctor.test.ts (AB7326 unexpanded → expanded → drifted → moved) and the portable host-install proof (isolated Cursor home, Doctor AB7326 info) pin it."
+        ],
+        "installer": "install.mjs (emitted with the portable bundle)",
+        "provenance": "derived",
+        "reason": "Cursor 3.18.25 expands no Agent Plugins placeholder, provides no PLUGIN_ROOT/PLUGIN_DATA, defaults an omitted cwd to the home directory and resolves ./ commands against the workspace (spec §7.2.1/§9); the emitted installer rewrites mcp.json in the ~/.cursor/plugins/local/<name> copy with absolute paths (PLUGIN_DATA = ~/.cursor/agent-bundle/plugin-data/<name>, created), keeps the shipped document in the receipt, and Doctor proves the expanded paths (AB7326). Never claimed as Cursor behaviour: the bundle itself still relies on the consuming client.",
+        "state": "supported"
+      }
+    },
     "extensionDirectories": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 §8.2 reserves top-level reverse-domain directories for client-owned files; the compiler emits no client extension directory because no pinned client publishes a file-based namespace contract for this format (https://agent-plugins.org/specification).",
       "state": "unavailable"
@@ -134,6 +212,13 @@
         "2026-09-02: Agent Plugins 1.0.0 §5.6/§8.1 — `extensions` maps reverse-domain client namespaces to opaque objects; clients ignore unimplemented namespaces without validating their contents (https://agent-plugins.org/specification)."
       ],
       "state": "supported"
+    },
+    "lsp": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only (https://agent-plugins.org/specification); the pinned schemas/portable/plugin.schema.json is closed to $schema, name, version, description, author, homepage, repository, license, keywords, and extensions, so no manifest field or conventional directory carries a language-server configuration."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no LSP server surface.",
+      "state": "unavailable"
     },
     "manifest": "plugin.json",
     "manifestMetadata": {
@@ -150,7 +235,42 @@
       ],
       "state": "supported"
     },
+    "nativeDiagnostics": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only (https://agent-plugins.org/specification); no section documents a diagnostics-provider component, and §8.2 client-owned reverse-domain directories are opaque to the format, so the compiler cannot claim any client consumes plugin-shipped diagnostics."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no native diagnostics surface.",
+      "state": "unavailable"
+    },
+    "nativeExtension": {
+      "evidence": [
+        "2026-09-03: Agent Plugins 1.0.0 §7 component types define skills and MCP servers only, and §8.2 reserves top-level reverse-domain directories for client-owned files without any pinned client publishing a native-extension contract for them (https://agent-plugins.org/specification); the manifest `extensions` field (§5.6) is opaque metadata, not an installable editor extension."
+      ],
+      "reason": "The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no native extension surface, and its reverse-domain `extensions` metadata is not one.",
+      "state": "unavailable"
+    },
+    "skillFeatures": {
+      "hostFrontmatter": {
+        "evidence": [
+          "2026-09-03: the portable lowering emits only the Agent Skills fields (name, description, license, compatibility, metadata, allowed-tools) validated against the pinned Agent Skills schema (schemas/agent-skills); typed Claude, Cursor, and Codex extensions are peeled per host and never reach the portable SKILL.md (#108)."
+        ],
+        "reason": "The Agent Skills specification pinned for the portable target defines only the portable frontmatter fields; host-specific extensions are not emitted in the portable SKILL.md.",
+        "state": "unavailable"
+      },
+      "markdownTokens": {
+        "evidence": [
+          "2026-09-03: skills/tokens.ts classifies every canonical token as `none` for portable Skill Markdown because https://agentskills.io/specification (69ef37e9424c0a7ea9dd2293b559e43ec8176379) documents no interpolation placeholders inside SKILL.md; lowering fails closed with AB3008."
+        ],
+        "reason": "The Agent Skills specification pinned for the portable target documents no Skill Markdown interpolation placeholders; a skill body token has no portable equivalent and fails closed (AB3008).",
+        "state": "unavailable"
+      }
+    },
     "skills": true
+  },
+  "tokens": {
+    "pluginData": "${PLUGIN_DATA}",
+    "pluginRoot": "${PLUGIN_ROOT}",
+    "workspaceRoot": false
   },
   "specificationSections": {
     "clientExtensions": "8",

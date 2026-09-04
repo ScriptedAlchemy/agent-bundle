@@ -2,10 +2,13 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
+import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
-import type { NormalizedHook, NormalizedStateDefinition } from '../core/types.ts';
+import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
+import { orderedProviders } from '../routes/provider-execution.ts';
+import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
+import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 
 /**
  * Generated-entry templates: the framework-provided entry files consumers
@@ -50,6 +53,18 @@ export const mcpEntryRuntimePath = (): string => runtimeModulePath('mcp-entry');
 export const mcpServerRuntimePath = (): string => runtimeModulePath('mcp-server-runtime');
 
 /**
+ * The terminal-capability probe (#511) aliased into `main`-envelope
+ * executables: plain Node, dependency-free, so a plain script or bin learns
+ * its TTY-ness, color, and size without loading the routed-CLI shell.
+ */
+export const terminalCapabilityRuntimeSpecifier = 'agent-bundle/terminal-capability';
+
+export const terminalCapabilityRuntimePath = (): string => runtimeModulePath('terminal-capability');
+
+/** The surface a `main`-envelope executable reports as its `terminal.hostSurface`. */
+export type GeneratedExecutableSurface = 'cli' | 'script';
+
+/**
  * The generated stdio MCP entry body for a factory-exporting server module:
  * the lifecycle installs the console guard before the consumer module
  * evaluates, so `loadEntry` stays a deferred dynamic import.
@@ -70,21 +85,24 @@ export const generatedStdioMcpEntrySource = (options: {
 /**
  * The generated process envelope for a `main`- or default-exporting
  * executable entry (npm bin outputs and artifact Scripts): await the entry
- * point with argv, adopt a numeric return as the exit code, and let an
- * escaped rejection surface through Node's top-level failure path (stack to
- * stderr, exit code 1).
+ * point with argv and the process's terminal capability (#511), adopt a
+ * numeric return as the exit code, and let an escaped rejection surface
+ * through Node's top-level failure path (stack to stderr, exit code 1).
  */
 export const generatedExecutableEntrySource = (options: {
   readonly entrySource: string;
   readonly exportName: 'default' | 'main';
+  /** `cli` for a package bin, `script` for an artifact script; defaults to `script`. */
+  readonly hostSurface?: GeneratedExecutableSurface;
 }): string => [
+  `import { detectProcessTerminal } from ${JSON.stringify(terminalCapabilityRuntimeSpecifier)};`,
   `import * as entry from ${JSON.stringify(options.entrySource)};`,
   '',
   `const main = entry[${JSON.stringify(options.exportName)}];`,
   "if (typeof main !== 'function') {",
   `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(options.entrySource)});`,
   '}',
-  'const code = await main(process.argv.slice(2));',
+  `const code = await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal(${JSON.stringify(options.hostSurface ?? 'script')}) }));`,
   "if (typeof code === 'number') process.exitCode = code;",
   '',
 ].join('\n');
@@ -127,54 +145,110 @@ export const generatedInstallBinEntrySource = (options: {
   '',
 ].join('\n');
 
+/**
+ * Where workspace-durable state anchors when the host supplies no
+ * `AGENT_BUNDLE_PLUGIN_ROOT`: `cwd` (the caller's `.agent-bundle/state`, the
+ * npm package bin's contract) or `artifact` (the parent of the executable's
+ * own directory — the target root — which the artifact-hosted routed CLI
+ * shares with the generated MCP worker beside it).
+ */
+export type GeneratedStateFallback = 'artifact' | 'cwd';
+
 export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
   /** Conventional request context providers, mounted for plain commands in this process (#313). */
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
+  /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
+  readonly stateFallback?: GeneratedStateFallback;
   /** The sibling react-server worker bundle; required when any command is rendered. */
   readonly workerFile?: string;
 }
 
-type GeneratedStateFallback = 'artifact' | 'cwd';
+/**
+ * The Node imports the plugin-root fallback expression needs: the artifact
+ * root is the parent of the module's own directory (`mcp/`, `bin/`, `hooks/`),
+ * the npm bin anchors on the caller's `.agent-bundle`. Emitted once per
+ * generated module, ahead of every other `node:path` / `node:url` import.
+ */
+const pluginRootImports = (fallback: GeneratedStateFallback): readonly string[] =>
+  fallback === 'artifact'
+    ? ["import { fileURLToPath } from 'node:url';"]
+    : ["import { join } from 'node:path';"];
+
+const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string =>
+  fallback === 'artifact'
+    ? "fileURLToPath(new URL('..', import.meta.url))"
+    : "join(process.cwd(), '.agent-bundle')";
+
+/**
+ * The one plugin-root resolution of a generated module (#468): the SQLite
+ * kernel, the notice ledger, the lineage journal, and every request scope the
+ * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
+ * directory they mount by construction.
+ */
+const pluginRootDeclaration = (fallback: GeneratedStateFallback): string =>
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback)} });`;
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
-  fallback: GeneratedStateFallback,
 ): readonly string[] => {
   if (state === undefined) return [];
   return [
     ...(state.lifetime === 'workspace-durable'
-      ? [
-        "import { join } from 'node:path';",
-        ...(fallback === 'artifact' ? ["import { fileURLToPath } from 'node:url';"] : []),
-        "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
-      ]
+      ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"]
       : ["import { createMemoryStateDriver } from '@agent-bundle/runtime/state';"]),
     "import { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';",
     `import stateDefinition from ${JSON.stringify(state.source)};`,
   ];
 };
 
+/**
+ * Notice ledger policy the generated runtime mounts (#99 acceptance item 7):
+ * the host's delivery advertisement, whose per-route sensitivity ceilings the
+ * ledger honours, and the project's resolved retention policy. Emitted as
+ * literals so the artifact carries the exact policy it was built with.
+ */
+export interface GeneratedNoticePolicy {
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
+}
+
+/** The policy literals, declared once per generated module and referenced by name. */
+const noticePolicyDeclarations = (policy: GeneratedNoticePolicy): readonly string[] => [
+  ...(policy.noticeDelivery === undefined
+    ? []
+    : [`const noticeDeliveryAdvertisement = Object.freeze(${stableJson(policy.noticeDelivery)});`]),
+  ...(policy.noticeRetention === undefined
+    ? []
+    : [`const noticeRetentionPolicy = Object.freeze(${stableJson(policy.noticeRetention)});`]),
+];
+
+const noticePolicyFields = (policy: GeneratedNoticePolicy): string => [
+  ...(policy.noticeDelivery === undefined ? [] : [', noticeDelivery: noticeDeliveryAdvertisement']),
+  ...(policy.noticeRetention === undefined ? [] : [', noticeRetention: noticeRetentionPolicy']),
+].join('');
+
+/** The state owner, mounted on the module's `pluginRoot` (declared by {@link pluginRootDeclaration}). */
 const generatedStateOwner = (
   state: NormalizedStateDefinition | undefined,
-  fallback: GeneratedStateFallback,
+  policy: GeneratedNoticePolicy,
 ): readonly string[] => {
   if (state === undefined) return [];
   if (state.lifetime !== 'workspace-durable') {
     return [
-      `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createMemoryStateDriver({ lifetime: ${JSON.stringify(state.lifetime)} }) });`,
+      ...noticePolicyDeclarations(policy),
+      `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createMemoryStateDriver({ lifetime: ${JSON.stringify(state.lifetime)} })${noticePolicyFields(policy)} });`,
       '',
     ];
   }
-  const fallbackExpression = fallback === 'artifact'
-    ? "fileURLToPath(new URL('..', import.meta.url))"
-    : "join(process.cwd(), '.agent-bundle')";
   return [
-    `const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? ${fallbackExpression};`,
-    "const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }) });",
+    ...noticePolicyDeclarations(policy),
+    `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: pluginRoot.stateRoot })${noticePolicyFields(policy)} });`,
     '',
   ];
 };
@@ -187,7 +261,9 @@ const generatedStateOwner = (
  * worker stdout guarded onto stderr (machine output owns stdout).
  */
 const renderedSessionSource = (workerFile: string): readonly string[] => [
-  'const openRenderedSession = ({ invocation, props, request, routeId, signal, validate }) => {',
+  // `limits` is the route's compiled render budget (#454), absent for the
+  // runtime default; it rides the dispatch so one dispatcher serves every budget.
+  'const openRenderedSession = ({ invocation, limits, props, request, routeId, signal, terminal, validate }) => {',
   `  const worker = new Worker(new URL(${JSON.stringify(`./${workerFile}`)}, import.meta.url), { stderr: true, stdout: true });`,
   "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
   "  worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -223,15 +299,17 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
   "      dispatch.signal.addEventListener('abort', entry.abort, { once: true });",
   '      if (dispatch.signal.aborted) { entry.abort(); return stream; }',
   // The invocation rides to the worker so conventional providers observe the
-  // real surface (`cli`, `script`, `tool`) instead of an undefined invocation.
-  "      worker.postMessage({ id, invocation, props, request, routeId, type: 'render' });",
+  // real surface (`cli`, `script`, `tool`) instead of an undefined invocation;
+  // the terminal capability rides with it because a worker thread's own
+  // streams are pipes to this process, never the terminal (#511).
+  "      worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' });",
   '      return stream;',
   '    },',
   '  });',
   '  const dispatcher = createAgentRenderDispatcher(host);',
   '  return Object.freeze({',
   '    close: async () => { await worker.terminate(); },',
-  '    events: () => dispatcher.stream({ invocation, signal }),',
+  '    events: () => dispatcher.stream({ invocation, ...(limits === undefined ? {} : { limits }), signal }),',
   '    validate,',
   '  });',
   '};',
@@ -256,17 +334,20 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   }
   const providers = orderedProviders(options.providers ?? []);
   const plainIndent = options.state === undefined ? '  ' : '    ';
+  const stateFallback = options.stateFallback ?? 'cwd';
   return [
-    `import { CliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
-      ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
-      : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+      ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
+      : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports(stateFallback),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
-    ...generatedStateImports(options.state, 'cwd'),
+    ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    ...generatedStateOwner(options.state, 'cwd'),
+    pluginRootDeclaration(stateFallback),
+    ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
     'const routes = Object.freeze({',
@@ -276,11 +357,13 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    'const parseInput = (route, input) => {',
+    // A schema failure becomes a CliInputError whose issues name the CLI
+    // argument, the expectation, and the received value (#465).
+    'const parseInput = (command, route, input) => {',
     '  try {',
     '    return route.module.inputSchema.parse(input);',
     '  } catch (error) {',
-    '    throw new CliInputError(error instanceof Error ? error.message : String(error));',
+    '    throw cliInputError(command, input, error);',
     '  }',
     '};',
     '',
@@ -290,15 +373,16 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
-    '  const parsed = parseInput(route, input);',
+    '  const parsed = parseInput(command, route, input);',
     '  const cwd = process.cwd();',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     ...(options.state === undefined
       ? []
       : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
     ...providerExecutionSource(providers, {
       indent: plainIndent,
       invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+      plugin: 'pluginRoot.identity',
       signal: 'context.signal',
     }),
     `${plainIndent}const result = await runAgentRequest({`,
@@ -310,10 +394,13 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '    },',
     "    host: unavailable('unsupported-surface'),",
     "    invocation: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+    "    lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '    plugin: pluginRoot.identity,',
     `    providers: ${providerValuesExpression(providers)},`,
     '    signal: context.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    "    terminal: available(context.terminal, 'native'),",
     "    workspace: available({ root: cwd }, 'derived'),",
     `  }, async () => route.module.default({ input: parsed, signal: context.signal }));`,
     `${options.state === undefined ? '  ' : '    '}return route.module.resultSchema.parse(result);`,
@@ -328,23 +415,27 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '',
         'const render = (command, input, context) => {',
         '  const route = routes[command.routeId];',
-        '  const parsed = parseInput(route, input);',
+        '  const parsed = parseInput(command, route, input);',
         '  if (command.mcp !== undefined) {',
         '    return openRenderedSession({',
         "      invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } },",
+        '      limits: command.render,',
         '      props: { input: parsed },',
         `      request: { artifactEpoch: ${JSON.stringify(generatedRouteArtifactEpoch(options.plugin))}, kind: 'tool', operationId: command.routeId, surface: command.mcp.tool },`,
         '      routeId: command.routeId,',
         '      signal: context.signal,',
+        '      terminal: context.terminal,',
         '      validate: (value) => route.module.resultSchema.parse(value),',
         '    });',
         '  }',
         '  return openRenderedSession({',
         "    invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
+        '    limits: command.render,',
         '    props: { input: parsed },',
         "    request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
         '    routeId: command.routeId,',
         '    signal: context.signal,',
+        '    terminal: context.terminal,',
         '    validate: (value) => route.module.resultSchema.parse(value),',
         '  });',
         '};',
@@ -368,10 +459,85 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
 };
 
 export interface GeneratedRenderedRouteWorkerOptions {
+  readonly layouts?: readonly CompiledLayout[];
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
+  /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
+  readonly stateFallback?: GeneratedStateFallback;
 }
+
+/**
+ * The layouts one worker imports: only those some route of this worker
+ * composes through, ordered by id. A server layout for a server this worker
+ * never renders is left out entirely, so its module-level initialization
+ * cannot run in — or break — an unrelated CLI, script, or server process.
+ */
+const workerLayouts = (
+  layouts: readonly CompiledLayout[],
+  routes: readonly Pick<CompiledAgentRoute, 'kind' | 'serverId'>[],
+): readonly CompiledLayout[] => {
+  const applicable = new Set(routes.flatMap((route) => layoutChainFor(route, layouts)));
+  return layouts.filter((layout) => applicable.has(layout)).sort((left, right) => left.id.localeCompare(right.id));
+};
+
+const layoutImports = (layouts: readonly CompiledLayout[]): readonly string[] =>
+  layouts.map((layout, index) => `import * as layout${String(index)} from ${JSON.stringify(layout.source)};`);
+
+const layoutRecords = (layouts: readonly CompiledLayout[]): readonly string[] =>
+  layouts.map((layout, index) =>
+    `  Object.freeze({ id: ${JSON.stringify(layout.id)}, module: layout${String(index)}, source: ${JSON.stringify(layout.provenance.relativePath)} }),`);
+
+/** The generated `layouts: [...]` record field: indices into the worker's layout table, outermost first. */
+const layoutChainField = (route: CompiledAgentRoute, layouts: readonly CompiledLayout[]): string => {
+  const chain = layoutChainFor(route, layouts).map((layout) => layouts.indexOf(layout));
+  return chain.length === 0 ? '' : `, layouts: Object.freeze(${JSON.stringify(chain)})`;
+};
+
+const layoutRouteFields = (route: CompiledAgentRoute): string => [
+  `id: ${JSON.stringify(route.id)}`,
+  `kind: ${JSON.stringify(route.kind)}`,
+  `name: ${JSON.stringify(layoutRouteName(route))}`,
+  ...(route.serverId === undefined ? [] : [`serverId: ${JSON.stringify(route.serverId)}`]),
+].join(', ');
+
+/**
+ * The generated layout composition. Without layouts the route component is
+ * the Flight root, so a layout-free project renders exactly the element it
+ * rendered before this convention existed (the emitted worker source itself
+ * changes with every release and is not a compatibility surface). With
+ * layouts, one root component awaits the route's element first and then
+ * wraps it in the chain from the
+ * innermost (server) layout outward — so a throwing route still rejects the
+ * root and fails the render exactly as it does without a layout, instead of
+ * degrading into a represented boundary error below the layout's shell. Every
+ * layout receives the route's stable identity and the request signal; a
+ * layout module without a function default export fails the request closed.
+ */
+const composeLayoutsSource = (layouts: readonly CompiledLayout[]): readonly string[] => layouts.length === 0
+  ? ['const composeLayouts = (route, props) => createElement(route.module.default, props);']
+  : [
+    'const layouts = Object.freeze([',
+    ...layoutRecords(layouts),
+    ']);',
+    'const composeLayouts = (route, props, signal) => {',
+    '  const chain = route.layouts ?? [];',
+    '  if (chain.length === 0) return createElement(route.module.default, props);',
+    '  return createElement(async () => {',
+    '    let composed = await route.module.default(props);',
+    '    for (const index of [...chain].reverse()) {',
+    '      const layout = layouts[index];',
+    "      if (typeof layout.module.default !== 'function') {",
+    '        throw new TypeError(`Layout "${layout.id}" (${layout.source}) must default-export a function component.`);',
+    '      }',
+    "      composed = createElement(layout.module.default, { children: composed, route: { id: route.id, kind: route.kind, name: route.name, ...(route.serverId === undefined ? {} : { serverId: route.serverId }) }, signal });",
+    '    }',
+    '    return composed;',
+    '  });',
+    '};',
+  ];
 
 /**
  * The react-server worker behind generated CLI executables and rendered
@@ -383,16 +549,21 @@ export const generatedRenderedRouteWorkerSource = (
   options: GeneratedRenderedRouteWorkerOptions,
 ): string => {
   const providers = orderedProviders(options.providers ?? []);
+  const stateFallback = options.stateFallback ?? 'cwd';
+  const layouts = workerLayouts(options.layouts ?? [], options.routes);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...generatedStateImports(options.state, 'cwd'),
+    "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports(stateFallback),
+    ...generatedStateImports(options.state),
     ...routeImports(options.routes),
     ...providerImports(providers),
+    ...layoutImports(layouts),
     '',
-    ...generatedStateOwner(options.state, 'cwd'),
+    pluginRootDeclaration(stateFallback),
+    ...generatedStateOwner(options.state, options),
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
     "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
@@ -400,9 +571,10 @@ export const generatedRenderedRouteWorkerSource = (
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
+    ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
     ...options.routes.map((route, index) =>
-      `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+      `  ${JSON.stringify(route.id)}: Object.freeze({ ${layoutRouteFields(route)}, module: route${String(index)}${layoutChainField(route, layouts)} }),`),
     '});',
     'const requests = new Map();',
     '',
@@ -411,14 +583,14 @@ export const generatedRenderedRouteWorkerSource = (
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     '    const cwd = process.cwd();',
     ...(options.state === undefined
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
     ...(options.state === undefined ? [] : ['    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', signal: 'controller.signal' }),
+    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'pluginRoot.identity', signal: 'controller.signal' }),
     '    await runAgentRequest({',
     '      capabilities: {',
     '        command: unavailable(),',
@@ -428,14 +600,19 @@ export const generatedRenderedRouteWorkerSource = (
     '      },',
     "      host: unavailable('unsupported-surface'),",
     '      invocation: message.request,',
+    "      lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
     `      providers: ${providerValuesExpression(providers)},`,
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    // The executable probed its terminal once and forwards the value; a worker
+    // thread cannot probe it (its streams are pipes to the parent).
+    "      terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),",
     "      workspace: available({ root: cwd }, 'derived'),",
     '    }, async () => {',
-    '      const flight = renderAgentFlight(createElement(route.module.default, { ...message.props, signal: controller.signal }), { signal: controller.signal });',
+    '      const flight = renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
     '      const reader = flight.getReader();',
     '      while (true) {',
     '        const next = await reader.read();',
@@ -466,6 +643,8 @@ export const generatedRenderedRouteWorkerSource = (
 export interface GeneratedRenderedScriptEntryOptions {
   readonly name: string;
   readonly routeId: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   readonly workerFile: string;
 }
@@ -493,6 +672,7 @@ export const generatedRenderedScriptEntrySource = (
   `    request: { kind: 'script', operationId: ${JSON.stringify(options.routeId)}, surface: ${JSON.stringify(options.name)} },`,
   `    routeId: ${JSON.stringify(options.routeId)},`,
   '    signal: context.signal,',
+  '    terminal: context.terminal,',
   '    validate: (value) => value,',
   '  }),',
   `  name: ${JSON.stringify(options.name)},`,
@@ -503,9 +683,18 @@ export const generatedRenderedScriptEntrySource = (
 export interface GeneratedRouteMcpEntryOptions {
   readonly artifactEpoch?: string;
   readonly eventRoutes?: readonly NormalizedHook[];
+  /**
+   * The target host's notice delivery advertisement (`TargetAdapter.noticeDelivery`).
+   * Cross-request routes are wired only where the host advertises them; an
+   * absent advertisement wires none, so a target the registry knows nothing
+   * about never receives a fabricated channel.
+   */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   readonly plugin: { readonly name: string; readonly version: string };
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
   readonly target?: string;
   readonly workerFile: string;
@@ -514,9 +703,14 @@ export interface GeneratedRouteMcpEntryOptions {
 export interface GeneratedRouteFlightWorkerOptions {
   readonly artifactEpoch: string;
   readonly eventRoutes?: readonly NormalizedHook[];
+  readonly layouts?: readonly CompiledLayout[];
+  /** The target host's advertisement; the worker mounts the inbox route only where it is advertised. */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
   readonly serverName: string;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
 }
 
@@ -534,19 +728,86 @@ const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly Co
 const routeImports = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
   routes.map((route, index) => `import * as route${String(index)} from ${JSON.stringify(route.source)};`);
 
-const routeRecords = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
-  routes.map((route, index) =>
-    `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))} }),`);
+/**
+ * The compiled route table. The entry-side table registers routes; the
+ * worker-side table (`worker` set) additionally carries each route's layout
+ * chain and owning server so layouts receive stable route identity.
+ */
+const routeRecords = (
+  routes: readonly CompiledAgentRoute[],
+  worker?: { readonly layouts: readonly CompiledLayout[] },
+): readonly string[] =>
+  routes.map((route, index) => {
+    const layoutFields = worker === undefined ? '' : layoutChainField(route, worker.layouts);
+    const serverField = worker === undefined || route.serverId === undefined ? '' : `, serverId: ${JSON.stringify(route.serverId)}`;
+    return `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}${layoutFields}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))}${serverField} }),`;
+  });
 
-const noticeInboxImport = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state === undefined
-    ? []
-    : [`import * as noticeInboxRoute from ${JSON.stringify(noticeInboxRuntimeSpecifier)};`];
+const noticeInboxImport = (wired: boolean): readonly string[] =>
+  wired
+    ? [`import * as noticeInboxRoute from ${JSON.stringify(noticeInboxRuntimeSpecifier)};`]
+    : [];
 
-const noticeInboxRecord = (state: NormalizedStateDefinition | undefined): readonly string[] =>
-  state === undefined
-    ? []
-    : ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),'];
+const noticeInboxRecord = (wired: boolean): readonly string[] =>
+  wired
+    ? ['  [noticeInboxRoute.AGENT_NOTICE_INBOX_ROUTE_ID]: noticeInboxRoute.noticeInboxRouteRecord(noticeInboxRoute),']
+    : [];
+
+interface NoticeRouteSelection {
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
+  readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
+  readonly state?: NormalizedStateDefinition;
+}
+
+/**
+ * Whether the generated artifact exposes the `mcp-inbox` route (#99 stage 3):
+ * the cross-request inbox resource needs a mounted notice ledger, so the
+ * project must declare state, and the target host must advertise the route
+ * in its pinned capability table. Each route is selected from its own
+ * advertised state; a host whose table marks it unavailable, or a target with
+ * no advertisement at all, exposes nothing it cannot honestly carry.
+ */
+const wiresInboxRoute = (options: NoticeRouteSelection): boolean =>
+  options.state !== undefined && options.noticeDelivery?.['mcp-inbox'].state === 'supported';
+
+/**
+ * Whether the generated entry wires the `mcp-resource-updated` delivery route
+ * (#99 stage 4). It signals about the inbox resource, so the inbox must be
+ * exposed; the host must advertise the route itself; and the project's state
+ * must be workspace-durable. SQLite is the one lifetime two threads can
+ * share, so only durable artifacts can give the server process its own handle
+ * on the notice store its Flight worker mounts; volatile lifetimes live in
+ * the worker's heap and honestly advertise no subscription capability.
+ */
+const wiresResourceUpdatedRoute = (options: NoticeRouteSelection): boolean =>
+  wiresInboxRoute(options) &&
+  options.state?.lifetime === 'workspace-durable' &&
+  options.noticeDelivery?.['mcp-resource-updated'].state === 'supported';
+
+/**
+ * The server process's own handle on the durable notice store. The anchor
+ * resolution matches the worker's so both open the same files.
+ */
+const noticeDeliveryImports = (wired: boolean): readonly string[] =>
+  wired
+    ? [
+      "import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';",
+      "import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';",
+    ]
+    : [];
+
+/** The server process's notice store, opened on the module's `pluginRoot` (#468). */
+const noticeDeliveryOwner = (wired: boolean, policy: GeneratedNoticePolicy): readonly string[] =>
+  wired
+    ? [
+      ...noticePolicyDeclarations(policy),
+      `const noticeDelivery = createNoticeInboxSignaller({ ${
+        policy.noticeDelivery === undefined ? '' : 'delivery: noticeDeliveryAdvertisement, '
+      }store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: pluginRoot.stateRoot }), lifetime: 'workspace-durable'${noticePolicyFields(policy)} }) });`,
+      '',
+    ]
+    : [];
 
 const eventRouteImports = (
   routes: readonly NormalizedHook[],
@@ -554,17 +815,19 @@ const eventRouteImports = (
 ): readonly string[] => routes.map((route, index) =>
   `import * as route${String(offset + index)} from ${JSON.stringify(route.source)};`);
 
+/**
+ * Event route records stay keyed by the hook identity the worker resolves
+ * from the canonical event (`hook:event-route:tool-after`), but the record's
+ * `id` is the compiled route id (`event:tool/after`): that is the
+ * `operationId` the hook shell opens the request scope with, the lifecycle
+ * replay mounts, the test manifest addresses, and the harness renders, so a
+ * route reading `invocation.operationId` sees one value everywhere.
+ */
 const eventRouteRecords = (
   routes: readonly NormalizedHook[],
   offset: number,
 ): readonly string[] => routes.map((route, index) =>
-  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(route.id)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
-
-const orderedProviders = (providers: readonly CompiledProvider[]): readonly CompiledProvider[] =>
-  [...providers].sort((left, right) => {
-    const byKey = providerKeyFromName(left.name).localeCompare(providerKeyFromName(right.name));
-    return byKey === 0 ? left.source.localeCompare(right.source) : byKey;
-  });
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
 
 const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider, index) =>
@@ -580,22 +843,40 @@ const providerRegistrySource = (providers: readonly CompiledProvider[]): readonl
     ? []
     : ['const providers = Object.freeze([', ...providerRecords(providers), ']);'];
 
-const processLifetimeValueSource =
-  '{ hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid }';
+/**
+ * Claims this request's hit on the process identity and snapshots it in the
+ * same synchronous step, before any state binding or provider `await`, so a
+ * concurrent request on the same scope cannot move the value this request
+ * mounts as `providers.processLifetime`.
+ */
+const processHitSource = (indent: string): readonly string[] => [
+  `${indent}processLifetime.hits += 1;`,
+  `${indent}const processHit = { hits: processLifetime.hits, instanceId: processLifetime.instanceId, pid: processLifetime.pid };`,
+];
+
+const processLifetimeValueSource = 'processHit';
 
 /**
  * Per-request provider execution shared by every generated request scope
  * (shared Flight worker, rendered CLI/script worker, plain routed CLI): once
  * per request, sequentially in deterministic key order, fail-closed on a
  * missing factory or a thrown/rejected factory, with the framework-owned
- * `processLifetime` value seeded first.
+ * `processLifetime` value seeded first. The emitted loop mirrors
+ * `executeProviders` in `../routes/provider-execution.ts`, which the
+ * in-process test harness runs; `entry-shell.test.ts` pins the two together.
  */
 const providerExecutionSource = (
   providers: readonly CompiledProvider[],
-  expressions: { readonly indent: string; readonly invocation: string; readonly signal: string },
+  expressions: {
+    readonly indent: string;
+    readonly invocation: string;
+    /** The observed plugin root the request scope publishes (#468); providers receive the same value. */
+    readonly plugin: string;
+    readonly signal: string;
+  },
 ): readonly string[] => {
   if (providers.length === 0) return [];
-  const { indent, invocation, signal } = expressions;
+  const { indent, invocation, plugin, signal } = expressions;
   return [
     `${indent}const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
     `${indent}for (const provider of providers) {`,
@@ -603,7 +884,7 @@ const providerExecutionSource = (
     `${indent}    throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
     `${indent}  }`,
     `${indent}  try {`,
-    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, signal: ${signal} });`,
+    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, plugin: ${plugin}, signal: ${signal} });`,
     `${indent}  } catch (error) {`,
     `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
     `${indent}  }`,
@@ -620,16 +901,20 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
   const routes = executableMcpRoutes(options.routes);
   const eventRoutes = options.eventRoutes ?? [];
   const providers = orderedProviders(options.providers ?? []);
+  const layouts = workerLayouts(options.layouts ?? [], routes);
+  const wiresInbox = wiresInboxRoute(options);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { runAgentRequest } from '@agent-bundle/runtime';",
-    ...generatedStateImports(options.state, 'artifact'),
-    ...noticeInboxImport(options.state),
+    "import { resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports('artifact'),
+    ...generatedStateImports(options.state),
+    ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
     ...providerImports(providers),
+    ...layoutImports(layouts),
     '',
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
@@ -637,11 +922,16 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    ...generatedStateOwner(options.state, 'artifact'),
+    // The worker resolves the same anchor as the server process beside it
+    // (same environment, same artifact layout); the server's observed value
+    // rides each render message and wins when present.
+    pluginRootDeclaration('artifact'),
+    ...generatedStateOwner(options.state, options),
     ...providerRegistrySource(providers),
+    ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
-    ...routeRecords(routes),
-    ...noticeInboxRecord(options.state),
+    ...routeRecords(routes, { layouts }),
+    ...noticeInboxRecord(wiresInbox),
     ...eventRouteRecords(eventRoutes, routes.length),
     '});',
     'const requests = new Map();',
@@ -656,28 +946,34 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
-    '  processLifetime.hits += 1;',
+    ...processHitSource('  '),
     '  try {',
     ...(options.state === undefined
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', signal: 'controller.signal' }),
+    '    const plugin = message.plugin ?? pluginRoot.identity;',
+    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'plugin', signal: 'controller.signal' }),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
     '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
+    "      lineage: message.lineage ?? unavailable('not-provided'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '      plugin,',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
     `      providers: ${providerValuesExpression(providers)},`,
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    // MCP and hook surfaces have no terminal; the host scope says so and the
+    // worker forwards it rather than probing its own pipes (#511).
+    "      terminal: message.terminal ?? unavailable('not-provided'),",
     '      ...(message.workspace === undefined ? {} : { workspace: message.workspace }),',
     '    }, async () => {',
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
     '        : { input: message.invocation.props.input, signal: controller.signal };',
-    '      const flight = renderAgentFlight(createElement(route.module.default, props), { signal: controller.signal });',
+    '      const flight = renderAgentFlight(composeLayouts(route, props, controller.signal), { signal: controller.signal });',
     '      return new Uint8Array(await new Response(flight).arrayBuffer());',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',
@@ -764,8 +1060,18 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const allowedEventTargets = eventTarget === 'plugin'
     ? ['claude', 'codex', 'cursor']
     : [eventTarget];
+  const wiresInbox = wiresInboxRoute(options);
+  const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
+  // The lineage registry journals durably only where the project already
+  // accepted the sqlite kernel and its durable anchor (a workspace-durable
+  // `src/state.ts`); stateless and volatile projects keep a process-lifetime
+  // registry so `node:sqlite` never loads for them and no `state/` directory
+  // appears inside an artifact that declared none.
+  const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
+    ...pluginRootImports('artifact'),
+    "import { resolvePluginRoot } from '@agent-bundle/runtime';",
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
     ...(hasEvents
       ? [
@@ -773,16 +1079,44 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           `import { createCanonicalEventProps, projectEventDocument } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
         ]
       : []),
+    `import { ${durableLineage ? 'agentLineageStateDefinition, ' : ''}createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';`,
+    ...(durableLineage || wiresResourceUpdated ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"] : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
-    ...noticeInboxImport(options.state),
+    ...noticeDeliveryImports(wiresResourceUpdated),
+    ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
+    // The server process's one anchor (#468): the lineage journal, the notice
+    // store, and every request identity it publishes read `pluginRoot`.
+    pluginRootDeclaration('artifact'),
+    ...(durableLineage
+      ? [
+          // Beside the project's own durable state, so a restarted MCP process
+          // still knows which subagents are alive. A store that cannot open
+          // degrades to memory rather than failing the server: lineage is an
+          // observed axis, never a precondition.
+          'const openLineage = async () => {',
+          '  const driver = createSqliteStateDriver({ root: pluginRoot.stateRoot });',
+          '  try {',
+          '    const store = await driver.open(agentLineageStateDefinition());',
+          '    return { dispose: async () => { await store.close(); await driver.close(); }, registry: createAgentLineageRegistry({ store }) };',
+          '  } catch (error) {',
+          "    process.stderr.write(`agent-bundle lineage registry is in-memory only: ${error instanceof Error ? error.message : String(error)}\\n`);",
+          '    await driver.close().catch(() => undefined);',
+          '    return { dispose: async () => undefined, registry: createAgentLineageRegistry() };',
+          '  }',
+          '};',
+        ]
+      : [
+          'const openLineage = async () => ({ dispose: async () => undefined, registry: createAgentLineageRegistry() });',
+        ]),
     'const routes = Object.freeze({',
     ...routeRecords(routes),
-    ...noticeInboxRecord(options.state),
+    ...noticeInboxRecord(wiresInbox),
     '});',
     '',
+    ...noticeDeliveryOwner(wiresResourceUpdated, options),
     ...(hasEvents
       ? [
           // The endpoint identity is artifact-location dependent, so it stays
@@ -802,14 +1136,21 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           '',
         ]
       : []),
-    'export default async () => createGeneratedRouteMcpServer({',
-    '  apps: mcpApps,',
-    '  artifactEpoch: ARTIFACT_EPOCH,',
-    ...(hasEvents ? ['  events,'] : []),
-    `  host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
-    `  plugin: ${stableJson(options.plugin)},`,
-    '  routes,',
-    '});',
+    'export default async () => {',
+    '  const lineage = await openLineage();',
+    '  return createGeneratedRouteMcpServer({',
+    '    apps: mcpApps,',
+    '    artifactEpoch: ARTIFACT_EPOCH,',
+    '    disposeLineage: lineage.dispose,',
+    ...(hasEvents ? ['    events,'] : []),
+    `    host: createFlightWorkerHost(new URL(${JSON.stringify(`./${options.workerFile}`)}, import.meta.url), ARTIFACT_EPOCH),`,
+    '    lineage: lineage.registry,',
+    ...(wiresResourceUpdated ? ['    notices: noticeDelivery,'] : []),
+    `    plugin: ${stableJson(options.plugin)},`,
+    '    pluginRoot: pluginRoot.identity,',
+    '    routes,',
+    '  });',
+    '};',
     '',
   ].join('\n');
 };

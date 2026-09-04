@@ -18,6 +18,8 @@ import {
   generatedRenderedRouteWorkerSource,
   installEntryRuntimePath,
   installEntryRuntimeSpecifier,
+  terminalCapabilityRuntimePath,
+  terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
 import type { BundledOutputEvidence } from './provenance.ts';
@@ -121,6 +123,7 @@ export const planPackageEntries = async (
       const sourceInputs = Object.freeze([...new Set([
         bin.provenance.sourcePath,
         ...bin.generatedCli.routes.map((route) => route.source),
+        ...(model.layouts ?? []).map((layout) => layout.source),
         ...(model.providers ?? []).map((provider) => provider.source),
         ...(model.state === undefined ? [] : [model.state.source]),
       ])]);
@@ -140,6 +143,7 @@ export const planPackageEntries = async (
             name: model.metadata.name,
             version: model.metadata.version,
           },
+          ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
           providers: model.providers ?? [],
           routes: bin.generatedCli.routes,
           ...(model.state === undefined ? {} : { state: model.state }),
@@ -158,6 +162,8 @@ export const planPackageEntries = async (
           source: bin.source,
           sourceInputs,
           virtualSource: generatedRenderedRouteWorkerSource({
+            layouts: model.layouts ?? [],
+            ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
             providers: model.providers ?? [],
             routes: renderedRoutes,
             ...(model.state === undefined ? {} : { state: model.state }),
@@ -179,7 +185,12 @@ export const planPackageEntries = async (
       sourceInputs: Object.freeze([bin.provenance.sourcePath, bin.source]),
       ...(exportName === undefined
         ? {}
-        : { virtualSource: generatedExecutableEntrySource({ entrySource: bin.source, exportName }) }),
+        : {
+          // The envelope probes the terminal (#511) through the aliased
+          // dependency-free runtime module, like the cli-entry shell.
+          aliases: { [terminalCapabilityRuntimeSpecifier]: terminalCapabilityRuntimePath() },
+          virtualSource: generatedExecutableEntrySource({ entrySource: bin.source, exportName, hostSurface: 'cli' }),
+        }),
     });
   }
   const installHosts = Object.freeze((['claude', 'codex', 'cursor'] as const)
@@ -298,14 +309,17 @@ export const buildPackageOutputs = async (options: {
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
   try {
-    const ignoredRuntimeRoots = Object.freeze([
+    const ignoredRuntimeRoots = Object.freeze([...new Set([
       ...(entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
         ? [runtimeIgnoredRoot(cliEntryRuntimePath())]
         : []),
       ...(entries.some((entry) => entry.aliases?.[installEntryRuntimeSpecifier] !== undefined)
         ? [runtimeIgnoredRoot(installEntryRuntimePath())]
         : []),
-    ]);
+      ...(entries.some((entry) => entry.aliases?.[terminalCapabilityRuntimeSpecifier] !== undefined)
+        ? [runtimeIgnoredRoot(terminalCapabilityRuntimePath())]
+        : []),
+    ])]);
     const evidence = await buildPackageEntries({
       cwd: projectRoot,
       entries,

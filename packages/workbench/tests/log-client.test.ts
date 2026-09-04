@@ -37,6 +37,41 @@ const clientFor = (response: Response): LogClient => new LogClient({
   foreground: foreground(async (input) => String(input).includes('/api/project/session') ? session() : response),
 });
 
+it('accepts lifecycle replay hook kinds and their routeId context', async () => {
+  const records = [
+    {
+      ...record,
+      context: { routeId: 'route-1', target: 'claude' },
+      details: { routeId: 'route-1' },
+      kind: 'lifecycle.replay.started',
+      producer: 'hook',
+      summary: 'Lifecycle replay started.',
+    },
+    {
+      ...record,
+      context: { routeId: 'route-1', target: 'claude' },
+      details: { routeId: 'route-1' },
+      kind: 'lifecycle.replay.completed',
+      producer: 'hook',
+      sequence: 2,
+      summary: 'Lifecycle replay completed.',
+    },
+    {
+      ...record,
+      context: { routeId: 'route-1', target: 'claude' },
+      details: { routeId: 'route-1' },
+      kind: 'lifecycle.replay.failed',
+      level: 'error',
+      producer: 'hook',
+      sequence: 3,
+      summary: 'Lifecycle replay failed.',
+    },
+  ];
+  await expect(clientFor(json({
+    replay: { cursor: { afterSequence: 3 }, records },
+  })).replay()).resolves.toMatchObject({ records });
+});
+
 it('accepts development host sync project and diagnostic log kinds', async () => {
   const records = [
     {

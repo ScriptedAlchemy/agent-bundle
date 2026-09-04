@@ -1,0 +1,359 @@
+---
+description: 'Test agent-bundle routes through the framework harness: the rstest configuration helper, renderRoute, the eleven proof levels, and the generated-plugin contract matrix.'
+---
+
+# Testing
+
+Route modules are tested through the framework, not through a hand-written bundler
+configuration. Two subpaths ship that harness and both are opt-in: `@rstest/core` and `react` are
+optional peer dependencies, so a project that never tests routes installs neither. Rendering also
+needs `@agent-bundle/runtime`, which the project already owns whenever it has route modules — the
+generated entries import it the same way.
+
+## The configuration helper
+
+`agent-bundle/rstest` compiles the project once — the same route-graph compilation the build
+performs, with no artifact build — and returns a plain Rstest configuration object carrying the
+test manifest, the route loaders, React's `react-server` resolution, and the automatic JSX
+runtime:
+
+```ts
+// rstest.route-unit.config.ts
+import { defineConfig } from '@rstest/core';
+import { agentBundleRstest } from 'agent-bundle/rstest';
+
+export default defineConfig(await agentBundleRstest());
+```
+
+Route-unit tests default to `tests/route-unit/**/*.test.{ts,tsx}` and need **their own** Rstest
+run, because rendering a route requires Node's `react-server` condition for the whole worker
+process. Keep them out of the project's ordinary `rstest` run.
+
+## Rendering a route
+
+`agent-bundle/test` holds the helpers. `renderRoute` executes a route — by compiled route id, or
+by importing the module directly — through the real renderer and the real request store, and
+resolves to the final Agent Document:
+
+```ts twoslash
+import { expectDocument, renderRoute } from 'agent-bundle/test';
+
+export const summarizes = async (): Promise<void> => {
+  const { document } = await renderRoute('tool:library/summarize', {
+    input: { title: 'Dune' },
+  });
+
+  expectDocument(document)
+    .toHaveStatus('success')
+    .toContainMarkdown('Dune')
+    .toHaveValue({ chapters: 24 });
+};
+```
+
+`renderRoute` accepts `input`, `args` (CLI routes), request-`context` overrides — including a
+`context.progress` reporter — render `limits`, and a `signal`. It returns the document, the
+request-scoped progress the route reported, the resolved provenance, and the route's own
+`resultSchema`-parsed value. Progress is recorded whether or not the caller supplies a reporter
+of its own.
+
+### Typed route ids, inputs, and results
+
+The compiler's generated `.agent-bundle/routes.d.ts` registers the project's route contracts on
+`@agent-bundle/runtime`'s `Register` interface, the way it already declares provider keys. Once
+that file is part of the project's TypeScript program — `create-agent-bundle` templates list
+`".agent-bundle/routes.d.ts"` in `tsconfig.json` `include` by default, the file itself stays
+gitignored, and `agent-bundle validate` warns with `AB4834` when a project that compiles routes or
+providers leaves it out — a `renderRoute` call written with a string literal is checked against
+the compiled route ids — the editor completes them, and a typo is rejected naming the registered
+alternatives — while `input` and `result` come from that route's own `inputSchema` and
+`resultSchema`:
+
+```ts
+const { result } = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+const chapters: number | undefined = result?.chapters; // no cast
+```
+
+An event route registers what the harness actually takes and gives back: `input` is the
+`{ canonical, native }` payload (the harness supplies `signal` itself), and `result` is
+`undefined`, since event modules export no `resultSchema`. Build that input from a host envelope
+with `createEventRouteInput('tool/after', envelope, { host: 'claude' })` rather than by hand: it
+validates the envelope per host and event and projects `canonical.payload` through the same table
+the artifact's wrapper uses, and a route typed `AgentEventRouteProps<'tool/after'>` narrows the
+registered `input` to that family, so passing a `stop` envelope's input to it is a type error.
+
+Nothing about it is required. A target typed `string` rather than a literal stays legal for
+dynamic lookups, a directly imported module target is unaffected, and a project that does not
+include the generated file — or has not run a build or `agent-bundle dev` yet — sees the previous
+types: any string id, `unknown` input, `unknown` result. `RegisteredRouteId`,
+`RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime` name the
+registered surface directly, for a wrapper of your own.
+
+The same registration reaches every other harness surface that takes a route id or a route
+payload, the way TanStack Router's one `Register` reaches `Link to`, `useNavigate`, and
+`RoutesByPath`. `invokeMcpTool('find', { input })` and `getMcpPrompt('brief', { input })` check
+their wire name against the registered tool or prompt names (`find` for `tool:curator/find`) and
+type `input` from that route's `inputSchema` — a union when two servers register the same name and
+`server` is omitted, that one server's route when a literal `server` is passed (and `server` itself is
+checked against the compiled server names);
+`runContractMatrix`, `runPackedContractMatrix`, `runDevEpochContractMatrix`, and
+`runInstalledHostContractMatrix` type each registered key of `fixtures` (`input`, `inputs`,
+`cancellation.input`, and lifecycle transitions) from that route, while an MCP App route key or a
+`Record<string, ContractRouteFixture>` built dynamically stays legal; `invokeCli` reports the
+executed command's `routeId` as a registered `cli:` or `tool:` id (`argv` stays
+`readonly string[]`); and `agent-bundle/eval`'s `expectMcpCall({ server, tool })` checks a
+literal `tool` against the registered tools of a literal `server` of this project, leaving a
+third-party server free. `RegisteredMcpServerName`, `RegisteredMcpRouteName`, and
+`RegisteredMcpRouteId` name the server and protocol names a registered id encodes. Not typed,
+deliberately: `readMcpResource` (a wire URI, which the registration does not carry), `runScript`
+(script routes register no contract), `structuredContent` (the wire carries it only for
+object-valued documents), and `agent-bundle/api`, which addresses an arbitrary project `root`.
+
+`testManifest()` exposes the compiled route inventory, so a suite can iterate every route in
+process rather than paying for a build per route. Every failure — an unknown route, a refused
+route kind, a rejected input, a render error — names the route id, the target kind, and the
+module provenance.
+
+`loadRouteModule(id)` returns the evaluated module behind one of those ids, through the same lazy
+loader `renderRoute` uses. It is the module object itself, so `inputSchema` and `resultSchema` are
+the route's own schema instances by reference, `config` is its static config export, and `default`
+its component (a plain `.ts` script exports `main` instead). A schema-identity suite therefore
+needs no hand-maintained list of static route imports: iterate `testManifest().routes` and load
+each id.
+
+```ts
+import { loadRouteModule, testManifest } from 'agent-bundle/test';
+
+// Schemas are the MCP route contract; event routes and scripts export none.
+const mcpRoutes = Object.values(testManifest().routes)
+  .filter((route) => route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
+
+for (const route of mcpRoutes) {
+  const module = await loadRouteModule(route.id);
+  expect(module.inputSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.resultSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.config ?? {}).toEqual(route.config);
+}
+```
+
+A literal id is checked against the registered ids exactly as `renderRoute` checks its target, and
+the schemas' parsed values are typed from the registration, so a removed placement is a type error.
+Conventional scripts are loadable but are not part of the registration, so a `script:` literal is
+accepted unchecked. Loading evaluates the module as an import would — a self-executing plain script
+runs. Outside a pool built with `agentBundleRstest()`
+the call fails closed with `manifest-unavailable`; a manifest describing another project rejects
+with the same mismatch report `renderRoute` gives, because route loaders are bound to the
+compilation that produced them.
+
+### One state across several renders
+
+Every `renderRoute` mounts the project's declared state — and its notice ledger — fresh for that
+one render and closes it afterwards, so two renders never see each other's writes. That is the
+right default for an isolated route test, but a journey that records on one event and reads on
+the next needs the same mounted state under every step. `mountTestState()` mounts the manifest's
+state definition once, with the same driver rules (a `workspace-durable` definition opens a
+disposable sqlite root that `close()` removes; other lifetimes use the memory driver), and hands
+the same `state` and `noticeLedger` to as many `renderRoute` or `renderRouteEvents` calls as spread
+its `context()`:
+
+```ts
+import { mountTestState, renderRoute } from 'agent-bundle/test';
+
+import type { TopologyEvents, TopologyState } from '../../src/state.js';
+
+const topology = await mountTestState<TopologyState, TopologyEvents>();
+try {
+  await renderRoute('event:session/start', { context: { ...topology.context(), host, workspace }, input: start });
+  await renderRoute('event:tool/before', { context: { ...topology.context(), host, workspace }, input: intent });
+
+  const snapshot = await topology.read(); // AgentStateSnapshot<TopologyState>
+  expect(snapshot.state.activities).toHaveLength(1);
+  const { notices } = await topology.notices(); // the ledger those renders published into
+} finally {
+  await topology.close();
+}
+```
+
+`read()` and `notices()` are the owner's own snapshots, not a per-render copy; `state` and
+`noticeLedger` are exposed too, for a direct `dispatch`. Each render binds the shared owner to its
+own request signal, exactly as a generated request scope does, so a render's `signal` still
+cancels that render's state operations. `withTestState(async (state) => { ... })`
+is the same mount scoped to one callback, closed when it settles. The snapshot type comes from the
+type arguments — the state registration carries no state type — or, checked, from
+`options.definition`, which mounts that definition instead of the manifest's (an `external`
+definition needs `options.driver`, since it names no storage the harness could open). A render
+that omits the mounted handles still gets its own isolated owner, so the two styles mix in one
+suite.
+
+Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`, `toContainText`,
+`toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
+
+This is the route-unit proof level, and only that: it proves a route module renders to the
+document it claims. It is not evidence about the MCP transport, a packed artifact, or a browser
+surface.
+
+## Proof levels
+
+The levels are separate on purpose. Each helper stamps the level it carried into its provenance
+and prints it in every failure, because a pass at one level is never a receipt for another.
+
+| Level | Helpers | What it proves |
+| --- | --- | --- |
+| `route-unit` | `renderRoute`, `renderRouteEvents`, `mountTestState` | A route module renders to the document — and render-event stream — it claims; one mounted state can span a multi-render journey. |
+| `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | The real generated MCP server's protocol contract, over the SDK's in-memory transport. |
+| `dev-epoch` | `runDevEpochContractMatrix` | An epoch-pinned generated stdio process opened through the Workbench session service; the caller owns the epoch lease and process lifetime, and MCP App routes are covered (surface plus `ui://` sweep). |
+| `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | A plain or rendered argv vector resolved and run through the routed CLI's own shell — including rendered Markdown, explicit TTY, JSON, and NDJSON modes — in-process. |
+| `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | A conventional `src/scripts/*` module run through its generated executable's contract, without bundling: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, TTY, `--json`, `--ndjson`, with the project's conventional providers mounted), a plain `.ts` script as a Node process of its own through the `main` envelope — real `process.exit`, exit code, stdout, stderr, optional `stdin`. `testManifest().scripts` lists the scripts that ship; a nested (`AB4808`) or conflicting (`AB4809`) script is never a target. |
+| `workbench-surface` | `inspectWorkbenchSurface` | What the dev server would hand the Workbench for this project — route manifest, grouped route catalog, state declaration, lifecycle-replay fixtures, page availability — from the same compiler pass, with no browser and no dev server; a project the compiler rejects reports `manifest-unavailable` with its error diagnostics. |
+| `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | A built artifact's generated entry running as a real process over stdio. |
+| `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | The packed stdio process still runs after project source and configuration are removed and verified absent. |
+| `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | A built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout. |
+
+Two further levels sit alongside these nine, for eleven in all. `agent-bundle/test/browser` supplies `mountBrowserApp`
+for the browser-safe `browser-app` level — production-compiled MCP App HTML mounted over the
+product bridge in a real browser page — and `simulated` reuses the installed-host helper
+`openInstalledHostMcpServer` without `sessionEvidence`: an emitted bundle staged directly into
+an isolated host-shaped root and spawned without a host-owned install, which is weaker than
+`host-install`.
+
+```ts twoslash
+import { cliJson, cliNdjson, invokeCli, invokeMcpTool } from 'agent-bundle/test';
+
+export const proofs = async (): Promise<Record<string, unknown>> => {
+  // mcp-in-memory: the generated server projects the document to protocol content.
+  const call = await invokeMcpTool('summarize', { input: { title: 'Dune' } });
+
+  // cli-dispatch, plain .ts route: resolve argv, execute, and map the exit code.
+  const run = await invokeCli(['library', 'audit', './books', '--max-files', '8']);
+
+  // cli-dispatch, rendered .tsx route: exercise the shell's rendered output modes.
+  const rendered = await invokeCli(['library', 'report', './books', '--ndjson']);
+  const events = cliNdjson(rendered);
+
+  // An explicit TTY proves the in-place progress path rather than the piped one.
+  const tty = await invokeCli(['library', 'report', './books'], { tty: true });
+
+  return {
+    exitCode: run.exitCode,
+    finalEvent: events.at(-1)?.type,
+    inPlaceProgress: tty.stdout.includes('\r\u001B[2K'),
+    scanned: cliJson(run),
+    structured: call.structuredContent,
+  };
+};
+```
+
+`expectEvents` asserts over a render-event stream. `toContainSequence` is sequence-tolerant — an
+extra `progress` or `replace` frame is legal and cannot turn a passing render red — while a
+missing frame, a reordering, or a regressed ordinal still fails. `toHaveMonotonicSequence`,
+`toCompleteOnce`, `toHaveProgress`, and `toHaveNoErrors` cover the rest of the contract.
+
+### Process evidence is deliberately expensive
+
+Among the packed levels, only `packed-stdio` and its strictly stronger `packed-deleted-source`
+upgrade are process evidence: pack once, install once, build once, remove and verify source once,
+spawn once, and iterate every per-route assertion inside that one session. `dev-epoch` is process
+evidence of a different shape — the Workbench's own epoch-pinned generated stdio process, not a
+packed artifact — so a `dev-epoch` pass says nothing about what a pack ships. The deleted-source journey also reads
+the embedded MCP App resource from the generated server; it does not prove native-host install or
+dispatch, or an install mode that copies the artifact elsewhere.
+
+`host-install` is separate installed-layout process evidence. Its deterministic
+adapter-simulator lane is unconditional, available Claude and Codex binaries also prove their
+public install paths, and Cursor records its unavailable non-interactive host-session surface
+explicitly.
+
+## The contract matrix
+
+The contract matrix is the framework-owned generated-plugin wire-contract suite. Three entry
+points share one implementation; boundary differences are explicit capability flags, not forked
+check logic. The project supplies only fixtures — valid inputs, a declared `resultCompat` policy
+for every in-memory tool route, optional `previousResults` payloads, optional `cancellation`
+cases, and an optional deterministic lifecycle transition driver with declarative expectations.
+
+**`runContractMatrix` (`mcp-in-memory`)** opens one real MCP client against the real generated
+server over the SDK's in-memory transport and runs the full matrix. It proves wire-surface
+completeness against the compiler manifest, fixture coverage, successful-path invocation sweeps,
+JSON serialized round-trip through each tool route's own `resultSchema`, declared additive or
+closed compat behavior on serialized payloads, acceptance of previous-server payloads under the
+current schema, rejection of negative inputs derived from the advertised `listTools` input JSON
+Schema, and mid-flight cancellation hygiene. In-memory transport may pass structured values
+without serialization, so the matrix closes that gap with an explicit
+`JSON.parse(JSON.stringify(...))` round-trip before validation. MCP Apps are reported as
+not-applicable for surface registration, because the in-memory level does not register them.
+
+**`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs against an
+already-open packed session — the single packed journey owns session open and close. It proves
+process stdio evidence for surface completeness (including compiled MCP App resource URIs in
+`listResources`), fixture coverage, successful-path sweeps, advertised input-schema rejection, and
+client-side cancellation hygiene. It cannot load project route modules, because source may be
+deleted and verified absent, so serialized-round-trip, compat-probe, and version-skew checks —
+including their per-lifecycle-phase variants — are reported `not-applicable` with an honest
+reason. The packed server validates every tool result through its bundled `resultSchema` before
+returning; a successful sweep invocation is that evidence.
+
+**`runInstalledHostContractMatrix` (`host-install`)** runs against an already-open session from
+`openInstalledHostMcpServer`. The opener reads the host's emitted MCP document from the installed
+root, verifies the manifest, the component, resource, and hook paths, and the artifact file
+digests, spawns that installed command, and observes the running version from the live MCP
+`initialize` result. Its report records source, built-artifact, installed-artifact, and
+running-process versions separately, and fails closed when any value is missing or differs.
+Metadata records the host binary version when observed, the adapter revision, the manifest and
+schema digest, and the framework version. Module-backed checks remain honestly not-applicable,
+because loading project modules would cross back into the source and build tree.
+
+```ts twoslash
+import { runContractMatrix } from 'agent-bundle/test';
+
+export const matrix = async (): Promise<void> => {
+  await runContractMatrix({
+    fixtures: {
+      'tool:library/summarize': {
+        input: { title: 'Dune' },
+        previousResults: [{ chapters: 24 }],
+        resultCompat: 'additive',
+      },
+    },
+  });
+};
+```
+
+The packed and installed-host entry points take the same fixture shape plus the session they run
+against: `runPackedContractMatrix` needs the open packed session and the manifest compiled
+*before* source removal, and `runInstalledHostContractMatrix` needs the session
+`openInstalledHostMcpServer` returned along with that manifest.
+
+### Lifecycle fixtures
+
+Lifecycle fixtures replay `unknown → queued → running → first-progress → repeated-progress →
+terminal` over the matrix's one open client. The framework validates every phase's structured
+content and rendered output, additive and closed compatibility, live progress before settlement,
+journal accumulation, declared notices, idempotent commit replay, and typed budget rejection.
+
+A caller-supplied same-store `restart` callback adds durability evidence at that boundary;
+without one the check is honestly `not-applicable`. Packed callers should wire that callback into
+the existing packed journey's restart rather than creating a second pack, build, and install
+path. A lifecycle fixture's optional `state.catalog` assertion pins its declared id and lifetime
+to the compiler manifest used by that same mounted-state replay.
+
+### Event routes and runtime identity
+
+When the compiled manifest contains event routes, the packed and installed-host boundaries sample
+the read-only event-runtime status before and throughout sequential matrix events. The
+`runtime-instance-identity` check fails if the warm `instanceId` changes, the artifact epoch
+drifts, or availability degrades to `runtime-restarted` or `runtime-unavailable`. In-memory runs
+and compiled artifacts without event routes report runtime identity as honestly
+`not-applicable`.
+
+No matrix boundary proves browser App HTML or artifact-rebuild replay.
+
+When the advertised input schema declares `additionalProperties: false`, plain `z.object` tool
+routes may still strip unknown keys without a protocol failure. The negative-inputs check records
+that tolerance when other generated negatives still prove rejection paths.
+
+A failing matrix throws one aggregated `AgentTestError` with code `contract-violation`, naming
+every failing route, every failing check, and the proof-level label the run actually carried.
+
+## Next
+
+- [Evaluations](./evaluations.mdx) — the surface that asks whether an agent reaches the plugin at all.
+- [Artifact validation](../distribution/validation.mdx) — the checks that gate a built bundle.

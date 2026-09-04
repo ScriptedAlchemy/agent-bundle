@@ -6,6 +6,7 @@ import {
   ContractMatrixViolationError,
   runDevEpochContractMatrix,
   type ContractMatrixClient,
+  type ContractProgressNotification,
 } from '../test/contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
@@ -45,10 +46,29 @@ const failed = (
   summary,
 });
 
-const targetFor = (prepared: PreparedProject): string => {
-  const targets = prepared.model?.targets.map((target) => target.name) ?? [];
-  const target = targets.includes('portable') ? 'portable' : targets[0];
-  if (target === undefined) throw new Error('Development contract matrix requires at least one generated target.');
+/**
+ * The generated target whose manifest carries the selected server. A server
+ * restricted to `targets: ['claude']` is absent from the portable manifest, so
+ * the choice is made over the server's own target list intersected with the
+ * project's; `portable` still wins whenever it is eligible.
+ */
+export const devContractTarget = (
+  prepared: Pick<PreparedProject, 'model'>,
+  serverName: string,
+): string => {
+  const projectTargets = prepared.model?.targets.map((target) => target.name) ?? [];
+  const server = prepared.model?.mcpServers.find((candidate) => candidate.name === serverName);
+  const eligible = server === undefined
+    ? projectTargets
+    : projectTargets.filter((target) => server.targets.includes(target));
+  const target = eligible.includes('portable') ? 'portable' : eligible[0];
+  if (target === undefined) {
+    throw new Error(
+      projectTargets.length === 0
+        ? 'Development contract matrix requires at least one generated target.'
+        : `Development contract matrix server ${JSON.stringify(serverName)} is emitted for none of the project's targets.`,
+    );
+  }
   return target;
 };
 
@@ -61,40 +81,64 @@ const serverFor = (prepared: PreparedProject, requested: string | undefined): st
   return names[0];
 };
 
-const matrixClient = (session: McpSession, signal: AbortSignal): ContractMatrixClient => ({
+/** The session's per-request timeout, applied afresh to each matrix request rather than once for the whole matrix. */
+const requestSignal = (session: Pick<McpSession, 'timeoutMs'>, options: { readonly signal?: AbortSignal } | undefined): AbortSignal => {
+  const timeout = AbortSignal.timeout(session.timeoutMs);
+  return options?.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]);
+};
+
+type MatrixSession = Pick<
+  McpSession,
+  'callTool' | 'getPrompt' | 'listPrompts' | 'listResources' | 'listTools' | 'readResource' | 'subscribeTrace' | 'timeoutMs' | 'trace'
+>;
+
+export const matrixClient = (session: MatrixSession): ContractMatrixClient => ({
   callTool: async (params, options) => session.callTool({
+    // Lifecycle fixtures pass their progress token here; generated routes only
+    // send progress when the request's `_meta.progressToken` is present.
+    ...(params._meta === undefined ? {} : { _meta: params._meta }),
     arguments: params.arguments ?? {},
     name: params.name,
-    signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+    signal: requestSignal(session, options),
     ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
   }),
   getPrompt: async (params, options) => session.getPrompt({
     ...(params.arguments === undefined ? {} : { arguments: params.arguments }),
     name: params.name,
-    signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+    signal: requestSignal(session, options),
     ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
   }),
   listPrompts: async (_params, options) => ({
     prompts: [...await session.listPrompts({
-      signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+      signal: requestSignal(session, options),
       ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     })],
   }),
   listResources: async (_params, options) => ({
     resources: [...await session.listResources({
-      signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+      signal: requestSignal(session, options),
       ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     })],
   }),
   listTools: async (_params, options) => ({
     tools: [...await session.listTools({
-      signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+      signal: requestSignal(session, options),
       ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
     })],
   }),
+  // Lifecycle fixtures count live progress; the session records every server
+  // notification in its trace synchronously on receipt, so a live trace
+  // subscription is the supported notification path for this non-SDK client.
+  observeProgress: (listener) => {
+    const latest = session.trace().entries.at(-1)?.sequence ?? 0;
+    const subscription = session.subscribeTrace({ afterSequence: latest }, (entry) => {
+      if ('kind' in entry && entry.kind === 'progress') listener({ params: entry.payload as ContractProgressNotification['params'] });
+    });
+    return () => subscription.unsubscribe();
+  },
   readResource: async (params, options) => ({
     contents: [...(await session.readResource({
-      signal: options?.signal === undefined ? signal : AbortSignal.any([signal, options.signal]),
+      signal: requestSignal(session, options),
       ...(options?.timeout === undefined ? {} : { timeoutMs: options.timeout }),
       uri: params.uri,
     })).contents] as never[],
@@ -113,8 +157,8 @@ export const runDevEpochContracts = async (
       contracts.diagnostics,
     );
   }
-  const target = targetFor(prepared);
   const serverName = serverFor(prepared, contracts.server);
+  const target = devContractTarget(prepared, serverName);
   const manifest = testManifestFromRouteGraph({
     apps: prepared.model?.mcpApps ?? [],
     configPath: prepared.configPath,
@@ -145,13 +189,12 @@ export const runDevEpochContracts = async (
       serverName,
       target,
     });
-    const signal = AbortSignal.timeout(session.timeoutMs);
     await runDevEpochContractMatrix({
       fixtures: contracts.fixtures,
       manifest,
       ...(contracts.server === undefined ? {} : { server: contracts.server }),
       session: {
-        client: matrixClient(session, signal),
+        client: matrixClient(session),
         provenance: {
           epochId,
           proofLevel: DEV_EPOCH_PROOF_LEVEL,

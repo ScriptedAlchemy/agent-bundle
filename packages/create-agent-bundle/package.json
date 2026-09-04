@@ -2,7 +2,7 @@
   "name": "create-agent-bundle",
   "version": "0.0.0",
   "description": "Scaffold a new agent-bundle plugin project from a checked-in template.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "agent-bundle",
     "create",
@@ -30,19 +30,24 @@
     "bin",
     "dist",
     "templates",
+    "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "bin": {
     "create-agent-bundle": "./bin/create-agent-bundle.js"
   },
   "scripts": {
-    "build": "rslib build",
+    "build": "node ../../scripts/sync-license-files.mjs && rslib build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@clack/prompts": "1.7.0",
+    "@effect/platform-node": "4.0.0-rc.112",
     "@rslib/core": "0.23.2",
     "@rstest/core": "0.11.10",
-    "@types/node": "26.4.0"
+    "@types/node": "26.4.0",
+    "effect": "4.0.0-rc.112",
+    "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f"
   }
 }

@@ -103,26 +103,3 @@ export const readNdjsonResponseFrames = async (
     }
   }
 };
-
-export interface NdjsonStream {
-  close(): void;
-  readonly done: Promise<void>;
-}
-
-/**
- * Owns the per-stream AbortController, forwards an optional caller signal into
- * it, and detaches that forwarding once the stream settles.
- */
-export const abortableNdjsonStream = (
-  signal: AbortSignal | undefined,
-  run: (signal: AbortSignal) => Promise<void>,
-): NdjsonStream => {
-  const controller = new AbortController();
-  const forwardAbort = (): void => controller.abort();
-  signal?.addEventListener('abort', forwardAbort, { once: true });
-  if (signal?.aborted) controller.abort();
-  return Object.freeze({
-    close: () => controller.abort(),
-    done: run(controller.signal).finally(() => signal?.removeEventListener('abort', forwardAbort)),
-  });
-};

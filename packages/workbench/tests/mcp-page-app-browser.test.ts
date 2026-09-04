@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
-import { chromium } from 'playwright';
+import { chromium, type Page } from 'playwright';
 
 import { closeServer } from './support/http.ts';
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
@@ -63,8 +63,11 @@ const proxyDocument = `<!doctype html>
 const mountedPageFixture = async (mode: 'artifact' | 'runtime' | 'runtime-direct' = 'artifact') => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-page-app-'));
   const sandboxRequests: string[] = [];
+  const sandboxRequestWaiters: Array<(url: string) => void> = [];
   const sandbox = createServer((request, response) => {
-    sandboxRequests.push(request.url ?? '');
+    const url = request.url ?? '';
+    sandboxRequests.push(url);
+    for (const waiter of sandboxRequestWaiters.splice(0)) waiter(url);
     response.writeHead(200, { 'content-type': 'text/html' }).end(proxyDocument);
   });
   const sandboxOrigin = await listen(sandbox);
@@ -185,11 +188,44 @@ const mountedPageFixture = async (mode: 'artifact' | 'runtime' | 'runtime-direct
       await closeServer(sandbox);
       await rm(root, { force: true, recursive: true });
     },
+    /**
+     * Resolves with the next sandbox document request the server accepts.
+     * Arm it before the action that provokes the load: an iframe's presence in
+     * the DOM only proves the element was inserted, not that its document
+     * request has reached this server yet.
+     */
+    nextSandboxRequest: () => new Promise<string>((resolvePromise) => { sandboxRequestWaiters.push(resolvePromise); }),
     outerOrigin,
     root,
     sandboxRequests: () => [...sandboxRequests],
   };
 };
+
+type McpPageAppLifecycleStats = Readonly<{
+  readonly closes: readonly { readonly bindingId: string; readonly type: 'close' | 'force' }[];
+  readonly creates: readonly unknown[];
+  readonly messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[];
+}>;
+
+/**
+ * Event-ordered lifecycle waits for the artifact fixture. Each waits for the
+ * fixture's own record of the route call rather than for DOM side effects: an
+ * iframe in the DOM says nothing about whether its proxy has loaded, and an
+ * iframe gone from the DOM says nothing about which route calls have landed.
+ */
+const lifecycleWaits = (page: Page) => ({
+  /** The proxy loaded, handed the app its resource, and the app completed `ui/initialize`. */
+  initialized: (bindingId: string) => page.waitForFunction((id) => (globalThis as typeof globalThis & {
+    __mcpPageAppFixture: { stats(): McpPageAppLifecycleStats };
+  }).__mcpPageAppFixture.stats().messages.some((entry) => entry.bindingId === id && entry.message.method === 'ui/notifications/initialized'), bindingId),
+  /** The page released the binding through exactly one close route call (graceful or forced). */
+  closed: (bindingId: string) => page.waitForFunction((id) => (globalThis as typeof globalThis & {
+    __mcpPageAppFixture: { stats(): McpPageAppLifecycleStats };
+  }).__mcpPageAppFixture.stats().closes.some((entry) => entry.bindingId === id), bindingId),
+  stats: (): Promise<McpPageAppLifecycleStats> => page.evaluate(() => (globalThis as typeof globalThis & {
+    __mcpPageAppFixture: { stats(): McpPageAppLifecycleStats };
+  }).__mcpPageAppFixture.stats()),
+});
 
 describe('MCP App page browser integration', () => {
   it('keeps the committed runtime evidence and preview request unchanged after caller mutation', async () => {
@@ -451,6 +487,7 @@ describe('MCP App page browser integration', () => {
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
+    const lifecycle = lifecycleWaits(page);
     try {
       await page.goto(`${fixture.outerOrigin}/page.html`);
       await page.waitForFunction(() => '__mcpPageAppFixture' in globalThis);
@@ -463,7 +500,7 @@ describe('MCP App page browser integration', () => {
       expect(await frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
       expect(await frame.getAttribute('referrerpolicy')).toBe('no-referrer');
       expect(await frame.contentFrame()?.locator('body').innerText()).not.toContain('foreground-token');
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { messages: readonly { readonly bindingId: string; readonly message: { readonly method?: string } }[] } } }).__mcpPageAppFixture.stats().messages.some(({ bindingId, message }) => bindingId === 'binding-1' && message.method === 'ui/notifications/initialized'));
+      await lifecycle.initialized('binding-1');
       const first = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): unknown } }).__mcpPageAppFixture.stats()) as {
         readonly creates: readonly { readonly request: { readonly host: { readonly displayMode: string; readonly locale: string; readonly theme: string }; readonly input: unknown; readonly previewProfile: string; readonly result: unknown; readonly toolName: string }; readonly sessionId: string }[];
         readonly messages: readonly { readonly message: { readonly method?: string } }[];
@@ -496,6 +533,7 @@ describe('MCP App page browser integration', () => {
         trace.push(snapshot());
         Object.assign(globalThis, { __mcpPageRemountTrace: { stop: () => observer.disconnect(), values: () => [...trace] } });
       });
+      const remountedDocumentRequest = fixture.nextSandboxRequest();
       await page.getByRole('button', { name: 'Allow geolocation' }).click();
       await page.locator('iframe[title="MCP App preview: weather"][data-mcp-app-document-revision="2"]').waitFor();
       const remountTrace = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageRemountTrace: { readonly stop: () => void; readonly values: () => readonly string[] } }).__mcpPageRemountTrace.values());
@@ -504,16 +542,30 @@ describe('MCP App page browser integration', () => {
       const refreshed = remountTrace.findIndex((value, index) => index > blank && value.startsWith('MCP App preview: weather|') && value.endsWith('|2'));
       expect(blank).toBeGreaterThanOrEqual(0);
       expect(refreshed).toBeGreaterThan(blank);
+      // The remounted document's request is a network event that trails the
+      // DOM insertion the locator above observed; wait for the server to
+      // accept it before asserting exactly one sandbox load.
+      expect(await remountedDocumentRequest).toBe('/');
       expect(fixture.sandboxRequests().slice(sandboxRequestsBeforeRemount)).toEqual(['/']);
+      // The remounted proxy must reach the app before the graceful teardown
+      // below can be acknowledged by it (the initialize count doubles because
+      // the refreshed document runs the handshake again).
+      await page.waitForFunction(() => (globalThis as McpPageAppFixtureGlobal).__mcpPageAppFixture.stats().messages
+        .filter(({ bindingId, message }) => bindingId === 'binding-1' && message.method === 'ui/notifications/initialized').length === 2);
 
       await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { setActive(active: boolean): void } }).__mcpPageAppFixture.setActive(false));
       await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { closes: readonly unknown[] } } }).__mcpPageAppFixture.stats().closes.length === 1);
+      await lifecycle.closed('binding-1');
+      expect((await lifecycle.stats()).closes).toEqual([{ bindingId: 'binding-1', options: expect.any(Object), type: 'close' }]);
       await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { setActive(active: boolean): void } }).__mcpPageAppFixture.setActive(true));
       expect(await page.getByText('Select a completed tool call below to create an App preview.').count()).toBe(1);
 
       await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
       await frame.waitFor();
+      // Switching profiles tears the current binding down first; wait for its
+      // app to be initialized so the teardown is acknowledged by a proxy that
+      // exists, not posted into a document that is still loading.
+      await lifecycle.initialized('binding-2');
 
       await page.selectOption('#mcp-app-profile', 'chatgpt');
       await page.waitForFunction(() => {
@@ -531,7 +583,7 @@ describe('MCP App page browser integration', () => {
       expect(await page.getByLabel('MCP App preview', { exact: true }).textContent()).toContain('claude');
 
       await page.getByRole('button', { name: 'Close App preview' }).click();
-      await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { closes: readonly unknown[] } } }).__mcpPageAppFixture.stats().closes.length >= 3);
+      await lifecycle.closed('binding-4');
       await page.getByRole('button', { name: 'List tools' }).click();
       await page.waitForFunction(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { controllerEvents: readonly { readonly type: string }[] } } }).__mcpPageAppFixture.stats().controllerEvents.some(({ type }) => type === 'invoke'));
 
@@ -539,21 +591,30 @@ describe('MCP App page browser integration', () => {
       await page.getByLabel('MCP App fallback').waitFor();
       expect(await page.getByLabel('MCP App fallback').textContent()).toContain('unsupported-media-type');
       await page.getByRole('button', { name: 'Close App preview' }).click();
+      await lifecycle.closed('binding-5');
       await page.getByRole('button', { name: 'Open App preview for legacy-template-call' }).click();
       await page.getByLabel('MCP App fallback').waitFor();
       expect(await page.getByLabel('MCP App fallback').textContent()).toContain('legacy-output-template');
       await page.getByRole('button', { name: 'Close App preview' }).click();
+      await lifecycle.closed('binding-6');
 
       await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
       await frame.waitFor();
+      await lifecycle.initialized('binding-7');
       await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { terminateAndClickClose(phase: 'error'): void } }).__mcpPageAppFixture.terminateAndClickClose('error'));
       await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
       expect(await page.locator('.mcp-page-phase').textContent()).toContain('Session error');
-      const final = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): unknown } }).__mcpPageAppFixture.stats()) as {
-        readonly closes: readonly unknown[];
+      await lifecycle.closed('binding-7');
+      const final = await lifecycle.stats() as McpPageAppLifecycleStats & {
         readonly creates: readonly { readonly request: Readonly<Record<string, unknown>> }[];
       };
-      expect(final.closes).toHaveLength(7);
+      // Every binding the page created was released through exactly one
+      // route call, in creation order: the canonical frames gracefully (the
+      // app acknowledged its teardown), the frameless fallbacks by force.
+      expect(final.creates).toHaveLength(7);
+      expect(final.closes.map(({ bindingId, type }) => `${bindingId}:${type}`)).toEqual([
+        'binding-1:close', 'binding-2:close', 'binding-3:close', 'binding-4:close', 'binding-5:force', 'binding-6:force', 'binding-7:close',
+      ]);
       expect(final.creates.every(({ request }) => !Object.hasOwn(request, 'toolMetadata') && !Object.hasOwn(request, 'resourceUri'))).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
@@ -561,11 +622,12 @@ describe('MCP App page browser integration', () => {
       await page.waitForFunction(() => '__mcpPageAppFixture' in globalThis);
       await page.getByRole('button', { name: 'Open App preview for weather-call' }).click();
       await frame.waitFor();
+      await lifecycle.initialized('binding-1');
       await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { terminateAndClickClose(phase: 'closed'): void } }).__mcpPageAppFixture.terminateAndClickClose('closed'));
       await page.waitForFunction(() => document.querySelector('iframe[title="MCP App preview: weather"]') === null);
       expect(await page.locator('.mcp-page-phase').textContent()).toContain('Session closed');
-      const closedTerminal = await page.evaluate(() => (globalThis as typeof globalThis & { __mcpPageAppFixture: { stats(): { closes: readonly unknown[] } } }).__mcpPageAppFixture.stats().closes);
-      expect(closedTerminal).toHaveLength(1);
+      await lifecycle.closed('binding-1');
+      expect((await lifecycle.stats()).closes.map(({ bindingId, type }) => `${bindingId}:${type}`)).toEqual(['binding-1:close']);
       expect(pageErrors).toEqual([]);
     } finally {
       await browser.close();

@@ -1,0 +1,567 @@
+---
+description: '在 agent-bundle 中以生成式路由模块或手写 stdio 入口编写 MCP 服务器，并了解 MCP App 与插件根目录环境锚点。'
+---
+
+# MCP 服务器与 MCP App
+
+MCP 服务器是插件中可执行的那一半。agent-bundle 提供两种编写方式：**生成式路由模块**，其中文件路径
+就是工具的身份；以及**手写 stdio 入口**，由你自己构造服务器，框架只负责它的进程生命周期。
+
+## 生成式路由服务器
+
+在 `src/mcp/<server>/` 下每个路由放一个模块：
+
+```text
+src/mcp/curator/
+├── tools/status.tsx
+├── resources/catalog.tsx
+├── prompts/triage.tsx
+└── apps/status-panel.tsx
+```
+
+路径提供身份：`src/mcp/curator/tools/status.tsx` 就是 `curator` 服务器的 `status` 工具。服务器的存在
+不需要任何声明。
+
+每个可执行模块导出静态 `config`、它的 schema，以及一个 async 默认 Server Component：
+
+```tsx
+// src/mcp/curator/tools/status.tsx
+import React from 'react';
+import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
+import { Agent, agent } from '@agent-bundle/runtime';
+import { z } from 'zod';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Read runtime status.',
+} satisfies ToolConfig;
+export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
+export const resultSchema = z.object({ status: z.literal('ready') }).strict();
+
+export default async function Status({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+  if (input.verbose) await agent();
+  const result = { status: 'ready' as const };
+  return (
+    <Agent.Result value={result}>
+      <Agent.Text>Runtime is ready.</Agent.Text>
+    </Agent.Result>
+  );
+}
+```
+
+编译器静态读取 `config`，只把 schema 与实现导入生成的入口，装配 `runAgentRequest`，并从路由图推导出
+真实的 MCP 服务器。每次调用都经由一个常驻的内部 Flight 分发器渲染，并把最终的 Agent Document 降级为
+合法的 MCP 输出。Flight 是生成运行时内部的实现传输层——绝不是面向宿主的公开线上协议，原始 Flight
+字节也永远不会跨越 MCP 线路。
+
+路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
+只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：
+
+```tsx
+// src/mcp/widgets/tools/status.tsx
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  _meta: { ui: { resourceUri: 'ui://widgets/status.html' } },
+  annotations: { readOnlyHint: true },
+  description: 'Read runtime status.',
+} satisfies ToolConfig;
+
+export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
+```
+
+路由契约检查（`AB4810`）会跟随相对路径的重新导出（`export { default } from`、
+`export { Page as default } from`），在声明默认导出的那个模块里判断它，因此重新导出背后的同步组件
+仍会在这里被报告。从检查无法读取的包里重新导出的默认导出会被接受，并在路由加载时验证。
+
+`ToolConfig` 与 `ToolRouteProps` 都是公开类型：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Read runtime status.',
+} satisfies ToolConfig;
+```
+
+只有在路由确实需要上下文时才调用 `await agent()`。该句柄暴露本次调用，以及 `host`、`session`、
+`actor`、`workspace`、`plugin` 五个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
+其来源，不知道时则发布带有类型化原因的 `unavailable`。裸 stdio 既不提供 session id 也不提供 HTTP
+actor 认证，因此这两个轴保持诚实的不可用，而不是被伪造出来。
+
+句柄还带有 `lineage`，它是"我的父会话是谁、根会话是什么、我们是否是子代理"这一问题的唯一答案——
+`{ conversation, root, parent?, depth, generation?, subagent?, resolution }`，由常驻运行时的注册表根据
+宿主的子代理 start/stop 与 pre-tool 钩子解析得出；无法解析时则给出带类型化原因的 `unavailable`
+（`id-not-resolvable`、`no-subagent-events`、`no-shared-runtime`、`cloud-agent-no-user-hooks`、
+`unsupported-surface`、`not-provided`）。`resolution` 表示 `parent`/`root`/`depth` 的可信级别：
+`native`（载荷本身给出——Claude 或 Codex 的根会话、Codex 的 `_meta`）、`registry`（注册表把子代理的
+start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿主随后自己说出了这条边——Claude 的
+`Agent` `PostToolUse` 同时带有 spawn 的 `tool_use_id` 与作为子代理的 `tool_response.agentId`——并且
+直到根会话的每一条边都如此）、`transcript`（从载荷所指向的宿主自写 rollout 文件中读取——Codex 会在
+其中记录子代理的父线程与深度，而其钩子载荷并不携带这些字段）、或 `inferred`（Cursor 把子会话绑定到
+唯一一个待定的 `subagentStart`）。一次确认还会为盲选认领的同胞补上 `subagent.toolCallId`，安放 spawn
+窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
+会话背后的人是谁。
+
+当注册表安放了这次请求时，lineage 还会带有 `tree`——还有谁在线，读自同一个注册表，绝不凭空编造：
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // 同一根会话之下所有其他在线会话（任意深度，
+                               // 对子代理而言包含根会话本身），按启动时间从早到晚
+  lineage.value.tree.children; // 以本会话为父节点的在线会话
+  lineage.value.tree.roots;    // 其他在线的根会话（Cursor：同一 workspace_roots）
+}
+```
+
+每个对等节点是 `{ conversation, depth, parent?, startedAt, subagent?, resolution }`——注册表关于该
+节点的事实，以及*它自己*安放的可信级别，与该节点自己发出请求时得到的判断完全一致。已停止的会话不会
+列出；尚未开口的 Cursor 子会话以其 `subagent_id` 列出。注册表没有安放这次请求时（独立钩子进程，或
+Codex `_meta` 指向一个注册表从未见过其启动的线程），`tree` 不存在：此时这一轴仍然回答"我是谁"，但不
+回答"还有谁在这里"。路由单元测试通过与该轴其余部分相同的 `context.lineage` 接缝注入它。
+
+### 终端能力
+
+句柄的最后一个轴是 `terminal`，一个 `Observed<AgentTerminal>`：描述进程的输出流是什么，因此需要自己给
+stderr 上色或给表格定宽的路由，再也不必自行探测 `process.stdout.isTTY` 或读取 `FORCE_COLOR`。框架外壳
+在每次调用时只计算一次，所用规则与选择 CLI 输出模式的规则完全相同，所以插件输出与框架输出总是一致。
+它只是信息——从来不是写入器——也不会改变 `Agent.*` 组件渲染的任何内容。
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 与 fd 2 指向同一个打开的文件（`2>&1`，或同一个终端）
+}
+```
+
+颜色遵循非正式标准的惯常优先级：设置了 `FORCE_COLOR` 时由它直接决定（`0`/`false` 关闭；空值、`1`
+或 `true` 为 basic；`2` 为 256；`3` 为 truecolor），`CLICOLOR_FORCE` 即使对管道也强制开启颜色，
+`NO_COLOR`（任何非空值）与 `CLICOLOR=0` 强制关闭，`TERM=dumb` 不渲染颜色，其余情况下终端按
+`COLORTERM`/`TERM` 声明的深度渲染，管道则不渲染。`COLUMNS`/`LINES` 会覆盖上报的尺寸。
+
+| 路由运行的位置 | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| 路由式 CLI 可执行文件——普通、渲染式或投影的 MCP 命令 | `cli` | 从可执行文件自身进程探测。机器输出独占 stdout，因此 `stdout` 说明文档落在哪里，`stderr` 则是路由可以自行写入的通道。 |
+| 渲染式脚本（`src/scripts/<name>.tsx`） | `script` | 同上，探测得出。 |
+| 生成的 MCP 服务器 | `mcp` | 两者均为 `none`——stdout 是协议线路，stderr 是宿主的日志。从不探测，也从不猜测。 |
+| 事件路由（共享运行时或独立钩子进程） | `hook` | 两者均为 `none`——stdout 是宿主的钩子信封。 |
+| Workbench 生命周期回放 | `workbench` | 两者均为 `none`。 |
+| `defineRscApplication` 适配器 | `mcp` / `cli` | `createRscMcpServer` 两者均挂载 `none`；`runRscCli` 自身不做探测，只挂载调用方在选项中传入的 `terminal`，否则为 `unavailable`（`not-provided`）。 |
+| 未挂载该轴的自定义宿主 | — | `unavailable`（`not-provided`）。 |
+
+导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
+[包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
+一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
+
+## 流式输出与进度
+
+路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
+boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——它是框架在 MCP、渲染式 CLI 与 Workbench 上的
+流式进度表面：
+
+```tsx
+// src/mcp/curator/tools/search.tsx
+import React, { Suspense } from 'react';
+import { Agent } from '@agent-bundle/runtime';
+
+export default async function Search({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  return (
+    <Suspense fallback={<Agent.Progress completed={0} message={`Searching for ${input.query}`} />}>
+      <Results input={input} signal={signal} />
+    </Suspense>
+  );
+}
+```
+
+在 MCP 上，投影器会从每个流式传输的 `shell` 与 `replace` 文档中读取 `Agent.Progress` 节点，并向请求携带了
+`_meta.progressToken` 的客户端发送一条 `notifications/progress`——`progress` 取自 `completed`，存在时附带
+`message` 与 `total`。没有 token 的请求不会收到任何通知。仅有回退内容就足够了：不需要再写一个 `announce()`
+之类的辅助函数，把回退的消息通过 `(await agent()).progress.report()` 重复一遍；即使两者都做，通知也不会重复。
+`progress.report()` 仍然用于宣告那些没有自己 boundary 的步骤（例如对一批文件的循环）。
+
+两种来源都遵守 MCP 的规则：每条通知的 `progress` 必须递增。因此在后续 chunk 中再次流出的同一回退、或其
+`completed` 已被先前报告到达的回退，不会被重发；而推进了 `completed` 的后续回退会被发送。当嵌套的每一级
+boundary 都应到达客户端时，请给它们递增的 `completed` 值。进度节点永远不会成为 `content` 块；留在最终
+文档中的进度节点只是内容。
+
+同一条路由以渲染式 CLI 命令形式暴露（`routes.mcpCommands`）或作为渲染式 `src/cli/**` 命令编写时，交互式
+终端同样会显示这个回退：就地更新的进度行会像来自显式报告一样从流式传输的 `Agent.Progress` 节点绘制，
+仅在回退变化时重绘，并且永远不会打印到管道 Markdown、`--json` 或 `--ndjson` 输出中（在那里该节点只是一个
+文档事件）。Workbench 把该节点渲染为文档内容。钩子没有进度通道。
+
+route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一点：
+`projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
+返回 fixture 的 token 产生的通知；而在 `callTool` 上设置了 `_meta.progressToken` 的
+`openInMemoryMcpServer()` 客户端会通过真实协议收到它们。
+
+## 渲染预算
+
+每次调用都在一个受运行时默认上限约束的渲染会话中进行，其中挂钟上限是 60 秒
+（`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`）。一条合理工作时间超过这一上限的路由——等待一次构建、
+对守护进程长轮询——应在 `config.render` 中声明自己的预算，而不是截短自己的等待再让调用方反复轮询：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Wait for a ticket to settle.',
+  render: { maxElapsedMs: 7_200_000 },
+} satisfies ToolConfig;
+```
+
+`maxElapsedMs` 是一个以毫秒计的正整数，上限为框架天花板 24 小时（从 `agent-bundle` 导出的
+`MAX_ROUTE_RENDER_ELAPSED_MS`）；其他任何值都会在构建时报 `AB4835`。编译器随 `config` 的其余部分静态读取
+该值，因此生成式 MCP 服务器会在该路由的每次 `tools/call`、`resources/read` 与 `prompts/get` 上把它应用到
+渲染会话；该工具的 `routes.mcpCommands` 投影以及渲染式 `src/cli/**` 命令在编译后的命令上携带同一个键
+（`CliRouteConfig` 上的 `config.render`；纯 `.ts` 命令没有渲染会话，会拒绝它）。`renderRoute` 与
+`openInMemoryMcpServer` 同样应用它，叠加在测试作为分发器基线传入的 `limits` 之上。省略 `render` 即保留
+默认值，其他上限（文档大小、事件数量、事件速率）保持不变。
+
+预算只约束框架自身的会话；宿主自己的工具调用期限仍然生效，因此整个等待期间都要持续汇报进度——调用运行
+期间，每次 `progress.report()` 与流式传输的 `Agent.Progress` 回退都会作为 `notifications/progress` 转发。
+Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，或按服务器配置的 `timeout`），其空闲
+计时器（stdio 服务器为 30 分钟）正是由这些通知重置；Codex 以 `tool_timeout_sec` 约束一次调用，除非操作者
+在 `config.toml` 中提高，否则为 60 秒。`agent-bundle inspect --routes` 会随每条路由编译后的 `config`
+一并显示该预算。
+
+## 共享布局
+
+`src/layout.tsx` 是每个渲染式路由外层的组合点——页面框架中 `layout.tsx` 的思路应用到 Agent Document 上。
+它默认导出一个接收 `{ children, route, signal }` 的组件，并在 `children`（路由渲染出的元素）外层渲染
+`Agent.Result`。`src/mcp/<server>/layout.tsx` 嵌套在它之内，只作用于一个生成式服务器；组合顺序是根布局、
+服务器布局、路由。生成式 MCP 工具、资源与提示、渲染式 `src/cli/**` 命令、投影的 MCP 命令以及渲染式
+`src/scripts/*.tsx` 都会被包裹。事件路由是宿主协议响应，浏览器 App 路由是浏览器构建，二者都不会被包裹。
+
+```tsx
+// src/layout.tsx —— 使用者需要编写的全部布局
+import { Agent, type AgentLayoutProps } from '@agent-bundle/runtime';
+import React from 'react';
+
+export default function Layout({ children, route }: AgentLayoutProps) {
+  return (
+    <Agent.Result metadata={{ route: route.id }}>
+      {children}
+    </Agent.Result>
+  );
+}
+```
+
+没有 `value` 的 `Agent.Result` 是一个容器：运行时在解码时把它与路由自己的 `<Agent.Result value={...}>`
+合并，因此路由保留其结果值、`structuredContent` 与内容，布局只添加共享的外壳——一个标题、末尾的
+`Agent.Context` 说明、文档元数据。`metadata` 对象按键合并，容器一方优先；由于 MCP 投影器把根元数据暴露为
+结果的 `_meta`，声明了元数据的布局会改变 `_meta`，没有声明的则保持原样。`route` 是编译期身份（`id`、
+`kind`、`name`，MCP 类型还有 `serverId`），`signal` 是请求中止信号，`await agent()` 在布局中的用法与在
+路由中完全一致。
+
+路由的元素在布局链渲染**之前**解析，因此抛错的路由仍然让整次渲染失败（CLI 退出码 `1`；在 MCP 上是 SDK
+默认的 `isError` 结果或一个 JSON-RPC 错误，且没有布局 `_meta`——见
+[路由抛错时会发生什么](#路由抛错时会发生什么)），而不是被降级为布局外壳之下的 boundary 错误；代价是
+布局无法在 `children` 周围流式输出 `Suspense` 回退。
+默认导出不是函数、或导出了仅属于路由的 `config`/`inputSchema`/`resultSchema` 的布局是 `AB4830`；同一作用域
+下 `.ts` 与 `.tsx` 并存是 `AB4831`；其服务器没有声明任何工具、资源或提示路由的服务器布局是 `AB4832`，而固定为
+`custom`、`command` 或 `remote` 的服务器会完全跳过其布局。route-unit 与 projection 两个测试层级组合同一条
+布局链，因此 `renderRoute('tool:...')` 与 `invokeMcpTool(...)` 证明的是组合后的文档；直接传给 `renderRoute()`
+的模块不会组合任何布局。
+
+## 路由抛错时会发生什么
+
+`Agent.Error` 是受支持的错误路径。错误是文档内部的数据，因此布局外壳、`_meta`、`structuredContent` 与
+`[code] message` 文本都得以保留，线上结果携带 `isError: true`：
+
+```tsx
+export default async function Lookup({ input }: ToolRouteProps<typeof inputSchema>) {
+  const hit = await catalog.find(input.id);
+  if (hit === undefined) {
+    return (
+      <Agent.Result value={{ found: false }}>
+        <Agent.Error code="E_NOT_FOUND">{`No entry is named ${input.id}.`}</Agent.Error>
+      </Agent.Result>
+    );
+  }
+  // …
+}
+```
+
+改为**抛出**异常的路由完全不会被 agent-bundle 投影——没有文档可投影——各个表面自己的默认行为生效。布局外壳
+永远不会包裹它。按表面分列：
+
+| 表面 | 路由的默认导出抛错 | 嵌套的 `Suspense` boundary 被拒绝 |
+| --- | --- | --- |
+| MCP `tools/call` | MCP SDK 的默认工具错误：`{ content: [{ type: 'text', text: <message> }], isError: true }`——没有 `_meta`、没有 `structuredContent`、没有 `[code]` 前缀。会话仍然可用。 | 一个已表示的错误：reconciler 把被拒绝的 boundary 折叠进文档，成为 code 为 `boundary` 的错误节点，因此结果与 `<Agent.Error code="boundary">` 所产生的一致——保留布局 `_meta`，`structuredContent` 来自路由的值，`isError: true`，并在已渲染的内容旁多一个 `[boundary] <message>` 文本块。 |
+| MCP `prompts/get`、`resources/read` | 一个携带该消息的 JSON-RPC 错误响应；客户端调用被拒绝。这些表面没有 `isError` 通道。 | 生成的服务器从同一份已表示文档中返回路由经 `resultSchema` 解析后的值。 |
+| 渲染式 CLI 命令 / 渲染式脚本 | 消息写到 stderr，退出码 `1`；stdout 无输出。 | 事件发生时 `[boundary] message` 写到 stderr；随后文档照常打印——Markdown 带有 `**[boundary]** message`，而在 `--json` 下只输出路由的值（boundary 消息不在 JSON 中；`--ndjson` 携带 `error` 事件本身）。退出码 `1`，与任何非 `success` 文档相同。 |
+| 普通 CLI 命令 / 普通脚本 | 路由式命令：消息写到 stderr，退出码 `1`（用法与输入错误退出码为 `2`）。普通脚本：走 Node 的顶层失败路径——堆栈写到 stderr，退出码 `1`。 | 不适用 |
+| 事件路由（钩子） | 生成的包装器写到 stderr，stdout 无输出，退出码 `1`。`runtime: 'standalone'` 的路由或配置声明的处理器写出抛出的消息；默认**共享**运行时中的路由写出 `Event route rendering failed.`——运行时以通用的 `runtime-failed` 错误应答，原始消息留在运行时进程内部。所有受支持的宿主都把退出码 `1` 记作**非阻塞**错误，因此待执行的动作会像 pass-through 一样继续进行——抛错的 `tool/before` **不会**拒绝。要阻止，请返回 `outcome: 'deny'`。 | 钩子投影只读取 `Agent.Context` 与结果值；错误节点不贡献任何内容。 |
+| `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')`，指明路由与原因；没有文档，也没有事件。 | 正常返回：`document.status === 'represented-error'`，一个 code 为 `boundary` 的 `error` 节点，事件序列为 `shell → error → complete`。 |
+
+投影器有意不把根级抛错包装成 `Agent.Error` 的形状：布局外壳是文档的属性，而根级抛错没有文档。希望在失败时
+带有 code、外壳或结构化内容的路由应渲染 `Agent.Error`；希望嵌套失败不影响文档其余部分的路由应把它放到
+`Suspense` 之后。
+
+## 手写 stdio 入口
+
+在配置中声明、但未指定 `entry`、`command` 或 `url` 的服务器，会识别约定的 `src/mcp/<server-id>.ts`
+模块。当它**默认导出一个服务器工厂函数**时，框架会把它放在生命周期外壳之下运行：
+
+```ts
+// src/mcp/curator.ts — the whole stdio entry a consumer writes
+import { createRscMcpServer } from '@agent-bundle/runtime/plugin';
+
+import { application } from '../application.js';
+
+export default () => createRscMcpServer(application, 'curator');
+```
+
+生成的外壳按顺序提供：在消费者模块求值*之前*把 console 重定向到 stderr、调用工厂函数、为协议帧恢复
+原始的 `process.stdout.write`、构造并连接传输层、SIGINT 退出码 130、SIGTERM 退出码 143、stdin EOF
+退出码 0（以便客户端重新拉起）、传输层关闭退出码 0、对卡死传输层的五秒有界关停竞态，以及 stderr 上
+的心跳与活动日志（五分钟间隔、六十秒活动节流，并以服务器名标注）。
+
+这层保护之所以重要，是因为 stdout 承载着 JSON-RPC 帧：任何被导入模块中一次走神的 `console.log` 都会
+破坏协议流。
+
+自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变。源码校验
+会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
+
+同一套生命周期对手写入口也是公开 API：
+
+```ts
+import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+```
+
+## 在配置中声明服务器
+
+当你需要约定无法表达的东西时再声明服务器——不同的入口路径、target 限制、额外环境变量，或者一个你
+并不编译的命令式或远程服务器：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  mcp: {
+    servers: {
+      curator: { entry: './src/mcp/curator.ts', transport: 'stdio' },
+      remote: { transport: 'streamable-http', url: 'https://example.com/mcp' },
+    },
+  },
+  plugin: { description: 'Library curation tools.', name: 'curator' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `entry` | 要编译的源码模块，或一个 `prebuilt` 标记，指向已声明 payload 中某个已构建好的文件。 |
+| `command` / `args` / `cwd` | 要启动的外部进程，用以替代编译入口。 |
+| `url` / `headers` | 通过 `streamable-http` 访问的远程服务器。 |
+| `transport` | `stdio` 或 `streamable-http`。 |
+| `env` | stdio 服务器的额外环境变量。 |
+| `targets` | 把服务器限制到特定 target。 |
+| `apps` | 注册到该服务器上的浏览器 MCP App。 |
+
+## 插件根目录环境锚点
+
+每个输出的 stdio MCP 服务器入口都带有 `AGENT_BUNDLE_PLUGIN_ROOT` 环境变量，其值是插件安装根目录在
+该 target 上的原生写法：Claude Code 上是 `${CLAUDE_PLUGIN_ROOT}`、可移植格式上是 `${PLUGIN_ROOT}`、
+Cursor 上是 `${CURSOR_PLUGIN_ROOT}`、Codex 上是 `./`，并相对入口的插件根 `cwd` 解析。Codex 没有路径
+token 插值，因此没有插件根工作目录的 Codex stdio 服务器会省略该锚点；由源码构建（`entry:`）的服务器
+在每个 target 上都一定有它。
+
+**请以这个锚点、而不是进程工作目录来解析持久化状态与随包资源。** Claude Code 目前从宿主自身的工作
+目录启动 stdio 服务器，并忽略任何 stdio `cwd` 字段（其占位符表不包含 `cwd`）。因此当工作目录是规范
+插件根——也就是标准的由源码构建（`entry:`）场景——Claude 适配器会**省略** `cwd`，改为在第一个参数前
+加上 `${CLAUDE_PLUGIN_ROOT}/` 使入口路径变为绝对路径，并同时注入环境锚点。这个规范的插件根 `cwd` 是
+Claude 唯一接受的带 token 取值；其他任何携带路径 token 的 `cwd` 都会被拒绝，只有显式编写、且不含 token 的
+`cwd` 才会原样透传。
+
+服务器自身的 `env` 条目优先于注入值，因此声明 `env: { AGENT_BUNDLE_PLUGIN_ROOT: ... }` 会替换该锚点。
+变量名有对应导出，消费者代码永远不必硬编码它：
+
+```ts twoslash
+import { pluginRootEnvAnchor } from 'agent-bundle';
+
+const readPluginRoot = (env: Record<string, string | undefined>): string | undefined =>
+  env[pluginRootEnvAnchor];
+```
+
+在路由内部完全不需要读取这个变量。每个生成的外壳——MCP 入口及其 Flight worker、路由式 CLI 可执行文件
+及其渲染 worker、hook 包装器——都在启动时用 `@agent-bundle/runtime` 的 `resolvePluginRoot` 解析一次
+锚点，把 SQLite 状态、通知账本与 lineage 日志挂载在 `<root>/state` 之下，并在它打开的每个请求上以
+`(await agent()).plugin` 发布同一个值：
+
+```ts
+const { plugin } = await agent();
+if (plugin.state === 'available') {
+  plugin.value.root;      // 安装根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
+  plugin.value.stateRoot; // `<root>/state`，defineState / 通知 / lineage 已经存放于此
+  plugin.source;          // 来自变量为 'native'，来自回退为 'derived'
+}
+```
+
+`source: 'native'` 表示宿主提供了已展开的 `AGENT_BUNDLE_PLUGIN_ROOT`；`'derived'` 表示外壳使用了回退——
+在构建产物内是产物根目录（`mcp/`、`bin/` 或 `hooks/` 的父目录），对 npm 包 bin 则是 `$PWD/.agent-bundle`。
+仍带有未展开 `${…}` token 的值（宿主把清单原样透传）会被视为未设置，在 stderr 上报告一次，且绝不会被
+拼接进路径。约定式 provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
+因此把文件放在框架状态旁边的 provider 自己不必再推导任何东西。route-unit 与 `mcp-in-memory` 测试层级
+以同样方式解析它（回退到 `<项目根目录>/.agent-bundle`），并像其他每个轴一样接受 `context.plugin` 覆盖；
+在生成的作用域之外，该轴为 `unavailable('not-provided')`。
+
+## MCP App
+
+MCP App 是一个浏览器表面，编译为自包含 HTML 并作为资源注册到生成的服务器上。约定位置是
+`src/mcp/<server>/apps/*.{ts,tsx}`，其中必须提供静态 `config.resourceUri`。同一服务器的两个 App 路由
+声明相同的 `config.resourceUri` 会以 `AB4829` 失败并点名两个文件；不同服务器的 App 路由使用相同 URI
+则没有问题，因为每个生成的服务器只注册自己的 App。给文件名加 `_` 前缀即可退出。
+
+在配置中声明 App 可以为它指定显式的 HTML 模板与 target 限制：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  mcp: {
+    servers: {
+      status: {
+        apps: {
+          status: {
+            entry: './views/status-panel.ts',
+            resourceUri: 'ui://mcp-app-example/status.html',
+            targets: ['portable'],
+            template: './views/status-panel.html',
+          },
+        },
+      },
+    },
+  },
+  plugin: { description: 'A service-readiness assistant.', name: 'mcp-app-example' },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+已编译的 App 通过 `agent-bundle/mcp-apps` 提供给服务器代码，编译器会为本地 MCP 服务器替换该子路径。
+在 agent-bundle 编译之外导入它会抛出错误，而不是返回一个空注册表——把不受支持的边界显式化，而不是在
+运行时悄悄失败。
+
+声明在*预构建*服务器上的 App 仍属于开发期表面：Workbench 会实时编译它，而构建假定 payload 已经在
+提供该资源。
+
+### 独立提供 App
+
+在 MCP 宿主之外，App 通常经由 Workbench 的 MCP 页面访问。当插件想要一条“打开仪表盘”的命令——从终端
+出发，在一个普通浏览器标签页里实时查看它自己的服务器——`agent-bundle serve-app` 会独立托管一个已构建的
+App：
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
+同样的 plugin-data 根目录），通过 Workbench MCP 页面所用的同一套宿主栈——沙箱代理、同意授权、
+`McpAppBridge`——把 App 绑定到它上面，先调用一次 App 的工具让它带着数据打开，然后打印 loopback URL。
+宿主只绑定 `127.0.0.1`，只提供一个页面加上由每次启动生成的令牌保护的 `/api/mcp/...` 路由，并且只通过
+桥接暴露那一个服务器；App 文档运行在框架沙箱内的第二个 loopback origin 上。它是本地预览宿主，不是部署
+目标。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
+
+同一套宿主以 `agent-bundle/api` 中的 `serveApp` 提供编程形式，因此插件自己的路由式 CLI 可以提供这条
+命令。它返回 `{ url, close, closed }`：`close()` 拆除宿主与服务器，`closed` 在服务器连接因任何原因
+结束时落定。
+
+```ts
+// src/cli/dashboard.ts —— `hauler dashboard`：针对正在运行的守护进程打开 App。
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  try {
+    // 在 Ctrl-C（经由 signal）或守护进程自行退出时落定。
+    await served.closed;
+  } finally {
+    // `closed` 只跟踪服务器连接；close() 还会释放宿主、沙箱代理与任何一次性产物。
+    await served.close();
+  }
+  return { url: served.url };
+}
+```
+
+`serveApp` 运行在插件的开发期或 CLI 进程里，绝不在 MCP 服务器外壳之内：像上面那样，在需要它的路由中
+惰性导入，这样输出的产物就不携带宿主运行时；同时要保证 `agent-bundle` 在该 CLI 运行之处可被解析。
+用完后务必 `close()`——`closed` 落定只表示服务器连接结束，并不表示宿主已被拆除。
+`autoApprove` 会在 App 请求时代操作者批准列出的同意能力（`call-tool` 让轮询型仪表盘无需弹窗即可刷新）；
+其余能力与 Workbench 一样，在宿主页面里等待 Allow/Deny 决定。
+
+## 服务器模式
+
+当目录约定不该生效时，`routes.servers.<server>` 可以让某个服务器退出路由生成——手写服务器用
+`custom`、外部进程用 `command`、通过 URL 访问的服务器用 `remote`。包含冲突恢复在内的完整模式契约见
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)。
+
+## 运行与检查
+
+```sh
+npx agent-bundle inspect --root . --routes
+npx agent-bundle mcp list --artifact artifact --target claude --server curator
+npx agent-bundle mcp invoke --artifact artifact --target claude --server curator \
+  --tool status --input '{"verbose":true}'
+npx agent-bundle mcp run --artifact artifact --target claude --server curator
+```
+
+`mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有
+服务器名称的摘要），通过 target 适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发子进程的退出码。不带
+`--artifact` 时会先构建一个临时产物。
+
+## 实时宿主 MCP 代理
+
+在开发期间，宿主可以在 `agent-bundle dev` 重建其背后的生成服务器时，始终保持一个 stdio MCP 进程连接
+不断。把宿主的 MCP 服务器命令配置为：
+
+```json
+{
+  "command": "agent-bundle",
+  "args": [
+    "dev",
+    "proxy",
+    "--root",
+    "/absolute/path/to/plugin",
+    "--server",
+    "tools"
+  ]
+}
+```
+
+该代理通过项目的开发锁发现 loopback 服务器，并连接到位于 `/mcp/host/<serverName>` 的稳定 Streamable
+HTTP 端点。`--target` 默认为 `portable`，`--url` 可覆盖发现过程。重建成功时会保持 stdio 连接不断、
+把新调用路由到当前 epoch、让已受理的调用在其原始 epoch 上完成，并转发 MCP 目录变更通知。若 epoch 或
+开发服务器消失，代理会以 MCP 错误以及 `AB8024` 或 `AB8025` 诊断失败关闭。
+
+该端点刻意不做认证，因为开发服务器只绑定 loopback，绝不会暴露到本机之外。
+
+## 下一步
+
+- [脚本与资源](./scripts-assets.mdx) —— 产物中非协议类的可执行文件。
+- [包入口](./package-entries.mdx) —— `bin`、`lib` 与路由式 CLI。

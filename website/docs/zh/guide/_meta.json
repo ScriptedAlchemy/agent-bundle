@@ -1,0 +1,22 @@
+[
+  {
+    "type": "dir-section-header",
+    "name": "start",
+    "label": "开始"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "authoring",
+    "label": "编写"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "development",
+    "label": "开发"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "distribution",
+    "label": "分发"
+  }
+]

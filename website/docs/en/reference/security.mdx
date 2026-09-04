@@ -1,0 +1,95 @@
+---
+description: 'The agent-bundle security boundaries: no provider credentials, loopback-only development surfaces, the Agent API bearer token, installer restraint, and inert Skill Markdown.'
+---
+
+# Security
+
+Most of what follows is a refusal rather than a feature. These are contracts the framework holds
+to, not defaults you can relax with a flag.
+
+## Provider credentials
+
+**This package never accepts, requests, injects, or persists a model-provider API key.**
+
+Native Claude and Codex harnesses use an already installed, signed-in CLI, and they run *after*
+provider-key environment variables have been removed. Credential-shaped material in the `evals`
+configuration block is rejected outright rather than ignored: Agent Bundle reuses the host CLI's
+existing session, and there is no fallback path that reads an API key from configuration.
+
+Each Codex trial sets a temporary `CODEX_HOME` and copies only the installed CLI's opaque
+`auth.json` into it. Your normal Codex home, configuration, and installed-plugin state are not
+used as trial state and are left unchanged. The contributor smoke commands remove provider
+API-key and credential-shaped environment values and fail if the selected host's normal
+configuration, settings, or installed-plugin state changes. For Claude that surface is
+`~/.claude/config.json`, `settings.json`, `settings.local.json`, and `plugins/`, plus — in the
+native contract smoke — the user-scope `mcpServers` registrations inside `~/.claude.json`. The
+rest of `~/.claude.json` is host bookkeeping Claude Code rewrites on every start (cached feature
+flags, first-start and machine identity, usage counters, per-project session statistics) and is
+deliberately not guarded.
+
+Native authenticated smokes are excluded from default and ordinary local test runs, and the
+trusted self-hosted CI workflow that runs them uses an existing subscription session with **no
+workflow secrets**.
+
+## The development server
+
+`agent-bundle dev` binds to **loopback only** and is a foreground development session, not a
+hosted service. The browser is not a trusted input source: it never supplies a command, a working
+directory, a native model, or a credential, and browser-supplied native models and credentials are
+refused. Operations are trusted-local only.
+
+Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are **inert** in the Workbench renderer. A Skill
+document is content to display, not markup to execute.
+
+`agent-bundle serve-app` follows the same model for one MCP App: loopback only, one process
+lifetime, one bound server. Its `/api/mcp/...` routes require a per-launch token that only the served
+document holds, plus same-origin and loopback `Host` checks; the App document runs on a second
+loopback origin inside the framework sandbox, and every App action still crosses the same consent
+authority as in the Workbench (`--allow` pre-approves named capabilities on the operator's behalf).
+It is a local preview host, not a deployment target.
+
+## The Agent API
+
+The Agent API is off by default. When enabled it is an authenticated Streamable HTTP MCP endpoint
+mounted at `/mcp` on the same loopback foreground server, with exactly thirteen fixed, ordered
+tools.
+
+- Startup fails **before serving** if the endpoint is enabled without
+  `AGENT_BUNDLE_AGENT_API_TOKEN`.
+- The fixed token is read once and is never logged, persisted, or returned.
+- Standard `Authorization: Bearer` authentication is required.
+- Clients may omit `Origin`; a supplied origin must match the foreground URL exactly.
+- When the endpoint is disabled it is **absent**, not merely unauthorized.
+
+The operational details are in [Developer Workbench](../guide/development/workbench.mdx).
+
+## Installation
+
+Installing a package never mutates a host's plugin state: **no npm lifecycle performs an
+installation**. The standalone `install.mjs` copies into `~/.cursor/plugins/local/<name>` without
+overwriting collisions, is idempotent for identical content, refuses version or content
+collisions, never invokes `sudo`, and never changes `PATH`.
+
+`agent-bundle doctor` is read-only by construction. It inventories durable state by directory
+entry and filesystem metadata only — it never opens a database — and it never repairs anything.
+
+## Artifact integrity
+
+Content-addressing is the trust anchor for a distributed bundle. Every emitted file carries a
+SHA-256 in `agent-bundle.manifest.json`, so a modified artifact fails validation rather than
+installing quietly, and the `host-install` proof level fails closed when source, built-artifact,
+installed-artifact, and running-process versions disagree.
+
+Path containment is enforced in both directions: a declared logo that escapes the deploy tree
+(`AB6025`), a symlink resolving outside a Cursor bundle (`AB6028`), an installed local plugin whose
+symlink escapes `~/.cursor/plugins/local` (`AB7320`), an eval `runsDir` that leaves the project
+root, and an MCP server name that would traverse out of its state root are all rejected.
+
+## What is not claimed
+
+The package publishes no example RSC provider and no host credentials. The native Claude and Codex
+eval harnesses (`runClaudeTrial`, `runCodexEvalTrial`, `--harness claude|codex`) drive a CLI you
+have already installed and signed in to; they carry no credentials of their own. Third-party notices, including the vendored MCP Inspector snapshot's license and
+provenance, ship in the published package.
+
+See [Limitations](./limitations.mdx) for what the evidence surfaces do **not** prove.

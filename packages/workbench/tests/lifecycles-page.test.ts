@@ -46,6 +46,7 @@ const replay: LifecycleReplay = {
     event: 'tool/after',
     idempotencyKey: 'receipt-a',
     observedAt: '2026-09-01T12:00:00.000Z',
+    payload: { toolName: { nativeKey: 'tool_name', value: 'Write' } },
     provenance: {
       host: 'claude',
       hostContractRevision: 'claude-hooks@1',
@@ -72,6 +73,7 @@ const replay: LifecycleReplay = {
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },
+    lineage: { reason: 'not-provided', state: 'unavailable' },
     session: { reason: 'not-provided', state: 'unavailable' },
     workspace: { source: 'receipt', state: 'available', value: { root: '/workspace' } },
   },

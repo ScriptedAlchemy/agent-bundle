@@ -26,6 +26,11 @@ export interface AgentRouteModule {
 
 export type AgentRouteModuleLoader = () => Promise<AgentRouteModule>;
 
+/** One conventional layout module: the default component the harness composes around a route, as generated workers do. */
+export interface AgentLayoutModule {
+  readonly default: (props: never) => unknown;
+}
+
 /**
  * Where a rendered route came from and what the render proves. Every harness
  * failure reports this block so a red test names the route, the module, the

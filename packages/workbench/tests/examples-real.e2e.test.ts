@@ -5,6 +5,7 @@ import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
+import { inspectWorkbenchSurface, workbenchPageLabel } from '../../agent-bundle/src/test/index.ts';
 import {
   captureExampleState,
   copyExample,
@@ -15,10 +16,36 @@ import {
   writeExampleReport,
 } from './support/example-acceptance.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
-import { replaceWatchedSource } from '../../agent-bundle/tests/support/watched-files.ts';
+import {
+  replaceWatchedSourceAndAwaitRebuild,
+  type WatchedBuildSession,
+} from '../../agent-bundle/tests/support/watched-files.ts';
 import { buildWorkbench, e2e, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 15_000 * timeScale;
+/** One watcher debounce plus a full development rebuild of an example under gate load. */
+const rebuildTimeout = 60_000 * timeScale;
+
+/**
+ * Edits one watched source and waits for the dev server's own rebuild of that
+ * edit to complete before the browser is asked about it. A source write must
+ * not be paired with an immediate manual rebuild: the watcher rebuilds the
+ * same write on its own, and two builds per edit mint two epochs whose
+ * relative timing depends on load — the second one flips the Workbench's
+ * build identity while it may still be loading capabilities for the first.
+ * Waiting on the coordinator's published attempt makes one edit exactly one
+ * build, so no retry is needed to absorb that race.
+ */
+const editWatchedSource = async (
+  server: WatchedBuildSession,
+  projectRoot: string,
+  path: string,
+  content: string,
+  expectedOutcome: 'failed' | 'succeeded',
+): Promise<void> => {
+  const attempt = await replaceWatchedSourceAndAwaitRebuild(server, projectRoot, path, content, { timeoutMs: rebuildTimeout });
+  expect(attempt.outcome).toBe(expectedOutcome);
+};
 
 const waitForExampleValue = async <Value>(
   page: Parameters<typeof captureExampleState>[0],
@@ -38,20 +65,6 @@ const waitForExampleValue = async <Value>(
     );
   }
   return value;
-};
-
-const rebuildFromCurrentPage = async (page: Parameters<typeof captureExampleState>[0]): Promise<void> => {
-  const status = await page.evaluate(async () => {
-    const sessionResponse = await fetch('/api/project/session');
-    const session = await sessionResponse.json() as { readonly token: string };
-    const response = await fetch('/api/project/rebuild', {
-      body: JSON.stringify({ paths: [] }),
-      headers: { 'content-type': 'application/json', 'x-agent-bundle-session': session.token },
-      method: 'POST',
-    });
-    return response.status;
-  });
-  expect(status).toBe(200);
 };
 
 e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, async ({ page }) => {
@@ -108,9 +121,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   }
 });
 
-// #122's delayed duplicate event is signature-gated; this retry still covers the first
-// Chokidar event racing the immediate manual rebuild after each source write.
-e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { retry: 2, timeout: 120_000 }, async ({ page }) => {
+e2e('reveals, retains, repairs, and removes capabilities without reloading Chrome', { timeout: 120_000 * timeScale }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('skills-starter');
   const configPath = join(project.root, 'agent-bundle.config.ts');
@@ -137,8 +148,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
 
-    await writeFile(configPath, hookConfig);
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, configPath, hookConfig, 'succeeded');
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toBeVisible({ timeout: browserTimeout });
     await page.getByRole('link', { name: 'Hooks', exact: true }).click();
@@ -146,8 +156,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-revealed');
 
-    await writeFile(hookSource, 'export default () => ({\n');
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, hookSource, 'export default () => ({\n', 'failed');
     await page.getByRole('link', { name: 'Overview', exact: true }).click();
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
@@ -156,8 +165,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-stale');
 
-    await writeFile(hookSource, healthyHook);
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, hookSource, healthyHook, 'succeeded');
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-repaired');
@@ -165,8 +173,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
     await page.getByRole('link', { name: 'Hooks', exact: true }).click();
     await waitForSettledWorkbench(page);
     await expect(page.locator('#hook-binding option')).not.toHaveCount(0, { timeout: browserTimeout });
-    await writeFile(configPath, originalConfig);
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, configPath, originalConfig, 'succeeded');
     await expect(page).toHaveURL(new URL('#overview', server.url).href, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Hooks', exact: true })).toHaveCount(0, { timeout: browserTimeout });
     await expect(page.getByRole('link', { name: 'Playground', exact: true })).toHaveCount(0, { timeout: browserTimeout });
@@ -179,9 +186,7 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   }
 });
 
-// #122's delayed duplicate event is signature-gated; this retry still covers the first
-// Chokidar event racing the immediate manual rebuild after each source write.
-e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
+e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { timeout: 150_000 * timeScale }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('hooks-and-scripts');
   const hookSource = join(project.root, 'src', 'hooks', 'session-start.ts');
@@ -270,24 +275,17 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { ret
     await expect(page.locator('.logs-details').first()).toHaveAttribute('open', '');
     await captureExampleState(page, 'hooks-and-scripts', 'logs-populated');
 
-    await writeFile(hookSource, 'export default () => ({\n');
+    // The stale-diagnostic and repair journey rides the watcher's own rebuild
+    // of each edit; the Rebuild button's manual path is overview.e2e's claim.
     await page.getByRole('link', { name: 'Overview' }).click();
-    const failedRebuild = page.waitForResponse((response) => response.url() === `${server.url}/api/project/rebuild` && response.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Rebuild' }).click();
-    await failedRebuild;
+    await waitForSettledWorkbench(page);
+    await editWatchedSource(server, project.root, hookSource, 'export default () => ({\n', 'failed');
     await expect(page.getByRole('heading', { name: /Diagnostics \([1-9]/u })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
-    await page.waitForTimeout(500);
     await expect(page.locator('.build-health')).toContainText('Last good build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-stale');
 
-    await writeFile(hookSource, healthyHook);
-    const repaired = page.waitForResponse((response) => response.url() === `${server.url}/api/project/rebuild` && response.request().method() === 'POST' && response.ok());
-    await page.getByRole('button', { name: 'Rebuild' }).click();
-    await repaired;
+    await editWatchedSource(server, project.root, hookSource, healthyHook, 'succeeded');
     await expect(page.getByRole('heading', { name: 'Diagnostics (0)' })).toBeVisible({ timeout: browserTimeout });
-    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
-    await page.waitForTimeout(500);
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'diagnostic-repaired');
     await expectHealthyExamplePage(ledger);
@@ -575,9 +573,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   }
 });
 
-// #122's delayed duplicate event is signature-gated; this retry still covers the first
-// Chokidar event racing the immediate manual rebuild after each staged source replacement.
-e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { retry: 2, timeout: 150_000 }, async ({ page }) => {
+e2e('renders the flagship compiled route catalog by server and kind in real Chrome', { timeout: 150_000 * timeScale }, async ({ page }) => {
   await buildWorkbench();
   const project = await copyExample('audiobook-curator');
   const conversionSource = join(project.root, 'src', 'conversion.ts');
@@ -599,7 +595,13 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     await expect(state).toContainText('workspace-durable', { timeout: browserTimeout });
     await expect(state).toContainText('sqlite', { timeout: browserTimeout });
     await expect(state).toContainText('src/state.ts', { timeout: browserTimeout });
-    await expect(state.locator('button, input, select, textarea')).toHaveCount(0);
+    // The co-mounted notice ledger's retention policy (#99 item 7): the
+    // curator declares none, so the runtime defaults are shown as such.
+    await expect(state).toContainText('Notice retention', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('defaults', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('7d (604800000ms)', { timeout: browserTimeout });
+    await expect(state.locator('.route-state-retention')).toContainText('500', { timeout: browserTimeout });
+    await expect(state.locator('button, input, select, textarea')).toHaveCount(0, { timeout: browserTimeout });
 
     // One generated server owns every MCP kind the curator declares, so each
     // kind must appear as its own server-scoped group rather than a flat list.
@@ -673,6 +675,39 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     expect(projectedMcpRouteIds).toEqual(await tools.locator('.route-id').allTextContents());
     expect(new Set(cliRouteIds).size).toBe(cliRouteIds.length);
     expect(cliRouteIds).toHaveLength(authoredCliRouteIds.length + projectedMcpRouteIds.length);
+
+    // The consumer harness's workbench-surface level claims to hand a test
+    // exactly what this page shows, without a browser. Pin that claim to the
+    // real page: same CLI catalog order, same tool inventory, same headings,
+    // same navigation.
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const surfaceCli = surface.catalog.groups.find((group) => group.label === 'CLI commands');
+    expect(surfaceCli?.entries.map((entry) => entry.route.id)).toEqual(cliRouteIds);
+    expect(surface.catalog.groups.find((group) => group.label === 'curator · Tools')?.entries.map((entry) => entry.route.id))
+      .toEqual(await tools.locator('.route-id').allTextContents());
+    for (const group of surface.catalog.groups) {
+      await expect(page.getByRole('heading', { name: group.label, exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    expect(surfaceCli?.entries.find((entry) => entry.route.id === 'cli:library-audit')?.commandUsage)
+      .toBe(await cli.locator('.route-command').filter({ hasText: 'library-audit' }).textContent());
+    for (const pageName of surface.pages) {
+      await expect(page.getByRole('link', { name: workbenchPageLabel(pageName), exact: true })).toBeVisible({ timeout: browserTimeout });
+    }
+    for (const pageName of surface.unavailablePages) {
+      await expect(page.getByRole('link', { name: workbenchPageLabel(pageName), exact: true })).toHaveCount(0);
+    }
+    // Same rail order, too: `surface.pages` claims the Workbench's own
+    // navigation order, so it must equal the rendered rail (Runtime is a
+    // dev-server runtime capability the surface does not model).
+    // Each rail link is an aria-hidden glyph span followed by the label text node.
+    const railLabels = (await page.getByLabel('Workbench navigation').getByRole('link').evaluateAll((links) =>
+      links.map((link) => Array.from(link.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent ?? '')
+        .join('')
+        .trim())))
+      .filter((label) => label !== 'Runtime');
+    expect(railLabels).toEqual(surface.pages.map(workbenchPageLabel));
     await expect(cli).toContainText('cli:library-audit', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/library-audit.tsx', { timeout: browserTimeout });
     await expect(cli).toContainText('src/cli/shelf.tsx', { timeout: browserTimeout });
@@ -694,7 +729,8 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     // invented: the curator declares no conventional event routes or scripts
     // and discovers one conventional context provider.
     await expect(page.getByRole('region', { name: 'Route graph identity' }).locator('dd').first())
-      .toHaveText('50', { timeout: browserTimeout });
+      .toHaveText(String(surface.catalog.routeCount), { timeout: browserTimeout });
+    expect(surface.catalog.routeCount).toBe(50);
     await expect(page.getByRole('heading', { name: 'Event routes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Scripts', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Context providers', exact: true })).toBeVisible({ timeout: browserTimeout });
@@ -707,8 +743,7 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     // A prepared source revision can move ahead while a failed rebuild keeps
     // the published epoch intact. Reloading the same browser page re-reads that
     // prepared manifest and must identify it as stale until a repair publishes.
-    await replaceWatchedSource(project.root, conversionSource, `${healthyConversion}\nconst = ;\n`);
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
     await page.reload();
     await waitForSettledWorkbench(page);
     await expect(page.locator('.route-state')).toHaveText('stale', { timeout: browserTimeout });
@@ -718,8 +753,7 @@ e2e('renders the flagship compiled route catalog by server and kind in real Chro
     );
     await captureExampleState(page, 'audiobook-curator', 'routes-catalog-stale');
 
-    await replaceWatchedSource(project.root, conversionSource, healthyConversion);
-    await rebuildFromCurrentPage(page);
+    await editWatchedSource(server, project.root, conversionSource, healthyConversion, 'succeeded');
     await waitForSettledWorkbench(page);
     await expect(page.locator('.route-state')).toHaveText('current', { timeout: browserTimeout });
     await expect(page.locator('.routes-page-heading')).toContainText(

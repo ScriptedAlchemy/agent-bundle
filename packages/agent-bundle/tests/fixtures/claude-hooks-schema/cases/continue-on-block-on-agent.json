@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "x",
+            "continueOnBlock": true
+          }
+        ]
+      }
+    ]
+  }
+}

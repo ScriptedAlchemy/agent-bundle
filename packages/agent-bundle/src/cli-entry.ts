@@ -1,5 +1,13 @@
 import type { CompiledCliCommand, CompiledCliOption } from './routes/types.ts';
 import { stableJson } from './core/digest.ts';
+import {
+  detectProcessTerminal,
+  type AgentTerminal,
+  type ProbedTerminalSurface,
+  type TerminalStreamProbe,
+} from './terminal-capability.ts';
+
+export type { AgentTerminal } from './terminal-capability.ts';
 
 /**
  * The framework-owned routed-CLI shell (#102 stage 2): command-tree
@@ -77,16 +85,208 @@ export class CliUsageError extends Error {
 }
 
 /**
+ * One input-validation failure of a routed command, already spelled in CLI
+ * terms (#465): the argument the user typed rather than the schema path.
+ */
+export interface CliInputIssue {
+  /** The plain-language expectation, e.g. `number <= 55000` or `one of: json, text`. */
+  readonly expected: string;
+  /** The schema's own message for the issue, kept for machine consumers. */
+  readonly message: string;
+  /** The value the command received at the issue path; absent when nothing was received. */
+  readonly received?: unknown;
+  /**
+   * The CLI spelling of the failing argument: `--flag` for a named option,
+   * `<name>` for a positional, `--input.<path>` for a projected MCP command,
+   * or `input` when the issue is not attributable to one argument.
+   */
+  readonly target: string;
+}
+
+/** The machine-readable error code of an input-validation failure in `--json` and `--ndjson` output. */
+export const cliInputInvalidCode = 'CLI_INPUT_INVALID';
+
+/**
  * Raised by generated executables when the route module's own `inputSchema`
  * rejects parsed input — invalid input is a usage failure (exit 2), never an
- * execution failure.
+ * execution failure. Construct it through {@link cliInputError} so a schema
+ * failure carries its {@link CliInputIssue} list; the message-only form stays
+ * for failures that are not attributable to individual arguments.
  */
 export class CliInputError extends Error {
-  constructor(message: string) {
+  readonly issues: readonly CliInputIssue[];
+
+  constructor(message: string, issues: readonly CliInputIssue[] = []) {
     super(message);
     this.name = 'CliInputError';
+    this.issues = Object.freeze([...issues]);
   }
 }
+
+/** The structural shape of a zod (v3/v4) issue, matched without importing zod: routed executables resolve zod from the consumer project. */
+interface SchemaIssueLike {
+  readonly code?: unknown;
+  readonly exact?: unknown;
+  readonly expected?: unknown;
+  readonly format?: unknown;
+  readonly includes?: unknown;
+  readonly inclusive?: unknown;
+  readonly keys?: unknown;
+  readonly maximum?: unknown;
+  readonly message: string;
+  readonly minimum?: unknown;
+  readonly origin?: unknown;
+  readonly path: readonly PropertyKey[];
+  readonly pattern?: unknown;
+  readonly prefix?: unknown;
+  readonly suffix?: unknown;
+  readonly values?: unknown;
+}
+
+const isSchemaIssue = (value: unknown): value is SchemaIssueLike =>
+  typeof value === 'object'
+  && value !== null
+  && typeof (value as { readonly message?: unknown }).message === 'string'
+  && Array.isArray((value as { readonly path?: unknown }).path);
+
+const schemaIssuesOf = (error: unknown): readonly SchemaIssueLike[] | undefined => {
+  const issues = (error as { readonly issues?: unknown } | null)?.issues;
+  if (!Array.isArray(issues) || issues.length === 0 || !issues.every(isSchemaIssue)) return undefined;
+  return issues;
+};
+
+/** `number <= 55000`, `non-empty string`, `array with at most 8 items`, `string with exactly 4 characters`, ... */
+const boundLabel = (issue: SchemaIssueLike, direction: 'max' | 'min'): string => {
+  const bound = direction === 'max' ? issue.maximum : issue.minimum;
+  const inclusiveBound = issue.inclusive !== false;
+  const value = String(bound);
+  const quantifier = issue.exact === true
+    ? 'exactly'
+    : direction === 'max'
+      ? (inclusiveBound ? 'at most' : 'fewer than')
+      : (inclusiveBound ? 'at least' : 'more than');
+  switch (issue.origin) {
+    case 'string':
+      if (direction === 'min' && inclusiveBound && bound === 1 && issue.exact !== true) return 'non-empty string';
+      return `string with ${quantifier} ${value} characters`;
+    case 'array':
+    case 'set':
+      return `${String(issue.origin)} with ${quantifier} ${value} items`;
+    default: {
+      const comparator = issue.exact === true
+        ? '=='
+        : direction === 'max' ? (inclusiveBound ? '<=' : '<') : (inclusiveBound ? '>=' : '>');
+      return `${typeof issue.origin === 'string' ? issue.origin : 'value'} ${comparator} ${value}`;
+    }
+  }
+};
+
+/** The string-format refinements keep their operand: the user needs the prefix, suffix, substring, or pattern to fix the value. */
+const formatLabel = (issue: SchemaIssueLike): string => {
+  switch (issue.format) {
+    case 'starts_with':
+      return `string starting with ${JSON.stringify(issue.prefix)}`;
+    case 'ends_with':
+      return `string ending with ${JSON.stringify(issue.suffix)}`;
+    case 'includes':
+      return `string containing ${JSON.stringify(issue.includes)}`;
+    case 'regex':
+      return `string matching ${String(issue.pattern)}`;
+    case 'url':
+      return 'URL';
+    default:
+      return issue.message;
+  }
+};
+
+/** The plain-language expectation of one schema issue; falls back to the schema's message. */
+const expectationOf = (issue: SchemaIssueLike): string => {
+  switch (issue.code) {
+    case 'invalid_type':
+      return typeof issue.expected === 'string' ? issue.expected : issue.message;
+    case 'too_big':
+      return boundLabel(issue, 'max');
+    case 'too_small':
+      return boundLabel(issue, 'min');
+    case 'invalid_value':
+    case 'invalid_enum_value':
+    case 'invalid_literal':
+      return Array.isArray(issue.values)
+        ? `one of: ${issue.values.map((value) => JSON.stringify(value)).join(', ')}`
+        : issue.message;
+    case 'invalid_format':
+    case 'invalid_string':
+      return formatLabel(issue);
+    case 'unrecognized_keys':
+      return Array.isArray(issue.keys)
+        ? `no unknown ${issue.keys.length === 1 ? 'key' : 'keys'} ${issue.keys.map((key) => JSON.stringify(key)).join(', ')}`
+        : issue.message;
+    default:
+      return issue.message;
+  }
+};
+
+const valueAt = (input: unknown, path: readonly PropertyKey[]): unknown => {
+  let cursor: unknown = input;
+  for (const segment of path) {
+    if (cursor === null || typeof cursor !== 'object') return undefined;
+    cursor = (cursor as Record<PropertyKey, unknown>)[segment];
+  }
+  return cursor;
+};
+
+const pathSuffix = (path: readonly PropertyKey[]): string =>
+  path.map((segment) => (typeof segment === 'number' ? `[${String(segment)}]` : `.${String(segment)}`)).join('');
+
+/**
+ * Spells a schema path the way the user typed it: the first segment is the
+ * schema property the compiler projected onto argv (`--kebab-flag` or
+ * `<positional>`); a projected MCP command's whole input arrived through
+ * `--input`, so its path renders as `--input.<path>`.
+ */
+const targetOf = (command: CompiledCliCommand, path: readonly PropertyKey[]): string => {
+  if (path.length === 0) return 'input';
+  if (command.mcp !== undefined) return `--input${pathSuffix(path)}`;
+  const [head, ...rest] = path;
+  const option = command.options.find((candidate) => candidate.key === head);
+  if (option === undefined) return `input${pathSuffix(path)}`;
+  const spelled = option.positional === undefined ? `--${option.option}` : `<${option.option}>`;
+  return `${spelled}${pathSuffix(rest)}`;
+};
+
+/** The one-line human rendering of one input issue. */
+export const cliInputIssueLine = (issue: CliInputIssue): string =>
+  `Invalid value for ${issue.target}: expected ${issue.expected}; received ${
+    issue.received === undefined ? 'nothing' : stableJson(issue.received)
+  }.`;
+
+/**
+ * Maps a route module's `inputSchema` failure onto a {@link CliInputError}
+ * whose issues name the CLI argument, the expectation, and the received
+ * value (#465). Any other thrown value keeps its message, exactly as before.
+ * Generated executables, the routed-CLI test harness, and the rendered-command
+ * harness all call this so every surface reports the same text.
+ */
+export const cliInputError = (
+  command: CompiledCliCommand,
+  input: Readonly<Record<string, unknown>>,
+  error: unknown,
+): CliInputError => {
+  const schemaIssues = schemaIssuesOf(error);
+  if (schemaIssues === undefined) {
+    return new CliInputError(error instanceof Error ? error.message : String(error));
+  }
+  const issues = schemaIssues.map((issue): CliInputIssue => {
+    const received = valueAt(input, issue.path);
+    return {
+      expected: expectationOf(issue),
+      message: issue.message,
+      ...(received === undefined ? {} : { received }),
+      target: targetOf(command, issue.path),
+    };
+  });
+  return new CliInputError(issues.map(cliInputIssueLine).join('\n'), issues);
+};
 
 export interface GeneratedCliExecuteContext {
   /** The raw argv the command consumed, for the provider invocation's `args`. */
@@ -94,13 +294,39 @@ export interface GeneratedCliExecuteContext {
   /** True when `--json` was passed; plain commands already emit canonical JSON. */
   readonly json: boolean;
   readonly signal: AbortSignal;
+  /** The process's terminal capability (#511), probed once by the shell; the executable mounts it as `request.terminal`. */
+  readonly terminal: AgentTerminal;
 }
 
 export interface GeneratedCliRenderContext {
   /** The raw argv the command consumed, for the dispatch invocation's `args`. */
   readonly args: readonly string[];
   readonly signal: AbortSignal;
+  /** The process's terminal capability (#511), the same value that selected the output mode. */
+  readonly terminal: AgentTerminal;
 }
+
+/**
+ * The terminal capability one shell invocation reports (#511): an explicit
+ * value wins (the in-process harness supplies one), otherwise the process's
+ * own streams are probed, with the legacy `isTty` knob standing in for
+ * stdout's TTY-ness so callers that only override that still see a
+ * consistent capability and output mode.
+ */
+const resolveTerminal = (
+  hostSurface: ProbedTerminalSurface,
+  options: { readonly isTty?: () => boolean; readonly terminal?: AgentTerminal },
+): AgentTerminal => {
+  if (options.terminal !== undefined) return options.terminal;
+  if (options.isTty === undefined) return detectProcessTerminal(hostSurface);
+  const stdout: TerminalStreamProbe = {
+    columns: process.stdout.columns,
+    fd: 1,
+    isTTY: options.isTty(),
+    rows: process.stdout.rows,
+  };
+  return detectProcessTerminal(hostSurface, { stdout });
+};
 
 export interface RunGeneratedCliOptions {
   readonly argv: readonly string[];
@@ -112,7 +338,7 @@ export interface RunGeneratedCliOptions {
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliExecuteContext,
   ) => Promise<unknown>;
-  /** True when stdout is an interactive terminal; rendered commands then update progress in place. */
+  /** Overrides stdout's TTY-ness only; rendered commands then update progress in place. Prefer `terminal`. */
   readonly isTty?: () => boolean;
   readonly name: string;
   /** Opens one rendered run for a resolved `.tsx` command with parsed input. */
@@ -122,6 +348,11 @@ export interface RunGeneratedCliOptions {
     context: GeneratedCliRenderContext,
   ) => GeneratedCliRenderSession;
   readonly signal?: AbortSignal;
+  /**
+   * The terminal capability to report and select the output mode from (#511).
+   * Omitted, the shell probes this process's stdout and stderr once.
+   */
+  readonly terminal?: AgentTerminal;
   readonly version: string;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
@@ -482,9 +713,44 @@ export const projectCliDocumentToMarkdown = (document: CliRenderedDocument): str
   return blocks.length === 0 ? '' : `${blocks.join('\n\n')}\n`;
 };
 
-const progressLine = (event: { readonly completed: number; readonly message?: string; readonly total?: number }): string => {
+/** The progress fields a render `progress` event and an `Agent.Progress` document node share. */
+interface CliProgressSource {
+  readonly completed: number;
+  readonly message?: string;
+  readonly total?: number;
+}
+
+const progressLine = (event: CliProgressSource): string => {
   const counter = event.total === undefined ? String(event.completed) : `${String(event.completed)}/${String(event.total)}`;
   return event.message === undefined ? counter : `${event.message} (${counter})`;
+};
+
+/**
+ * The `Agent.Progress` nodes of a streamed `shell`/`replace` document, in
+ * document order — a `Suspense` fallback rendered as `Agent.Progress` is the
+ * route's progress surface, so the interactive TTY shows it exactly as it
+ * shows an explicit `progress.report()` (#448).
+ */
+const progressNodes = (node: CliRenderedDocumentNode): readonly CliProgressSource[] => {
+  switch (node.kind) {
+    case 'result':
+      return node.children.flatMap(progressNodes);
+    case 'progress':
+      return [node];
+    case 'audio':
+    case 'context':
+    case 'error':
+    case 'image':
+    case 'json':
+    case 'markdown':
+    case 'resource':
+    case 'text':
+      return [];
+    default: {
+      const unreachable: never = node;
+      throw new TypeError(`Unsupported Agent Document node ${String((unreachable as { kind?: string }).kind)}.`);
+    }
+  }
 };
 
 const clearProgressLine = '\r\u001B[2K';
@@ -509,6 +775,21 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
   const reader = options.session.events().getReader();
   let complete: CliRenderedDocument | undefined;
   let progressShown = false;
+  const showProgress = (source: CliProgressSource): void => {
+    if (mode !== 'tty') return;
+    writeOut(`${clearProgressLine}${progressLine(source)}`);
+    progressShown = true;
+  };
+  // A fallback is re-streamed with every chunk that leaves its boundary
+  // pending; the line is redrawn only when the fallback itself changed. A TTY
+  // has no monotonic constraint, so an explicit report always redraws.
+  const shownFallbacks = new Set<string>();
+  const showFallback = (node: CliProgressSource): void => {
+    const key = JSON.stringify([node.completed, node.message, node.total]);
+    if (shownFallbacks.has(key)) return;
+    shownFallbacks.add(key);
+    showProgress(node);
+  };
   const clearProgress = (): void => {
     if (progressShown) {
       writeOut(clearProgressLine);
@@ -526,12 +807,10 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
       switch (event.type) {
         case 'shell':
         case 'replace':
+          for (const node of progressNodes(event.document.root)) showFallback(node);
           break;
         case 'progress':
-          if (mode === 'tty') {
-            writeOut(`${clearProgressLine}${progressLine(event)}`);
-            progressShown = true;
-          }
+          showProgress(event);
           break;
         case 'error':
           if (mode !== 'ndjson') {
@@ -601,6 +880,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
 
   let node = tree;
   let index = 0;
+  let parsed: ParsedArgv | undefined;
   try {
     if (options.argv[0] === '--version') {
       writeOut(`${options.name} ${options.version}\n`);
@@ -643,8 +923,11 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       writeOut(commandHelp(options.name, command));
       return 0;
     }
-    const parsed = parseMcpCommandInput(command, parseCommandArgv(command, rest));
+    parsed = parseMcpCommandInput(command, parseCommandArgv(command, rest));
     signal.throwIfAborted();
+    // Probed once: the same value selects the output mode and reaches the
+    // route as `request.terminal`, so the two can never disagree.
+    const terminal = resolveTerminal('cli', options);
     if (command.rendered) {
       if (options.render === undefined) {
         throw new Error(`Rendered command ${command.path.join(' ')} has no render host.`);
@@ -653,10 +936,10 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
         ? 'ndjson'
         : parsed.json
           ? 'json'
-          : (options.isTty ?? (() => process.stdout.isTTY === true))()
+          : terminal.stdout.kind === 'tty'
             ? 'tty'
             : 'markdown';
-      const session = options.render(command, parsed.input, { args: rest, signal });
+      const session = options.render(command, parsed.input, { args: rest, signal, terminal });
       try {
         return await runRenderedInvocation({
           exitCode: command.exitCode,
@@ -671,7 +954,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       }
     }
     if (parsed.ndjson) throw new CliUsageError('--ndjson requires a rendered command.');
-    const result = await options.execute(command, parsed.input, { args: rest, json: parsed.json, signal });
+    const result = await options.execute(command, parsed.input, { args: rest, json: parsed.json, signal, terminal });
     signal.throwIfAborted();
     const exitCode = resultExitCode(command.exitCode, result);
     writeOut(`${stableJson(result === undefined ? null : result)}\n`);
@@ -681,13 +964,68 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       writeErr('Aborted.\n');
       return 1;
     }
+    const helpPath = node.path.length === 0 ? '' : ` ${node.path.join(' ')}`;
+    const helpHint = `Run '${options.name}${helpPath} --help' for usage.\n`;
+    if (error instanceof CliInputError && error.issues.length > 0 && node.command !== undefined) {
+      writeInputIssues({
+        command: node.command,
+        issues: error.issues,
+        mode: parsed?.ndjson === true ? 'ndjson' : parsed?.json === true ? 'json' : 'text',
+        name: options.name,
+        writeErr,
+        writeOut,
+      });
+      if (parsed?.json !== true && parsed?.ndjson !== true) writeErr(helpHint);
+      return 2;
+    }
     const usage = error instanceof CliUsageError || error instanceof CliInputError;
     writeErr(`${error instanceof Error ? error.message : String(error)}\n`);
-    if (usage) {
-      const helpPath = node.path.length === 0 ? '' : ` ${node.path.join(' ')}`;
-      writeErr(`Run '${options.name}${helpPath} --help' for usage.\n`);
-    }
+    if (usage) writeErr(helpHint);
     return usage ? 2 : 1;
+  }
+};
+
+interface InputIssuesReport {
+  readonly command: CompiledCliCommand;
+  readonly issues: readonly CliInputIssue[];
+  readonly mode: 'json' | 'ndjson' | 'text';
+  readonly name: string;
+  readonly writeErr: (text: string) => void;
+  readonly writeOut: (text: string) => void;
+}
+
+/**
+ * Reports input-validation issues (#465) per output mode: plain text on
+ * stderr, one issue per line and the exact usage line; `--json` keeps stdout
+ * empty and writes one canonical error object to stderr; `--ndjson` keeps the
+ * stdout stream machine-only with one canonical error event.
+ */
+const writeInputIssues = (report: InputIssuesReport): void => {
+  const usage = commandUsage(report.name, report.command);
+  switch (report.mode) {
+    case 'json':
+      report.writeErr(`${stableJson({ error: { code: cliInputInvalidCode, issues: report.issues, usage } })}\n`);
+      return;
+    case 'ndjson':
+      report.writeOut(`${stableJson({
+        error: {
+          code: cliInputInvalidCode,
+          issues: report.issues,
+          message: report.issues.map(cliInputIssueLine).join('\n'),
+          usage,
+        },
+        sequence: 0,
+        type: 'error',
+      })}\n`);
+      return;
+    case 'text':
+      for (const issue of report.issues) report.writeErr(`${cliInputIssueLine(issue)}\n`);
+      report.writeErr(`${usage}\n`);
+      return;
+    default: {
+      const unreachable: never = report.mode;
+      throw new TypeError(`Unsupported output mode ${String(unreachable)}.`);
+    }
   }
 };
 
@@ -696,11 +1034,14 @@ export interface RunGeneratedRenderedScriptOptions {
   /** Opens one rendered run for the script with the mode flags removed from argv. */
   readonly createSession: (
     argv: readonly string[],
-    context: { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
   ) => GeneratedCliRenderSession;
+  /** Overrides stdout's TTY-ness only. Prefer `terminal`. */
   readonly isTty?: () => boolean;
   readonly name: string;
   readonly signal?: AbortSignal;
+  /** The terminal capability to report and select the output mode from (#511); probed from the process when omitted. */
+  readonly terminal?: AgentTerminal;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
 }
@@ -728,14 +1069,15 @@ export const runGeneratedRenderedScript = async (
   }
   const argv = options.argv.filter((argument, index) =>
     (terminator !== -1 && index > terminator) || (argument !== '--json' && argument !== '--ndjson'));
+  const terminal = resolveTerminal('script', options);
   const mode: CliOutputMode = ndjson
     ? 'ndjson'
     : json
       ? 'json'
-      : (options.isTty ?? (() => process.stdout.isTTY === true))()
+      : terminal.stdout.kind === 'tty'
         ? 'tty'
         : 'markdown';
-  const session = options.createSession(argv, { signal });
+  const session = options.createSession(argv, { signal, terminal });
   try {
     return await runRenderedInvocation({
       exitCode: 'zero',

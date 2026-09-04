@@ -1,0 +1,79 @@
+---
+description: '钩子与脚本示例：一个 session-start 钩子、两个输出脚本（其中一个带阻断性退出码）、持久的 Playground 轨迹，以及一次可逆的诊断演练。'
+---
+
+# 钩子与脚本
+
+一次无需凭据的发布准备会话。它证明的是两个最容易手工写错的契约：生成的钩子包装器，以及框架为编写好的
+脚本套上的那层进程外壳。
+
+- **在仓库根目录运行：** `pnpm example:hooks`
+- **包名：** `@agent-bundle-example/hooks-and-scripts`
+- **公开依赖：** `agent-bundle`（`workspace:*`）
+- **Target：** `portable`、`codex`、`claude`
+- **凭据：** 不需要——示例只读取 `release/` 下签入的 JSON
+- **源码：** [`examples/hooks-and-scripts`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/hooks-and-scripts)
+
+## 它证明什么
+
+- **钩子是写成处理函数，而不是宿主文档。** `src/hooks/session-start.ts` 只是一个模块。构建会把它降级为
+  各宿主自己的钩子文档形状，并输出运行它的包装器。见[钩子](../guide/authoring/hooks.mdx)。
+- **两种脚本声明方式都在。** `verify-release` 按约定发布——`src/scripts/` 下任何未被声明占用的普通脚本
+  都会被发现——而 `detect-risk` 保持显式配置，因为它要把自己的 target 限制为 `portable`。示例故意让两种
+  方式都有覆盖。
+- **进程外壳属于框架。** 两个脚本都导出 `main` 并返回退出码。argv 处理、等待与退出码采纳都归生成的外壳
+  所有，因此一个非零返回值会变成真正的阻断性退出，而不是被吞掉的返回值。见
+  [脚本与资源](../guide/authoring/scripts-assets.mdx)。
+- **输出的脚本自行解析自己的资源。** `assets: ['release/*.json']` 把发布清单与风险登记表复制进每个
+  target，而每个输出脚本都相对自己所在的模块去读取它们——而不是相对 shell 的工作目录。
+- **失败的重建保留上一个可用产物。** 这就是下面那段可逆演练。
+
+## 编写了什么
+
+| 路径 | 是什么 |
+| --- | --- |
+| `src/hooks/session-start.ts` | `sessionStart` 处理函数，把发布会话导向那两项检查。 |
+| `src/scripts/verify-release.ts` | 以清单为依据的打包检查，按约定被发现。 |
+| `src/scripts/detect-risk.ts` | 风险登记表检查，显式配置以限制它的 target。 |
+| `release/release-manifest.json` | 被作为资源复制的打包发布清单。 |
+| `release/risk-register.json` | 阻断性检查读取的风险登记表。 |
+
+## 在 Workbench 中操作
+
+1. **Overview** 把编写好的钩子与它的输出产物、演练轨迹和评估页面关联起来。它的状态就是“当前或已过期”
+   epoch 状态的权威来源。
+2. **Hooks** 默认选中 Claude 的 `sessionStart` 绑定，并带有已填充的内联规范 JSON，其中包含
+   `"source": "workbench"`。运行这次模拟，然后用 **Replay saved simulation** 精确重放那份绑定到该
+   epoch 的输入。
+3. **Playground** 默认是脚本执行、Claude target 与 `verify-release`。运行它并等待会话定稿：输出的脚本
+   读取自己模块旁边打包好的 `release/release-manifest.json`，并报告 2.4.0 版本已可打包。
+4. 把 target 换成 portable 并选择 `detect-risk`。它读取 `release/risk-register.json`，报告高严重级别的
+   `REL-204`，以退出码 2 结束，并定稿一条持久的阻断性轨迹。
+5. **Logs** 可按生产者、级别、种类或上下文过滤这些生产者记录；打开某条记录即可查看原始细节。
+   **Artifacts** 是输出文件与来源视图，而 **Comparisons** 只有在有两次记录的 eval 运行之后才会对齐结果。
+
+## 可逆的诊断演练
+
+签入的项目是健康的，所以要看到“上一个可用产物”的行为，就得故意把它弄坏。把
+`src/hooks/session-start.ts` 的函数体临时替换为一个语法不完整的处理函数，按 **Rebuild**，并等待
+**Failed** 这个已完成状态。Workbench 会报告新的诊断，同时继续提供上一个可用产物。恢复签入的处理函数，
+再按一次 **Rebuild**，等到 **Idle**：一个新的活跃 epoch 会替换过期状态并清除该诊断。
+
+不要把 Building 状态读成修复已完成——新的活跃 epoch 才是证据。
+
+## 非交互检查
+
+在仓库级 `pnpm build` 之后：
+
+```sh
+cd examples/hooks-and-scripts
+pnpm validate
+pnpm build
+```
+
+`pnpm check` 是同一对“校验加构建”，只用一条命令。想在不打开 Workbench 的情况下检视输出的钩子包装器，
+可以用命令行自身的钩子表面：
+
+```sh
+pnpm exec agent-bundle hooks list --artifact artifact
+```

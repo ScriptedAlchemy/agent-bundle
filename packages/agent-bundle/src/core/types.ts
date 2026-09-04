@@ -5,7 +5,7 @@ import type {
   AgentEventRuntimeMode,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledProvider } from '../routes/types.ts';
+import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
 
@@ -54,6 +54,8 @@ export const eventRouteOnlyHookEvents = Object.freeze([
   'taskCreate',
   'taskComplete',
   'agentIdle',
+  'modelSwitchBefore',
+  'modelSwitchAfter',
 ] as const);
 
 export type EventRouteOnlyHookEvent = (typeof eventRouteOnlyHookEvents)[number];
@@ -269,6 +271,24 @@ export type AgentBundleHookInput =
 /** False disables the conventional src/state.ts module. */
 export type AgentBundleStateConfig = false;
 
+/**
+ * Retention policy of the notice ledger a stateful project co-mounts beside
+ * `src/state.ts` (#99). Omitted fields keep the runtime defaults: seven days,
+ * 500 terminal notices, a 16 MiB journal.
+ */
+export interface AgentBundleNoticeRetentionConfig {
+  /** Retained journal bytes above which the ledger compacts its store onto the head. */
+  readonly maxJournalBytes?: number;
+  /** Most terminal notices kept regardless of age. */
+  readonly maxTerminal?: number;
+  /** How long a terminal notice is kept after it settled: milliseconds, or a duration such as `'7d'`, `'12h'`, `'30m'`, `'90s'`. */
+  readonly terminalTtl?: number | string;
+}
+
+export interface AgentBundleNoticesConfig {
+  readonly retention?: AgentBundleNoticeRetentionConfig;
+}
+
 export interface AgentBundleDevRuntimeConfig {
   readonly provider: string;
 }
@@ -295,6 +315,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   lib?: AgentBundleLibConfig;
   marketplace?: boolean;
   mcp?: AgentBundleMcpConfig;
+  notices?: AgentBundleNoticesConfig;
   output?: AgentBundleOutputConfig;
   payload?: AgentBundlePayloadConfig;
   plugin: AgentBundlePluginConfig;
@@ -582,6 +603,24 @@ export interface NormalizedConfigExtension {
   readonly value: unknown;
 }
 
+/**
+ * One language-server component (`lsp` kind, #100). LSP servers are declared
+ * through a host config extension's `lspServers` record (today only Claude
+ * documents such a surface: `claude.lspServers` → plugin-root `.lsp.json`).
+ * The component is still accounted against every selected target so each
+ * host's `lsp` capability row explains emission or omission; the declaring
+ * host keeps lowering and validating the server configuration itself.
+ */
+export interface NormalizedLspServer {
+  /** The config extension key that declared the server (for example `claude`). */
+  readonly declaredBy: string;
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: SourceProvenance;
+  /** Selected targets whose adapter lowers the declaring extension; other hosts are excluded by the declaration. */
+  readonly targets: readonly string[];
+}
+
 /** The selected runtime floor for generated executables, written to artifact metadata. */
 export interface NormalizedRuntime {
   readonly node: string;
@@ -608,6 +647,29 @@ export interface NormalizedStateDefinition {
   readonly source: string;
 }
 
+/** Resolved notice retention policy in the runtime's units (milliseconds, counts, bytes). */
+export interface NormalizedNoticeRetentionPolicy {
+  readonly maxJournalBytes: number;
+  readonly maxTerminal: number;
+  readonly terminalTtlMs: number;
+}
+
+/**
+ * The project's notice retention policy: the fields `notices.retention`
+ * declared (already converted to runtime units) and the fully resolved
+ * policy the generated runtime mounts. Present only when the config declares
+ * `notices.retention`; the runtime defaults apply otherwise.
+ */
+export interface NormalizedNoticeRetention {
+  readonly declared: Partial<NormalizedNoticeRetentionPolicy>;
+  readonly provenance: SourceProvenance;
+  readonly resolved: NormalizedNoticeRetentionPolicy;
+}
+
+export interface NormalizedNotices {
+  readonly retention: NormalizedNoticeRetention;
+}
+
 export interface NormalizedPlugin {
   /**
    * Project-level copied assets. Normalizers always provide this collection;
@@ -627,6 +689,12 @@ export interface NormalizedPlugin {
   /** Adapter-declared host-native workflow directories, enumerated during normalization. */
   readonly hostWorkflows?: readonly NormalizedHostPayloadDirectory[];
   readonly hooks: readonly NormalizedHook[];
+  /**
+   * Language-server components declared through host config extensions.
+   * Present only when a selected host extension declares `lspServers`;
+   * optional so hand-constructed models predating the kind remain valid.
+   */
+  readonly lspServers?: readonly NormalizedLspServer[];
   readonly marketplace?: true;
   readonly metadata: NormalizedMetadata;
   readonly mcpServers: readonly NormalizedMcpServer[];
@@ -637,6 +705,8 @@ export interface NormalizedPlugin {
    */
   readonly mcpApps?: readonly NormalizedMcpApp[];
   readonly nativeHooks?: readonly NormalizedNativeHook[];
+  /** Notice ledger policy declared by `notices` config; absent means runtime defaults. */
+  readonly notices?: NormalizedNotices;
   /**
    * The framework-owned npm package build (bin + lib outputs). Present only
    * when configured or discovered by convention; optional so hand-constructed
@@ -649,6 +719,8 @@ export interface NormalizedPlugin {
    * models predating prebuilt payloads stay valid.
    */
   readonly payloads?: readonly NormalizedPayload[];
+  /** Conventional layout modules composed around every rendered route (root first, then the owning server's). */
+  readonly layouts?: readonly CompiledLayout[];
   /** Conventional context providers executed for every generated render request. */
   readonly providers?: readonly CompiledProvider[];
   /**
@@ -705,9 +777,18 @@ export interface NormalizationTargetRegistry {
     targetNames: readonly string[],
   ): readonly NormalizationHostBinSource[];
   capabilityState?(name: string, capability: string): CapabilityState | undefined;
+  /**
+   * The judgment that decides component emission for one target: the
+   * adapter's `componentCapabilities` override when it publishes one (a key
+   * it omits reads as no row), otherwise its `capabilities`. Emission and
+   * `inspect` accounting must consult the same judgment.
+   */
+  componentCapabilityState?(name: string, capability: string): CapabilityState | undefined;
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
+  /** True when the target's adapter reads the config extension `key` (its own key or a declared composite side). */
+  lowersConfigExtension?(name: string, key: string): boolean;
   nativeHookSources?(
     config: Readonly<AgentBundleConfig>,
     targetNames: readonly string[],

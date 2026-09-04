@@ -1,14 +1,14 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { expect, it } from '@rstest/core';
+import { beforeAll, expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
-import { cachedNpmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, linkWorkspaceTypes, sharedPackedTarball } from './support/shared-pack.ts';
 
 interface PackageManifest {
   bin: {
@@ -50,6 +50,31 @@ const producerFrom = async (output: string): Promise<{ readonly name: string; re
   ) as { readonly producer: { readonly name: string; readonly version: string } };
   return manifest.producer;
 };
+
+/**
+ * Warms this worker's npm cache with the packed tarball's full dependency
+ * tree once, so the three consumer installs below are cache-backed
+ * (`--prefer-offline` then serves every tarball and metadata record from
+ * disk). The download is the one network-bound step in this file: about
+ * 180 MB of registry tarballs, and a CI runner's npm cache is empty at job
+ * start (pnpm/setup caches only the pnpm store), so the Release gates and
+ * Verify jobs always pay it exactly once here, never inside a test's 30 s
+ * budget. The budget below covers that cold download on a slow runner
+ * network; a warm worker cache finishes in a few seconds.
+ */
+beforeAll(async () => {
+  const { tarball } = await sharedPackedTarball('agent-bundle');
+  const warmRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-npm-warm-'));
+  try {
+    await writeFile(join(warmRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', ...cachedNpmInstallArguments, tarball],
+      { cwd: warmRoot, env: isolatedCommandEnvironment() },
+    );
+  } finally {
+    await rm(warmRoot, { force: true, recursive: true });
+  }
+}, 180_000);
 
 it('writes the package version as the producer of a packed CLI manifest', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
@@ -109,11 +134,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
         ].join('\n'),
       ], { cwd: consumerRoot, env: isolatedCommandEnvironment() }),
     ).resolves.toMatchObject({ stderr: '', stdout: '' });
-    await symlink(
-      join(workspaceRoot, 'node_modules', '@types'),
-      join(consumerRoot, 'node_modules', '@types'),
-      'dir',
-    );
+    await linkWorkspaceTypes(consumerRoot);
     await writeFile(join(consumerRoot, 'config.mts'), [
       "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
       '',
@@ -151,6 +172,19 @@ it('imports the externalized config entry from a packed npm consumer', async () 
         : '';
       throw new Error(`Packed config typecheck failed.\nstdout:\n${stdout}\nstderr:\n${stderr}`, { cause: error });
     }
+    // The aliased artifact runtime's declarations must stay self-contained
+    // for a consumer without the optional runtime peer's `notices` subpath
+    // (#99 close-out): its notice binding is spelled locally, so no public or
+    // aliased declaration resolves through `@agent-bundle/runtime/notices`.
+    const installedDist = join(consumerRoot, 'node_modules', 'agent-bundle', 'dist');
+    // Module specifiers only: a doc comment may name the subpath, an import may not.
+    const noticesSpecifier = /(?:from\s*|import\(\s*)['"]@agent-bundle\/runtime\/notices(?:\/[^'"]*)?['"]/u;
+    for (const declaration of ['mcp-server-runtime.d.ts', 'api.d.ts', 'index.d.ts', 'adapters/notice-delivery.d.ts', 'adapters/types.d.ts']) {
+      const text = await readFile(join(installedDist, declaration), 'utf8');
+      expect(text, declaration).not.toMatch(noticesSpecifier);
+    }
+    const aliasedRuntime = await readFile(join(installedDist, 'mcp-server-runtime.d.ts'), 'utf8');
+    expect(aliasedRuntime).toContain('GeneratedNoticeDeliveryBinding');
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }
@@ -195,7 +229,9 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
         mcpServers: {
           fixture: {
             args: ['mcp/server.mjs'],
-            command: process.execPath,
+            // Bare executable name, as the compiler emits: Agent Plugins §7.2.1
+            // forbids absolute command paths and the build now fails closed.
+            command: 'node',
             cwd: '${PLUGIN_ROOT}',
             type: 'stdio',
           },

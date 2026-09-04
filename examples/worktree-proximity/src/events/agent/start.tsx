@@ -3,8 +3,8 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
-import { deliveryContexts, nativeString } from '../../event-support.js';
+import { withIntent, withNotices } from '../../coordination.js';
+import { carriedChild, deliveryContexts, nonEmpty } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -13,8 +13,7 @@ export const config = {
 
 export default async function AgentStart({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'agent/start'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -24,14 +23,19 @@ export default async function AgentStart({
     );
   }
 
-  const agentId = nativeString(native, 'agent_id');
-  const sessionId = nativeString(native, 'session_id');
-  if (agentId === undefined || sessionId === undefined) {
-    const refusal = agentId === undefined
+  // The runtime's `request.lineage` names the child and its parent when the
+  // registry resolved this start; the payload's `agentId` + `sessionId` pair
+  // is the fallback. Neither present is a refusal, never a guess. The edge
+  // itself (parent, depth, root) is the registry's to keep: this route
+  // records only which worktree the child works in.
+  const child = await carriedChild(canonical.payload);
+  if (child === undefined) {
+    const sessionId = nonEmpty(canonical.payload.sessionId?.value);
+    const refusal = nonEmpty(canonical.payload.agentId?.value) === undefined
       ? 'agent/start omitted native agent_id; refused to fabricate a topology edge'
       : 'agent/start omitted native session_id; refused to fabricate a topology edge';
-    const topologyResult = await withTopology(async (topology) => {
-      await topology.dispatch('edgeRefused', {
+    const intentResult = await withIntent(async (intent) => {
+      await intent.dispatch('edgeRefused', {
         idempotencyKey: canonical.idempotencyKey,
         observedAt: canonical.observedAt,
         reason: refusal,
@@ -42,7 +46,7 @@ export default async function AgentStart({
     });
     const noticeResult = await withNotices(async (notices) => notices.read());
     const contexts = [
-      ...(topologyResult.state === 'unavailable' ? [topologyResult.reason] : []),
+      ...(intentResult.state === 'unavailable' ? [intentResult.reason] : []),
       ...(noticeResult.state === 'available'
         ? deliveryContexts(noticeResult.value)
         : [noticeResult.reason]),
@@ -56,31 +60,19 @@ export default async function AgentStart({
     );
   }
 
-  const topologyResult = await withTopology(async (topology) => {
-    await topology.dispatch('actorObserved', {
-      id: agentId,
-      kind: 'child',
-      parentSessionId: sessionId,
-      provenance: {
-        id: 'native',
-        parentSessionId: 'native',
-      },
-      status: 'active',
-    }, {
-      idempotencyKey: `${canonical.idempotencyKey}:actor`,
-    });
-    await topology.dispatch('actorBound', {
-      actorId: agentId,
-      provenance: 'native',
+  const intentResult = await withIntent(async (intent) => {
+    await intent.dispatch('actorBound', {
+      actorId: child.id,
+      provenance: { actorId: child.source, worktreeRoot: 'native' },
       worktreeRoot: currentWorktree.root,
     }, {
       idempotencyKey: `${canonical.idempotencyKey}:worktree`,
     });
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }

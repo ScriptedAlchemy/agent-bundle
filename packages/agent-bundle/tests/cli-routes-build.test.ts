@@ -69,11 +69,17 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '',
     ].join('\n')),
     // A conventional request context provider (#313): every generated request
-    // scope — plain CLI, rendered CLI, rendered script — mounts the same value.
+    // scope — plain CLI, rendered CLI, projected MCP command, rendered script —
+    // mounts the same value.
     writeProjectFile(root, 'src/providers/library-tooling.ts', [
       'export default async function libraryTooling({ invocation, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
-      "  return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      // Branching on the documented kind fails loudly if a surface ever posts
+      // no invocation to its worker again (#319 review).
+      "  switch (invocation.kind) {",
+      "    case 'cli': case 'script': case 'tool': return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      "    default: throw new Error(`unexpected invocation kind ${String(invocation.kind)}`);",
+      '  }',
       '}',
       '',
     ].join('\n')),
@@ -143,11 +149,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
-      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string() }).strict();",
+      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string(), tooling: z.string() }).strict();",
       'export default async function Lookup({ input }) {',
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
-      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId };',
+      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
       '  return <Agent.Result value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
       '}',
       '',
@@ -240,9 +246,31 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
 
   // Usage and input-validation failures exit 2 with diagnostics on stderr only.
   await expect(execFile(binPath, ['unknown'])).rejects.toMatchObject({ code: 2, stdout: '' });
+  // The packed executable spells a schema rejection in CLI terms (#465): the
+  // argument, the expectation, the received value, then the usage line —
+  // never the raw zod issue JSON.
   const tooMany = execFile(binPath, ['library', 'audit', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
-  await expect(tooMany).rejects.toMatchObject({ code: 2, stdout: '' });
-  await expect(tooMany).rejects.toMatchObject({ stderr: expect.stringContaining('sources') });
+  await expect(tooMany).rejects.toMatchObject({
+    code: 2,
+    stderr: [
+      'Invalid value for <sources>: expected array with at most 8 items; received ["a","b","c","d","e","f","g","h","i"].',
+      'Usage: cli-bin-fixture library audit [options] <sources...>',
+      "Run 'cli-bin-fixture library audit --help' for usage.",
+      '',
+    ].join('\n'),
+    stdout: '',
+  });
+  const tooManyJson = execFile(binPath, ['library', 'audit', '--max-findings', '-1', 'a', '--json']);
+  await expect(tooManyJson).rejects.toMatchObject({ code: 2, stdout: '' });
+  await tooManyJson.catch((failure: { readonly stderr: string }) => {
+    expect(JSON.parse(failure.stderr)).toEqual({
+      error: {
+        code: 'CLI_INPUT_INVALID',
+        issues: [{ expected: 'number >= 0', message: expect.any(String), received: -1, target: '--max-findings' }],
+        usage: 'Usage: cli-bin-fixture library audit [options] <sources...>',
+      },
+    });
+  });
 
   // The rendered .tsx command (#102 stage 3) renders through the dispatcher
   // against the sibling react-server worker.
@@ -271,10 +299,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   const projectedJson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"packed"}', '--json',
   ]);
+  // The projected command's provider sees `invocation.kind === 'tool'`, not the
+  // CLI surface it was typed on (#319 review).
   expect(JSON.parse(projectedJson.stdout)).toEqual({
     invocation: 'tool',
     message: 'packed',
     operationId: 'tool:harness/lookup',
+    tooling: 'tool:ffprobe 6.1',
   });
   const projectedNdjson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"events"}', '--ndjson',

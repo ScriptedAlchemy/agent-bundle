@@ -66,6 +66,29 @@ describe('route-unit target-capability projection', () => {
     expect(projected.structuredContent).toEqual({ fixture: 'target-capabilities' });
   });
 
+  it('projects an Agent.Progress Suspense fallback streamed in the shell to notifications/progress (#448)', async () => {
+    // The catalog route reports no progress itself: its only progress surface
+    // is the `<Suspense fallback={<Agent.Progress …/>}>` the shell streams.
+    const rendered = await renderRouteEvents('tool:harness/catalog', { input: { genre: 'mystery' } });
+    expect(rendered.events.some((event) => event.type === 'progress')).toBe(false);
+
+    const projected = await projectTargetCapabilities(rendered, fixture());
+    expect(projected.progress).toEqual([{
+      message: 'loading mystery',
+      progress: 0,
+      progressToken: 'agent-bundle-target-capability-fixture',
+      total: 2,
+    }]);
+    // The resolved boundary, not the fallback, is what the result carries.
+    expect(projected.content).toEqual([
+      { text: 'catalog: mystery', type: 'text' },
+      { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
+    ]);
+
+    const silent = await projectTargetCapabilities(rendered, fixture({ progress: false }));
+    expect(silent.progress).toEqual([]);
+  });
+
   it('uses exact text fallbacks and leaks no denied rich block', async () => {
     const projected = await projectTargetCapabilities(await renderRichContent(), fixture({
       audio: false,

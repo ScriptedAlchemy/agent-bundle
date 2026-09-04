@@ -1,12 +1,14 @@
 {
   "name": "@agent-bundle-example/mcp-app",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "build": "agent-bundle build",
-    "check": "pnpm validate && pnpm build",
+    "check": "pnpm validate && pnpm build && pnpm typecheck",
     "dev": "agent-bundle dev",
     "test:browser-app": "rstest --config rstest.browser-app.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate"
   },
   "devDependencies": {

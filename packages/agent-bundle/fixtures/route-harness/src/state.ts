@@ -1,6 +1,11 @@
 import { defineState } from '@agent-bundle/runtime/state';
 import { z } from 'zod';
 
+// Evaluation is observable: harness tests prove the state module is not loaded
+// before a rendered-script shell has accepted its argv.
+const tally = globalThis as { routeHarnessStateLoads?: number };
+tally.routeHarnessStateLoads = (tally.routeHarnessStateLoads ?? 0) + 1;
+
 const journalEntrySchema = z.object({
   note: z.string(),
 }).strict();

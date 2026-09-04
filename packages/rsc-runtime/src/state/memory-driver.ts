@@ -8,10 +8,14 @@ import type {
   AgentStateChangeBatch,
   AgentStateChangesOptions,
   AgentStateCommitResult,
+  AgentStateCompactOptions,
+  AgentStateCompactResult,
   AgentStateDefinition,
   AgentStateDispatchOptions,
   AgentStateDriver,
   AgentStateEventSchemas,
+  AgentStateInspectOptions,
+  AgentStateJournalInspection,
   AgentStateLifetime,
   AgentStateReadOptions,
   AgentStateResetOptions,
@@ -23,8 +27,11 @@ import type { AgentStateJournalRecord } from './journal.js';
 import {
   canonicalCommitInput,
   changeFromJournalRecord,
+  compactionIdempotencyKey,
   expectCommitWithinBudgets,
   expectMigrationWithinStateBudget,
+  inspectJournalRecords,
+  journalIsCompactable,
   migrationIdempotencyKey,
   parseEventPayload,
   reduceStateEvent,
@@ -76,18 +83,47 @@ const expectVolatileLifetime = (lifetime: AgentStateLifetime): MemoryLifetime =>
 };
 
 interface CommittedResult<TState> {
+  readonly kind: 'committed';
   readonly record: AgentStateJournalRecord;
   /** Post-commit state, kept per key so replay survives history rebases. */
   readonly state: TState;
+}
+
+/**
+ * A key whose record compaction deleted: the commit is remembered by its
+ * canonical input and revision so a retry replays as `revision-unavailable`
+ * (it happened; its result is gone) and a conflicting reuse is still refused.
+ */
+interface PrunedCommit {
+  readonly canonicalInput: string;
+  readonly kind: 'pruned';
+  readonly revision: number;
 }
 
 interface MemoryStoreInternals<TState, TEvents extends AgentStateEventSchemas> {
   closed: boolean;
   definition: AgentStateDefinition<TState, TEvents>;
   head: AgentStateSnapshot<TState>;
-  readonly journal: AgentStateJournalRecord[];
-  keys: Map<string, CommittedResult<TState>>;
+  journal: AgentStateJournalRecord[];
+  keys: Map<string, CommittedResult<TState> | PrunedCommit>;
 }
+
+/** Approximates the sqlite driver's byte accounting: payloads plus stored states. */
+const journalBytesOf = (records: readonly AgentStateJournalRecord[]): number =>
+  records.reduce((total, record) => {
+    switch (record.kind) {
+      case 'event':
+        return total + Buffer.byteLength(canonicalJson(record.payload), 'utf8');
+      case 'compact':
+      case 'migrate':
+      case 'reset':
+        return total + Buffer.byteLength(canonicalJson(record.state), 'utf8');
+      default: {
+        const unreachable: never = record;
+        throw new AgentStateError('corrupt', `Unknown journal record kind ${String(unreachable)}`);
+      }
+    }
+  }, 0);
 
 /** Generics-erased entry type for the driver-wide open-store collections. */
 type AnyMemoryStoreEntry = MemoryStoreEntry<unknown, AgentStateEventSchemas>;
@@ -155,10 +191,19 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
   ): AgentStateCommitResult<TState> => {
     const committed = internals.keys.get(input.key);
     if (committed !== undefined) {
-      if (canonicalCommitInput(committed.record) !== input.canonicalInput) {
+      const committedInput = committed.kind === 'committed'
+        ? canonicalCommitInput(committed.record)
+        : committed.canonicalInput;
+      if (committedInput !== input.canonicalInput) {
         throw new AgentStateError(
           'idempotency-conflict',
           `State '${internals.definition.id}' idempotency key was reused with a conflicting input`,
+        );
+      }
+      if (committed.kind === 'pruned') {
+        throw new AgentStateError(
+          'revision-unavailable',
+          `State '${internals.definition.id}' idempotency key committed at revision ${String(committed.revision)}, which compaction pruned; its result is no longer available`,
         );
       }
       return Object.freeze({ replayed: true, revision: committed.record.revision, state: committed.state });
@@ -200,9 +245,55 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
             state: input.state,
           };
     internals.journal.push(journalRecord);
-    internals.keys.set(journalRecord.idempotencyKey, { record: journalRecord, state });
+    internals.keys.set(journalRecord.idempotencyKey, { kind: 'committed', record: journalRecord, state });
     internals.head = Object.freeze({ revision: journalRecord.revision, state });
     return Object.freeze({ replayed: false, revision: journalRecord.revision, state });
+  };
+
+  /**
+   * Folds the journal onto the head: one `compact` baseline carrying the head
+   * state takes the next revision and every earlier record is dropped, its key
+   * kept as a pruned marker. Synchronous, so atomic per store in this process.
+   */
+  const compact = (expectedRevision: number | undefined): AgentStateCompactResult<TState> => {
+    if (expectedRevision !== undefined && expectedRevision !== internals.head.revision) {
+      throw new AgentStateError(
+        'revision-conflict',
+        `State '${internals.definition.id}' expected revision ${String(expectedRevision)} but the head is ${String(internals.head.revision)}`,
+      );
+    }
+    if (!journalIsCompactable(internals.journal)) {
+      return Object.freeze({
+        baselineRevision: internals.journal[0]?.revision ?? internals.head.revision,
+        prunedRecords: 0,
+        revision: internals.head.revision,
+        state: internals.head.state,
+      });
+    }
+    const baseline: AgentStateJournalRecord = {
+      committedAt: now().toISOString(),
+      idempotencyKey: compactionIdempotencyKey(internals.head.revision + 1),
+      kind: 'compact',
+      revision: internals.head.revision + 1,
+      state: internals.head.state,
+    };
+    const pruned = internals.journal;
+    for (const record of pruned) {
+      internals.keys.set(record.idempotencyKey, {
+        canonicalInput: canonicalCommitInput(record),
+        kind: 'pruned',
+        revision: record.revision,
+      });
+    }
+    internals.journal = [baseline];
+    internals.keys.set(baseline.idempotencyKey, { kind: 'committed', record: baseline, state: internals.head.state });
+    internals.head = Object.freeze({ revision: baseline.revision, state: internals.head.state });
+    return Object.freeze({
+      baselineRevision: baseline.revision,
+      prunedRecords: pruned.length,
+      revision: baseline.revision,
+      state: internals.head.state,
+    });
   };
 
   const store: AgentStateStore<TState, TEvents> = {
@@ -236,6 +327,25 @@ const createMemoryStore = <TState, TEvents extends AgentStateEventSchemas>(
 
     close(): Promise<void> {
       return runtime.close();
+    },
+
+    compact(options: AgentStateCompactOptions = {}): Promise<AgentStateCompactResult<TState>> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          expectRevisionShape(options.expectedRevision, `State '${internals.definition.id}' expectedRevision`);
+          return compact(options.expectedRevision);
+        }),
+      );
+    },
+
+    inspect(options: AgentStateInspectOptions = {}): Promise<AgentStateJournalInspection> {
+      return runStore(
+        stateEffect(() => {
+          expectOperable(internals.closed, internals.definition.id, options.signal);
+          return inspectJournalRecords(internals.journal, internals.head.revision, journalBytesOf(internals.journal));
+        }),
+      );
     },
 
     dispatch(name, payload, options: AgentStateDispatchOptions): Promise<AgentStateCommitResult<TState>> {
@@ -336,17 +446,18 @@ const migrateOpenStore = <TState, TEvents extends AgentStateEventSchemas>(
     state: migrated,
     toVersion: definition.version,
   };
-  const keys = new Map<string, CommittedResult<TState>>();
+  const keys = new Map<string, CommittedResult<TState> | PrunedCommit>();
   // Committed results replay across migrations: every stored result sits at
   // `fromVersion` (this loop maintains that inductively), so each one rides
-  // the same migration chain as the head.
+  // the same migration chain as the head. Pruned keys carry no result.
   for (const [key, entry] of internals.keys) {
-    keys.set(key, {
+    keys.set(key, entry.kind === 'pruned' ? entry : {
+      kind: 'committed',
       record: entry.record,
       state: runStateMigrations(definition, fromVersion, entry.state),
     });
   }
-  keys.set(record.idempotencyKey, { record, state: migrated });
+  keys.set(record.idempotencyKey, { kind: 'committed', record, state: migrated });
   internals.keys = keys;
   internals.journal.push(record);
   internals.head = Object.freeze({ revision: record.revision, state: migrated });

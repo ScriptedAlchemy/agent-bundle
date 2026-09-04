@@ -1,0 +1,166 @@
+---
+description: '以带资源的 SKILL.md 文档、宿主扩展、规范路径 token，或渲染式 SKILL.tsx 源码编写 agent-bundle Skill。'
+---
+
+# Skills
+
+一个 Skill 就是一份 Markdown 文档，加上它所引用的文件。agent-bundle 从 `src/` 约定中发现 Skill，把
+每个 Skill 降级为每个所选宿主期望的写法，并把该目录中其余文件作为这个 Skill 的资源随行发布。
+
+## 约定
+
+每个 Skill 一个目录，里面放 `SKILL.md`：
+
+```text
+src/skills/release-review/
+├── SKILL.md
+├── assets/report-template.md
+└── references/checklist.md
+```
+
+这样就能随产物发布，无需任何声明。目录中除 `SKILL.md` 之外的所有内容——以及除渲染式 Skill 源文件
+之外，那些是构建输入——都会成为该 Skill 的资源，并保留相对路径复制进产物。
+
+## 文档
+
+`SKILL.md` 以 YAML frontmatter 开头，其后是普通 Markdown：
+
+```md
+---
+name: release-review
+description: Reviews release evidence and issues an auditable readiness verdict.
+---
+# Release review
+
+## When to use
+
+Use this Skill when a release candidate needs a go/no-go verdict supported by
+checked, reproducible evidence.
+
+## Required resources
+
+- Read [the release checklist](references/checklist.md) to inspect the artifact.
+- Deliver the result with [the report template](assets/report-template.md).
+```
+
+frontmatter 是必需的。缺少 frontmatter 的文档报告 `AB3001`；YAML 无效则报告 `AB3002`。`name` 与
+`description` 是每个宿主都会读取的字段——description 就是激活表面，因此请把它写成「在什么条件下应当
+使用这个 Skill」，而不是写成标题。
+
+指向同级文件的链接是 Skill 引用自身资源的方式。它们在输出文档中保持相对形式，因此在宿主安装的任何
+产物中都能正确解析。
+
+## 显式选择 Skill
+
+约定发现覆盖 `src/skills/*/SKILL.{md,ts,tsx}`。当你需要不同位置、只取子集，或需要一份字面清单时，
+再声明 `skills`：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Engineering operations.', name: 'ops-bundle' },
+  skills: ['src/skills/*'],
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+字面路径保持字面；glob 匹配 Skill 目录或 `SKILL.md` 文件。配置总是胜过约定。
+
+## 宿主扩展
+
+可移植的 Skill 元数据——`name`、`description`、`license`、`compatibility`、`allowed-tools`（Agent Skills
+的拼写；驼峰式 `allowedTools` 只在 `targets.claude` 下被接受），以及一个
+自由形式的 `metadata` 记录——每个 target 都能理解。宿主专属的键位于各自宿主之下，因此只会抵达该适配器：
+
+| 宿主 | 示例 |
+| --- | --- |
+| `claude` | `allowedTools`、`disallowedTools`、`argumentHint`、`model`、`effort`、`context: 'fork'`、`background`、`userInvocable`、`disableModelInvocation`、`whenToUse`、`shell`、`paths`、`hooks` |
+| `codex` | `dependencies.tools`、`interface`（显示名、图标、品牌色、默认提示词）、`policy.allowImplicitInvocation` |
+| `cursor` | `globs`、`icon`、`color`、`paths`、`disableModelInvocation` |
+
+Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
+`AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
+
+## 路径 token
+
+各宿主的占位符语法并不相同——`${CLAUDE_PLUGIN_ROOT}` 并不是 Cursor 或可移植标准所使用的写法。请改为
+编写规范 token，由构建期降级替换成宿主写法：
+
+| Token | 含义 |
+| --- | --- |
+| `agent-bundle:path:plugin-root` | 插件安装根目录。 |
+| `agent-bundle:path:plugin-data` | 宿主提供的插件数据目录。 |
+| `agent-bundle:path:workspace-root` | 用户的工作区或项目根目录。 |
+| `agent-bundle:token:arguments` | 调用参数。 |
+| `agent-bundle:token:session-identity` | 当前会话标识。 |
+| `agent-bundle:token:skill-root` | 已安装 Skill 自身的目录。 |
+
+降级只替换语法；构建期不会解析任何运行时取值。宿主无法表达的 token 会被报告，而不是悄悄以字面文本
+输出。
+
+## 渲染式 Skill
+
+当一份 Skill 文档是生成出来的而不是手写的——例如逐环境重复的同一张检查表，或从某个契约推导出的表格
+——请在 `src/skills/<name>/SKILL.tsx`（或 `.ts`）放一个组件。它默认导出一个组件并导出一个
+`frontmatter` 记录；构建会把渲染树编译成宿主消费的 `SKILL.md` 文档：
+
+```tsx
+// src/skills/release-review/SKILL.tsx
+import { Skill } from 'agent-bundle';
+
+export const frontmatter = {
+  name: 'release-review',
+  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+};
+
+export default () => (
+  <>
+    <h1>Release review</h1>
+    <p>Evidence lives under {Skill.PluginRoot()}/assets.</p>
+  </>
+);
+```
+
+六个 `Skill.*` 成员会输出规范 token：`Skill.Arguments`、`Skill.PluginData`、`Skill.PluginRoot`、
+`Skill.ProjectRoot`、`Skill.SessionIdentity` 与 `Skill.SkillRoot`。`Skill.Resource` 渲染的是
+Markdown 链接（`[path](path)`），不是 token。宿主语法在降级阶段应用，绝不在组件里应用。
+
+渲染源可以导入项目代码，因此文档由插件所发布的同一批源码计算得出；它也可以导入
+`agent-bundle/meta`：加载器提供的 `{ name, packageName, packageVersion, version }` 与编译器烙印到
+每个构建面上的完全相同，所以 Skill 能打印出它所描述的版本。它的 JSX 针对加载器自己的元素工厂编译，
+而不是项目的 `react/jsx-runtime`——渲染器只遍历普通元素对象，不需要任何 React 内部实现——因此求值
+不依赖进程如何解析 `react`（包括 route-unit 池的 `react-server` 条件），`inspectWorkbenchSurface`
+可以从任意池检查带有渲染 Skill 的项目。
+
+同目录下手写的 `SKILL.md` 总是胜出——手写文件胜过生成文件——被遮蔽的组件会报告信息级的 `AB4735`
+提示。渲染模块加载失败报告 `AB3003`；未默认导出组件函数、或未导出 `frontmatter` 记录，则报告
+`AB3004`。
+
+`defineSkill` 可以在渲染式源码旁给 Skill 定义加上类型：
+
+```ts twoslash
+import { defineSkill } from 'agent-bundle';
+
+export const skill = defineSkill({
+  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  name: 'release-review',
+});
+```
+
+## 检查发布了什么
+
+```sh
+npx agent-bundle inspect --root . --skills
+```
+
+skill focus 会展示每个被发现的 Skill、它的 provenance（`conventional` 或 `config`）、它的资源，以及
+逐 target 的降级判断。在开发者 Workbench 中，Skills 页面会渲染每个宿主的输出文档。
+
+Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是惰性的。这是刻意的隔离边界，
+不是渲染缺失。
+
+## 下一步
+
+- [钩子](./hooks.mdx) —— 对生命周期事件作出反应。
+- [MCP 服务器与 MCP App](./mcp.mdx) —— 暴露工具、资源与提示词。

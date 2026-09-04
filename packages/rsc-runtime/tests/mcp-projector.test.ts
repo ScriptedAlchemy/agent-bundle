@@ -125,12 +125,126 @@ describe('projectMcpRenderStream', () => {
       },
     });
 
-    expect(sent).toEqual([{ message: 'working', progress: 1, progressToken: 'tok' }]);
+    // The shell's Agent.Progress node is the streaming progress surface (#448)
+    // and is notified once; the markdown beside it never leaves the buffer.
+    expect(sent).toEqual([
+      { message: 'loading', progress: 0, progressToken: 'tok' },
+      { message: 'working', progress: 1, progressToken: 'tok' },
+    ]);
     expect(JSON.stringify(sent)).not.toContain('Partial shell');
     expect(JSON.stringify(sent)).not.toContain('partial');
     expect(projected.result).toEqual({
       content: [{ text: '# Final', type: 'text' }],
       structuredContent: { ok: true },
+    });
+  });
+
+  describe('Agent.Progress rendered as a streamed Suspense fallback (#448)', () => {
+    const fallback = (message: string, completed = 0): AgentDocument => document({
+      root: {
+        children: [
+          { kind: 'text', text: 'catalog: mystery' },
+          { completed, kind: 'progress', message, total: 2 },
+        ],
+        kind: 'result',
+      },
+      value: { partial: true },
+    });
+    const final = document({
+      root: {
+        children: [{ kind: 'text', text: 'catalog: mystery' }, { kind: 'markdown', text: '- Piranesi' }],
+        kind: 'result',
+      },
+    });
+    const collect = () => {
+      const sent: McpProgressNotificationParams[] = [];
+      return {
+        options: {
+          progressToken: 'tok-448',
+          sendProgress: async (params: McpProgressNotificationParams) => {
+            sent.push(params);
+          },
+        },
+        sent,
+      };
+    };
+
+    it('projects the fallback node to one notifications/progress with the node message, progress, and total', async () => {
+      const { options, sent } = collect();
+      const projected = await projectMcpRenderStream(eventsOf([
+        { document: fallback('loading mystery'), sequence: 0, type: 'shell' },
+        { document: final, sequence: 1, type: 'complete' },
+      ]), options);
+
+      expect(sent).toEqual([
+        { message: 'loading mystery', progress: 0, progressToken: 'tok-448', total: 2 },
+      ]);
+      expect(projected.result.content).toEqual([
+        { text: 'catalog: mystery', type: 'text' },
+        { text: '- Piranesi', type: 'text' },
+      ]);
+    });
+
+    it('does not re-send the same fallback when a later replace still streams it', async () => {
+      const { options, sent } = collect();
+      await projectMcpRenderStream(eventsOf([
+        { document: fallback('loading mystery'), sequence: 0, type: 'shell' },
+        { boundaryId: 'b:1', document: fallback('loading mystery'), sequence: 1, type: 'replace' },
+        { boundaryId: 'b:2', document: fallback('still loading'), sequence: 2, type: 'replace' },
+        { boundaryId: 'b:3', document: fallback('nearly there', 1), sequence: 3, type: 'replace' },
+        { document: final, sequence: 4, type: 'complete' },
+      ]), options);
+
+      // Same monotonic rule as progress events: a fallback whose `completed`
+      // does not exceed the last notified value is not repeated, and a later
+      // fallback that advances it is.
+      expect(sent).toEqual([
+        { message: 'loading mystery', progress: 0, progressToken: 'tok-448', total: 2 },
+        { message: 'nearly there', progress: 1, progressToken: 'tok-448', total: 2 },
+      ]);
+    });
+
+    it('emits nothing for a fallback when the request carried no progress token', async () => {
+      const sent: McpProgressNotificationParams[] = [];
+      await projectMcpRenderStream(eventsOf([
+        { document: fallback('loading mystery'), sequence: 0, type: 'shell' },
+        { document: final, sequence: 1, type: 'complete' },
+      ]), {
+        sendProgress: async (params) => {
+          sent.push(params);
+        },
+      });
+      expect(sent).toEqual([]);
+    });
+
+    it('does not duplicate a fallback that an explicit progress report also announces', async () => {
+      const { options, sent } = collect();
+      await projectMcpRenderStream(eventsOf([
+        { document: fallback('loading mystery'), sequence: 0, type: 'shell' },
+        { completed: 0, message: 'loading mystery', sequence: 1, total: 2, type: 'progress' },
+        { completed: 1, message: 'one title', sequence: 2, total: 2, type: 'progress' },
+        { document: final, sequence: 3, type: 'complete' },
+      ]), options);
+
+      expect(sent).toEqual([
+        { message: 'loading mystery', progress: 0, progressToken: 'tok-448', total: 2 },
+        { message: 'one title', progress: 1, progressToken: 'tok-448', total: 2 },
+      ]);
+    });
+
+    it('treats a progress node in the complete document as content only', async () => {
+      const { options, sent } = collect();
+      await projectMcpRenderStream(eventsOf([{
+        document: document({
+          root: {
+            children: [{ completed: 3, kind: 'progress', message: 'status-only' }],
+            kind: 'result',
+          },
+        }),
+        sequence: 0,
+        type: 'complete',
+      }]), options);
+      expect(sent).toEqual([]);
     });
   });
 
@@ -195,6 +309,42 @@ describe('projectMcpRenderStream', () => {
     ]), { capabilities: { image: false }, richContentFallback: 'text' })).resolves.toMatchObject({
       result: { content: [{ text: '[image image/png]', type: 'text' }] },
     });
+  });
+
+  it('projects result metadata to _meta and fails closed on a non-object', async () => {
+    const withMetadata = await projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: {
+          children: [{ kind: 'text', text: 'Ready.' }],
+          kind: 'result',
+          metadata: { ui: { resourceUri: 'ui://demo/panel.html' }, 'vendor/trace': ['a', 1, null] },
+        },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]));
+    expect(withMetadata.result).toEqual({
+      _meta: { ui: { resourceUri: 'ui://demo/panel.html' }, 'vendor/trace': ['a', 1, null] },
+      content: [{ text: 'Ready.', type: 'text' }],
+      structuredContent: { ok: true },
+    });
+    expect(Object.isFrozen(withMetadata.result._meta)).toBe(true);
+
+    const scalar = projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: { children: [], kind: 'result', metadata: 'not an object' },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]));
+    await expect(scalar).rejects.toBeInstanceOf(McpProjectionError);
+    await expect(projectMcpRenderStream(eventsOf([{
+      document: document({
+        root: { children: [], kind: 'result', metadata: ['not', 'an', 'object'] },
+      }),
+      sequence: 0,
+      type: 'complete',
+    }]))).rejects.toMatchObject({ code: 'invalid-result-metadata' });
   });
 
   it('omits non-object structured content instead of fabricating an object', async () => {

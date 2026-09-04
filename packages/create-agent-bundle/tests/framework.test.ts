@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-import { describe, expect, it } from '@rstest/core';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import { Effect, FileSystem, Path } from 'effect';
+import { describe, expect, it, layer } from 'effect-rstest';
 
 import {
   assertLocalFrameworkTarball,
@@ -18,15 +18,20 @@ import {
   tamperedTrailingHeaderPackageTarball,
 } from './support/package-tarball.ts';
 
-const withTarballDirectory = async (
-  run: (directory: string) => Promise<void>,
-): Promise<void> => {
-  const directory = await mkdtemp(join(tmpdir(), 'create-agent-bundle-tarball-'));
-  try {
-    await run(directory);
-  } finally {
-    await rm(directory, { force: true, recursive: true });
+/** A scoped temp directory holding the named tarballs; removed when the test scope closes. */
+const tarballDirectory = Effect.fnUntraced(function* (tarballs: Readonly<Record<string, Buffer>>) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: 'create-agent-bundle-tarball-' });
+  for (const [name, contents] of Object.entries(tarballs)) {
+    yield* fs.writeFile(path.join(directory, name), contents);
   }
+  return directory;
+});
+
+const expectUsageError = (error: unknown, message?: string): void => {
+  expect(error).toBeInstanceOf(UsageError);
+  if (message !== undefined) expect((error as Error).message).toContain(message);
 };
 
 describe('previewPackageSpec', () => {
@@ -97,85 +102,87 @@ describe('runtimeSpecForFramework', () => {
   });
 });
 
-describe('assertLocalFrameworkTarball', () => {
-  it('leaves registry and preview specs to npm', async () => {
-    await expect(assertLocalFrameworkTarball('0.1.0', tmpdir())).resolves.toBeUndefined();
-    await expect(assertLocalFrameworkTarball('next', tmpdir())).resolves.toBeUndefined();
-    await expect(assertLocalFrameworkTarball(
+layer(NodeServices.layer, { excludeTestServices: true })('assertLocalFrameworkTarball', (it) => {
+  it.effect('leaves registry and preview specs to npm', () => Effect.gen(function* () {
+    expect(yield* assertLocalFrameworkTarball('0.1.0', tmpdir())).toBeUndefined();
+    expect(yield* assertLocalFrameworkTarball('next', tmpdir())).toBeUndefined();
+    expect(yield* assertLocalFrameworkTarball(
       'https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@da5df1d',
       tmpdir(),
-    )).resolves.toBeUndefined();
-  });
+    )).toBeUndefined();
+  }));
 
-  it('rejects a local tarball that cannot be read', async () => {
-    await expect(assertLocalFrameworkTarball('file:/tmp/absent-agent-bundle.tgz', tmpdir()))
-      .rejects.toThrow(UsageError);
-  });
+  it.effect('rejects a local tarball that cannot be read, naming the Node error', () => Effect.gen(function* () {
+    const error = yield* Effect.flip(assertLocalFrameworkTarball('file:/tmp/absent-agent-bundle.tgz', tmpdir()));
+    // The platform wrapper is peeled off: the message is the ENOENT Node error's.
+    expectUsageError(error, 'Cannot inspect local package tarball "file:/tmp/absent-agent-bundle.tgz": ENOENT');
+  }));
 
-  it('accepts a well-formed tarball whose tar header checksum is correct', async () => {
-    await withTarballDirectory(async (directory) => {
-      const tarball = join(directory, 'agent-bundle-0.0.0.tgz');
-      await writeFile(tarball, packageTarball('agent-bundle'));
-      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory)).resolves.toBeUndefined();
+  it.effect('accepts a well-formed tarball whose tar header checksum is correct', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({ 'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle') });
+    const tarball = path.join(directory, 'agent-bundle-0.0.0.tgz');
+    expect(yield* assertLocalFrameworkTarball(`file:${tarball}`, directory)).toBeUndefined();
+  }));
+
+  it.effect('rejects an inflatable tarball whose tar header checksum does not match', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({ 'agent-bundle-0.0.0.tgz': tamperedPackageTarball('agent-bundle') });
+    const tarball = path.join(directory, 'agent-bundle-0.0.0.tgz');
+    expectUsageError(yield* Effect.flip(assertLocalFrameworkTarball(`file:${tarball}`, directory)), 'Invalid tar header checksum');
+  }));
+
+  it.effect('rejects a tarball whose manifest is valid but a later tar header is corrupt', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({
+      'agent-bundle-0.0.0.tgz': tamperedTrailingHeaderPackageTarball('agent-bundle'),
     });
-  });
+    const tarball = path.join(directory, 'agent-bundle-0.0.0.tgz');
+    expectUsageError(yield* Effect.flip(assertLocalFrameworkTarball(`file:${tarball}`, directory)), 'Invalid tar header checksum');
+  }));
 
-  it('rejects an inflatable tarball whose tar header checksum does not match', async () => {
-    await withTarballDirectory(async (directory) => {
-      const tarball = join(directory, 'agent-bundle-0.0.0.tgz');
-      await writeFile(tarball, tamperedPackageTarball('agent-bundle'));
-      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory)).rejects.toThrow(UsageError);
-      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory))
-        .rejects.toThrow('Invalid tar header checksum');
-    });
-  });
-
-  it('rejects a tarball whose manifest is valid but a later tar header is corrupt', async () => {
-    await withTarballDirectory(async (directory) => {
-      const tarball = join(directory, 'agent-bundle-0.0.0.tgz');
-      await writeFile(tarball, tamperedTrailingHeaderPackageTarball('agent-bundle'));
-      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory)).rejects.toThrow(UsageError);
-      await expect(assertLocalFrameworkTarball(`file:${tarball}`, directory))
-        .rejects.toThrow('Invalid tar header checksum');
-    });
-  });
-
-  it('resolves a relative file: spec against the base directory, not the process working directory', async () => {
-    await withTarballDirectory(async (directory) => {
-      await writeFile(join(directory, 'agent-bundle-0.0.0.tgz'), packageTarball('agent-bundle'));
-      const spec = 'file:../agent-bundle-0.0.0.tgz';
-      await expect(assertLocalFrameworkTarball(spec, join(directory, 'project'))).resolves.toBeUndefined();
-      await expect(assertLocalFrameworkTarball(spec, process.cwd())).rejects.toThrow(UsageError);
-    });
-  });
+  it.effect('resolves a relative file: spec against the base directory, not the process working directory', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({ 'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle') });
+    const spec = 'file:../agent-bundle-0.0.0.tgz';
+    expect(yield* assertLocalFrameworkTarball(spec, path.join(directory, 'project'))).toBeUndefined();
+    expectUsageError(yield* Effect.flip(assertLocalFrameworkTarball(spec, process.cwd())));
+  }));
 });
 
-describe('validatedRuntimeSpecForFramework', () => {
-  it('leaves registry and preview specs to npm', async () => {
-    await expect(validatedRuntimeSpecForFramework('0.1.0', tmpdir())).resolves.toBe('0.1.0');
-  });
+layer(NodeServices.layer, { excludeTestServices: true })('validatedRuntimeSpecForFramework', (it) => {
+  it.effect('leaves registry and preview specs to npm', () => Effect.gen(function* () {
+    expect(yield* validatedRuntimeSpecForFramework('0.1.0', tmpdir())).toBe('0.1.0');
+  }));
 
-  it('resolves a relative file: pair against the base directory', async () => {
-    await withTarballDirectory(async (directory) => {
-      await Promise.all([
-        writeFile(join(directory, 'agent-bundle-0.0.0.tgz'), packageTarball('agent-bundle')),
-        writeFile(join(directory, 'agent-bundle-runtime-0.0.0.tgz'), packageTarball('@agent-bundle/runtime')),
-      ]);
-      const spec = 'file:../agent-bundle-0.0.0.tgz';
-      await expect(validatedRuntimeSpecForFramework(spec, join(directory, 'project')))
-        .resolves.toBe('file:../agent-bundle-runtime-0.0.0.tgz');
-      await expect(validatedRuntimeSpecForFramework(spec, process.cwd())).rejects.toThrow(UsageError);
-    });
-  });
+  it.effect('fails closed on the typed usage error when no runtime spec can be derived', () => Effect.gen(function* () {
+    expectUsageError(
+      yield* Effect.flip(validatedRuntimeSpecForFramework('file:/tmp/framework.tgz', tmpdir())),
+      'npm registry version, range, or tag',
+    );
+  }));
 
-  it('rejects a pair whose runtime tarball has a tampered tar header', async () => {
-    await withTarballDirectory(async (directory) => {
-      await Promise.all([
-        writeFile(join(directory, 'agent-bundle-0.0.0.tgz'), packageTarball('agent-bundle')),
-        writeFile(join(directory, 'agent-bundle-runtime-0.0.0.tgz'), tamperedPackageTarball('@agent-bundle/runtime')),
-      ]);
-      await expect(validatedRuntimeSpecForFramework(`file:${join(directory, 'agent-bundle-0.0.0.tgz')}`, directory))
-        .rejects.toThrow('Invalid tar header checksum');
+  it.effect('resolves a relative file: pair against the base directory', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({
+      'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle'),
+      'agent-bundle-runtime-0.0.0.tgz': packageTarball('@agent-bundle/runtime'),
     });
-  });
+    const spec = 'file:../agent-bundle-0.0.0.tgz';
+    expect(yield* validatedRuntimeSpecForFramework(spec, path.join(directory, 'project')))
+      .toBe('file:../agent-bundle-runtime-0.0.0.tgz');
+    expectUsageError(yield* Effect.flip(validatedRuntimeSpecForFramework(spec, process.cwd())));
+  }));
+
+  it.effect('rejects a pair whose runtime tarball has a tampered tar header', () => Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const directory = yield* tarballDirectory({
+      'agent-bundle-0.0.0.tgz': packageTarball('agent-bundle'),
+      'agent-bundle-runtime-0.0.0.tgz': tamperedPackageTarball('@agent-bundle/runtime'),
+    });
+    expectUsageError(
+      yield* Effect.flip(validatedRuntimeSpecForFramework(`file:${path.join(directory, 'agent-bundle-0.0.0.tgz')}`, directory)),
+      'Invalid tar header checksum',
+    );
+  }));
 });

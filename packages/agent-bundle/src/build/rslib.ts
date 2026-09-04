@@ -3,21 +3,25 @@
 // (https://rslib.rs/api/javascript-api/core).
 import { pluginReact } from '@rsbuild/plugin-react';
 import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
-import { init, parse } from 'es-module-lexer';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
 import {
+  assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
   generatedMetaModuleSource,
-  generatedModulesDirname,
+  generatedModulesRoot,
   metaModuleSpecifier,
+  virtualModulesPluginConstructor,
 } from './meta.ts';
+import { readModuleImports, type ModuleImport } from './module-imports.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -59,26 +63,9 @@ interface RslibDependencies {
   readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
 }
 
-/**
- * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
- * of throwaway files on disk — an accepted design decision: the experimental
- * surface is the cost of never touching the artifact tree with build-time
- * scratch files. This narrow feature check turns an upstream rename or
- * removal into an actionable diagnostic instead of an opaque resolution
- * failure deep inside a build.
- */
-const virtualModulesPluginConstructor = (): typeof rspack.experiments.VirtualModulesPlugin => {
-  const constructor = (rspack as { readonly experiments?: { readonly VirtualModulesPlugin?: unknown } })
-    .experiments?.VirtualModulesPlugin;
-  if (typeof constructor !== 'function') {
-    throw new Error(
-      'The Rspack engine nested in @rslib/core no longer exposes experiments.VirtualModulesPlugin, '
-      + 'which agent-bundle uses to serve generated wrapper and registry modules. '
-      + 'Pin @rslib/core to a version whose Rspack ships the plugin, or update agent-bundle.',
-    );
-  }
-  return constructor as typeof rspack.experiments.VirtualModulesPlugin;
-};
+/** This engine's virtual-module plugin (see {@link virtualModulesPluginConstructor}). */
+const rslibVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPlugin =>
+  virtualModulesPluginConstructor(rspack, '@rslib/core', 'serve generated wrapper and registry modules');
 
 /**
  * The tools escape hatch is typed against the workspace `@rsbuild/core` (the
@@ -95,7 +82,18 @@ const asRslibRspackHatch = (
   hatch: NonNullable<AgentBundleToolsConfig['rspack']>,
 ): RslibToolsRspack => hatch as RslibToolsRspack;
 
-const entryLibId = (entry: Pick<RslibEntry, 'name'>): string => `agent-bundle-${entry.name}`;
+/**
+ * The Rslib lib id — and so the Rsbuild environment name and the Rspack
+ * compiler name — of an entry. It derives from the artifact destination,
+ * which the planner already asserts unique within a target, rather than
+ * from the entry name: surfaces sharing one run may legitimately reuse a
+ * name (a script authored as `hooks-flight` emits `scripts/hooks-flight.mjs`
+ * beside the hook surface's standalone worker `hooks/hooks-flight.mjs`).
+ * Visible only in `inspect --bundler` and bundler stats, never in emitted
+ * bytes.
+ */
+export const entryLibId = (entry: Pick<RslibEntry, 'outputRelativePath'>): string =>
+  `agent-bundle-${entry.outputRelativePath.replace(/\.[^./]+$/u, '').replaceAll('/', '-')}`;
 
 /**
  * rsbuild-plugin-dts aborts a failed declaration pass with a stackless prose
@@ -107,10 +105,12 @@ const entryLibId = (entry: Pick<RslibEntry, 'name'>): string => `agent-bundle-${
 export const isDeclarationGenerationFailure = (error: unknown): boolean =>
   error instanceof Error && /declaration files/iu.test(error.message);
 
-// join (not resolve) so a tokenized output root (`<output>/<target>`) stays
-// a token instead of resolving against the cwd.
-const generatedEntryModulePath = (outputRoot: string, entry: RslibEntry): string =>
-  join(outputRoot, generatedModulesDirname, `${entry.name}-entry.mjs`);
+// Generated module paths live in the project's reserved namespace (see
+// `generatedModulesDirname`), never under the per-build staged output root:
+// Rspack writes module identifiers relative to the project root into the
+// emitted bundles, and those bytes must not change from one build to the next.
+const generatedEntryModulePath = (projectRoot: string, entry: RslibEntry): string =>
+  join(generatedModulesRoot(projectRoot), `${entry.name}-entry.mjs`);
 
 /** The import requests of one named entry in a lowered Rspack entry record. */
 const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] => {
@@ -122,7 +122,7 @@ const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] =
 };
 
 const virtualRegistryModules = (
-  outputRoot: string,
+  projectRoot: string,
   entry: RslibEntry,
   meta: AgentBundleMeta,
 ): readonly { readonly name: string; readonly path: string; readonly source: string }[] => [
@@ -131,12 +131,12 @@ const virtualRegistryModules = (
   // build stamps one identity, and every entry shares one generated module.
   {
     name: metaModuleSpecifier,
-    path: generatedMetaModulePath(outputRoot),
+    path: generatedMetaModulePath(projectRoot),
     source: generatedMetaModuleSource(meta),
   },
   ...(entry.virtualModules ?? []).map((module, index) => ({
     ...module,
-    path: join(outputRoot, generatedModulesDirname, `${entry.name}-${index}.mjs`),
+    path: join(generatedModulesRoot(projectRoot), `${entry.name}-${index}.mjs`),
   })),
 ];
 
@@ -258,28 +258,26 @@ const reservedAliasViolation = (
  * Fail-closed self-containment check on the emitted bundles themselves:
  * no reserved specifier may survive bundling as a live import. This is the
  * belt behind the static externals check and the function-external guard.
- * The bundle is parsed as an ES module (the emitted format by contract), so
+ * The bundle is lexed as an ES module (the emitted format by contract), so
  * string literals or comments that merely mention a reserved specifier are
- * not violations.
+ * not violations. The lex is keyed by the bundle's digest, so artifact
+ * validation, which scans these same bytes next, reads the imports once.
  */
 const assertNoResidualReservedImports = async (
   entries: readonly RslibEntry[],
   outputRoot: string,
 ): Promise<void> => {
-  await init;
   await Promise.all(entries.map(async (entry) => {
     const reserved = reservedSpecifiers(entry);
-    const bundle = await readFile(resolve(outputRoot, entry.outputRelativePath), 'utf8');
-    // A bin banner shebang is legal for Node but not for the ESM lexer.
-    const source = bundle.startsWith('#!') ? bundle.slice(bundle.indexOf('\n') + 1) : bundle;
-    let imports: ReturnType<typeof parse>[0];
+    const bytes = await readFile(resolve(outputRoot, entry.outputRelativePath));
+    let imports: readonly ModuleImport[];
     try {
-      [imports] = parse(source);
+      imports = await readModuleImports(bytes.toString('utf8'), { check: 'lexed', sha256: sha256Hex(bytes) });
     } catch {
       throw new Error(`Generated executable ${JSON.stringify(entry.outputRelativePath)} did not parse as an ES module.`);
     }
     const residual = imports
-      .map((record) => record.n)
+      .map((record) => record.specifier)
       .find((specifier) => specifier !== undefined && reserved.includes(specifier));
     if (residual !== undefined) {
       throw new Error(
@@ -344,9 +342,9 @@ const assertExecutableConfig = (
     readonly bundlerConfigs: readonly InspectedBundlerConfig[];
     readonly environmentConfigs: Readonly<Record<string, unknown>>;
   },
-  outputRoot: string,
-  meta: AgentBundleMeta,
+  run: Pick<RslibRunOptions, 'cwd' | 'meta' | 'outputRoot'>,
 ): void => {
+  const { cwd, meta, outputRoot } = run;
   if (
     inspection.bundlerConfigs.length !== entries.length ||
     Object.keys(inspection.environmentConfigs).length !== entries.length
@@ -359,10 +357,10 @@ const assertExecutableConfig = (
     if (environment === undefined) {
       throw new Error('Rslib did not resolve one environment for every generated executable.');
     }
-    // Scripts, MCP entries, hooks, and MCP Apps build sequentially into one
-    // shared staged root, so an environment that cleans its dist path would
-    // delete sibling outputs already emitted there; the composed invariant
-    // pins it off after the hatch merge.
+    // Every surface of a target builds into one shared staged root (MCP Apps
+    // first, then the node surfaces together), so an environment that cleans
+    // its dist path would delete sibling outputs already emitted there; the
+    // composed invariant pins it off after the hatch merge.
     if (environment.output?.cleanDistPath !== false) {
       throw new Error('Rslib resolved a generated executable environment that would clean its own output root.');
     }
@@ -379,14 +377,14 @@ const assertExecutableConfig = (
     }
     // The generated environment must retain the virtual-module source: a
     // resolved config without the plugin instance would resolve the
-    // guaranteed-nonexistent generated paths against the real filesystem.
-    const registryModules = virtualRegistryModules(outputRoot, entry, meta);
-    const constructor = virtualModulesPluginConstructor();
+    // reserved generated paths against the real filesystem.
+    const registryModules = virtualRegistryModules(cwd, entry, meta);
+    const constructor = rslibVirtualModulesPlugin();
     if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
       throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
     }
     if (entry.virtualSource !== undefined
-      && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(outputRoot, entry))) {
+      && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(cwd, entry))) {
       throw new Error('Rslib resolved a generated executable environment without its generated wrapper entry.');
     }
     const expectedAliases = {
@@ -414,17 +412,18 @@ const assertExecutableConfig = (
 };
 
 /**
- * Composes the full Rslib lib config for one synthesized entry: the
- * framework profile, the consumer `tools` escape hatch merged over it
- * (Rslib's "raw user config highest" priority), and the invariant enforcer
- * hook appended last, all composed with Rslib's own `mergeRslibConfig`
- * keyed by the synthesized lib id. `buildWithRslib` lowers exactly this
- * composition and `inspect --bundler` surfaces it, so the two can never
- * drift.
+ * Composes the full Rslib lib config for one synthesized entry in the
+ * shared `composeToolsLayers` order — the framework profile, the consumer
+ * `tools` escape hatch over it, the invariant enforcer hook last — with
+ * Rslib's own `mergeRslibConfig` keyed by the synthesized lib id.
+ * `buildWithRslib` lowers exactly this composition and `inspect --bundler`
+ * surfaces it, so the two can never drift.
  */
 export const composeEntryLibConfig = (
   entry: RslibEntry,
   options: {
+    /** The project root: the bundler `context` and the root of the generated-module namespace. */
+    readonly cwd: string;
     /** The project identity served to plugin source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
@@ -435,13 +434,13 @@ export const composeEntryLibConfig = (
 ): LibConfig => {
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
-  const virtualModules = virtualRegistryModules(options.outputRoot, entry, options.meta);
+  const virtualModules = virtualRegistryModules(options.cwd, entry, options.meta);
   // Every generated module this entry serves virtually during its build:
   // the wrapper entry (when present) plus the registry modules.
   const generatedModules = [
     ...(virtualSource === undefined
       ? []
-      : [{ path: generatedEntryModulePath(options.outputRoot, entry), source: virtualSource }]),
+      : [{ path: generatedEntryModulePath(options.cwd, entry), source: virtualSource }]),
     ...virtualModules,
   ];
   const aliases = entry.aliases ?? {};
@@ -452,12 +451,6 @@ export const composeEntryLibConfig = (
   ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
     config.output = { ...config.output, asyncChunks: false };
-    if (entry.rscManifest === true) {
-      config.plugins = [
-        ...(config.plugins ?? []),
-        new rspack.DefinePlugin({ __rspack_rsc_manifest__: JSON.stringify({ clientManifest: {}, cssLinkProps: {}, entryCssFiles: {}, entryJsFiles: [], moduleLoading: { prefix: '' }, serverConsumerModuleMap: {}, serverManifest: {} }) }),
-      ];
-    }
     if (entry.reactServer === true) {
       config.resolve = { ...config.resolve, conditionNames: ['react-server', '...'] };
     }
@@ -484,28 +477,31 @@ export const composeEntryLibConfig = (
         },
       };
     }
-    if (generatedModules.length > 0) {
-      // Added after the hatch mutator (this hook is merged last), so a
-      // consumer cannot strip the generated sources out of the compiler.
-      const VirtualModulesPlugin = virtualModulesPluginConstructor();
-      config.plugins = [
-        ...(config.plugins ?? []),
-        new VirtualModulesPlugin(Object.fromEntries(generatedModules.map((module) => [module.path, module.source]))),
-      ];
-    }
+    // Framework plugins are added after the hatch mutator (this hook is
+    // merged last), so a consumer cannot strip the RSC manifest stub or the
+    // generated sources out of the compiler.
+    const frameworkPlugins = [
+      ...(entry.rscManifest === true
+        ? [new rspack.DefinePlugin({ __rspack_rsc_manifest__: JSON.stringify({ clientManifest: {}, cssLinkProps: {}, entryCssFiles: {}, entryJsFiles: [], moduleLoading: { prefix: '' }, serverConsumerModuleMap: {}, serverManifest: {} }) })]
+        : []),
+      ...(generatedModules.length > 0
+        ? [new (rslibVirtualModulesPlugin())(Object.fromEntries(generatedModules.map((module) => [module.path, module.source])))]
+        : []),
+    ];
+    if (frameworkPlugins.length > 0) config.plugins = [...(config.plugins ?? []), ...frameworkPlugins];
     if (virtualSource !== undefined) {
       // Rslib validates `source.entry` against the real filesystem before
       // Rspack exists, so the profile keys the entry on the authored program
       // and this hook redirects the lowered Rspack entry to the generated
-      // wrapper's guaranteed-nonexistent virtual path, which the plugin
-      // above serves from memory. Rspack resolves entries through the
-      // plugin-patched input filesystem, so no real path is ever shadowed.
+      // wrapper's reserved virtual path, which the plugin above serves from
+      // memory. Rspack resolves entries through the plugin-patched input
+      // filesystem, so nothing is ever read from disk under that path.
       const lowered = config.entry;
       if (!isRecord(lowered)) {
         throw new Error('Rslib lowered a generated executable without a keyed entry record.');
       }
       const description = lowered[entry.name];
-      const wrapperImport = [generatedEntryModulePath(options.outputRoot, entry)];
+      const wrapperImport = [generatedEntryModulePath(options.cwd, entry)];
       config.entry = {
         ...lowered,
         [entry.name]: isRecord(description) ? { ...description, import: wrapperImport } : wrapperImport,
@@ -567,20 +563,17 @@ export const composeEntryLibConfig = (
       ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
     },
   };
-  const merged = mergeRslibConfig(
-    { lib: [profile] },
-    options.tools?.rsbuild === undefined
-      ? undefined
-      : { lib: [{ ...asRslibEnvironmentFragment(options.tools.rsbuild), id: libId }] },
-    options.tools?.rspack === undefined
-      ? undefined
-      : { lib: [{ id: libId, tools: { rspack: asRslibRspackHatch(options.tools.rspack) } }] },
-    // Merged last so the hatch cannot reach either invariant. Dist cleaning
-    // would delete sibling entries already emitted into the shared staged
-    // root, so it stays off no matter what the consumer asks for; the
-    // emitted output is published atomically from a staged root instead.
-    { lib: [{ id: libId, output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } }] },
-  );
+  // Every layer is keyed by the synthesized lib id so `mergeRslibConfig`
+  // folds them into one lib entry in `composeToolsLayers` order.
+  const merged = mergeRslibConfig(...composeToolsLayers<RslibLibConfig>({
+    invariants: { id: libId, ...frameworkInvariantLayer(enforceInvariants) },
+    lift: {
+      rsbuild: (fragment) => ({ ...asRslibEnvironmentFragment(fragment), id: libId }),
+      rspack: (hatch) => ({ id: libId, tools: { rspack: asRslibRspackHatch(hatch) } }),
+    },
+    profile,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
+  }).map((lib) => ({ lib: [lib] })));
   const lib = merged.lib?.[0];
   if (merged.lib?.length !== 1 || lib === undefined) {
     throw new Error(`Rslib config composition did not merge one lib entry for ${JSON.stringify(libId)}.`);
@@ -588,30 +581,96 @@ export const composeEntryLibConfig = (
   return lib;
 };
 
-export const buildWithRslib = async (options: {
-  readonly cwd: string;
+/**
+ * One compiled surface's share of a target's Rslib run: the entries it
+ * synthesizes and the module roots its authored-source evidence excludes.
+ * Every surface of one target (routed CLI bin, scripts, hook wrappers, MCP
+ * entries, and each one's react-server Flight worker) rides one Rslib
+ * instance — one Rsbuild environment per entry, compiled by one Rspack
+ * multi-compiler in parallel — instead of one sequential instance per
+ * surface. Surfaces keep their own evidence exclusions and results.
+ */
+export interface RslibSurface {
   readonly entries: readonly RslibEntry[];
-  /** Extra module roots excluded from authored-source evidence (e.g. the aliased runtime shell). */
+  /** Extra module roots excluded from this surface's authored-source evidence (e.g. an aliased runtime shell). */
   readonly ignoredSourcePaths?: readonly string[];
-  /** 'error' lets declaration-generation failures reach the consumer's terminal. */
+  /** 'error' lets bundler and declaration-generation failures reach the consumer's terminal. */
   readonly logLevel?: 'error' | 'silent';
+}
+
+/**
+ * A surface planned for a shared Rslib run: its entries plus the step that
+ * turns the run's evidence for those entries back into compiled records.
+ * Planning is separated from finishing so the orchestrator can gather every
+ * surface of a target first and lower them together in one instance.
+ */
+export interface RslibSurfacePlan<Result> extends RslibSurface {
+  readonly finish: (evidence: readonly BundledOutputEvidence[]) => Promise<Result>;
+}
+
+/** A surface with nothing to compile whose result is already settled (e.g. a target that hosts no CLI bin). */
+export const settledRslibSurface = <Result>(result: Result): RslibSurfacePlan<Result> => ({
+  entries: Object.freeze([]),
+  finish: async () => result,
+});
+
+export interface RslibRunOptions {
+  readonly cwd: string;
   /** The project identity served to plugin source as `agent-bundle/meta`. */
   readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;
-}, dependencies: RslibDependencies = {}): Promise<readonly BundledOutputEvidence[]> => {
-  if (options.entries.length === 0) {
-    return Object.freeze([]);
+}
+
+/**
+ * Lib ids key Rslib environments and `mergeRslibConfig` folds same-id libs
+ * into one, so two entries of one run may not share an id. Ids derive from
+ * artifact destinations the planner already rejects as duplicates, so this
+ * is an internal invariant rather than a consumer-facing diagnostic.
+ */
+const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const id = entryLibId(entry);
+    const previous = seen.get(id);
+    if (previous !== undefined) {
+      throw new Error(
+        `Rslib surfaces of one target synthesize the same lib id ${JSON.stringify(id)} for `
+        + `${JSON.stringify(previous)} and ${JSON.stringify(entry.outputRelativePath)}.`,
+      );
+    }
+    seen.set(id, entry.outputRelativePath);
   }
+};
+
+/**
+ * Lowers every surface's entries through one Rslib instance and returns the
+ * bundled evidence per surface, in surface order. A surface without entries
+ * contributes nothing and receives no evidence; with no entries at all no
+ * instance is created.
+ */
+export const buildRslibSurfaces = async (
+  options: RslibRunOptions,
+  surfaces: readonly RslibSurface[],
+  dependencies: RslibDependencies = {},
+): Promise<readonly (readonly BundledOutputEvidence[])[]> => {
+  const entries = surfaces.flatMap((surface) => surface.entries);
+  if (entries.length === 0) {
+    return Object.freeze(surfaces.map(() => Object.freeze([])));
+  }
+  assertDistinctLibIds(entries);
+  await assertGeneratedModulesRootAbsent(options.cwd);
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const reservedExternalViolations: string[] = [];
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
-      logLevel: options.logLevel ?? 'silent',
-      lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+      // The run reports at the most verbose level any surface asks for.
+      logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
+      lib: entries.map((entry) => composeEntryLibConfig(entry, {
+        cwd: options.cwd,
         meta: options.meta,
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
@@ -621,7 +680,7 @@ export const buildWithRslib = async (options: {
   });
 
   const inspection = await rslib.inspectConfig();
-  assertExecutableConfig(options.entries, inspection.origin, options.outputRoot, options.meta);
+  assertExecutableConfig(entries, inspection.origin, options);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {
@@ -634,23 +693,57 @@ export const buildWithRslib = async (options: {
     }
     if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
     const evidence = collectBundledOutputEvidence({
-      expectedAssets: options.entries.map((entry) => ({
+      expectedAssets: surfaces.flatMap((surface) => surface.entries.map((entry) => ({
+        ...(surface.ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths: surface.ignoredSourcePaths }),
         path: entry.outputRelativePath,
         sourceInputs: entry.sourceInputs,
-      })),
+      }))),
       ignoredSourcePaths: [
         // Generated wrapper/registry modules are virtual, but they still
         // surface in stats as modules under this reserved namespace.
-        resolve(options.outputRoot, generatedModulesDirname),
-        ...(options.ignoredSourcePaths ?? []),
+        resolve(generatedModulesRoot(options.cwd)),
         ...dependencyRoots,
       ],
       projectRoot: options.cwd,
       stats: result.stats,
     });
-    await assertNoResidualReservedImports(options.entries, options.outputRoot);
-    return evidence;
+    await assertNoResidualReservedImports(entries, options.outputRoot);
+    // Evidence covers exactly every entry (a missing asset already threw),
+    // sorted by path; each surface takes back its own entries' records.
+    return Object.freeze(surfaces.map((surface) => {
+      const paths = new Set(surface.entries.map((entry) => entry.outputRelativePath));
+      return Object.freeze(evidence.filter((record) => paths.has(record.path)));
+    }));
   } finally {
     await result?.close();
   }
+};
+
+/** Lowers every planned surface in one Rslib run and finishes each with its own evidence, in order. */
+export const compileRslibSurfaces = async <const Plans extends readonly RslibSurfacePlan<unknown>[]>(
+  options: RslibRunOptions,
+  plans: Plans,
+): Promise<{ readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never }> => {
+  const evidence = await buildRslibSurfaces(options, plans);
+  const results: unknown[] = [];
+  // Sequential on purpose: a finish step may emit sibling files into the
+  // shared staged root, and the former per-surface order is preserved.
+  for (const [index, plan] of plans.entries()) {
+    results.push(await plan.finish(evidence[index]!));
+  }
+  return results as { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never };
+};
+
+/** The single-surface run: the package build and direct callers. */
+export const buildWithRslib = async (
+  options: RslibRunOptions & RslibSurface,
+  dependencies: RslibDependencies = {},
+): Promise<readonly BundledOutputEvidence[]> => {
+  const { entries, ignoredSourcePaths, logLevel, ...run } = options;
+  const [evidence] = await buildRslibSurfaces(run, [{
+    entries,
+    ...(ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths }),
+    ...(logLevel === undefined ? {} : { logLevel }),
+  }], dependencies);
+  return evidence!;
 };

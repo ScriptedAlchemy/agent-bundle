@@ -1,0 +1,179 @@
+---
+description: '校验 agent-bundle 源码与已构建产物，包括严格的 Claude Code 宿主校验、被固定的 Codex 与 Cursor schema 检查，以及 npm prepack 门禁。'
+---
+
+# 产物校验
+
+校验用同一条命令回答两个不同的问题。针对**源码**，它问的是项目是否描述了一个合法的捆绑包；针对
+**产物**，它问的是输出的字节是否就是清单所承诺的字节。
+
+```sh
+npx agent-bundle validate --root .                        # 项目源码
+npx agent-bundle validate --artifact artifact --strict    # 已构建字节，无需源码
+```
+
+`validate --artifact`、`mcp` 与 `hooks` 都能在项目源码已被删除的情况下针对已构建产物工作。这是刻意
+如此：只有在源码树存在时才能通过校验的产物，其实并不算自包含；[测试](../development/testing.mdx)中的
+`packed-deleted-source` 证明级别存在的理由与此相同。
+
+## 内容寻址，而不是路径存在性
+
+`agent-bundle.manifest.json` 为每个输出文件记录一份 SHA-256 摘要，包括被复制的脚本与资源。产物校验
+把真实字节与这些摘要比对，因此被手工改过的生成文件会失败，而不会因为路径还在就通过。被引用的文件同样
+会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。
+
+每个输出的 JavaScript 模块都会被当作 ES 模块遍历（`AB6005`）：每个 import 必须是字面量说明符，要么指向
+Node 内建模块（`node:fs`、`fs`），要么以相对或 `file:` 说明符解析到产物内、清单中列出的常规文件。不允许
+非字面量的动态 import，不允许裸包名，不允许指向树外。模块语法检查的深度取决于它的字节由谁产出。框架编译的
+模块（清单 kind 为 `bundle`）是打包器自己的输出，因此只由 ESM 词法分析器扫描，它会拒绝未终止的字符串、模板、
+注释与正则以及不配对的花括号。框架没有编译的模块——被复制的消费者脚本、生成的安装器——则会被完整解析；若一次
+构建的 [`tools` 逃生口](../../reference/configuration.mdx#tools)有可能改写了输出资源，该构建的每个 bundle 也会被完整解析。
+预构建载荷（`kind: 'prebuilt'`）保持不透明，只做哈希锁定。
+
+每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
+`recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有
+存在 error 级诊断时才以非零退出；warning 与 info 绝不会为构建、校验或 dev 重建把关。`eval` 与 `inspect`
+在试验失败或无定论、或模型无效时也会以 `1` 退出，这与错误诊断无关——见
+[命令行退出码](../../reference/cli.mdx#退出码)。
+
+## Claude Code 严格校验
+
+当 Claude Code 位于 `PATH` 上时，产物校验会为输出的 `claude` target 以及统一的 `plugin` target 运行
+已安装的 `claude plugin validate`。`agent-bundle build` 会对刚写出的产物运行同样的检查
+（`--no-host-validation` 跳过；`--strict` 把宿主 warning 提升为构建 error），而
+`agent-bundle doctor --host claude --from <bundle-dir>` 会对该 bundle 以及 Claude 列出的每一份已安装副本运行
+这些检查。Claude Code 根据被指向的清单决定检查什么：一个同时包含
+`.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json` 的 bundle 目录会被当作 marketplace，
+而 marketplace 校验从不打开插件的 hook、skill、agent 或 command 文件。因此 Agent Bundle 运行两条命令：
+
+```sh
+# plugin.json、hooks/hooks.json、skills/、agents/、commands/
+claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+# marketplace schema、插件名、source 路径
+claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+```
+
+- 宿主的 **error** 会变成 Agent Bundle 的 error（`AB6021`）。
+- 宿主的 **warning** 保持为 warning（`AB6020`），除非设置了 `agent-bundle validate --strict`。
+- 每条发现都会点名 Claude Code 检查的文件，例如
+  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`。Agent Bundle 会先请求 CLI 的
+  `--json` 报告（Claude Code 2.1.259 及更高版本；固定的 2.1.260 会输出它），只有当 CLI 拒绝该标志或探测到的
+  版本早于 2.1.259 时才解析文本报告。marketplace 那次
+  运行中对插件运行已报告过的清单发现的 `plugins[0] plugin.json →` 副本会被丢弃。
+- 二进制文件缺失会被报告为一次显式的信息性**跳过**（`AB6019`），绝不会伪造成功；探测或运行无法完成
+  时为 `AB6022`。`PATH` 上没有 `claude` 时，`build` 只会启动一次进程并只报告一次跳过，无论它构建了多少个
+  `claude`/`plugin` target。
+
+### 加载检查
+
+校验不是加载结论。Claude Code 2.1.250 到 2.1.260 在 `--strict` 下会接受一些随后会被会话拒绝加载的清单与
+组件文件——例如无效的 `monitors/monitors.json`，或指向自动加载的 `hooks/hooks.json` 的 `hooks` 字段。拒绝
+唯一显现的地方是 `claude --plugin-dir <bundle-dir> plugin list --json`（"Plugins reference" → "plugin list"）
+中该插件所在的行：被拒绝的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。因此 `build` 与
+`validate --artifact` 在两次校验运行之后正好执行这条列表命令，并读取 bundle 的 `<name>@inline` 行：
+
+| `load.status` | 含义 | 代码 |
+| --- | --- | --- |
+| `loaded` | 该行没有 `errors`。 | — |
+| `refused` | 该行带有 `errors`；逐字引用。 | `AB7325`（error；当每一项都是 `Dependency "…" is not installed` 时为 warning，因为它描述的是执行校验的机器而非产物——`--strict` 会提升它） |
+| `unregistered` | 没有该 bundle 的行：Claude Code 没有把该目录注册为插件。 | `AB7311` |
+| `failed` | 列表无法读取（非零退出、超时、不是 JSON 数组）。 | `AB6022` |
+
+这条列表命令是只读的，也不需要登录。Doctor 不会重复它：其 `--plugin-dir` 注册证明与清单行中的 `errors`
+已经承载了同样的结论。
+
+CI 应当使用严格校验：
+
+```sh
+npx agent-bundle validate --artifact artifact --strict
+```
+
+当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
+同一道门禁，并得到同样的 schema 结论。
+
+在开发期，先在不安装的情况下为单个会话加载已构建 target，然后迭代：
+
+```sh
+claude --plugin-dir artifact/claude
+```
+
+在 `agent-bundle build` 重写了 `hooks/`、`.mcp.json` 或 `agents/` 之后，在该会话中运行
+`/reload-plugins`；`SKILL.md` 的修改无需它即可生效。`--plugin-dir` 插件对不带参数的
+`claude plugin list` 不可见；把该标志放在子命令之前即可查看：
+
+```sh
+claude --plugin-dir artifact/claude plugin list --json
+```
+
+这份列表就是上文描述的加载结论，`build` 与 `validate --artifact` 会替你运行它。`agent-bundle doctor --host
+claude --from <bundle-dir>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取同一个 `errors` 数组，并报告为
+`AB7325`（`load-failed`）；当已安装副本带有该数组时，`agent-bundle install claude` 以 `AB7006` 失败。被固定的
+Claude `plugin` schema 也会预先拒绝 `hooks: "./hooks/hooks.json"`（`AB6012`），因为清单中的该字段只用于*额外的*
+hook 文件。
+
+Doctor 还会读取每一行的 `enabled` 标志。被 `claude plugin disable` 关闭的副本（"Plugins reference" →
+"plugin disable"）仍然处于已安装状态，甚至可能与 bundle 字节一致，但它的任何内容都不会进入会话；Doctor 把它列为
+`disabled`，保留其内容结论，并追加一条 `AB7327` warning，其修复建议就是精确的
+`claude plugin enable <name>@<marketplace> [--scope <scope>]` 命令——重新安装不会启用一个被禁用的插件。
+
+## Codex 与 Cursor：被固定的 schema
+
+Codex 与 Cursor 目前都没有发布插件校验的开发者动词，因此 Agent Bundle 用自己 vendored 的、被固定的
+schema 校验它们输出的 JSON 文档，并把宿主的 schema 生成器视为一个**漂移信号**，绝不当作替代的插件契约。
+
+| 代码 | 严重级别 | 含义 |
+| --- | --- | --- |
+| `AB6026` | info | 每份 Cursor 报告都会声明 Cursor 未发布 plugin-validate 动词，并指明本地校验所用的 vendored schema 固定版本。 |
+| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。hooks 文档是 `.cursor-plugin/plugin.json` 的 `hooks` 字段所指定的那个（`cursor` 目标为 `hooks/hooks.json`，统一 `plugin` 目标为 `hooks/hooks-cursor.json`，或内联对象），仅在该字段缺失时才回退到 `hooks/hooks.json`；指定的文件缺失或逃逸出插件根目录时为 error。 |
+| `AB6028` | error | 生成的字节违反了被固定的 Cursor 加载器证据：清单候选优先级选中了回退清单、符号链接解析到捆绑包之外，或者 `CURSOR_PLUGIN_ROOT` 出现在加载器替换字段之外。 |
+| `AB6029` | info / warning | Cursor Agent 版本探测不可用（`ENOENT`，info），或未能完成（warning）。本地的固定 schema 校验仍会运行。 |
+| `AB6030` | info | Codex CLI 不可用，或已安装的 Codex 版本未发布插件校验命令。 |
+| `AB6031` | info / warning（`--strict` 下为 error） | Codex 的 app-server schema 生成动词不可用，或其实时输出缺失、与被固定的生成式钩子 schema 不一致。 |
+| `AB6032` | error | 某个必需的 Codex 捆绑包文档缺失、不可读、不是合法 JSON，或未通过其 vendored 固定 schema。 |
+| `AB6033` | error | 一条有界的 Codex 版本或 schema 生成命令无法启动、执行失败、超时、输出超过 1 MiB，或产生了不可读的输出。 |
+
+`AB6031` 是其中最值得注意的一条：当 Codex 生成的 schema 与被固定的版本不一致时，只有在 Codex 发布了
+匹配的契约之后才会更新这个固定版本。自动跟随宿主的实时输出，会把一次上游变更变成这里一次无声的契约变更。
+
+## Agent Skills 规范 lint
+
+`AB6034` 是针对输出字节的 **error**：某份 `SKILL.md` 拥有合法的 YAML frontmatter，但其后没有 Markdown
+指令正文。被固定的 Agent Skills 规范要求 frontmatter 之后必须跟随 Markdown 内容，而这项检查针对的是
+产物实际包含的内容，而不是编写时的源码。
+
+## 哈希固定与仓库自有的表格
+
+哈希固定覆盖那些真实来源位于本仓库之外、且可能漂移的 vendored 外部内容：`src/adapters/schemas/*` 下的
+宿主文档 schema（其上游 URL、commit 与 SHA-256 记录在 `PROVENANCE.json` 中）、清单 `agentSkills` 块中
+由 Agent Skills 规范派生的 schema 固定值，以及为完整性而记录的输出产物文件与源输入。
+
+仓库自有的能力表格与证据**不**做哈希。能力证据记录被观察到的宿主版本（`observedVersion`）与 target，
+适配器则携带一个单调递增的 `adapterRevision`。Git 已经为仓库自有内容做了版本管理；在仓库内部再哈希一遍
+是自我指涉的，并且会让每次编辑表格都产生变动噪声。
+
+## npm prepack 门禁
+
+```sh
+npx agent-bundle prepack --root . --output artifact --json
+```
+
+`prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、清单
+哈希、包 bin 目标以及发布版本一致性把关。`--output` 是相对 `--root` 的产物路径，会覆盖配置中的
+`output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
+而且任何 npm 生命周期都绝不会执行宿主安装。
+
+| 代码 | 含义 |
+| --- | --- |
+| `AB7010` | dry-run 的 npm 清单遗漏了某个包输出、产物清单或文件、安装表面，或 README。请把 `dist` 与产物目录加入包的 `files` 允许列表。 |
+| `AB7011` | 磁盘上的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成的宿主包。 |
+| `AB7012` | 某个 `package.json` bin 指向了打包后的 `dist` 输出之外（包括 `src/`），或指名了一个被 npm 忽略的文件。请把它指向生成的 `dist/bin` 文件。 |
+| `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
+
+发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带
+`0.0.0-dev.<short-revision>` 这个开发期回退值。声明的 `plugin.version` 与 `package.json` 不一致时会
+报告 `AB4008` 警告。
+
+## 下一步
+
+- [宿主安装](./installation.mdx) —— 把已校验的捆绑包注册到宿主。
+- [预览包](./preview-packages.mdx) —— 这些输出目前如何抵达消费者。

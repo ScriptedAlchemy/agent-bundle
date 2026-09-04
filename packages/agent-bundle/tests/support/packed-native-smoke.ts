@@ -41,7 +41,12 @@ interface EvalDocument {
 export interface PackedNativeSmokeReport {
   readonly hosts: readonly {
     readonly host: PackedNativeHost;
-    readonly normalHome?: 'unchanged';
+    /**
+     * Codex: auth, config, and plugins unchanged. Claude: settings and the
+     * installed-plugin tree unchanged — a real turn rewrites `.claude.json`
+     * session bookkeeping, so that file is not part of the guard.
+     */
+    readonly normalHome?: 'settings-and-plugins-unchanged' | 'unchanged';
     readonly status: 'failed' | 'passed';
     readonly trials: number;
   }[];
@@ -250,6 +255,39 @@ const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {
   return Object.freeze({ host, status: passed ? 'passed' as const : 'failed' as const, trials: summary?.trials ?? 0 });
 };
 
+interface PackedClaudeValidationDocument {
+  readonly hostValidation?: readonly {
+    readonly diagnostics?: readonly unknown[];
+    readonly host?: unknown;
+    readonly load?: { readonly status?: unknown };
+    readonly status?: unknown;
+    readonly target?: unknown;
+    readonly version?: unknown;
+  }[];
+}
+
+/**
+ * The packed `validate --artifact --strict --json` document must carry one Claude
+ * report that passed both the plugin-mode validation runs and the
+ * `--plugin-dir … plugin list --json` load check against the installed `claude`.
+ */
+const packedClaudeValidationPassed = (stdout: string, versionNumber: string): boolean => {
+  let document: PackedClaudeValidationDocument;
+  try {
+    document = JSON.parse(stdout) as PackedClaudeValidationDocument;
+  } catch {
+    return false;
+  }
+  // Other hosts' informational reports (Codex `AB6030`/`AB6031`) share the document; the exit
+  // code already proves none of them is an error.
+  const report = document.hostValidation?.find((entry) => entry.host === 'claude' && entry.target === 'claude');
+  return report !== undefined
+    && report.status === 'passed'
+    && report.version === versionNumber
+    && report.load?.status === 'loaded'
+    && (report.diagnostics?.length ?? 0) === 0;
+};
+
 /**
  * Packed-artifact proof for Claude's developer tools. It requires only the
  * installed binary, never authentication, and retains no plugin-list output.
@@ -295,11 +333,24 @@ export const runPackedClaudePluginProof = async (options: {
     if (version.exitCode !== 0 || versionNumber === undefined) {
       throw new Error('packed-claude-proof:version');
     }
-    const validation = await run('claude', ['plugin', 'validate', pluginDirectory, '--strict'], {
-      cwd: project,
-      environment,
-    });
-    if (validation.exitCode !== 0) throw new Error('packed-claude-proof:validate');
+    // The packed CLI's own host validation: `claude plugin validate --strict` against
+    // `.claude-plugin/plugin.json` (plugin.json, hooks/hooks.json, skills/, agents/, commands/),
+    // then `marketplace.json`, then the `--plugin-dir … plugin list --json` load check. A raw
+    // run against the directory would be a marketplace run that never opens the component
+    // files (#475), and the shared runner is what `build`, `validate --artifact`, and `doctor`
+    // execute in production.
+    const validation = await runNodeEntrypoint(cli, [
+      'validate',
+      '--root',
+      project,
+      '--artifact',
+      artifact,
+      '--strict',
+      '--json',
+    ], { cwd: project, environment });
+    if (validation.exitCode !== 0 || !packedClaudeValidationPassed(validation.stdout, versionNumber)) {
+      throw new Error('packed-claude-proof:validate');
+    }
     const plugins = await run('claude', ['--plugin-dir', pluginDirectory, 'plugin', 'list', '--json'], {
       cwd: project,
       environment,
@@ -356,10 +407,12 @@ export const runPackedNativeSmoke = async (options: {
       cwd: packageRoot,
       environment,
     });
-    const packOutput = packOutputFromJson(packed.stdout);
     if (packed.exitCode !== 0) {
-      throw new Error('Packed native smoke could not create exactly one release tarball.');
+      throw new Error('Packed native smoke could not create the release tarball.');
     }
+    // Select the agent-bundle entry by name: a workspace-aware `npm pack --json`
+    // can list sibling packages, and index 0 is not necessarily this one.
+    const packOutput = packOutputFromJson(packed.stdout, 'agent-bundle');
     const installed = await runNodeEntrypoint(npmEntrypoint, [
       'install',
       '--omit=dev',
@@ -394,15 +447,19 @@ export const runPackedNativeSmoke = async (options: {
           '--json',
         ], { cwd: project, environment });
       };
-      const claudeHomeUnchanged = host === 'claude'
-        ? await normalClaudeHomeUnchanged(options.environment, executeEval)
+      // The Claude Eval is a real signed-in turn, and Claude Code 2.1.257
+      // rewrites `.claude.json` on every such turn (observed 2026-09-03,
+      // docs/audits/2026-09-03-claude-live-session-proofs.md), so the guard is
+      // the settings-and-plugins surface, as in the host-install session proofs.
+      const claudeSettingsAndPluginsUnchanged = host === 'claude'
+        ? await normalClaudeSettingsAndPluginsUnchanged(options.environment, executeEval)
         : undefined;
       if (host === 'codex') await executeEval();
       if (command === undefined) throw new Error('Packed native smoke did not execute the selected Eval host.');
       const summary = summarizeEval(host, command);
       if (host === 'claude') {
-        reports.push(claudeHomeUnchanged === true
-          ? Object.freeze({ ...summary, normalHome: 'unchanged' })
+        reports.push(claudeSettingsAndPluginsUnchanged === true
+          ? Object.freeze({ ...summary, normalHome: 'settings-and-plugins-unchanged' })
           : Object.freeze({ host, status: 'failed', trials: summary.trials }));
       } else if (before !== undefined) {
         const after = await digestNormalCodexState(normalCodexHome);

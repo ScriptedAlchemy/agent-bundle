@@ -1,5 +1,5 @@
 ---
-'agent-bundle': minor
+'agent-bundle': patch
 ---
 
 Add the projection-contract proof levels to `agent-bundle/test` (#103 stage 2).

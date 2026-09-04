@@ -1,4 +1,4 @@
-import type { DevRuntimeProvider, DevRuntimeStartContext } from '../../../../packages/agent-bundle/src/dev/runtime-provider.ts';
+import type { DevRuntimeProvider, DevRuntimeStartContext } from 'agent-bundle/api';
 
 import { RsbuildRuntimeSession } from './rsbuild-runtime-session.js';
 

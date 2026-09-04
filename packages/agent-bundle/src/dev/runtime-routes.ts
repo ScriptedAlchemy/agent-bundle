@@ -3,8 +3,20 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hasOnlyOwnKeys, isPlainRecord } from '../core/strict-json.ts';
 
 import {
-  DevRuntimeGenerationConflictError,
+  diagnostic,
+  isJsonRequest,
+  isRequestDiagnostic,
+  rawPathname,
+  readBody,
+  requestError,
+  responseDiagnostic,
+  responseJson as writeJsonResponse,
+} from './http.ts';
+
+import {
   DevRuntimeUnavailableError,
+  isDevRuntimeGenerationConflictError,
+  isDevRuntimeUnavailableError,
   type DevRuntimeSession,
 } from './runtime-provider.ts';
 import type {
@@ -17,16 +29,9 @@ import type {
 } from './runtime-protocol.ts';
 import { freezeJsonValue, type JsonValue } from './types.ts';
 
-const bodyLimit = 64 * 1024;
 const assetLimit = 4 * 1024 * 1024;
 // 16 MiB leaves room for rich timelines while bounding retained replacement snapshots.
 const agentDocumentResponseLimit = 16 * 1024 * 1024;
-
-interface RequestDiagnostic {
-  readonly code: string;
-  readonly message: string;
-  readonly status: number;
-}
 
 type Route =
   | Readonly<{ readonly kind: 'status' | 'surfaces' | 'runs' | 'state-reset' }>
@@ -71,80 +76,6 @@ const loadAgentDocumentRuntime = async (): Promise<AgentDocumentRuntimeModule> =
     });
   return agentDocumentRuntimePromise;
 };
-
-const diagnostic = (code: string, message: string, status: number): RequestDiagnostic => ({ code, message, status });
-
-const requestError = (value: RequestDiagnostic): RequestDiagnostic & Error => Object.assign(
-  new Error(value.message),
-  value,
-);
-
-const isRequestDiagnostic = (value: unknown): value is RequestDiagnostic =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as Partial<RequestDiagnostic>).code === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).message === 'string' &&
-  typeof (value as Partial<RequestDiagnostic>).status === 'number';
-
-const responseDiagnostic = (response: ServerResponse, value: RequestDiagnostic): void => {
-  if (response.headersSent || response.writableEnded) {
-    response.destroy();
-    return;
-  }
-  response.writeHead(value.status, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify({ diagnostic: { code: value.code, message: value.message } }));
-};
-
-const responseJson = (response: ServerResponse, body: unknown): void => {
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(body));
-};
-
-const singleHeader = (value: string | readonly string[] | undefined): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-
-const unquoteHeaderValue = (value: string): string | undefined => {
-  if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)) return value;
-  if (!/^"(?:[^"\\\r\n]|\\[\t !-~])*"$/u.test(value)) return undefined;
-  return value.slice(1, -1).replace(/\\([\t !-~])/gu, '$1');
-};
-
-const isJsonRequest = (request: IncomingMessage): boolean => {
-  const contentType = singleHeader(request.headers['content-type']);
-  if (contentType === undefined) return false;
-  const parts = contentType.split(';').map((part) => part.trim());
-  if (parts.shift()?.toLowerCase() !== 'application/json') return false;
-  if (parts.length === 0) return true;
-  if (parts.length !== 1) return false;
-  const parameter = parts[0]!;
-  const equals = parameter.indexOf('=');
-  if (equals < 1 || parameter.slice(0, equals).trim().toLowerCase() !== 'charset') return false;
-  return unquoteHeaderValue(parameter.slice(equals + 1).trim())?.toLowerCase() === 'utf-8';
-};
-
-const readBody = async (request: IncomingMessage): Promise<string> => new Promise((resolvePromise, rejectPromise) => {
-  let size = 0;
-  let tooLarge = false;
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > bodyLimit) {
-      tooLarge = true;
-      return;
-    }
-    if (!tooLarge) chunks.push(chunk);
-  });
-  request.once('end', () => {
-    if (tooLarge) {
-      rejectPromise(requestError(diagnostic('AB8010', 'Request body exceeds 64 KiB.', 413)));
-      return;
-    }
-    resolvePromise(Buffer.concat(chunks).toString('utf8'));
-  });
-  request.once('error', rejectPromise);
-});
-
-const rawPathname = (requestTarget: string | undefined): string =>
-  requestTarget?.split(/[?#]/u, 1)[0] ?? '';
 
 const hasQuery = (requestTarget: string | undefined): boolean => requestTarget?.includes('?') ?? false;
 
@@ -345,10 +276,12 @@ export class RuntimeRoutes {
       await this.#dispatch(parsed, request, response);
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
-      if (error instanceof DevRuntimeGenerationConflictError) {
+      // Recognised by name and code, not constructor identity: a provider
+      // throws these from its own `agent-bundle/api` installation (#485).
+      if (isDevRuntimeGenerationConflictError(error)) {
         throw requestError(diagnostic(error.code, error.message, 409));
       }
-      if (error instanceof DevRuntimeUnavailableError) {
+      if (isDevRuntimeUnavailableError(error)) {
         throw requestError(diagnostic(error.code, error.message, 404));
       }
       throw requestError(diagnostic('AB8205', 'Runtime request could not be completed.', 500));
@@ -366,18 +299,18 @@ export class RuntimeRoutes {
     if (parsed.kind === 'status') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       onlyQuery(request.url, undefined);
-      return responseJson(response, { status: this.#runtime?.status() ?? null });
+      return writeJsonResponse(response, { status: this.#runtime?.status() ?? null });
     }
     if (parsed.kind === 'surfaces') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       onlyQuery(request.url, undefined);
-      return responseJson(response, { surfaces: this.#runtime?.surfaces() ?? [] });
+      return writeJsonResponse(response, { surfaces: this.#runtime?.surfaces() ?? [] });
     }
     const session = this.#session();
     if (parsed.kind === 'runs') {
       if (method === 'POST') {
         onlyQuery(request.url, undefined);
-        return responseJson(response, {
+        return writeJsonResponse(response, {
           run: assertRunOwned(session, await session.invoke(invocation(await jsonBody(request), session.surfaces()))),
         });
       }
@@ -389,12 +322,12 @@ export class RuntimeRoutes {
       if (runs.some((run) => run.vector.providerSessionId !== provider)) {
         throw requestError(diagnostic('AB8205', 'Runtime request could not be completed.', 500));
       }
-      return responseJson(response, { providerSessionId: provider, runs });
+      return writeJsonResponse(response, { providerSessionId: provider, runs });
     }
     if (parsed.kind === 'run') {
       onlyQuery(request.url, undefined);
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { run: assertRunOwned(session, session.run(parsed.id)) });
+      return writeJsonResponse(response, { run: assertRunOwned(session, session.run(parsed.id)) });
     }
     if (parsed.kind === 'flight') {
       onlyQuery(request.url, undefined);
@@ -446,7 +379,7 @@ export class RuntimeRoutes {
           responseBytes += separatorBytes + eventBytes;
           events.push(event);
         }
-        return responseJson(response, { events });
+        return writeJsonResponse(response, { events });
       } catch (error) {
         if (isRequestDiagnostic(error)) throw error;
         throw requestError(diagnostic('AB8208', 'Stored Flight could not be decoded as an Agent Document.', 409));
@@ -457,12 +390,12 @@ export class RuntimeRoutes {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       const replayRequest = replay(await jsonBody(request));
       if (replayRequest.runId !== parsed.id) return invalidShape();
-      return responseJson(response, { run: assertRunOwned(session, await session.replay(replayRequest)) });
+      return writeJsonResponse(response, { run: assertRunOwned(session, await session.replay(replayRequest)) });
     }
     if (parsed.kind === 'state-reset') {
       onlyQuery(request.url, undefined);
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      return responseJson(response, { state: await session.resetState(reset(await jsonBody(request))) });
+      return writeJsonResponse(response, { state: await session.resetState(reset(await jsonBody(request))) });
     }
     if (parsed.kind !== 'asset') return;
     if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));

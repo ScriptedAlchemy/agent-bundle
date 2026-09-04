@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "FooEvent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hi"
+          }
+        ]
+      }
+    ]
+  }
+}

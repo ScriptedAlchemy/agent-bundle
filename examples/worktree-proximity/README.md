@@ -1,27 +1,35 @@
 # Worktree proximity
 
 This advanced composition reference coordinates one root task and two child
-agents working in linked worktrees of the same Git repository. Application
-code records topology and current intent, detects path or dependency overlap,
-warns the actor handling the current event, and publishes a durable notice
-addressed to the other actor. The notice ledger attempts delivery on that
-actor's next admitted event. No daemon and no native directed-message API are
-required.
+agents working in linked worktrees of the same Git repository. The runtime's
+lineage registry supplies the agent tree — who the root is, which children
+are alive, who is a sibling — through `(await agent()).lineage`; application
+code records only which worktree each agent works in and its current intent,
+detects path or dependency overlap, warns the actor handling the current
+event, and publishes a durable notice addressed to the other actor. The
+notice ledger attempts delivery on that actor's next admitted event. No
+daemon and no native directed-message API are required.
 
 This example is intentionally not part of the newcomer path.
 
 ## Scenario
 
-1. A `session/start` event records the root actor.
-2. Two `agent/start` events bind native child actor IDs to distinct worktrees.
+1. A `session/start` event binds the root conversation to its worktree.
+2. Two `agent/start` events bind the child conversations the runtime placed
+   under that root to distinct worktrees.
 3. `tool/before` records current path and dependency intent.
-4. The pure proximity domain compares active intents from different worktrees.
+4. The pure proximity domain compares active intents from different
+   worktrees, ignoring an intent whose agent `request.lineage.tree` no longer
+   lists as alive.
 5. A conflict renders an `Agent.Context` warning with an `outcome: continue`
-   result and publishes a recipient-scoped notice.
-6. The other actor's next event admits the pending notice, changes its
+   result and publishes a notice addressed to the other actor's lineage
+   conversation (`recipient.conversation`).
+6. That actor's next event — and only that actor's, even when a sibling works
+   in the same worktree — admits the pending notice, changes its
    evidence-backed state to `attempted`, and renders its content as context.
-7. `tool/after` records an empty current intent, and `stop` marks the actor
-   stopped.
+7. `tool/after` records an empty current intent; `agent/stop` and `stop`
+   release the actor's binding and whatever intent it still held (the
+   registry records the stop itself, so siblings stop seeing it).
 
 The demonstration dependency convention is a `deps:` string in tool input:
 
@@ -37,51 +45,96 @@ repository-relative slash-separated paths by the domain module.
 
 The application has four planes:
 
+- **Lineage** — the agent tree is the runtime's. `(await agent()).lineage`
+  answers who this request is (`conversation`, `parent`, `root`, `depth`,
+  `resolution`) and, through `lineage.value.tree`, who else is alive:
+  `siblings` (every other live conversation under the same root, the root
+  included), `children`, and other live `roots`, each with the registry's own
+  `resolution` for its placement. `agentTree()` in `src/event-support.ts`
+  turns that into the coordinator's report; `liveConversations()` turns it
+  into the liveness the domain uses.
 - **Providers** — `git-worktree` derives repository, branch, commit, common
   Git directory, and linked-worktree identity without throwing for expected
   degradation. `agent-topology` reports that its snapshot is unavailable
-  before request mounting.
-- **Events** — canonical shared-runtime routes observe actors, bind worktrees,
-  record or clear intent, detect conflicts, render current-actor context, and
-  publish or admit notices.
-- **State and notices** — one workspace-durable topology definition and the
-  framework notice definition share the generated runtime's SQLite driver.
-  Routes use only the mounted `(await agent()).state` and
-  `(await agent()).notices` handles; SQLite supplies cross-process durability
-  and idempotency without a daemon.
+  because providers receive no request lineage.
+- **Events** — canonical shared-runtime routes bind actors to worktrees,
+  record or clear intent, detect conflicts, render current-actor context,
+  release stopped actors, and publish or admit notices.
+- **State and notices** — one workspace-durable intent definition (worktree
+  bindings, activities, refusals) and the framework notice definition share
+  the generated runtime's SQLite driver. Routes use only the mounted
+  `(await agent()).state` and `(await agent()).notices` handles; SQLite
+  supplies cross-process durability and idempotency without a daemon.
 - **Domain** — `src/domain/proximity.ts` contains all collision decisions and
   performs no I/O.
 
 The generated runtime owns the durable root. It mounts SQLite at
 `$AGENT_BUNDLE_PLUGIN_ROOT/state`, with the generated artifact root as the
-fallback anchor, and mounts topology state and the notice ledger over that
-same driver. The application never opens a second store from Git identity
-data; `gitWorktree.commonDir` remains identity evidence only.
+fallback anchor, and mounts intent state, the notice ledger, and its own
+lineage journal over that same driver. The application never opens a second
+store from Git identity data; `gitWorktree.commonDir` remains identity
+evidence only.
 
-The issue sketch places a snapshot at `providers.agentTopology.snapshot`, but
-providers execute before request state is mounted, so this provider reports
-an honest unavailable result and routes read snapshots from
-`(await agent()).state.read()` instead.
+The issue sketch places the agent tree at `providers.agentTopology`. The tree
+is on the request (`request.lineage.tree`,
+[#457](https://github.com/scriptedalchemy/agent-bundle/issues/457)), but a
+provider factory receives only `{ invocation, signal }` — not the request's
+`lineage` ([#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)) —
+so this provider reports an honest unavailable result and routes read the
+tree from `(await agent()).lineage` instead.
 
 `worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
-provider value. A `useWorktree()` React-hook variant is recorded unavailable:
-the framework exposes no client-hook contract for provider values.
+provider value. `useWorktree()` is the hook-shaped variant for Server
+Components and synchronous helpers: it reads the same request handle through
+the runtime's `useAgent()`, so it follows the identical lease rules and throws
+the runtime's `outside-invocation` error outside a request.
 
 ## Actor identity and provenance
 
-Every identity claim records whether it came from a native envelope or was
-derived:
+Every identity claim records where it came from. `native` is read from the
+host envelope (or a `request.lineage` the runtime resolved natively),
+`registry`, `inferred`, `confirmed` and `transcript` are the runtime lineage
+registry's own resolutions (`confirmed` once the host has named every edge up
+to the root; `transcript` is read from the host's own rollout file), and
+`derived` is this application's fallback:
 
-- `session/start` observes `session:<session_id>` as the root actor.
-- `agent/start` requires native `agent_id` and `session_id`, records the child,
-  and records its parent session provenance as native.
-- Tool envelopes contain no `agent_id`. A tool event first resolves an active
-  actor already bound to the event worktree. Without an earlier binding it
-  uses the explicit derived identity `worktree:<root>` and records that
-  provenance; it never upgrades the derived identity to native.
-- `agent/start` without native identity records an `edgeRefused` event and
-  renders that parent identity is unavailable. It refuses to fabricate a
-  topology edge.
+- `session/start` binds the root conversation — `(await agent()).lineage.root`
+  when the runtime resolved a lineage and the native `session_id` otherwise —
+  to its worktree, under the same id `request.lineage.tree` lists it by.
+- `agent/start` binds the child named by `request.lineage` (`conversation`,
+  with `resolution` as the binding's provenance) when the runtime placed the
+  start below the root — which needs the spawning `Agent`/`Task`
+  `tool/before` to have passed through the same shared runtime — and the
+  native `agent_id` otherwise. Either way the child's actor id is its lineage
+  conversation (Claude and Codex spell it `agent_id`), which is what a
+  directed notice targets. The edge itself (parent, depth, root) is not
+  recorded: the registry holds it.
+- Claude and Codex put the subagent's `agent_id` on every one of its hook
+  payloads; Cursor gives the child a fresh `conversation_id` that only the
+  runtime registry can bind to its `subagentStart`. A tool or stop event
+  therefore resolves its actor in order of evidence: the child named by
+  `request.lineage` (depth above zero), then the native `agent_id`, then the
+  actor most recently bound to the event worktree, and finally the explicit
+  derived identity `worktree:<root>`. A carried child not yet bound is bound
+  with the provenance the evidence carried; a derived identity is never
+  upgraded. A root-level tool envelope (lineage
+  depth zero) resolves through the worktree binding, so intent stays
+  attributed per worktree.
+- `agent/start` without either lineage or native identity records an
+  `edgeRefused` event and renders that parent identity is unavailable. It
+  refuses to fabricate a topology edge.
+- `agent/stop` and `stop` release the actor the envelope names (binding and
+  intent); an identity-less stop releases nobody.
+
+Liveness is the registry's word, not this application's: when
+`request.lineage.tree` is present, an intent held by a host-identified actor
+the tree no longer lists under our root is stale and warns nobody; a derived
+`worktree:<root>` actor is not a conversation and is never filtered that
+way; and a lineage with no tree (a payload that proved only its own chain, a
+standalone hook, or none at all) presumes nothing about who stopped. The
+coordinator `status` tool reports the tree the runtime resolved for *its*
+call — a client no pre-tool hook window names gets an honest
+`agents: unavailable`, never a tree from another caller's point of view.
 
 Unsupported worktree, actor, parent, state, and delivery conditions are
 rendered as unavailable instead of being replaced with invented evidence.
@@ -89,20 +142,38 @@ rendered as unavailable instead of being replaced with invented evidence.
 ## Framework primitive wiring
 
 Generated route workers mount the extracted `src/state.ts` definition and the
-notice ledger into every request scope. `withTopology` and `withNotices` are
+notice ledger into every request scope. `withIntent` and `withNotices` are
 small capability adapters over those real handles. If a surface has no
 mounted handle, they return an unavailable result and the route renders that
 reason as `Agent.Context`; there is no fallback write path.
 
 Notice admission runs once per event invocation in the render scope.
-Generated event principals in v1 mount host, session, and workspace identity,
-but not actor identity. Proximity notices therefore target the recipient
-worktree through `recipient.workspace.root`, while their content and dedupe
-keys continue to name the target actor. Actor-directed delivery remains future
-work tied to actor-principal mounting in the #99/#233 lineage.
+Generated event principals mount host, session, workspace, and lineage
+identity, but not actor identity (#391/#444). A proximity notice is therefore
+addressed to the other actor's lineage conversation —
+`recipient: { conversation }`, matched against the admitting request's
+`request.lineage.conversation` — so only that agent thread admits it, even
+when a sibling shares its worktree and every subagent shares the root
+`session_id`. An event whose lineage the runtime could not resolve (no shared
+runtime, an unplaced `agent_id`) is never the addressed agent; the notice
+stays pending for the next event that is. Only the application's derived
+`worktree:<root>` fallback actor, which names no conversation, is still
+addressed through `recipient.workspace.root`. `recipient.root` (every
+conversation under one root) is available but unused here: proximity is a
+message to one peer, not to the tree.
 `(await agent()).notices.read()` exposes only deliveries attempted for the
-current invocation. The coordinator status therefore reports topology facts
-only and does not claim a whole-ledger pending count.
+current invocation, and `inbox()` only what is pending for the current
+recipient. The coordinator status reports, beside the agent tree, bindings,
+and intents, what became of the notices *the calling agent* published — `pending`,
+`attempted`, `acknowledged`, and the other ledger states, counted from
+`(await agent()).notices.published()`
+([#460](https://github.com/scriptedalchemy/agent-bundle/issues/460)). That
+view is scoped by the publisher identity the ledger recorded at publish, the
+agent's lineage conversation, so a status call correlated to agent B's
+conversation (Claude names the pre-tool hook's `tool_use_id` in the MCP call's
+`_meta`) counts agent B's notices whatever the MCP client name, session id, or
+server cwd; a call whose lineage the runtime cannot resolve counts zero. It is
+never a whole-ledger count and never another agent's.
 
 ## Evidence boundary
 
@@ -112,8 +183,13 @@ and exercises the documented journeys against one shared durable runtime
 owner. The root integration-pool suite
 `packages/agent-bundle/tests/worktree-proximity-journeys.test.ts` builds the
 real artifact, invokes generated hooks as separate processes against linked
-Git worktrees, and proves warning, workspace-directed delivery, replay
-idempotency, and exact-revision restart durability through the generated MCP
+Git worktrees, and proves warning, conversation-directed delivery (the
+spawning `Agent` `PreToolUse` opens the registry's spawn window and the
+child's hook payloads carry its `agent_id`, as Claude's do; an event the
+runtime cannot place under that child is not delivered to), replay
+idempotency, exact-revision restart durability, and the registry-fed agent
+tree — spawned children visible to the root's `status` call, still visible
+after a server restart, gone after `agent/stop` — through the generated MCP
 server. Journey 8 has two honesty layers: the generated wrapper fails closed
 on an identity-less `SubagentStart` for host contracts that require
 `agent_id`, while the route-unit suite proves the route records a refusal for

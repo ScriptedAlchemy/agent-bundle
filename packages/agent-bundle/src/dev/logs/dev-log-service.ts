@@ -8,6 +8,7 @@ import {
   devLogLevels,
   devLogProducers,
   hasControlOrSeparators,
+  safeContextKeys,
   type DevLogKindFor,
   type DevLogLevel,
   type DevLogProducer,
@@ -114,17 +115,6 @@ const defaultSubscriberRecordLimit = 128;
 const minimumRecordByteLimit = 256;
 const unavailable = '[UNAVAILABLE]' as const;
 const redacted = '[REDACTED]';
-const safeContextKeys = new Set([
-  'buildId',
-  'diagnosticCode',
-  'epochId',
-  'hookId',
-  'projectId',
-  'routeId',
-  'runId',
-  'sessionId',
-  'target',
-]);
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const maxSummaryLength = 2_048;
 

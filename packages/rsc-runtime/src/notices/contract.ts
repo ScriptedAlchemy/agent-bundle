@@ -3,10 +3,14 @@ import type {
   AgentActorIdentity,
   AgentHostIdentity,
   AgentInvocation,
+  AgentLineage,
   AgentSessionIdentity,
   AgentWorkspaceIdentity,
   Observed,
 } from '../agent-request.js';
+import type { AgentStateJournalInspection } from '../state/contract.js';
+import type { AgentNoticeSensitivity } from './redaction.js';
+import type { AgentNoticeDeliveryRoute } from './router.js';
 
 export const AGENT_NOTICE_STATES = Object.freeze([
   'pending',
@@ -30,10 +34,21 @@ export type AgentNoticeState = (typeof AGENT_NOTICE_STATES)[number];
 
 export type AgentNoticePriority = 'low' | 'normal' | 'high';
 
-/** A recipient is the conjunction of the observed identity axes it specifies. */
+/**
+ * A recipient is the conjunction of the observed identity axes it specifies:
+ * every axis present must match the admitting request, and an axis the
+ * request cannot observe never matches. `conversation` and `root` are read
+ * from the request's `lineage` (#host-lineage), so they address one agent
+ * thread — or every thread under one root — where `session` cannot: on
+ * Claude and Codex every subagent's hooks carry the root `session_id`.
+ */
 export interface AgentRecipient {
   readonly actor?: AgentActorIdentity;
+  /** Matches when `request.lineage.conversation` is exactly this id: one agent thread. */
+  readonly conversation?: string;
   readonly host?: AgentHostIdentity;
+  /** Matches when `request.lineage.root` is this id: the root conversation and every subagent under it. */
+  readonly root?: string;
   readonly session?: AgentSessionIdentity;
   readonly workspace?: AgentWorkspaceIdentity;
 }
@@ -41,6 +56,47 @@ export interface AgentRecipient {
 export interface AgentNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /**
+   * The request's place in the conversation tree. Optional so a principal
+   * built before the axis existed (a four-axis `openRequest()` or
+   * `subscribe()` caller) keeps working: absent is unavailable, and
+   * unavailable lineage matches no `conversation`/`root` recipient.
+   */
+  readonly lineage?: Observed<AgentLineage>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** The lineage facts recipient matching reads: the request's own conversation and its root. */
+export type AgentNoticeLineageScope = Pick<AgentLineage, 'conversation' | 'root'>;
+
+/**
+ * The publishing request's identity as `publish()` recorded it: every axis the
+ * request could observe, in the same terms a recipient is spelled. It scopes
+ * `notices.published()` — the publisher's own view of what became of its
+ * notices (#460) — and nothing else: it is never matched for delivery, and it
+ * is absent on notices published before it existed or by a request that
+ * observed no identity at all, which therefore no `published()` view returns.
+ */
+export interface AgentNoticePublisher {
+  readonly actor?: AgentActorIdentity;
+  /** `request.lineage.conversation`: the agent thread that published, whichever transport observed it. */
+  readonly conversation?: string;
+  readonly host?: AgentHostIdentity;
+  readonly session?: AgentSessionIdentity;
+  readonly workspace?: AgentWorkspaceIdentity;
+}
+
+/**
+ * The principal as the ledger journals it on an admission: the identity axes
+ * plus only the lineage scope, so a journaled admission never depends on the
+ * rest of the lineage shape. `lineage` is absent on admissions journaled
+ * before the axis existed and is treated as unavailable.
+ */
+export interface AgentNoticeRecordedPrincipal {
+  readonly actor: Observed<AgentActorIdentity>;
+  readonly host: Observed<AgentHostIdentity>;
+  readonly lineage?: Observed<AgentNoticeLineageScope>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
@@ -71,6 +127,23 @@ export interface AgentNoticeAvailability {
   readonly lastAt: string;
 }
 
+/**
+ * A signaller's durable hold on one `resources/updated` send that has not yet
+ * succeeded. It spends no budget: the receipt is recorded only once the
+ * protocol write succeeds (`signalAvailability`) and released when it fails
+ * (`releaseAvailability`). It exists so two signallers over one store cannot
+ * both send for the same budget slot, and it is honoured only for
+ * `AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` so a crashed holder cannot
+ * starve the notice.
+ */
+export interface AgentNoticeAvailabilityReservation {
+  readonly at: string;
+  readonly key: string;
+}
+
+/** How long a reservation blocks other signallers before it is treated as abandoned. */
+export const AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS = 30_000;
+
 export interface AgentNoticeAcknowledgement {
   readonly acknowledgedAt: string;
   readonly invocationId: string;
@@ -78,10 +151,36 @@ export interface AgentNoticeAcknowledgement {
 
 export type AgentNoticeUnavailableReason = 'delivery-authorization-unavailable';
 
+/**
+ * Evidence that a route refused to disclose the notice: the recipient's route
+ * was reached but the redaction policy withheld the content (its sensitivity
+ * exceeds the host row's ceiling). Recorded per route so the ledger says why
+ * a matching recipient never saw a notice; it moves no state.
+ */
+export type AgentNoticeWithholdingReason = 'route-unavailable' | 'sensitivity-exceeds-route';
+
+export interface AgentNoticeWithholding {
+  readonly count: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  /** The latest reason; a route that became unavailable after a sensitivity refusal reports the newer one. */
+  readonly reason: AgentNoticeWithholdingReason;
+}
+
+export type AgentNoticeWithholdings = Readonly<Partial<Record<AgentNoticeDeliveryRoute, AgentNoticeWithholding>>>;
+
+/** One withholding decision as an event payload records it. */
+export interface AgentNoticeWithheldEntry {
+  readonly id: string;
+  readonly reason: AgentNoticeWithholdingReason;
+}
+
 export interface AgentNotice {
   readonly acknowledgement?: AgentNoticeAcknowledgement;
   readonly attempts: readonly AgentNoticeAttemptReceipt[];
   readonly availability?: AgentNoticeAvailability;
+  readonly availabilityReservation?: AgentNoticeAvailabilityReservation;
+  /** The persisted snapshot as authored; routes disclose it per {@link AgentNotice.sensitivity}. */
   readonly content: AgentDocumentSnapshot;
   readonly createdAt: string;
   readonly dedupeKey?: string;
@@ -92,17 +191,56 @@ export interface AgentNotice {
   /** Admissions before this instant leave the notice pending (V1: evaluated only on admitted events, never by an implied timer). */
   readonly nextAttemptAt?: string;
   readonly priority: AgentNoticePriority;
+  /** Who published it, for {@link AgentNoticesHandle.published}; absent on pre-#460 notices and identity-less publishes. */
+  readonly publisher?: AgentNoticePublisher;
   readonly recipient: AgentRecipient;
   /** Maximum next-event attempt receipts before admission stops re-attempting; absent means 1. */
   readonly retryBudget?: number;
+  /** Author-declared disclosure class; absent on notices persisted before the redaction contract and means `internal`. */
+  readonly sensitivity?: AgentNoticeSensitivity;
   readonly state: AgentNoticeState;
   readonly unavailableAt?: string;
   readonly unavailableReason?: AgentNoticeUnavailableReason;
   readonly withdrawnAt?: string;
+  /** Routes that withheld this notice from a matching recipient, with counts. */
+  readonly withheld?: AgentNoticeWithholdings;
+}
+
+/**
+ * Retention policy of one ledger (#99 acceptance item 7). Terminal notices —
+ * `expired`, `unavailable`, `withdrawn`, `acknowledged`, and `attempted`
+ * with an exhausted retry budget — are pruned from the state once they have
+ * been settled for `terminalTtlMs`, or earliest-settled first once more than
+ * `maxTerminal` remain; the store's journal is compacted onto its head once
+ * it exceeds `maxJournalBytes`. Pruning runs only on admitted events and
+ * explicit `retain()` calls: V1 implies no timer.
+ */
+export interface AgentNoticeRetentionPolicy {
+  /** Retained journal bytes above which `retain()` compacts the store's journal. */
+  readonly maxJournalBytes: number;
+  /** Most terminal notices kept regardless of age. */
+  readonly maxTerminal: number;
+  /** Milliseconds a terminal notice is kept after it settled. */
+  readonly terminalTtlMs: number;
+}
+
+/** Sane defaults: a week of terminal history, at most 500 terminal notices, a 16 MiB journal. */
+export const AGENT_NOTICE_DEFAULT_RETENTION: AgentNoticeRetentionPolicy = Object.freeze({
+  maxJournalBytes: 16 * 1024 * 1024,
+  maxTerminal: 500,
+  terminalTtlMs: 7 * 24 * 60 * 60 * 1000,
+});
+
+/** Durable summary of pruning that has happened; absent until the first prune. */
+export interface AgentNoticeRetentionSummary {
+  readonly lastPrunedAt: string;
+  readonly pruneRuns: number;
+  readonly prunedTotal: number;
 }
 
 export interface AgentNoticeLedgerSnapshot {
   readonly notices: readonly AgentNotice[];
+  readonly retention?: AgentNoticeRetentionSummary;
   readonly revision: number;
 }
 
@@ -115,6 +253,8 @@ export interface AgentNoticePublishInput {
   readonly recipient: AgentRecipient;
   /** Defaults to 1 (single next-event attempt). */
   readonly retryBudget?: number;
+  /** Defaults to `internal`; see `redaction.ts` for what each class means per route. */
+  readonly sensitivity?: AgentNoticeSensitivity;
 }
 
 export interface AgentNoticePublishOptions {
@@ -123,6 +263,12 @@ export interface AgentNoticePublishOptions {
 
 export interface AgentNoticePublishResult {
   readonly deduped: boolean;
+  /**
+   * The persisted notice. When the publish deduplicated onto a notice another
+   * publish created (a shared `dedupeKey` for the same recipient), `content`
+   * is the `[REDACTED]` mark, never the other author's text; a fresh publish
+   * or an idempotent replay of the caller's own publish carries its content.
+   */
   readonly notice: AgentNotice;
   readonly replayed: boolean;
   readonly revision: number;
@@ -144,7 +290,8 @@ export type AgentNoticeAuthorizationDecision =
 
 export interface AgentNoticeAuthorizationRequest {
   readonly noticeId?: string;
-  readonly phase: 'acknowledge' | 'deliver' | 'publish' | 'read';
+  /** `published` is the publisher-scoped read (`notices.published()`), judged once per notice like `read`. */
+  readonly phase: 'acknowledge' | 'deliver' | 'publish' | 'published' | 'read';
   readonly principal: AgentNoticePrincipal;
   readonly recipient: AgentRecipient;
 }
@@ -153,7 +300,16 @@ export type AgentNoticeAuthorizer = (
   request: AgentNoticeAuthorizationRequest,
 ) => AgentNoticeAuthorizationDecision | Promise<AgentNoticeAuthorizationDecision>;
 
+/** What the `next-event` route disclosed of a delivered notice. */
+export interface AgentNoticeDisclosureReceipt {
+  /** True when the secret pass ran over `notice.content` (every `internal` notice). */
+  readonly redacted: boolean;
+  readonly route: AgentNoticeDeliveryRoute;
+}
+
 export interface AgentNoticeDelivery {
+  readonly disclosure: AgentNoticeDisclosureReceipt;
+  /** The notice with `content` as the route disclosed it, not necessarily as persisted. */
   readonly notice: AgentNotice;
   readonly receipt: AgentNoticeAttemptReceipt;
 }
@@ -161,8 +317,20 @@ export interface AgentNoticeDelivery {
 export interface AgentNoticesHandle {
   /** Recipient-scoped explicit acknowledgement; the strongest evidenced state. */
   acknowledge(id: string): Promise<AgentNotice>;
+  /** Pending notices as the `mcp-inbox` route discloses them (`content` redacted per sensitivity; withheld ones omitted). */
   inbox(): Promise<readonly AgentNotice[]>;
   publish(input: AgentNoticePublishInput, options: AgentNoticePublishOptions): Promise<AgentNoticePublishResult>;
+  /**
+   * The notices this principal published, in every state, with their
+   * receipts — the publisher's answer to "was my notice attempted or
+   * acknowledged?" (#460). Scoped by the publisher identity `publish()`
+   * recorded: the same lineage conversation when both sides have one,
+   * otherwise every recorded identity axis. Never another publisher's
+   * notices and never a recipient view; `content` is disclosed under the
+   * default `internal` ceiling (secret-passed; `secret` content is the
+   * placeholder), because this is not a delivery route. Records nothing.
+   */
+  published(): Promise<readonly AgentNotice[]>;
   read(): Promise<readonly AgentNoticeDelivery[]>;
 }
 
@@ -179,15 +347,95 @@ export interface AgentNoticeRequestLease {
 
 export interface AgentNoticeAvailabilitySignalOptions {
   readonly at: string;
+  /**
+   * Compare-and-swap guard: the receipt commits only if the ledger is still at
+   * this revision, so concurrent signallers over one durable store cannot both
+   * spend a notice's budget (typed `revision-conflict` otherwise).
+   */
+  readonly expectedRevision?: number;
   readonly idempotencyKey: string;
   readonly noticeIds: readonly string[];
+  /**
+   * The reservation this signal finalizes. The receipt is recorded only on
+   * notices this key still holds and the hold is cleared with it; a key that
+   * lost the hold (another signaller took over after the TTL) records nothing
+   * and the call rejects with `reservation-lost`, so two holders can never
+   * both spend one budget slot.
+   */
+  readonly reservationKey?: string;
+}
+
+export interface AgentNoticeAvailabilityReservationOptions {
+  readonly at: string;
+  /** Compare-and-swap guard against the revision the eligibility was computed from. */
+  readonly expectedRevision?: number;
+  readonly idempotencyKey: string;
+  readonly noticeIds: readonly string[];
+  readonly reservationKey: string;
+}
+
+export interface AgentNoticeAvailabilityReleaseOptions {
+  readonly idempotencyKey: string;
+  readonly noticeIds: readonly string[];
+  /** Only a reservation with this key is released; a newer holder's is left intact. */
+  readonly reservationKey: string;
+}
+
+export interface AgentNoticeRetainOptions {
+  readonly at: string;
+  readonly idempotencyKey: string;
+}
+
+export interface AgentNoticeRetentionReport {
+  /** True when the store's journal was compacted onto its head by this call. */
+  readonly compacted: boolean;
+  readonly journal: AgentStateJournalInspection;
+  /** Ids of terminal notices this call removed from the ledger state. */
+  readonly prunedIds: readonly string[];
+  readonly revision: number;
+}
+
+/** Read-only retention facts of a ledger: policy, live counts, and storage. */
+export interface AgentNoticeLedgerInspection {
+  readonly counts: {
+    readonly byState: Readonly<Record<AgentNoticeState, number>>;
+    /** Notices the retention policy treats as terminal (including exhausted `attempted`). */
+    readonly terminal: number;
+    readonly total: number;
+  };
+  readonly journal: AgentStateJournalInspection;
+  readonly policy: AgentNoticeRetentionPolicy;
+  readonly retention?: AgentNoticeRetentionSummary;
+  readonly revision: number;
+}
+
+/**
+ * A route's refusal to carry notices, recorded by the surface that made the
+ * decision (the `resources/updated` signaller records its own; the inbox and
+ * event admission record theirs inside their own events).
+ */
+export interface AgentNoticeWithholdingOptions {
+  readonly at: string;
+  readonly idempotencyKey: string;
+  readonly route: AgentNoticeDeliveryRoute;
+  readonly withheld: readonly AgentNoticeWithheldEntry[];
 }
 
 export interface AgentNoticeLedger {
   expire(options: AgentNoticeExpiryOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Retention facts for diagnostics; never notice content. */
+  inspect(): Promise<AgentNoticeLedgerInspection>;
   openRequest(request: AgentNoticeRequest): Promise<AgentNoticeRequestLease>;
   read(): Promise<AgentNoticeLedgerSnapshot>;
-  /** Records a wire-level resources/updated signal; availability, never delivery. */
+  /** Records that a route withheld the listed notices; evidence only, no state moves. */
+  recordWithholding(options: AgentNoticeWithholdingOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Applies the retention policy now: prunes eligible terminal notices, then compacts an oversized journal. */
+  retain(options: AgentNoticeRetainOptions): Promise<AgentNoticeRetentionReport>;
+  /** Releases a reservation whose resources/updated send failed; no budget was spent. */
+  releaseAvailability(options: AgentNoticeAvailabilityReleaseOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Holds one budget slot for a resources/updated send about to happen; records no receipt. */
+  reserveAvailability(options: AgentNoticeAvailabilityReservationOptions): Promise<AgentNoticeLedgerSnapshot>;
+  /** Records a wire-level resources/updated signal that succeeded; availability, never delivery. */
   signalAvailability(options: AgentNoticeAvailabilitySignalOptions): Promise<AgentNoticeLedgerSnapshot>;
   withdraw(id: string, options: AgentNoticeWithdrawOptions): Promise<AgentNoticeLedgerSnapshot>;
 }
@@ -196,6 +444,8 @@ export type AgentNoticeErrorCode =
   | 'aborted'
   | 'invalid-input'
   | 'request-closed'
+  /** A reserved availability receipt was refused because the reservation key no longer holds the slot. */
+  | 'reservation-lost'
   | 'unauthorized';
 
 export class AgentNoticeError extends Error {

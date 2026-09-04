@@ -2,6 +2,8 @@
 
 agent-bundle compiles an agent plugin — skills, hooks, MCP servers, and scripts, described by one typed config — into installable artifacts for Claude Code, Codex, and Cursor, plus a portable layout. You write the plugin once; the compiler emits each host's manifests and wrappers.
 
+Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
+
 Requires Node.js 22.19 or later.
 
 ## Install
@@ -51,11 +53,13 @@ npx agent-bundle dev --root .                   # local workbench with live rebu
 
 `targets: ['plugin']` emits one multi-host bundle at `dist/plugin/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
 
-The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter — the default target, and the layout Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT load natively (Claude Code consumes it only through CLI translation). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time, after every build (`AB6011`/`AB6012`), under `validate --artifact --host-validation` (`AB6035`–`AB6038`), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
+The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter — the default target, and the layout Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT load natively (Claude Code consumes it only through CLI translation). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time (`portable.mcp.*.standard`), after every ordinary build and `validate --artifact` (`AB6011`/`AB6012` plus the Agent Plugins byte lane `AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane with the `AB6038` provenance note), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
 
 Claude Code language servers are declared under `claude.lspServers`; the `claude` target and the Claude half of `plugin` emit the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary — install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
 
 Claude Code plugin defaults are declared under `claude.settings` and emitted as plugin-root `settings.json`, which Claude Code applies when the plugin is enabled. The pinned contract supports only `agent` and `subagentStatusLine`; Agent Bundle rejects any other key rather than shipping a default Claude Code would silently ignore, and it expands no path tokens here because `settings.json` is absent from the host's placeholder-substitution table. Because the plugin `agents/` component is still deferred, declaring `agent` also raises a warning: the referenced agent has to reach the plugin root some other way, such as a prebuilt payload.
+
+Cursor Plugin manifest metadata is declared under `cursor.*` and emitted verbatim into `.cursor-plugin/plugin.json` by the `cursor` target and the Cursor half of `plugin`: `author` (`name`, optional `email`), `homepage`, `repository`, `license`, `keywords`, plus the schema-admitted `publisher`, `category`, `tags`, and `minClientVersions` (for example `{ cursor: '3.13.0' }`). Every field is validated against the pinned `cursor/plugins` manifest schema before emission — `author.url`, non-HTTP URLs, empty strings, and loose semver are rejected with `cursor.manifest.*` errors, and an invalid block emits no partial metadata. The Cursor artifact never mixes Agent Plugin (`plugin.json`, `${PLUGIN_ROOT}`) paths or tokens into the Cursor Plugin format; the portable target owns that format. The full documented-surface contract matrix (every Cursor hook event, cloud availability, hook options, marketplace and team-distribution surfaces, canvases, agents) lives as dated `supported` / `unavailable` rows in `packages/agent-bundle/src/adapters/capabilities/cursor-2026-08-28.json`.
 
 The same config also owns the npm package build — no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the host artifacts; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract, and [Framework mode](docs/framework-mode.md) is the whole authoring model on one screen: structure in config and conventions (`src/skills/<name>/SKILL.md` ships with no declaration at all), JSX only where something is rendered.
 
@@ -86,6 +90,7 @@ The [package README](packages/agent-bundle/README.md) is the full reference: con
 | [Hooks and Scripts](examples/hooks-and-scripts) | simulate a hook and inspect script traces | `pnpm example:hooks` |
 | [MCP App](examples/mcp-app) | an interactive MCP App with a deterministic eval | `pnpm example:mcp-app` |
 | [Audiobook Curator](examples/audiobook-curator) | a real media-management plugin for Claude or Codex | `pnpm example:audiobook` |
+| [Host Test](examples/host-test) | probe what Claude, Codex, and Cursor send to hooks and MCP calls | `pnpm example:host-test` |
 
 Run these from the repository root. `pnpm examples:check` validates and builds every example noninteractively.
 
@@ -95,4 +100,10 @@ Run these from the repository root. `pnpm examples:check` validates and builds e
 
 ## Status
 
-Pre-release. The final npm package name and license are not yet chosen; pkg.pr.new previews are the release channel until then.
+Pre-release. The final npm package name is not yet chosen; pkg.pr.new previews are the release channel until then.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party material in this
+repository (the Workbench MCP App renderer derived from the MIT-licensed MCP Inspector) is covered by
+its own notices in [packages/workbench/THIRD_PARTY_NOTICES](packages/workbench/THIRD_PARTY_NOTICES).

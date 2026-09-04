@@ -1,0 +1,132 @@
+---
+description: 'Ship executable scripts and static assets in every agent-bundle artifact, including rendered .tsx scripts and the four CLI output modes.'
+---
+
+# Scripts and assets
+
+Scripts are the executables an artifact carries that are not MCP servers: the thing a Skill tells
+the agent to run, or the check a hook wants performed. Assets are the static files that ship
+beside them.
+
+## Scripts
+
+Top-level `scripts` is a record of stable output names to an entry path, or to an object with
+`entry` and an optional `targets` restriction:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
+  scripts: {
+    'check-service-fixture': './src/scripts/check-service-fixture.ts',
+    'detect-risk': { entry: './src/scripts/detect-risk.ts', targets: ['portable'] },
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+The key is the **output name**, so it stays stable even when the source file moves. Compilation
+depends on the entry's extension:
+
+| Entry | Output |
+| --- | --- |
+| JavaScript / TypeScript | Bundled to `scripts/<name>.mjs` in every selected target artifact. |
+| `.sh`, `.bash`, `.py` | Copied byte-for-byte, preserving source file modes. |
+
+### The convention
+
+An unclaimed plain module at `src/scripts/<name>.ts` ships through the same pipeline with no
+declaration at all. A `scripts` entry that references the file claims it, which is how the
+example above keeps `detect-risk` explicit only because it restricts targets.
+
+Nested modules under `src/scripts/` are a hard error (`AB4808`) — the output name must be
+unambiguous. Opt out by prefixing a path segment with `_`, or by claiming the file with an
+explicit `scripts` entry.
+
+Every explicit config entry that references a module — `scripts`, `hooks`, `mcp`, `lib` — claims
+it out of convention, with one exception: a `bin` entry does **not** claim a direct
+`src/scripts/<name>.ts` child. The bin compiles to `dist/bin/<name>.js`, disjoint from every
+artifact, and both envelopes run the same `main`, so the module ships as the npm bin *and* the
+artifact `scripts/<name>.mjs`. Such a module must export `main` or be self-executing: a
+`default`-only plain script is `AB4738`, and a rendered `.tsx` script must export both its default
+component and `main` (`AB4737`). For a bin-only module, prefix a path segment with `_`.
+
+### Rendered scripts
+
+`src/scripts/<name>.tsx` is a rendered script. Its async default component receives `argv` and
+`signal` and renders through the Agent renderer with the full CLI output contract. It compiles to
+`scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker.
+
+The extension is the explicit, visible contract. A plain `.ts` script is never wrapped in React
+behavior, and an explicit `scripts` config entry stays plain regardless of extension. Rename to
+`.ts` to opt out.
+
+Rendered scripts and rendered routed-CLI commands share one output contract:
+
+| Mode | Behavior |
+| --- | --- |
+| Interactive TTY | Progress updates in place; the final document prints as Markdown. |
+| Piped | Exactly one final Markdown document, with no partial fallbacks. |
+| `--json` | The canonical validated final value. |
+| `--ndjson` | The sequence-numbered render-event stream. |
+
+`--ndjson` is an agent-bundle CLI and script output dialect, not MCP JSON-RPC, and it is never
+written as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr; machine output
+owns stdout.
+
+The mode is selected from the executable's probed
+[terminal capability](./mcp.mdx#the-terminal-capability), and the component reads the same
+value from `(await agent()).terminal` (`hostSurface: 'script'`) — so a script that writes its
+own progress to stderr colors and sizes it exactly as the framework would, without probing
+`process.stdout` itself. A plain `main`-exporting script receives the same value as
+`main`'s second argument (see [Package entries](./package-entries.mdx#the-executable-envelope)).
+
+### Running a script
+
+`script.run` is a production-mounted, trusted-local Workbench Playground operation. It runs only
+the selected manifest-owned emitted script for the selected target, inside a managed workspace,
+and preserves bounded stdout and stderr, the exit code, cancellation, and raw event references.
+It cannot be handed a browser-supplied command.
+
+## Assets
+
+Files under a root `assets/` directory copy byte-for-byte into every target artifact's `assets/`
+directory. That convention needs no configuration.
+
+A top-level `assets` list **replaces** that convention with explicit entries — literal file
+paths, whole directories, or globs, all resolved from the project root:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  assets: ['release/*.json', 'evals/fixtures/status/result.json'],
+  plugin: {
+    name: 'hooks-and-scripts',
+    description: 'Release preparation helpers.',
+  },
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+Entries outside `assets/` keep their project-relative path under the artifact's `assets/`
+directory, so `release/notes.json` lands at `assets/release/notes.json`.
+
+## Integrity
+
+The generated `agent-bundle.manifest.json` records a SHA-256 digest for every emitted file,
+including copied scripts and assets. Artifact validation is therefore content-addressed: it
+compares real bytes against the manifest rather than checking that a path exists.
+
+```sh
+npx agent-bundle validate --artifact artifact --strict
+```
+
+## Next
+
+- [Package entries](./package-entries.mdx) — `bin`, `lib`, the routed CLI, and the bundler escape hatch.
+- [Hooks](./hooks.mdx) — the lifecycle handlers that often invoke these scripts.

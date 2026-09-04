@@ -72,3 +72,21 @@ from any spec-conformant portable package fail to launch on Cursor even
 though the plugin, its skills, and its MCP configuration are all discovered
 and surfaced correctly. This is tracked as adoption-issue evidence, not as an
 adapter defect.
+
+## Re-verification 2026-09-03 (#426)
+
+Repeated on the same installed build (3.18.25, `realCommit`
+`280eca2911f1774689696e5f1efa5a4f97a87af3`; no newer stable build was
+available and the rendered Cursor changelog through Sep 2, 2026 carries no
+plugin entry) with the emitted pack plus five single-variable probe plugins.
+All three gaps above reproduced byte-for-byte (`spawn node ENOENT` for the
+`cwd` shape, `Cannot find module '<HOME>/${PLUGIN_ROOT}/…'` for the `args`
+shape, default `cwd` = `HOME`). The widened probe added three observations on
+the same build: `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` are not expanded in `env`
+values (§9.2), the reserved `PLUGIN_ROOT`/`PLUGIN_DATA` subprocess variables
+are not provided (§9.1), and a plugin-relative `./` `command` is resolved
+against the workspace folder instead of the plugin root (§7.2.1). Full
+table, log excerpts, and 1440×900 captures:
+[`2026-09-03-agent-plugins-cursor-ide-proof.md`](./2026-09-03-agent-plugins-cursor-ide-proof.md).
+No report is sent to Cursor (maintainer decision, 2026-09-03). No capability
+row moved to `supported`.

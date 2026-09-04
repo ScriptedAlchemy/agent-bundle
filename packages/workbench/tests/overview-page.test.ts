@@ -4,10 +4,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from '@rstest/core';
 
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
-import { BundleWorkflow, Overview } from '../src/overview-page.tsx';
-import type { ProjectClient } from '../src/project-client.ts';
+import { overviewFor } from '../src/overview-model.ts';
+import { BundleWorkflow, HostAdoptionSection } from '../src/overview-page.tsx';
 import type { WorkbenchCapabilities } from '../src/workbench-capabilities.ts';
-import type { WorkbenchPage } from '../src/workbench-screen.tsx';
 
 const capabilities: Pick<WorkbenchCapabilities, 'counts' | 'pages'> = {
   counts: { evalSuites: 1, hooks: 0, mcpServers: 0, scripts: 0, skills: 1, targets: 3 },
@@ -55,17 +54,20 @@ const activeStatus: ProjectStatus = {
   source: { diagnostics: [], revision: 'revision-2', state: 'ready' },
 };
 
-const renderOverview = (status: ProjectStatus): string => renderToStaticMarkup(createElement(Overview, {
-  changedFiles: [],
-  client: {} as unknown as ProjectClient,
-  onNavigate: () => undefined,
-  onStatus: () => undefined,
-  pages: new Set<WorkbenchPage>(['overview']),
-  status,
-}));
+/**
+ * The Overview in main.tsx feeds `overviewFor(status)` into the shared
+ * HostAdoptionSection; this renders that section the same way.
+ */
+const renderHostAdoption = (status: ProjectStatus): string => {
+  const overview = overviewFor(status);
+  return renderToStaticMarkup(createElement(HostAdoptionSection, {
+    hostAdoption: overview.hostAdoption,
+    publishedEpochId: overview.epoch.id,
+  }));
+};
 
 it('renders a failed host-adoption gate with its violations instead of silently applying the build', () => {
-  const markup = renderOverview({
+  const status: ProjectStatus = {
     ...activeStatus,
     hostAdoption: {
       adoptedEpochId: 'epoch-1',
@@ -78,17 +80,19 @@ it('renders a failed host-adoption gate with its violations instead of silently 
       },
       mode: 'gated',
     },
-  });
+  };
+  const markup = renderHostAdoption(status);
 
   expect(markup).toContain('Host adoption');
   expect(markup).toContain('data-state="failed"');
   expect(markup).toContain('Contract matrix failed for build epoch-2 with 1 violation; hosts keep build epoch-1');
   expect(markup).toContain('tool:fixture/unknown');
   expect(markup).toContain('coverage');
-  expect(markup).toContain('AB7211');
-  expect(markup).toContain('Diagnostics (1)');
+  expect(markup).toContain('epoch-2');
+  // The gate diagnostic reaches the Overview diagnostics table through the same model.
+  expect(overviewFor(status).diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['AB7211']);
 });
 
 it('omits the host-adoption section when the foreground reports no host-facing surfaces', () => {
-  expect(renderOverview(activeStatus)).not.toContain('Host adoption');
+  expect(renderHostAdoption(activeStatus)).toBe('');
 });

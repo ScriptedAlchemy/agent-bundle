@@ -13,9 +13,9 @@ import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
-import { compileHooks } from '../src/build/entries.ts';
+import { planHooksSurface } from '../src/build/entries.ts';
 import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
-import { buildWithRslib } from '../src/build/rslib.ts';
+import { buildWithRslib, compileRslibSurfaces } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
@@ -34,11 +34,12 @@ const probeMeta: AgentBundleMeta = Object.freeze({
 /**
  * Every generated executable resolves the framework identity module, so a
  * stubbed Rslib resolution has to carry what a real one would: the
- * virtual-module plugin instance and the exact-match alias.
+ * virtual-module plugin instance and the exact-match alias onto the
+ * project-rooted generated-module namespace.
  */
-const resolvedVirtualModules = (outputRoot: string) => ({
+const resolvedVirtualModules = (projectRoot: string) => ({
   plugins: [new rspack.experiments.VirtualModulesPlugin({})],
-  resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(outputRoot) } },
+  resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(projectRoot) } },
 });
 
 const registry: NormalizationTargetRegistry = {
@@ -199,13 +200,13 @@ it('does not share a persistent Rslib cache between generated executables', asyn
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-cache-probe',
+          name: 'agent-bundle-hooks-cache-probe',
           output: { asyncChunks: false, path: outputRoot },
           performance: { buildCache: false },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
-        environmentConfigs: { 'agent-bundle-cache-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-cache-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -242,8 +243,12 @@ it('does not share a persistent Rslib cache between generated executables', asyn
 });
 
 it('closes the Rslib build result and serves the generated wrapper entry virtually without touching disk', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-project-'));
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-output-'));
-  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs');
+  // The generated-module namespace hangs off the project root (the bundler
+  // context), never off the per-build output root, so the module identifiers
+  // Rspack writes into emitted bundles do not carry the staged directory.
+  const virtualEntryPath = join(projectRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs');
   const close = rs.fn(async () => undefined);
   const buildResult = {
     close,
@@ -260,7 +265,7 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
     build: async () => {
       // The generated wrapper entry is served from memory: its reserved
       // namespace must not exist on disk even while the build is running.
-      reservedNamespaceDuringBuild = await readdir(join(outputRoot, '.agent-bundle-virtual'))
+      reservedNamespaceDuringBuild = await readdir(join(projectRoot, '.agent-bundle-virtual'))
         .then(() => undefined, (error: unknown) => error);
       return buildResult;
     },
@@ -268,12 +273,12 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       origin: {
         bundlerConfigs: [{
           entry: { 'close-probe': [virtualEntryPath] },
-          name: 'agent-bundle-close-probe',
+          name: 'agent-bundle-hooks-close-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules(projectRoot),
         }],
-        environmentConfigs: { 'agent-bundle-close-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-close-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -282,12 +287,12 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
     await mkdir(join(outputRoot, 'hooks'), { recursive: true });
     await writeFile(join(outputRoot, 'hooks', 'close-probe.mjs'), 'export default undefined;\n');
     await buildWithRslib({
-      cwd: '/tmp',
+      cwd: projectRoot,
       entries: [{
         name: 'close-probe',
         outputRelativePath: 'hooks/close-probe.mjs',
-        source: '/tmp/hook.ts',
-        sourceInputs: ['/tmp/hook.ts'],
+        source: join(projectRoot, 'hook.ts'),
+        sourceInputs: [join(projectRoot, 'hook.ts')],
         virtualSource: 'export default undefined;',
       }],
       meta: probeMeta,
@@ -301,12 +306,13 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
 
     expect(close).toHaveBeenCalledOnce();
     expect(reservedNamespaceDuringBuild).toMatchObject({ code: 'ENOENT' });
+    await expect(readdir(join(projectRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(join(outputRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
 
     // The composed profile keys the entry on the authored program (Rslib
     // checks entry existence on the real filesystem), and the invariant hook
-    // redirects the lowered Rspack entry to the guaranteed-nonexistent
-    // virtual path it registers with VirtualModulesPlugin.
+    // redirects the lowered Rspack entry to the reserved virtual path it
+    // registers with VirtualModulesPlugin.
     const [{ config }] = createOptions as [{
       readonly config: {
         readonly lib: readonly [{
@@ -315,13 +321,13 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
         }];
       };
     }];
-    expect(config.lib[0].source.entry).toEqual({ 'close-probe': '/tmp/hook.ts' });
+    expect(config.lib[0].source.entry).toEqual({ 'close-probe': join(projectRoot, 'hook.ts') });
     const hooksChain = config.lib[0].tools?.rspack;
     const mutators = (Array.isArray(hooksChain) ? hooksChain : [hooksChain])
       .filter((mutator): mutator is (value: object) => object => typeof mutator === 'function');
     expect(mutators.length).toBeGreaterThan(0);
     const resolved: { entry?: unknown; plugins?: readonly unknown[] } = {
-      entry: { 'close-probe': ['/tmp/hook.ts'] },
+      entry: { 'close-probe': [join(projectRoot, 'hook.ts')] },
     };
     for (const mutator of mutators) mutator(resolved);
     expect(resolved.entry).toEqual({ 'close-probe': [virtualEntryPath] });
@@ -329,13 +335,45 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       .filter((plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin);
     expect(virtualPlugins).toHaveLength(1);
   } finally {
-    await rm(outputRoot, { force: true, recursive: true });
+    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
+  }
+});
+
+it('refuses to compile while anything occupies the reserved generated-module namespace', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-project-'));
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-output-'));
+  // The virtual paths are predictable, so an authored file at one of them
+  // (here, where the project-identity module is served) would be shadowed by
+  // the generated module — or compile as an entry from generated source. The
+  // whole directory is reserved; the build fails before any compiler is created.
+  await mkdir(join(projectRoot, '.agent-bundle-virtual'), { recursive: true });
+  await writeFile(join(projectRoot, '.agent-bundle-virtual', 'meta.mjs'), 'export default undefined;\n');
+  const createRslib = rs.fn(async () => { throw new Error('unreachable'); });
+
+  try {
+    await expect(buildWithRslib({
+      cwd: projectRoot,
+      entries: [{
+        name: 'reserved-probe',
+        outputRelativePath: 'hooks/reserved-probe.mjs',
+        source: join(projectRoot, 'hook.ts'),
+        sourceInputs: [join(projectRoot, 'hook.ts')],
+        virtualSource: 'export default undefined;',
+      }],
+      meta: probeMeta,
+      outputRoot,
+    }, { createRslib: createRslib as never })).rejects.toThrow(
+      `".agent-bundle-virtual" under the project root ${JSON.stringify(projectRoot)} is reserved for generated module sources served from memory; remove it before building.`,
+    );
+    expect(createRslib).not.toHaveBeenCalled();
+  } finally {
+    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
   }
 });
 
 it('fails closed when the resolved environment lost its virtual modules or wrapper entry', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-lost-virtual-'));
-  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'lost-probe-entry.mjs');
+  const virtualEntryPath = join('/tmp', '.agent-bundle-virtual', 'lost-probe-entry.mjs');
   const rslibFor = (bundlerConfig: Record<string, unknown>) => ({
     build: async () => {
       throw new Error('inspection must fail before the build starts');
@@ -343,12 +381,12 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-lost-probe',
+          name: 'agent-bundle-hooks-lost-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
           ...bundlerConfig,
         }],
-        environmentConfigs: { 'agent-bundle-lost-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-lost-probe': { output: { cleanDistPath: false } } },
       },
     }),
   });
@@ -366,15 +404,15 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
   }, { createRslib: async () => rslibFor(bundlerConfig) as never });
 
   try {
-    // A resolved config without the plugin would resolve the
-    // guaranteed-nonexistent generated paths against the real filesystem.
+    // A resolved config without the plugin would resolve the reserved
+    // generated paths against the real filesystem.
     await expect(buildLostProbe({ entry: { 'lost-probe': [virtualEntryPath] } }))
       .rejects.toThrow(/without its virtual modules/u);
     // A resolved config still keyed on the authored program would compile
     // without the generated wrapper.
     await expect(buildLostProbe({
       entry: { 'lost-probe': ['/tmp/hook.ts'] },
-      ...resolvedVirtualModules(outputRoot),
+      ...resolvedVirtualModules('/tmp'),
     })).rejects.toThrow(/without its generated wrapper entry/u);
     // A resolved config that lost the framework identity alias would resolve
     // agent-bundle/meta to the published throwing stub instead.
@@ -402,12 +440,12 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-residual-probe',
+          name: 'agent-bundle-hooks-residual-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
-        environmentConfigs: { 'agent-bundle-residual-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-residual-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -442,12 +480,12 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-close-error-probe',
+          name: 'agent-bundle-hooks-close-error-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
-        environmentConfigs: { 'agent-bundle-close-error-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-close-error-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -1025,7 +1063,14 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
-      writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
+      writeFile(join(sourceRoot, 'check-command.ts'), [
+        'export default (event: { toolName?: string; toolInput?: Record<string, unknown> }) => {',
+        "  if (event.toolName === 'Bash') return { outcome: 'deny' as const, reason: 'blocked command' };",
+        "  if (event.toolName === 'Edit') return { outcome: 'continue' as const, updatedInput: { ...event.toolInput, file_path: '/workspace/safe.ts' } };",
+        "  return { outcome: 'continue' as const };",
+        '};',
+        '',
+      ].join('\n')),
       writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: unknown }) => ({ outcome: 'continue' as const, additionalContext: String(event.toolResponse) });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
@@ -1047,6 +1092,19 @@ it('runs the embedded Codex and Claude native codecs through their published wra
         stderr: '',
         stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked command"}}',
       });
+      // A continuing beforeTool handler writes no decision, so the host's own
+      // permission prompt still applies (#461): nothing on stdout without a
+      // rewrite, and a rewrite alone without permissionDecision.
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { command: 'ls' }, tool_name: 'Write', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
+      })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { file_path: '/etc/passwd' }, tool_name: 'Edit', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"file_path":"/workspace/safe.ts"}}}',
+      });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         cwd: '/workspace', hook_event_name: 'PostToolUse', session_id: 'session-1', tool_input: {}, tool_response: { value: 'observed' }, tool_name: 'Write', tool_use_id: 'use-2', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
@@ -1057,6 +1115,18 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
         cwd: '/workspace', hook_event_name: 'Stop', last_assistant_message: 'done', session_id: 'session-1', stop_hook_active: false, transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+    }
+
+    // The pinned rust-v0.147.0 post-tool-use input schema types tool_response
+    // (and tool_input) as any JSON value, so scalar payloads reach the handler.
+    for (const toolResponse of ['observed', 42, false, null]) {
+      await expect(runNativeHook(join(outputRoot, 'codex', 'hooks', 'after-tool-record-87785f02.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PostToolUse', model: 'gpt-5-codex', permission_mode: 'default', session_id: 'session-1', tool_input: 'raw', tool_name: 'Write', tool_response: toolResponse, tool_use_id: 'use-2', transcript_path: null, turn_id: 'turn-1',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: `{"hookSpecificOutput":{"additionalContext":"${String(toolResponse)}","hookEventName":"PostToolUse"}}`,
+      });
     }
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1109,17 +1179,17 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
     expect(plan.diagnostics).toEqual([]);
     expect(generated).toBeDefined();
-    await compileHooks(plan.hookEntries ?? [], {
-      artifactEpoch: 'cursor-workspace-open-test',
-      cwd: buildRoot,
-      meta: projectMeta(model.metadata),
-      outDir: outputRoot,
-      plugin: { name: model.metadata.name, version: model.metadata.version },
-    });
+    await compileRslibSurfaces(
+      { cwd: buildRoot, meta: projectMeta(model.metadata), outputRoot },
+      [planHooksSurface(plan.hookEntries ?? [], {
+        artifactEpoch: 'cursor-workspace-open-test',
+        outDir: outputRoot,
+        plugin: { name: model.metadata.name, version: model.metadata.version },
+      })],
+    );
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',
-      user_email: null,
       workspace_roots: ['/tmp'],
     });
     await expect(runNativeHook(wrapper, starter!)).resolves.toEqual({
@@ -1213,6 +1283,160 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
   }
 }, 15_000);
 
+it('round-trips the documented Cursor subagent envelopes through published Cursor wrappers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cursor-subagent-hook-codecs-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const base = hookModel(root);
+  const model: NormalizedPlugin = {
+    ...base,
+    hooks: [
+      {
+        ...base.hooks[0]!,
+        event: 'agentStart',
+        id: 'hook:agent-start:subagent-start',
+        name: 'subagent-start',
+        source: join(sourceRoot, 'subagent-start.ts'),
+        targets: ['cursor'],
+      },
+      {
+        ...base.hooks[3]!,
+        event: 'agentStop',
+        id: 'hook:agent-stop:subagent-stop',
+        name: 'subagent-stop',
+        source: join(sourceRoot, 'subagent-stop.ts'),
+        targets: ['cursor'],
+      },
+    ],
+    targets: [
+      { id: 'target:cursor', name: 'cursor', provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') } },
+    ],
+  };
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(
+        join(sourceRoot, 'subagent-start.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.toolUseId)}:${String(event.model)}` });\n",
+      ),
+      writeFile(
+        join(sourceRoot, 'subagent-stop.ts'),
+        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}:${String(event.agentType)}` });\n",
+      ),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const document = JSON.parse(await readFile(join(outputRoot, 'cursor', 'hooks', 'hooks.json'), 'utf8')) as {
+      readonly hooks: Readonly<Record<string, readonly unknown[]>>;
+      readonly version: number;
+    };
+    expect(document.version).toBe(1);
+    expect(document.hooks.subagentStart).toEqual([{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/subagent-start.mjs"' }]);
+    expect(document.hooks.subagentStop).toEqual([{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/subagent-stop.mjs"' }]);
+
+    const startInput = JSON.parse(await readFile(
+      new URL('./fixtures/events/cursor-subagent-start.json', import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    const stopInput = JSON.parse(await readFile(
+      new URL('./fixtures/events/cursor-subagent-stop.json', import.meta.url),
+      'utf8',
+    )) as Record<string, unknown>;
+    // https://cursor.com/docs/hooks#subagentstart: { permission, user_message }.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        permission: 'deny',
+        // subagent_model is the model the subagent will use; it decodes to the
+        // canonical `model` field so handlers can see it.
+        user_message: `${String(startInput.conversation_id)}:${String(startInput.subagent_id)}:${String(startInput.subagent_type)}:${String(startInput.tool_call_id)}:${String(startInput.subagent_model)}`,
+      }),
+    });
+    // https://cursor.com/docs/hooks#subagentstop: { followup_message }.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}`,
+      }),
+    });
+    // The Claude/Codex agent_id/agent_type spelling is not the Cursor envelope.
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), {
+      agent_id: 'abc-123',
+      agent_type: 'explore',
+      conversation_id: 'conv-456',
+      hook_event_name: 'subagentStart',
+    })).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native subagent_id must be a string\n',
+      stdout: '',
+    });
+    // The common envelope's conversation_id is required even though the
+    // subagent envelope also carries parent_conversation_id; the parent id is
+    // not a substitute for the session identifier.
+    const { conversation_id: _conversationId, ...startWithoutConversation } = startInput;
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutConversation)).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native session_id or conversation_id must be a string\n',
+      stdout: '',
+    });
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), {
+      ...stopInput,
+      status: 'cancelled',
+    })).resolves.toEqual({
+      code: 1,
+      stderr: 'Agent Bundle hook error: native subagentStop status is invalid\n',
+      stdout: '',
+    });
+    // followup_message is consumed only when status is "completed"; a denial
+    // on an errored or aborted subagent fails instead of emitting ignored output.
+    for (const status of ['error', 'aborted']) {
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), { ...stopInput, status })).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported "${status}"\n`,
+        stdout: '',
+      });
+    }
+    // Every documented field except git_branch is mandatory: a malformed
+    // envelope must fail closed before the handler runs with undefined fields.
+    const { git_branch: _gitBranch, ...startWithoutGitBranch } = startInput;
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutGitBranch))
+      .resolves.toMatchObject({ code: 0, stderr: '' });
+    for (const [field, message] of [
+      ['tool_call_id', 'native tool_call_id must be a string'],
+      ['parent_conversation_id', 'native parent_conversation_id must be a string'],
+      ['subagent_model', 'native subagent_model must be a string'],
+      ['is_parallel_worker', 'native is_parallel_worker must be a boolean'],
+    ] as const) {
+      const { [field]: _omitted, ...missing } = startInput;
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), missing)).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: ${message}\n`,
+        stdout: '',
+      });
+    }
+    for (const [field, message] of [
+      ['description', 'native description must be a string'],
+      ['duration_ms', 'native subagentStop duration_ms must be a number'],
+      ['modified_files', 'native modified_files must be an array of strings'],
+      ['agent_transcript_path', 'native agent_transcript_path must be a string or null'],
+    ] as const) {
+      const { [field]: _omitted, ...missing } = stopInput;
+      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), missing)).resolves.toEqual({
+        code: 1,
+        stderr: `Agent Bundle hook error: ${message}\n`,
+        stdout: '',
+      });
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('rejects malformed event-specific native input before calling generated Codex and Claude hooks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-input-'));
   const sourceRoot = join(root, 'src', 'hooks');
@@ -1243,18 +1467,23 @@ it('rejects malformed event-specific native input before calling generated Codex
         stderr: 'Agent Bundle hook error: native source must be a string\n',
         stdout: '',
       });
+      // Codex pins tool_input/tool_response as any JSON value (presence only);
+      // Claude documents both as objects.
+      const toolInputError = target === 'codex' ? 'tool_input is required' : 'tool_input must be an object';
+      const toolResponseError = 'tool_response is required';
       await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
-        ...common, hook_event_name: 'PreToolUse', tool_input: [], tool_name: 'Bash', tool_use_id: 'use-1',
+        ...common, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'use-1',
+        ...(target === 'codex' ? {} : { tool_input: [] }),
       })).resolves.toEqual({
         code: 1,
-        stderr: 'Agent Bundle hook error: native PreToolUse tool_input must be an object\n',
+        stderr: `Agent Bundle hook error: native PreToolUse ${toolInputError}\n`,
         stdout: '',
       });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
-        ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_response: 'observed', tool_use_id: 'use-2',
+        ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_use_id: 'use-2',
       })).resolves.toEqual({
         code: 1,
-        stderr: 'Agent Bundle hook error: native PostToolUse tool_response must be an object\n',
+        stderr: `Agent Bundle hook error: native PostToolUse ${toolResponseError}\n`,
         stdout: '',
       });
       await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
@@ -1333,6 +1562,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       { ...base.hooks[0]!, id: 'hook:session-start:valid:00000001', name: 'valid-00000001', source: join(sourceRoot, 'valid.ts'), targets: ['codex'] },
       { ...base.hooks[0]!, id: 'hook:session-start:export:00000002', name: 'export-00000002', source: join(sourceRoot, 'no-default.ts'), targets: ['codex'] },
       { ...base.hooks[0]!, id: 'hook:session-start:result:00000003', name: 'result-00000003', source: join(sourceRoot, 'bad-result.ts'), targets: ['codex'] },
+      { ...base.hooks[0]!, id: 'hook:session-start:throws:00000004', name: 'throws-00000004', source: join(sourceRoot, 'throws.ts'), targets: ['codex'] },
     ],
     targets: [base.targets[0]!],
   };
@@ -1345,6 +1575,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       writeFile(join(sourceRoot, 'valid.ts'), 'export default () => undefined;\n'),
       writeFile(join(sourceRoot, 'no-default.ts'), 'export const value = true;\n'),
       writeFile(join(sourceRoot, 'bad-result.ts'), "export default () => 'not a result';\n"),
+      writeFile(join(sourceRoot, 'throws.ts'), "export default () => { throw new Error('handler exploded'); };\n"),
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
@@ -1363,6 +1594,16 @@ it('rejects malformed native hook input, exports, and handler results concisely'
     }))).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: handler must return void or a result object\n',
+      stdout: '',
+    });
+    // #492: a handler that throws is the same wire outcome as a malformed one —
+    // the message on stderr, nothing on stdout, exit 1 (a non-blocking error on
+    // every supported host, so the pending action proceeds).
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'throws-00000004.mjs'), JSON.stringify({
+      cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
+    }))).resolves.toEqual({
+      code: 1,
+      stderr: 'handler exploded\n',
       stdout: '',
     });
   } finally {
@@ -1441,9 +1682,9 @@ it('plans deterministic Codex and Claude hook configurations from the same model
     expect(JSON.parse(writes(codex.entries)['.codex-plugin/plugin.json']!)).toMatchObject({
       hooks: './hooks/hooks.json',
     });
-    expect(JSON.parse(writes(claude.entries)['.claude-plugin/plugin.json']!)).toMatchObject({
-      hooks: './hooks/hooks.json',
-    });
+    // Claude Code loads hooks/hooks.json by convention and flags a manifest
+    // pointer at that same file as a duplicate, so only Codex names it.
+    expect(JSON.parse(writes(claude.entries)['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
     expect(JSON.parse(writes(codex.entries)['hooks/hooks.json']!)).toEqual({
       hooks: {
         PostToolUse: [{

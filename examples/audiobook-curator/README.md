@@ -67,6 +67,31 @@ The routed CLI under `src/cli/` contains 16 authored commands. The
 Projected tools accept one optional `--input '<JSON object>'`; tools annotated
 read-only run directly, while mutation-capable tools require `--yes`.
 
+### `src/layout.tsx` is the shared document shell
+
+The conventional layout module wraps every rendered route once — the 16 MCP
+tools, the catalog resource, the curate prompt, the rendered CLI commands, and
+the projected `curator <tool>` commands — so no route imports a wrapper to get
+the server's standard document structure. The layout renders a container
+`Agent.Result` and the runtime merges each route's own
+`<Agent.Result value={receipt}>` into it: the structured receipt, the MCP
+content, and the CLI Markdown are exactly what the route declared, and the
+shell contributes document metadata naming the producing route and surface,
+which MCP hosts receive as `CallToolResult._meta.curator`. A route therefore
+states only its value, its headline, and its report:
+
+```tsx
+export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  const receipt = await operation.handler(input, { signal }) as InventoryReceipt;
+  return (
+    <Agent.Result value={receipt}>
+      <Agent.Text>{inventoryHeadline(receipt)}</Agent.Text>
+      <InventoryShelf receipt={receipt} />
+    </Agent.Result>
+  );
+}
+```
+
 ### `src/components/` is the shared presentation library
 
 The route modules perform domain work and compose these report components
@@ -74,10 +99,9 @@ instead of maintaining separate MCP and CLI presenters:
 
 | Component | MCP composition | Rendered authored CLI composition |
 | --- | --- | --- |
-| `CuratorDocument` and its `CuratorReceipt` union | Wrap the structured receipt and headline for 15 receipt-bearing tools | Wrap `inventory`, `select`, `audible-search`, `convert`, `audit`, and `library-audit` |
 | `DataList`, `Field`, `Callout`, and `FileList` | Provide atomic report fields, prose callouts, and file-list blocks throughout the component library and directly in the catalog resource, curate prompt, cache route, and library audit | Provide the same primitives through the shared components and directly in `library-audit` |
 | `FileCard` and `EditionCard`, fed by `view-models` | Render file and edition models in `audit_library`, shelf, and ranking views | Reached through the receipt-specific shelves and ranking components |
-| `InspectionShelf`, `InventoryShelf`, `AuditShelf`, and `SelectionShelf` | Compose receipt-specific inspection, inventory, audit, and selection reports; the inspection, inventory, and selection shelves are used directly by their MCP routes | `InventoryShelf` and `SelectionShelf` compose `inventory` and `select` |
+| `InspectionShelf`, `InventoryShelf`, and `SelectionShelf` | Compose receipt-specific inspection, inventory, and selection reports, each used directly by its MCP route; `audit_library` composes `AuditSummary` and `AuditFileCards` alongside the asynchronous `LibraryAnalysis` instead of a shelf | `InventoryShelf` and `SelectionShelf` compose `inventory` and `select` |
 | `SearchRanking`, `IdentifyRanking`, and `SelectionRanking` | Render the statically typed ranking for `search_audible`, `identify_audible_sample`, and `select_audible_edition` | `SearchRanking` composes `audible-search` |
 | `AcousticTrail`, `IdentifyTrail`, and `WhisperTrail` | Render the statically typed evidence for acoustic verification, acoustic identification, and Whisper verification | No authored rendered counterpart; those compatibility commands remain plain `.ts` routes |
 | `MetadataMutation`, `ChapterMutation`, `ConversionMutation`, and `PrepareMutation` | Render each statically typed metadata, chapter, conversion, or preparation mutation | `ConversionMutation` composes `convert` |
@@ -114,14 +138,15 @@ structured shelf and render an explicit unavailable notice.
 
 ### Suspense becomes MCP progress
 
-`audit_library` first reports progress through the request's
-`context.progress`, then places the asynchronous `LibraryAnalysis` component
-behind React `Suspense`. While that component re-stats duplicate candidates and
+`audit_library` places the asynchronous `LibraryAnalysis` component behind
+React `Suspense`. While that component re-stats duplicate candidates and
 calculates reclaimable bytes, its fallback is an `Agent.Progress` document
-node. The generated MCP projector streams the progress state and then replaces
-it with the completed analysis without changing the final structured
-`LibraryAuditReceipt`. The rendered `library-audit` CLI route composes the same
-analysis and fallback.
+node — and that node is the whole progress story: the generated MCP projector
+turns the streamed fallback into `notifications/progress` for a client that
+sent a progress token, then replaces it with the completed analysis without
+changing the final structured `LibraryAuditReceipt`. No `progress.report()`
+call repeats the fallback's message. The rendered `library-audit` CLI route
+composes the same analysis and fallback.
 
 ### CLI routes have rendered and plain modes
 

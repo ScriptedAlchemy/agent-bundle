@@ -1,5 +1,5 @@
 ---
-"agent-bundle": minor
+"agent-bundle": patch
 ---
 
 Compile `src/cli/**` routes into a routed CLI (#102 stage 2). Conventional

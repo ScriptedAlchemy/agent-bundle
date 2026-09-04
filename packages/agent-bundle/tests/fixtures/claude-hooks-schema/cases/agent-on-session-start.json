@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

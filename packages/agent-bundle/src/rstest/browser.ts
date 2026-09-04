@@ -6,6 +6,7 @@ import { compileMcpApps } from '../build/mcp-apps.ts';
 import type { NormalizedMcpApp } from '../core/types.ts';
 import { compileTestManifest, proofLevelLabel, type TestableAppDescriptor } from '../test/manifest.ts';
 import { writeBrowserTestSetup } from './browser-setup-module.ts';
+import { metaModuleAlias, writeTestMetaModule } from './meta-module.ts';
 
 const browserAppInclude = 'tests/browser-app/**/*.test.{ts,tsx}';
 
@@ -34,6 +35,8 @@ export interface AgentBundleBrowserRstestConfig {
     viewport: { height: 900; width: 1440 };
   };
   include: string[];
+  /** Routes the reserved `agent-bundle/meta` specifier to the generated identity module. */
+  resolve: { alias: { [specifier: string]: string } };
   setupFiles: string[];
   source?: { tsconfigPath: string };
   tools: {
@@ -133,6 +136,9 @@ export const agentBundleBrowserRstest = async (
     );
   }
   const setup = await writeBrowserTestSetup(root, compiled);
+  // The compiled app bundles already carry the stamped identity; the alias
+  // covers test files and view helpers the browser pool bundles itself.
+  const metaModule = await writeTestMetaModule(root, manifest);
   const tsconfigPath = resolve(root, 'tsconfig.json');
   return {
     browser: {
@@ -143,6 +149,7 @@ export const agentBundleBrowserRstest = async (
       viewport: { height: 900, width: 1440 },
     },
     include: [...(options.include ?? [browserAppInclude])],
+    resolve: { alias: metaModuleAlias(metaModule) },
     setupFiles: [setup, ...(options.setupFiles ?? [])],
     ...(existsSync(tsconfigPath) ? { source: { tsconfigPath } } : {}),
     tools: {

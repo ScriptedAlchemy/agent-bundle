@@ -3,10 +3,25 @@ export { cliArgvGrammar, extractCliArgv, reservedCliOptionNames } from './cli-ar
 export type { ExtractedCliArgv } from './cli-argv.ts';
 export { cliCommandPath, compileCliCommands, isRenderedCliRoute } from './cli-commands.ts';
 export type { CompiledCliCommandSurface } from './cli-commands.ts';
-export { extractRouteConfig, routeConfigGrammar } from './config-extract.ts';
-export type { ExtractedRouteConfig } from './config-extract.ts';
+export {
+  appResourceUriHelperName,
+  extractRouteConfig,
+  resolveRouteConfigAppReferences,
+  routeConfigGrammar,
+  routeHelpersSpecifier,
+} from './config-extract.ts';
+export type {
+  AppReferenceSite,
+  AppReferenceTarget,
+  ExtractedRouteConfig,
+  RouteConfigAppReference,
+  RouteConfigExtractionOptions,
+} from './config-extract.ts';
+export { appRouteTemplatePath, resolveAppRouteTemplate } from './app-template.ts';
+export type { AppRouteTemplateResolution } from './app-template.ts';
 export { inspectRouteGraph } from './inspect.ts';
 export type { RouteGraphInspection } from './inspect.ts';
+export { isLayoutRouteKind, layoutChainFor, layoutRouteName } from './layouts.ts';
 export { emptyRouteConfig } from './types.ts';
 export type {
   CapabilityEvidence,
@@ -16,6 +31,8 @@ export type {
   CompiledCliMode,
   CompiledCliOption,
   CompiledCliSurface,
+  CompiledLayout,
+  CompiledLayoutScope,
   CompiledProvider,
   CompiledRouteGraph,
   CompiledRouteKind,
@@ -27,30 +44,55 @@ export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './t
 export {
   scanRouteModuleExports,
   validateEventRouteModuleContract,
+  validateLayoutModuleContract,
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
-export { canonicalAgentEvents } from './public.ts';
+export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
+export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  appResourceUri,
+  canonicalAgentEvents,
+  MAX_ROUTE_RENDER_ELAPSED_MS,
+} from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  AgentLayoutRoute,
+  AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,
   CliRouteProps,
   PromptConfig,
   ResourceConfig,
+  RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
+  RouteUiMeta,
   ToolConfig,
   ToolRouteProps,
 } from './public.ts';

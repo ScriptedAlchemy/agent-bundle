@@ -1,8 +1,16 @@
 import { McpServer as ProtocolMcpServer } from '@modelcontextprotocol/server';
 
 import type { RscApplication } from './application.js';
-import { available, runAgentRequest } from './agent-request.js';
+import { available, runAgentRequest, type AgentTerminal } from './agent-request.js';
 import { lowerMcpResult } from './lower-mcp.js';
+
+/** An MCP server's stdout is the protocol wire and its stderr the host's log: no terminal, never probed (#511). */
+const mcpTerminal: AgentTerminal = Object.freeze({
+  hostSurface: 'mcp',
+  sharesTarget: false,
+  stderr: Object.freeze({ color: 'none', kind: 'none' }),
+  stdout: Object.freeze({ color: 'none', kind: 'none' }),
+});
 
 export const createRscMcpServer = (
   application: Readonly<RscApplication>,
@@ -53,6 +61,7 @@ export const createRscMcpServer = (
           ? { session: available({ sessionId: context.sessionId }, 'native') }
           : {}),
         signal: context.mcpReq.signal,
+        terminal: available(mcpTerminal, 'derived'),
       }, async () => {
         const result = await operation.execute(input, { signal: context.mcpReq.signal });
         return lowerMcpResult(operation.render(result));

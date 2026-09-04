@@ -52,6 +52,7 @@ export interface LifecyclesView {
   readonly canonicalRows: readonly LifecycleDetailRow[];
   readonly listDiagnostics: readonly LifecycleDiagnostic[];
   readonly options: readonly LifecycleOption[];
+  readonly payloadRows: readonly LifecycleDetailRow[];
   readonly replay: LifecycleReplay | undefined;
   readonly replayDiagnostics: readonly LifecycleDiagnostic[];
   readonly requestRows: readonly LifecycleDetailRow[];
@@ -122,6 +123,25 @@ export const canonicalRowsFor = (replay: LifecycleReplay): readonly LifecycleDet
   row('Host contract revision', replay.canonical.provenance.hostContractRevision),
 ]);
 
+const payloadValueText = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value) ?? String(value);
+};
+
+/**
+ * The canonical payload the route received (#466): one row per mapped field,
+ * showing the value beside the host key it was read from, so the evidence
+ * panel makes the mapped-versus-missing distinction visible. An empty payload
+ * is one row saying so rather than an absent section.
+ */
+export const payloadRowsFor = (replay: LifecycleReplay): readonly LifecycleDetailRow[] => {
+  const entries = Object.entries(replay.canonical.payload)
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) return Object.freeze([row('Payload', 'No canonical field mapped from this envelope')]);
+  return Object.freeze(entries.map(([field, mapped]) =>
+    row(field, `${payloadValueText(mapped.value)} · ${mapped.nativeKey}`)));
+};
+
 export const requestRowsFor = (replay: LifecycleReplay): readonly LifecycleDetailRow[] => Object.freeze([
   row('Invocation kind', replay.requestContext.invocation.kind),
   optionalRow('Operation ID', replay.requestContext.invocation.operationId),
@@ -131,7 +151,29 @@ export const requestRowsFor = (replay: LifecycleReplay): readonly LifecycleDetai
   observedRow('Session', replay.requestContext.session, ({ sessionId }) => sessionId),
   observedRow('Actor', replay.requestContext.actor, ({ id }) => id),
   observedRow('Workspace', replay.requestContext.workspace, ({ root }) => root),
+  observedRow('Lineage', replay.requestContext.lineage, ({ conversation, depth, resolution }) =>
+    `${conversation} · depth ${String(depth)} · ${resolution}`),
 ]);
+
+export interface LifecycleLineageNode {
+  readonly id: string;
+  readonly role: 'root' | 'ancestor' | 'current';
+}
+
+/**
+ * The root-to-current chain a replayed request sits on. A single receipt can
+ * name at most its root, its parent, and itself; the warm runtime holds the
+ * rest of the tree.
+ */
+export const lineageChainFor = (replay: LifecycleReplay): readonly LifecycleLineageNode[] => {
+  const lineage = replay.requestContext.lineage;
+  if (lineage.state !== 'available') return Object.freeze([]);
+  const { conversation, parent, root } = lineage.value;
+  const chain: LifecycleLineageNode[] = [{ id: root, role: conversation === root ? 'current' : 'root' }];
+  if (parent !== undefined && parent !== root && parent !== conversation) chain.push({ id: parent, role: 'ancestor' });
+  if (conversation !== root) chain.push({ id: conversation, role: 'current' });
+  return Object.freeze(chain.map((node) => Object.freeze(node)));
+};
 
 export const resultDiagnosticsFor = (replay: LifecycleReplay): readonly LifecycleResultDiagnostic[] => Object.freeze([
   ...(replay.projectionDiagnostic === undefined ? [] : [Object.freeze({
@@ -200,6 +242,7 @@ export const lifecyclesViewFor = (options: LifecyclesViewOptions): LifecyclesVie
     canonicalRows: replay === undefined ? noRows : canonicalRowsFor(replay),
     listDiagnostics,
     options: lifecycleOptions,
+    payloadRows: replay === undefined ? noRows : payloadRowsFor(replay),
     replay,
     replayDiagnostics,
     requestRows: replay === undefined ? noRows : requestRowsFor(replay),

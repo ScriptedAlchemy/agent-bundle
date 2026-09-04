@@ -1,0 +1,86 @@
+---
+description: 'agent-bundle 将一份带类型的配置编译为可安装到 Claude Code、Codex、Cursor 的插件产物以及可移植布局。'
+---
+
+# 介绍
+
+agent-bundle 把一个智能体插件——由一份带类型的配置描述的 Skills、钩子、MCP 服务器与脚本——编译为
+可安装到 Claude Code、Codex 与 Cursor 的产物，外加一份可移植布局。插件只写一次，编译器负责生成
+每个宿主各自的清单与包装层。
+
+需要 Node.js 22.19 或更高版本。
+
+## 它解决的问题
+
+每个智能体宿主都想要同一个插件、但要按自己的布局表达：自己的清单文件名、自己表示插件安装根目录的
+占位符写法、自己的钩子文档形状、自己的 MCP 服务器声明。手工维护这些，等于把同一个插件维护好几遍，
+而且只有在安装之后才会发现它们互相不一致。
+
+agent-bundle 把这件事反转过来。宿主专属布局是编译器的职责，因此它不会出现在你的源码树中：
+
+```sh
+npx agent-bundle build --root .
+```
+
+当 `targets: ['plugin']` 时，这一条命令会在 `artifact/plugin/` 生成一份多宿主捆绑包：`.claude-plugin/`、
+`.codex-plugin/` 与 `.cursor-plugin/` 三份清单，共享同一套 `skills/`、`hooks/`、`mcp/` 与 `scripts/`
+目录。捆绑包中生成的 `AGENTS.md` 会说明如何把它安装到各个宿主。单宿主布局则由 `claude`、`codex`、
+`cursor` 与 `portable` 这几个 target 提供。
+
+## 配置负责什么
+
+项目根目录下的一份 `agent-bundle.config.ts` 描述整个插件：
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
+  targets: ['plugin'],
+  skills: ['src/skills/*'],
+  hooks: { sessionStart: { handler: './src/session-start.ts' } },
+  mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
+});
+```
+
+同一份配置还负责 npm 包构建——不需要第二份打包器配置、不需要 bin 垫片、也不需要手写 stdio 生命周期。
+`bin` 与 `lib` 条目（或 `src/cli.ts`、`src/index.ts`、`src/mcp/<server-id>.ts` 这几个约定）会在宿主
+产物之外一并生成可执行的 `dist/bin/<name>.js` 包与库输出。默认导出服务器工厂函数的 MCP 入口会运行在
+框架自有的 stdio 生命周期之下。`tools.rsbuild` / `tools.rspack` 是唯一的打包器逃生舱。
+
+## 编写模型
+
+agent-bundle 只有一个面向新手的模型，四行就能写完：
+
+1. **编写的源码放在 `src/` 下。** Skills、命令、规则、脚本、MCP 路由、状态与 provider 都有各自约定的
+   `src/` 根目录。路径即身份：位于 `src/mcp/curator/tools/status.tsx` 的模块*就是* `curator` 服务器的
+   `status` 工具。
+2. **一份小而扁平的配置。** `agent-bundle.config.ts` 只保存项目标识、targets，以及任何单个路由文件都
+   无法拥有的策略。
+3. **JSX 意味着渲染。** 一个可执行路由就是一个 async 默认导出的 Server Component：它完成工作并返回
+   `Agent.*` 节点。不存在公开的 `execute`/`render` 分裂。
+4. **按需接入上下文。** 只有在需要 host、session、actor、workspace、capability 或 state 上下文时，
+   才在该组件内部调用 `await agent()`。
+
+这条线以上的内容都属于进阶参考：自定义与远程 MCP 服务器模式、预构建 payload、请求上下文 provider，
+以及打包器逃生舱。
+
+## 证据，而不是感觉
+
+能构建的插件不等于能工作的插件。agent-bundle 提供彼此独立的证明级别——route-unit、内存内 MCP、
+CLI 派发、打包后的 stdio、删除源码后的打包运行，以及宿主安装——每个辅助函数都会把自己所承载的级别
+写进 provenance。某一级别的通过绝不会被当作另一级别的凭据；当断言所需的证据强于该 harness 实际产生的
+证据时，结果是 `inconclusive`，而不是悄悄通过。
+
+## 下一步
+
+- [安装](./installation.mdx) —— 安装 CI 目前发布的预览包。
+- [快速开始](./quick-start.mdx) —— 使用脚手架，或手写配置。
+- [项目结构](./project-structure.mdx) —— 约定的 `src/` 根目录与输出布局。
+- [编写](../authoring/index.mdx) —— 配置模型与每一种可编写的表面。
+
+仓库中对同样的契约有更深入的说明：
+[Framework mode](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/framework-mode.md)
+用一屏讲完整个编写模型，
+[Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)
+则是完整的包构建契约。

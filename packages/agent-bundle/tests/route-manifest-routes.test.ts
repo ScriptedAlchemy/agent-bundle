@@ -98,7 +98,14 @@ it('serves the normalized state catalog on the manifest wire', async () => {
           durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
           id: 'fixture/catalog-state',
           lifetime: 'workspace-durable',
-          notices: [expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1')],
+          noticeRetention: {
+            resolved: { maxJournalBytes: 16_777_216, maxTerminal: 500, terminalTtlMs: 604_800_000 },
+            source: 'defaults',
+          },
+          notices: [
+            expect.stringContaining('@agent-bundle/runtime/agent-notice-ledger/v1'),
+            expect.stringContaining('Notice retention'),
+          ],
           source: 'src/state.ts',
         },
       },

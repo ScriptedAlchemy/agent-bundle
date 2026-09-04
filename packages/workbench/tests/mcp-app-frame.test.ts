@@ -385,11 +385,15 @@ describe('MCP App frame relay', () => {
     expect(messages).toHaveLength(1);
   });
 
-  it('force-deletes a closing binding when the proxy never acknowledges the teardown frame', async () => {
+  it('force-deletes a closing binding when the ready proxy never acknowledges the teardown frame', async () => {
     const browser = fakeBrowser();
+    let closeCalls = 0;
     let forceClosed = false;
     const routes: McpAppFrameRelayRoutes = {
-      close: async (_bindingId, options) => closeResult({ id: options.id, jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} }),
+      close: async (_bindingId, options) => {
+        closeCalls += 1;
+        return closeResult({ id: options.id, jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} });
+      },
       forceClose: async () => {
         forceClosed = true;
         return true;
@@ -398,10 +402,42 @@ describe('MCP App frame relay', () => {
     };
     const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 1, frame, iframe: browser.iframe, resource, routes, window: browser.window });
     relay.start();
+    relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
 
     await relay.close();
 
+    expect(closeCalls).toBe(1);
     expect(forceClosed).toBe(true);
+  });
+
+  it('force-deletes immediately, without a teardown handshake or the timer, when the proxy never signaled readiness', async () => {
+    const browser = fakeBrowser();
+    let closeCalls = 0;
+    let forceCloseCalls = 0;
+    const routes: McpAppFrameRelayRoutes = {
+      close: async (_bindingId, options) => {
+        closeCalls += 1;
+        return closeResult({ id: options.id, jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} });
+      },
+      forceClose: async () => {
+        forceCloseCalls += 1;
+        return true;
+      },
+      message: async () => messageResult(),
+    };
+    // The full 30 s budget: a timer-driven fallback would fail this test.
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 30_000, frame, iframe: browser.iframe, resource, routes, window: browser.window });
+    relay.start();
+
+    await relay.close();
+
+    expect(closeCalls).toBe(0);
+    expect(forceCloseCalls).toBe(1);
+    expect(relay.state).toBe('closed');
+    expect(browser.child.posts).toEqual([]);
+    // A proxy that reports ready after the close began is a late arrival, not
+    // a reopened relay.
+    expect(relay.receive({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child })).toBe(false);
   });
 
   it('renders the exact server-issued sandbox URL and no inline document or credential-bearing attribute', () => {

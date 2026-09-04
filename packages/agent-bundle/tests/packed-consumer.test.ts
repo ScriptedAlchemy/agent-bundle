@@ -9,7 +9,6 @@ import {
   realpath,
   rm,
   stat,
-  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,7 +19,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { sha256Hex } from '../src/core/digest.ts';
-import { cachedNpmInstallArguments, installedEnvironment, packOutputFromJson } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, installedEnvironment, linkWorkspaceTypes, packOutputFromJson } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
@@ -92,7 +91,7 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: packedPackageRoot,
       env: installedEnvironment(),
     });
-    const tarball = join(consumerRoot, packOutputFromJson(packed).filename);
+    const tarball = join(consumerRoot, packOutputFromJson(packed, 'agent-bundle').filename);
     await cp(fixtureRoot, projectRoot, { recursive: true });
     const [sourceShellMode, sourcePythonMode] = await Promise.all([
       stat(join(projectRoot, 'src', 'shell.sh')).then((metadata) => metadata.mode & 0o777),
@@ -362,12 +361,7 @@ it('uses only an installed tarball after source deletion', async () => {
       cwd: frameworkRoot,
       env: installedEnvironment(),
     });
-    // Declaration generation resolves typescript and ambient node types from
-    // the consumer project, exactly like a real devDependency install.
-    await Promise.all([
-      symlink(join(workspaceRoot, 'node_modules', 'typescript'), join(frameworkRoot, 'node_modules', 'typescript'), 'dir'),
-      symlink(join(workspaceRoot, 'node_modules', '@types'), join(frameworkRoot, 'node_modules', '@types'), 'dir'),
-    ]);
+    await linkWorkspaceTypes(frameworkRoot, { typescript: true });
     const frameworkCli = join(frameworkRoot, 'node_modules', '.bin', 'agent-bundle');
     const frameworkArtifact = join(frameworkRoot, 'artifact');
     await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);

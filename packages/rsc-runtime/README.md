@@ -17,12 +17,25 @@ elapsed time are bounded on the reconciler.
 
 Generated MCP tool calls project the live render-event stream through
 `projectMcpRenderStream`: `notifications/progress` is emitted only when the
-caller supplied a progress token, shell/replace stay internal, and the
-request resolves to one final `CallToolResult`. Image, audio, and resource
+caller supplied a progress token — for `progress.report()` events and for
+`Agent.Progress` nodes streamed in a shell/replace document (a `Suspense`
+fallback), under one monotonic `progress` rule so neither source duplicates
+the other — shell/replace content stays internal, and the request resolves to
+one final `CallToolResult`. Image, audio, and resource
 blocks are capability-gated — unsupported rich content uses a declared
 fallback or a typed `McpProjectionError`, never a silent drop. The existing
 `lowerMcpResult` / `lowerHookResult` helpers remain synchronous compatibility
 APIs for the operations-model path.
+
+Task-augmented tool calls (`CreateTaskResult`, `tasks/get`, `tasks/result`,
+`tasks/cancel`) are deferred, not partially implemented. The generated servers
+never advertise a `tasks` capability, and a request that carries task
+augmentation is processed as an ordinary `tools/call` — the fallback the
+2025-11-25 Tasks utility requires of a receiver that declared no task support.
+The deferral, its SDK pin, and the exact unblock condition are recorded in
+[MCP conformance evidence](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)
+and enforced by `tests/mcp-tasks-deferral.test.ts`, which fails the day the
+installed SDK grows a task runtime.
 
 ```tsx
 import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
@@ -66,9 +79,15 @@ actor, or workspace is a typed reason, never a fabricated string. The context
 handle throws after the request completes. Workspace identity is deliberately
 scalar: when a native envelope provides multiple `workspace_roots` and no
 `cwd`, the first root is the primary workspace exposed by `agent()`; later
-roots remain available only in the native event payload. `state`, `notices`,
-and `providers` are reserved extension slots; provider discovery and
-`useAgent()` arrive later.
+roots remain available only in the native event payload. Synchronous Server
+Components and utilities that cannot `await` call `useAgent()` instead; it
+returns the identical handle from the same store under the same lease rules:
+a call with no request in its async context — before a request, or after
+`runAgentRequest` has settled — throws `outside-invocation`, while a handle
+captured inside the request throws `request-closed` once it completes. `providers`
+carries the values contributed by conventional `src/providers/*` modules, which
+the `agent-bundle` compiler discovers, executes in order, and types per project;
+`state` and `notices` remain reserved extension slots.
 
 Structured MCP metadata and content are copied through a strict finite-JSON
 boundary before being returned, so later caller mutations do not alter a result.
@@ -230,10 +249,42 @@ workspace-durable SQLite driver and passes the resulting ledger as
 subpath and ship no state or notice implementation.
 
 Inside an authorized request, `(await agent()).notices` is a request-bound
-handle with `publish()`, `read()`, `inbox()`, and `acknowledge()`. Recipients
-use only observed host/session/actor/workspace axes. Publish authorization
-runs before persistence, and delivery authorization runs again when a
-matching event is admitted. `read()` exposes notices selected for that event
+handle with `publish()`, `read()`, `inbox()`, `acknowledge()`, and
+`published()`. A
+recipient is the conjunction of the observed axes it names — `actor`, `host`,
+`session`, `workspace`, plus the two lineage axes read from the admitting
+request's `lineage`: `conversation` (exactly one agent thread,
+`request.lineage.conversation`) and `root` (the root conversation and every
+subagent under it, `request.lineage.root`). Every named axis must match, and
+an axis the request cannot observe — including lineage the runtime could not
+resolve, or a principal built without the optional `lineage` at all —
+matches nothing, so a `conversation`-addressed notice is never
+admitted on a sibling's event even though Claude and Codex give every
+subagent the root `session_id`. Admissions journal the principal's lineage as
+just `{ conversation, root }`; both recipient fields and that scope are
+additive optional schema fields (no definition version bump), and an
+admission journaled before them matches exactly what it matched then. Publish
+authorization runs before persistence, and delivery authorization runs again
+when a matching event is admitted.
+
+`published()` is the publisher's own view (#460): the notices this request's
+principal published, in every state, with their receipts — the answer to "was
+my notice attempted or acknowledged?" that `read()` (this invocation's
+deliveries) and `inbox()` (this recipient's pending notices) cannot give.
+`publish()` records the publishing principal's observed axes on the notice as
+`publisher` (`actor`, `host`, `session`, `workspace`, and `conversation` from
+`request.lineage`; absent when the request observed none, so such a notice
+belongs to no view). A reader is the publisher when it resolves the same
+lineage conversation — the identity of an agent thread, whichever transport
+observed it, so the hook that published and the MCP tool call that asks agree
+even though host name, session id, and cwd differ — or, for a publisher
+recorded without lineage, when every recorded axis matches. It is a read with
+no route behind it: it records no receipt, is judged per notice under
+authorization `phase: 'published'`, and discloses content under the default
+`internal` ceiling only (`internal` secret-passed, `public` as authored,
+`secret` as the placeholder). It never returns another publisher's notices,
+never a notice deduplicated onto another author's, and is not a recipient
+view — cross-recipient reads stay structurally impossible. `read()` exposes notices selected for that event
 while the ledger records a receipt containing the invocation id and state
 `attempted`. `acknowledge()` is recipient-matched and authorization-gated and
 produces the terminal `acknowledged` state — the strongest evidenced outcome.
@@ -246,6 +297,62 @@ expires instead of retaining unused attempts. Wire-level
 `signalAvailability()` as availability receipts, and MCP inbox reads record
 exposure receipts; neither is a delivery claim.
 
+`createNoticeInboxSignaller({ store })` is the `mcp-resource-updated` route
+itself: one long-lived MCP connection's subscription to the reserved inbox
+resource (`AGENT_NOTICE_INBOX_URI`). The generated server process opens its
+own handle on the workspace-durable store its Flight worker mounts
+(`createGeneratedNoticeRuntime` from `@agent-bundle/runtime/mount`), and
+after every completed render `observe(send)` — detached from that render's
+response, so a slow subscriber's wire never delays a tool result — reads the ledger, reserves the
+budget slot of the subscriber's newly eligible pending notices as one
+compare-and-swap against the revision it read (`reserveAvailability()` with
+`expectedRevision`), sends at most one `notifications/resources/updated`, and
+then finalizes the reservation into the availability receipt
+(`signalAvailability()`) — or releases it (`releaseAvailability()`) when the
+protocol write failed, so the receipt only ever means the write succeeded and
+a failed send costs no budget. Eligibility is recipient-matched against the
+subscriber's observed identity, respects `nextAttemptAt`, skips notices whose
+slot another signaller currently holds (a hold older than
+`AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS` counts as abandoned; a live
+holder renews it under its key while its write is pending, and the reducer
+refuses a renewal once another key has legitimately taken over — or once the
+takeover's receipt has spent the budget and cleared the hold), and is
+bounded by `retryBudget` (availability receipts per notice, durable across
+restarts); because the slot is held before the wire write, two server processes
+over one store can never both signal the same notice; a receipt presented by a
+key that lost its hold is refused (`reservation-lost`) rather than counted, so
+a stale send and a takeover send can never push a budget-one notice to two.
+Ownership, not state, decides whether a receipt lands: a notice acknowledged,
+expired, or withdrawn while its send was in flight still keeps the hold, so the
+receipt for the send that happened is recorded on it without moving its state,
+and a key that never held the slot is refused on a terminal notice too. These
+reducer semantics are schema version 2 of the notice ledger
+(`AGENT_NOTICE_STATE_VERSION`); a workspace-durable store journaled under
+version 1 is migrated from its materialized head on first open rather than
+replayed by a reducer that would disagree with it. A
+send that reached the wire but whose receipt commit failed stays owed: the same
+idempotent receipt is retried on the renewal cadence (renewing its hold as it
+goes), before any later observation spends, and on `close()`, so a live process
+cannot lose a send the wire already carried; only a process that dies while the
+ledger is refusing writes leaves an unrecorded send, and its hold then lapses
+after the TTL. A renewal still awaiting the ledger when a send settles is
+awaited before the hold is released or finalized, so no orphan hold is
+re-created behind a release. Shutdown never waits on the wire, nor on a ledger
+call that has not answered: `close()` abandons a `resources/updated` write or
+ledger call still pending (its outcome is unknown, so nothing is inferred from
+it — no receipt, no release — and its hold lapses after the TTL), then gives
+owed receipts and the store close one chance bounded by `closeTimeoutMs`
+(default 5 s), so neither a subscriber that stopped reading nor a store that
+stopped answering can wedge server teardown. The generated
+server coalesces observations — one in flight, at most one owed — because every
+observation reads the whole ledger, so renders completing behind a pending
+write never queue per-render work. Exposure and availability
+receipts never re-trigger a signal, so a subscribed client cannot be driven into
+a refetch loop. Subscribing fails closed when the store is unreadable,
+`unsubscribe()` resolves only after in-flight observations settle, and only the
+workspace-durable lifetime is wired — volatile stores live in the worker's
+heap, so those servers honestly advertise no `resources.subscribe`.
+
 States are `pending | attempted | expired | unavailable | withdrawn |
 acknowledged`. The ledger still does not claim `delivered` or `read` as
 states: observing the recipient process is not evidence the agent saw the
@@ -253,3 +360,172 @@ content, and the `available`/`read` taxonomy rows from #99 map onto the
 availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
 cross-request routes from a per-host advertisement and returns a typed
 unavailable outcome when none is supported; it never fabricates a channel.
+
+### Redaction (#99 acceptance item 7)
+
+A notice's free text lives only in its detached `AgentDocumentSnapshot` —
+`text`, `markdown`, `context`, `progress.message`, `error.message`,
+`resource.name`/`uri`, and every string inside `json.value`, `result.metadata`,
+and the document `value`. Recipient, priority, dedupe key, timestamps, and
+receipts are identity and evidence, never prose; hosts receive them unredacted
+and they must not carry secrets. The store keeps content exactly as authored;
+redaction happens on egress, per route.
+
+`publish()` accepts `sensitivity: 'public' | 'internal' | 'secret'` (default
+`internal`, persisted explicitly on new notices; notices journaled before the
+contract have no class and are `internal`):
+
+- `public` — safe for any surface; delivered as authored.
+- `internal` — for the recipient's own context; every route passes it through
+  `redactSecretText()` first, so a credential pasted into a coordination
+  message never crosses into another actor's context.
+- `secret` — delivered as authored, but only over a route whose host row
+  admits `secret`; otherwise it never leaves the store through that route.
+
+Each route has a structural shape (`AGENT_NOTICE_ROUTE_SHAPES`): `mcp-inbox`,
+`next-event`, `current-response`, and `directed-push` carry the document
+(`body`); `host-toast` carries one bounded line (`title`, `noticeTitle()`);
+`mcp-resource-updated` carries only the inbox URI (`signal`). A supported route
+in an `AgentNoticeDeliveryAdvertisement` may name `sensitivity`, the most
+sensitive class it carries in full, with dated `sensitivityEvidence`; an
+absent ceiling means `internal`, the pre-sensitivity contract, so `secret`
+notices are withheld everywhere until a host row says otherwise.
+`resolveNoticeDisclosure(route, sensitivity, advertisement)` is the whole
+decision: `withheld` (`route-unavailable` or `sensitivity-exceeds-route`) or
+`disclosed` with `shape` and `redacted`; a row naming a ceiling outside the
+vocabulary admits nothing. `createAgentNoticeLedger(store, { delivery })` and
+`createNoticeInboxSignaller({ delivery })` take the host's advertisement and
+validate it at construction (`validateNoticeDeliveryAdvertisement`, typed
+`invalid-input`): `inbox()` omits withheld notices and hands out disclosed content
+(the inbox resource projection reports `sensitivity` and
+`disclosure.redacted`), event admission neither authorizes nor attempts a
+withheld notice, `read()` deliveries carry `disclosure` and the disclosed
+`content`, `acknowledge()` returns the notice only as the acknowledging
+request's route may disclose it (an admitted event is held to `next-event`,
+every other invocation to the inbox ceiling; a withheld class comes back as
+the `[REDACTED]` mark, so an id learned from a redacted inbox unlocks nothing),
+and the signaller never sends `resources/updated` for a notice the inbox would
+withhold, recording that refusal itself through
+`recordWithholding()` once per subscription. Admission stays one commit per
+invocation: a retry of the same invocation id whose recomputed decision differs
+(a notice published or a ceiling changed in between) replays the committed
+admission instead of failing `idempotency-conflict`. Every refusal is durable evidence,
+not a state change: the notice records
+`withheld[route] = { count, firstAt, lastAt, reason }` and stays eligible for
+a route whose row admits it. The built-in hosts admit
+`secret` on `current-response` and `next-event` (the hook response returns to
+the recipient's own host process) and `internal` on `mcp-inbox` and
+`mcp-resource-updated` (transport-derived identity the host does not
+authenticate to the plugin); `portable` has only the MCP routes.
+
+The secret pass (`redactSecretText()`, `redactNoticeDocument()`,
+`containsSecretText()`) is not written here. Which fields are prose, which
+class each route may carry, and what a refusal records are this package's
+policy; recognizing a credential is delegated to
+[`flare-redact`](https://www.npmjs.com/package/flare-redact), a runtime
+dependency pinned to an exact version (a range would let a publish change
+what `internal` notices disclose without a changeset; a test keeps the pin
+exact). The ledger runs it with its default detectors and default
+credential-shaped member names, every finding replaced whole by `[REDACTED]`
+(the library's own masks keep a hint such as `AKIA***`; a notice crossing into
+another actor's context keeps nothing). Coverage: provider tokens (OpenAI,
+Anthropic, AWS, GitHub, GitLab, Slack, Stripe, Google, npm, and the other
+default detectors), JWTs, PEM private keys, `Bearer` / `Basic` headers,
+`user:password@` URL credentials, `key=value` / `key: value` credential
+assignments in any language (the whole assignment is masked, key included),
+e-mail addresses (a recipient's identity is never surfaced through another
+actor's notice), card numbers, and IBANs; a string held directly under a
+credential-shaped member name (`password`, `token`, `apiKey`,
+`authorization`, …) is masked whole regardless of content, and member names
+themselves are scanned like any other string. Not redacted: paths (coordination
+notices legitimately name files), numbers, base64 image and audio payloads,
+and vocabulary fields (`kind`, `status`, `code`, `mimeType`). Two detector
+limits at the pinned version are part of the contract, not patched here: the
+assignment detector needs a value of at least four characters (`password=abc`
+in free text is not a finding; the same value as `{ "password": "abc" }` is
+masked by member name), and the OpenAI detector caps at 64 key characters, so
+a project-scoped `sk-proj-…` key of production length (~160) is not
+recognized. Authors pasting either should publish as `secret`; both are
+reportable upstream fixes. A redacted document that has grown past the
+Agent Document byte bound (the mark is longer than the shortest values it
+replaces) is handed out as the one-line `[REDACTED]` placeholder instead
+(`noticeRedactionPlaceholder(snapshot)`, the same document a withholding
+route hands out, keeping the original `status` and `version`), so the bound
+made at publish holds on egress. The compiler keeps its
+own, older credential pass for probe and log text
+(`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
+parity, and no vendored-code notice is involved — `flare-redact` is an
+ordinary npm dependency under its own MIT license.
+
+Libraries evaluated for the pass (September 2026), against: MIT/Apache
+license, pure JS with no native dependencies and no Node-only globals (the
+Workbench renders notice content in a browser bundle), a stable API with
+recent releases, structured-field redaction, and a pattern pass for common
+credentials:
+
+| Package | License | Unpacked size | Last release | Module / runtime | Coverage | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `flare-redact` 1.6.1 | MIT | 949 kB (root entry a fraction; zero dependencies) | 2026-08 | ESM, Node ≥ 20, browser and edge safe | Deep object walk with sensitive-member-name masking plus 51 default text detectors (provider tokens, JWT, PEM, Bearer/Basic, URL credentials, generic assignments with a multilingual key vocabulary, e-mail, cards, IBAN); opt-in PII and high-entropy detectors left off | **Chosen**: the only candidate covering both halves in one dependency without Node-only code; young (first release 2026-07), hence the exact pin |
+| `fast-redact` 3.5.0 | MIT | 93 kB | 2024-03 | CJS, zero dependencies; compiles redactors with `Function()`, so it needs `unsafe-eval` under a browser CSP | Field-path redaction of known keys only, no pattern detection, no arbitrary-depth wildcards | Not chosen: covers structured fields but has no credential pass, and notice free text needs one |
+| `@sanity-labs/secret-scan` 1.1.0 | MIT | 1.1 MB | 2026-09 | ESM + CJS, zero dependencies, browser safe | 1,100+ TruffleHog-derived provider-token rules, JWT, connection strings; no generic `password=` assignments, no key-name masking, no e-mail | Not chosen: strong provider coverage but no structured-field or assignment redaction |
+| `redact-pii` 3.4.0 | MIT | 462 kB | 2022-07 | CJS; depends on `lodash` and `@google-cloud/dlp` (gRPC, Node only) | PII (names, addresses, cards, phones, e-mail) with optional Google DLP | Not chosen: Node-only heavy dependency, no releases since 2022, PII rather than credentials |
+| `@redact-pii/core`, `secret-scan`, `gitleaks-regexes` | — | — | — | — | — | Do not exist on npm |
+| `detect-secrets` 1.0.6 | Apache-2.0 | 37 kB | 2025-10 | CJS, CLI oriented (`which`, `debug`) | Yelp-style detectors for CI and pre-commit scanning, reports rather than redacts | Not chosen: a scanner for files, not a redaction primitive |
+| `secretlint` / `@secretlint/secretlint-rule-preset-recommend` 13.0.5 | MIT | 56 kB + 633 kB | 2026-08 | ESM, Node ≥ 22 | gitleaks-class rule presets through an async linting engine | Not chosen: async file-linting API and a large dependency graph for a synchronous egress pass |
+| `@zapier/secret-scrubber` 1.1.6 | ISC | 22 kB | 2026-07 | CJS; uses `node:url`, `Buffer`, `process.env`, `create-hash` | Scrubs values you already know are secret from objects | Not chosen: value-driven (needs the secrets up front), Node-only, ISC |
+| `is-secret` 1.2.1 | MIT | 4 kB | 2022-06 | CJS | Nine key-name regexes and one card-number regex | Not chosen: a key classifier, not a redactor |
+| `scrubtext` 0.1.1 | MIT | 90 kB | 2026-06 | ESM + CJS, zero dependencies | Text-only secrets and PII, no assignment or key-name pass | Not chosen: pre-1.0, two releases, no structured input |
+
+### Retention (#99 acceptance item 7)
+
+Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
+`attempted` with an exhausted retry budget (`noticeSettledAt()`) — no longer
+stay in the ledger forever. `createAgentNoticeLedger(store, { retention })`
+takes an `AgentNoticeRetentionPolicy` (`resolveNoticeRetentionPolicy()`
+validates it; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`: `terminalTtlMs`
+seven days, `maxTerminal` 500, `maxJournalBytes` 16 MiB). Generated runtimes
+resolve it from the project's `notices.retention` config (`AB4833` when
+malformed). `retain({ at, idempotencyKey })` applies it once: settled notices
+older than the TTL, plus the earliest-settled beyond the cap, leave the state
+through one `pruned` event (the reducer skips any id that is live again, so a
+stale decision can never drop a pending notice, and records
+`retention = { lastPrunedAt, pruneRuns, prunedTotal }` on the state and
+snapshot); then, when the store's retained journal exceeds `maxJournalBytes`,
+the journal is compacted (`store.compact()`). Event admission runs the same
+pass after it commits, under a per-invocation key, so retention rides
+admitted events only — V1 implies no timer — and the prune key is
+content-addressed on the selected ids, so a retry that selects the same set
+replays and one that selects a different set commits its own decision instead
+of an idempotency conflict. `inspect()` reports the policy, live counts by
+state, the number of terminal notices, the retention summary, and the store's
+`AgentStateJournalInspection`; it never returns content. A process killed
+between the prune and the compaction leaves a pruned state over an unfolded
+journal, which the next pass finishes; a compaction over an already-compact
+journal is a no-op with no new revision.
+
+Journal compaction is a state-kernel operation (`AgentStateStore.compact()`,
+`AgentStateStore.inspect()`), available on both drivers and pinned by the
+conformance suite: the head is materialized as a `compact` baseline record
+that takes the next revision, every earlier record is deleted, exact reads
+below the baseline become `revision-unavailable` (as below a migration), the
+change cursor delivers the baseline as a `compact` discontinuity so a
+subscriber positioned before it re-reads, and the idempotency keys of the
+deleted records are remembered without their results — replaying one is
+`revision-unavailable` (the commit happened; its result is gone) and reusing
+one with a different input is still `idempotency-conflict`. On SQLite the
+baseline insert, key bookkeeping, delete, head update, and the kernel-format
+bump commit in one `BEGIN IMMEDIATE` transaction under `synchronous = FULL`,
+so a writer killed mid-compaction leaves the full journal or the compacted
+one, never a journal missing records its head needs; concurrent processes
+serialize on the database lock and reopen through the same head-vs-replay
+check. The first compaction moves a store to kernel format 2, which a
+pre-compaction kernel refuses with a typed `corrupt` error rather than
+misreading the truncated journal; a store that was never compacted stays
+readable by both. The `maxRevisions` budget still counts absolute revisions:
+compaction bounds bytes and terminal history, not the revision counter.
+
+## License
+
+Apache License 2.0. The published tarball carries the repository
+[LICENSE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/LICENSE) and
+[NOTICE](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/NOTICE).

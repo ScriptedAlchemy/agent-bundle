@@ -73,6 +73,7 @@ from the example package:
 cd examples/mcp-app
 pnpm validate
 pnpm build
+pnpm typecheck
 pnpm exec agent-bundle eval --case status-is-healthy --trials 1
 pnpm dev
 ```
@@ -84,7 +85,7 @@ pnpm exec agent-bundle mcp run --server status --target portable
 ```
 
 The command resolves the generated entry from the portable target's MCP
-manifest, building a temporary artifact first; pass `--artifact dist` to
+manifest, building a temporary artifact first; pass `--artifact artifact` to
 reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
 exits 130, and per-server state persists under
 `.agent-bundle/mcp-run/portable/status`.
@@ -95,6 +96,7 @@ variants, by default. Launch environment precedence is manifest env, then
 `--env-file <path>` to replace the conventional files, `--no-env` to skip
 them, and `--plugin-root <path>` only for a copied-artifact rehearsal.
 
-Use `pnpm check` for validation and build without opening the Workbench. The
+Use `pnpm check` for validation, build, and typecheck without opening the
+Workbench. The
 deterministic portable eval and fixture check read only checked-in data and
 require no native Claude/Codex login or API key.

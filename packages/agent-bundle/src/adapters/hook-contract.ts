@@ -208,7 +208,16 @@ export const createNativeEventStarter = (
         : { ...base, ...codexTurn, last_assistant_message: 'Lifecycle replay stopped.', stop_hook_active: false });
     case 'agent/start':
       return deepFreeze(target === 'cursor'
-        ? base
+        ? {
+            ...base,
+            is_parallel_worker: false,
+            parent_conversation_id: 'lifecycle-replay',
+            subagent_id: 'lifecycle-replay-agent',
+            subagent_model: 'default',
+            subagent_type: 'generalPurpose',
+            task: 'Lifecycle replay subagent task.',
+            tool_call_id: 'lifecycle-replay-tool',
+          }
         : {
             ...base,
             agent_id: 'lifecycle-replay-agent',
@@ -219,7 +228,20 @@ export const createNativeEventStarter = (
           });
     case 'agent/stop':
       return deepFreeze(target === 'cursor'
-        ? base
+        ? {
+            ...base,
+            agent_transcript_path: null,
+            description: 'Lifecycle replay subagent.',
+            duration_ms: 0,
+            loop_count: 0,
+            message_count: 0,
+            modified_files: [],
+            status: 'completed',
+            subagent_type: 'generalPurpose',
+            summary: 'Lifecycle replay subagent summary.',
+            task: 'Lifecycle replay subagent task.',
+            tool_call_count: 0,
+          }
         : {
             ...base,
             agent_id: 'lifecycle-replay-agent',
@@ -285,12 +307,27 @@ export const createNativeEventStarter = (
         team_name: 'lifecycle-replay-team',
         teammate_name: 'lifecycle-replay-teammate',
       });
+    case 'model-switch/before':
+    case 'model-switch/after':
+      // hooks reference "PreModelSwitch input" / "PostModelSwitch input": the
+      // documented example for `/model opus` from a Sonnet session.
+      return deepFreeze({
+        ...base,
+        cache_ttl: '5m',
+        context_tokens: 0,
+        estimated_cache_write_usd: 0,
+        from_model: 'claude-sonnet-5',
+        pricing: 'catalog',
+        prompt_cache_warm: false,
+        requested_model: 'opus',
+        source: 'command',
+        to_model: 'claude-opus-5',
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {
             cursor_version: 'lifecycle-replay',
             hook_event_name: nativeEvent,
-            user_email: null,
             workspace_roots: ['/tmp'],
           }
         : base);
@@ -342,7 +379,12 @@ export const readTargetNativeHookCommands = (
   }
 };
 
-/** Enumerates commands from the native Claude/Codex hook document shape. */
+/**
+ * Enumerates commands from the native Claude/Codex hook document shape. Only
+ * `command` handlers carry a command; the other handler types the pinned hooks
+ * schemas admit (`http`, `mcp_tool`, `prompt`, `agent`) are skipped, so a
+ * native document that mixes them still enumerates its command hooks.
+ */
 export const readStandardNativeHookCommands = (document: unknown): TargetNativeHookCommandsReadResult => {
   if (!isPlainDataRecord(document)) return Object.freeze({ status: 'invalid' });
   const hooks = ownDataValue(document, 'hooks');
@@ -361,9 +403,10 @@ export const readStandardNativeHookCommands = (document: unknown): TargetNativeH
         if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
         const command = ownDataValue(hook, 'command');
         const type = ownDataValue(hook, 'type');
-        if (command === undefined || type === undefined || !type.found || type.value !== 'command') {
+        if (command === undefined || type === undefined || !type.found || typeof type.value !== 'string') {
           return Object.freeze({ status: 'invalid' });
         }
+        if (type.value !== 'command') continue;
         if (command.found && typeof command.value === 'string') {
           commands.push(Object.freeze({ command: command.value }));
         } else {
@@ -473,10 +516,13 @@ export const encodeNativeHookPlaygroundOutput = (
   }
   const beforeTool = canonicalEvent === 'beforeTool';
   const denied = result.outcome === 'deny';
+  // A continuing beforeTool handler makes no decision: the host keeps its own
+  // permission flow (and evaluates any rewrite through it). Only deny is
+  // projected as a decision (#461).
   const output = defined({
     additionalContext: result.additionalContext,
     hookEventName: nativeEvent,
-    permissionDecision: beforeTool ? (denied ? 'deny' : 'allow') : undefined,
+    permissionDecision: beforeTool && denied ? 'deny' : undefined,
     permissionDecisionReason: beforeTool && denied ? result.reason : undefined,
     updatedInput: beforeTool && !denied ? result.updatedInput : undefined,
   });
@@ -508,13 +554,45 @@ export const encodeCursorPlaygroundInput = (
   ...(nativeEvent === 'stop'
     ? { loop_count: input.stopHookActive === true ? 1 : 0, status: 'completed' }
     : {}),
+  // https://cursor.com/docs/hooks#subagentstart / #subagentstop (retrieved
+  // 2026-09-02): Cursor names the subagent fields subagent_* and reports the
+  // completion summary and follow-up loop count instead of Claude's
+  // last_assistant_message / stop_hook_active pair.
+  // Every documented field except git_branch is required, so the simulated
+  // envelope carries neutral values for the ones canonical input lacks.
+  ...(nativeEvent === 'subagentStart'
+    ? {
+        is_parallel_worker: false,
+        parent_conversation_id: input.sessionId,
+        subagent_id: input.agentId,
+        subagent_model: input.model ?? '',
+        subagent_type: input.agentType,
+        task: '',
+        tool_call_id: input.toolUseId ?? '',
+      }
+    : {}),
+  ...(nativeEvent === 'subagentStop'
+    ? {
+        agent_transcript_path: input.agentTranscriptPath ?? null,
+        description: '',
+        duration_ms: 0,
+        loop_count: input.stopHookActive === true ? 1 : 0,
+        message_count: 0,
+        modified_files: [],
+        status: 'completed',
+        subagent_type: input.agentType,
+        summary: input.lastAssistantMessage ?? '',
+        task: '',
+        tool_call_count: 0,
+      }
+    : {}),
   session_id: input.sessionId,
-  tool_input: input.toolInput,
-  tool_name: input.toolName,
+  ...(nativeEvent === 'subagentStart' || nativeEvent === 'subagentStop'
+    ? {}
+    : { tool_input: input.toolInput, tool_name: input.toolName, tool_use_id: input.toolUseId }),
   ...(nativeEvent === 'postToolUse' && input.toolResponse !== undefined
     ? { tool_output: JSON.stringify(input.toolResponse) }
     : {}),
-  tool_use_id: input.toolUseId,
   transcript_path: input.transcriptPath,
 });
 
@@ -523,8 +601,11 @@ export const encodeCursorPlaygroundOutput = (
   canonicalEvent: CanonicalHookEvent,
 ): Readonly<Record<string, unknown>> | undefined => {
   if (result === undefined) return undefined;
-  if (canonicalEvent === 'stop') {
+  if (canonicalEvent === 'stop' || canonicalEvent === 'agentStop') {
     return result.outcome === 'deny' ? defined({ followup_message: result.reason }) : undefined;
+  }
+  if (canonicalEvent === 'agentStart') {
+    return result.outcome === 'deny' ? defined({ permission: 'deny', user_message: result.reason }) : undefined;
   }
   if (canonicalEvent === 'beforeTool') {
     if (result.outcome === 'deny') {
@@ -548,9 +629,14 @@ const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
   concreteTarget?: string,
+  durableLineage = false,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
+  // A standalone `session/end` (the warm runtime has usually already exited by
+  // then) retires the durable lineage journal itself, so roots never outlive
+  // their session; only projects whose state is workspace-durable have one.
+  const retiresLineage = standalone && durableLineage && route.event === 'session/end';
   const targetSource = concreteTarget !== undefined
     ? [`const target = ${JSON.stringify(concreteTarget)};`]
     : entry.target === 'plugin'
@@ -565,7 +651,16 @@ const eventRouteHookWrapperSource = (
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
-      ? ["import { agent, available, createAgentRenderDispatcher, runAgentRequest } from '@agent-bundle/runtime';"]
+      ? [
+          "import { fileURLToPath } from 'node:url';",
+          "import { agent, available, createAgentRenderDispatcher, resolvePluginRoot, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+        ]
+      : []),
+    ...(retiresLineage
+      ? [
+          "import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';",
+          "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
+        ]
       : []),
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
     `import { ${standalone ? 'createCanonicalEventProps, projectEventDocument, ' : ''}validateNativeEventEnvelope } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
@@ -585,6 +680,9 @@ const eventRouteHookWrapperSource = (
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
       ? [
+          // The wrapper lives in `hooks/`, so its artifact root is the parent
+          // directory — the same anchor the generated MCP entry resolves (#468).
+          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });",
           'const renderStandalone = async (invocation, signal) => {',
           '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -619,8 +717,11 @@ const eventRouteHookWrapperSource = (
           '          host: context.host,',
           '          id,',
           '          invocation: dispatch.invocation,',
+          '          lineage: context.lineage,',
+          '          plugin: context.plugin,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
+          '          terminal: context.terminal,',
           '          type: "render",',
           '          workspace: context.workspace,',
           '        });',
@@ -633,18 +734,46 @@ const eventRouteHookWrapperSource = (
           '    await worker.terminate();',
           '  }',
           '};',
+          ...(retiresLineage
+            ? [
+                'const retireLineage = async (native, idempotencyKey, observedAt) => {',
+                "  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') return;",
+                '  const driver = createSqliteStateDriver({ root: pluginRoot.stateRoot });',
+                '  try {',
+                '    const store = await driver.open(agentLineageStateDefinition());',
+                '    try {',
+                '      await createAgentLineageRegistry({ store }).observe({ event: canonicalEvent, host: target, idempotencyKey, native, observedAt });',
+                '    } finally {',
+                '      await store.close();',
+                '    }',
+                '  } catch (error) {',
+                '    process.stderr.write(`agent-bundle lineage retirement skipped: ${error instanceof Error ? error.message : String(error)}\\n`);',
+                '  } finally {',
+                '    await driver.close().catch(() => undefined);',
+                '  }',
+                '};',
+              ]
+            : []),
           'const runStandalone = async (native, signal) => {',
           '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          ...(retiresLineage ? ['  await retireLineage(native, props.canonical.idempotencyKey, props.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
+          // Standalone hooks hold no registry, so lineage is what the payload proves — plus, on Codex, what the
+          // thread's own rollout named in the payload records (docs/audits/2026-09-03-host-lineage-matrix.md, #423).
+          '  const lineage = target === "claude" || target === "codex" || target === "cursor" ? await resolveStandaloneLineage(target, native) : unavailable("no-subagent-events");',
           '  const document = await runAgentRequest({',
           '    host: available({ name: target }, "native"),',
           '    invocation: { artifactEpoch, hostContractRevision: capabilityRevision, kind: "event", operationId: `event:${canonicalEvent}`, surface: canonicalEvent },',
+          '    lineage,',
+          '    plugin: pluginRoot.identity,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
+          // A hook's stdout is its host envelope: no terminal, never probed (#511).
+          '    terminal: available({ hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } }, "derived"),',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
           '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: props.canonical, native: props.native } } }, signal));',
-          '  return projectEventDocument(document, canonicalEvent, target, nativeEvent);',
+          '  return projectEventDocument(document, canonicalEvent, target, nativeEvent, native);',
           '};',
         ]
       : []),
@@ -704,15 +833,21 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  if (!isRecord(parsed)) fail("native tool_output must encode an object");',
   '  return parsed;',
   '};',
+  'const subagentEvent = canonicalEvent === "agentStart" || canonicalEvent === "agentStop";',
   'const decodeCursorNative = (nativeInput) => defined({',
+  '  agentId: canonicalEvent === "agentStart" ? nativeInput.subagent_id : undefined,',
+  '  agentTranscriptPath: canonicalEvent === "agentStop" ? nativeInput.agent_transcript_path ?? undefined : undefined,',
+  '  agentType: subagentEvent ? nativeInput.subagent_type : undefined,',
   '  cwd: nativeInput.cwd,',
   '  hookEventName: nativeInput.hook_event_name,',
+  '  lastAssistantMessage: canonicalEvent === "agentStop" ? nativeInput.summary : undefined,',
+  '  model: canonicalEvent === "agentStart" ? nativeInput.subagent_model : undefined,',
   '  sessionId: nativeInput.session_id ?? nativeInput.conversation_id,',
-  '  stopHookActive: canonicalEvent === "stop" ? nativeInput.loop_count > 0 : undefined,',
+  '  stopHookActive: canonicalEvent === "stop" || canonicalEvent === "agentStop" ? nativeInput.loop_count > 0 : undefined,',
   '  toolInput: nativeInput.tool_input,',
   '  toolName: nativeInput.tool_name,',
   '  toolResponse: parsedToolOutput(nativeInput),',
-  '  toolUseId: nativeInput.tool_use_id,',
+  '  toolUseId: canonicalEvent === "agentStart" ? nativeInput.tool_call_id : nativeInput.tool_use_id,',
   '  transcriptPath: nativeInput.transcript_path ?? undefined,',
   '});',
   'const encodeCursorNative = (canonicalInput) => defined({',
@@ -720,11 +855,11 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  cwd: canonicalInput.cwd,',
   '  hook_event_name: nativeEvent,',
   '  ...(canonicalEvent === "stop" ? { loop_count: canonicalInput.stopHookActive === true ? 1 : 0, status: "completed" } : {}),',
+  '  ...(canonicalEvent === "agentStart" ? { is_parallel_worker: false, parent_conversation_id: canonicalInput.sessionId, subagent_id: canonicalInput.agentId, subagent_model: canonicalInput.model ?? "", subagent_type: canonicalInput.agentType, task: "", tool_call_id: canonicalInput.toolUseId ?? "" } : {}),',
+  '  ...(canonicalEvent === "agentStop" ? { agent_transcript_path: canonicalInput.agentTranscriptPath ?? null, description: "", duration_ms: 0, loop_count: canonicalInput.stopHookActive === true ? 1 : 0, message_count: 0, modified_files: [], status: "completed", subagent_type: canonicalInput.agentType, summary: canonicalInput.lastAssistantMessage ?? "", task: "", tool_call_count: 0 } : {}),',
   '  session_id: canonicalInput.sessionId,',
-  '  tool_input: canonicalInput.toolInput,',
-  '  tool_name: canonicalInput.toolName,',
+  '  ...(subagentEvent ? {} : { tool_input: canonicalInput.toolInput, tool_name: canonicalInput.toolName, tool_use_id: canonicalInput.toolUseId }),',
   '  ...(canonicalEvent === "afterTool" && canonicalInput.toolResponse !== undefined ? { tool_output: JSON.stringify(canonicalInput.toolResponse) } : {}),',
-  '  tool_use_id: canonicalInput.toolUseId,',
   '  transcript_path: canonicalInput.transcriptPath,',
   '});',
   'const validateResult = (result) => {',
@@ -736,16 +871,21 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  if (result.reason !== undefined && typeof result.reason !== "string") fail("handler result reason must be a string");',
   '  if (result.additionalContext !== undefined && typeof result.additionalContext !== "string") fail("handler result additionalContext must be a string");',
   '  if (result.updatedInput !== undefined && !isRecord(result.updatedInput)) fail("handler result updatedInput must be an object");',
-  '  if (result.reason !== undefined && !(result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop"))) fail("reason is only valid for a denied beforeTool or stop hook");',
-  '  if (result.outcome === "deny" && (canonicalEvent === "beforeTool" || canonicalEvent === "stop") && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
+  '  const supportsDeniedReason = canonicalEvent === "beforeTool" || canonicalEvent === "stop" || subagentEvent;',
+  '  if (result.reason !== undefined && !(result.outcome === "deny" && supportsDeniedReason)) fail("reason is only valid for a denied beforeTool, stop, agentStart, or agentStop hook");',
+  '  if (result.outcome === "deny" && supportsDeniedReason && (typeof result.reason !== "string" || result.reason.trim().length === 0)) fail(`denied ${canonicalEvent} hook requires a nonempty reason`);',
   '  if ((canonicalEvent === "sessionStart" || canonicalEvent === "afterTool") && (result.outcome === "deny" || result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot deny, stop, or replace input`);',
   '  if (canonicalEvent === "beforeTool" && (result.outcome === "stop" || (result.outcome === "deny" && result.updatedInput !== undefined))) fail("beforeTool cannot stop or replace input while denying");',
   '  if (canonicalEvent === "stop" && (result.outcome === "stop" || result.updatedInput !== undefined || result.additionalContext !== undefined)) fail("stop only accepts continue or deny with a reason");',
+  '  if (subagentEvent && (result.outcome === "stop" || result.updatedInput !== undefined)) fail(`${canonicalEvent} cannot stop the parent flow or replace input`);',
+  '  if (subagentEvent && result.additionalContext !== undefined) fail(`Cursor ${nativeEvent} has no additional-context channel`);',
   '  return result;',
   '};',
-  'const encodeOutput = (result) => {',
+  'const encodeOutput = (result, nativeInput) => {',
   '  if (result === undefined) return undefined;',
-  '  if (canonicalEvent === "stop") return result.outcome === "deny" ? defined({ followup_message: result.reason }) : undefined;',
+  '  if (canonicalEvent === "agentStop" && result.outcome === "deny" && nativeInput.status !== "completed") fail(`Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported ${JSON.stringify(nativeInput.status)}`);',
+  '  if (canonicalEvent === "stop" || canonicalEvent === "agentStop") return result.outcome === "deny" ? defined({ followup_message: result.reason }) : undefined;',
+  '  if (canonicalEvent === "agentStart") return result.outcome === "deny" ? defined({ permission: "deny", user_message: result.reason }) : undefined;',
   '  if (canonicalEvent === "beforeTool") {',
   '    if (result.outcome === "deny") return defined({ agent_message: result.reason, permission: "deny", user_message: result.reason });',
   '    return result.updatedInput === undefined ? undefined : { permission: "allow", updated_input: result.updatedInput };',
@@ -754,7 +894,8 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '};',
   'const decodeOutput = (nativeOutput) => {',
   '  if (nativeOutput === undefined) return undefined;',
-  '  if (canonicalEvent === "stop") return typeof nativeOutput.followup_message === "string" ? { outcome: "deny", reason: nativeOutput.followup_message } : undefined;',
+  '  if (canonicalEvent === "stop" || canonicalEvent === "agentStop") return typeof nativeOutput.followup_message === "string" ? { outcome: "deny", reason: nativeOutput.followup_message } : undefined;',
+  '  if (canonicalEvent === "agentStart") return nativeOutput.permission === "deny" ? defined({ outcome: "deny", reason: nativeOutput.user_message }) : { outcome: "continue" };',
   '  if (canonicalEvent === "beforeTool") {',
   '    if (nativeOutput.permission === "deny") return defined({ outcome: "deny", reason: nativeOutput.agent_message });',
   '    return defined({ outcome: "continue", updatedInput: nativeOutput.updated_input });',
@@ -776,6 +917,22 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '    if (canonicalEvent === "afterTool") requireString(input, "tool_output");',
   '    return;',
   '  }',
+  '  if (canonicalEvent === "agentStart") {',
+  '    for (const field of ["subagent_id", "subagent_type", "task", "parent_conversation_id", "tool_call_id", "subagent_model"]) requireString(input, field);',
+  '    if (typeof input.is_parallel_worker !== "boolean") fail("native is_parallel_worker must be a boolean");',
+  '    if (input.git_branch !== undefined) requireString(input, "git_branch");',
+  '    return;',
+  '  }',
+  '  if (canonicalEvent === "agentStop") {',
+  '    for (const field of ["subagent_type", "task", "description", "summary"]) requireString(input, field);',
+  '    if (!["completed", "error", "aborted"].includes(input.status)) fail("native subagentStop status is invalid");',
+  '    for (const field of ["duration_ms", "message_count", "tool_call_count", "loop_count"]) {',
+  '      if (typeof input[field] !== "number") fail(`native subagentStop ${field} must be a number`);',
+  '    }',
+  '    if (!Array.isArray(input.modified_files) || !input.modified_files.every((file) => typeof file === "string")) fail("native modified_files must be an array of strings");',
+  '    if (input.agent_transcript_path !== null && typeof input.agent_transcript_path !== "string") fail("native agent_transcript_path must be a string or null");',
+  '    return;',
+  '  }',
   '  if (typeof input.loop_count !== "number") fail("native stop loop_count must be a number");',
   '  requireString(input, "status");',
   '};',
@@ -793,7 +950,7 @@ export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
   '  validateNativeInput(nativeInput);',
   '  const event = decodeCursorNative(nativeInput);',
   '  const result = validateResult(await handler(event, { nativeEvent, nativeInput, target }));',
-  '  const nativeOutput = encodeOutput(result);',
+  '  const nativeOutput = encodeOutput(result, nativeInput);',
   '  const output = simulation ? decodeOutput(nativeOutput) : nativeOutput;',
   '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
   '};',
@@ -1016,7 +1173,12 @@ export const planHooks = (
       ...wrapper,
       virtualSource: hook.eventRoute === undefined
         ? contract.wrapperSource(wrapper)
-        : eventRouteHookWrapperSource(wrapper, contract.hostContractRevision ?? target, concreteEventTarget),
+        : eventRouteHookWrapperSource(
+            wrapper,
+            contract.hostContractRevision ?? target,
+            concreteEventTarget,
+            model.state?.lifetime === 'workspace-durable',
+          ),
     });
   }
 
@@ -1117,7 +1279,7 @@ export const nativeHookWrapperSource = (
     '  const output = defined({',
     '    additionalContext: result.additionalContext,',
     '    hookEventName: nativeEvent,',
-    '    permissionDecision: canonicalEvent === "beforeTool" ? (result.outcome === "deny" ? "deny" : "allow") : undefined,',
+    '    permissionDecision: canonicalEvent === "beforeTool" && result.outcome === "deny" ? "deny" : undefined,',
     '    permissionDecisionReason: canonicalEvent === "beforeTool" && result.outcome === "deny" ? result.reason : undefined,',
     '    updatedInput: canonicalEvent === "beforeTool" && result.outcome !== "deny" ? result.updatedInput : undefined,',
     '  });',
@@ -1156,9 +1318,16 @@ export const nativeHookWrapperSource = (
     '  if (canonicalEvent === "sessionStart") { requireString(input, "source"); return; }',
     '  if (canonicalEvent === "beforeTool" || canonicalEvent === "afterTool") {',
     '    requireString(input, "tool_name");',
-    '    if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
+    // The pinned rust-v0.147.0 pre-tool-use/post-tool-use input schemas declare
+    // `"tool_input": true` and `"tool_response": true` (any JSON value), so Codex
+    // only guarantees presence; Claude documents both as objects.
+    '    if (target === "codex") { if (input.tool_input === undefined) fail(`native ${nativeEvent} tool_input is required`); }',
+    '    else if (!isRecord(input.tool_input)) fail(`native ${nativeEvent} tool_input must be an object`);',
     '    requireString(input, "tool_use_id");',
-    '    if (canonicalEvent === "afterTool" && !isRecord(input.tool_response)) fail("native PostToolUse tool_response must be an object");',
+    '    if (canonicalEvent === "afterTool") {',
+    // Claude delivers an MCP tool's PostToolUse tool_response as a plain string (2.1.257, 2026-09-03), so presence is the only host-independent rule.
+    '      if (input.tool_response === undefined) fail("native PostToolUse tool_response is required");',
+    '    }',
     '    return;',
     '  }',
     '  if (canonicalEvent === "agentStart" || canonicalEvent === "agentStop") {',

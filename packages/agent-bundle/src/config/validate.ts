@@ -1,7 +1,10 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
-import { scanEntryExportsSource } from '../build/entry-exports.ts';
+import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
+import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
+import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -18,6 +21,8 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
+import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
+import { featureCapabilityName } from '../core/components.ts';
 import type {
   AgentBundleBinEntry,
   AgentBundleHookEntry,
@@ -42,6 +47,7 @@ import {
 } from './normalize.ts';
 import { type DiscoveredProject, payloadDeclarationEntry, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
+import { normalizeNoticeRetention } from './notice-retention.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 import type { SkillDocument } from './skill.ts';
 import { referencedResources } from './skill-references.ts';
@@ -477,10 +483,12 @@ const validateMcpApps = (
   loaded: LoadedConfig,
   seenApps: Map<string, string | undefined>,
   seenUris: Map<string, string>,
+  options: { readonly generated?: boolean } = {},
 ): Diagnostic[] => {
   if (server.apps === undefined) return [];
   const diagnostics: Diagnostic[] = [];
-  const hasLocalEntry = server.entry !== undefined || (
+  // A route-generated server always has a compiled local entry (#380).
+  const hasLocalEntry = options.generated === true || server.entry !== undefined || (
     server.command === undefined && server.url === undefined &&
     conventionalMcpEntrySource(loaded.context.projectRoot, name) !== undefined
   );
@@ -750,6 +758,55 @@ const validateMcpServer = (
   return diagnostics;
 };
 
+/**
+ * The declaration a route-generated server accepts (#380). Config wins and
+ * conventions fill: the `src/mcp/<name>/` route modules supply the entry, so
+ * a `mcp.servers.<name>` block *augments* that server — `env`, `args`,
+ * `targets`, `apps`, and `transport: 'stdio'` — and never redeclares it.
+ * `entry`, `command`, and `url` are a precise error rather than a silently
+ * ignored field: the route graph already compiles this server, so a second
+ * entry claim has no reading the compiler could honor.
+ */
+const validateGeneratedMcpServerDeclaration = (
+  name: string,
+  value: unknown,
+  loaded: LoadedConfig,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  if (!nonemptyString(name)) {
+    diagnostics.push(sourceDiagnostic('AB4302', 'MCP server names must be nonempty.', loaded.configPath));
+  }
+  if (!isRecord(value)) {
+    diagnostics.push(sourceDiagnostic('AB4303', `MCP server ${JSON.stringify(name)} must be an object.`, loaded.configPath));
+    return diagnostics;
+  }
+  const server = value as AgentBundleMcpServer;
+  const claims = (['entry', 'command', 'url'] as const).filter((key) => server[key] !== undefined);
+  if (claims.length > 0) {
+    diagnostics.push({
+      code: 'AB4340',
+      message: `MCP server ${JSON.stringify(name)} is compiled from src/mcp/${name}/ route modules, so its declaration cannot set ${claims.join(', ')}; a config declaration for a generated server only augments it.`,
+      recovery: `Remove ${claims.join(', ')} to keep the generated server (env, args, targets, and apps still apply), or set routes.servers.${name} to custom, command, or remote to serve the declared entry instead of the route modules.`,
+      severity: 'error',
+      sourcePath: loaded.configPath,
+    });
+    return diagnostics;
+  }
+  diagnostics.push(...validateStringList(server.targets, 'targets', 'AB4305', loaded));
+  if (server.transport !== undefined && server.transport !== 'stdio') {
+    diagnostics.push(sourceDiagnostic('AB4308', `MCP server ${JSON.stringify(name)} entry must use stdio transport.`, loaded.configPath));
+  }
+  if (server.cwd !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4309', `MCP server ${JSON.stringify(name)} local entry cannot set cwd.`, loaded.configPath));
+  }
+  if (server.headers !== undefined) {
+    diagnostics.push(sourceDiagnostic('AB4310', `MCP server ${JSON.stringify(name)} stdio server cannot set headers.`, loaded.configPath));
+  }
+  diagnostics.push(...validateStringList(server.args, 'args', 'AB4311', loaded));
+  diagnostics.push(...validateStringRecord(server.env, 'env', 'AB4312', loaded));
+  return diagnostics;
+};
+
 const validatePluginLogo = (
   loaded: LoadedConfig,
   pluginRecord: Record<string, unknown> | undefined,
@@ -840,6 +897,7 @@ const validateRuntime = (loaded: LoadedConfig): Diagnostic[] => {
 
 const validateMcp = (
   loaded: LoadedConfig,
+  discovered: DiscoveredProject,
   registry: NormalizationTargetRegistry,
   payloads: readonly DeclaredPayload[],
 ): Diagnostic[] => {
@@ -851,12 +909,35 @@ const validateMcp = (
   if (!isRecord(mcp.servers)) {
     return [sourceDiagnostic('AB4301', 'MCP configuration must define a servers object.', loaded.configPath)];
   }
+  // The same judgment normalization applies: a server the route graph
+  // compiles in generated mode is declared by its route modules, and a config
+  // block for it augments rather than redeclares (#380).
+  const generatedServers = (discovered.routeGraph?.servers ?? [])
+    .filter((server) => server.mode === 'generated' && server.routes.length > 0);
+  const generated = new Set(generatedServers.map((server) => server.name));
+  // Route-declared Apps (`src/mcp/<server>/apps/*`) take part in the same
+  // name and resourceUri collision checks as configured ones: a config App
+  // that reuses a route App's name is AB4325 (a route module is never an
+  // identical config declaration) and one that reuses its resourceUri under
+  // another name is AB4330, instead of both Apps reaching the generated server.
   const names = new Map<string, string | undefined>();
   const uris = new Map<string, string>();
+  for (const server of generatedServers) {
+    for (const route of server.routes) {
+      if (route.kind !== 'app') continue;
+      const appName = route.id.slice(route.id.lastIndexOf('/') + 1);
+      if (!names.has(appName)) names.set(appName, undefined);
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri === 'string' && !uris.has(resourceUri)) uris.set(resourceUri, appName);
+    }
+  }
   return Object.entries(mcp.servers).flatMap(([name, server]) => {
-    const diagnostics = validateMcpServer(name, server, loaded, registry, payloads);
+    const isGenerated = generated.has(name);
+    const diagnostics = isGenerated
+      ? validateGeneratedMcpServerDeclaration(name, server, loaded)
+      : validateMcpServer(name, server, loaded, registry, payloads);
     return isRecord(server)
-      ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris)]
+      ? [...diagnostics, ...validateMcpApps(name, server as AgentBundleMcpServer, loaded, names, uris, { generated: isGenerated })]
       : diagnostics;
   });
 };
@@ -918,6 +999,8 @@ const validateSkill = (skill: SkillDocument): Diagnostic[] => {
 interface TargetedDocument {
   readonly authoredTargets?: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
+  /** Validated frontmatter; every key is a host feature the component uses. */
+  readonly frontmatter: Readonly<Record<string, unknown>>;
   readonly source: string;
 }
 
@@ -925,8 +1008,86 @@ interface TargetedDocumentCodes {
   /** Explicit target whose capability is degraded, prohibited, or unavailable. */
   readonly capability: string;
   readonly duplicateName: string;
+  /** Implicit target that cannot express a frontmatter feature: the feature is omitted with the host's reason. */
+  readonly featureOmitted: string;
+  /** Explicit target that cannot express a frontmatter feature: fail closed. */
+  readonly featureRequired: string;
   readonly outsideTargets: string;
 }
+
+/**
+ * The host's judgment of one component feature row (`<kind>.<feature>`, #100),
+ * read through the emission-dispatch view so the composite `plugin` target is
+ * judged by the half that emits the kind. A host that publishes no row for a
+ * feature it is asked about has not evidenced it and reads as `unavailable`.
+ */
+const featureCapabilityStateFor = (
+  registry: NormalizationTargetRegistry,
+  target: string,
+  capabilityName: string,
+): CapabilityState => {
+  const lookup = registry.componentCapabilityState ?? registry.capabilityState;
+  return lookup?.call(registry, target, capabilityName)
+    ?? { reason: `The ${target} adapter publishes no ${capabilityName} capability row.`, state: 'unavailable' };
+};
+
+
+/**
+ * Component feature sets (#100): a component may use only the host features the
+ * target's pinned feature rows support. An author-required target fails closed;
+ * an implicitly selected target still receives the component, minus the
+ * feature, and the omission is reported with the host's own reason. Targets
+ * whose kind row is not supported are judged by the kind-level checks instead.
+ */
+const validateDocumentFeatures = (
+  document: TargetedDocument,
+  name: string,
+  label: 'Command' | 'Rule',
+  capabilityName: 'commands' | 'rules',
+  codes: TargetedDocumentCodes,
+  selectedTargets: readonly string[],
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  const features = Object.keys(document.frontmatter).sort((left, right) => left.localeCompare(right));
+  if (features.length === 0) return diagnostics;
+  const explicit = document.authoredTargets !== undefined;
+  const targets = explicit
+    ? document.authoredTargets!.filter((target) => registry.has(target) && selectedTargets.includes(target))
+    : selectedTargets.filter((target) => registry.has(target));
+  for (const target of targets) {
+    if (!capabilityIsSupported(featureCapabilityStateFor(registry, target, capabilityName))) continue;
+    for (const feature of features) {
+      const featureName = featureCapabilityName(capabilityName, feature);
+      const capability = featureCapabilityStateFor(registry, target, featureName);
+      switch (capability.state) {
+        case 'supported':
+          break;
+        case 'degraded':
+        case 'prohibited':
+        case 'unavailable':
+          diagnostics.push({
+            code: explicit ? codes.featureRequired : codes.featureOmitted,
+            message: explicit
+              ? `${label} ${JSON.stringify(name)} uses ${feature} and explicitly targets ${JSON.stringify(target)}, whose ${featureName} capability is ${capability.state}: ${capability.reason}`
+              : `${label} ${JSON.stringify(name)} uses ${feature}, which ${target} omits (${featureName} ${capability.state}): ${capability.reason}`,
+            recovery: explicit
+              ? `Remove ${feature} from the ${label.toLowerCase()} or drop ${JSON.stringify(target)} from its targets.`
+              : `Accept the omission, restrict the ${label.toLowerCase()}'s targets to hosts that support ${featureName}, or remove ${feature}.`,
+            severity: explicit ? 'error' : 'warning',
+            sourcePath: document.source,
+            target,
+          });
+          break;
+        default: {
+          const exhaustive: never = capability;
+          return exhaustive;
+        }
+      }
+    }
+  }
+  return diagnostics;
+};
 
 /** Shared validator for commands and rules, which differ only in label and codes. */
 const validateTargetedDocuments = (
@@ -954,6 +1115,8 @@ const validateTargetedDocuments = (
         document.source,
       ));
     }
+
+    diagnostics.push(...validateDocumentFeatures(document, name, label, capabilityName, codes, selectedTargets, registry));
 
     for (const target of document.authoredTargets ?? []) {
       if (!registry.has(target) || !selectedTargets.includes(target)) {
@@ -1010,6 +1173,8 @@ const validateCommands = (
   validateTargetedDocuments(loaded, discovered.commands ?? [], 'Command', 'commands', {
     capability: 'AB4925',
     duplicateName: 'AB4926',
+    featureOmitted: 'AB4928',
+    featureRequired: 'AB4927',
     outsideTargets: 'AB4924',
   }, registry);
 
@@ -1021,6 +1186,8 @@ const validateRules = (
   validateTargetedDocuments(loaded, discovered.rules ?? [], 'Rule', 'rules', {
     capability: 'AB4905',
     duplicateName: 'AB4906',
+    featureOmitted: 'AB4908',
+    featureRequired: 'AB4907',
     outsideTargets: 'AB4904',
   }, registry);
 
@@ -1135,6 +1302,77 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
   }
 };
 
+/** The `_meta.ui.resourceUri` a route's static config advertises, when it is a string. */
+const advertisedUiResourceUri = (config: Readonly<Record<string, unknown>>): string | undefined => {
+  const meta = config['_meta'];
+  if (!isRecord(meta) || !isRecord(meta.ui)) return undefined;
+  const resourceUri = meta.ui.resourceUri;
+  return typeof resourceUri === 'string' ? resourceUri : undefined;
+};
+
+/**
+ * A generated route that advertises `_meta.ui.resourceUri` of one of its
+ * server's Apps must reach every target the server ships to with that App
+ * built: an App restricted through `config.targets` (or a config-declared
+ * App's `targets`) is skipped by the other targets' builds, and the route
+ * would point hosts at a resource the server never registers there. The
+ * check covers both `appResourceUri()` references (already resolved to the
+ * literal by the graph compiler) and hand-written literals.
+ */
+const validateRouteAppTargets = (
+  loaded: LoadedConfig,
+  discovered: DiscoveredProject,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const selectedTargets = selectedTargetNamesFor(loaded, registry);
+  const configured = isRecord(loaded.config.mcp) && isRecord(loaded.config.mcp.servers)
+    ? loaded.config.mcp.servers as Readonly<Record<string, unknown>>
+    : {};
+  const diagnostics: Diagnostic[] = [];
+  for (const server of discovered.routeGraph?.servers ?? []) {
+    if (server.mode !== 'generated' || server.routes.length === 0) continue;
+    const declaration = isRecord(configured[server.name]) ? configured[server.name] as Readonly<Record<string, unknown>> : {};
+    const serverTargets = declaredTargetsOr(declaration.targets, selectedTargets);
+    // Every App this server registers, by resourceUri, with the targets it is built for.
+    const appTargets = new Map<string, { readonly name: string; readonly targets: readonly string[] }>();
+    for (const route of server.routes) {
+      if (route.kind !== 'app') continue;
+      const resourceUri = route.config['resourceUri'];
+      if (typeof resourceUri !== 'string') continue;
+      appTargets.set(resourceUri, {
+        name: route.provenance.relativePath,
+        targets: declaredTargetsOr(route.config['targets'], serverTargets),
+      });
+    }
+    if (isRecord(declaration.apps)) {
+      for (const [appName, app] of Object.entries(declaration.apps)) {
+        if (!isRecord(app) || typeof app.resourceUri !== 'string') continue;
+        appTargets.set(app.resourceUri, {
+          name: `config App ${JSON.stringify(appName)}`,
+          targets: declaredTargetsOr(app.targets, serverTargets),
+        });
+      }
+    }
+    for (const route of server.routes) {
+      if (route.kind === 'app') continue;
+      const resourceUri = advertisedUiResourceUri(route.config);
+      if (resourceUri === undefined) continue;
+      const app = appTargets.get(resourceUri);
+      if (app === undefined) continue;
+      const missing = serverTargets.filter((target) => !app.targets.includes(target));
+      if (missing.length === 0) continue;
+      diagnostics.push({
+        code: 'AB4828',
+        message: `Route ${route.provenance.relativePath} advertises _meta.ui.resourceUri ${JSON.stringify(resourceUri)} of ${app.name}, which is not built for ${missing.map((target) => JSON.stringify(target)).join(', ')} although the ${JSON.stringify(server.name)} server ships there.`,
+        recovery: `Widen the App's targets to cover ${missing.join(', ')}, or restrict mcp.servers.${server.name}.targets to the App's targets, then inspect again.`,
+        severity: 'error',
+        sourcePath: route.source,
+      });
+    }
+  }
+  return diagnostics;
+};
+
 const validateEventRoutes = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
@@ -1175,7 +1413,11 @@ const validateEventRoutes = (
         continue;
       }
       const capabilityName = `event:${route.event}`;
-      const capability = registry.capabilityState?.(target, capabilityName);
+      // Admission uses the same judgment that decides emission and that
+      // `inspect` reports: the adapter's component override when published,
+      // else its top-level row.
+      const capability = registry.componentCapabilityState?.(target, capabilityName)
+        ?? registry.capabilityState?.(target, capabilityName);
       if (capability === undefined) {
         if (registry.supports(target, capabilityName)) continue;
         diagnostics.push({
@@ -1609,6 +1851,20 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
   const rsbuild = (tools as Record<string, unknown>).rsbuild;
   if (rsbuild !== undefined && !isRecord(rsbuild)) {
     diagnostics.push(sourceDiagnostic('AB4722', 'Tools rsbuild must be an Rsbuild environment-config object.', loaded.configPath));
+  } else if (rsbuild !== undefined) {
+    // AB4724: the hatch merges *beside* the framework profile, and Rsbuild
+    // never dedupes plugins by name, so a framework-owned plugin supplied
+    // here would register twice. A config problem with one deterministic fix,
+    // so it is an error at validation time like the rest of the AB472x family.
+    for (const name of frameworkOwnedPluginCollisions(rsbuild.plugins)) {
+      const specifier = frameworkOwnedRsbuildPlugins.get(name) ?? name;
+      diagnostics.push(sourceDiagnostic(
+        'AB4724',
+        `Tools rsbuild plugin ${JSON.stringify(name)} (${specifier}) is already registered by agent-bundle; Rsbuild does not dedupe plugins by name, so the build would run it twice.`,
+        loaded.configPath,
+        `Remove ${specifier} from tools.rsbuild.plugins; agent-bundle registers it in every config it synthesizes.`,
+      ));
+    }
   }
   const rspack = (tools as Record<string, unknown>).rspack;
   if (
@@ -1719,21 +1975,113 @@ const validatePackageIdentity = (loaded: LoadedConfig, release: boolean): Diagno
  * resolution. Discovery is not a packaging choice - a route never
  * disappears silently.
  */
+/** The explicit `bin` names claiming each absolute entry source, tolerant of malformed config shapes. */
+const explicitBinNamesBySource = (loaded: LoadedConfig): ReadonlyMap<string, readonly string[]> => {
+  const bin = loaded.config.bin;
+  const names = new Map<string, string[]>();
+  if (!isRecord(bin)) return names;
+  for (const [name, declaration] of Object.entries(bin)) {
+    const entry = typeof declaration === 'string'
+      ? declaration
+      : isRecord(declaration) ? (declaration as AgentBundleBinEntry).entry : undefined;
+    if (!nonemptyString(entry)) continue;
+    const source = resolve(loaded.context.projectRoot, entry);
+    names.set(source, [...(names.get(source) ?? []), name]);
+  }
+  return names;
+};
+
+/**
+ * The build's own static export scan of one conventional script, so the
+ * dual-surface gates below agree with the bin envelope's export selection
+ * (`main` first, then `default`). Undefined when the module is unreadable.
+ */
+const scriptEntryExports = (source: string): EntryExportScan | undefined => {
+  try {
+    return scanEntryExportsSource(readFileSync(source, 'utf8'));
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The route compiler's static export scan of one rendered script, which
+ * judges the default export's component shape (an async function) rather
+ * than its mere presence. Undefined when the module is unreadable.
+ */
+const renderedScriptExports = (source: string, relativePath: string): RouteModuleExports | undefined => {
+  try {
+    return scanRouteModuleExports(readFileSync(source, 'utf8'), relativePath, { source });
+  } catch {
+    return undefined;
+  }
+};
+
 const validateConventionalScripts = (
   loaded: LoadedConfig,
   discovered: DiscoveredProject,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const configured = configuredScriptNames(loaded.config);
+  const binNamesBySource = explicitBinNamesBySource(loaded);
   for (const route of discovered.routeGraph?.scripts ?? []) {
     const relativePath = route.provenance.relativePath;
     const judgment = judgeScriptRoute(route, configured);
+    const binNames = binNamesBySource.get(route.source);
+    const binList = binNames?.map((name) => JSON.stringify(name)).join(', ');
     switch (judgment) {
-      case 'shippable':
+      case 'shippable': {
+        // A plain script a `bin` entry also names ships as both surfaces: the
+        // npm bin and the artifact script are disjoint outputs (#389). Both
+        // pipelines wrap a `main` export in the process envelope and bundle a
+        // self-executing module byte for byte, so those shapes agree. Only
+        // the bin envelope falls back to a default export; the artifact
+        // script would merely define it, so that shape is gated.
+        const exports = binNames === undefined ? undefined : scriptEntryExports(route.source);
+        if (exports !== undefined && !exports.hasMainExport && exports.hasDefaultExport) {
+          diagnostics.push({
+            code: 'AB4738',
+            message: `Script ${relativePath} is also the entry of bin ${binList} and exports a default but no main; the bin envelope would run the default export while the artifact script would only define it.`,
+            recovery: 'Export a named main(argv) so both the bin and the artifact script run the same entry, make the module self-executing (no default export), or prefix a path segment with "_" to keep the module bin-only.',
+            severity: 'error',
+            sourcePath: route.source,
+          });
+        }
+        break;
+      }
       // Rendered scripts ship through the Agent renderer pipeline (#102
       // stage 3); AB4807 is retired and never reused.
-      case 'rendered':
+      case 'rendered': {
+        // The rendered-script default export is a Server Component the
+        // renderer drives. The bin envelope prefers a named `main` export and
+        // only falls back to the default export, so the two surfaces can share
+        // one module exactly when it exports both; the detection is the
+        // build's own export scan, so the gate and the envelope always agree.
+        if (binNames === undefined) break;
+        // `main` is judged by the bin envelope's own scan (which ignores
+        // type-only exports); the component by the route compiler's scan (an
+        // async default function, not mere default-export presence, since
+        // `export default {}` would build and fail at run time). A default
+        // re-exported from a relative module (`export { default } from`) is
+        // judged in that module; one the scan cannot read is accepted and the
+        // worker still verifies it.
+        const hasMain = scriptEntryExports(route.source)?.hasMainExport === true;
+        const routeExports = renderedScriptExports(route.source, relativePath);
+        const hasComponent = routeExports?.asyncDefault === true
+          || routeExports?.defaultReExport?.resolution === 'unresolved';
+        if (hasMain && hasComponent) break;
+        const missing = !hasMain && !hasComponent
+          ? 'neither an async default Server Component nor a named main'
+          : hasMain ? 'no async default Server Component' : 'no named main';
+        diagnostics.push({
+          code: 'AB4737',
+          message: `Rendered script ${relativePath} is also the entry of bin ${binList} but exports ${missing}; the artifact script renders the default component and the bin envelope calls main(argv).`,
+          recovery: 'Export both an async default Server Component and a named main(argv) from the module, point the bin entry at a plain module that exports main, rename the script to .ts so one plain module ships as both the bin and the artifact script, or prefix a path segment with "_" to keep the module bin-only.',
+          severity: 'error',
+          sourcePath: route.source,
+        });
         break;
+      }
       case 'nested':
         diagnostics.push({
           code: 'AB4808',
@@ -1855,7 +2203,7 @@ export const validateSource = (
   diagnostics.push(...validateBin(loaded));
   diagnostics.push(...validateHooks(loaded, registry, payloads));
   diagnostics.push(...validateLib(loaded));
-  diagnostics.push(...validateMcp(loaded, registry, payloads));
+  diagnostics.push(...validateMcp(loaded, discovered, registry, payloads));
   diagnostics.push(...validateOutput(loaded));
   diagnostics.push(...validatePayload(loaded, registry, options?.payloadFreshness !== false));
   diagnostics.push(...validateRuntime(loaded));
@@ -1870,6 +2218,12 @@ export const validateSource = (
       loaded.configPath,
     ));
   }
+  // `notices.retention` (AB4833) needs the co-mounted ledger a state module brings.
+  diagnostics.push(...normalizeNoticeRetention(
+    loaded.config,
+    loaded.configPath,
+    discovered.state?.definition !== undefined,
+  ).diagnostics);
   diagnostics.push(...packageConventionShadowNudges(loaded));
   diagnostics.push(...skillConventionShadowNudges(loaded, discovered));
   diagnostics.push(...legacyConventionalDocumentErrors(loaded, discovered));
@@ -1880,6 +2234,7 @@ export const validateSource = (
   // they are project-source errors, so they gate inspect and build here.
   diagnostics.push(...(discovered.routeGraph?.diagnostics ?? []));
   diagnostics.push(...(discovered.state?.diagnostics ?? []));
+  diagnostics.push(...validateRouteAppTargets(loaded, discovered, registry));
   diagnostics.push(...validateEventRoutes(loaded, discovered, registry));
   // The stage-1 gate for conventional script routes rides beside the graph's
   // own collisions: rendered, nested, and config-conflicting script routes
@@ -1889,6 +2244,74 @@ export const validateSource = (
   // explicit-bin shadowing stay hard errors, never silent omissions.
   diagnostics.push(...validateConventionalCliRoutes(loaded, discovered));
 
+  return diagnostics;
+};
+
+/**
+ * AB4765 (#387): the compiled routed CLI is offered to every selected target,
+ * but a host artifact receives `bin/<name>.mjs` only when its adapter
+ * publishes a supported `cli` capability. Every built-in target does; a
+ * custom adapter that publishes no row (or a non-supported one) omits the
+ * bin, and that omission is reported here — never silently — so skills and
+ * scripts installed with that target are not written against a file that is
+ * not there. `inspect` lists the same omission as an `unsupported-capability`
+ * skip.
+ */
+const routedCliBinTargetDiagnostics = (
+  model: NormalizedPlugin,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const diagnostics: Diagnostic[] = [];
+  // The judgment must be the one emission and `inspect` use: the adapter's
+  // component override when published, otherwise its plain capabilities. A
+  // registry exposing neither accessor falls back to its boolean view.
+  const judgmentFor = (target: string): { readonly known: true; readonly state: CapabilityState | undefined } | { readonly known: false } => {
+    if (registry.componentCapabilityState !== undefined) {
+      return { known: true, state: registry.componentCapabilityState(target, cliBinCapability) };
+    }
+    if (registry.capabilityState !== undefined) {
+      return { known: true, state: registry.capabilityState(target, cliBinCapability) };
+    }
+    return { known: false };
+  };
+  for (const bin of model.packageBuild?.bins ?? []) {
+    if (bin.generatedCli === undefined) continue;
+    for (const target of model.targets) {
+      if (!registry.has(target.name)) continue;
+      const judged = judgmentFor(target.name);
+      const supported = judged.known
+        ? capabilityIsSupported(judged.state)
+        : registry.supports(target.name, cliBinCapability);
+      if (supported) continue;
+      const capability = judged.known ? judged.state : undefined;
+      let judgment: string;
+      if (capability === undefined) {
+        judgment = `the target publishes no ${cliBinCapability} capability row`;
+      } else {
+        switch (capability.state) {
+          case 'supported':
+            continue;
+          case 'degraded':
+          case 'unavailable':
+          case 'prohibited':
+            judgment = `its ${cliBinCapability} capability is ${capability.state}: ${capability.reason}`;
+            break;
+          default: {
+            const exhaustive: never = capability;
+            return exhaustive;
+          }
+        }
+      }
+      diagnostics.push({
+        code: 'AB4765',
+        message: `Routed CLI ${JSON.stringify(bin.name)} is not emitted into target ${JSON.stringify(target.name)}: ${judgment}. Skills, hooks, and scripts in that artifact cannot invoke bin/${bin.name}.mjs.`,
+        recovery: `Publish a supported ${cliBinCapability} capability (and a cliBin artifact layout) on the ${target.name} adapter, or drop the target from the surfaces that reference the routed CLI.`,
+        severity: 'warning',
+        sourcePath: bin.provenance.sourcePath,
+        target: target.name,
+      });
+    }
+  }
   return diagnostics;
 };
 
@@ -1910,6 +2333,8 @@ export const validateModel = (
     }
   }
 
+  diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
+
   const ids = new Map<string, string>();
   const components = [
     model.metadata,
@@ -1919,6 +2344,7 @@ export const validateModel = (
     ...(model.commands ?? []),
     ...(model.rules ?? []),
     ...model.hooks,
+    ...(model.lspServers ?? []),
     ...model.mcpServers,
     ...(model.mcpApps ?? []),
     ...model.scripts,

@@ -1,0 +1,108 @@
+/*
+ * agent-bundle brand tokens.
+ *
+ * Rspress declares its own tokens through `:where(...)` (zero specificity), so
+ * plain `:root` selectors here win regardless of stylesheet order.
+ */
+
+:root:not(.rp-dark) {
+  --rp-c-brand: #0d8f80;
+  --rp-c-brand-light: #14b8a6;
+  --rp-c-brand-lighter: #99f6e4;
+  --rp-c-brand-dark: #0f766e;
+  --rp-c-brand-darker: #115e59;
+  --rp-c-brand-tint: #14b8a629;
+
+  --rp-home-hero-secondary-color: #5b5bd6;
+}
+
+:root.rp-dark {
+  --rp-c-brand: #2dd4bf;
+  --rp-c-brand-light: #5eead4;
+  --rp-c-brand-lighter: #99f6e4;
+  --rp-c-brand-dark: #14b8a6;
+  --rp-c-brand-darker: #0d9488;
+  --rp-c-brand-tint: #2dd4bf29;
+
+  --rp-home-hero-secondary-color: #a5b4fc;
+}
+
+/*
+ * The hero title inherits `--rp-home-hero-title-bg` from the default theme,
+ * which references the brand tokens above, so only the gradient endpoint is
+ * restated to keep the second stop inside the agent-bundle palette.
+ */
+:root {
+  --rp-home-hero-title-bg: linear-gradient(
+    90deg,
+    var(--rp-c-brand-dark) 0%,
+    var(--rp-c-brand-dark) 32%,
+    var(--rp-home-hero-secondary-color) 100%
+  );
+}
+
+/*
+ * Bounded homepage accent. The default theme already brand-colors the feature
+ * card border on hover, so this only tints the icon chip and adds a small lift.
+ */
+.rp-home-feature__icon {
+  border-color: var(--rp-c-brand-tint);
+  background-color: var(--rp-c-bg-soft);
+}
+
+.rp-home-feature__card:hover {
+  transform: translateY(-2px);
+}
+
+/*
+ * Home page body, rendered by the theme's `afterFeatures` slot. Width matches
+ * the feature grid container so the sections line up with the cards above.
+ */
+.ab-home-body {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 4rem;
+}
+
+.ab-home-body .rp-doc h2 {
+  margin-top: 3.5rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+}
+
+.ab-home-body .rp-doc h2 + p {
+  color: var(--rp-c-text-2);
+  font-size: 1.05rem;
+  max-width: 48rem;
+}
+
+/* Side-by-side "what you write / what you get" comparison. */
+.ab-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  margin-top: 1.5rem;
+}
+
+.ab-compare > div {
+  min-width: 0;
+  padding: 1.25rem 1.5rem 0.25rem;
+  border: 1px solid var(--rp-c-divider-light);
+  border-radius: 12px;
+  background: var(--rp-c-bg-soft);
+}
+
+.ab-compare > div > h3 {
+  margin-top: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--rp-c-brand);
+}
+
+.ab-compare .rp-doc pre,
+.ab-compare pre {
+  font-size: 0.82rem;
+}

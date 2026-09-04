@@ -87,9 +87,12 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
   'tool:harness/catalog': { input: { genre: 'mystery' }, resultCompat: 'additive' },
   'tool:harness/context': { resultCompat: 'closed' },
   'tool:harness/echo': { input: { message: 'contract matrix' }, resultCompat: 'additive' },
+  'tool:harness/fault': { input: { mode: 'ok' }, resultCompat: 'additive' },
   'tool:harness/journal': { resultCompat: 'closed' },
+  'tool:harness/layout-probe': { input: { label: 'contract matrix' }, resultCompat: 'additive' },
   'tool:harness/lifecycle': lifecycleFixture(),
   'tool:harness/mutation-probe': { input: { marker: 'contract matrix' }, resultCompat: 'closed' },
+  'tool:harness/plugin-root': { resultCompat: 'closed' },
   'tool:harness/publish-notice': {
     input: { message: 'matrix notice', recipientSession: 'matrix-session' },
     resultCompat: 'closed',
@@ -101,6 +104,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
     previousResults: [{ status: 'completed' }],
     resultCompat: 'additive',
   },
+  'tool:harness/tooling': { resultCompat: 'closed' },
   'tool:harness/unavailable': { resultCompat: 'additive' },
   'tool:harness/wait': {
     cancellation: { abortAfterMs: 50, input: { holdMs: 5000 } },
@@ -111,11 +115,12 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
 
 /**
  * Packed-journey fixtures: journal sweep is read-only (`{}`) so durable-state
- * assertions in `packed-stdio-projection.test.ts` stay intact.
+ * assertions in `packed-stdio-projection.test.ts` stay intact. The compiled
+ * `app:harness/panel` route is deliberately absent — the packed level
+ * auto-covers app routes (#401).
  */
 export const routeHarnessPackedContractFixtures = (): Record<string, ContractRouteFixture> => ({
   ...routeHarnessContractFixtures(),
-  'app:harness/panel': {},
   'tool:harness/journal': { resultCompat: 'closed' },
   'tool:harness/lifecycle': lifecycleFixture(1),
 });

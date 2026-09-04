@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { get as httpGet } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -9,6 +9,7 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import {
   closeDevServerLifecycle,
@@ -1110,17 +1111,28 @@ it('prepares the optional runtime once with the development config context befor
   });
   let proxyCalls = 0;
   let surfaceCloseCalls = 0;
+  // Both fixture records live outside the watched project source. The dev
+  // watcher treats every non-ignored path under the project root as source
+  // (the project snapshot is broad by design), so a config that appended its
+  // calls inside the root, or a provider that wrote its start context there,
+  // would itself be a source change: the watcher rebuilds, the rebuild
+  // re-loads the config, the load appends again, and the dev-load count
+  // climbs until the test happens to read it. The provider uses its
+  // contract-provided storageRoot (`.agent-bundle/runtime/<session>`, excluded
+  // from watching and snapshots); the config logs beside the workbench assets.
+  const configCallsPath = join(assetsRoot, 'config-calls.ndjson');
   await mkdir(join(project.root, 'src', 'dev'), { recursive: true });
   await Promise.all([
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
     writeFile(join(project.root, 'src', 'dev', 'provider.ts'), [
-      "import { writeFile } from 'node:fs/promises';",
+      "import { mkdir, writeFile } from 'node:fs/promises';",
       "import { join } from 'node:path';",
       '',
       'export const createDevRuntimeProvider = () => ({',
       "  descriptor: { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 },",
       '  start: async (context) => {',
-      "    await writeFile(join(context.projectRoot, 'provider-context.json'), JSON.stringify({",
+      '    await mkdir(context.storageRoot, { recursive: true });',
+      "    await writeFile(join(context.storageRoot, 'provider-context.json'), JSON.stringify({",
       '      artifact: context.artifactStatus(),',
       '      environment: context.environment,',
       '      preparedRuntime: context.preparedRuntime,',
@@ -1142,11 +1154,10 @@ it('prepares the optional runtime once with the development config context befor
     ].join('\n')),
     writeFile(project.configPath, [
       "import { appendFile } from 'node:fs/promises';",
-      "import { join } from 'node:path';",
       "import { defineConfig } from 'agent-bundle';",
       '',
-      'export default defineConfig(async ({ command, mode, projectRoot }) => {',
-      "  await appendFile(join(projectRoot, 'config-calls.ndjson'), JSON.stringify({ command, mode }) + '\\n');",
+      'export default defineConfig(async ({ command, mode }) => {',
+      `  await appendFile(${JSON.stringify(configCallsPath)}, JSON.stringify({ command, mode }) + '\\n');`,
       '  return {',
       "    dev: { runtime: { provider: './src/dev/provider.ts' } },",
       "    plugin: { name: 'runtime-fixture', version: '1.0.0' },",
@@ -1171,9 +1182,13 @@ it('prepares the optional runtime once with the development config context befor
       },
     });
 
+    const runtimeStorageRoot = join(project.root, '.agent-bundle', 'runtime');
+    const [providerSessionDirectory, ...otherSessionDirectories] = await readdir(runtimeStorageRoot);
+    if (providerSessionDirectory === undefined) throw new Error('The fixture provider did not create its storage root.');
+    expect(otherSessionDirectories).toEqual([]);
     const [calls, context, runtimeStatus, projectStatus] = await Promise.all([
-      readFile(join(project.root, 'config-calls.ndjson'), 'utf8'),
-      readFile(join(project.root, 'provider-context.json'), 'utf8').then(JSON.parse) as Promise<Record<string, unknown>>,
+      readFile(configCallsPath, 'utf8'),
+      readFile(join(runtimeStorageRoot, providerSessionDirectory, 'provider-context.json'), 'utf8').then(JSON.parse) as Promise<Record<string, unknown>>,
       fetch(`${server.url}/api/runtime/status`).then((response) => response.json()),
       fetch(`${server.url}/api/project/status`).then((response) => response.json()),
     ]);
@@ -1186,7 +1201,7 @@ it('prepares the optional runtime once with the development config context befor
       environment: {},
       preparedRuntime: { provider: './src/dev/provider.ts' },
       projectRoot: project.root,
-      storageRoot: expect.stringMatching(new RegExp(`^${join(project.root, '.agent-bundle', 'runtime').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/`)),
+      storageRoot: join(runtimeStorageRoot, providerSessionDirectory),
     });
     expect(runtimeStatus).toMatchObject({ status: { descriptor: { id: 'fixture-runtime' }, state: 'active' } });
     expect(projectStatus).toMatchObject({ status: { runtime: { state: 'configured' } } });
@@ -1813,7 +1828,7 @@ it('retains sandbox startup and foreground cleanup failures structurally', async
 });
 
 it('passes --no-open, the requested port, and repeatable dev host installs to the public dev API', async () => {
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const received: unknown[] = [];
   const exitCode = await runCli([
     'dev',
@@ -1826,9 +1841,7 @@ it('passes --no-open, the requested port, and repeatable dev host installs to th
     'cursor',
     '--install-host',
     'claude',
-  ], {
-    stdout: { write: (value) => stdout.push(value) },
-  }, {
+  ], terminal.output, {
     startDevServer: async (options) => {
       received.push(options);
       return {
@@ -1847,7 +1860,7 @@ it('passes --no-open, the requested port, and repeatable dev host installs to th
     port: 4100,
     root: '/project',
   })]);
-  expect(stdout.join('')).toBe('Development workbench at http://127.0.0.1:4100\n');
+  expect(terminal.stdout()).toBe('Development workbench at http://127.0.0.1:4100\n');
 });
 
 it('passes explicit Agent API enablement and disablement through the dev CLI', async () => {

@@ -1,0 +1,17 @@
+agent-bundle
+Copyright 2026 Zack Jackson (ScriptedAlchemy)
+
+This product is licensed under the Apache License, Version 2.0; see the
+LICENSE file distributed with it.
+
+This distribution includes third-party material that is covered by its own
+license and notices, which are preserved unmodified alongside that material:
+
+  - The Agent Bundle Workbench MCP App renderer is derived from the MCP
+    Inspector project (MIT License). See THIRD_PARTY_NOTICES and
+    src/mcp/APP-RENDERER-LICENSE, which the agent-bundle package ships under
+    dist/workbench/.
+
+The repository's vendored reference checkouts under repos/ are read-only
+reference material, retain their own upstream licenses, and are not part of
+any published package.

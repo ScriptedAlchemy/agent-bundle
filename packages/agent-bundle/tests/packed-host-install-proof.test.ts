@@ -9,9 +9,11 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 import {
   buildHostInstallFixture,
   disposeHostInstallFixture,
+  expectedCodexInterfaceFields,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
+  runHostUninstallProof,
   type BuiltHostInstallFixture,
   type HostInstallCommand,
 } from './support/host-install.ts';
@@ -105,6 +107,7 @@ beforeAll(async () => {
     access(join(installedArtifactRoot, 'claude')),
     access(join(installedArtifactRoot, 'codex')),
     access(join(installedArtifactRoot, 'cursor')),
+    access(join(installedArtifactRoot, 'plugin')),
   ]);
 
   await rm(projectRoot, { force: true, recursive: true });
@@ -118,6 +121,7 @@ beforeAll(async () => {
       claude: join(installedArtifactRoot, 'claude'),
       codex: join(installedArtifactRoot, 'codex'),
       cursor: join(installedArtifactRoot, 'cursor'),
+      plugin: join(installedArtifactRoot, 'plugin'),
     }),
     cli: sourceFixture.cli,
     root: cleanupRoot,
@@ -160,7 +164,7 @@ claudePluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'claude',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       inventory: { hooks: 1, mcpServers: 1, skills: 1 },
       proofLevel: proofLabel,
       registration: {
@@ -192,20 +196,13 @@ codexPluginIt(
 
     expect(report, proofLabel).toEqual({
       host: 'codex',
-      install: { state: 'installed', version: '1.0.0' },
+      install: { sameVersionRebuild: 'replaced', state: 'installed', version: '1.0.0' },
       manifest: {
         interfaceCapabilities: ['hooks', 'mcp', 'skills'],
-        interfaceFields: [
-          'capabilities',
-          'category',
-          'defaultPrompt',
-          'developerName',
-          'displayName',
-          'logo',
-          'longDescription',
-          'shortDescription',
-        ],
+        interfaceFields: [...expectedCodexInterfaceFields],
+        matchesBuiltArtifact: true,
         path: '.codex-plugin/plugin.json',
+        schema: 'schema-valid',
       },
       proofLevel: proofLabel,
       registration: {
@@ -241,11 +238,20 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
       mcp: 'schema-valid',
       plugin: 'schema-valid',
     },
+    hooksRegistration: { events: ['sessionStart'], state: 'registered', userHooksJson: 'absent' },
     host: 'cursor',
-    install: { first: 'installed', second: 'already-installed', version: '1.0.0' },
+    install: { first: 'installed', sameVersionRebuild: 'replaced', second: 'already-installed', version: '1.0.0' },
     logo: {
       path: './assets/docs/media/logo.svg',
       resolvesInsideDeployTree: true,
+    },
+    marketplace: {
+      commit: 'git-sha',
+      first: 'staged',
+      imported: false,
+      manifest: 'marketplace.json lists the plugin',
+      repository: '.cursor/agent-bundle/marketplaces/host-install-proof',
+      second: 'already-staged',
     },
     pluginRootVariable: {
       locations: [
@@ -260,7 +266,77 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
     proofLevel: proofLabel,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',
+    unifiedBundle: {
+      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksRegistration: 'registered',
+      install: 'installed',
+      staticFindings: { AB6027: 0, AB7320: 0 },
+    },
   });
   expect(report.install.version, proofLabel).toBe(fixturePackageVersion);
+  expectHygienicReport(report);
+}, 180_000);
+
+claudePluginIt(
+  claudeAvailable
+    ? 'uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping'
+    : `uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping [${claudeMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'claude', {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+    expect(report, proofLabel).toMatchObject({
+      agentBundleResidue: [],
+      host: 'claude',
+      hostResidue: ['claude-orphaned-cache-copy', 'claude-plugin-registry-files', 'claude-session-bookkeeping', 'claude-settings'],
+      registrations: { 'claude-marketplace': 'removed', 'claude-plugin': 'removed' },
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+codexPluginIt(
+  codexAvailable
+    ? 'uninstalls the packed tarball through Codex with the package bin'
+    : `uninstalls the packed tarball through Codex with the package bin [${codexMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'codex', {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+    expect(report, proofLabel).toMatchObject({
+      agentBundleResidue: [],
+      host: 'codex',
+      hostResidue: ['codex-empty-config', 'codex-empty-directories'],
+      registrations: { 'codex-marketplace': 'removed', 'codex-plugin': 'removed' },
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+it('uninstalls the packed tarball from an isolated Cursor home with the package bin and leaves it byte-identical', async () => {
+  const report = await runHostUninstallProof(builtFixture(), 'cursor', {
+    environment: process.env,
+    installCommand: installCommand(),
+  });
+  expect(report, proofLabel).toEqual({
+    agentBundleResidue: [],
+    homeByteIdentical: true,
+    host: 'cursor',
+    hostResidue: [],
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: proofLabel,
+    purgeData: 'purged',
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    registrations: { 'cursor-local-plugin': 'removed' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
   expectHygienicReport(report);
 }, 180_000);

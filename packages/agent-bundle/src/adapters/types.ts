@@ -14,11 +14,17 @@ import {
   type NormalizedPlugin,
 } from '../core/types.ts';
 import type { TargetHookContract, TargetHookEntry } from './hook-contract.ts';
+import type { NoticeDeliveryAdvertisement } from './notice-delivery.ts';
 import type { TargetMcpRuntimeContract } from '../services/mcp-runtime.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
 export type { TargetHookEntry, TargetHookWrapper } from './hook-contract.ts';
+export type {
+  NoticeDeliveryAdvertisement,
+  NoticeDeliveryRoute,
+  NoticeDeliveryRouteState,
+} from './notice-delivery.ts';
 
 export interface TargetArtifactWrite {
   readonly content: string;
@@ -414,7 +420,14 @@ const invalidMcpDocumentIssues: readonly TargetArtifactDocumentIssue[] = deepFre
  */
 export interface TargetArtifactLayout {
   readonly assets?: string;
+  /** A host-native executable directory copied verbatim (Claude Code's `bin/`). */
   readonly bin?: string;
+  /**
+   * The compiled routed-CLI executable and its Flight worker
+   * (`bin/<plugin-name>.mjs`, `bin/<plugin-name>-flight.mjs`); required
+   * whenever the adapter publishes a supported `cli` capability (#387).
+   */
+  readonly cliBin?: TargetArtifactOutputLayout;
   readonly commands?: TargetArtifactOutputLayout;
   readonly hookWrappers?: TargetArtifactOutputLayout;
   readonly mcpApps?: TargetArtifactOutputLayout;
@@ -429,12 +442,26 @@ export interface TargetArtifactLayout {
 }
 
 /**
+ * The one layout the compiler emits the routed CLI into (#387):
+ * `bin/<plugin-name>.mjs` plus `bin/<plugin-name>-flight.mjs`. Every adapter
+ * that publishes a supported `cli` capability must declare a `cliBin` layout
+ * naming this directory and admitting this suffix; the registry rejects any
+ * other spelling because the compiler would otherwise emit files its own
+ * artifact validation rejects.
+ */
+export const routedCliBinLayout: TargetArtifactOutputLayout = Object.freeze({
+  allowedSuffixes: Object.freeze(['.mjs']),
+  directory: 'bin',
+});
+
+/**
  * Direct-file artifact layout shared by every plugin-shaped target adapter
  * (Claude, Codex): hook wrappers, MCP apps/entries, scripts, and skills all
  * land in the same target-agnostic directories with the same suffix policy.
  */
 export const standardArtifactLayout: TargetArtifactLayout = Object.freeze({
   assets: 'assets',
+  cliBin: routedCliBinLayout,
   hookWrappers: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'hooks' }),
   mcpApps: Object.freeze({ allowedSuffixes: Object.freeze(['.html']), directory: 'mcp-apps' }),
   mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
@@ -504,10 +531,25 @@ export interface TargetAdapter {
   /** Per-component-kind emission dispatch used by inspect skip accounting; defaults to `capabilities`. */
   readonly componentCapabilities?: Readonly<Record<string, CapabilityState>>;
   readonly configExtension?: TargetConfigExtension;
+  /**
+   * Config extension keys this adapter lowers besides its own (a composite
+   * that plans other hosts' sides). Host-scoped declarations such as
+   * `<key>.lspServers` are eligible for emission only on adapters that lower
+   * that key, so an opaque declaration never counts as emitted by a host whose
+   * planner never reads it.
+   */
+  readonly lowersConfigExtensions?: readonly string[];
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
   readonly mcpRuntime?: TargetMcpRuntimeContract;
   readonly name: string;
+  /**
+   * The host's per-route notice delivery advertisement (#99 stage 4), read
+   * from its pinned capability table. The generated MCP entry selects its
+   * cross-request delivery routes from this; an adapter that declares none
+   * advertises no cross-request route and its artifacts wire none.
+   */
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
   binSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   nativeHookSource?(config: Readonly<AgentBundleConfig>): string | undefined;
   outputStylesSource?(config: Readonly<AgentBundleConfig>): string | undefined;

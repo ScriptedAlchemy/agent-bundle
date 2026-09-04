@@ -1,0 +1,178 @@
+---
+description: 'Author agent-bundle Skills as SKILL.md documents with resources, host extensions, canonical path tokens, or rendered SKILL.tsx sources.'
+---
+
+# Skills
+
+A Skill is a Markdown document plus the files it references. agent-bundle discovers Skills from
+the `src/` convention, lowers each one into the spelling every selected host expects, and ships
+the directory's other files as that Skill's resources.
+
+## The convention
+
+One directory per Skill, with `SKILL.md` inside:
+
+```text
+src/skills/release-review/
+├── SKILL.md
+├── assets/report-template.md
+└── references/checklist.md
+```
+
+That ships with no declaration at all. Everything in the directory other than `SKILL.md` — and
+other than the rendered-skill source files, which are build inputs — becomes a resource of that
+Skill, copied into the artifact with its relative path preserved.
+
+## The document
+
+`SKILL.md` starts with YAML frontmatter and continues as ordinary Markdown:
+
+```md
+---
+name: release-review
+description: Reviews release evidence and issues an auditable readiness verdict.
+---
+# Release review
+
+## When to use
+
+Use this Skill when a release candidate needs a go/no-go verdict supported by
+checked, reproducible evidence.
+
+## Required resources
+
+- Read [the release checklist](references/checklist.md) to inspect the artifact.
+- Deliver the result with [the report template](assets/report-template.md).
+```
+
+Frontmatter is required. A document with none reports `AB3001`; invalid YAML reports `AB3002`.
+`name` and `description` are what every host reads — the description is the activation surface,
+so write it as the condition under which the Skill should be used, not as a title.
+
+Links to sibling files are how a Skill points at its own resources. They stay relative in the
+emitted document, so they resolve inside whichever artifact the host installed.
+
+## Selecting Skills explicitly
+
+Conventional discovery covers `src/skills/*/SKILL.{md,ts,tsx}`. Declare `skills` when you need a
+different location, a subset, or a literal list:
+
+```ts twoslash
+import { defineConfig } from 'agent-bundle/config';
+
+export default defineConfig({
+  plugin: { description: 'Engineering operations.', name: 'ops-bundle' },
+  skills: ['src/skills/*'],
+  targets: ['portable', 'codex', 'claude'],
+});
+```
+
+Literal paths stay literal; globs match Skill directories or `SKILL.md` files. Config always
+wins over the convention.
+
+## Host extensions
+
+Portable Skill metadata — `name`, `description`, `license`, `compatibility`, `allowed-tools` (the
+Agent Skills spelling; camelCase `allowedTools` is accepted only under `targets.claude`), and a
+free-form `metadata` record — is understood by every target. Host-specific keys live under
+their host so they reach only that adapter:
+
+| Host | Examples |
+| --- | --- |
+| `claude` | `allowedTools`, `disallowedTools`, `argumentHint`, `model`, `effort`, `context: 'fork'`, `background`, `userInvocable`, `disableModelInvocation`, `whenToUse`, `shell`, `paths`, `hooks` |
+| `codex` | `dependencies.tools`, `interface` (display name, icons, brand color, default prompt), `policy.allowImplicitInvocation` |
+| `cursor` | `globs`, `icon`, `color`, `paths`, `disableModelInvocation` |
+
+`targets` in Skill frontmatter is that per-host object and nothing else; a list such as
+`targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
+is no per-Skill artifact restriction.
+
+## Path tokens
+
+Host placeholder syntax differs — `${CLAUDE_PLUGIN_ROOT}` is not what Cursor or the portable
+standard write. Author the canonical token instead and let build-time lowering substitute the
+host spelling:
+
+| Token | Means |
+| --- | --- |
+| `agent-bundle:path:plugin-root` | The plugin install root. |
+| `agent-bundle:path:plugin-data` | The host-provided plugin data directory. |
+| `agent-bundle:path:workspace-root` | The user's workspace or project root. |
+| `agent-bundle:token:arguments` | The invocation arguments. |
+| `agent-bundle:token:session-identity` | The current session identity. |
+| `agent-bundle:token:skill-root` | The installed Skill's own directory. |
+
+Lowering substitutes syntax only; no runtime value is resolved at build time. A token a host
+cannot express is reported rather than silently emitted as literal text.
+
+## Rendered Skills
+
+When a Skill document is generated rather than typed — the same checklist repeated per
+environment, a table derived from a contract — put a component at `src/skills/<name>/SKILL.tsx`
+(or `.ts`). It default-exports a component and exports a `frontmatter` record; the build compiles
+the rendered tree into the `SKILL.md` document hosts consume:
+
+```tsx
+// src/skills/release-review/SKILL.tsx
+import { Skill } from 'agent-bundle';
+
+export const frontmatter = {
+  name: 'release-review',
+  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+};
+
+export default () => (
+  <>
+    <h1>Release review</h1>
+    <p>Evidence lives under {Skill.PluginRoot()}/assets.</p>
+  </>
+);
+```
+
+Six `Skill.*` members emit canonical tokens: `Skill.Arguments`, `Skill.PluginData`,
+`Skill.PluginRoot`, `Skill.ProjectRoot`, `Skill.SessionIdentity`, and `Skill.SkillRoot`.
+`Skill.Resource` renders a Markdown link (`[path](path)`), not a token. Host syntax is
+applied during lowering, never in the component.
+
+A rendered source may import project code, so the document is computed from the same sources the
+plugin ships, and it may import `agent-bundle/meta`: the loader serves the same
+`{ name, packageName, packageVersion, version }` the compiler stamps into every built surface, so a
+skill can print the version it documents. Its JSX compiles against the loader's own element
+factory rather than the project's `react/jsx-runtime` — the renderer walks plain element objects
+and needs no React internals — so the evaluation does not depend on how the process resolves
+`react` (the `react-server` condition of the route-unit pool included), and `inspectWorkbenchSurface`
+inspects a project with rendered skills from any pool.
+
+A hand-authored `SKILL.md` in the same directory always wins — an authored file beats a
+generated one — and the shadowed component reports the informational `AB4735` nudge. A rendered
+module that fails to load reports `AB3003`; one that does not default-export a component
+function, or does not export a `frontmatter` record, reports `AB3004`.
+
+`defineSkill` types a Skill definition next to a rendered source:
+
+```ts twoslash
+import { defineSkill } from 'agent-bundle';
+
+export const skill = defineSkill({
+  description: 'Reviews release evidence and issues an auditable readiness verdict.',
+  name: 'release-review',
+});
+```
+
+## Inspecting what shipped
+
+```sh
+npx agent-bundle inspect --root . --skills
+```
+
+The skill focus shows each discovered Skill, its provenance (`conventional` or `config`), its
+resources, and the per-target lowering decisions. In the developer Workbench, the Skills page
+renders the emitted document for each host.
+
+Raw HTML, JSX/MDX, and Mermaid inside Skill Markdown are inert in the Workbench renderer. That
+is a deliberate containment boundary, not a rendering gap.
+
+## Next
+
+- [Hooks](./hooks.mdx) — react to lifecycle events.
+- [MCP servers and Apps](./mcp.mdx) — expose tools, resources, and prompts.

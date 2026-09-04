@@ -1,0 +1,14 @@
+[
+  "index",
+  "cli",
+  "configuration",
+  "targets-artifacts",
+  "hosts",
+  "events",
+  "notices",
+  "diagnostics",
+  "runtime-environment",
+  "security",
+  "limitations",
+  "api"
+]

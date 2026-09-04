@@ -198,6 +198,46 @@ it('discovers flat non-ignored rules deterministically and omits the collection 
   });
 });
 
+it('judges rule frontmatter features against the pinned Cursor .mdc field rows (#100)', async () => {
+  await withProject(async (root) => {
+    const registry = createDefaultRegistry();
+    const rule: RuleDocument = {
+      body: '# Rule\n',
+      diagnostics: [],
+      emittedMarkdown: '---\nalwaysApply: true\nglobs: src/**\n---\n# Rule\n',
+      frontmatter: { alwaysApply: true, description: 'Rule guidance', globs: 'src/**' },
+      markdown: '---\nalwaysApply: true\ndescription: Rule guidance\nglobs: src/**\n---\n# Rule\n',
+      source: join(root, 'src', 'rules', 'review.mdc'),
+    };
+    // Cursor documents description, globs, and alwaysApply (retrieved
+    // 2026-09-03), so every authored field is supported: no diagnostic, and
+    // hosts without a rules surface are judged by the kind row, not per field.
+    expect(validateSource(loadedProject(root, ['cursor', 'claude', 'codex', 'portable', 'plugin']), { rules: [rule], skills: [] }, registry)).toEqual([]);
+    for (const field of ['alwaysApply', 'description', 'globs']) {
+      expect(registry.get('cursor').capabilities[`rules.${field}`]).toMatchObject({ evidence: { target: 'cursor' }, state: 'supported' });
+    }
+
+    // A synthetic host that supports rules but publishes no field rows omits
+    // every feature honestly (AB4908) and fails an explicit target (AB4907).
+    const rulesOnly = createDefaultRegistry().register({
+      capabilities: { rules: { evidence: { observedVersion: 'test', target: 'ruleshost' }, state: 'supported' } },
+      metadata: { adapterRevision: 'test', observedVersion: 'test', schemas: [] },
+      name: 'ruleshost',
+      plan: () => ({ diagnostics: [], entries: [] }),
+    });
+    expect(validateSource(loadedProject(root, ['ruleshost']), { rules: [rule], skills: [] }, rulesOnly)).toEqual([
+      expect.objectContaining({ code: 'AB4908', message: expect.stringContaining('uses alwaysApply, which ruleshost omits (rules.alwaysApply unavailable): The ruleshost adapter publishes no rules.alwaysApply capability row.'), severity: 'warning', target: 'ruleshost' }),
+      expect.objectContaining({ code: 'AB4908', message: expect.stringContaining('uses description'), severity: 'warning' }),
+      expect.objectContaining({ code: 'AB4908', message: expect.stringContaining('uses globs'), severity: 'warning' }),
+    ]);
+    expect(validateSource(loadedProject(root, ['ruleshost']), { rules: [{ ...rule, authoredTargets: ['ruleshost'] }], skills: [] }, rulesOnly)).toEqual([
+      expect.objectContaining({ code: 'AB4907', severity: 'error', target: 'ruleshost' }),
+      expect.objectContaining({ code: 'AB4907', severity: 'error' }),
+      expect.objectContaining({ code: 'AB4907', severity: 'error' }),
+    ]);
+  });
+});
+
 it('normalizes peeled rule targets and reports unknown, unavailable, and duplicate rules', async () => {
   await withProject(async (root) => {
     const rule = (
