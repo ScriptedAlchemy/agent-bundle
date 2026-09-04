@@ -1,9 +1,12 @@
-import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
 import { createJiti } from 'jiti';
 
 import type { AgentBundleDevRuntimeConfig } from '../core/types.ts';
+import type { PlatformRun } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import type { DevRuntimeDescriptor } from './runtime-protocol.ts';
 import type { DevRuntimeProvider } from './runtime-provider.ts';
 import { YieldableFrameworkError } from '../effect/errors.ts';
@@ -104,7 +107,11 @@ const namedProviderFactory = (module: ProviderModule): (() => unknown) => {
   return entry.value as () => unknown;
 };
 
-const containedProviderPath = async (projectRoot: string, declaration: AgentBundleDevRuntimeConfig): Promise<string> => {
+const containedProviderPath = async (
+  projectRoot: string,
+  declaration: AgentBundleDevRuntimeConfig,
+  run: PlatformRun,
+): Promise<string> => {
   if (!nonemptyString(declaration.provider)) {
     throw new DevRuntimeProviderLoadError('Development runtime provider must be a nonempty project-relative module path.');
   }
@@ -118,10 +125,10 @@ const containedProviderPath = async (projectRoot: string, declaration: AgentBund
   let canonicalRoot: string;
   let canonicalProvider: string;
   try {
-    [canonicalRoot, canonicalProvider] = await Promise.all([
-      realpath(lexicalRoot),
-      realpath(lexicalProvider),
-    ]);
+    [canonicalRoot, canonicalProvider] = await run(Effect.flatMap(FileSystem.FileSystem, (fs) => Effect.all([
+      fs.realPath(lexicalRoot),
+      fs.realPath(lexicalProvider),
+    ], { concurrency: 'unbounded' })));
   } catch {
     throw new DevRuntimeProviderLoadError('Development runtime provider must name an existing regular file inside the project root.');
   }
@@ -129,12 +136,13 @@ const containedProviderPath = async (projectRoot: string, declaration: AgentBund
     throw new DevRuntimeProviderLoadError('Development runtime provider must resolve inside the project root.');
   }
 
+  let regularFile: boolean;
   try {
-    if (!(await stat(canonicalProvider)).isFile()) {
-      throw new DevRuntimeProviderLoadError('Development runtime provider must name an existing regular file.');
-    }
-  } catch (error) {
-    if (error instanceof DevRuntimeProviderLoadError) throw error;
+    regularFile = (await run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(canonicalProvider)))).type === 'File';
+  } catch {
+    throw new DevRuntimeProviderLoadError('Development runtime provider must name an existing regular file.');
+  }
+  if (!regularFile) {
     throw new DevRuntimeProviderLoadError('Development runtime provider must name an existing regular file.');
   }
   return canonicalProvider;
@@ -145,8 +153,9 @@ export const resolveDevRuntimeProvider = async (
   projectRoot: string,
   declaration: AgentBundleDevRuntimeConfig,
   importer: DevRuntimeModuleImporter = importProviderModule,
+  platformRuntime?: DevPlatformRuntime,
 ): Promise<DevRuntimeProvider> => {
-  const providerPath = await containedProviderPath(projectRoot, declaration);
+  const providerPath = await containedProviderPath(projectRoot, declaration, platformRunOf(platformRuntime));
   let loaded: ProviderModule;
   try {
     loaded = await importer(providerPath);

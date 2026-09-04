@@ -99,13 +99,22 @@ describe('the compiled test manifest', () => {
       'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
-    expect(manifest.providers).toEqual([{
-      id: 'provider:library-tooling',
-      key: 'libraryTooling',
-      name: 'library-tooling',
-      relativePath: 'src/providers/library-tooling.ts',
-      source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
-    }]);
+    expect(manifest.providers).toEqual([
+      {
+        id: 'provider:library-tooling',
+        key: 'libraryTooling',
+        name: 'library-tooling',
+        relativePath: 'src/providers/library-tooling.ts',
+        source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
+      },
+      {
+        id: 'provider:request-view',
+        key: 'requestView',
+        name: 'request-view',
+        relativePath: 'src/providers/request-view.ts',
+        source: resolve(fixtureRoot, 'src/providers/request-view.ts'),
+      },
+    ]);
     // Layouts are never routes; the manifest carries them separately, ordered by id.
     expect(manifest.layouts).toEqual([
       {
@@ -472,6 +481,7 @@ describe('the generated route registry', () => {
 
     expect(providerLoaders).toContain('"provider:library-tooling": () => import(');
     expect(providerLoaders).toContain('/src/providers/library-tooling.ts');
+    expect(providerLoaders).toContain('"provider:request-view": () => import(');
     // A project without providers emits no loader table at all.
     expect(routeTestSetupSource({ ...manifest, providers: undefined })).not.toContain('providerLoaders');
   });

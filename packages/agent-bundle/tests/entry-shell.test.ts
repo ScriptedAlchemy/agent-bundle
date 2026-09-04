@@ -603,12 +603,14 @@ it('generates deterministic per-request provider execution in the shared Flight 
     source.indexOf('/project/src/providers/zeta.ts'),
   );
   expect(source).toContain('key: "alphaValue"');
-  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: plugin, signal: controller.signal })');
-  // The server's observed anchor rides each render message; the worker's own resolution backs it.
+  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
+  // The server's observed anchor rides each render message; the worker's own
+  // resolution backs it, and the request view hands the same value to providers.
   expect(source).toContain('const plugin = message.plugin ?? pluginRoot.identity;');
   expect(source).toContain('Context provider "');
   expect(source).toContain('provider.source');
-  expect(source).toContain('providers: providerValues');
+  expect(source).toContain('providers: async (request) => {');
+  expect(source).toContain('return providerValues;');
 });
 
 it('mounts deterministic per-request providers for plain routed CLI commands (#313)', () => {
@@ -655,14 +657,19 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   );
   expect(withProviders).toContain('key: "alphaValue"');
   expect(withProviders).toContain(
-    "await provider.module.default({ invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }, plugin: pluginRoot.identity, signal: context.signal })",
+    "await provider.module.default({ ...request, invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } } })",
   );
   expect(withProviders).toContain('must default-export a factory.');
   expect(withProviders).toContain('failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })');
-  expect(withProviders).toContain('providers: providerValues,');
-  // Providers run once per request, before the request scope opens.
+  // Providers run once per request as the request's own resolver (#459): the
+  // loop is the `providers` field of the `runAgentRequest` init, so the runtime
+  // runs it after the identity axes are frozen and the notice lease is open.
+  expect(withProviders).toContain('providers: async (request) => {');
+  expect(withProviders.indexOf('const result = await runAgentRequest({')).toBeLessThan(
+    withProviders.indexOf('for (const provider of providers)'),
+  );
   expect(withProviders.indexOf('for (const provider of providers)')).toBeLessThan(
-    withProviders.indexOf('const result = await runAgentRequest({'),
+    withProviders.indexOf('}, async () => route.module.default('),
   );
   // The request's hit is claimed and snapshotted in one synchronous step
   // before any await, so concurrent requests cannot move each other's value.
@@ -712,8 +719,8 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
   expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
     source.indexOf('/project/src/providers/zeta.ts'),
   );
-  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: pluginRoot.identity, signal: controller.signal })');
-  expect(source).toContain('providers: providerValues');
+  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
+  expect(source).toContain('providers: async (request) => {');
   expect(source).toContain('processLifetime');
 
   // The rendered-session bridge must post the invocation the worker's
@@ -771,42 +778,52 @@ it('keeps the generated provider loop and the in-process execution helper identi
     'provider.source': 'src/providers/alpha-value.ts',
   })).toBe(providerFailedMessage('alphaValue', 'src/providers/alpha-value.ts', new Error('boom')));
 
-  // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects.
+  // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects,
+  // and the request view spread onto the factory context beside the surface invocation (#459).
   const lifetime = { hits: 3, instanceId: 'instance-1', pid: 42 };
+  const signal = new AbortController().signal;
+  // The runtime omits `notices`/`state` when the request mounted none; here state is mounted, notices not.
+  const plugin = { source: 'derived', state: 'available', value: { root: '/plugin', stateRoot: '/plugin/state' } } as const;
+  const request = {
+    host: { source: 'native', state: 'available', value: { name: 'claude' } },
+    lineage: { reason: 'not-provided', state: 'unavailable' },
+    plugin,
+    session: { reason: 'not-provided', state: 'unavailable' },
+    signal,
+    state: { lifetime: 'request', read: async () => ({ revision: 0, state: {} }) },
+    workspace: { source: 'derived', state: 'available', value: { root: '/w' } },
+  } as const;
   const calls: string[] = [];
-  const plugin = { source: 'derived', state: 'available', value: { root: '/plugin', stateRoot: '/plugin/state' } };
   const values = await executeProviders({
     invocation: { kind: 'cli', props: { args: [], command: 'report' } },
-    plugin,
     processLifetime: lifetime,
     providers: [
       { key: 'alphaValue', module: { default: (context: { invocation: unknown; plugin: unknown }) => { calls.push('alphaValue'); return [context.invocation, context.plugin]; } }, source: 'src/providers/alpha-value.ts' },
-      { key: 'zeta', module: { default: async () => { calls.push('zeta'); return 'z'; } }, source: 'src/providers/zeta.ts' },
+      { key: 'zeta', module: { default: async (context: Record<string, unknown>) => { calls.push('zeta'); return Object.keys(context).sort(); } }, source: 'src/providers/zeta.ts' },
     ],
-    signal: new AbortController().signal,
+    request,
   });
   expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
-  // Providers receive the invocation and the observed plugin root (#468) — the same value the request scope publishes.
+  // Providers receive the invocation and, through the request view, the observed
+  // plugin root (#468) — the same value the request scope publishes.
   expect(values).toEqual({
     alphaValue: [{ kind: 'cli', props: { args: [], command: 'report' } }, plugin],
     processLifetime: { hits: 3, instanceId: 'instance-1', pid: 42 },
-    zeta: 'z',
+    zeta: ['host', 'invocation', 'lineage', 'plugin', 'session', 'signal', 'state', 'workspace'],
   });
-  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: pluginRoot.identity, signal: controller.signal })');
+  expect(source).toContain('await provider.module.default({ ...request, invocation: message.invocation })');
   expect(calls).toEqual(['alphaValue', 'zeta']);
   await expect(executeProviders({
     invocation: undefined,
-    plugin: undefined,
     processLifetime: lifetime,
     providers: [{ key: 'zeta', module: {}, source: 'src/providers/zeta.ts' }],
-    signal: new AbortController().signal,
+    request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) must default-export a factory.');
   await expect(executeProviders({
     invocation: undefined,
-    plugin: undefined,
     processLifetime: lifetime,
     providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
-    signal: new AbortController().signal,
+    request,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) failed: boom');
 });
 

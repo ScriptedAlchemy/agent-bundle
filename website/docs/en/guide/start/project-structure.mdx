@@ -54,7 +54,7 @@ my-plugin/
 | `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed-CLI commands, projected MCP commands, and rendered scripts. Event routes and browser Apps are never wrapped. | Rename to `_layout.tsx`. |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode. |
 | `src/state.ts` | Project state: default-exports `defineState`. Generated MCP, routed-CLI, and rendered-script request scopes mount it. | `state: false`, or rename to `_state.ts`. |
-| `src/providers/<name>.{ts,tsx}` | A request-context provider mounted at `providers.<camelCaseName>` on the request handle. | Prefix the file with `_`. |
+| `src/providers/<name>.{ts,tsx}` | A request-context provider mounted at `providers.<camelCaseName>` on the request handle; its factory receives the request's identity, lineage, and read-only state/notice handles. | Prefix the file with `_`. |
 | `assets/` | Static resources copied byte-for-byte into every target artifact's `assets/` directory. | Declare a top-level `assets` list instead. |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly; the state convention

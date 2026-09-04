@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { lstat, open, realpath, rm } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 
+import { Effect, FileSystem } from 'effect';
+
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
+import { type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import { digest } from '../../core/digest.ts';
@@ -152,6 +157,8 @@ export interface EvalServiceOptions {
   readonly now?: () => Date;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly targets?: readonly string[];
 }
 
@@ -447,6 +454,7 @@ export class EvalService {
   readonly #now: () => Date;
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
+  readonly #run: PlatformRun;
   readonly #targets: readonly string[] | undefined;
   readonly #eventSubscriptions = new Map<string, Set<PendingEvalEventSubscription>>();
   readonly #activeRuns = new Map<string, ActiveEvalRun>();
@@ -461,6 +469,7 @@ export class EvalService {
     this.#now = options.now ?? (() => new Date());
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#run = platformRunOf(options.platformRuntime);
     this.#targets = options.targets;
   }
 
@@ -660,7 +669,7 @@ export class EvalService {
     const missing = missingArtifactTargets(planned, artifact);
     if (missing.length > 0) {
       // Nothing owns this directory yet, so the abandoned artifact copy is removed.
-      await rm(directory, { force: true, recursive: true });
+      await this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(directory, { force: true, recursive: true })));
       throw serviceError(
         'EVAL_TARGET_MISSING',
         `The evaluated artifact has no target for ${JSON.stringify(missing)}. Build the pinned host targets before evaluating them.`,
@@ -1057,6 +1066,8 @@ export class EvalService {
   ): Promise<EvalArtifactReader> {
     const artifactRoot = join(directory, 'artifacts');
     const target = join(directory, ...segments);
+    // Stays on `node:fs` (keep-raw list): an `O_NOFOLLOW` descriptor whose
+    // `dev`/`ino`/`nlink` identity is checked against the surrounding `lstat`s.
     await assertNoSymlinkedArtifactPath(this.#projectRoot, target);
     const before = await lstat(target);
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximumArtifactBytes) {

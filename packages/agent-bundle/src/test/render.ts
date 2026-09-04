@@ -1129,14 +1129,12 @@ export const prepareCliRenderHost = async (
         requestInit: async (request) => {
           const root = process.cwd();
           const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
-          const providers = await mountProviders({
+          const providers = mountProviders({
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
-            plugin,
             processHit: claimProcessHit(options.processLifetime),
             provenance: { ...options.provenance, routeId: command.routeId },
-            signal: request.signal,
           });
           return {
             capabilities: {
@@ -1330,14 +1328,12 @@ export const prepareScriptRenderHost = async (
             // The generated script's render worker hands its providers the
             // `script` invocation with the path-derived name, never the route id.
             const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
-            const providers = await mountProviders({
+            const providers = mountProviders({
               explicit: context.providers,
               invocation,
               manifest: options.manifest,
-              plugin,
               processHit: claimProcessHit(options.processLifetime),
               provenance: options.provenance,
-              signal: request.signal,
             });
             return {
               capabilities: {
@@ -1460,14 +1456,12 @@ const prepareRender = async (
       ...mounted.context,
       // The render invocation is exactly what the generated Flight worker
       // receives as `message.invocation`, so providers see the same shape.
-      providers: await mountProviders({
+      providers: mountProviders({
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
-        plugin,
         processHit: claimProcessHit(processLifetime),
         provenance: resolved.provenance,
-        signal: request.signal,
       }),
       invocation: {
         ...requestInvocation(request.invocation, resolved.provenance.routeId, surface),
