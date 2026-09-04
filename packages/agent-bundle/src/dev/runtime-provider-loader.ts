@@ -6,6 +6,7 @@ import { createJiti } from 'jiti';
 import type { AgentBundleDevRuntimeConfig } from '../core/types.ts';
 import type { DevRuntimeDescriptor } from './runtime-protocol.ts';
 import type { DevRuntimeProvider } from './runtime-provider.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 type ProviderModule = Readonly<{ createDevRuntimeProvider?: unknown }>;
 
@@ -16,7 +17,7 @@ const importProviderModule: DevRuntimeModuleImporter = async (path) => {
   return jiti.import<ProviderModule>(path);
 };
 
-export class DevRuntimeProviderLoadError extends Error {
+export class DevRuntimeProviderLoadError extends YieldableFrameworkError {
   readonly code = 'AB8200' as const;
 
   constructor(message: string, options?: ErrorOptions) {

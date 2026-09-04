@@ -27,6 +27,7 @@ import type {
 import { isRecord } from '../core/strict-json.ts';
 import { RuntimeGenerationStore, type RuntimeGeneration } from './runtime-generation-store.ts';
 import type { JsonObject, JsonValue } from './types.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 const maxRetainedResults = 64;
 const restartDrainTimeoutMs = 10_000;
@@ -158,7 +159,7 @@ export interface RuntimeMcpRegistryCloseFailure {
   readonly resource: string;
 }
 
-export class RuntimeMcpRegistryCloseError extends Error {
+export class RuntimeMcpRegistryCloseError extends YieldableFrameworkError {
   readonly failures: readonly RuntimeMcpRegistryCloseFailure[];
 
   constructor(failures: readonly RuntimeMcpRegistryCloseFailure[]) {
@@ -174,7 +175,7 @@ export type RuntimeMcpRegistryErrorCode =
   | 'RUNTIME_MCP_REGISTRY_INVALID'
   | 'RUNTIME_MCP_REGISTRY_NOT_FOUND';
 
-export class RuntimeMcpRegistryError extends Error {
+export class RuntimeMcpRegistryError extends YieldableFrameworkError {
   readonly code: RuntimeMcpRegistryErrorCode;
 
   constructor(code: RuntimeMcpRegistryErrorCode, message: string) {

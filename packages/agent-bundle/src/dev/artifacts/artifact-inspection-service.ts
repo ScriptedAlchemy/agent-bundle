@@ -6,7 +6,6 @@ import {
   type ValidatedArtifactSnapshot,
 } from '../../build/validate-artifact.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
-import { CodedError } from '../../core/errors.ts';
 import type { ProjectContext } from '../../core/project-context.ts';
 import { EpochReference, EpochStore } from '../epoch-store.ts';
 import { artifactScriptCatalog } from './artifact-script-catalog.ts';
@@ -29,6 +28,7 @@ import type {
   ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
 } from '../types.ts';
+import { YieldableCodedError } from '../../effect/errors.ts';
 
 export type ArtifactInspectionServiceErrorCode =
   | 'ARTIFACT_INSPECTION_INVALID'
@@ -58,7 +58,7 @@ const snapshotDiagnostic = (diagnostic: Diagnostic): Diagnostic => Object.freeze
   ...(diagnostic.target === undefined ? {} : { target: diagnostic.target }),
 });
 
-export class ArtifactInspectionServiceError extends CodedError<ArtifactInspectionServiceErrorCode> {
+export class ArtifactInspectionServiceError extends YieldableCodedError<ArtifactInspectionServiceErrorCode> {
   readonly diagnostics: readonly Diagnostic[];
 
   constructor(code: ArtifactInspectionServiceErrorCode, message: string, diagnostics: readonly Diagnostic[]) {
