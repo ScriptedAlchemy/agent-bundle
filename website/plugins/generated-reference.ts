@@ -113,6 +113,9 @@ const code = (text: string): string => `\`${text.replaceAll('|', '\\|')}\``;
 const codeList = (values: readonly JsonValue[]): string =>
   values.map(value => code(String(value))).join(', ');
 
+const detailValueCell = (value: JsonValue): string =>
+  Array.isArray(value) ? codeList(value) : code(isObject(value) ? JSON.stringify(value) : String(value));
+
 const table = (headers: readonly string[], rows: readonly (readonly string[])[]): string => {
   const line = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
   return [
@@ -143,7 +146,7 @@ const messages = {
     lineageDetails: 'Lineage row details',
     pluginComponents: 'Plugin components',
     pluginComponentsIntro:
-      'The `plugin` section of each table, flattened to dotted capability paths. Boolean rows record a component the adapter emits; rows with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
+      'The `plugin` section of each table, flattened to dotted capability paths and grouped by top-level key. Boolean entries record a component the adapter emits; entries with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
     headers: {
       lineageRow: 'Lineage row',
       host: 'Host',
@@ -156,8 +159,6 @@ const messages = {
       scopes: 'Scopes',
       source: 'Source',
       token: 'Token',
-      capability: 'Capability',
-      detail: 'Detail',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
       tokenFields: 'Fields accepting path tokens',
@@ -225,7 +226,7 @@ const messages = {
     lineageDetails: '谱系行详情',
     pluginComponents: '插件组件',
     pluginComponentsIntro:
-      '每张表的 `plugin` 部分，按点分能力路径展开。布尔行表示适配器会发出的组件；带状态的行记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
+      '每张表的 `plugin` 部分，按点分能力路径展开并按顶层键分组。布尔条目表示适配器会发出的组件；带状态的条目记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
     headers: {
       lineageRow: '谱系行',
       host: '宿主',
@@ -238,8 +239,6 @@ const messages = {
       scopes: '作用域',
       source: '来源',
       token: '令牌',
-      capability: '能力',
-      detail: '说明',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
       tokenFields: '接受路径令牌的字段',
@@ -351,8 +350,8 @@ const eventRoutesOf = (data: JsonObject): JsonObject => asObject(asObject(data.h
 
 interface FlattenedRow {
   readonly path: string;
-  readonly state: string;
-  readonly detail: string;
+  readonly state?: string;
+  readonly detail?: string;
 }
 
 function flattenPlugin(value: JsonObject, prefix: string, m: Messages, rows: FlattenedRow[]): void {
@@ -368,34 +367,37 @@ function flattenPlugin(value: JsonObject, prefix: string, m: Messages, rows: Fla
           if (detailKey === 'state' || detailKey === 'reason' || detailKey === 'evidence') {
             continue;
           }
-          if (Array.isArray(detailValue)) {
-            details.push(`${code(detailKey)}: ${codeList(detailValue)}`);
-          } else if (isObject(detailValue)) {
-            details.push(`${code(detailKey)}: ${code(JSON.stringify(detailValue))}`);
-          } else {
-            details.push(`${code(detailKey)}: ${code(String(detailValue))}`);
+          // One line per object member; a stringified object is one unbreakable token.
+          const members = isObject(detailValue)
+            ? Object.entries(detailValue).map(([key, value]) => [`${detailKey}.${key}`, value] as const)
+            : [[detailKey, detailValue] as const];
+          for (const [key, value] of members) {
+            details.push(`${code(key)}: ${detailValueCell(value)}`);
           }
         }
         if (Array.isArray(entry.evidence)) {
           details.push(m.evidenceNotes(entry.evidence.length));
         }
-        rows.push({ detail: details.join('<br />'), path: dotted, state: entry.state });
+        rows.push({ detail: details.join(' · '), path: dotted, state: entry.state });
         continue;
       }
       flattenPlugin(entry, dotted, m, rows);
       continue;
     }
     if (Array.isArray(entry)) {
-      rows.push({ detail: codeList(entry), path: dotted, state: m.notApplicable });
+      rows.push({ detail: codeList(entry), path: dotted });
       continue;
     }
     if (typeof entry === 'boolean') {
-      rows.push({ detail: m.notApplicable, path: dotted, state: entry ? 'supported' : 'unavailable' });
+      rows.push({ path: dotted, state: entry ? 'supported' : 'unavailable' });
       continue;
     }
-    rows.push({ detail: code(String(entry)), path: dotted, state: m.notApplicable });
+    rows.push({ detail: code(String(entry)), path: dotted });
   }
 }
+
+const capabilityItem = ({ path, state, detail }: FlattenedRow): string =>
+  `- ${code(path)}${state ? ` **${state}**` : ''}${detail ? ` — ${detail}` : ''}`;
 
 function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string {
   const sections: string[] = [];
@@ -530,12 +532,13 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
     const rows: FlattenedRow[] = [];
     flattenPlugin(asObject(host.data.plugin), '', m, rows);
     sections.push(`### ${hostHeader(host)}\n`);
-    sections.push(
-      table(
-        [m.headers.capability, m.headers.state, m.headers.detail],
-        rows.map(row => [code(row.path), row.state, row.detail]),
-      ),
-    );
+    // One heading per top-level key, one list item per capability: a
+    // 150-row three-column table scrolls sideways and has no anchors.
+    const groups = Map.groupBy(rows, row => row.path.split('.')[0] ?? row.path);
+    for (const [group, groupRows] of groups) {
+      sections.push(`#### ${group}\n`);
+      sections.push(groupRows.map(capabilityItem).join('\n'));
+    }
   }
 
   return `${sections.join('\n\n')}\n`;
