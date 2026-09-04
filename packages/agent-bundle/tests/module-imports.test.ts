@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import { sha256Hex } from '../src/core/digest.ts';
-import { readModuleImports, rememberedModuleImports } from '../src/build/module-imports.ts';
+import { readModuleImports } from '../src/build/module-imports.ts';
 
 const source = [
   "import { a } from './a.mjs';",
@@ -26,26 +26,33 @@ it('reports every import with its kind and literal specifier', async () => {
 it('remembers imports by digest and check level so the same bytes are lexed once per process', async () => {
   const bytes = `${source}// remembered\n`;
   const sha256 = sha256Hex(bytes);
-  expect(rememberedModuleImports('lexed', sha256)).toBeUndefined();
   const imports = await readModuleImports(bytes, { check: 'lexed', sha256 });
-  expect(rememberedModuleImports('lexed', sha256)).toBe(imports);
-  // A full parse is a stronger claim than a lex; each level is remembered on its own.
-  expect(rememberedModuleImports('parsed', sha256)).toBeUndefined();
   expect(Object.isFrozen(imports)).toBe(true);
+  // The same bytes at the same level come back as the remembered object, even from a different source string.
+  expect(await readModuleImports('/* replaced */', { check: 'lexed', sha256 })).toBe(imports);
+  // A full parse is a stronger claim than a lex: a lexed result never answers a parsed request …
+  const parsed = await readModuleImports(bytes, { check: 'parsed', sha256 });
+  expect(parsed).not.toBe(imports);
+  expect(parsed).toEqual(imports);
+  // … but a parsed result answers a later lexed request.
+  const fresh = `${source}// parsed first\n`;
+  const freshParsed = await readModuleImports(fresh, { check: 'parsed', sha256: sha256Hex(fresh) });
+  expect(await readModuleImports(fresh, { check: 'lexed', sha256: sha256Hex(fresh) })).toBe(freshParsed);
   // Without a digest nothing is remembered.
-  await readModuleImports(`${source}// unkeyed\n`, { check: 'lexed' });
-  expect(rememberedModuleImports('lexed', sha256Hex(`${source}// unkeyed\n`))).toBeUndefined();
+  const unkeyed = `${source}// unkeyed\n`;
+  const first = await readModuleImports(unkeyed, { check: 'lexed' });
+  expect(await readModuleImports(unkeyed, { check: 'lexed' })).not.toBe(first);
 });
 
 it('rejects what each check level rejects and remembers nothing for invalid input', async () => {
   const unterminated = 'export const broken = `;\n';
   const badStatement = 'export const broken = ;\n';
   await expect(readModuleImports(unterminated, { check: 'lexed', sha256: sha256Hex(unterminated) })).rejects.toThrow();
-  expect(rememberedModuleImports('lexed', sha256Hex(unterminated))).toBeUndefined();
+  await expect(readModuleImports(unterminated, { check: 'lexed', sha256: sha256Hex(unterminated) })).rejects.toThrow();
   // The lexer accepts a bare statement error a bundler never emits; the full parse does not.
   expect(await readModuleImports(badStatement, { check: 'lexed' })).toEqual([]);
   await expect(readModuleImports(badStatement, { check: 'parsed', sha256: sha256Hex(badStatement) })).rejects.toThrow();
-  expect(rememberedModuleImports('parsed', sha256Hex(badStatement))).toBeUndefined();
+  await expect(readModuleImports(badStatement, { check: 'parsed', sha256: sha256Hex(badStatement) })).rejects.toThrow();
   // A hashbang line is legal ESM input for both levels.
   expect(await readModuleImports("#!/usr/bin/env node\nimport './cli.mjs';\n", { check: 'parsed' })).toEqual([
     { kind: 'static', specifier: './cli.mjs' },

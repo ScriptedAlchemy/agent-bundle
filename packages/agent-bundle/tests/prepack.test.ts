@@ -164,119 +164,106 @@ it('reports stale artifact hashes as AB7011', async () => {
   }
 });
 
-it('reports source-relative or unpacked package bins as AB7012', async () => {
+/** Runs `run` against `package.json` rewritten by `mutate`, restoring the original afterwards. */
+const withPackageDocument = async (
+  mutate: (document: Record<string, unknown>) => void,
+  run: () => Promise<void>,
+): Promise<void> => {
   const packagePath = join(projectRoot, 'package.json');
   const original = await readFile(packagePath, 'utf8');
   const document = JSON.parse(original) as Record<string, unknown>;
-  document.bin = { 'installer-fixture': './src/cli.ts' };
+  mutate(document);
   await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
   try {
+    await run();
+  } finally {
+    await writeFile(packagePath, original);
+  }
+};
+
+const withCode = (reported: readonly Diagnostic[], code: string): readonly Diagnostic[] =>
+  reported.filter((diagnostic) => diagnostic.code === code);
+
+it('reports source-relative or unpacked package bins as AB7012', () => withPackageDocument(
+  (document) => { document.bin = { 'installer-fixture': './src/cli.ts' }; },
+  async () => {
     expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB7012' }));
-  } finally {
-    await writeFile(packagePath, original);
-  }
-});
+  },
+));
 
-it('reports package, model, host, and provenance version disagreement as AB7013', async () => {
-  const packagePath = join(projectRoot, 'package.json');
-  const original = await readFile(packagePath, 'utf8');
-  const document = JSON.parse(original) as Record<string, unknown>;
-  document.version = '9.0.0';
-  await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
-  try {
+it('reports package, model, host, and provenance version disagreement as AB7013', () => withPackageDocument(
+  (document) => { document.version = '9.0.0'; },
+  async () => {
     expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB7013' }));
-  } finally {
-    await writeFile(packagePath, original);
-  }
-});
+  },
+));
 
-it('reports installed dependencies no packed JavaScript imports as AB7014, per field', async () => {
-  const packagePath = join(projectRoot, 'package.json');
-  const original = await readFile(packagePath, 'utf8');
-  const document = JSON.parse(original) as Record<string, unknown>;
-  document.dependencies = { effect: '4.0.0', zod: '4.5.4' };
-  document.peerDependencies = { react: '19.2.8' };
-  document.devDependencies = { 'agent-bundle': 'workspace:*' };
-  await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
-  try {
-    const reported = await diagnostics();
-    expect(reported).toContainEqual(expect.objectContaining({
-      code: 'AB7014',
-      message: expect.stringContaining('dependencies names packages no packed JavaScript imports: "effect", "zod"'),
-      recovery: expect.stringContaining('devDependencies'),
-      severity: 'error',
-    }));
-    expect(reported).toContainEqual(expect.objectContaining({
-      code: 'AB7014',
-      message: expect.stringContaining('peerDependencies names packages no packed JavaScript imports: "react"'),
-    }));
-    // devDependencies never reach a consumer and are not inspected.
-    expect(reported.filter((diagnostic) => diagnostic.code === 'AB7014')).toHaveLength(2);
-    expect(reported.filter((diagnostic) => diagnostic.code === 'AB7015')).toHaveLength(0);
-  } finally {
-    await writeFile(packagePath, original);
-  }
-});
+it('reports installed dependencies no packed JavaScript imports as AB7014, per field', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { zod: '4.5.4', effect: '4.0.0' };
+    document.peerDependencies = { react: '19.2.8' };
+    document.devDependencies = { 'agent-bundle': 'workspace:*' };
+  },
+  async () => {
+    const reported = withCode(await diagnostics(), 'AB7014');
+    // One diagnostic per field; devDependencies never reach a consumer and are not inspected.
+    expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
+      expect.stringMatching(/^package\.json dependencies .*"effect", "zod"/u),
+      expect.stringMatching(/^package\.json peerDependencies .*"react"/u),
+    ]);
+    expect(reported.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+    expect(reported[0]?.recovery).toContain('devDependencies');
+  },
+));
 
-it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifiers as AB7015', async () => {
-  const packagePath = join(projectRoot, 'package.json');
-  const original = await readFile(packagePath, 'utf8');
-  const document = JSON.parse(original) as Record<string, unknown>;
-  document.dependencies = {
-    '@agent-bundle/runtime': 'https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@42539ff',
-    bashjsast: 'github:woolkingx/bashjsast#131f4b6',
-    local: 'file:../local',
-    shorthand: 'owner/repo',
-    // Registry forms are not reported.
-    alias: 'npm:effect@^4.0.0',
-    tagged: 'latest',
-    versioned: '^1.2.3',
-    workspace: 'workspace:*',
-  };
-  await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
-  try {
-    const reported = await diagnostics();
-    const nonRegistry = reported.filter((diagnostic) => diagnostic.code === 'AB7015');
-    expect(nonRegistry).toEqual([expect.objectContaining({
-      message: expect.stringContaining(
-        '"@agent-bundle/runtime" -> "https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@42539ff", '
-        + '"bashjsast" -> "github:woolkingx/bashjsast#131f4b6", "local" -> "file:../local", "shorthand" -> "owner/repo"',
-      ),
-      recovery: expect.stringContaining('registry'),
-      severity: 'error',
-    })]);
-    expect(nonRegistry[0]?.message).not.toContain('"alias"');
-    expect(nonRegistry[0]?.message).not.toContain('"workspace"');
-  } finally {
-    await writeFile(packagePath, original);
-  }
-});
+it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifiers as AB7015', () => withPackageDocument(
+  (document) => {
+    document.dependencies = {
+      '@agent-bundle/runtime': 'https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@42539ff',
+      bashjsast: 'github:woolkingx/bashjsast#131f4b6',
+      local: 'file:../local',
+      // Registry forms are not reported.
+      alias: 'npm:effect@^4.0.0',
+      versioned: '^1.2.3',
+    };
+    document.optionalDependencies = { scp: 'git@github.com:owner/repo.git' };
+  },
+  async () => {
+    const reported = withCode(await diagnostics(), 'AB7015');
+    expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
+      expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*fails to fetch/u),
+    ]);
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local']) {
+      expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
+    }
+    expect(reported[0]?.message).not.toContain('"alias"');
+    expect(reported[0]?.message).not.toContain('"versioned"');
+    expect(reported[0]?.recovery).toContain('registry');
+  },
+));
 
-it('accepts a dependency that packed JavaScript imports or requires', async () => {
-  const packagePath = join(projectRoot, 'package.json');
-  const original = await readFile(packagePath, 'utf8');
-  const document = JSON.parse(original) as Record<string, unknown>;
-  document.dependencies = { 'left-pad': '^1.3.0', '@scope/required': '^2.0.0' };
-  await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
-  const consumer = join(projectRoot, 'dist', 'consumer.mjs');
-  await writeFile(consumer, [
-    'import leftPad from "left-pad/lib/index.js";',
-    'const { createRequire } = await import("node:module");',
-    'const require = createRequire(import.meta.url);',
-    'const required = require("@scope/required/subpath");',
-    '// import { Function } from "effect" -- a comment never counts.',
-    'export { leftPad, required };',
-    '',
-  ].join('\n'));
-  try {
-    const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.mjs' }] };
-    const reported = await diagnostics(pack);
-    expect(reported.filter((diagnostic) => diagnostic.code === 'AB7014')).toHaveLength(0);
-  } finally {
-    await rm(consumer, { force: true });
-    await writeFile(packagePath, original);
-  }
-});
+it('accepts a dependency that packed JavaScript imports or requires', () => withPackageDocument(
+  (document) => { document.dependencies = { 'left-pad': '^1.3.0', '@scope/required': '^2.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'consumer.mjs');
+    await writeFile(consumer, [
+      'import leftPad from "left-pad/lib/index.js";',
+      'const { createRequire } = await import("node:module");',
+      'const require = createRequire(import.meta.url);',
+      'const required = require("@scope/required/subpath");',
+      '// import { Function } from "effect" -- a comment never counts.',
+      'export { leftPad, required };',
+      '',
+    ].join('\n'));
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.mjs' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
 
 it('installs a real packed tarball and runs its Cursor installer from node_modules', async () => {
   const tarballs = join(cleanupRoot, 'tarballs');

@@ -33,6 +33,18 @@ const header = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
+/** The paragraph both marketplace hosts share: the framework CLI automates the host-native reinstall sequence. */
+const optionalCliReinstall = (host: 'claude' | 'codex'): string[] => [
+  `With the optional \`agent-bundle\` CLI, \`agent-bundle install ${host} --from ./\` runs this sequence`,
+  'automatically when the installed copy has the same version but a different content hash; `--replace`',
+  '(alias `--force`) forces it.',
+];
+
+const optionalCliUninstall = (host: 'claude' | 'codex'): string[] => [
+  `With the optional \`agent-bundle\` CLI, \`agent-bundle uninstall ${host} --from ./ --plan\` prints exactly what`,
+  `would be removed and \`agent-bundle uninstall ${host} --from ./\` reverses the recorded registrations.`,
+];
+
 const claudeInstructions = (model: NormalizedPlugin): string[] => [
   '## Claude Code',
   '',
@@ -57,9 +69,7 @@ const claudeInstructions = (model: NormalizedPlugin): string[] => [
   `claude plugin install ${pluginId(model)} --scope user`,
   '```',
   '',
-  'With the optional `agent-bundle` CLI, `agent-bundle install claude --from ./` runs this sequence',
-  'automatically when the installed copy has the same version but a different content hash; `--replace`',
-  '(alias `--force`) forces it.',
+  ...optionalCliReinstall('claude'),
   '',
   '### Uninstall',
   '',
@@ -72,8 +82,7 @@ const claudeInstructions = (model: NormalizedPlugin): string[] => [
   'runtime state (Claude orphans the cached copy, `state/` included, for its ~14-day grace period); omit it to',
   'remove `~/.claude/plugins/data/<id>/` immediately.',
   '',
-  'With the optional `agent-bundle` CLI, `agent-bundle uninstall claude --from ./ --plan` prints exactly what',
-  'would be removed and `agent-bundle uninstall claude --from ./` reverses the recorded registrations.',
+  ...optionalCliUninstall('claude'),
   `\`agent-bundle install claude\` records a receipt at \`~/.claude/agent-bundle/receipts/${model.metadata.name}.${marketplaceName(model)}.user.json\``,
   '(or under `$CLAUDE_CONFIG_DIR`; `user` is the install scope, pass `--scope project` or `--scope local` to match',
   'a scoped install), and `uninstall` consumes it, running the two commands above in order. Durable runtime state',
@@ -104,9 +113,7 @@ const codexInstructions = (model: NormalizedPlugin): string[] => [
   `codex plugin add ${pluginId(model)}`,
   '```',
   '',
-  'With the optional `agent-bundle` CLI, `agent-bundle install codex --from ./` runs this sequence',
-  'automatically when the installed copy has the same version but a different content hash; `--replace`',
-  '(alias `--force`) forces it.',
+  ...optionalCliReinstall('codex'),
   '',
   '### Uninstall',
   '',
@@ -118,8 +125,7 @@ const codexInstructions = (model: NormalizedPlugin): string[] => [
   'Codex 0.147.0 deletes the cached plugin tree, `state/` included, on `plugin remove` and has no keep-data',
   'option.',
   '',
-  'With the optional `agent-bundle` CLI, `agent-bundle uninstall codex --from ./ --plan` prints exactly what',
-  'would be removed and `agent-bundle uninstall codex --from ./` reverses the recorded registrations.',
+  ...optionalCliUninstall('codex'),
   `\`agent-bundle install codex\` records a receipt at \`~/.codex/agent-bundle/receipts/${model.metadata.name}.${marketplaceName(model)}.user.json\` (or`,
   'under `$CODEX_HOME`), and `uninstall` consumes it, running the two commands above in order. `--keep-data`',
   'cannot preserve durable state on Codex; the result says so (`unavailable`). A missing receipt or a cached',

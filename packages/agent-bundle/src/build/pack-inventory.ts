@@ -5,10 +5,17 @@ import { join, relative, resolve } from 'node:path';
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
-import { packDependencyDiagnostics } from './pack-dependencies.ts';
+import {
+  declaredDependencies,
+  importedPackageNames,
+  isRegistrySpecifier,
+  type DeclaredDependency,
+  type InstalledDependencyField,
+} from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
 
 export interface PackOutputFile {
@@ -19,9 +26,6 @@ export interface PackOutput {
   readonly filename: string;
   readonly files: readonly PackOutputFile[];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const packEntryName = (entry: unknown, key: string | undefined): string | undefined =>
   isRecord(entry) && typeof entry.name === 'string' ? entry.name : key;
@@ -129,6 +133,48 @@ const diagnostic = (code: string, message: string, recovery: string): Diagnostic
   severity: 'error',
 });
 
+const quoteAll = (values: readonly string[]): string => values.map((value) => JSON.stringify(value)).join(', ');
+
+/** One diagnostic per installed-dependency field that has offending entries, entries sorted by name. */
+const perField = (
+  entries: readonly DeclaredDependency[],
+  emit: (field: InstalledDependencyField, entries: readonly DeclaredDependency[]) => Diagnostic,
+): readonly Diagnostic[] => [...Map.groupBy(entries, (entry) => entry.field)]
+  .map(([field, own]) => emit(field, own.toSorted((left, right) => left.name.localeCompare(right.name))));
+
+/**
+ * `AB7014`/`AB7015`: the build inlines every dependency into `dist/bin` and
+ * the host packs, so an installed-dependency entry no packed JavaScript
+ * imports only makes every consumer's `npm install` fetch a build-time
+ * package — and fail outright when the specifier is one npm 12 refuses by
+ * default (git, remote tarball, path).
+ */
+const dependencyDiagnostics = async (
+  packageDocument: Readonly<Record<string, unknown>>,
+  packedPaths: readonly string[],
+  projectRoot: string,
+): Promise<readonly Diagnostic[]> => {
+  const declared = declaredDependencies(packageDocument);
+  if (declared.length === 0) return [];
+  const imported = await importedPackageNames({ paths: packedPaths, projectRoot });
+  return [
+    ...perField(declared.filter((dependency) => !imported.has(dependency.name)), (field, own) => diagnostic(
+      'AB7014',
+      `package.json ${field} names packages no packed JavaScript imports: ${quoteAll(own.map((dependency) => dependency.name))}. `
+        + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
+      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime.',
+    )),
+    ...perField(declared.filter((dependency) => !isRegistrySpecifier(dependency.specifier)), (field, own) => diagnostic(
+      'AB7015',
+      `package.json ${field} resolves packages outside a registry: ${own.map((dependency) =>
+        `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}. `
+        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote), so '
+        + (field === 'optionalDependencies' ? 'every consumer install fails to fetch them.' : 'consumers cannot install the package.'),
+      'Depend on a published registry version, or bundle the package and declare it under devDependencies.',
+    )),
+  ];
+};
+
 export const packInventoryDiagnostics = async (options: {
   readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
@@ -158,7 +204,7 @@ export const packInventoryDiagnostics = async (options: {
   if (missing.length > 0) {
     diagnostics.push(diagnostic(
       'AB7010',
-      `npm pack omits expected files: ${missing.map((path) => JSON.stringify(path)).join(', ')}.`,
+      `npm pack omits expected files: ${quoteAll(missing)}.`,
       'Add the exact paths (including dist and the artifact directory) to the package.json "files" allowlist.',
     ));
   }
@@ -171,7 +217,7 @@ export const packInventoryDiagnostics = async (options: {
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
       'AB7011',
-      `Artifact files no longer match their manifest hashes: ${stale.sort().map((path) => JSON.stringify(path)).join(', ')}.`,
+      `Artifact files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
       'Run agent-bundle prepack again without modifying generated artifacts.',
     ));
   }
@@ -216,11 +262,7 @@ export const packInventoryDiagnostics = async (options: {
     ));
   }
 
-  diagnostics.push(...await packDependencyDiagnostics({
-    packageDocument,
-    packedPaths: [...packed],
-    projectRoot,
-  }));
+  diagnostics.push(...await dependencyDiagnostics(packageDocument, [...packed], projectRoot));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));
 };
