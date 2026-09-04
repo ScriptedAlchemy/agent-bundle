@@ -579,21 +579,28 @@ const installScripts = ['preinstall', 'install', 'postinstall'] as const;
 const runSubcommand = String.raw`(?:run(?:-script)?|rum|urn)\b`;
 /** npm's direct script commands, each running the script of the same name (`t` and `tst` are `test`). */
 const directScriptCommand = String.raw`(?:test|tst|t|start|stop|restart)\b`;
-const shellQuotes = /^(["'])(.*)\1$/u;
 const delegatedRun = new RegExp(
   String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand}|${directScriptCommand})[^\s&|;]+\s+)*`
     + String.raw`(?:${runSubcommand}(?<rest>[^&|;\n]*)|(?<direct>${directScriptCommand}))`,
   'gu',
 );
 
+/** A single- or double-quoted shell segment; a word is a run of them and unquoted text with no whitespace between. */
+const shellQuoted = /"([^"\n]*)"|'([^'\n]*)'/gu;
+
 /**
  * A shell command's words: quoted arguments kept whole and unquoted (`node
- * "scripts/my install.cjs"` is two words), and the operators `&&`, `||`, `;`,
- * `|`, `&` split off even without surrounding whitespace (`node install.js&&echo
- * done` is four words).
+ * "scripts/my install.cjs"` is two words, `--import="./setup.mjs"` one), and
+ * the operators `&&`, `||`, `;`, `|`, `&` split off even without surrounding
+ * whitespace (`node install.js&&echo done` is four words). A newline is an
+ * operator too: it ends a command as `;` does, and is how `installScriptText`
+ * joins one script's body to the next.
  */
 const shellWords = (command: string): readonly string[] =>
-  Array.from(command.matchAll(/"[^"\n]*"|'[^'\n]*'|&&|\|\||[;|&]|[^\s"'&|;]+/gu), (match) => match[0].replace(shellQuotes, '$2'));
+  Array.from(
+    command.matchAll(/(?:"[^"\n]*"|'[^'\n]*'|[^\s"'&|;]+)+|&&|\|\||[;|&\n]/gu),
+    (match) => match[0].replace(shellQuoted, '$1$2'),
+  );
 
 /**
  * The text a consumer's install lifecycle executes: the lifecycle scripts,
@@ -660,28 +667,39 @@ const installScriptMentions = (text: string, executables: ExecutableCommands): r
     .map(([name]) => name);
 };
 
-const shellOperators = new Set(['&&', '||', ';', '|', '&']);
+const shellOperators = new Set(['&&', '||', ';', '|', '&', '\n']);
 /** Words a shell command may start with before the command proper: environment assignments, options, and wrappers that exec their argument. */
 const commandPrefix = /^(?:[A-Za-z_][A-Za-z0-9_]*=|-|npx$|bunx$|cross-env$|env$|exec$|dotenv$|nice$|time$)/u;
 const packageManagers = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const execSubcommands = new Set(['exec', 'dlx', 'x']);
 
+/** One simple command of a shell script: what it runs, and the words after it. */
+interface SimpleCommand {
+  /** The command proper, the directory dropped from a path (`./node_modules/.bin/tsc` is `tsc`). */
+  readonly command: string;
+  readonly operands: readonly string[];
+}
+
 /**
- * The command each simple command of a shell script runs: the first word of
- * each operator-separated segment after environment assignments and exec
- * wrappers (`FOO=1 npx tsc`, `pnpm exec -- tsc`, `cross-env CI=1 tsc`), the
- * directory dropped from a path (`./node_modules/.bin/tsc`).
+ * The simple commands of a shell script, one per operator-separated segment:
+ * the first word after environment assignments and exec wrappers (`FOO=1 npx
+ * tsc`, `pnpm exec -- tsc`, `cross-env CI=1 tsc`) is the command, the rest of
+ * the segment its operands.
  */
-const commandWords = (text: string): readonly string[] => {
-  const commands: string[] = [];
-  let atCommand = true;
+const simpleCommands = (text: string): readonly SimpleCommand[] => {
+  const commands: { readonly command: string; readonly operands: string[] }[] = [];
+  let current: (typeof commands)[number] | undefined;
   let skipSubcommand = false;
   for (const word of shellWords(text)) {
     if (shellOperators.has(word)) {
-      atCommand = true;
+      current = undefined;
+      skipSubcommand = false;
       continue;
     }
-    if (!atCommand) continue;
+    if (current !== undefined) {
+      current.operands.push(word);
+      continue;
+    }
     if (skipSubcommand) {
       skipSubcommand = false;
       if (execSubcommands.has(word)) continue;
@@ -691,19 +709,35 @@ const commandWords = (text: string): readonly string[] => {
       skipSubcommand = true;
       continue;
     }
-    commands.push(word.includes('/') ? posix.basename(word) : word);
-    atCommand = false;
+    current = { command: word.includes('/') ? posix.basename(word) : word, operands: [] };
+    commands.push(current);
   }
   return commands;
 };
 
-/** The inline programs a script hands to `node -e`/`--eval`/`-p`/`--print`. */
-const inlinePrograms = (text: string): readonly string[] => {
-  const words = shellWords(text);
-  return words.flatMap((word, index) => (
-    /^(?:-e|-p|--eval|--print)$/u.test(word) && index + 1 < words.length ? [words[index + 1] as string] : []
-  ));
-};
+/** Node's preloads, loaded before the program: `-r`/`--require` (CommonJS), `--import`, and `--loader`/`--experimental-loader` (ES modules). */
+const preloadOptions = /^(?:-r|--require|--import|--loader|--experimental-loader)$/u;
+/** Node's inline programs: `-e`/`--eval`, `-p`/`--print`, and the one short combination Node accepts, `-pe`. */
+const inlineOptions = /^(?:-e|--eval|-p|-pe|--print)$/u;
+
+/**
+ * The values a script gives one of `node`'s options, across every `node`
+ * command in command position: the next word (`-r dotenv/config`) or the
+ * assigned text (`--require=dotenv/config`), up to a `--`, after which Node
+ * reads no options. The program's own arguments are read too — Node has too
+ * many valued options to tell where the program starts — while the same flag
+ * on another command (`rm -r dist`) is never Node's.
+ */
+const nodeOptionValues = (commands: readonly SimpleCommand[], options: RegExp): readonly string[] =>
+  commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => {
+    const terminator = operands.indexOf('--');
+    const own = terminator === -1 ? operands : operands.slice(0, terminator);
+    return own.flatMap((word, index) => {
+      const assigned = /^(--[^=]+)=(.*)$/u.exec(word);
+      if (assigned !== null) return options.test(assigned[1] ?? '') ? [assigned[2] ?? ''] : [];
+      return options.test(word) && index + 1 < own.length ? [own[index + 1] as string] : [];
+    });
+  });
 
 /**
  * Dependencies a consumer's install lifecycle demonstrably needs: one of
@@ -713,22 +747,25 @@ const inlinePrograms = (text: string): readonly string[] => {
  * inline `node -e` program (`node -e "require('setup-tool')"`; a computed
  * load there may reach any declared package). An optional dependency npm
  * skipped after a failed fetch then fails the script, so this is what turns
- * a survivable `AB7015` fatal; `echo setup-tool` never does.
+ * a survivable `AB7015` fatal; `echo setup-tool` never does. The packages
+ * the files and preloads a `node` command runs then load are
+ * `installScriptModuleDependencies`'s.
  */
 const installScriptCommandDependencies = (
   text: string,
+  commands: readonly SimpleCommand[],
   executables: ExecutableCommands,
   declared: readonly string[],
 ): readonly string[] => {
   if (text === '') return [];
-  const commands = new Set(commandWords(text));
+  const run = new Set(commands.map(({ command }) => command));
   const words = shellWords(text);
   const names = new Set<string>();
   for (const [name, { commands: bins }] of executables) {
-    if (bins.some((command) => commands.has(command))) names.add(name);
+    if (bins.some((command) => run.has(command))) names.add(name);
     if (words.some((word) => word.replace(/^\.\//u, '').startsWith(`node_modules/${name}/`))) names.add(name);
   }
-  for (const program of inlinePrograms(text)) {
+  for (const program of nodeOptionValues(commands, inlineOptions)) {
     if (computedLoad(['require'], ['createRequire']).test(program)) for (const name of declared) names.add(name);
     for (const match of program.matchAll(literalLoad(['require'], ['createRequire']))) {
       const name = packageNameOf(decodeLiteral(match[2] ?? ''));
@@ -746,25 +783,34 @@ interface PackedModules {
 }
 
 /**
- * The `main` of every packed directory manifest other than the package's own
- * (`lib/package.json` with `"main": "setup.cjs"` → `lib` → `lib/setup.cjs`),
- * which Node consults before the `index.js` fallback when a directory is
- * required or run. `node_modules` manifests belong to bundled dependencies,
- * not to the package's own files.
+ * Directory → the `main` of its packed manifest (`lib/package.json` with
+ * `"main": "setup.cjs"` → `lib` → `lib/setup.cjs`), which Node consults before
+ * the `index.js` fallback when a directory is required or run: the package's
+ * own manifest for `.` (what `node .` runs), read from the document since
+ * the inventory's `package.json` is the package itself, and every other
+ * packed manifest outside `node_modules`, whose manifests belong to bundled
+ * dependencies.
  */
-const packedMains = async (paths: readonly string[], projectRoot: string): Promise<ReadonlyMap<string, string>> => {
+const packedMains = async (
+  paths: readonly string[],
+  projectRoot: string,
+  packageDocument: Readonly<Record<string, unknown>>,
+): Promise<ReadonlyMap<string, string>> => {
   const manifests = paths.filter((path) => /^(?!node_modules\/).+\/package\.json$/u.test(path));
   const entries = await Promise.all(manifests.map(async (path): Promise<readonly [string, string] | undefined> => {
     try {
       const parsed: unknown = JSON.parse(await readFile(resolve(projectRoot, path), 'utf8'));
       if (!isRecord(parsed) || typeof parsed.main !== 'string') return undefined;
       const directory = posix.dirname(path);
-      return [directory, posix.normalize(posix.join(directory, parsed.main))];
+      return [directory, posix.join(directory, parsed.main)];
     } catch {
       return undefined;
     }
   }));
-  return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== undefined));
+  return new Map([
+    ...(typeof packageDocument.main === 'string' ? [['.', posix.join('.', packageDocument.main)] as const] : []),
+    ...entries.filter((entry): entry is readonly [string, string] => entry !== undefined),
+  ]);
 };
 
 /**
@@ -772,79 +818,93 @@ const packedMains = async (paths: readonly string[], projectRoot: string): Promi
  * for `require("./lib")` or `node scripts/install`: the exact file, the `.js`
  * extension, then the directory — its manifest's `main` as a file, with
  * `.js`, or as a directory index, and finally `index.js`. Node never tries
- * `.cjs` or `.mjs` there.
+ * `.cjs` or `.mjs` there. A trailing slash names the same directory (`node
+ * scripts/`, `node ./`), and `.` is the package root.
  */
 const packedModule = (path: string, modules: PackedModules): string | undefined => {
-  const base = posix.normalize(path);
+  const base = posix.normalize(path).replace(/(?<=.)\/$/u, '');
   const main = modules.mains.get(base);
   const candidates = [
     base,
     `${base}.js`,
-    ...(main === undefined ? [] : [main, `${main}.js`, `${main}/index.js`]),
-    `${base}/index.js`,
+    ...(main === undefined ? [] : [main, `${main}.js`, posix.join(main, 'index.js')]),
+    posix.join(base, 'index.js'),
   ];
   return candidates.find((candidate) => javaScriptSuffix.test(candidate) && modules.files.has(candidate));
 };
+
+/** `.` or `./`: the package directory, which `node .` runs through the root manifest's `main`. */
+const packageDirectory = /^\.\/*$/u;
 
 /**
  * The packed JavaScript files an install script runs: `node install.cjs`,
  * `node ./scripts/setup.mjs`, `node scripts/install`, `node "scripts/my
  * install.cjs"`. Every word is tried; a word that is not a packed module is
- * not one.
+ * not one, and the empty word `""` names no path. The package directory
+ * itself counts only as a `node` operand (`node .`, `node -r dotenv/config
+ * .`): elsewhere `.` is the working directory an option names (`npm --prefix
+ * . run setup`), not a program.
  */
-const installScriptFiles = (text: string, modules: PackedModules): readonly string[] =>
-  shellWords(text).flatMap((word) => {
-    const module = packedModule(word, modules);
-    return module === undefined ? [] : [module];
-  });
+const installScriptFiles = (text: string, commands: readonly SimpleCommand[], modules: PackedModules): readonly string[] => [
+  ...shellWords(text).filter((word) => word !== '' && !packageDirectory.test(word)),
+  ...commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => operands.filter((word) => packageDirectory.test(word))),
+].flatMap((word) => {
+  const module = packedModule(word, modules);
+  return module === undefined ? [] : [module];
+});
 
 const relativeSpecifier = /^\.\.?\//u;
-
-const relativeTarget = (from: string, specifier: string, modules: PackedModules): string | undefined =>
-  packedModule(posix.join(posix.dirname(from), specifier), modules);
 
 /**
  * The packages a consumer's install lifecycle loads through the packed
  * JavaScript it runs — `"postinstall": "node install.cjs"` with `install.cjs`
- * requiring a driver — following relative imports and the manifest's
- * `imports` map through the tarball. A computed load in any of those files
- * could reach any declared package, so every declared name then counts as
- * needed at install time.
+ * requiring a driver — and through the modules `node` preloads before the
+ * program (`node -r dotenv/config install.cjs`, `node --import ./setup.mjs
+ * .`), following relative imports and the manifest's `imports` map through
+ * the tarball. A computed load in any of those files could reach any declared
+ * package, so every declared name then counts as needed at install time.
  */
-const installScriptModuleDependencies = (
-  roots: readonly string[],
-  evidenceByPath: ReadonlyMap<string, FileEvidence>,
-  modules: PackedModules,
-  packageDocument: Readonly<Record<string, unknown>>,
-  declared: readonly string[],
-): readonly string[] => {
+const installScriptModuleDependencies = (options: {
+  /** The packed files run directly. */
+  readonly roots: readonly string[];
+  /** The specifiers preloaded from the package root, where npm runs the lifecycle. */
+  readonly preloads: readonly string[];
+  readonly evidenceByPath: ReadonlyMap<string, FileEvidence>;
+  readonly modules: PackedModules;
+  readonly packageDocument: Readonly<Record<string, unknown>>;
+  readonly declared: readonly string[];
+}): readonly string[] => {
+  const { declared, evidenceByPath, modules, packageDocument } = options;
   const names = new Set<string>();
   const seen = new Set<string>();
-  const queue = [...roots];
+  const queue = [...options.roots];
+  // What one specifier resolved from `directory` reaches: a relative one a packed module to follow, a bare one a
+  // package, a `#` one whatever the `imports` map gives it — a package, or the package's own file
+  // (`"#setup": "./setup.js"`), relative to the package root.
+  const follow = (specifier: string, directory: string): void => {
+    if (relativeSpecifier.test(specifier)) {
+      const target = packedModule(posix.join(directory, specifier), modules);
+      if (target !== undefined) queue.push(target);
+      return;
+    }
+    for (const target of specifier.startsWith('#') ? packageImportTargets(packageDocument, specifier) : [specifier]) {
+      if (relativeSpecifier.test(target)) {
+        const module = packedModule(target, modules);
+        if (module !== undefined) queue.push(module);
+        continue;
+      }
+      const name = packageNameOf(target);
+      if (name !== undefined) names.add(name);
+    }
+  };
+  for (const specifier of options.preloads) follow(specifier, '.');
   for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
     const evidence = evidenceByPath.get(path);
     if (seen.has(path) || evidence === undefined) continue;
     seen.add(path);
     if (!evidence.complete) for (const name of declared) names.add(name);
     for (const name of evidence.executed) names.add(name);
-    for (const specifier of evidence.specifiers) {
-      if (relativeSpecifier.test(specifier)) {
-        const target = relativeTarget(path, specifier, modules);
-        if (target !== undefined) queue.push(target);
-        continue;
-      }
-      const targets = specifier.startsWith('#') ? packageImportTargets(packageDocument, specifier) : [specifier];
-      for (const target of targets) {
-        // An `imports` target of the package's own file (`"#setup": "./setup.js"`) is relative to the package root.
-        if (relativeSpecifier.test(target)) {
-          const module = packedModule(target, modules);
-          if (module !== undefined) queue.push(module);
-          continue;
-        }
-        const name = packageNameOf(target);
-        if (name !== undefined) names.add(name);
-      }
-    }
+    for (const specifier of evidence.specifiers) follow(specifier, posix.dirname(path));
   }
   return [...names];
 };
@@ -867,18 +927,23 @@ export const importedPackageNames = async (options: {
   const evidenceByPath = new Map(await Promise.all(options.paths
     .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
     .map(async (path) => [path, await fileEvidence(resolve(projectRoot, path), executables)] as const)));
-  const modules: PackedModules = { files: new Set(evidenceByPath.keys()), mains: await packedMains(options.paths, projectRoot) };
+  const modules: PackedModules = {
+    files: new Set(evidenceByPath.keys()),
+    mains: await packedMains(options.paths, projectRoot, options.packageDocument),
+  };
   const evidence = [...evidenceByPath.values()];
   const scriptText = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
+  const commands = simpleCommands(scriptText);
   const neededByScripts = [
-    ...installScriptCommandDependencies(scriptText, executables, options.declared),
-    ...installScriptModuleDependencies(
-      installScriptFiles(scriptText, modules),
+    ...installScriptCommandDependencies(scriptText, commands, executables, options.declared),
+    ...installScriptModuleDependencies({
+      declared: options.declared,
       evidenceByPath,
       modules,
-      options.packageDocument,
-      options.declared,
-    ),
+      packageDocument: options.packageDocument,
+      preloads: nodeOptionValues(commands, preloadOptions),
+      roots: installScriptFiles(scriptText, commands, modules),
+    }),
   ];
   const specifiers = evidence.flatMap((file) => file.specifiers);
   const reachable = specifiers

@@ -348,20 +348,29 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips these six after the failed fetch too — and then postinstall fails: on the missing command, and on
-      // the missing modules packed files it runs require. The files are reached as `node scripts/install` (Node
-      // resolves `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
+      // npm skips these ten after the failed fetch too — and then postinstall fails: on the missing commands, and on
+      // the missing modules packed files it runs require. `newline-tool` is the first command of postinstall's second
+      // line, `setup-tool` the second of the first. The files are reached as `node scripts/install` (Node resolves
+      // `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
       // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependencies
       // through a wildcard `imports` entry mapped to the package's own file, and through a directory whose packed
-      // manifest names its `main`. An inline `node -e` program that requires a package needs it too.
+      // manifest names its `main`. An inline `node -e` program that requires a package needs it too, as do the
+      // modules `node` preloads — a bare `-r` package and a packed `--import=` file — before running `.`, the root
+      // `main`.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
+      'newline-tool': 'github:owner/newline-tool',
       'optional-driver': 'github:owner/optional-driver',
       'optional-tester': 'github:owner/optional-tester',
       'optional-hook': 'github:owner/optional-hook',
       'optional-main': 'github:owner/optional-main',
       'optional-inline': 'github:owner/optional-inline',
-      // Merely mentioned by the script — an `echo` argument — so npm's skipping it breaks nothing: a warning.
+      'optional-preload': 'github:owner/optional-preload',
+      'optional-imported': 'github:owner/optional-imported',
+      'optional-root': 'github:owner/optional-root',
+      // Merely mentioned by the script — an `echo` argument, and the operand of `rm -r`, whose `-r` is not Node's
+      // preload option — so npm's skipping them breaks nothing: a warning.
       'optional-mentioned': 'github:owner/optional-mentioned',
+      'optional-removed': 'github:owner/optional-removed',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
@@ -369,10 +378,12 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       'bad name': '^1.0.0',
     };
     document.imports = { '#hooks/*': './scripts/*-setup.cjs' };
+    document.main = './scripts/root-setup.cjs';
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
-      postinstall: 'setup-tool --init && node scripts/install && npm test',
-      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\'optional-inline\')"',
+      postinstall: 'echo start\nnewline-tool --init && setup-tool --init && node scripts/install && npm test',
+      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\'optional-inline\')"'
+        + ' && rm -r optional-removed && node -r optional-preload/register --import="./scripts/preload.mjs" .',
     };
   },
   async () => {
@@ -387,6 +398,8 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       writeFile(join(projectRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
       writeFile(join(projectRoot, 'scripts', 'lib', 'package.json'), '{ "main": "setup.cjs" }\n'),
       writeFile(join(projectRoot, 'scripts', 'lib', 'setup.cjs'), 'require("optional-main");\n'),
+      writeFile(join(projectRoot, 'scripts', 'preload.mjs'), 'import "optional-imported";\n'),
+      writeFile(join(projectRoot, 'scripts', 'root-setup.cjs'), 'require("optional-root");\n'),
       writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
       writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
       writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
@@ -407,22 +420,38 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       { path: 'scripts/hook-setup.cjs' },
       { path: 'scripts/lib/package.json' },
       { path: 'scripts/lib/setup.cjs' },
+      { path: 'scripts/preload.mjs' },
+      { path: 'scripts/root-setup.cjs' },
     ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"optional-mentioned" -> "github:owner\/optional-mentioned", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-imported" -> "github:owner\/optional-imported", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-preload" -> "github:owner\/optional-preload", "optional-root" -> "github:owner\/optional-root", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
     // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
     // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
-    expect(reported[1]?.message).not.toContain('"scp"');
-    expect(reported[1]?.message).not.toContain('"optional-mentioned"');
-    for (const name of ['setup-tool', 'optional-driver', 'optional-tester', 'optional-hook', 'optional-main', 'optional-inline']) {
+    for (const name of ['scp', 'optional-mentioned', 'optional-removed']) {
+      expect(reported[1]?.message).not.toContain(JSON.stringify(name));
+    }
+    for (const name of [
+      'setup-tool', 'newline-tool', 'optional-driver', 'optional-tester', 'optional-hook', 'optional-main', 'optional-inline',
+      'optional-preload', 'optional-imported', 'optional-root',
+    ]) {
       expect(reported[2]?.message).not.toContain(JSON.stringify(name));
     }
+    // To npm, `.` is the working directory (`--prefix .`), not a program: only `node .` runs the root `main`.
+    await withPackageDocument(
+      (document) => {
+        document.scripts = { ...(document.scripts as Record<string, string>), postinstall: 'npm --prefix . run setup', setup: 'echo setup' };
+      },
+      async () => {
+        const survivable = withCode(await diagnostics(pack), 'AB7015').find((diagnostic) => diagnostic.severity === 'warning');
+        expect(survivable?.message).toContain('"optional-root"');
+      },
+    );
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest', 'bad-tarred-manifest']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
