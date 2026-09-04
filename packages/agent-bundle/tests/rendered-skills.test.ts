@@ -280,6 +280,16 @@ describe('rendered skill compilation', () => {
     // it resolves however the project resolves `agent-bundle` — here, not at all.
     const direct = await parseSkill(join(root, 'src', 'skills', 'identity'), root);
     expect(direct.diagnostics).toEqual([expect.objectContaining({ code: 'AB3003' })]);
+
+    // A config with no usable plugin.name is the validator's AB4000: discovery
+    // still completes, and the skill is served no fabricated identity.
+    for (const malformed of [{}, { plugin: null }, { plugin: { name: '' } }, { plugin: 'x' }]) {
+      const config = malformed as unknown as AgentBundleConfig;
+      const withoutIdentity = await discoverProject(root, config);
+      expect(withoutIdentity.skills[0]?.diagnostics).toEqual([expect.objectContaining({ code: 'AB3003' })]);
+      expect(validateSource(loadedProject(config, root), withoutIdentity, registry).map(({ code }) => code))
+        .toContain('AB4000');
+    }
   });
 
   it('compiles JSX against the loader element factory, not the consumer react/jsx-runtime (#441)', async () => {

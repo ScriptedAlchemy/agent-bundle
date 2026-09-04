@@ -1,5 +1,6 @@
 import type { ProjectMetaSource } from '../build/meta.ts';
 import { developmentFallbackVersion, snapshotPackageIdentity } from '../core/project-context.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 
 /**
@@ -37,5 +38,24 @@ export const pluginIdentity = (
     packageName: packageIdentity.packageName,
     packageVersion: packageIdentity.packageVersion,
     version: resolvePluginVersion(config.plugin.version, packageIdentity.packageVersion),
+  });
+};
+
+/**
+ * {@link pluginIdentity} for a configuration that has not been validated yet
+ * (discovery runs before `validateSource`): undefined when `plugin.name` is
+ * not a nonempty string, so a malformed `plugin` block stays the validator's
+ * `AB4000` to report rather than a crash here, and no fabricated identity is
+ * ever served in its place.
+ */
+export const declaredPluginIdentity = (
+  projectRoot: string,
+  config: Readonly<Record<string, unknown>>,
+): ProjectMetaSource | undefined => {
+  const plugin = config.plugin;
+  if (!isRecord(plugin) || typeof plugin.name !== 'string' || plugin.name.trim().length === 0) return undefined;
+  // `resolvePluginVersion` already treats a non-string `version` as absent.
+  return pluginIdentity(projectRoot, {
+    plugin: { name: plugin.name, ...(typeof plugin.version === 'string' ? { version: plugin.version } : {}) },
   });
 };

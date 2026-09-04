@@ -12,7 +12,7 @@ import { compileRouteGraph, isEmptyRouteGraph } from '../routes/graph.ts';
 import type { CompiledRouteGraph } from '../routes/types.ts';
 import { parseCommand, type CommandDocument } from './command.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules } from './ignore.ts';
-import { pluginIdentity } from './plugin-identity.ts';
+import { declaredPluginIdentity } from './plugin-identity.ts';
 import { isRenderedSkillSourceName } from './rendered-skill.ts';
 import { parseRule, type RuleDocument } from './rule.ts';
 import { parseSkill, type SkillDocument } from './skill.ts';
@@ -257,8 +257,11 @@ export const discoverProject = async (
   const rules = await readProjectIgnoreRules(projectRoot);
   // Rendered skills evaluate during discovery, before normalization stamps
   // the same identity into the model; `agent-bundle/meta` serves it to them
-  // here so a skill documents the version its plugin ships (#440).
-  const meta = projectMeta(pluginIdentity(projectRoot, config));
+  // here so a skill documents the version its plugin ships (#440). A config
+  // without a usable `plugin.name` is the validator's AB4000, not a crash
+  // here, and such a skill gets no identity rather than a fabricated one.
+  const identity = declaredPluginIdentity(projectRoot, config as Readonly<Record<string, unknown>>);
+  const meta = identity === undefined ? undefined : projectMeta(identity);
   const configuredSkills = config.skills;
   const conventionalSources = (await fastGlob('src/skills/*/SKILL.{md,ts,tsx}', {
     absolute: true,
@@ -352,7 +355,7 @@ export const discoverProject = async (
     ...(discoveredRules.length === 0 ? {} : { rules: discoveredRules }),
     ...(shadowedConventionalSkills.length === 0 ? {} : { shadowedConventionalSkills }),
     skills: await Promise.all(
-      skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules, { meta })),
+      skillDirs.map((skillDir) => parseSkill(skillDir, projectRoot, rules, meta === undefined ? {} : { meta })),
     ),
     ...(state === undefined ? {} : { state }),
   };
