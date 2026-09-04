@@ -326,18 +326,22 @@ describe('task-augmented tools/call (#369)', () => {
   });
 
   it('serves every tool as an ordinary request on a revision without the core Tasks utility, required ones included', async () => {
-    // The SDK client negotiates 2025-11-25 by default; the server's own view
-    // of the session is what gates the lifecycle, so it is narrowed here to
-    // what a 2026-07-28 session reports (where the wire has no task vocabulary).
+    // Negotiated for real: the client offers only 2025-06-18, a revision whose
+    // core has no Tasks utility, and the server counter-offers it through the
+    // ordinary initialize handshake. The gate is the negotiated revision, so
+    // this is the same branch a 2026-07-28 session takes (where the SDK strips
+    // `execution.taskSupport` and `capabilities.tasks`); that era is opened
+    // only by the SDK's serving entries, never by a hand-connected in-memory
+    // pair, which is why it is not the revision driven here.
     const { declareTool, install, server, tasks } = createTaskAugmentedMcpServer({ name: 'tasks-unit', version: '0.0.0' });
     const required = server.registerTool('background-only', { inputSchema: z.object({}) }, async () => ({ content: [{ text: 'ran', type: 'text' }] }));
     declareTool(required, 'background-only', 'required');
     install();
-    Object.defineProperty(tasks, 'getNegotiatedProtocolVersion', { configurable: true, value: () => '2026-07-28' });
-    const client = new Client({ name: 'tasks-unit-client', version: '0.0.0' });
+    const client = new Client({ name: 'tasks-unit-client', version: '0.0.0' }, { supportedProtocolVersions: ['2025-06-18'] });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
+      expect(tasks.getNegotiatedProtocolVersion()).toBe('2025-06-18');
       // An ordinary call to the required tool is served, not refused.
       expect(await client.callTool({ arguments: {}, name: 'background-only' })).toEqual({ content: [{ text: 'ran', type: 'text' }] });
       // Task metadata is ignored: the ordinary result comes back, no task handle.
