@@ -847,7 +847,7 @@ it('lets the operator .env beat a manifest env default the host passed through, 
   }
 }, 60_000);
 
-it('redirects stdout written at module scope by the server module to stderr before the protocol stream opens', async () => {
+it('redirects stdout written at module scope by the server module to stderr before the protocol stream opens, and discards a module-scope wrapper over stdout', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-module-scope-stdout-'));
   try {
     await mkdir(join(root, 'src'), { recursive: true });
@@ -863,10 +863,16 @@ it('redirects stdout written at module scope by the server module to stderr befo
     // consumer module can: the console and the raw stream. The server module
     // is a static import of the shell, so it evaluates before the shell body;
     // only a guard installed by an earlier import keeps these off the wire.
+    // It then wraps `process.stdout.write` the way a logging library might:
+    // the wrapper sits over the redirect, and the guard must discard it when
+    // the protocol stream opens rather than adopt it as the original.
     await writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "console.log('hello');",
       "process.stdout.write('raw\\n');",
+      'const previous = process.stdout.write;',
+      'process.stdout.write = ((chunk, ...rest) => previous.call(process.stdout, `wrapped:${chunk}`, ...rest)) as typeof process.stdout.write;',
+      "process.stdout.write('after wrap\\n');",
       'export default () => {',
       "  console.log('factory');",
       "  const server = new McpServer({ name: 'module-scope-stdout', version: '1.0.0' });",
@@ -904,9 +910,12 @@ it('redirects stdout written at module scope by the server module to stderr befo
       await client.close();
     }
     const stderr = stderrChunks.join('');
-    expect(stderr).toContain('hello\nraw\n');
+    expect(stderr).toContain('hello\nraw\nwrapped:after wrap\n');
+    expect(stderr).toContain('a module replaced process.stdout.write while console output was redirected to stderr');
     expect(stderr).toContain('factory\n');
     expect(stderr).toContain('tool\n');
+    // The frames themselves never went through the wrapper.
+    expect(stderr).not.toContain('wrapped:{');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

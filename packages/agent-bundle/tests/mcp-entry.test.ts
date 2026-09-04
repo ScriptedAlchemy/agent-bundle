@@ -296,6 +296,61 @@ describe('stdout protocol guard', () => {
       console.log = originalConsole.log;
     }
   });
+
+  it('keeps one guard under a consumer wrapper over stdout and restores the real stdout, discarding the wrapper', () => {
+    // A consumer module that wraps `process.stdout.write` at module scope
+    // wraps the redirect, not the protocol stream. Adoption must not depend
+    // on the write's identity: a second guard would record the wrapper as
+    // the original and "restore" it, sending every JSON-RPC frame through
+    // the wrapper into stderr.
+    const originalConsole = { error: console.error, log: console.log };
+    const originalStdoutWrite = process.stdout.write;
+    const originalStderrWrite = process.stderr.write;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const realStdout = ((chunk: string | Uint8Array) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = realStdout;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const guard = redirectConsoleToStderr();
+      const redirect = process.stdout.write;
+      const wrapped: string[] = [];
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: never[]) => {
+        wrapped.push(String(chunk));
+        return (redirect as (chunk: string | Uint8Array, ...rest: never[]) => boolean)(chunk, ...rest);
+      }) as typeof process.stdout.write;
+      process.stdout.write('module scope through the wrapper');
+      expect(wrapped).toEqual(['module scope through the wrapper']);
+      expect(stdoutChunks).toEqual([]);
+      expect(stderrChunks).toEqual(['module scope through the wrapper']);
+
+      expect(redirectConsoleToStderr()).toBe(guard);
+      guard.restoreProtocolStdout();
+      process.stdout.write('{"jsonrpc":"2.0"}');
+      expect(stdoutChunks).toEqual(['{"jsonrpc":"2.0"}']);
+      expect(wrapped).toEqual(['module scope through the wrapper']);
+      expect(stderrChunks.join('')).toContain('process.stdout.write');
+      // Restored means uninstalled: the next call installs a fresh guard.
+      const next = redirectConsoleToStderr();
+      expect(next).not.toBe(guard);
+      process.stdout.write('swallowed');
+      next.restoreProtocolStdout();
+      process.stdout.write('{"id":1}');
+      expect(stdoutChunks).toEqual(['{"jsonrpc":"2.0"}', '{"id":1}']);
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+      console.error = originalConsole.error;
+      console.log = originalConsole.log;
+    }
+  });
 });
 
 describe('runGeneratedStdioMcpEntry', () => {
@@ -308,6 +363,9 @@ describe('runGeneratedStdioMcpEntry', () => {
     try {
       await run();
     } finally {
+      // A run that threw before serving left its guard installed; release it
+      // through the guard so the process-wide state is clean for the next test.
+      redirectConsoleToStderr().restoreProtocolStdout();
       process.stdout.write = originalStdoutWrite;
       Object.assign(console, originalConsole);
     }

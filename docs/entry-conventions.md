@@ -1403,10 +1403,15 @@ Two details keep the installed order equal to the `mcp run` table above:
   the layer — stdout is the protocol wire there, and the same ordering
   argument means only an earlier import can put the guard ahead of a
   `console.log` or `process.stdout.write` at the server module's top level.
-  The guard has one implementation: `redirectConsoleToStderr` returns the
-  guard already installed (recognised by `process.stdout.write` still being
-  its redirect) instead of stacking a second, so `runGeneratedStdioMcpEntry`
-  adopts the prelude's guard and restores raw stdout from it before serving.
+  The guard has one implementation: while a guard is installed,
+  `redirectConsoleToStderr` returns it instead of stacking a second, whatever
+  `process.stdout.write` has become since, so `runGeneratedStdioMcpEntry`
+  adopts the prelude's guard and restores the real stdout from it before
+  serving; a wrapper a consumer module installed over `process.stdout.write`
+  at module scope wrapped the redirect, not the protocol stream, and is
+  discarded at that point with one stderr line saying so (stdout is the
+  protocol channel; wrapping it is unsupported). Restoring clears the
+  installed guard, so a later call installs anew.
   A consumer `package.json` declaring `"sideEffects": false` would let the
   bundler drop either bare import, so the build marks generated modules
   side-effectful (`src/build/rslib.ts`). Module-level `process.env` reads in

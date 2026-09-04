@@ -24,12 +24,12 @@ export interface StdoutProtocolGuard {
 }
 
 /**
- * The guard this process currently has installed, recognised by identity: it
- * is installed exactly while `process.stdout.write` is still its redirect.
- * Lets the generated stdio prelude install the guard as the entry's first
- * import and the lifecycle adopt that same guard instead of stacking a
- * second one — a second install would capture the redirect as the "original"
- * and restore stdout to stderr.
+ * The guard this process currently has installed: set by an install, cleared
+ * by its `restoreProtocolStdout`. It owns the real stdout write. The
+ * generated stdio prelude installs the guard as the entry's first import and
+ * the lifecycle adopts that same guard instead of stacking a second one — a
+ * second install would record whatever `process.stdout.write` had become as
+ * the "original" and restore that, not the protocol stream.
  */
 let installedGuard: { readonly guard: StdoutProtocolGuard; readonly redirectedWrite: StdoutWrite } | undefined;
 
@@ -39,13 +39,17 @@ let installedGuard: { readonly guard: StdoutProtocolGuard; readonly redirectedWr
  * the protocol stream. Install this guard before evaluating server modules,
  * then call `restoreProtocolStdout()` right before serving. Console methods
  * stay on stderr forever; only the raw `process.stdout.write` is restored
- * for protocol frames. Calling it while a guard is installed returns that
- * guard rather than installing another.
+ * for protocol frames.
+ *
+ * While a guard is installed, calling this returns it — whatever
+ * `process.stdout.write` has become since. A consumer module that wraps
+ * `process.stdout.write` at module scope wraps the redirect, not the
+ * protocol stream; stdout is the protocol channel, so such a wrapper is
+ * unsupported, and `restoreProtocolStdout()` discards it in favour of the
+ * real stdout, saying so once on stderr.
  */
 export const redirectConsoleToStderr = (): StdoutProtocolGuard => {
-  if (installedGuard !== undefined && process.stdout.write === installedGuard.redirectedWrite) {
-    return installedGuard.guard;
-  }
+  if (installedGuard !== undefined) return installedGuard.guard;
   const originalStdoutWrite: StdoutWrite = process.stdout.write.bind(process.stdout) as StdoutWrite;
   const stderrConsole = new console.Console({ stderr: process.stderr, stdout: process.stderr });
   const methods = ['debug', 'dir', 'error', 'info', 'log', 'trace', 'warn'] as const;
@@ -57,7 +61,14 @@ export const redirectConsoleToStderr = (): StdoutProtocolGuard => {
   process.stdout.write = redirectedWrite;
   const guard: StdoutProtocolGuard = Object.freeze({
     restoreProtocolStdout: (): void => {
+      if (process.stdout.write !== redirectedWrite) {
+        process.stderr.write(
+          '[agent-bundle] a module replaced process.stdout.write while console output was redirected to stderr; '
+          + 'the replacement is discarded because stdout carries the MCP protocol stream.\n',
+        );
+      }
       process.stdout.write = originalStdoutWrite;
+      if (installedGuard?.guard === guard) installedGuard = undefined;
     },
   });
   installedGuard = { guard, redirectedWrite };
