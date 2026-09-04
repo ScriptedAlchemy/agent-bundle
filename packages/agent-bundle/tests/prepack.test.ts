@@ -259,7 +259,8 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       const [reported] = withCode(await diagnostics(pack), 'AB7014');
       expect(reported?.message).toContain('"never-loaded"');
       expect(reported?.message).not.toContain('"driver-package"');
-      await writeFile(consumer, 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const any = (name) => load(name);\n');
+      // Namespace-qualified factory, computed argument.
+      await writeFile(consumer, 'import * as Module from "node:module";\nconst load = Module.createRequire(import.meta.url);\nexport const any = (name) => load(name);\n');
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });

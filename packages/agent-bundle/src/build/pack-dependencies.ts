@@ -216,9 +216,15 @@ const factoryNames = (source: string): readonly string[] => [
   ...Array.from(source.matchAll(createRequireAlias), (match) => escapeIdentifier(match[1] ?? '')),
 ];
 
-/** `const load = <factory>(…)`: the binding is a loader, called like `require` from then on. */
-const loaderBinding = (factories: readonly string[]): RegExp =>
-  new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:${factories.join('|')})\s*[(]`, 'gu');
+/**
+ * `const load = <factory>(…)`, the factory bare or namespace-qualified
+ * (`Module.createRequire(…)` after `import * as Module from "node:module"`):
+ * the binding is a loader, called like `require` from then on.
+ */
+const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
+  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
+  'gu',
+);
 
 /**
  * The identifiers a file loads packages through: `require` itself plus every
