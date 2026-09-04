@@ -1,9 +1,9 @@
 import type { ZodType } from 'zod';
+import type { JsonObject } from 'agent-bundle';
 import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeMcpServerDescriptor,
-} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject } from 'agent-bundle';
+} from 'agent-bundle/api';
 
 export interface EditEvent {
   eventId: string;

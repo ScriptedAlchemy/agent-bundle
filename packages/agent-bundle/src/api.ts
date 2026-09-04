@@ -252,10 +252,105 @@ export type {
   AgentBundleDevContractsConfig,
   AgentBundleDevRuntimeConfig,
 } from './core/types.ts';
+// The `dev.runtime.provider` protocol (#485): everything a provider module
+// accepts through `start()` or hands back through its session, the two errors
+// a provider throws to get the documented Workbench behaviour, and the
+// generation store and MCP registry a session drives. Test-only services
+// (`ProjectService`, `EpochStore`, the provider loader) stay internal.
+export {
+  DevRuntimeGenerationConflictError,
+  DevRuntimeUnavailableError,
+} from './dev/runtime-provider.ts';
 export type {
   CreateDevRuntimeProvider,
+  DevRuntimeClientSurfaceEndpoint,
+  DevRuntimeEventInput,
+  DevRuntimeMcpRegistry,
+  DevRuntimeMcpRegistryListener,
+  DevRuntimeMcpRegistryMessage,
+  DevRuntimeMcpRegistrySubscription,
+  DevRuntimeMcpSession,
+  DevRuntimeMcpSessionCloseObservation,
+  DevRuntimeMcpSessionExecuteOptions,
+  DevRuntimeMcpSessionView,
+  DevRuntimePreparedMcpApp,
+  DevRuntimePreparedMcpServer,
+  DevRuntimePreparedProject,
   DevRuntimeProvider,
+  DevRuntimeSession,
+  DevRuntimeStartContext,
 } from './dev/runtime-provider.ts';
+export type {
+  DevRuntimeAsset,
+  DevRuntimeAssetRequest,
+  DevRuntimeDescriptor,
+  DevRuntimeDiagnostic,
+  DevRuntimeDiagnosticPhase,
+  DevRuntimeFixture,
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeInvocationRequest,
+  DevRuntimeMcpAppRunBinding,
+  DevRuntimeMcpConnectionState,
+  DevRuntimeMcpInvalidatedBinding,
+  DevRuntimeMcpOperationRequest,
+  DevRuntimeMcpOperationResult,
+  DevRuntimeMcpRegistryReconcileInput,
+  DevRuntimeMcpRegistryReconcileResult,
+  DevRuntimeMcpRegistryReplayGap,
+  DevRuntimeMcpRegistrySnapshot,
+  DevRuntimeMcpServerDescriptor,
+  DevRuntimeMcpSessionBinding,
+  DevRuntimeMcpSessionControlRequest,
+  DevRuntimeMcpSessionRequest,
+  DevRuntimeMcpSessionSnapshot,
+  DevRuntimeReplayRequest,
+  DevRuntimeRun,
+  DevRuntimeStateIdentity,
+  DevRuntimeStateResetRequest,
+  DevRuntimeStatus,
+  DevRuntimeSurface,
+  DevRuntimeTraceSpan,
+  DevRuntimeTreeNode,
+  RuntimeVector,
+} from './dev/runtime-protocol.ts';
+export {
+  RuntimeGenerationStore,
+  RuntimeGenerationStoreCloseError,
+  RuntimeGenerationStoreError,
+} from './dev/runtime-generation-store.ts';
+export type {
+  RuntimeGeneration,
+  RuntimeGenerationActivationGuard,
+  RuntimeGenerationAsset,
+  RuntimeGenerationCandidate,
+  RuntimeGenerationCloseFailure,
+  RuntimeGenerationLease,
+  RuntimeGenerationManifest,
+  RuntimeGenerationManifestInput,
+  RuntimeGenerationMetadataCodec,
+  RuntimeGenerationPrepareOptions,
+  RuntimeGenerationPreparedActivation,
+  RuntimeGenerationStoreErrorCode,
+  RuntimeGenerationStoreOptions,
+  RuntimeGenerationValidationInput,
+  RuntimeGenerationValidator,
+} from './dev/runtime-generation-store.ts';
+export {
+  RuntimeMcpRegistry,
+  RuntimeMcpRegistryCloseError,
+  RuntimeMcpRegistryError,
+} from './dev/runtime-mcp-registry.ts';
+export type {
+  RuntimeMcpCommittedActivationReconcile,
+  RuntimeMcpConnection,
+  RuntimeMcpConnector,
+  RuntimeMcpExecutionContext,
+  RuntimeMcpExecutionValue,
+  RuntimeMcpPreparedActivationReconcile,
+  RuntimeMcpRegistryCloseFailure,
+  RuntimeMcpRegistryErrorCode,
+  RuntimeMcpRegistryOptions,
+} from './dev/runtime-mcp-registry.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;

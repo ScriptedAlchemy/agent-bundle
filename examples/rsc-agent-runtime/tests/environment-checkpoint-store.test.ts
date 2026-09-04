@@ -18,7 +18,7 @@ import {
   validateStagedRscEnvironmentCheckpoint,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
-import { RuntimeGenerationStore } from '../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
+import { RuntimeGenerationStore } from 'agent-bundle/api';
 import { writeCompilerCohort } from './support/compiler-cohort.ts';
 
 const preparedRuntime = Object.freeze({

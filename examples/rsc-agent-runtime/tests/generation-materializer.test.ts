@@ -26,9 +26,9 @@ import {
   type RscRuntimeCapturedGenerationSnapshot,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
+import { RuntimeGenerationStore, type DevRuntimePreparedProject, type RuntimeGenerationCandidate } from 'agent-bundle/api';
+// Test-only wiring: the digest helpers are not part of the provider protocol.
 import { digest, stableJson } from '../../../packages/agent-bundle/src/core/digest.ts';
-import { RuntimeGenerationStore, type RuntimeGenerationCandidate } from '../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
-import type { DevRuntimePreparedProject } from '../../../packages/agent-bundle/src/dev/runtime-provider.ts';
 import { writeCompilerCohort } from './support/compiler-cohort.ts';
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');

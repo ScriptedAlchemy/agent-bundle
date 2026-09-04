@@ -16,10 +16,10 @@ import type {
   RscRuntimeSurfaceAsset,
   SerializedRuntimeDefinition,
 } from '../runtime/contracts.js';
-import type { DevRuntimePreparedProject } from '../../../../packages/agent-bundle/src/dev/runtime-provider.ts';
-import type { DevRuntimeMcpServerDescriptor } from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
 import type { JsonObject, JsonValue } from 'agent-bundle';
 import type {
+  DevRuntimeMcpServerDescriptor,
+  DevRuntimePreparedProject,
   RuntimeGenerationActivationGuard,
   RuntimeGenerationAsset,
   RuntimeGenerationCandidate,
@@ -28,7 +28,7 @@ import type {
   RuntimeGenerationPreparedActivation,
   RuntimeGenerationStore,
   RuntimeGenerationValidationInput,
-} from '../../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
+} from 'agent-bundle/api';
 
 export type { RscRuntimeGenerationMetadata, RscRuntimeSurfaceAsset } from '../runtime/contracts.js';
 

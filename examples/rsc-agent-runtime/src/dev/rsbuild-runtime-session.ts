@@ -40,51 +40,45 @@ import {
   isInspectionSensitiveKey,
   redactInspectionDiagnostics,
 } from './inspection-security.js';
-import {
-  RuntimeGenerationStore,
-  type RuntimeGeneration,
-  type RuntimeGenerationActivationGuard,
-  type RuntimeGenerationCandidate,
-  type RuntimeGenerationPreparedActivation,
-} from '../../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
-import {
-  RuntimeMcpRegistry,
-  type RuntimeMcpConnection,
-  type RuntimeMcpConnector,
-  type RuntimeMcpExecutionContext,
-  type RuntimeMcpPreparedActivationReconcile,
-} from '../../../../packages/agent-bundle/src/dev/runtime-mcp-registry.ts';
+import type { JsonObject, JsonValue } from 'agent-bundle';
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
-  type DevRuntimeClientSurfaceEndpoint,
-  type DevRuntimeEventInput,
-  type DevRuntimeMcpSession,
-  type DevRuntimeMcpSessionCloseObservation,
-  type DevRuntimePreparedProject,
-  type DevRuntimeSession,
-  type DevRuntimeStartContext,
-} from '../../../../packages/agent-bundle/src/dev/runtime-provider.ts';
-import {
+  RuntimeGenerationStore,
+  RuntimeMcpRegistry,
   type DevRuntimeAsset,
   type DevRuntimeAssetRequest,
+  type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeDescriptor,
   type DevRuntimeDiagnostic,
+  type DevRuntimeEventInput,
   type DevRuntimeFixture,
   type DevRuntimeInspectionEnvelope,
   type DevRuntimeInvocationRequest,
   type DevRuntimeMcpConnectionState,
   type DevRuntimeMcpRegistryReconcileInput,
+  type DevRuntimeMcpSession,
   type DevRuntimeMcpSessionBinding,
+  type DevRuntimeMcpSessionCloseObservation,
+  type DevRuntimePreparedProject,
   type DevRuntimeReplayRequest,
   type DevRuntimeRun,
+  type DevRuntimeSession,
+  type DevRuntimeStartContext,
   type DevRuntimeStateIdentity,
   type DevRuntimeStateResetRequest,
   type DevRuntimeStatus,
   type DevRuntimeSurface,
+  type RuntimeGeneration,
+  type RuntimeGenerationActivationGuard,
+  type RuntimeGenerationCandidate,
+  type RuntimeGenerationPreparedActivation,
+  type RuntimeMcpConnection,
+  type RuntimeMcpConnector,
+  type RuntimeMcpExecutionContext,
+  type RuntimeMcpPreparedActivationReconcile,
   type RuntimeVector,
-} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from 'agent-bundle';
+} from 'agent-bundle/api';
 
 const descriptor: DevRuntimeDescriptor = Object.freeze({
   environmentVariables: Object.freeze([]),

@@ -16,8 +16,26 @@ import {
   type EvalHarness,
   type EvalServiceNativeOptions,
 } from '../src/index.ts';
-import { TargetRegistry, createDefaultRegistry } from '../src/api.ts';
+import {
+  DevRuntimeGenerationConflictError,
+  DevRuntimeUnavailableError,
+  RuntimeGenerationStore,
+  RuntimeGenerationStoreError,
+  RuntimeMcpRegistry,
+  RuntimeMcpRegistryError,
+  TargetRegistry,
+  createDefaultRegistry,
+} from '../src/api.ts';
 import type {
+  DevRuntimeDescriptor,
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeMcpServerDescriptor,
+  DevRuntimeProvider,
+  DevRuntimeSession,
+  DevRuntimeStartContext,
+  RuntimeGenerationCandidate,
+  RuntimeGenerationStoreOptions,
+  RuntimeMcpRegistryOptions,
   TargetAdapter,
   TargetHookContract,
   TargetMcpRuntimeContract,
@@ -132,6 +150,44 @@ it('exposes advanced adapter registry and contract types only from the advanced 
 
   expect(registry.defaultTargetNames()).toEqual(['advanced-synthetic']);
   expect(createDefaultRegistry().has('portable')).toBe(true);
+});
+
+it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () => {
+  // A provider module is written against these names alone: the start
+  // context it accepts, the session it returns, the envelope and MCP
+  // descriptor it produces, and the store and registry a session drives.
+  const descriptor: DevRuntimeDescriptor = { environmentVariables: [], id: 'synthetic', label: 'Synthetic', schemaVersion: 1 };
+  const provider = {
+    descriptor,
+    start: async (context: DevRuntimeStartContext): Promise<DevRuntimeSession> => {
+      throw new DevRuntimeUnavailableError(`no runtime for ${context.projectRoot}`);
+    },
+  } satisfies DevRuntimeProvider;
+  const server: DevRuntimeMcpServerDescriptor = {
+    definitionDigest: 'd', name: 'fixture', resources: [], serverDigest: 's', target: 'portable', tools: [], transportDigest: 't',
+  };
+  const envelope: Pick<DevRuntimeInspectionEnvelope, 'trace'> = { trace: [] };
+  const candidate: Pick<RuntimeGenerationCandidate, 'id'> = { id: 'gen-1' };
+  const storeOptions: Pick<RuntimeGenerationStoreOptions<unknown>, 'storageRoot'> = { storageRoot: '/tmp/never-opened' };
+  const registryOptions: Pick<RuntimeMcpRegistryOptions, 'stateStoreId'> = { stateStoreId: 'state' };
+
+  expect(provider.descriptor.id).toBe('synthetic');
+  expect(server.name).toBe('fixture');
+  expect(envelope.trace).toEqual([]);
+  expect(candidate.id).toBe('gen-1');
+  expect(storeOptions.storageRoot).toBe('/tmp/never-opened');
+  expect(registryOptions.stateStoreId).toBe('state');
+  // The two errors a provider throws for the documented Workbench behaviour carry their codes.
+  expect(new DevRuntimeUnavailableError().code).toBe('AB8201');
+  expect(new DevRuntimeGenerationConflictError('gen-2', 'gen-1')).toMatchObject({
+    actualGenerationId: 'gen-1',
+    code: 'AB8204',
+    expectedGenerationId: 'gen-2',
+  });
+  expect(typeof RuntimeGenerationStore).toBe('function');
+  expect(typeof RuntimeMcpRegistry).toBe('function');
+  expect(new RuntimeGenerationStoreError('RUNTIME_GENERATION_CLOSED', 'closed').code).toBe('RUNTIME_GENERATION_CLOSED');
+  expect(new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', 'closed').code).toBe('RUNTIME_MCP_REGISTRY_CLOSED');
 });
 
 it('loads every public subpath and reports the package version', async () => {
