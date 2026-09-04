@@ -1,4 +1,4 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
@@ -7,6 +7,7 @@ import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
@@ -84,6 +85,7 @@ export const packOutputFromJson = (stdout: string, packageName?: string): PackOu
 const toPosixRelative = (root: string, path: string): string =>
   relative(resolve(root), resolve(path)).replaceAll('\\', '/');
 
+/** Stays on `lstat`: a dangling symlink at a host manifest path still counts as present. */
 const exists = async (path: string): Promise<boolean> => {
   try {
     await lstat(path);
@@ -95,7 +97,7 @@ const exists = async (path: string): Promise<boolean> => {
 };
 
 const jsonRecord = async (path: string): Promise<Readonly<Record<string, unknown>>> => {
-  const value: unknown = JSON.parse(await readFile(path, 'utf8'));
+  const value: unknown = JSON.parse(await runWithPlatform(readFileString(path)));
   if (!isRecord(value)) throw new TypeError(`Expected a JSON object at ${JSON.stringify(path)}.`);
   return value;
 };
@@ -237,7 +239,7 @@ export const packInventoryDiagnostics = async (options: {
   const artifactPrefix = toPosixRelative(projectRoot, artifactRoot);
   const packagePrefix = toPosixRelative(projectRoot, options.packageBuild.outputRoot);
   const manifestPath = join(artifactRoot, artifactManifestName);
-  const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+  const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
   const packageDocument = await jsonRecord(join(projectRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
   const expected = new Set<string>([
@@ -261,7 +263,7 @@ export const packInventoryDiagnostics = async (options: {
 
   const stale: string[] = [];
   for (const file of manifest.files) {
-    const bytes = await readFile(join(artifactRoot, file.path));
+    const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
     if (sha256Hex(bytes) !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
   }
   if (stale.length > 0) {

@@ -71,6 +71,11 @@ react-server worker。
 `--ndjson` 是 agent-bundle 的 CLI 与脚本输出方言，不是 MCP JSON-RPC，并且绝不会作为非 MCP 字节写入
 某个 MCP 服务器的 stdout。诊断信息留在 stderr；机器可读输出独占 stdout。
 
+输出模式由可执行文件探测到的[终端能力](./mcp.mdx#终端能力)决定，而组件通过 `(await agent()).terminal`
+（`hostSurface: 'script'`）读到的正是同一个值——因此一个自行向 stderr 写进度的脚本，其上色与定宽会与
+框架完全一致，无需自己探测 `process.stdout`。导出 `main` 的普通脚本则把同一个值作为 `main` 的第二个
+参数收到（见[包入口](./package-entries.mdx#可执行封套)）。
+
 ### 运行脚本
 
 `script.run` 是生产环境挂载、可信本地的 Workbench Playground 操作。它只在受管工作区中、为所选 target

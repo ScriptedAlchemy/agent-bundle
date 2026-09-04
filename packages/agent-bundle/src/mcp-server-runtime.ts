@@ -32,6 +32,8 @@ import {
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
+import { routeRenderLimits } from './routes/render-budget.ts';
+import { noTerminal } from './terminal-capability.ts';
 import type {
   AgentActorIdentity,
   AgentDocument,
@@ -40,7 +42,9 @@ import type {
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
+  AgentRenderLimits,
   AgentSessionIdentity,
+  AgentTerminal,
   AgentWorkspaceIdentity,
   LineageHost,
   McpProgressNotificationParams,
@@ -107,6 +111,7 @@ interface GeneratedRouteIdentity {
   readonly host?: Observed<AgentHostIdentity>;
   readonly lineage: Observed<AgentLineage>;
   readonly session?: Observed<AgentSessionIdentity>;
+  readonly terminal: Observed<AgentTerminal>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -205,6 +210,9 @@ const requestIdentity = (
   ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
     ? { session: available({ sessionId: context.sessionId }, 'native') }
     : {}),
+  // An MCP server's stdout is the protocol wire and its stderr the host's
+  // log: no terminal, whatever the descriptors happen to be (#511).
+  terminal: available(noTerminal('mcp'), 'derived'),
   workspace: available({ root: process.cwd() }, 'derived'),
 });
 
@@ -253,9 +261,13 @@ export const renderGeneratedRoute = async (
 }, async () => {
   // State and notice admission live only in the render scope. This host scope
   // establishes identity and forwards it so one invocation is admitted once.
+  // The route's compiled `config.render` budget (#454) bounds this render
+  // session; the projector keeps forwarding progress for as long as it runs.
+  const render = routeRenderLimits(route.config);
   const projected = await projectMcpRenderStream(dispatcher.stream({
     artifactEpoch,
     invocation: { kind: 'tool', props: { input: input as never, operationId: route.id } },
+    ...(render === undefined ? {} : { limits: render }),
     signal: context.mcpReq.signal,
   }), projectorOptions(context));
   return {
@@ -571,6 +583,7 @@ export const createFlightWorkerHost = (
             lineage: context.lineage,
             requestInvocation: context.invocation,
             session: context.session,
+            terminal: context.terminal,
             type: 'render',
             workspace: context.workspace,
           });
@@ -610,6 +623,8 @@ export interface GeneratedEventRuntimeBinding {
 export interface GeneratedNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /** Optional like the runtime's: absent is unavailable lineage. */
+  readonly lineage?: Observed<AgentLineage>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
@@ -661,6 +676,13 @@ export interface CreateGeneratedRouteMcpServerOptions {
    * call reads `request.lineage` from it. Absent registries leave the axis
    * `unavailable('not-provided')`.
    */
+  /**
+   * The dispatcher's base render limits; a route's compiled `config.render`
+   * budget layers over them per call. Generated entries leave the runtime
+   * defaults in place; the in-memory proof level lowers them to observe a
+   * route's budget without waiting out the default.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
   readonly lineage?: AgentLineageRegistry;
   readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
@@ -707,12 +729,14 @@ const installNoticeInboxSubscriptions = (
   ) => {
     assertInboxUri(request.params.uri);
     // Subscriptions are not tool calls: no pre-tool hook precedes them, so
-    // there is no correlation window to resolve lineage through.
+    // there is no correlation window to resolve lineage through — a
+    // subscriber therefore never matches a `conversation`/`root` recipient.
     const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'));
     try {
       await notices.subscribe({
         actor: identity.actor ?? unavailable(),
         host: identity.host ?? unavailable(),
+        lineage: identity.lineage,
         session: identity.session ?? unavailable(),
         workspace: identity.workspace,
       });
@@ -880,6 +904,8 @@ const startEventRuntime = async (
       lineage,
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
       signal,
+      // A hook's stdout is its host envelope: no terminal (#511).
+      terminal: available(noTerminal('hook'), 'derived'),
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
     }, async () => events.projectEventDocument(
       // The host scope remains ledger-free: the Flight worker owns the one
@@ -920,7 +946,10 @@ export const createGeneratedRouteMcpServer = async (
   options: CreateGeneratedRouteMcpServerOptions,
 ): Promise<McpServer> => {
   const server = new McpServer(options.plugin);
-  const dispatcher = createAgentRenderDispatcher(options.host);
+  const dispatcher = createAgentRenderDispatcher(
+    options.host,
+    options.limits === undefined ? {} : { limits: options.limits },
+  );
   // The subscribe bit registers before any transport connects; the SDK merges
   // its own resources.listChanged into the same capability object when the
   // inbox resource route registers below.

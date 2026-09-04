@@ -14,7 +14,7 @@ import {
   unavailableCapability,
   unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
-import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import cursorHooksSchema from '../src/adapters/schemas/cursor/hooks.schema.json' with { type: 'json' };
@@ -78,7 +78,7 @@ it('records an honest four-state rules row on every adapter', () => {
     state: 'supported',
   });
   expect(registry.get('claude').capabilities.rules).toEqual({
-    reason: 'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
+    reason: 'The pinned Claude Code plugin contract (2.1.260) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     state: 'unavailable',
   });
   expect(registry.get('codex').capabilities.rules).toEqual({
@@ -195,7 +195,7 @@ it('reports Claude LSP support and honest unavailable composite coverage', () =>
 
   expect(registry.get('claude').capabilities.lsp).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -336,7 +336,7 @@ it('reports Claude bin support without inventing coverage on other native hosts'
 
   expect(registry.get('claude').capabilities.bin).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -360,7 +360,7 @@ it.each([
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -382,7 +382,7 @@ it('reports Claude plugin settings support and honest unavailable composite cove
 
   expect(registry.get('claude').capabilities.settings).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -522,7 +522,7 @@ it('reports Claude userConfig support and honest unavailable composite coverage'
 
   expect(registry.get('claude').capabilities.userConfig).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -543,7 +543,7 @@ it('reports Claude channels support and honest unavailable composite coverage', 
 
   expect(registry.get('claude').capabilities.channels).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -567,7 +567,7 @@ it.each([
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -589,7 +589,7 @@ it('reports Claude dependency support and honest unavailable composite coverage'
 
   expect(registry.get('claude').capabilities.dependencies).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -638,7 +638,7 @@ it('reports Claude plugin install scopes from the scoped installer implementatio
     state: 'supported',
   });
   expect(capability).toMatchObject({
-    evidence: { observedVersion: '2.1.250', target: 'claude' },
+    evidence: { observedVersion: '2.1.260', target: 'claude' },
     state: 'supported',
   });
 });
@@ -670,7 +670,7 @@ it('records dated unavailable Claude distribution and policy capability rows', (
     expect(row.evidence.every((line) => line.includes('retrieved 2026-09-02'))).toBe(true);
     if (capability === 'pluginInstallScopes') {
       expect(registry.get('claude').capabilities[capability]).toMatchObject({
-        evidence: { observedVersion: '2.1.250', target: 'claude' },
+        evidence: { observedVersion: '2.1.260', target: 'claude' },
         state: 'supported',
       });
     } else {
@@ -782,7 +782,7 @@ it.each([
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -831,7 +831,7 @@ it('reports Claude manifestPaths support without inventing shared composite cove
 
   expect(registry.get('claude').capabilities.manifestPaths).toMatchObject({
     evidence: {
-      observedVersion: '2.1.250',
+      observedVersion: '2.1.260',
       target: 'claude',
     },
     state: 'supported',
@@ -1306,7 +1306,7 @@ it('reports the evidence-backed G10 event family matrix without inferred support
     reason: expect.not.stringContaining('pluginPaths'),
     state: 'unavailable',
   });
-  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Claude Code 2.1.250') });
+  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Claude Code 2.1.260') });
   expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Codex 0.147.0') });
 });
 
@@ -1332,15 +1332,15 @@ it('reports evidence-backed installation support only for real host targets', ()
 it('pins dated deferral rows for every explicitly deferred native callback from #258', async () => {
   const { readFile } = await import('node:fs/promises');
   const tables = {
-    claude: JSON.parse(await readFile(new URL('../src/adapters/capabilities/claude-2.1.250.json', import.meta.url), 'utf8')) as Record<string, unknown>,
+    claude: JSON.parse(await readFile(new URL('../src/adapters/capabilities/claude-2.1.260.json', import.meta.url), 'utf8')) as Record<string, unknown>,
     codex: JSON.parse(await readFile(new URL('../src/adapters/capabilities/codex-0.147.0.json', import.meta.url), 'utf8')) as Record<string, unknown>,
     cursor: JSON.parse(await readFile(new URL('../src/adapters/capabilities/cursor-2026-08-28.json', import.meta.url), 'utf8')) as Record<string, unknown>,
   };
   const expected = {
     claude: [
       'ConfigChange-policy_settings', 'CwdChanged', 'DirectoryAdded', 'Elicitation', 'ElicitationResult',
-      'InstructionsLoaded', 'MessageDisplay', 'Notification', 'PostModelSwitch', 'PostToolBatch',
-      'PreModelSwitch', 'Setup', 'UserPromptExpansion', 'WorktreeCreate', 'WorktreeRemove',
+      'InstructionsLoaded', 'MessageDisplay', 'Notification', 'PostToolBatch',
+      'Setup', 'UserPromptExpansion', 'WorktreeCreate', 'WorktreeRemove',
     ],
     codex: ['Interrupt'],
     cursor: [
@@ -1362,7 +1362,7 @@ it('advertises conversation lineage per host with dated 2026-09-03 evidence', as
   const { readFile } = await import('node:fs/promises');
   const rows = ['depth', 'mcp-correlation', 'parent', 'root', 'subagent-events'];
   const files = {
-    claude: 'claude-2.1.250.json',
+    claude: 'claude-2.1.260.json',
     codex: 'codex-0.147.0.json',
     cursor: 'cursor-2026-08-28.json',
     portable: 'portable-1.0.0.json',
@@ -1397,7 +1397,7 @@ it('advertises notice delivery routes per host with dated unavailability (#99 st
   const { readFile } = await import('node:fs/promises');
   const routes = ['current-response', 'directed-push', 'host-toast', 'mcp-inbox', 'mcp-resource-updated', 'next-event'];
   const files = {
-    claude: 'claude-2.1.250.json',
+    claude: 'claude-2.1.260.json',
     codex: 'codex-0.147.0.json',
     cursor: 'cursor-2026-08-28.json',
     portable: 'portable-1.0.0.json',

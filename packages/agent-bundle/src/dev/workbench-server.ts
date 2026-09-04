@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
@@ -36,6 +35,7 @@ import {
 import { McpAppBindingService, type McpAppToolDefinition } from './mcp-apps/mcp-app-binding-service.ts';
 import type { McpAppRoutePreviewService } from './mcp-apps/mcp-app-routes.ts';
 import { McpAppPreviewService } from './mcp-apps/mcp-app-preview-service.ts';
+import { mcpAppPreviewHost, mcpAppPreviewHostInfo, openInBrowser, type OpenBrowser } from './mcp-apps/mcp-app-preview-host.ts';
 import { McpAppRuntimeBindingService } from './mcp-app-runtime-binding-service.ts';
 import { McpAppRuntimePreviewService } from './mcp-app-runtime-preview-service.ts';
 import {
@@ -59,7 +59,7 @@ import {
 } from './runtime-client-surface-proxy.ts';
 import { resolveDevRuntimeProvider } from './runtime-provider-loader.ts';
 import {
-  DevRuntimeUnavailableError,
+  isDevRuntimeUnavailableError,
   type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeClientSurfaceProxyBinding,
   type DevRuntimeEventInput,
@@ -78,7 +78,7 @@ export interface DevServerSession {
   readonly url: string;
 }
 
-export type OpenBrowser = (url: string) => Promise<void> | void;
+export type { OpenBrowser } from './mcp-apps/mcp-app-preview-host.ts';
 
 interface Closeable {
   close(): Promise<void>;
@@ -361,7 +361,7 @@ export class RuntimeClientSurfaceBindings implements Closeable {
     try {
       endpoint = this.#runtime?.clientSurface(surfaceId);
     } catch (error) {
-      if (error instanceof DevRuntimeUnavailableError) return undefined;
+      if (isDevRuntimeUnavailableError(error)) return undefined;
       throw error;
     }
     if (endpoint === undefined) return undefined;
@@ -539,20 +539,6 @@ const withMcpSessionLifecycle = (
   status,
 });
 
-const openInBrowser: OpenBrowser = (url) => new Promise((resolvePromise, rejectPromise) => {
-  const [command, args] = process.platform === 'darwin'
-    ? ['open', [url]]
-    : process.platform === 'win32'
-      ? ['cmd', ['/c', 'start', '', url]]
-      : ['xdg-open', [url]];
-  const child = spawn(command, args, { detached: true, stdio: 'ignore' });
-  child.once('error', rejectPromise);
-  child.once('spawn', () => {
-    child.unref();
-    resolvePromise();
-  });
-});
-
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
   const root = resolve(options.root);
@@ -685,7 +671,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       // registration, so a foreground close cannot expose a half-owned lane.
       if (!appPreviews.attachRuntime(runtimePreviews)) void runtimePreviews.prepareClose().catch(() => undefined);
     } catch (error) {
-      if (!(error instanceof DevRuntimeUnavailableError)) throw error;
+      if (!isDevRuntimeUnavailableError(error)) throw error;
     } finally {
       installingRuntimePreviews = false;
     }
@@ -917,16 +903,8 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
     previews = new McpAppPreviewService({
       bindingAuthority: bindings,
-      host: {
-        onDisplayMode: (mode) => mode,
-        onDownload: async (download) => {
-          // This is a host-created opaque data URL; App-controlled content is
-          // encoded before it crosses the browser-launch boundary.
-          await openBrowser(`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(download.contents))}`);
-        },
-        onOpenLink: async (url) => { await openBrowser(url); },
-      },
-      hostInfo: { name: 'agent-bundle', version: '0.1.0' },
+      host: mcpAppPreviewHost(openBrowser),
+      hostInfo: mcpAppPreviewHostInfo,
       hostOrigin: foreground.url,
       sandboxProxy: sandbox,
       toolAuthority: {

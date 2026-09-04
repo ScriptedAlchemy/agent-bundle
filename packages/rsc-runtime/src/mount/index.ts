@@ -102,6 +102,7 @@ const failedLedger = (failure: AgentStateError): AgentNoticeLedger => {
         acknowledge: reject,
         inbox: reject,
         publish: reject,
+        published: reject,
         read: reject,
       }),
     }),

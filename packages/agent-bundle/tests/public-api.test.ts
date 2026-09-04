@@ -3,7 +3,7 @@ import { execFile as executeFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -16,8 +16,24 @@ import {
   type EvalHarness,
   type EvalServiceNativeOptions,
 } from '../src/index.ts';
-import { TargetRegistry, createDefaultRegistry } from '../src/api.ts';
+import {
+  DevRuntimeGenerationConflictError,
+  DevRuntimeUnavailableError,
+  TargetRegistry,
+  createDefaultRegistry,
+  createRuntimeGenerationStore,
+  createRuntimeMcpRegistry,
+} from '../src/api.ts';
 import type {
+  DevRuntimeDescriptor,
+  DevRuntimeInspectionEnvelope,
+  DevRuntimeMcpServerDescriptor,
+  DevRuntimeProvider,
+  DevRuntimeSession,
+  DevRuntimeStartContext,
+  RuntimeGenerationCandidate,
+  RuntimeGenerationStoreOptions,
+  RuntimeMcpRegistryOptions,
   TargetAdapter,
   TargetHookContract,
   TargetMcpRuntimeContract,
@@ -134,6 +150,44 @@ it('exposes advanced adapter registry and contract types only from the advanced 
   expect(createDefaultRegistry().has('portable')).toBe(true);
 });
 
+it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () => {
+  // A provider module is written against these names alone: the start
+  // context it accepts, the session it returns, the envelope and MCP
+  // descriptor it produces, and the store and registry a session drives.
+  const descriptor: DevRuntimeDescriptor = { environmentVariables: [], id: 'synthetic', label: 'Synthetic', schemaVersion: 1 };
+  const provider = {
+    descriptor,
+    start: async (context: DevRuntimeStartContext): Promise<DevRuntimeSession> => {
+      throw new DevRuntimeUnavailableError(`no runtime for ${context.projectRoot}`);
+    },
+  } satisfies DevRuntimeProvider;
+  const server: DevRuntimeMcpServerDescriptor = {
+    definitionDigest: 'd', name: 'fixture', resources: [], serverDigest: 's', target: 'portable', tools: [], transportDigest: 't',
+  };
+  const envelope: Pick<DevRuntimeInspectionEnvelope, 'trace'> = { trace: [] };
+  const candidate: Pick<RuntimeGenerationCandidate, 'id'> = { id: 'gen-1' };
+  const storeOptions: Pick<RuntimeGenerationStoreOptions<unknown>, 'storageRoot'> = { storageRoot: '/tmp/never-opened' };
+  const registryOptions: Pick<RuntimeMcpRegistryOptions, 'stateStoreId'> = { stateStoreId: 'state' };
+
+  expect(provider.descriptor.id).toBe('synthetic');
+  expect(server.name).toBe('fixture');
+  expect(envelope.trace).toEqual([]);
+  expect(candidate.id).toBe('gen-1');
+  expect(storeOptions.storageRoot).toBe('/tmp/never-opened');
+  expect(registryOptions.stateStoreId).toBe('state');
+  // The two errors a provider throws for the documented Workbench behaviour carry their codes.
+  expect(new DevRuntimeUnavailableError().code).toBe('AB8201');
+  expect(new DevRuntimeGenerationConflictError('gen-2', 'gen-1')).toMatchObject({
+    actualGenerationId: 'gen-1',
+    code: 'AB8204',
+    expectedGenerationId: 'gen-2',
+  });
+  // The store and registry ship as effect-free contracts plus constructors;
+  // their classes throw YieldableFrameworkErrors and stay behind the boundary.
+  expect(typeof createRuntimeGenerationStore).toBe('function');
+  expect(typeof createRuntimeMcpRegistry).toBe('function');
+});
+
 it('loads every public subpath and reports the package version', async () => {
   await expect(import('../src/api.ts')).resolves.toBeDefined();
   await expect(import('../src/config/index.ts')).resolves.toBeDefined();
@@ -168,6 +222,61 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
 }, 15_000);
+
+/**
+ * Declaration files each public export reaches, by breadth-first walk over
+ * the relative `import`/`export ... from` specifiers of the emitted `.d.ts`
+ * graph (per-file declarations, `dts.bundle: false`).
+ */
+const reachableDeclarations = async (entry: string): Promise<ReadonlyMap<string, string>> => {
+  const specifierPattern = /(?:from\s+|import\s*\(\s*)["']([^"']+)["']/gu;
+  const resolveRelative = async (from: string, specifier: string): Promise<string | undefined> => {
+    if (!specifier.startsWith('.')) return undefined;
+    const base = join(dirname(from), specifier).replace(/\.ts$/u, '');
+    for (const candidate of [`${base}.d.ts`, `${base}/index.d.ts`]) {
+      try {
+        await access(candidate);
+        return candidate;
+      } catch {
+        // try the next candidate
+      }
+    }
+    return undefined;
+  };
+  const seen = new Map<string, string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (seen.has(file)) continue;
+    const source = await readFile(file, 'utf8');
+    seen.set(file, source);
+    for (const match of source.matchAll(specifierPattern)) {
+      const next = await resolveRelative(file, match[1]!);
+      if (next !== undefined && !seen.has(next)) queue.push(next);
+    }
+  }
+  return seen;
+};
+
+it('keeps every public declaration graph free of effect', async () => {
+  // Effect is an implementation detail (docs/effect-conventions.md § Boundary
+  // modules): a consumer's `tsc` resolves every declaration the exports
+  // reach, so one `import ... from 'effect'` in a reachable `.d.ts` (for
+  // example a class extending `src/effect/errors.ts`) makes `effect` a type
+  // dependency of the package. Public entry classes therefore stay on plain
+  // `Error` / `CodedError`, and this pins it for each export.
+  await buildPackage();
+  const manifest = await readPackageManifest();
+  const effectImport = /from\s+["']effect(?:\/|["'])/u;
+  const offenders: string[] = [];
+  for (const [name, entrypoint] of Object.entries(manifest.exports)) {
+    const reachable = await reachableDeclarations(join(packageRoot, entrypoint.types));
+    for (const [file, source] of reachable) {
+      if (effectImport.test(source)) offenders.push(`${name} -> ${relative(packageRoot, file)}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+}, 30_000);
 
 it('writes the package version as the producer of a built CLI manifest', async () => {
   await buildPackage();
@@ -252,6 +361,15 @@ it('keeps bundled config extension types in emitted root declarations', async ()
     await symlink(
       join(agentBundleNodeModules, '@rslib'),
       join(consumerRoot, 'node_modules', '@rslib'),
+      'dir',
+    );
+    // The validators' and services' FileSystem programs type their Effect
+    // signatures, so the declaration graph resolves effect exactly as
+    // installed consumers do (a runtime dependency of the package; nothing
+    // Effect-typed is re-exported from a package entry).
+    await symlink(
+      join(agentBundleNodeModules, 'effect'),
+      join(consumerRoot, 'node_modules', 'effect'),
       'dir',
     );
     await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({

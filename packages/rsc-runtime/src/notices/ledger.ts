@@ -65,7 +65,10 @@ import {
 import {
   agentNoticeEventSchemas,
   type AgentNoticeLedgerState,
+  noticePublisherOf,
+  publisherMatchesPrincipal,
   recipientMatchesPrincipal,
+  recordedNoticePrincipal,
 } from './state.js';
 
 export interface CreateAgentNoticeLedgerOptions {
@@ -239,9 +242,15 @@ const recipient = (input: AgentRecipient): AgentRecipient => {
     ...(input.actor === undefined
       ? {}
       : { actor: Object.freeze({ id: nonEmptyText(input.actor.id, 'Notice recipient actor id') }) }),
+    ...(input.conversation === undefined
+      ? {}
+      : { conversation: nonEmptyText(input.conversation, 'Notice recipient conversation') }),
     ...(input.host === undefined
       ? {}
       : { host: Object.freeze({ name: nonEmptyText(input.host.name, 'Notice recipient host name') }) }),
+    ...(input.root === undefined
+      ? {}
+      : { root: nonEmptyText(input.root, 'Notice recipient root') }),
     ...(input.session === undefined
       ? {}
       : { session: Object.freeze({ sessionId: nonEmptyText(input.session.sessionId, 'Notice recipient session id') }) }),
@@ -346,6 +355,10 @@ const publishProgram = Effect.fnUntraced(function*(
     const id = `notice_${createHash('sha256')
       .update(canonicalJson({ idempotencyKey, recipient: target }), 'utf8')
       .digest('hex')}`;
+    // The publisher is identity the ledger already holds on the principal,
+    // recorded so the publishing agent can later read what became of its own
+    // notices; it is never matched for delivery.
+    const publisher = noticePublisherOf(request.principal);
     const notice: AgentNotice = Object.freeze({
       attempts: Object.freeze([]),
       content: createAgentDocument(input.content as AgentDocument),
@@ -355,6 +368,7 @@ const publishProgram = Effect.fnUntraced(function*(
       id,
       ...(nextAttemptAt === undefined ? {} : { nextAttemptAt }),
       priority: priority(input.priority),
+      ...(publisher === undefined ? {} : { publisher }),
       recipient: target,
       ...(retryBudget === undefined ? {} : { retryBudget }),
       // Persisted explicitly: only notices from before the redaction contract
@@ -498,6 +512,40 @@ const inboxProgram = Effect.fnUntraced(function*(
     }));
 });
 
+/**
+ * The publisher's own view (#460): every notice whose recorded publisher this
+ * principal is, in whatever state it reached, with its receipts. It is a read
+ * with no route behind it, so it records nothing on the ledger and discloses
+ * content under the default `internal` ceiling only — the secret pass runs
+ * over `internal` text, `public` travels as authored, and `secret` content is
+ * the placeholder — never the host's wider advertisement, and never another
+ * publisher's or any recipient's notices. Authorization is judged once per
+ * notice under `phase: 'published'`; a refused notice is simply omitted.
+ */
+const publishedProgram = Effect.fnUntraced(function*(
+  store: NoticeStore,
+  authorize: AgentNoticeAuthorizer,
+  request: AgentNoticeRequest,
+): Effect.fn.Return<readonly AgentNotice[], Error> {
+  const snapshot = yield* storeEffect(() => store.read({ signal: request.signal }));
+  const own = snapshot.state.notices.filter((notice) => publisherMatchesPrincipal(notice.publisher, request.principal));
+  const decisions = yield* Effect.forEach(own, (notice) =>
+    authorizeEffect(authorize, {
+      noticeId: notice.id,
+      phase: 'published',
+      principal: request.principal,
+      recipient: notice.recipient,
+    }).pipe(Effect.map((decision) => ({ decision, notice }))));
+  // Chronological by instant, not by string: `createdAt` is whatever valid
+  // ISO-8601 the publishing invocation started with, offsets included.
+  return Object.freeze(decisions
+    .filter(({ decision }) => decision.state === 'authorized')
+    .map(({ notice }) => notice)
+    .toSorted((left, right) =>
+      Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))
+    .map((notice) => currentlyDisclosedNotice(notice, 'mcp-inbox', undefined).notice));
+});
+
 const stateCounts = (notices: readonly AgentNotice[]): AgentNoticeLedgerInspection['counts'] => {
   const byState = Object.fromEntries(AGENT_NOTICE_STATES.map((state) => [state, 0])) as Record<AgentNoticeState, number>;
   let terminal = 0;
@@ -634,7 +682,7 @@ export const createAgentNoticeLedger = (
                 .filter(({ decision }) => decision.state === 'authorized')
                 .map(({ id }) => id),
               invocationId: request.invocation.id,
-              principal: request.principal,
+              principal: recordedNoticePrincipal(request.principal),
               unavailableIds: decisions
                 .filter(({ decision }) => decision.state === 'unavailable')
                 .map(({ id }) => id),
@@ -740,6 +788,12 @@ export const createAgentNoticeLedger = (
           return runPromise(Effect.gen(function*() {
             yield* noticeEffect(() => assertOpen(closed, request.signal));
             return yield* publishProgram(store, options.authorize, request, input, publishOptions);
+          }));
+        },
+        published() {
+          return runPromise(Effect.gen(function*() {
+            yield* noticeEffect(() => assertOpen(closed, request.signal));
+            return yield* publishedProgram(store, options.authorize, request);
           }));
         },
         read() {

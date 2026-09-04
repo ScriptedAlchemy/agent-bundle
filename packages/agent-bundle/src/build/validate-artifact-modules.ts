@@ -1,10 +1,11 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { sha256Hex } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { readFileBytes, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
 import { readModuleImports, type ModuleImport, type ModuleSyntaxCheck } from './module-imports.ts';
@@ -128,7 +129,7 @@ export const validateJavaScriptModules = async (options: {
     const check = options.bundledPaths?.has(path) === true ? options.bundleSyntaxCheck ?? 'lexed' : 'parsed';
     let bytes: Buffer;
     try {
-      bytes = await readFile(resolve(artifactRoot, path));
+      bytes = await runWithPlatform(readFileBytes(resolve(artifactRoot, path)));
     } catch {
       diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
       visiting.delete(path);

@@ -40,51 +40,47 @@ import {
   isInspectionSensitiveKey,
   redactInspectionDiagnostics,
 } from './inspection-security.js';
-import {
-  RuntimeGenerationStore,
-  type RuntimeGeneration,
-  type RuntimeGenerationActivationGuard,
-  type RuntimeGenerationCandidate,
-  type RuntimeGenerationPreparedActivation,
-} from '../../../../packages/agent-bundle/src/dev/runtime-generation-store.ts';
-import {
-  RuntimeMcpRegistry,
-  type RuntimeMcpConnection,
-  type RuntimeMcpConnector,
-  type RuntimeMcpExecutionContext,
-  type RuntimeMcpPreparedActivationReconcile,
-} from '../../../../packages/agent-bundle/src/dev/runtime-mcp-registry.ts';
+import type { JsonObject, JsonValue } from 'agent-bundle';
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
-  type DevRuntimeClientSurfaceEndpoint,
-  type DevRuntimeEventInput,
-  type DevRuntimeMcpSession,
-  type DevRuntimeMcpSessionCloseObservation,
-  type DevRuntimePreparedProject,
-  type DevRuntimeSession,
-  type DevRuntimeStartContext,
-} from '../../../../packages/agent-bundle/src/dev/runtime-provider.ts';
-import {
+  createRuntimeGenerationStore,
+  createRuntimeMcpRegistry,
   type DevRuntimeAsset,
   type DevRuntimeAssetRequest,
+  type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeDescriptor,
   type DevRuntimeDiagnostic,
+  type DevRuntimeEventInput,
   type DevRuntimeFixture,
+  type DevRuntimeGenerationStore,
   type DevRuntimeInspectionEnvelope,
   type DevRuntimeInvocationRequest,
   type DevRuntimeMcpConnectionState,
   type DevRuntimeMcpRegistryReconcileInput,
+  type DevRuntimeMcpSession,
   type DevRuntimeMcpSessionBinding,
+  type DevRuntimeMcpSessionCloseObservation,
+  type DevRuntimePreparedProject,
+  type DevRuntimeProviderMcpRegistry,
   type DevRuntimeReplayRequest,
   type DevRuntimeRun,
+  type DevRuntimeSession,
+  type DevRuntimeStartContext,
   type DevRuntimeStateIdentity,
   type DevRuntimeStateResetRequest,
   type DevRuntimeStatus,
   type DevRuntimeSurface,
+  type RuntimeGeneration,
+  type RuntimeGenerationActivationGuard,
+  type RuntimeGenerationCandidate,
+  type RuntimeGenerationPreparedActivation,
+  type RuntimeMcpConnection,
+  type RuntimeMcpConnector,
+  type RuntimeMcpExecutionContext,
+  type RuntimeMcpPreparedActivationReconcile,
   type RuntimeVector,
-} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from 'agent-bundle';
+} from 'agent-bundle/api';
 
 const descriptor: DevRuntimeDescriptor = Object.freeze({
   environmentVariables: Object.freeze([]),
@@ -632,8 +628,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   readonly #candidatesByAttempt = new Map<string, RuntimeGenerationCandidate>();
   readonly #captureTasks = new Set<Promise<void>>();
   readonly #context: DevRuntimeStartContext;
-  readonly #generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
-  readonly #mcpRegistry: RuntimeMcpRegistry;
+  readonly #generationStore: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
+  readonly #mcpRegistry: DevRuntimeProviderMcpRegistry;
   readonly #preparedRevisions = new Set<string>();
   readonly #invocations = new Set<Promise<DevRuntimeRun>>();
   readonly #invocationAbort = new AbortController();
@@ -690,8 +686,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   private constructor(input: Readonly<{
     readonly checkpointStore: RscEnvironmentCheckpointStore;
     readonly context: DevRuntimeStartContext;
-    readonly generationStore: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
-    readonly mcpRegistry: RuntimeMcpRegistry;
+    readonly generationStore: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
+    readonly mcpRegistry: DevRuntimeProviderMcpRegistry;
     readonly ownedRunsRoot: OwnedRunsRoot;
     readonly preparedRuntime: DevRuntimePreparedProject;
     readonly testing: RsbuildRuntimeSessionStartTesting;
@@ -749,7 +745,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     try {
       context.signal.throwIfAborted();
       const storageRoot = resolve(context.storageRoot);
-      const generationStore = new RuntimeGenerationStore<RscRuntimeGenerationMetadata>({
+      const generationStore = createRuntimeGenerationStore<RscRuntimeGenerationMetadata>({
         metadataCodec: rscRuntimeGenerationMetadataCodec,
         retainInactive: 5,
         storageRoot: join(storageRoot, 'generation-store'),
@@ -813,7 +809,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           return connection;
         },
       });
-      const mcpRegistry = new RuntimeMcpRegistry({
+      const mcpRegistry = createRuntimeMcpRegistry({
         artifactEpochId: () => undefined,
         connector,
         emit: (event) => {
@@ -825,7 +821,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
           if (session === undefined) throw new Error('RSC runtime session is unavailable.');
           return session.#executeMcp(execution);
         },
-        generationStore: generationStore as RuntimeGenerationStore,
+        generationStore: generationStore as DevRuntimeGenerationStore,
         providerSessionId: context.providerSessionId,
         stateStoreId,
       });
@@ -879,7 +875,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
   }
 
-  get mcpRegistry(): RuntimeMcpRegistry {
+  get mcpRegistry(): DevRuntimeProviderMcpRegistry {
     return this.#mcpRegistry;
   }
 
@@ -1015,7 +1011,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     const expectedGenerationId = request.mode === 'exact' ? historicalGenerationId : activeGenerationId;
     if (expectedGenerationId === undefined) throw new DevRuntimeUnavailableError('RSC runtime has no active generation.');
     if (request.mode === 'exact') {
-      let retained: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>> | undefined;
+      let retained: Awaited<ReturnType<DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>> | undefined;
       try {
         try {
           retained = await this.#generationStore.lease(historicalGenerationId);
@@ -1097,7 +1093,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
 
   async #invoke(
     request: DevRuntimeInvocationRequest,
-    suppliedLease?: Awaited<ReturnType<RuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>>,
+    suppliedLease?: Awaited<ReturnType<DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>['lease']>>,
     historicalSurface?: DevRuntimeSurface,
   ): Promise<DevRuntimeRun> {
     let lease = suppliedLease;
@@ -1536,7 +1532,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #assertRuntimeAppAuthority(
     generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
     link: RuntimeAppLink,
-  ): NonNullable<ReturnType<RuntimeMcpRegistry['snapshot']>> {
+  ): NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>> {
     this.#assertInvocationOpen();
     const registry = this.#mcpRegistry.snapshot();
     if (
@@ -1554,7 +1550,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #matchesRuntimeAppBinding(
     binding: DevRuntimeMcpSessionBinding,
     link: RuntimeAppLink,
-    registry: NonNullable<ReturnType<RuntimeMcpRegistry['snapshot']>>,
+    registry: NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>>,
   ): boolean {
     return binding.definitionDigest === registry.definitionDigest && binding.registryRevision === registry.registryRevision &&
       binding.serverDigest === link.descriptor.serverDigest && binding.serverName === link.descriptor.name &&
@@ -2595,7 +2591,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
   #assertMcpExecutionAuthority(
     execution: RuntimeMcpExecutionContext,
     generation: RuntimeGeneration<RscRuntimeGenerationMetadata>,
-  ): NonNullable<ReturnType<RuntimeMcpRegistry['snapshot']>> {
+  ): NonNullable<ReturnType<DevRuntimeProviderMcpRegistry['snapshot']>> {
     this.#assertInvocationOpen();
     const registry = this.#mcpRegistry.snapshot();
     const binding = this.#mcpRegistry.session(execution.sessionId)?.snapshot().binding;

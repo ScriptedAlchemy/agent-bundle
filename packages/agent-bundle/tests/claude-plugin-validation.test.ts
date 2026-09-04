@@ -446,15 +446,50 @@ it('fails host validation when the Claude version probe cannot be spawned', asyn
   });
 });
 
-it('gates the --json report on Claude Code 2.1.259 or later', () => {
-  expect(claudeSupportsJsonValidationReport(undefined)).toBe(false);
+it('asks for the --json report first and skips it only for a version known to predate Claude Code 2.1.259', () => {
   expect(claudeSupportsJsonValidationReport('2.1.250')).toBe(false);
   expect(claudeSupportsJsonValidationReport('2.1.258')).toBe(false);
   expect(claudeSupportsJsonValidationReport('2.1.259')).toBe(true);
+  expect(claudeSupportsJsonValidationReport('2.1.260')).toBe(true);
   expect(claudeSupportsJsonValidationReport('2.1.300')).toBe(true);
   expect(claudeSupportsJsonValidationReport('2.2.0')).toBe(true);
   expect(claudeSupportsJsonValidationReport('3.0.0')).toBe(true);
-  expect(claudeSupportsJsonValidationReport('nightly')).toBe(false);
+  // Unknown versions take the primary path; the CLI's own `unknown option` answer selects the text fallback.
+  expect(claudeSupportsJsonValidationReport(undefined)).toBe(true);
+  expect(claudeSupportsJsonValidationReport('nightly')).toBe(true);
+});
+
+it('falls back to the text reporter for every run when a CLI of unknown version rejects --json', async () => {
+  const bundle = await emittedClaudeBundle();
+  const text = await recordedReport('2.1.250-plugin-strict-findings.txt', bundle);
+  const calls: string[][] = [];
+  const report = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: async (request) => {
+      calls.push([...request.args]);
+      if (request.args[0] === '--version') return { exitCode: 0, signal: null, stderr: '', stdout: 'nightly (Claude Code)\n' };
+      if (request.args[0] === '--plugin-dir') return { exitCode: 0, signal: null, stderr: '', stdout: loadedFixtureRow(request.args[1] ?? '') };
+      if (request.args.includes('--json')) return { exitCode: 1, signal: null, stderr: "error: unknown option '--json'\n", stdout: '' };
+      const target = request.args[2] ?? '';
+      return target.endsWith('marketplace.json')
+        ? { exitCode: 0, signal: null, stderr: '', stdout: `Validating marketplace manifest: ${target}\n\n✔ Validation passed\n` }
+        : { exitCode: 1, signal: null, stderr: '', stdout: text };
+    },
+    target: 'claude',
+  });
+
+  const plugin = join(bundle, '.claude-plugin', 'plugin.json');
+  const marketplace = join(bundle, '.claude-plugin', 'marketplace.json');
+  expect(calls).toEqual([
+    ['--version'],
+    ['plugin', 'validate', plugin, '--strict', '--json'],
+    ['plugin', 'validate', plugin, '--strict'],
+    ['plugin', 'validate', marketplace, '--strict'],
+    ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
+  ]);
+  expect(report.status).toBe('failed');
+  expect(report.version).toBeUndefined();
+  expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['AB6020', 'AB6020', 'AB6020', 'AB6021', 'AB6021']);
 });
 
 it('validates the plugin manifest and the marketplace manifest separately with --json on 2.1.259', async () => {
@@ -718,7 +753,7 @@ it('reports AB6022 when a 2.1.259 run returns no JSON report (exit 2 writes only
   });
 });
 
-it('falls back to text parsing with file attribution on the CI-pinned Claude Code 2.1.250', async () => {
+it('parses the text reporter with file attribution on Claude Code 2.1.250, which has no --json', async () => {
   const bundle = await emittedClaudeBundle();
   const text = await recordedReport('2.1.250-plugin-strict-findings.txt', bundle);
   const fixture = runByTarget({

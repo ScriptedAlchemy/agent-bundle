@@ -20,8 +20,8 @@ interface ActorStatus {
   readonly kind: 'child' | 'root';
   readonly parentSessionId?: string;
   readonly provenance: {
-    readonly id: 'derived' | 'native';
-    readonly parentSessionId?: 'derived' | 'native';
+    readonly id: 'derived' | 'native' | 'registry';
+    readonly parentSessionId?: 'derived' | 'native' | 'registry';
     readonly worktreeRoot?: 'derived' | 'native';
   };
   readonly status: 'active' | 'stopped';
@@ -31,6 +31,12 @@ interface ActorStatus {
 interface StatusResult {
   readonly activeActivities: number;
   readonly actors: readonly ActorStatus[];
+  readonly notices: {
+    readonly pending: number;
+    readonly reason?: string;
+    readonly state: 'available' | 'unavailable';
+    readonly total: number;
+  };
   readonly reason?: string;
   readonly refusals: number;
   readonly revision: number;
@@ -159,6 +165,7 @@ const callStatus = async (client: Client): Promise<StatusResult> => {
   expect(Object.keys(result as Record<string, unknown>).sort()).toEqual([
     'activeActivities',
     'actors',
+    'notices',
     'refusals',
     'revision',
     'state',
@@ -254,9 +261,22 @@ it('proves worktree proximity journeys across real processes and linked worktree
   liveSession = await startServer();
   expect(liveSession.pid).toBeGreaterThan(0);
   await expect(stat(fixture.endpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+  // This client call carries no `_meta` correlation, so its lineage is
+  // unresolved and it is nobody's publisher: the published-notice count is
+  // honestly zero for it, never the ledger's total.
   await expect(callStatus(liveSession.client)).resolves.toEqual({
     activeActivities: 0,
     actors: [],
+    notices: {
+      acknowledged: 0,
+      attempted: 0,
+      expired: 0,
+      pending: 0,
+      state: 'available',
+      total: 0,
+      unavailable: 0,
+      withdrawn: 0,
+    },
     refusals: 0,
     revision: 0,
     state: 'available',
@@ -271,24 +291,37 @@ it('proves worktree proximity journeys across real processes and linked worktree
     source: 'startup',
     transcript_path: transcriptPath,
   }, hookEnvironment);
-  await runHook(fixture.hooks.agentStart, fixture.worktreeA, {
-    agent_id: 'agent-a',
-    agent_type: 'implementation',
-    cwd: fixture.worktreeA,
-    hook_event_name: 'SubagentStart',
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }, hookEnvironment);
-  await runHook(fixture.hooks.agentStart, fixture.worktreeB, {
-    agent_id: 'agent-b',
-    agent_type: 'implementation',
-    cwd: fixture.worktreeB,
-    hook_event_name: 'SubagentStart',
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }, hookEnvironment);
+  // Claude spawns a subagent from the root's `Agent` tool call: its PreToolUse
+  // opens the spawn window the shared runtime's lineage registry places the
+  // following `SubagentStart` under, and every one of the child's later hook
+  // payloads carries its `agent_id`
+  // (fixtures/host-lineage/claude-2.1.259-orchestration.ndjson). The registry
+  // resolves that id as the child's lineage conversation — the axis the
+  // proximity notice is addressed to.
+  const spawn = async (agentId: string, worktree: string): Promise<void> => {
+    await runHook(fixture.hooks.beforeTool, fixture.repoRoot, {
+      cwd: fixture.repoRoot,
+      hook_event_name: 'PreToolUse',
+      session_id: sessionId,
+      tool_input: { prompt: `work in ${worktree}`, subagent_type: 'implementation' },
+      tool_name: 'Agent',
+      tool_use_id: `spawn-${agentId}`,
+      transcript_path: transcriptPath,
+    }, hookEnvironment);
+    await runHook(fixture.hooks.agentStart, worktree, {
+      agent_id: agentId,
+      agent_type: 'implementation',
+      cwd: worktree,
+      hook_event_name: 'SubagentStart',
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+    }, hookEnvironment);
+  };
+  await spawn('agent-a', fixture.worktreeA);
+  await spawn('agent-b', fixture.worktreeB);
 
   const intentA = {
+    agent_id: 'agent-a',
     cwd: fixture.worktreeA,
     hook_event_name: 'PreToolUse',
     session_id: sessionId,
@@ -298,6 +331,7 @@ it('proves worktree proximity journeys across real processes and linked worktree
     transcript_path: transcriptPath,
   } as const;
   const intentB = {
+    agent_id: 'agent-b',
     cwd: fixture.worktreeB,
     hook_event_name: 'PreToolUse',
     session_id: sessionId,
@@ -324,7 +358,22 @@ it('proves worktree proximity journeys across real processes and linked worktree
   );
   expect(hookText(secondIntent)).toContain(warning);
 
+  // Only agent-a's own conversation admits the notice: an event in worktree A
+  // that the runtime cannot place under agent-a (no `agent_id`) is not it.
+  const notAgentA = await runHook(fixture.hooks.afterTool, fixture.worktreeA, {
+    cwd: fixture.worktreeA,
+    hook_event_name: 'PostToolUse',
+    session_id: sessionId,
+    tool_input: { file_path: 'src/other.ts' },
+    tool_name: 'Edit',
+    tool_response: { ok: true },
+    tool_use_id: 'not-agent-a-after',
+    transcript_path: transcriptPath,
+  }, hookEnvironment);
+  expect(hookText(notAgentA)).not.toContain('Directed proximity notice');
+
   const delivered = await runHook(fixture.hooks.afterTool, fixture.worktreeA, {
+    agent_id: 'agent-a',
     cwd: fixture.worktreeA,
     hook_event_name: 'PostToolUse',
     session_id: sessionId,
@@ -370,13 +419,16 @@ it('proves worktree proximity journeys across real processes and linked worktree
       status: 'active',
       worktreeRoot: fixture.repoRoot,
     },
+    // Placed under the root by the runtime's lineage registry (the spawning
+    // `Agent` call opened the window), so the child's identity and its
+    // parent carry the registry's provenance rather than the raw envelope's.
     {
       id: 'agent-a',
       kind: 'child',
       parentSessionId: sessionId,
       provenance: {
-        id: 'native',
-        parentSessionId: 'native',
+        id: 'registry',
+        parentSessionId: 'registry',
         worktreeRoot: 'native',
       },
       status: 'active',
@@ -387,8 +439,8 @@ it('proves worktree proximity journeys across real processes and linked worktree
       kind: 'child',
       parentSessionId: sessionId,
       provenance: {
-        id: 'native',
-        parentSessionId: 'native',
+        id: 'registry',
+        parentSessionId: 'registry',
         worktreeRoot: 'native',
       },
       status: 'active',

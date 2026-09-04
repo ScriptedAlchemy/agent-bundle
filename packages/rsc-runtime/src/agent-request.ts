@@ -8,9 +8,10 @@ import type {
 } from './notices/contract.js';
 import type { AgentStateHandle } from './state/contract.js';
 
-// Bumped to 3 when `lineage` joined the handle shape: a realm that already
-// holds an older store must fail closed rather than hand out handles without it.
-export const AGENT_REQUEST_STORE_VERSION = 3;
+// Bumped to 3 when `lineage` joined the handle shape and to 4 when `terminal`
+// did: a realm that already holds an older store must fail closed rather than
+// hand out handles without them.
+export const AGENT_REQUEST_STORE_VERSION = 4;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
@@ -126,6 +127,55 @@ export interface AgentLineage {
   readonly resolution: AgentLineageResolution;
   readonly root: string;
   readonly subagent?: AgentLineageSubagent;
+}
+
+/**
+ * What one of the process's output streams is, as far as the request can
+ * honestly tell: `tty` is an interactive terminal, `pipe` is any other open
+ * descriptor (a pipe, a file, a socket, `/dev/null`), and `none` means no
+ * human-facing stream exists for the route on this surface — an MCP server's
+ * stdout is the protocol wire and a hook's is its host envelope.
+ */
+export type AgentTerminalStreamKind = 'tty' | 'pipe' | 'none';
+
+/** The color depth a stream renders: `basic` is 16 colors, `256` the xterm palette, `truecolor` 24-bit. */
+export type AgentTerminalColor = 'none' | 'basic' | '256' | 'truecolor';
+
+/**
+ * The projection the request is running under. The routed CLI (`cli`), a
+ * rendered or plain script (`script`), and the Workbench (`workbench`) each
+ * own a process whose streams can be probed; a generated MCP server (`mcp`)
+ * and an event route (`hook`) never have a terminal, whatever their
+ * descriptors are, so those two always report `none`.
+ */
+export type AgentTerminalSurface = 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+
+export interface AgentTerminalStream {
+  /** Present when the stream is a terminal or `COLUMNS` overrides it. */
+  readonly columns?: number;
+  readonly color: AgentTerminalColor;
+  readonly kind: AgentTerminalStreamKind;
+  /** Present when the stream is a terminal or `LINES` overrides it. */
+  readonly rows?: number;
+}
+
+/**
+ * The terminal capability of the process the route runs in (#511): what
+ * stdout and stderr are, whether they render color (per `NO_COLOR`,
+ * `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `TERM`, and `COLORTERM`), and
+ * how wide they are (`COLUMNS`/`LINES` override the terminal's report). It is
+ * information only — never a writer — computed once per invocation by the
+ * framework shell with the same rules that pick the CLI output mode, so a
+ * route's own output agrees with the framework's. Under the routed CLI and
+ * rendered scripts, machine output owns stdout: `stdout` describes where the
+ * rendered document lands, `stderr` the channel a route may write to itself.
+ */
+export interface AgentTerminal {
+  readonly hostSurface: AgentTerminalSurface;
+  /** Whether stdout and stderr name the same open file (`2>&1`, one shared terminal). */
+  readonly sharesTarget: boolean;
+  readonly stderr: AgentTerminalStream;
+  readonly stdout: AgentTerminalStream;
 }
 
 export interface AgentFilesystemAuthority {
@@ -302,6 +352,12 @@ export interface AgentRequestContext {
    * host fields; `unavailable` carries the per-host reason.
    */
   readonly lineage: Observed<AgentLineage>;
+  /**
+   * The terminal capability of the process (#511), probed by the routed CLI
+   * and script shells and reported as `none` under MCP and hooks; `unavailable`
+   * when the host wiring mounted none.
+   */
+  readonly terminal: Observed<AgentTerminal>;
   readonly capabilities: AgentRequestCapabilities;
   readonly progress: AgentProgressReporter;
   readonly signal: AbortSignal;
@@ -348,6 +404,7 @@ export interface AgentRequestInitBase {
   readonly signal?: AbortSignal;
   /** Request-bound state handle from `createAgentStateHandle` (subpath `./state`). */
   readonly state?: AgentStateHandle;
+  readonly terminal?: Observed<AgentTerminal>;
   readonly workspace?: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -446,6 +503,7 @@ interface FrozenValues {
   readonly session: Observed<AgentSessionIdentity>;
   readonly signal: AbortSignal;
   readonly state: AgentStateHandle | undefined;
+  readonly terminal: Observed<AgentTerminal>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -512,6 +570,9 @@ const createHandle = (lease: Lease): AgentRequestContext => Object.freeze({
   },
   get lineage() {
     return open(lease).lineage;
+  },
+  get terminal() {
+    return open(lease).terminal;
   },
   get capabilities() {
     return open(lease).capabilities;
@@ -583,12 +644,13 @@ export const runAgentRequest = async <T>(
   const lineage = snapshotObserved(init.lineage ?? unavailable<AgentLineage>());
   const session = snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>());
   const signal = init.signal ?? new AbortController().signal;
+  const terminal = snapshotObserved(init.terminal ?? unavailable<AgentTerminal>());
   const workspace = snapshotObserved(init.workspace ?? unavailable<AgentWorkspaceIdentity>());
   const noticeLease: AgentNoticeRequestLease | undefined = init.noticeLedger === undefined
     ? undefined
     : await init.noticeLedger.openRequest({
       invocation,
-      principal: Object.freeze({ actor, host, session, workspace }),
+      principal: Object.freeze({ actor, host, lineage, session, workspace }),
       signal,
     });
   const values: FrozenValues = Object.freeze({
@@ -604,6 +666,7 @@ export const runAgentRequest = async <T>(
     session,
     signal,
     state: init.state,
+    terminal,
     workspace,
   });
   const lease = new Lease(values);

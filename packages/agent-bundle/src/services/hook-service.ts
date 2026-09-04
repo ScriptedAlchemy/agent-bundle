@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact } from '../core/paths.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import {
   artifactHookIndexName,
   type ArtifactHook,
@@ -13,6 +13,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { parseArtifactHookIndex } from '../build/hook-index.ts';
 import { taskkill, terminateProcessTree, type ProcessTreeTaskkill } from './process-tree.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 
 const defaultTimeoutMs = 5_000;
@@ -60,7 +61,7 @@ const cancellations = new WeakSet<object>();
  * clone that could not be removed stays a real failure even when it reports the
  * same surface.
  */
-class HookSimulationAbortError extends Error {
+class HookSimulationAbortError extends YieldableFrameworkError {
   readonly code = 'hook.simulation.aborted';
 
   constructor() {
@@ -74,7 +75,7 @@ class HookSimulationAbortError extends Error {
 export const isHookSimulationCancellation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && cancellations.has(error);
 
-class HookSimulationTerminationError extends Error {
+class HookSimulationTerminationError extends YieldableFrameworkError {
   readonly code = 'hook.simulation.termination.unsettled';
 
   constructor(reason: Error) {
@@ -258,7 +259,7 @@ export class HookService {
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const index = parseArtifactHookIndex(await readFile(joinArtifact(artifact, artifactHookIndexName), 'utf8'));
+    const index = parseArtifactHookIndex(await runWithPlatform(readFileString(joinArtifact(artifact, artifactHookIndexName))));
     if (index === undefined) {
       throw new Error('Artifact hook metadata is missing or invalid.');
     }

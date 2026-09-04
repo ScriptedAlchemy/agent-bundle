@@ -58,16 +58,24 @@ function, receives the generated process envelope:
 
 ```ts
 // src/cli.ts — the whole CLI entry a consumer writes
-export const main = async (argv: readonly string[]): Promise<number> => {
-  // ...
+import type { ExecutableMainContext } from 'agent-bundle';
+
+export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+  if (terminal.stderr.color !== 'none') { /* paint progress on stderr */ }
   return 0;
 };
 ```
 
-The envelope awaits `main(process.argv.slice(2))`, adopts a numeric return as the process exit
-code, and lets an escaped rejection surface through Node's top-level failure path (stack to
-stderr, exit code 1). Self-executing modules with no `main` export bundle directly, byte for
-byte.
+The envelope awaits `main(process.argv.slice(2), { terminal })`, adopts a numeric return as the
+process exit code, and lets an escaped rejection surface through Node's top-level failure path
+(stack to stderr, exit code 1). `terminal` is the process's
+[terminal capability](./mcp.mdx#the-terminal-capability): TTY-ness, color, and size for stdout
+and stderr, plus whether the two share one target, probed once before `main` runs by a
+dependency-free module the envelope inlines — a plain script or bin loads no runtime for it.
+`hostSurface` is `cli` for a package bin and `script` for an artifact script, so a module shipped
+on both surfaces sees the one it was launched from. A `main` declared with one parameter keeps
+working; the second argument is simply unread. Self-executing modules with no `main` export
+bundle directly, byte for byte, and receive no probe.
 
 ## The routed CLI
 
@@ -132,6 +140,13 @@ same props and renders through the runtime dispatcher against a sibling
 `dist/bin/<plugin-name>-flight.mjs` worker. It gains the four output modes described in
 [Scripts and assets](./scripts-assets.mdx). Routed CLI projects need `@agent-bundle/runtime` as a
 dependency, because the generated executable installs the request context through it.
+
+A rendered command runs inside a render session whose wall clock defaults to 60 seconds. A command
+that legitimately runs longer — `<bin> await <ticket>` over a two-hour build — declares its budget
+as `config.render: { maxElapsedMs }` (a positive integer of milliseconds up to 24 hours, `AB4835`
+otherwise); the compiled command carries it into the generated executable, and a projected MCP
+command (`routes.mcpCommands`) inherits its tool's. A plain `.ts` command executes without a render
+session and rejects the key. See [Render budget](./mcp.mdx#render-budget).
 
 Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
 

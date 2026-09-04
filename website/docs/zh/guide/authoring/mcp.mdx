@@ -105,6 +105,41 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
 
+### 终端能力
+
+句柄的最后一个轴是 `terminal`，一个 `Observed<AgentTerminal>`：描述进程的输出流是什么，因此需要自己给
+stderr 上色或给表格定宽的路由，再也不必自行探测 `process.stdout.isTTY` 或读取 `FORCE_COLOR`。框架外壳
+在每次调用时只计算一次，所用规则与选择 CLI 输出模式的规则完全相同，所以插件输出与框架输出总是一致。
+它只是信息——从来不是写入器——也不会改变 `Agent.*` 组件渲染的任何内容。
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 与 fd 2 指向同一个打开的文件（`2>&1`，或同一个终端）
+}
+```
+
+颜色遵循非正式标准的惯常优先级：设置了 `FORCE_COLOR` 时由它直接决定（`0`/`false` 关闭；空值、`1`
+或 `true` 为 basic；`2` 为 256；`3` 为 truecolor），`CLICOLOR_FORCE` 即使对管道也强制开启颜色，
+`NO_COLOR`（任何非空值）与 `CLICOLOR=0` 强制关闭，`TERM=dumb` 不渲染颜色，其余情况下终端按
+`COLORTERM`/`TERM` 声明的深度渲染，管道则不渲染。`COLUMNS`/`LINES` 会覆盖上报的尺寸。
+
+| 路由运行的位置 | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| 路由式 CLI 可执行文件——普通、渲染式或投影的 MCP 命令 | `cli` | 从可执行文件自身进程探测。机器输出独占 stdout，因此 `stdout` 说明文档落在哪里，`stderr` 则是路由可以自行写入的通道。 |
+| 渲染式脚本（`src/scripts/<name>.tsx`） | `script` | 同上，探测得出。 |
+| 生成的 MCP 服务器 | `mcp` | 两者均为 `none`——stdout 是协议线路，stderr 是宿主的日志。从不探测，也从不猜测。 |
+| 事件路由（共享运行时或独立钩子进程） | `hook` | 两者均为 `none`——stdout 是宿主的钩子信封。 |
+| Workbench 生命周期回放 | `workbench` | 两者均为 `none`。 |
+| `defineRscApplication` 适配器 | `mcp` / `cli` | `createRscMcpServer` 两者均挂载 `none`；`runRscCli` 自身不做探测，只挂载调用方在选项中传入的 `terminal`，否则为 `unavailable`（`not-provided`）。 |
+| 未挂载该轴的自定义宿主 | — | `unavailable`（`not-provided`）。 |
+
+导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
+[包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
+一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
@@ -145,6 +180,37 @@ route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一�
 `projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
 返回 fixture 的 token 产生的通知；而在 `callTool` 上设置了 `_meta.progressToken` 的
 `openInMemoryMcpServer()` 客户端会通过真实协议收到它们。
+
+## 渲染预算
+
+每次调用都在一个受运行时默认上限约束的渲染会话中进行，其中挂钟上限是 60 秒
+（`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`）。一条合理工作时间超过这一上限的路由——等待一次构建、
+对守护进程长轮询——应在 `config.render` 中声明自己的预算，而不是截短自己的等待再让调用方反复轮询：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Wait for a ticket to settle.',
+  render: { maxElapsedMs: 7_200_000 },
+} satisfies ToolConfig;
+```
+
+`maxElapsedMs` 是一个以毫秒计的正整数，上限为框架天花板 24 小时（从 `agent-bundle` 导出的
+`MAX_ROUTE_RENDER_ELAPSED_MS`）；其他任何值都会在构建时报 `AB4835`。编译器随 `config` 的其余部分静态读取
+该值，因此生成式 MCP 服务器会在该路由的每次 `tools/call`、`resources/read` 与 `prompts/get` 上把它应用到
+渲染会话；该工具的 `routes.mcpCommands` 投影以及渲染式 `src/cli/**` 命令在编译后的命令上携带同一个键
+（`CliRouteConfig` 上的 `config.render`；纯 `.ts` 命令没有渲染会话，会拒绝它）。`renderRoute` 与
+`openInMemoryMcpServer` 同样应用它，叠加在测试作为分发器基线传入的 `limits` 之上。省略 `render` 即保留
+默认值，其他上限（文档大小、事件数量、事件速率）保持不变。
+
+预算只约束框架自身的会话；宿主自己的工具调用期限仍然生效，因此整个等待期间都要持续汇报进度——调用运行
+期间，每次 `progress.report()` 与流式传输的 `Agent.Progress` 回退都会作为 `notifications/progress` 转发。
+Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，或按服务器配置的 `timeout`），其空闲
+计时器（stdio 服务器为 30 分钟）正是由这些通知重置；Codex 以 `tool_timeout_sec` 约束一次调用，除非操作者
+在 `config.toml` 中提高，否则为 60 秒。`agent-bundle inspect --routes` 会随每条路由编译后的 `config`
+一并显示该预算。
 
 ## 共享布局
 
@@ -344,6 +410,70 @@ export default defineConfig({
 
 声明在*预构建*服务器上的 App 仍属于开发期表面：Workbench 会实时编译它，而构建假定 payload 已经在
 提供该资源。
+
+### 独立提供 App
+
+在 MCP 宿主之外，App 通常经由 Workbench 的 MCP 页面访问。当插件想要一条“打开仪表盘”的命令——从终端
+出发，在一个普通浏览器标签页里实时查看它自己的服务器——`agent-bundle serve-app` 会独立托管一个已构建的
+App：
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
+同样的 plugin-data 根目录），通过 Workbench MCP 页面所用的同一套宿主栈——沙箱代理、同意授权、
+`McpAppBridge`——把 App 绑定到它上面，先调用一次 App 的工具让它带着数据打开，然后打印 loopback URL。
+宿主只绑定 `127.0.0.1`，只提供一个页面加上由每次启动生成的令牌保护的 `/api/mcp/...` 路由，并且只通过
+桥接暴露那一个服务器；App 文档运行在框架沙箱内的第二个 loopback origin 上。它是本地预览宿主，不是部署
+目标。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
+
+同一套宿主以 `agent-bundle/api` 中的 `serveApp` 提供编程形式，因此插件自己的路由式 CLI 可以提供这条
+命令。它返回 `{ url, close, closed }`：`close()` 拆除宿主与服务器，`closed` 在服务器连接因任何原因
+结束时落定。
+
+```ts
+// src/cli/dashboard.ts —— `hauler dashboard`：针对正在运行的守护进程打开 App。
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  try {
+    // 在 Ctrl-C（经由 signal）或守护进程自行退出时落定。
+    await served.closed;
+  } finally {
+    // `closed` 只跟踪服务器连接；close() 还会释放宿主、沙箱代理与任何一次性产物。
+    await served.close();
+  }
+  return { url: served.url };
+}
+```
+
+`serveApp` 运行在插件的开发期或 CLI 进程里，绝不在 MCP 服务器外壳之内：像上面那样，在需要它的路由中
+惰性导入，这样输出的产物就不携带宿主运行时；同时要保证 `agent-bundle` 在该 CLI 运行之处可被解析。
+用完后务必 `close()`——`closed` 落定只表示服务器连接结束，并不表示宿主已被拆除。
+`autoApprove` 会在 App 请求时代操作者批准列出的同意能力（`call-tool` 让轮询型仪表盘无需弹窗即可刷新）；
+其余能力与 Workbench 一样，在宿主页面里等待 Allow/Deny 决定。
 
 ## 服务器模式
 

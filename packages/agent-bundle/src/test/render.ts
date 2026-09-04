@@ -32,11 +32,14 @@ import type {
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
+import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
+import type { AgentTerminal } from '../terminal-capability.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LayoutChainTarget, type LoadedLayout } from './layouts.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
+import { routeKindTerminal } from './terminal.ts';
 import {
   registeredManifestIdentity,
   registeredRouteLoader,
@@ -117,6 +120,12 @@ export interface RenderRouteOptionsBase<Target = RenderRouteTarget> {
   readonly input?: RouteTargetInput<Target>;
   /** Overrides the route kind when a module is rendered directly; ignored for manifest routes. */
   readonly kind?: RenderableRouteKind;
+  /**
+   * The dispatcher's base render limits, as the generated executable's
+   * dispatcher has them. A manifest route's compiled `config.render` budget
+   * layers over them exactly as in the generated MCP server and routed CLI;
+   * a module rendered directly has no compiled config, so these apply alone.
+   */
   readonly limits?: Partial<AgentRenderLimits>;
   /** Renders against an explicit manifest instead of the one the generated configuration registered. */
   readonly manifest?: AgentBundleTestManifest;
@@ -342,6 +351,8 @@ interface ResolvedTarget {
   readonly manifest?: AgentBundleTestManifest;
   readonly module: AgentRouteModule;
   readonly provenance: RenderedRouteProvenance;
+  /** The route's compiled `config.render` budget; absent for a module rendered directly or a route without one. */
+  readonly render?: RouteRenderBudget;
 }
 
 /** The protocol name a generated server registers, and the request surface it records. */
@@ -439,6 +450,7 @@ const resolveTarget = async (
   const manifest = options.manifest ?? testManifest();
   const loaded = await loadManifestRouteModule(manifest, target);
   const layouts = await loadLayoutChain(manifest, loaded.descriptor, loaded.provenance);
+  const render = routeRenderLimits(loaded.descriptor.config);
   return {
     component: componentOf(loaded.module, loaded.provenance),
     kind: loaded.kind,
@@ -446,6 +458,7 @@ const resolveTarget = async (
     manifest,
     module: loaded.module,
     provenance: loaded.provenance,
+    ...(render === undefined ? {} : { render }),
   };
 };
 
@@ -1107,6 +1120,9 @@ export const prepareCliRenderHost = async (
         contextProgress: context.progress,
         layoutRoute: descriptor ?? { id: command.routeId, kind: command.mcp === undefined ? 'cli' : 'tool' },
         layouts: layoutsByRoute.get(command.routeId) ?? [],
+        // The compiled command carries its route's render budget (#454), as
+        // the generated executable's command table does.
+        ...(command.render === undefined ? {} : { limits: command.render }),
         renderer,
         requestInit: async (request) => {
           const root = process.cwd();
@@ -1126,6 +1142,7 @@ export const prepareCliRenderHost = async (
               projectRoot: renderer.available({ root }, 'derived'),
             },
             host: renderer.unavailable('unsupported-surface'),
+            terminal: renderer.available(execution.terminal, 'native'),
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
@@ -1188,7 +1205,7 @@ export interface PreparedScriptRenderHost {
   readonly close: () => Promise<void>;
   readonly createSession: (
     argv: readonly string[],
-    context: { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
   ) => GeneratedCliRenderSession;
   /**
    * Ends the render the way the generated executable's render worker ending
@@ -1258,7 +1275,10 @@ export const prepareScriptRenderHost = async (
   };
   return Object.freeze({
     close,
-    createSession: (argv: readonly string[], execution: { readonly signal: AbortSignal }): GeneratedCliRenderSession => {
+    createSession: (
+      argv: readonly string[],
+      execution: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
+    ): GeneratedCliRenderSession => {
       const invocation: AgentRenderInvocation = {
         kind: 'script',
         props: { input: argv as never, name: options.name },
@@ -1320,6 +1340,7 @@ export const prepareScriptRenderHost = async (
                 projectRoot: renderer.available({ root }, 'derived'),
               },
               host: renderer.unavailable('unsupported-surface'),
+              terminal: renderer.available(execution.terminal, 'native'),
               workspace: renderer.available({ root }, 'derived'),
               ...context,
               ...state.context,
@@ -1415,9 +1436,16 @@ const prepareRender = async (
       ...(resolved.provenance.serverId === undefined ? {} : { serverId: resolved.provenance.serverId }),
     },
     layouts: resolved.layouts,
-    limits: options.limits,
+    // The route's compiled budget layers over the base limits, as it does on
+    // the generated dispatchers.
+    ...(options.limits === undefined && resolved.render === undefined
+      ? {}
+      : { limits: { ...options.limits, ...resolved.render } }),
     renderer,
     requestInit: async (request) => ({
+      // What the artifact's scope for this route kind mounts (#511): no
+      // terminal under MCP or a hook, the harness's piped shape otherwise.
+      terminal: renderer.available(routeKindTerminal(resolved.kind), 'derived'),
       ...context,
       ...mounted.context,
       // The render invocation is exactly what the generated Flight worker

@@ -3,6 +3,7 @@ import { describe, expect, it } from '@rstest/core';
 import { createElement } from 'react';
 
 import Echo from '../../fixtures/route-harness/src/mcp/harness/tools/echo.tsx';
+import Wait from '../../fixtures/route-harness/src/mcp/harness/tools/wait.tsx';
 import { AgentTestError } from '../../src/test/errors.ts';
 import { expectDocument } from '../../src/test/matchers.ts';
 import { renderRoute } from '../../src/test/render.ts';
@@ -10,6 +11,13 @@ import { testManifest } from '../../src/test/registry.ts';
 
 const workspace = { source: 'native', state: 'available', value: { root: '/tmp/harness-library' } } as never;
 const notProvided = { reason: 'not-provided', state: 'unavailable' };
+/** What every MCP request scope reports for `request.terminal` (#511). */
+const noTerminal = {
+  hostSurface: 'mcp',
+  sharesTarget: false,
+  stderr: { color: 'none', kind: 'none' },
+  stdout: { color: 'none', kind: 'none' },
+};
 
 /** The harness error one render rejected with; a resolved render is itself a failure. */
 const rejection = async (render: Promise<unknown>): Promise<AgentTestError> => {
@@ -77,7 +85,33 @@ describe('renderRoute through the real renderer', () => {
       host: notProvided,
       lineage: notProvided,
       session: notProvided,
+      // An MCP tool has no terminal, on every surface that serves it (#511).
+      terminal: { source: 'derived', state: 'available', value: noTerminal },
       workspace: notProvided,
+    });
+  });
+
+  it('lets a test inject the terminal capability through the context seam (#511)', async () => {
+    const injected = await renderRoute('tool:harness/context', {
+      context: {
+        terminal: {
+          source: 'native',
+          state: 'available',
+          value: {
+            hostSurface: 'cli',
+            sharesTarget: true,
+            stderr: { color: 'truecolor', columns: 100, kind: 'tty', rows: 30 },
+            stdout: { color: 'truecolor', columns: 100, kind: 'tty', rows: 30 },
+          },
+        },
+      },
+    });
+    expect(injected.result).toMatchObject({
+      terminal: {
+        source: 'native',
+        state: 'available',
+        value: { hostSurface: 'cli', stdout: { color: 'truecolor', columns: 100, kind: 'tty', rows: 30 } },
+      },
     });
   });
 
@@ -105,6 +139,7 @@ describe('renderRoute through the real renderer', () => {
       host: { source: 'native', state: 'available', value: { name: 'route-unit-host' } },
       lineage: { source: 'derived', state: 'available', value: lineage },
       session: { source: 'native', state: 'available', value: { sessionId: 'route-unit-session' } },
+      terminal: { source: 'derived', state: 'available', value: noTerminal },
       workspace: { source: 'derived', state: 'available', value: { root: '/tmp/route-unit' } },
     });
   });
@@ -127,6 +162,7 @@ describe('renderRoute through the real renderer', () => {
       host: notProvided,
       lineage: notProvided,
       session: notProvided,
+      terminal: { source: 'derived', state: 'available', value: noTerminal },
       workspace: notProvided,
     });
   });
@@ -253,6 +289,37 @@ describe('renderRoute through the real renderer', () => {
     expect(delegated).toEqual([...rendered.progress]);
   });
 
+  describe('a route that declares its own render budget (#454)', () => {
+    // `wait` declares `config.render.maxElapsedMs: 120_000`. The harness
+    // `limits` are the dispatcher's base, so a base of 100ms shows whether the
+    // route's compiled budget reached its render session: a 300ms hold
+    // outlives the base and completes only because the route raised it.
+    const limits = { maxElapsedMs: 100 };
+
+    it('applies the compiled config.render budget over the base limits for a manifest route', async () => {
+      const rendered = await renderRoute('tool:harness/wait', { input: { holdMs: 300 }, limits });
+
+      expectDocument(rendered).toHaveStatus('success').toHaveValue({ waitedMs: 300 });
+    });
+
+    it('leaves the base limits alone for a module rendered directly, which has no compiled config', async () => {
+      const error = await rejection(renderRoute({ default: Wait }, { input: { holdMs: 300 }, limits, routeId: 'tool:harness/wait' }));
+
+      expect(error.code).toBe('render-failed');
+      expect(error.message).toContain('elapsed time exceeds 100ms');
+    });
+
+    it('keeps forwarding progress reports for the whole raised budget', async () => {
+      const rendered = await renderRoute('tool:harness/wait', { input: { holdMs: 300, tickMs: 100 }, limits });
+
+      expect(rendered.progress).toEqual([
+        { completed: 1, message: 'waiting', total: 3 },
+        { completed: 2, message: 'waiting', total: 3 },
+        { completed: 3, message: 'waiting', total: 3 },
+      ]);
+    });
+  });
+
   it('reports a represented error as the document status the runtime decided', async () => {
     const rendered = await renderRoute('tool:harness/unavailable');
 
@@ -309,6 +376,8 @@ describe('renderRoute through the real renderer', () => {
       .toHaveStatus('success')
       .toContainMarkdown('Observed tool/after from claude.')
       .toContainContext('actor unavailable:not-provided')
+      // An event route runs under a hook: no terminal, never probed (#511).
+      .toContainContext('terminal available:derived hook/none/none')
       .toHaveValue(undefined);
   });
 

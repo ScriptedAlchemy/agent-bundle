@@ -410,6 +410,72 @@ it('returns honest diagnostics when the Agent runtime is absent or stored Flight
   }
 });
 
+/**
+ * A provider imports `DevRuntimeUnavailableError` and
+ * `DevRuntimeGenerationConflictError` from its own `agent-bundle/api`
+ * installation (#485), which need not be the one serving the Workbench. These
+ * two are structurally the published classes without sharing their identity.
+ */
+class ForeignUnavailableError extends Error {
+  readonly code = 'AB8201' as const;
+  constructor(message = 'Development runtime is not available.') {
+    super(message);
+    this.name = 'DevRuntimeUnavailableError';
+  }
+}
+class ForeignConflictError extends Error {
+  readonly actualGenerationId?: string;
+  readonly code = 'AB8204' as const;
+  readonly expectedGenerationId: string;
+  constructor(expectedGenerationId: string, actualGenerationId?: string) {
+    super(`Expected runtime generation ${JSON.stringify(expectedGenerationId)} is not active.`);
+    this.name = 'DevRuntimeGenerationConflictError';
+    this.expectedGenerationId = expectedGenerationId;
+    this.actualGenerationId = actualGenerationId;
+  }
+}
+
+class ForeignIdentityRuntime extends MemoryRuntime {
+  override async invoke(request: Parameters<DevRuntimeSession['invoke']>[0]): Promise<DevRuntimeRun> {
+    if (request.expectedGenerationId !== undefined && request.expectedGenerationId !== 'g1') {
+      throw new ForeignConflictError(request.expectedGenerationId, 'g1');
+    }
+    throw new ForeignUnavailableError('The provider has no runtime for this surface.');
+  }
+}
+
+it('maps a provider\'s AB8201 and AB8204 errors by name and code, not constructor identity', async () => {
+  const server = await start(new ForeignIdentityRuntime());
+  try {
+    const headers = { ...authenticated(server), 'content-type': 'application/json' };
+    const stale = await fetch(`${server.url}/api/runtime/runs`, {
+      body: JSON.stringify({ expectedGenerationId: 'g0', input: {}, surfaceId: 'hook.after-edit', target: 'claude' }),
+      headers,
+      method: 'POST',
+    });
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8204', message: 'Expected runtime generation "g0" is not active.' },
+    });
+
+    const unavailable = await fetch(`${server.url}/api/runtime/runs`, {
+      body: JSON.stringify({ input: {}, surfaceId: 'hook.after-edit', target: 'claude' }),
+      headers,
+      method: 'POST',
+    });
+    expect(unavailable.status).toBe(404);
+    await expect(unavailable.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8201', message: 'The provider has no runtime for this surface.' },
+    });
+
+    // An unrelated error that merely borrows the code is not the contract.
+    const impostor = Object.assign(new Error('impostor'), { code: 'AB8204' });
+    expect(impostor.name).toBe('Error');
+  } finally {
+    await server.close();
+  }
+});
+
 it('rejects malformed, stale, undeclared, and excessive runtime inputs at the fixed boundary', async () => {
   const server = await start(new MemoryRuntime());
   try {

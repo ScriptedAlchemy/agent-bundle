@@ -115,6 +115,45 @@ siblings claimed blind, places a start no spawn window could, and moves a child 
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
 
+### The terminal capability
+
+The handle's last axis is `terminal`, an `Observed<AgentTerminal>`: what the process's output
+streams are, so a route that paints its own stderr or sizes its own table never probes
+`process.stdout.isTTY` or reads `FORCE_COLOR` itself. The framework shell computes it once per
+invocation with the same rules that select the CLI output mode, so plugin output and framework
+output agree. It is information only — never a writer — and it changes nothing about what
+`Agent.*` components render.
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 and fd 2 name one open file (`2>&1`, one shared terminal)
+}
+```
+
+Color follows the informal standards in their usual precedence: `FORCE_COLOR` decides outright
+when set (`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor), `CLICOLOR_FORCE`
+forces color on even for a pipe, `NO_COLOR` (any non-empty value) and `CLICOLOR=0` force it off,
+`TERM=dumb` renders none, and otherwise a terminal renders at the depth `COLORTERM`/`TERM`
+advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported size.
+
+| Where the route runs | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| Routed CLI executable — plain, rendered, or projected MCP command | `cli` | Probed from the executable's own process. Machine output owns stdout, so `stdout` says where the document lands and `stderr` is the channel a route may write to. |
+| Rendered script (`src/scripts/<name>.tsx`) | `script` | Probed, as above. |
+| Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
+| Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
+| Workbench lifecycle replay | `workbench` | `none` on both. |
+| `defineRscApplication` adapters | `mcp` / `cli` | `createRscMcpServer` mounts `none` on both; `runRscCli` owns no probe and mounts the `terminal` its caller passes in the options, else `unavailable` (`not-provided`). |
+| A custom host that mounts none | — | `unavailable` (`not-provided`). |
+
+A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
+as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
+In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
+and `context.terminal` injects any other one through the same seam as every identity axis.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
@@ -160,6 +199,42 @@ The route-unit and `mcp-in-memory` test levels prove this without a host:
 `projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
 returns the notifications the fixture's token produced, and an `openInMemoryMcpServer()` client
 that sets `_meta.progressToken` on `callTool` receives them over the real protocol.
+
+## Render budget
+
+Every call renders inside one render session bounded by the runtime's default limits, and the
+wall-clock one is 60 seconds (`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`). A route whose
+legitimate work outlives that — awaiting a build, long-polling a daemon — declares its own budget
+in `config.render` instead of clamping its waits and asking the caller to poll:
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Wait for a ticket to settle.',
+  render: { maxElapsedMs: 7_200_000 },
+} satisfies ToolConfig;
+```
+
+`maxElapsedMs` is a positive integer of milliseconds up to the framework ceiling of 24 hours
+(`MAX_ROUTE_RENDER_ELAPSED_MS`, exported from `agent-bundle`); anything else is `AB4835` at build
+time. The compiler reads the value statically with the rest of `config`, so the generated MCP
+server applies it to that route's render session on every `tools/call`, `resources/read`, and
+`prompts/get`; a `routes.mcpCommands` projection of the tool and a rendered `src/cli/**` command
+carry the same key on the compiled command (`config.render` on `CliRouteConfig`; a plain `.ts`
+command has no render session and rejects it). `renderRoute` and `openInMemoryMcpServer` apply it
+too, layered over the `limits` a test passes as the dispatcher's base. Omitting `render` keeps
+the default, and the other limits (document size, event count, event rate) are unchanged.
+
+The budget bounds the framework's session only; the host's own tool-call deadline still applies,
+so keep progress flowing for the whole wait — every `progress.report()` and streamed
+`Agent.Progress` fallback is forwarded as `notifications/progress` while the call runs. Claude
+Code's default per-call wall clock is about 28 hours (`MCP_TOOL_TIMEOUT`, or a per-server
+`timeout`), and its idle timer (30 minutes for stdio servers) is reset by exactly those
+notifications; Codex bounds a call at `tool_timeout_sec`, 60 seconds unless the operator raises
+it in `config.toml`. `agent-bundle inspect --routes` shows the budget with the rest of each
+route's compiled `config`.
 
 ## Shared layouts
 
@@ -378,6 +453,76 @@ silently at run time.
 
 An App declared on a *prebuilt* server stays a development surface: the Workbench compiles it
 live, and the build assumes the payload already serves the resource.
+
+### Serving an App standalone
+
+Outside an MCP host, an App is normally reached through the Workbench MCP page. When a plugin
+wants an "open the dashboard" command instead — a live view of its own server, in a plain browser
+tab, from a terminal — `agent-bundle serve-app` hosts one built App standalone:
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+The command launches the plugin's packed MCP server exactly as `mcp run` does (same artifact
+resolution, same `.env` layering, same plugin-data root), binds the App to it through the same
+host stack the Workbench MCP page uses — sandbox proxy, consent authority, `McpAppBridge` — calls
+the App's tool once so it opens populated, and prints the loopback URL. The host binds `127.0.0.1`
+only, serves one page plus the authenticated `/api/mcp/...` routes behind a per-launch token, and
+exposes only that server through the bridge; the App document runs on a second loopback origin in
+the framework's sandbox. It is a local preview host, not a deployment target. Every option is in
+the [CLI reference](../../reference/cli.mdx#serve-app).
+
+The same host is available programmatically as `serveApp` in `agent-bundle/api`, so a plugin's
+own routed CLI can offer the command. It returns `{ url, close, closed }`: `close()` tears down the
+host and the server, `closed` settles when the server connection ends for any reason.
+
+```ts
+// src/cli/dashboard.ts — `hauler dashboard`: open the App against the running daemon.
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  try {
+    // Settles on Ctrl-C (through the signal) or when the daemon exits on its own.
+    await served.closed;
+  } finally {
+    // `closed` tracks only the server connection; close() also releases the
+    // host, the sandbox proxy, and any throwaway artifact.
+    await served.close();
+  }
+  return { url: served.url };
+}
+```
+
+`serveApp` runs in the plugin's dev-time or CLI process, never inside the MCP server shell: import
+it lazily from the route that needs it, as above, so the emitted artifact stays free of the host
+runtime, and expect `agent-bundle` to be resolvable where that CLI runs. Always `close()` when
+you are done — `closed` settling means the server connection ended, not that the host was torn
+down. `autoApprove` grants the
+listed consent capabilities on the operator's behalf as the App requests them (`call-tool` lets a
+polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision in the
+host page, as in the Workbench.
 
 ## Server modes
 

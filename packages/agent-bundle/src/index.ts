@@ -20,7 +20,7 @@ export type {
   SkillTokenId,
   SkillTreeLayoutDecision,
 } from './skills/index.ts';
-export { canonicalAgentEvents } from './routes/public.ts';
+export { canonicalAgentEvents, MAX_ROUTE_RENDER_ELAPSED_MS } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
@@ -34,13 +34,20 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentTerminal,
+  AgentTerminalColor,
+  AgentTerminalStream,
+  AgentTerminalStreamKind,
+  AgentTerminalSurface,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,
   CliRouteProps,
+  ExecutableMainContext,
   PromptConfig,
   ResourceConfig,
   RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
   RouteUiMeta,
@@ -114,6 +121,30 @@ export type AgentBundleConfig = CoreAgentBundleConfig
   & PortableConfigExtension;
 
 export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
+
+// The config hook handler contract (#488): the payload a `hooks.<event>.handler`
+// receives and the result the generated wrapper admits, per canonical event.
+export { hookEventFields, hookHandlerEventNames, hookResultContract } from './adapters/hook-handler.ts';
+export type {
+  AfterToolHookEvent,
+  AgentStartHookEvent,
+  AgentStopHookEvent,
+  BeforeToolHookEvent,
+  HookContinueResult,
+  HookDenyResult,
+  HookEvent,
+  HookEventBase,
+  HookEventPayloads,
+  HookHandler,
+  HookHandlerContext,
+  HookHandlerEventName,
+  HookResult,
+  HookResultContract,
+  HookResultRule,
+  SessionStartHookEvent,
+  StopHookEvent,
+} from './adapters/hook-handler.ts';
+export type { AgentBundleHookEntry, AgentBundleHookInput, CanonicalHookEvent } from './core/types.ts';
 
 export type {
   AgentBundleConfigExtensions,

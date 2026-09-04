@@ -1,10 +1,15 @@
-import { access, readFile, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
+
+import { Effect, FileSystem, Option, Result } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
 import { claudeArtifactValidation } from '../adapters/claude.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
+import { liftPromise } from '../effect/lift.ts';
+import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 import {
   runBoundedChildProcess,
   type BoundedChildProcessRequest,
@@ -60,7 +65,7 @@ export interface ValidateClaudePluginOptions {
    * Also run `claude --plugin-dir <bundle-dir> plugin list --json` after the
    * validation runs and read the plugin's row (default `true`). `plugin
    * validate --strict` accepts manifests Claude Code then refuses to load
-   * (observed 2.1.250–2.1.259); the listing's `errors[]` is the only load
+   * (observed 2.1.250–2.1.260); the listing's `errors[]` is the only load
    * verdict. Doctor passes `false` because it runs its own registration proof.
    */
   readonly loadCheck?: boolean;
@@ -183,19 +188,39 @@ const localDiagnostic = (
   target,
 });
 
-export const validateClaudePluginFiles = async (
+/** Reads and parses one bundle document; `Left` is the read failure, `Right` is the parse outcome. */
+const readJsonDocument = (
+  path: string,
+): Effect.Effect<Result.Result<{ readonly document?: unknown; readonly invalid: boolean }, PlatformError>, never, FileSystem.FileSystem> =>
+  readFileString(path).pipe(
+    Effect.map((source) => {
+      try {
+        return { document: JSON.parse(source) as unknown, invalid: false };
+      } catch {
+        return { invalid: true };
+      }
+    }),
+    Effect.result,
+  );
+
+/**
+ * The local document lane as a `FileSystem` program. The wildcard listing
+ * (`matchingDocumentPaths`) stays on `node:fs` because it keys on `Dirent`
+ * symlink types, which the pinned `FileSystem` cannot report. Not exported:
+ * an Effect-typed export would put `effect` on the public declaration graph
+ * (`public-api.test.ts`).
+ */
+const validateClaudePluginFilesProgram = Effect.fnUntraced(function* (
   options: ValidateClaudePluginFilesOptions,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], never, FileSystem.FileSystem> {
   const pluginDirectory = resolve(options.pluginDirectory);
   const validators = new Map(
     claudeArtifactValidation.schemas.map((schema) => [schema.name, schema.validate]),
   );
   const diagnostics: Diagnostic[] = [];
   for (const contract of claudeArtifactValidation.documents) {
-    let paths: readonly string[];
-    try {
-      paths = await matchingDocumentPaths(pluginDirectory, contract.path);
-    } catch {
+    const listed = yield* liftPromise(() => matchingDocumentPaths(pluginDirectory, contract.path)).pipe(Effect.option);
+    if (Option.isNone(listed)) {
       diagnostics.push(localDiagnostic(
         'AB6012',
         `Claude bundle document pattern ${JSON.stringify(contract.path)} could not be read.`,
@@ -203,6 +228,7 @@ export const validateClaudePluginFiles = async (
       ));
       continue;
     }
+    const paths = listed.value;
     if (paths.length === 0 && contract.required) {
       diagnostics.push(localDiagnostic(
         'AB6011',
@@ -212,20 +238,20 @@ export const validateClaudePluginFiles = async (
       continue;
     }
     for (const relativePath of paths) {
-      let document: unknown;
-      try {
-        document = JSON.parse(await readFile(join(pluginDirectory, relativePath), 'utf8')) as unknown;
-      } catch (error) {
-        if (isErrno(error, 'ENOENT') && !contract.required) continue;
+      const read = yield* readJsonDocument(join(pluginDirectory, relativePath));
+      const missing = Result.isFailure(read) && isPlatformErrno(read.failure, 'ENOENT');
+      if (Result.isFailure(read) || read.success.invalid) {
+        if (missing && !contract.required) continue;
         diagnostics.push(localDiagnostic(
-          isErrno(error, 'ENOENT') ? 'AB6011' : 'AB6006',
-          isErrno(error, 'ENOENT')
+          missing ? 'AB6011' : 'AB6006',
+          missing
             ? `Required Claude bundle document ${JSON.stringify(relativePath)} is missing.`
             : `Claude bundle document ${JSON.stringify(relativePath)} is unreadable or not valid JSON.`,
           options.target,
         ));
         continue;
       }
+      const document = read.success.document;
       const validate = validators.get(contract.schema);
       if (validate === undefined) continue;
       let issues;
@@ -248,7 +274,11 @@ export const validateClaudePluginFiles = async (
     }
   }
   return freezeDiagnostics(diagnostics);
-};
+});
+
+export const validateClaudePluginFiles = (
+  options: ValidateClaudePluginFilesOptions,
+): Promise<readonly Diagnostic[]> => runWithPlatform(validateClaudePluginFilesProgram(options));
 
 type ClaudeFindingSeverity = 'error' | 'note' | 'warning';
 
@@ -264,7 +294,11 @@ interface ClaudeFinding {
 
 type ClaudeValidationRun = 'marketplace' | 'plugin';
 
-/** `claude plugin validate --json` landed in Claude Code 2.1.259 (plugins-reference §plugin validate). */
+/**
+ * `claude plugin validate --json` landed in Claude Code 2.1.259 (plugins-reference
+ * §plugin validate); the pinned 2.1.260 prints it and 2.1.250 answers
+ * `error: unknown option '--json'`.
+ */
 const jsonReportMinimumVersion: readonly [number, number, number] = [2, 1, 259];
 
 const parseVersion = (version: string): readonly [number, number, number] | undefined => {
@@ -272,15 +306,25 @@ const parseVersion = (version: string): readonly [number, number, number] | unde
   return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
 };
 
+/**
+ * Whether to request the JSON report first. `--json` is the primary path: it
+ * is skipped only for a probed version known to predate 2.1.259. An unknown
+ * or unparseable version asks for JSON and falls back to the text reporter
+ * when the CLI rejects the flag (`unknownJsonOption`).
+ */
 export const claudeSupportsJsonValidationReport = (version: string | undefined): boolean => {
-  if (version === undefined) return false;
+  if (version === undefined) return true;
   const parsed = parseVersion(version);
-  if (parsed === undefined) return false;
+  if (parsed === undefined) return true;
   for (let index = 0; index < 3; index += 1) {
     if (parsed[index] !== jsonReportMinimumVersion[index]) return parsed[index] > jsonReportMinimumVersion[index];
   }
   return true;
 };
+
+/** A CLI without `--json` (Claude Code before 2.1.259) rejects the flag on stderr with exit 1. */
+const unknownJsonOption = (result: ClaudePluginCommandResult): boolean =>
+  result.exitCode !== 0 && /unknown option '--json'/u.test(result.stderr);
 
 const relativeToPlugin = (file: string, pluginDirectory: string): string => {
   const absolute = resolve(pluginDirectory, file);
@@ -436,14 +480,9 @@ const failedReport = (
   ...(version === undefined ? {} : { version }),
 });
 
-const fileExists = async (path: string): Promise<boolean> => {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-};
+/** `access` semantics: any failure, not only `ENOENT`, means "treat as absent". */
+const fileExists = (fs: FileSystem.FileSystem, path: string): Effect.Effect<boolean> =>
+  fs.access(path).pipe(Effect.as(true), Effect.catch(() => Effect.succeed(false)));
 
 interface ClaudeValidationTarget {
   readonly path: string;
@@ -457,15 +496,17 @@ interface ClaudeValidationTarget {
  * side, so run the plugin manifest first (covers `plugin.json`, `hooks/hooks.json`, `skills/`,
  * `agents/`, `commands/`) and the marketplace manifest second.
  */
-const validationTargets = async (pluginDirectory: string): Promise<readonly ClaudeValidationTarget[]> => {
-  const manifestDirectory = join(pluginDirectory, '.claude-plugin');
-  const pluginManifest = join(manifestDirectory, 'plugin.json');
-  const marketplaceManifest = join(manifestDirectory, 'marketplace.json');
-  const targets: ClaudeValidationTarget[] = [];
-  targets.push({ path: (await fileExists(pluginManifest)) ? pluginManifest : pluginDirectory, run: 'plugin' });
-  if (await fileExists(marketplaceManifest)) targets.push({ path: marketplaceManifest, run: 'marketplace' });
-  return Object.freeze(targets);
-};
+const validationTargets = (pluginDirectory: string): Promise<readonly ClaudeValidationTarget[]> =>
+  runWithPlatform(Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const manifestDirectory = join(pluginDirectory, '.claude-plugin');
+    const pluginManifest = join(manifestDirectory, 'plugin.json');
+    const marketplaceManifest = join(manifestDirectory, 'marketplace.json');
+    const targets: ClaudeValidationTarget[] = [];
+    targets.push({ path: (yield* fileExists(fs, pluginManifest)) ? pluginManifest : pluginDirectory, run: 'plugin' });
+    if (yield* fileExists(fs, marketplaceManifest)) targets.push({ path: marketplaceManifest, run: 'marketplace' });
+    return Object.freeze(targets);
+  }));
 
 interface ClaudeCommandContext {
   readonly cwd: string;
@@ -533,25 +574,32 @@ export const validateClaudePlugin = async (
   if ('report' in probed) return probed.report;
   const version = probed.version;
 
-  const jsonReport = claudeSupportsJsonValidationReport(version);
+  // `--json` first (2.1.259+); a CLI that rejects the flag drops every run
+  // of this validation to the text reporter, so the two runs stay consistent.
+  let jsonReport = claudeSupportsJsonValidationReport(version);
   const findingsByRun: Partial<Record<ClaudeValidationRun, readonly ClaudeFinding[]>> = {};
   for (const validationTarget of await validationTargets(pluginDirectory)) {
     const label = validationTarget.run === 'marketplace'
       ? 'Claude marketplace manifest validation'
       : 'Claude host artifact validation';
+    const validate = (json: boolean): Promise<ClaudePluginCommandResult> => run(Object.freeze({
+      args: Object.freeze([
+        'plugin',
+        'validate',
+        validationTarget.path,
+        '--strict',
+        ...(json ? ['--json'] : []),
+      ]),
+      cwd,
+      executable,
+    }));
     let result: ClaudePluginCommandResult;
     try {
-      result = await run(Object.freeze({
-        args: Object.freeze([
-          'plugin',
-          'validate',
-          validationTarget.path,
-          '--strict',
-          ...(jsonReport ? ['--json'] : []),
-        ]),
-        cwd,
-        executable,
-      }));
+      result = await validate(jsonReport);
+      if (jsonReport && result.termination === undefined && unknownJsonOption(result)) {
+        jsonReport = false;
+        result = await validate(false);
+      }
     } catch {
       return failedReport(`${label} could not be started.`, options.target, version);
     }
@@ -617,15 +665,14 @@ interface ClaudeLoadCheckOutcome {
 }
 
 /** The `name` of `<dir>/.claude-plugin/plugin.json`, or `undefined` when the manifest cannot name a row. */
-const claudePluginManifestName = async (pluginDirectory: string): Promise<string | undefined> => {
-  try {
-    const manifest: unknown = JSON.parse(await readFile(join(pluginDirectory, '.claude-plugin', 'plugin.json'), 'utf8'));
+const claudePluginManifestName = (pluginDirectory: string): Promise<string | undefined> =>
+  runWithPlatform(Effect.gen(function* () {
+    const read = yield* readJsonDocument(join(pluginDirectory, '.claude-plugin', 'plugin.json'));
+    if (Result.isFailure(read) || read.success.invalid) return undefined;
+    const manifest = read.success.document;
     const name = isRecord(manifest) ? manifest['name'] : undefined;
     return typeof name === 'string' && name.trim() !== '' ? name : undefined;
-  } catch {
-    return undefined;
-  }
-};
+  }));
 
 const claudeLoadFailure = (message: string, target: string): ClaudeLoadCheckOutcome => Object.freeze({
   check: Object.freeze({ status: 'failed' }),

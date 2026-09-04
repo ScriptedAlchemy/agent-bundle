@@ -307,6 +307,22 @@ export const createNativeEventStarter = (
         team_name: 'lifecycle-replay-team',
         teammate_name: 'lifecycle-replay-teammate',
       });
+    case 'model-switch/before':
+    case 'model-switch/after':
+      // hooks reference "PreModelSwitch input" / "PostModelSwitch input": the
+      // documented example for `/model opus` from a Sonnet session.
+      return deepFreeze({
+        ...base,
+        cache_ttl: '5m',
+        context_tokens: 0,
+        estimated_cache_write_usd: 0,
+        from_model: 'claude-sonnet-5',
+        pricing: 'catalog',
+        prompt_cache_warm: false,
+        requested_model: 'opus',
+        source: 'command',
+        to_model: 'claude-opus-5',
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {
@@ -700,6 +716,7 @@ const eventRouteHookWrapperSource = (
           '          lineage: context.lineage,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
+          '          terminal: context.terminal,',
           '          type: "render",',
           '          workspace: context.workspace,',
           '        });',
@@ -747,6 +764,8 @@ const eventRouteHookWrapperSource = (
           '    lineage,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
+          // A hook's stdout is its host envelope: no terminal, never probed (#511).
+          '    terminal: available({ hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } }, "derived"),',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
           '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: props.canonical, native: props.native } } }, signal));',
           '  return projectEventDocument(document, canonicalEvent, target, nativeEvent, native);',

@@ -398,6 +398,8 @@ it('accepts a dependency reached through a package imports map or run by a consu
       '@mapbox/node-pre-gyp': '^1.0.0',
       // A string-form `bin` is one command named after the installed manifest, not the alias.
       'prepack-test-wrapper': 'npm:@scope/real@^1.0.0',
+      // npm never runs `prepare` for a registry or tarball install; a package only it names is installed for nothing.
+      'prepare-only': '^1.0.0',
     };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
@@ -408,6 +410,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
       presetup: 'tsc --version',
       postsetup: 'pnpm run finish',
       finish: 'node-pre-gyp install && real --check',
+      prepare: 'prepare-only --generate',
     };
   },
   async () => {
@@ -420,11 +423,14 @@ it('accepts a dependency reached through a package imports map or run by a consu
     try {
       const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/mapped.mjs' }] };
       // `#driver` reaches driver-package; the script names named-in-script directly, typescript through its `tsc` bin,
-      // and the alias through `real`, the bin npm derives from the installed manifest's name.
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      // and the alias through `real`, the bin npm derives from the installed manifest's name. `prepare` proves nothing.
+      const [withImport] = withCode(await diagnostics(pack), 'AB7014');
+      expect(withImport?.message).toContain('"prepare-only"');
+      expect(withImport?.message).not.toContain('"driver-package"');
       // Without the `#` import the map alone proves nothing.
       const [reported] = withCode(await diagnostics(), 'AB7014');
       expect(reported?.message).toContain('"driver-package"');
+      expect(reported?.message).toContain('"prepare-only"');
       expect(reported?.message).not.toContain('"typescript"');
       expect(reported?.message).not.toContain('"@mapbox/node-pre-gyp"');
       expect(reported?.message).not.toContain('"prepack-test-wrapper"');
@@ -469,7 +475,15 @@ it('accepts a dependency that only packed declaration files reference, including
 
 it('accepts a dependency that packed JavaScript imports, requires, or only resolves', () => withPackageDocument(
   (document) => {
-    document.dependencies = { 'left-pad': '^1.3.0', '@scope/required': '^2.0.0', 'asset-pkg': '^1.0.0', 'tool-pkg': '^1.0.0' };
+    document.dependencies = {
+      'left-pad': '^1.3.0',
+      '@scope/required': '^2.0.0',
+      'asset-pkg': '^1.0.0',
+      'tool-pkg': '^1.0.0',
+      // Named only through escaped literals, which Node decodes before resolving.
+      'hex-pkg': '^1.0.0',
+      'unicode-pkg': '^1.0.0',
+    };
   },
   async () => {
     const consumer = join(projectRoot, 'dist', 'consumer.mjs');
@@ -480,8 +494,10 @@ it('accepts a dependency that packed JavaScript imports, requires, or only resol
       'const required = require("@scope/required/subpath");',
       'const asset = require.resolve("asset-pkg/package.json");',
       'const tool = import.meta.resolve("tool-pkg/bin/tool");',
+      String.raw`const hex = require("\x68ex-pkg");`,
+      String.raw`const unicode = require('unicode-pkg\u002fsubpath');`,
       '// import { Function } from "effect" -- a comment never counts.',
-      'export { leftPad, required, asset, tool };',
+      'export { leftPad, required, asset, tool, hex, unicode };',
       '',
     ].join('\n'));
     try {

@@ -32,6 +32,7 @@ import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './public.ts';
+import { validateRouteRenderConfig } from './render-budget.ts';
 import {
   emptyRouteConfig,
   type CompiledAgentRoute,
@@ -888,6 +889,9 @@ export const compileRouteGraph = async (
             route.source,
           ));
         }
+        // The route's render budget (#454) is read by the generated server
+        // from this compiled config, so it is validated here, once.
+        diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
       }
     }
     servers.push({

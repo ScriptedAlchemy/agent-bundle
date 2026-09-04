@@ -154,6 +154,28 @@ export const classifyDependency = (name: string, specifier: string): DependencyK
 /** A single- or double-quoted string literal; the group after the opening quote is its body. */
 const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
 
+const escapeSequence = /\\(?:x(?<hex>[0-9A-Fa-f]{2})|u\{(?<point>[0-9A-Fa-f]+)\}|u(?<unit>[0-9A-Fa-f]{4})|(?<other>.))/gsu;
+const controlEscapes: Readonly<Record<string, string>> = { 0: '\0', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+
+/**
+ * The string a JavaScript literal's body denotes: `\x66oo` is `foo`,
+ * `foo\u002fsubpath` is `foo/subpath`, `\/` is `/`. Node resolves the value,
+ * not the source text, so a package name compared textually has to be
+ * decoded first.
+ */
+const decodeLiteral = (body: string): string => body.replace(escapeSequence, (...args) => {
+  const groups = args.at(-1) as Record<string, string | undefined>;
+  if (groups.hex !== undefined) return String.fromCharCode(Number.parseInt(groups.hex, 16));
+  if (groups.unit !== undefined) return String.fromCharCode(Number.parseInt(groups.unit, 16));
+  if (groups.point !== undefined) {
+    const point = Number.parseInt(groups.point, 16);
+    // Beyond Unicode the literal is a syntax error; the file never loads anything.
+    return point > 0x10_ff_ff ? '' : String.fromCodePoint(point);
+  }
+  const other = groups.other ?? '';
+  return controlEscapes[other] ?? other;
+});
+
 /**
  * A `require("…")` call, or a resolution-only use — `require.resolve("…")`,
  * `createRequire(…).resolve("…")`, `import.meta.resolve("…")` — with a
@@ -249,7 +271,7 @@ const typeDirectivePackages = (name: string): readonly string[] => [
 /** The literal module specifiers a declaration file resolves, in order of appearance. */
 export const declarationSpecifiers = (source: string): readonly string[] =>
   Array.from(source.matchAll(declarationSpecifier)).flatMap((match) =>
-    (match[4] === undefined ? [match[2] ?? ''] : typeDirectivePackages(match[4])));
+    (match[4] === undefined ? [decodeLiteral(match[2] ?? '')] : typeDirectivePackages(match[4])));
 
 /** What one packed file proves about the packages it resolves. */
 interface FileEvidence {
@@ -279,7 +301,7 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
       && !computedLoad(loaders, factories).test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-      ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => match[2] ?? ''),
+      ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => decodeLiteral(match[2] ?? '')),
     ],
   };
 };
@@ -328,7 +350,14 @@ const importMapTargets = (value: unknown): readonly string[] => {
 const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>): readonly string[] =>
   importMapTargets(packageDocument.imports);
 
-const installScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+/**
+ * The lifecycle scripts npm runs when installing a package from a registry
+ * or tarball. `prepare` is not one: npm runs it on `pack`, on local and
+ * `link:` installs, and for git dependencies — never for the published
+ * tarball — so a package it alone names is one every consumer installs for
+ * nothing.
+ */
+const installScripts = ['preinstall', 'install', 'postinstall'] as const;
 
 /** `npm run build`, `npm --silent run build`, `pnpm run -s build`, `yarn run build`, `bun run build`: a script delegating to another. */
 const delegatedRun = /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+\s+)*run(?:-script)?\s+(?:-{1,2}[\w-]+\s+)*([\w:.-]+)/gu;
@@ -356,8 +385,8 @@ const installScriptText = (scripts: Readonly<Record<string, unknown>>): string =
 
 /**
  * Dependencies a consumer's install lifecycle uses: npm puts every
- * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`
- * (and `prepare` when installing from git), so a script that names a
+ * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`,
+ * so a script that names a
  * dependency, or one of its `bin` commands, needs it installed even though no
  * packed JavaScript imports it. Bin names come from the dependency's own
  * manifest under `node_modules`. A string-form `bin` is one command named
