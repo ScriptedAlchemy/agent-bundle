@@ -27,6 +27,7 @@ const T2 = '2026-09-02T10:02:00.000Z';
 const principal = (sessionId: string): AgentNoticePrincipal => Object.freeze({
   actor: unavailable(),
   host: available({ name: 'claude' }, 'native'),
+  lineage: unavailable('not-provided'),
   session: available({ sessionId }, 'native'),
   workspace: available({ root: '/workspace' }, 'native'),
 });

@@ -15,6 +15,7 @@ import {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   type AgentNotice,
   type AgentNoticePrincipal,
+  type AgentNoticeRecordedPrincipal,
   type AgentNoticeRetentionSummary,
   type AgentNoticeWithheldEntry,
   type AgentNoticeWithholding,
@@ -47,7 +48,11 @@ const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state'
 
 const recipientSchema = z.object({
   actor: z.object({ id: z.string().min(1) }).strict().optional(),
+  // Lineage axes (additive, optional): notices journaled before them parse
+  // unchanged, and absent means the axis is not part of the conjunction.
+  conversation: z.string().min(1).optional(),
   host: z.object({ name: z.string().min(1) }).strict().optional(),
+  root: z.string().min(1).optional(),
   session: z.object({ sessionId: z.string().min(1) }).strict().optional(),
   workspace: z.object({ root: z.string().min(1) }).strict().optional(),
 }).strict().refine(
@@ -55,9 +60,17 @@ const recipientSchema = z.object({
   'A notice recipient requires at least one identity axis',
 );
 
+const lineageScopeSchema = z.object({
+  conversation: z.string().min(1),
+  root: z.string().min(1),
+}).strict();
+
 const principalSchema = z.object({
   actor: observed(z.object({ id: z.string().min(1) }).strict()),
   host: observed(z.object({ name: z.string().min(1) }).strict()),
+  // Optional so admissions journaled before the lineage axes replay unchanged;
+  // the reducer reads an absent scope as unavailable lineage.
+  lineage: observed(lineageScopeSchema).optional(),
   session: observed(z.object({ sessionId: z.string().min(1) }).strict()),
   workspace: observed(z.object({ root: z.string().min(1) }).strict()),
 }).strict();
@@ -229,9 +242,44 @@ export const agentNoticeEventSchemas = {
 const sameRecipient = (left: AgentRecipient, right: AgentRecipient): boolean =>
   canonicalJson(left) === canonicalJson(right);
 
+/**
+ * The principal as an admission journals it: the lineage axis is narrowed to
+ * the conversation and root the matcher reads, so the journaled payload never
+ * grows with the lineage shape and a replay matches exactly what the live
+ * admission matched.
+ */
+export const recordedNoticePrincipal = (principal: AgentNoticePrincipal): AgentNoticeRecordedPrincipal => Object.freeze({
+  actor: principal.actor,
+  host: principal.host,
+  // A principal built without the axis journals none, exactly like a
+  // pre-#458 admission: absent reads as unavailable.
+  ...(principal.lineage === undefined
+    ? {}
+    : {
+      lineage: principal.lineage.state === 'available'
+        ? Object.freeze({
+            source: principal.lineage.source,
+            state: 'available' as const,
+            value: Object.freeze({
+              conversation: principal.lineage.value.conversation,
+              root: principal.lineage.value.root,
+            }),
+          })
+        : principal.lineage,
+    }),
+  session: principal.session,
+  workspace: principal.workspace,
+});
+
+/**
+ * Every axis the recipient names must match an available axis of the
+ * principal; an unavailable axis — including lineage the runtime could not
+ * resolve — matches nothing. `conversation` is exact; `root` matches the
+ * root conversation itself and every conversation whose lineage root it is.
+ */
 export const recipientMatchesPrincipal = (
   recipient: AgentRecipient,
-  principal: AgentNoticePrincipal,
+  principal: AgentNoticeRecordedPrincipal,
 ): boolean => {
   if (recipient.actor !== undefined) {
     if (principal.actor.state !== 'available' || principal.actor.value.id !== recipient.actor.id) return false;
@@ -244,6 +292,12 @@ export const recipientMatchesPrincipal = (
   }
   if (recipient.workspace !== undefined) {
     if (principal.workspace.state !== 'available' || principal.workspace.value.root !== recipient.workspace.root) return false;
+  }
+  if (recipient.conversation !== undefined) {
+    if (principal.lineage?.state !== 'available' || principal.lineage.value.conversation !== recipient.conversation) return false;
+  }
+  if (recipient.root !== undefined) {
+    if (principal.lineage?.state !== 'available' || principal.lineage.value.root !== recipient.root) return false;
   }
   return true;
 };
@@ -474,7 +528,7 @@ const transitionAdmission = (
     readonly at: string;
     readonly authorizedIds: ReadonlySet<string>;
     readonly invocationId: string;
-    readonly principal: AgentNoticePrincipal;
+    readonly principal: AgentNoticeRecordedPrincipal;
     readonly unavailableIds: ReadonlySet<string>;
     readonly withheld: ReadonlyMap<string, AgentNoticeWithholdingReason>;
   },
@@ -580,6 +634,13 @@ export const agentNoticeStateDefinition = (
     // Journals written under version 1 therefore cannot be replayed by this
     // reducer; the migration rebases them on their materialized head, which
     // already satisfies the version 2 schema unchanged.
+    //
+    // The lineage recipient axes (`recipient.conversation` / `recipient.root`,
+    // `principal.lineage` on admissions) are additive optional fields, not a
+    // version: a journal without them replays to the same state, because an
+    // admission that recorded no lineage matches exactly the recipients it
+    // matched when it was written, and no persisted notice names an axis it
+    // did not have.
     migrations: { 2: (persisted) => persisted },
     reduce: (state, event) => {
       switch (event.name) {

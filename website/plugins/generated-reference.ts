@@ -197,6 +197,18 @@ const messages = {
       'Which notice delivery channels each pinned host supports, with the recorded reason for every unavailable channel.',
     noticesIntro:
       'A notice is an entry in the journal-backed notice ledger co-mounted with project state (the reserved store id `@agent-bundle/runtime/agent-notice-ledger/v1`). It targets a recipient and moves only through evidenced states — `pending`, `attempted`, `acknowledged`, `expired`, `unavailable`, `withdrawn`; settled terminal notices are pruned and the journal compacted under the project\'s `notices.retention` policy, so history is bounded, not permanent. Delivery is attempted through the channels below, and a generated MCP server wires each cross-request route only where its host advertises it: the recipient-scoped inbox resource `agent-bundle://notices/inbox` is registered for stateful projects on hosts advertising `mcp-inbox` (every built-in host), and `resources/subscribe` plus one `notifications/resources/updated` per newly eligible pending notice is offered only where the host additionally advertises `mcp-resource-updated` and the state lifetime is workspace-durable — recorded on the ledger as an availability receipt, never a delivery claim. No host delivery is claimed without a supported channel.',
+    recipientAxes: 'Recipient axes',
+    recipientAxesIntro:
+      'A recipient is the conjunction of the observed identity axes it names: every axis present must match the admitting request, and an axis the request cannot observe never matches. `conversation` and `root` are read from the request\'s `lineage`, so they address one agent thread — or every thread under one root — where `session` cannot: on Claude and Codex every subagent\'s hooks carry the root `session_id`, and a `conversation`-addressed notice is never admitted on a sibling\'s event. There is no push channel on any pinned host, so addressing a conversation still means publish plus admission on that conversation\'s next event.',
+    recipientAxisRows: [
+      ['`actor`', '`request.actor.id`', 'The HTTP-authenticated MCP client only; never mounted in event scopes.'],
+      ['`host`', '`request.host.name`', 'Every request on that host.'],
+      ['`session`', '`request.session.sessionId`', 'Every request in that host session — on Claude and Codex, every subagent under the root.'],
+      ['`workspace`', '`request.workspace.root`', 'Every request whose observed workspace root (hook `cwd`) is that directory.'],
+      ['`conversation`', '`request.lineage.conversation`', 'Exactly one agent thread: the root, or one subagent (Claude/Codex `agent_id`, Cursor child `conversation_id`).'],
+      ['`root`', '`request.lineage.root`', 'The root conversation and every subagent whose lineage root it is — the publisher included when it is under that root.'],
+    ],
+    recipientAxisHeaders: ['Axis', 'Matched against', 'Reaches'],
     noticeChannels: 'Delivery channels',
     unavailableChannels: 'Why a channel is unavailable',
     sensitivityCeilings: 'Sensitivity ceilings',
@@ -278,6 +290,18 @@ const messages = {
       '每个固定宿主支持哪些通知投递通道，以及每个不可用通道的记录原因。',
     noticesIntro:
       '通知是与项目状态共同挂载、以日志为底的通知账本中的一条记录（保留的存储 id 为 `@agent-bundle/runtime/agent-notice-ledger/v1`）。它面向一个接收者，并且只会经历有证据的状态——`pending`、`attempted`、`acknowledged`、`expired`、`unavailable`、`withdrawn`；已结束的终态通知会按项目的 `notices.retention` 策略被清理、日志被压实，因此历史是有界的，而非永久保留。投递通过下列通道尝试，生成的 MCP 服务器只在宿主宣告了某条跨请求路由时才接线：按接收者限定的收件箱资源 `agent-bundle://notices/inbox` 会为宣告 `mcp-inbox` 的宿主（所有内置宿主）上的有状态项目注册；只有当宿主还宣告了 `mcp-resource-updated` 且 state 生命周期为工作区持久时，才提供 `resources/subscribe` 以及每条新近可用的待处理通知一次 `notifications/resources/updated`——它以可用性回执记录在账本上，绝不是投递声明。没有受支持的通道时，绝不声称已投递到宿主。',
+    recipientAxes: '接收者轴',
+    recipientAxesIntro:
+      '接收者是它所命名的各个已观测身份轴的合取：出现的每个轴都必须与准入请求匹配，请求无法观测到的轴永不匹配。`conversation` 与 `root` 读取自请求的 `lineage`，因此能定向到单个代理线程——或某个根之下的全部线程——这是 `session` 做不到的：在 Claude 和 Codex 上，每个子代理的钩子都携带根 `session_id`，而以 `conversation` 定向的通知绝不会在兄弟代理的事件上被准入。任何固定宿主都没有推送通道，因此定向到某个会话仍然意味着发布，然后在该会话的下一个事件上准入。',
+    recipientAxisRows: [
+      ['`actor`', '`request.actor.id`', '仅指经 HTTP 认证的 MCP 客户端；事件作用域中永不挂载。'],
+      ['`host`', '`request.host.name`', '该宿主上的每个请求。'],
+      ['`session`', '`request.session.sessionId`', '该宿主会话中的每个请求——在 Claude 和 Codex 上即根之下的每个子代理。'],
+      ['`workspace`', '`request.workspace.root`', '观测到的工作区根目录（钩子 `cwd`）为该目录的每个请求。'],
+      ['`conversation`', '`request.lineage.conversation`', '恰好一个代理线程：根，或某一个子代理（Claude/Codex 的 `agent_id`，Cursor 子会话的 `conversation_id`）。'],
+      ['`root`', '`request.lineage.root`', '根会话以及谱系根为它的每个子代理——发布者若位于该根之下，也包括在内。'],
+    ],
+    recipientAxisHeaders: ['轴', '匹配对象', '到达范围'],
     noticeChannels: '投递通道',
     unavailableChannels: '通道不可用的原因',
     sensitivityCeilings: '敏感度上限',
@@ -658,6 +682,10 @@ function renderNotices(hosts: readonly HostCapabilityTable[], m: Messages): stri
   sections.push(`# ${m.noticesTitle}\n`);
   sections.push(m.generatedFromCapabilities(hosts.map(host => host.fileName)));
   sections.push(m.noticesIntro);
+
+  sections.push(`## ${m.recipientAxes}\n`);
+  sections.push(m.recipientAxesIntro);
+  sections.push(table(m.recipientAxisHeaders, m.recipientAxisRows));
 
   sections.push(`## ${m.noticeChannels}\n`);
   const channels = unionKeys(hosts, data => asObject(data.noticeDelivery));

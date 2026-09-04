@@ -332,12 +332,16 @@ const withContextIdentity = (
   },
   close: () => signaller.close(),
   observe: (send: () => Promise<void>) => signaller.observe(send),
-  subscribe: (principal: GeneratedNoticePrincipal) => signaller.subscribe({
-    actor: context.actor ?? principal.actor,
-    host: context.host ?? principal.host,
-    session: context.session ?? principal.session,
-    workspace: context.workspace ?? principal.workspace,
-  }),
+  subscribe: (principal: GeneratedNoticePrincipal) => {
+    const lineage = context.lineage ?? principal.lineage;
+    return signaller.subscribe({
+      actor: context.actor ?? principal.actor,
+      host: context.host ?? principal.host,
+      ...(lineage === undefined ? {} : { lineage }),
+      session: context.session ?? principal.session,
+      workspace: context.workspace ?? principal.workspace,
+    });
+  },
   unsubscribe: () => signaller.unsubscribe(),
 });
 

@@ -9,6 +9,7 @@ import {
   actorForWorktree,
   deliveryContexts,
   extractIntent,
+  noticeRecipientFor,
 } from '../../event-support.js';
 
 export const config = {
@@ -47,6 +48,7 @@ export default async function BeforeTool({
     });
     return {
       actor,
+      actors: committed.state.actors,
       conflicts: findProximity(committed.state, currentWorktree.root, {
         actorId: actor.id,
         dependencies: intent.dependencies,
@@ -66,6 +68,13 @@ export default async function BeforeTool({
   const noticeResult = await withNotices(async (notices) => {
     const deliveries = await notices.read();
     for (const [index, conflict] of resolution.conflicts.entries()) {
+      // The other actor's conversation is the recipient: only that agent
+      // thread admits the notice, even when a sibling shares its worktree.
+      // A derived actor has no conversation, so its worktree is addressed.
+      const recipient = noticeRecipientFor(
+        resolution.actors.find((actor) => actor.id === conflict.actorId),
+        conflict.worktreeRoot,
+      );
       await notices.publish({
         content: {
           root: {
@@ -77,9 +86,7 @@ export default async function BeforeTool({
         },
         dedupeKey: `proximity:${resolution.actor.id}:${conflict.actorId}:${conflict.summary}`,
         priority: 'high',
-        recipient: {
-          workspace: { root: conflict.worktreeRoot },
-        },
+        recipient,
       }, {
         idempotencyKey: `${canonical.idempotencyKey}:notice:${String(index)}`,
       });
