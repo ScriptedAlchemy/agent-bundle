@@ -22,7 +22,7 @@ import { resolve } from 'node:path';
 import type { Lifecycle, LifecycleListResponse } from '../contracts/lifecycles.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import type { NormalizedStateDefinition } from '../core/types.ts';
+import type { NormalizedNotices, NormalizedStateDefinition } from '../core/types.ts';
 import { routeManifestFor } from '../dev/routes/route-manifest.ts';
 import type {
   RouteManifest,
@@ -327,6 +327,7 @@ export interface WorkbenchSurfaceFromGraphInput {
   readonly lifecycles: LifecycleListResponse;
   readonly projectRoot: string;
   readonly sourceRevision: string;
+  readonly notices?: NormalizedNotices;
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly string[];
 }
@@ -337,7 +338,7 @@ export interface WorkbenchSurfaceFromGraphInput {
  * rules, with the navigation rule applied over the declared counts.
  */
 export const workbenchSurfaceFromRouteGraph = (input: WorkbenchSurfaceFromGraphInput): WorkbenchSurface => {
-  const manifest = routeManifestFor(input.graph, input.sourceRevision, input.state);
+  const manifest = routeManifestFor(input.graph, input.sourceRevision, input.state, input.notices);
   const catalog = workbenchRouteCatalog(manifest);
   const pages = workbenchPagesFor(input.counts, catalog);
   return deepFreeze({

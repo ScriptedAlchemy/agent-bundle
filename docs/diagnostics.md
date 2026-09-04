@@ -471,7 +471,7 @@ above, never per feature. Skills keep their own closed per-host schemas
 | `AB4927` | error | A command explicitly targets a host that supports commands but whose `commands.<field>` row for a frontmatter field the command uses is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). Cursor's pinned commands surface is frontmatter-free Markdown, so every field row is unavailable there. | Remove the field or drop that host from the command's `targets`. |
 | `AB4928` | warning | An implicitly selected host supports commands but cannot express a frontmatter field the command uses; the command ships there without it (Cursor receives the prompt body only). | Accept the omission, restrict the command's `targets` to hosts that support the field, or remove the field. |
 
-## Route graph, state, layout, and provider conventions (`AB4800`–`AB4832`, `AB4940`–`AB4942`)
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4833`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -666,6 +666,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4830` | error | A conventional layout module (`src/layout.*`, `src/mcp/<server>/layout.*`) does not satisfy the layout contract: its default export is not a function component, it exports the route-only `config`/`inputSchema`/`resultSchema`, or it exports `execute`/`render`. Default-export one component receiving `{ children, route, signal }` that renders `Agent.Result` around `children`. |
 | `AB4831` | error | Two layout modules declare one layout scope (for example `src/layout.ts` beside `src/layout.tsx`). Keep exactly one module per scope. |
 | `AB4832` | error | A server layout (`src/mcp/<server>/layout.*`) names an MCP server that declares no tool, resource, or prompt route modules — the server directory is missing or holds only `apps/` routes, which never take a layout. Add routes under that server directory, move the layout, or rename it `_layout.*` to opt out. A server pinned to `custom`, `command`, or `remote` via `routes.servers.<server>` is skipped entirely: its layout is neither validated (`AB4830`) nor retained, because no generated worker composes it. |
+| `AB4833` | error | `notices.retention` is malformed: `notices` or `retention` is not an object, carries an unknown key, `terminalTtl` is not a positive integer of milliseconds or a duration such as `"7d"`, `"12h"`, `"30m"`, or `"90s"`, `maxTerminal` / `maxJournalBytes` is not a positive integer — or the policy is declared by a project without a conventional `src/state.ts`, which has no co-mounted notice ledger to retain. Omit a field to keep the runtime default (`7d`, `500`, `16777216`). |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

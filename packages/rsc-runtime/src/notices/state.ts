@@ -15,8 +15,14 @@ import {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   type AgentNotice,
   type AgentNoticePrincipal,
+  type AgentNoticeRetentionSummary,
+  type AgentNoticeWithheldEntry,
+  type AgentNoticeWithholding,
+  type AgentNoticeWithholdingReason,
   type AgentRecipient,
 } from './contract.js';
+import { AGENT_NOTICE_SENSITIVITIES } from './redaction.js';
+import { AGENT_NOTICE_DELIVERY_ROUTES, type AgentNoticeDeliveryRoute } from './router.js';
 
 const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state', [
   z.object({
@@ -96,6 +102,22 @@ const acknowledgementSchema = z.object({
   invocationId: z.string().min(1),
 }).strict().readonly();
 
+const withholdingReasonSchema = z.enum(['route-unavailable', 'sensitivity-exceeds-route']);
+
+const withholdingSchema = z.object({
+  count: z.number().int().positive(),
+  firstAt: z.string().min(1),
+  lastAt: z.string().min(1),
+  reason: withholdingReasonSchema,
+}).strict().readonly();
+
+const withheldEntrySchema = z.object({
+  id: z.string().min(1),
+  reason: withholdingReasonSchema,
+}).strict();
+
+const routeSchema = z.enum(AGENT_NOTICE_DELIVERY_ROUTES);
+
 const noticeSchema = z.object({
   acknowledgement: acknowledgementSchema.optional(),
   attempts: z.array(attemptSchema).readonly(),
@@ -115,14 +137,25 @@ const noticeSchema = z.object({
   // stored heads or the journal head-vs-replay consistency check would diverge
   // on state persisted before the retry contract. Absent means a budget of 1.
   retryBudget: z.number().int().min(1).optional(),
+  // Optional for the same reason: absent on pre-redaction notices and means `internal`.
+  sensitivity: z.enum(AGENT_NOTICE_SENSITIVITIES).optional(),
   state: z.enum(['pending', 'attempted', 'expired', 'unavailable', 'withdrawn', 'acknowledged']),
   unavailableAt: z.string().min(1).optional(),
   unavailableReason: z.literal('delivery-authorization-unavailable').optional(),
   withdrawnAt: z.string().min(1).optional(),
+  withheld: z.partialRecord(routeSchema, withholdingSchema).readonly().optional(),
+}).strict().readonly();
+
+const retentionSummarySchema = z.object({
+  lastPrunedAt: z.string().min(1),
+  pruneRuns: z.number().int().positive(),
+  prunedTotal: z.number().int().positive(),
 }).strict().readonly();
 
 export interface AgentNoticeLedgerState {
   readonly notices: readonly AgentNotice[];
+  /** Absent until the first prune; never defaulted, so pre-retention heads replay unchanged. */
+  readonly retention?: AgentNoticeRetentionSummary;
 }
 
 /**
@@ -145,6 +178,8 @@ export const agentNoticeEventSchemas = {
     invocationId: z.string().min(1),
     principal: principalSchema,
     unavailableIds: z.array(z.string().min(1)),
+    // Optional so journals written before the redaction contract replay unchanged.
+    withheld: z.array(withheldEntrySchema).optional(),
   }).strict(),
   'availability-released': z.object({
     noticeIds: z.array(z.string().min(1)),
@@ -166,9 +201,15 @@ export const agentNoticeEventSchemas = {
     channel: z.literal('mcp-inbox'),
     invocationId: z.string().min(1),
     noticeIds: z.array(z.string().min(1)),
+    withheld: z.array(withheldEntrySchema).optional(),
   }).strict(),
   expired: z.object({
     at: z.string().min(1),
+  }).strict(),
+  /** Retention: removes the listed notices from the state when they are terminal. */
+  pruned: z.object({
+    at: z.string().min(1),
+    noticeIds: z.array(z.string().min(1)).min(1),
   }).strict(),
   published: z.object({
     notice: noticeSchema,
@@ -176,6 +217,12 @@ export const agentNoticeEventSchemas = {
   withdrawn: z.object({
     at: z.string().min(1),
     id: z.string().min(1),
+  }).strict(),
+  /** A route refused the listed notices; recorded by the surface that decided (the signaller). */
+  withheld: z.object({
+    at: z.string().min(1),
+    entries: z.array(withheldEntrySchema).min(1),
+    route: routeSchema,
   }).strict(),
 } as const satisfies AgentStateEventSchemas;
 
@@ -364,6 +411,63 @@ const transitionAvailabilityReservation = (
   }
 };
 
+/**
+ * Records that a route withheld the notice from a matching recipient because
+ * its sensitivity exceeds the route's ceiling. Evidence only: the notice keeps
+ * its state and stays eligible for a route whose row admits it.
+ */
+const withholding = (
+  notice: AgentNotice,
+  route: AgentNoticeDeliveryRoute,
+  at: string,
+  reason: AgentNoticeWithholdingReason,
+): AgentNotice => {
+  const previous: AgentNoticeWithholding | undefined = notice.withheld?.[route];
+  return Object.freeze({
+    ...notice,
+    withheld: Object.freeze({
+      ...notice.withheld,
+      [route]: Object.freeze({
+        count: (previous?.count ?? 0) + 1,
+        firstAt: previous?.firstAt ?? at,
+        lastAt: at,
+        reason,
+      }),
+    }),
+  });
+};
+
+/** Withheld entries keyed by id for the reducer's per-notice pass. */
+const withheldById = (
+  entries: readonly AgentNoticeWithheldEntry[] | undefined,
+): ReadonlyMap<string, AgentNoticeWithholdingReason> =>
+  new Map((entries ?? []).map((entry) => [entry.id, entry.reason]));
+
+/** Settled terminal notices the retention policy may prune; exhausted attempts count as settled. */
+export const noticeSettledAt = (notice: AgentNotice): string | undefined => {
+  switch (notice.state) {
+    case 'pending':
+      return undefined;
+    case 'attempted': {
+      if (notice.attempts.length < (notice.retryBudget ?? 1)) return undefined;
+      const last = notice.attempts[notice.attempts.length - 1];
+      return last?.attemptedAt;
+    }
+    case 'expired':
+      return notice.expiredAt;
+    case 'unavailable':
+      return notice.unavailableAt;
+    case 'withdrawn':
+      return notice.withdrawnAt;
+    case 'acknowledged':
+      return notice.acknowledgement?.acknowledgedAt;
+    default: {
+      const exhaustive: never = notice.state;
+      return exhaustive;
+    }
+  }
+};
+
 const transitionAdmission = (
   notice: AgentNotice,
   input: {
@@ -372,6 +476,7 @@ const transitionAdmission = (
     readonly invocationId: string;
     readonly principal: AgentNoticePrincipal;
     readonly unavailableIds: ReadonlySet<string>;
+    readonly withheld: ReadonlyMap<string, AgentNoticeWithholdingReason>;
   },
 ): AgentNotice => {
   const current = transitionExpiry(notice, input.at);
@@ -384,6 +489,10 @@ const transitionAdmission = (
         return current;
       }
       if (current.attempts.length >= (current.retryBudget ?? 1)) return current;
+      // The route refused the content: nothing is attempted and no budget is
+      // spent, only the refusal is remembered.
+      const refused = input.withheld.get(current.id);
+      if (refused !== undefined) return withholding(current, 'next-event', input.at, refused);
       if (input.unavailableIds.has(current.id)) {
         return current.state === 'pending'
           ? Object.freeze({
@@ -425,10 +534,13 @@ const transitionExposure = (
     readonly at: string;
     readonly invocationId: string;
     readonly noticeIds: ReadonlySet<string>;
+    readonly withheld: ReadonlyMap<string, AgentNoticeWithholdingReason>;
   },
 ): AgentNotice => {
   switch (notice.state) {
     case 'pending': {
+      const refused = input.withheld.get(notice.id);
+      if (refused !== undefined) return withholding(notice, 'mcp-inbox', input.at, refused);
       if (!input.noticeIds.has(notice.id)) return notice;
       return Object.freeze({
         ...notice,
@@ -478,47 +590,57 @@ export const agentNoticeStateDefinition = (
             : state.notices.some((notice) =>
               notice.dedupeKey === candidate.dedupeKey
               && sameRecipient(notice.recipient, candidate.recipient));
-          return duplicate ? state : { notices: [...state.notices, candidate] };
+          return duplicate ? state : { ...state, notices: [...state.notices, candidate] };
         }
         case 'expired':
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionExpiry(notice, event.payload.at)),
           };
         case 'withdrawn':
           return {
+            ...state,
             notices: state.notices.map((notice) =>
               transitionWithdrawal(notice, event.payload.id, event.payload.at)),
           };
         case 'admitted': {
           const authorizedIds = new Set(event.payload.authorizedIds);
           const unavailableIds = new Set(event.payload.unavailableIds);
+          const withheld = withheldById(event.payload.withheld);
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionAdmission(notice, {
               at: event.payload.at,
               authorizedIds,
               invocationId: event.payload.invocationId,
               principal: event.payload.principal,
               unavailableIds,
+              withheld,
             })),
           };
         }
         case 'exposed': {
           const noticeIds = new Set(event.payload.noticeIds);
+          const withheld = withheldById(event.payload.withheld);
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionExposure(notice, {
               at: event.payload.at,
               invocationId: event.payload.invocationId,
               noticeIds,
+              withheld,
             })),
           };
         }
         case 'acknowledged':
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionAcknowledgement(notice, event.payload)),
           };
         case 'availability-signalled': {
           const noticeIds = new Set(event.payload.noticeIds);
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionAvailability(notice, {
               at: event.payload.at,
               noticeIds,
@@ -529,6 +651,7 @@ export const agentNoticeStateDefinition = (
         case 'availability-reserved': {
           const noticeIds = new Set(event.payload.noticeIds);
           return {
+            ...state,
             notices: state.notices.map((notice) => transitionAvailabilityReservation(notice, {
               at: event.payload.at,
               noticeIds,
@@ -539,9 +662,38 @@ export const agentNoticeStateDefinition = (
         case 'availability-released': {
           const noticeIds = new Set(event.payload.noticeIds);
           return {
+            ...state,
             notices: state.notices.map((notice) => noticeIds.has(notice.id)
               ? withoutReservation(notice, event.payload.reservationKey)
               : notice),
+          };
+        }
+        case 'withheld': {
+          const refused = withheldById(event.payload.entries);
+          return {
+            ...state,
+            notices: state.notices.map((notice) => {
+              const reason = refused.get(notice.id);
+              return reason === undefined ? notice : withholding(notice, event.payload.route, event.payload.at, reason);
+            }),
+          };
+        }
+        case 'pruned': {
+          // Only settled notices leave; an id that is live again (or unknown)
+          // is skipped, so a stale prune decision can never drop a pending
+          // notice. The summary counts what was actually removed.
+          const noticeIds = new Set(event.payload.noticeIds);
+          const remaining = state.notices.filter((notice) =>
+            !(noticeIds.has(notice.id) && noticeSettledAt(notice) !== undefined));
+          const removed = state.notices.length - remaining.length;
+          if (removed === 0) return state;
+          return {
+            notices: remaining,
+            retention: {
+              lastPrunedAt: event.payload.at,
+              pruneRuns: (state.retention?.pruneRuns ?? 0) + 1,
+              prunedTotal: (state.retention?.prunedTotal ?? 0) + removed,
+            },
           };
         }
         default: {
@@ -552,6 +704,7 @@ export const agentNoticeStateDefinition = (
     },
     schema: z.object({
       notices: z.array(noticeSchema).readonly(),
+      retention: retentionSummarySchema.optional(),
     }).strict().readonly(),
     version: AGENT_NOTICE_STATE_VERSION,
   });

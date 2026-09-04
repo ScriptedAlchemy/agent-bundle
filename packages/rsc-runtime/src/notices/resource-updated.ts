@@ -8,6 +8,13 @@ import {
   type AgentNoticeLedger,
   type AgentNoticePrincipal,
 } from './contract.js';
+import { AGENT_NOTICE_DEFAULT_SENSITIVITY } from './redaction.js';
+import {
+  resolveNoticeDisclosure,
+  validateNoticeDeliveryAdvertisement,
+  type AgentNoticeDeliveryAdvertisement,
+} from './router.js';
+import type { AgentNoticeWithheldEntry, AgentNoticeWithholdingReason } from './contract.js';
 import { recipientMatchesPrincipal } from './state.js';
 
 /** Consecutive compare-and-swap losses tolerated before a reservation reports failure. */
@@ -42,6 +49,13 @@ export interface CreateNoticeInboxSignallerOptions {
    * its hold lapses after the reservation TTL. Defaults to 5 seconds.
    */
   readonly closeTimeoutMs?: number;
+  /**
+   * The host's notice delivery advertisement. A notice the inbox route would
+   * withhold (its sensitivity exceeds the `mcp-inbox` or `mcp-resource-updated`
+   * ceiling) is never signalled: a refetch that shows nothing would leak only
+   * that something was withheld. Absent means every route admits `internal`.
+   */
+  readonly delivery?: AgentNoticeDeliveryAdvertisement;
   /** Clock injection for deterministic tests. */
   readonly now?: () => Date;
   /**
@@ -123,6 +137,8 @@ interface InboxSubscription {
   readonly id: string;
   readonly principal: AgentNoticePrincipal;
   readonly signalled: Set<string>;
+  /** Notices whose refusal this subscription already recorded, so a refusal is evidence once, not once per render. */
+  readonly withheld: Set<string>;
 }
 
 /** A send that succeeded on the wire whose availability receipt has not been committed yet. */
@@ -131,6 +147,24 @@ interface PendingReceipt {
   readonly noticeIds: readonly string[];
   readonly reservationKey: string;
 }
+
+/**
+ * The signal and the inbox it points at must both admit the notice's class;
+ * a refetch of an inbox that would withhold the notice would announce only
+ * that something was withheld. Returns the refusal to record, or `undefined`
+ * when the notice may be signalled.
+ */
+const signalRefusal = (
+  notice: AgentNotice,
+  advertisement: AgentNoticeDeliveryAdvertisement | undefined,
+): AgentNoticeWithholdingReason | undefined => {
+  const sensitivity = notice.sensitivity ?? AGENT_NOTICE_DEFAULT_SENSITIVITY;
+  for (const route of ['mcp-resource-updated', 'mcp-inbox'] as const) {
+    const disclosure = resolveNoticeDisclosure(route, sensitivity, advertisement);
+    if (disclosure.kind === 'withheld') return disclosure.reason;
+  }
+  return undefined;
+};
 
 const eligibleForSignal = (
   notice: AgentNotice,
@@ -170,6 +204,9 @@ export const createNoticeInboxSignaller = (
   options: CreateNoticeInboxSignallerOptions,
 ): AgentNoticeInboxSignaller => {
   const now = options.now ?? ((): Date => new Date());
+  // Fail closed at construction, like the ledger: an advertisement naming an
+  // unknown ceiling is a typed error before any subscription exists.
+  if (options.delivery !== undefined) validateNoticeDeliveryAdvertisement(options.delivery);
   const renewalIntervalMs = options.reservationRenewalIntervalMs
     ?? Math.floor(AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS / 3);
   let subscription: InboxSubscription | undefined;
@@ -249,10 +286,40 @@ export const createNoticeInboxSignaller = (
       if (snapshot === CLOSED || pendingUnsubscribes > 0 || subscription !== current) return { kind: 'unsubscribed' };
       const at = now().toISOString();
       const nowMs = Date.parse(at);
-      const noticeIds = Object.freeze(snapshot.notices
+      const candidates = snapshot.notices
         .filter((notice) => !current.signalled.has(notice.id) && eligibleForSignal(notice, current.principal, nowMs))
-        .map((notice) => notice.id)
-        .toSorted((left, right) => left.localeCompare(right)));
+        .toSorted((left, right) => left.id.localeCompare(right.id));
+      // A notice the inbox would withhold is refused here too, and the
+      // refusal is durable evidence like the inbox's own: recorded once per
+      // subscription, before any send, so the ledger says why a matching
+      // subscriber was never signalled about it.
+      const refused: AgentNoticeWithheldEntry[] = [];
+      const noticeIds: string[] = [];
+      for (const notice of candidates) {
+        const reason = signalRefusal(notice, options.delivery);
+        if (reason === undefined) {
+          noticeIds.push(notice.id);
+        } else if (!current.withheld.has(notice.id)) {
+          refused.push(Object.freeze({ id: notice.id, reason }));
+        }
+      }
+      if (refused.length > 0) {
+        signalSequence += 1;
+        try {
+          const recorded = await untilClosed(ledger.recordWithholding({
+            at,
+            idempotencyKey: `agent-notices:withheld:${current.id}:${String(signalSequence)}`,
+            route: 'mcp-resource-updated',
+            withheld: refused,
+          }));
+          if (recorded === CLOSED) return { kind: 'unsubscribed' };
+          for (const entry of refused) current.withheld.add(entry.id);
+          // The recording moved the revision the eligibility was judged against.
+          continue;
+        } catch (error) {
+          return { error, kind: 'failed', stage: 'record' };
+        }
+      }
       if (noticeIds.length === 0) return { kind: 'nothing-eligible', revision: snapshot.revision };
       signalSequence += 1;
       const reservationKey = `${current.id}:${String(signalSequence)}`;
@@ -566,6 +633,7 @@ export const createNoticeInboxSignaller = (
           id: randomUUID(),
           principal,
           signalled: new Set<string>(),
+          withheld: new Set<string>(),
         });
       });
     },

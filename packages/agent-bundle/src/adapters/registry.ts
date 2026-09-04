@@ -472,7 +472,12 @@ const snapshotNoticeDelivery = (adapter: TargetAdapter): NoticeDeliveryAdvertise
         `Target adapter "${adapter.name}" notice delivery route "${route}" must declare a state.`,
       );
     }
-    return [route, { ...(typeof row.reason === 'string' ? { reason: row.reason } : {}), state: row.state }];
+    return [route, {
+      ...(typeof row.reason === 'string' ? { reason: row.reason } : {}),
+      ...(typeof row.sensitivity === 'string' ? { sensitivity: row.sensitivity } : {}),
+      ...(typeof row.sensitivityEvidence === 'string' ? { sensitivityEvidence: row.sensitivityEvidence } : {}),
+      state: row.state,
+    }];
   }));
   return noticeDeliveryAdvertisementFrom(adapter.name, entries);
 };

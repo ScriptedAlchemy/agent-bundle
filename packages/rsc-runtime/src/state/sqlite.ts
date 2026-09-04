@@ -28,10 +28,14 @@ import type {
   AgentStateChangeBatch,
   AgentStateChangesOptions,
   AgentStateCommitResult,
+  AgentStateCompactOptions,
+  AgentStateCompactResult,
   AgentStateDefinition,
   AgentStateDispatchOptions,
   AgentStateDriver,
   AgentStateEventSchemas,
+  AgentStateInspectOptions,
+  AgentStateJournalInspection,
   AgentStateJournalRecord,
   AgentStateReadOptions,
   AgentStateResetOptions,
@@ -43,12 +47,16 @@ import {
   canonicalCommitInput,
   canonicalJson,
   changeFromJournalRecord,
+  compactionIdempotencyKey,
   deepFreezeJson,
   describeSchemaIssues,
   expectCommitWithinBudgets,
   expectConsistentJournal,
   expectIdempotencyKey,
   expectMigrationWithinStateBudget,
+  inspectJournalRecords,
+  isCompactionIdempotencyKey,
+  journalIsCompactable,
   migrationIdempotencyKey,
   parseEventPayload,
   reduceStateEvent,
@@ -81,9 +89,17 @@ import { createPendingOpenTracker } from './pending-opens.js';
  *
  * Subscriptions are polling change cursors only; nothing stronger is
  * promised from short-lived processes.
+ *
+ * Kernel formats: format 1 stores are never compacted; the first compaction
+ * moves a store to format 2, whose journal may start at a `compact` baseline
+ * and whose `agent_state_pruned_keys` table remembers the idempotency keys of
+ * deleted records. A format-1 kernel therefore refuses a compacted store with
+ * a typed `corrupt` error instead of misreading its truncated journal.
  */
 
 const KERNEL_FORMAT = 1;
+const COMPACTED_KERNEL_FORMAT = 2;
+const READABLE_KERNEL_FORMATS: readonly number[] = Object.freeze([KERNEL_FORMAT, COMPACTED_KERNEL_FORMAT]);
 
 export interface SqliteStateDriverOptions {
   /**
@@ -195,13 +211,24 @@ interface JournalRow {
   readonly to_version: number | null;
 }
 
+/**
+ * Compaction baselines are stored under the `reset` row kind (the journal
+ * table's kind constraint predates them) and told apart by their kernel-owned
+ * idempotency key, which no caller can mint.
+ */
+const storedKind = (record: AgentStateJournalRecord): 'event' | 'migrate' | 'reset' =>
+  record.kind === 'compact' ? 'reset' : record.kind;
+
 const recordFromRow = (definitionId: string, row: JournalRow): AgentStateJournalRecord => {
   const base = { committedAt: row.committed_at, idempotencyKey: row.idempotency_key, revision: row.revision };
   if (row.kind === 'event' && row.name !== null && row.payload !== null) {
     return { ...base, kind: 'event', name: row.name, payload: parseStoredJson(definitionId, 'payload', row.revision, row.payload) };
   }
   if (row.kind === 'reset' && row.state !== null) {
-    return { ...base, kind: 'reset', state: parseStoredJson(definitionId, 'state', row.revision, row.state) };
+    const state = parseStoredJson(definitionId, 'state', row.revision, row.state);
+    return isCompactionIdempotencyKey(row.idempotency_key)
+      ? { ...base, kind: 'compact', state }
+      : { ...base, kind: 'reset', state };
   }
   if (row.kind === 'migrate' && row.state !== null && row.to_version !== null) {
     return {
@@ -353,13 +380,22 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
   #committedByKey(
     db: DatabaseSync,
     key: string,
-  ): { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null } | undefined {
+  ):
+    | { readonly kind: 'committed'; readonly record: AgentStateJournalRecord; readonly resultStateText: string | null }
+    | { readonly canonicalInput: string; readonly kind: 'pruned'; readonly revision: number }
+    | undefined {
     const row = this.#prepare(db, 'SELECT * FROM agent_state_journal WHERE idempotency_key = ?').get(key) as
       | JournalRow
       | undefined;
-    return row === undefined
+    if (row !== undefined) {
+      return { kind: 'committed', record: recordFromRow(this.#definition.id, row), resultStateText: row.result_state ?? row.state };
+    }
+    const pruned = this
+      .#prepare(db, 'SELECT revision, canonical_input FROM agent_state_pruned_keys WHERE idempotency_key = ?')
+      .get(key) as { canonical_input: string; revision: number } | undefined;
+    return pruned === undefined
       ? undefined
-      : { record: recordFromRow(this.#definition.id, row), resultStateText: row.result_state ?? row.state };
+      : { canonicalInput: pruned.canonical_input, kind: 'pruned', revision: pruned.revision };
   }
 
   /**
@@ -370,7 +406,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
    */
   #committedState(
     db: DatabaseSync,
-    committed: { readonly record: AgentStateJournalRecord; readonly resultStateText: string | null },
+    committed: { readonly kind: 'committed'; readonly record: AgentStateJournalRecord; readonly resultStateText: string | null },
   ): TState {
     const raw =
       committed.resultStateText !== null
@@ -394,6 +430,17 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
         `State '${this.#definition.id}' revision ${String(revision)} predates the migration at revision ${String(latestMigration)}`,
       );
     }
+    // The records below a compaction baseline no longer exist, so the filtered
+    // read below would otherwise replay the initial state for them.
+    const first = this
+      .#prepare(db, 'SELECT revision, idempotency_key FROM agent_state_journal ORDER BY revision LIMIT 1')
+      .get() as { idempotency_key: string; revision: number } | undefined;
+    if (first !== undefined && isCompactionIdempotencyKey(first.idempotency_key) && revision < first.revision) {
+      throw new AgentStateError(
+        'revision-unavailable',
+        `State '${this.#definition.id}' revision ${String(revision)} predates the compaction at revision ${String(first.revision)}`,
+      );
+    }
     return replayJournal(this.#definition, this.#journalRecords(db, revision), revision);
   }
 
@@ -410,7 +457,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       )
       .run(
         record.revision,
-        record.kind,
+        storedKind(record),
         record.kind === 'event' ? record.name : null,
         record.kind === 'event' ? canonicalJson(record.payload) : null,
         // Event rows store their post-commit state too, so idempotent replay
@@ -475,10 +522,19 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       return yield* this.#transaction('write', input.kind === 'event' ? `dispatch '${input.name}'` : 'reset', (db) => {
         const committed = this.#committedByKey(db, key);
         if (committed !== undefined) {
-          if (canonicalCommitInput(committed.record) !== prepared.canonicalInput) {
+          const committedInput = committed.kind === 'committed'
+            ? canonicalCommitInput(committed.record)
+            : committed.canonicalInput;
+          if (committedInput !== prepared.canonicalInput) {
             throw new AgentStateError(
               'idempotency-conflict',
               `State '${definition.id}' idempotency key was reused with a conflicting input`,
+            );
+          }
+          if (committed.kind === 'pruned') {
+            throw new AgentStateError(
+              'revision-unavailable',
+              `State '${definition.id}' idempotency key committed at revision ${String(committed.revision)}, which compaction pruned; its result is no longer available`,
             );
           }
           return Object.freeze({
@@ -570,6 +626,104 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
     return this.#run(this.#commit({ kind: 'reset', seed: options.seed }, options));
   }
 
+  /**
+   * Compaction runs inside one `BEGIN IMMEDIATE` transaction like every other
+   * mutation: the baseline insert, the pruned-key bookkeeping, the delete, the
+   * head update, and the kernel-format bump commit together or not at all, so
+   * a process killed mid-compaction leaves either the full journal or the
+   * compacted one — never a journal missing records its head still needs.
+   * Concurrent writers in other processes serialize on the database lock and
+   * observe the compacted journal on their next transaction.
+   */
+  compact(options: AgentStateCompactOptions = {}): Promise<AgentStateCompactResult<TState>> {
+    const definition = this.#definition;
+    const now = this.#now;
+    return this.#run(
+      sqliteEffect(definition.id, 'validate compact', () => {
+        expectOperable(this.#closed, definition.id, options.signal);
+        expectRevisionShape(options.expectedRevision, `State '${definition.id}' expectedRevision`);
+      }).pipe(
+        Effect.andThen(
+          this.#transaction('write', 'compact', (db) => {
+            const head = this.#headState(db, 'compact');
+            if (options.expectedRevision !== undefined && options.expectedRevision !== head.revision) {
+              throw new AgentStateError(
+                'revision-conflict',
+                `State '${definition.id}' expected revision ${String(options.expectedRevision)} but the head is ${String(head.revision)}`,
+              );
+            }
+            const records = this.#journalRecords(db);
+            if (!journalIsCompactable(records)) {
+              return Object.freeze({
+                baselineRevision: records[0]?.revision ?? head.revision,
+                prunedRecords: 0,
+                revision: head.revision,
+                state: head.state,
+              });
+            }
+            const remember = this.#prepare(
+              db,
+              'INSERT OR REPLACE INTO agent_state_pruned_keys (idempotency_key, revision, canonical_input) VALUES (?, ?, ?)',
+            );
+            for (const record of records) {
+              remember.run(record.idempotencyKey, record.revision, canonicalCommitInput(record));
+            }
+            this.#prepare(db, 'DELETE FROM agent_state_journal WHERE revision <= ?').run(head.revision);
+            const stateText = canonicalJson(head.state);
+            const baseline: AgentStateJournalRecord = {
+              committedAt: now().toISOString(),
+              idempotencyKey: compactionIdempotencyKey(head.revision + 1),
+              kind: 'compact',
+              revision: head.revision + 1,
+              state: head.state,
+            };
+            const committed = this.#appendRecord(db, baseline, head.state, stateText);
+            this.#prepare(db, 'UPDATE agent_state_meta SET kernel_format = ? WHERE id = 1').run(COMPACTED_KERNEL_FORMAT);
+            return Object.freeze({
+              baselineRevision: baseline.revision,
+              prunedRecords: records.length,
+              revision: committed.revision,
+              state: committed.state,
+            });
+          }),
+        ),
+      ),
+    );
+  }
+
+  inspect(options: AgentStateInspectOptions = {}): Promise<AgentStateJournalInspection> {
+    const definition = this.#definition;
+    return this.#run(
+      sqliteEffect(definition.id, 'validate inspect', () => {
+        expectOperable(this.#closed, definition.id, options.signal);
+      }).pipe(
+        Effect.andThen(
+          this.#transaction('read', 'inspect', (db) => {
+            const head = this.#headRow(db, 'inspect');
+            const size = this
+              .#prepare(
+                db,
+                'SELECT COUNT(*) AS records, COALESCE(SUM(LENGTH(CAST(COALESCE(payload, \'\') AS BLOB)) + LENGTH(CAST(COALESCE(state, \'\') AS BLOB)) + LENGTH(CAST(COALESCE(result_state, \'\') AS BLOB))), 0) AS bytes FROM agent_state_journal',
+              )
+              .get() as { bytes: number; records: number };
+            const first = this
+              .#prepare(db, 'SELECT * FROM agent_state_journal ORDER BY revision LIMIT 1')
+              .get() as JournalRow | undefined;
+            // Only the first record decides the baseline and last compaction;
+            // the count and bytes come from SQL so a large journal is never
+            // materialized to inspect it.
+            const summary = inspectJournalRecords(
+              first === undefined ? [] : [recordFromRow(definition.id, first)],
+              head.revision,
+              size.bytes,
+            );
+            return Object.freeze({ ...summary, records: size.records });
+          }),
+        ),
+      ),
+    );
+  }
+
   read(options: AgentStateReadOptions = {}): Promise<AgentStateSnapshot<TState>> {
     return this.#run(
       sqliteEffect(this.#definition.id, 'validate read', () => {
@@ -653,6 +807,11 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           revision INTEGER NOT NULL,
           state TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS agent_state_pruned_keys (
+          idempotency_key TEXT PRIMARY KEY,
+          revision INTEGER NOT NULL,
+          canonical_input TEXT NOT NULL
+        );
       `);
       const journalColumns = transactionDb.prepare('PRAGMA table_info(agent_state_journal)').all() as unknown as {
         readonly name: string;
@@ -679,10 +838,10 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           `State '${definition.id}' storage at '${this.location}' belongs to definition '${meta.definition_id}'`,
         );
       }
-      if (meta.kernel_format !== KERNEL_FORMAT) {
+      if (!READABLE_KERNEL_FORMATS.includes(meta.kernel_format)) {
         throw new AgentStateError(
           'corrupt',
-          `State '${definition.id}' storage uses kernel format ${String(meta.kernel_format)}; this kernel reads format ${String(KERNEL_FORMAT)}`,
+          `State '${definition.id}' storage uses kernel format ${String(meta.kernel_format)}; this kernel reads formats ${READABLE_KERNEL_FORMATS.map(String).join(', ')}`,
         );
       }
       const head = this.#headRow(transactionDb, 'open');

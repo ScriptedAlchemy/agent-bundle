@@ -141,6 +141,7 @@ export const planPackageEntries = async (
             name: model.metadata.name,
             version: model.metadata.version,
           },
+          ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
           providers: model.providers ?? [],
           routes: bin.generatedCli.routes,
           ...(model.state === undefined ? {} : { state: model.state }),
@@ -160,6 +161,7 @@ export const planPackageEntries = async (
           sourceInputs,
           virtualSource: generatedRenderedRouteWorkerSource({
             layouts: model.layouts ?? [],
+            ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
             providers: model.providers ?? [],
             routes: renderedRoutes,
             ...(model.state === undefined ? {} : { state: model.state }),

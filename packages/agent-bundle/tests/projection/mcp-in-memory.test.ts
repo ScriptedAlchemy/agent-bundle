@@ -4,11 +4,13 @@ import { join } from 'node:path';
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it } from '@rstest/core';
+import { agentNoticeStateDefinition } from '@agent-bundle/runtime/notices';
 import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
 import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 import { z } from 'zod';
 
 import stateDefinition from '../../fixtures/route-harness/src/state.ts';
+import { createDefaultRegistry } from '../../src/adapters/registry.ts';
 import { AgentTestError } from '../../src/test/errors.ts';
 import {
   getMcpPrompt,
@@ -327,6 +329,76 @@ describe('the in-memory MCP projection level', () => {
     }
 
     expect((await listMcpSurface()).resources).not.toContain('agent-bundle://notices/inbox');
+  });
+
+  it('discloses inbox content per sensitivity under the host advertisement: redacted, full, or withheld (#99 item 7)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-redaction-'));
+    const secretText = 'Rotate token=abc123def456 at https://ops:hunter2@vault.example.test/x';
+    const readInbox = async (session: Awaited<ReturnType<typeof openInMemoryMcpServer>>) => {
+      const read = await session.client.readResource({ uri: 'agent-bundle://notices/inbox' });
+      const content = read.contents[0];
+      if (content === undefined || !('text' in content)) throw new TypeError('Expected text inbox content');
+      return (JSON.parse(content.text) as { notices: readonly Readonly<Record<string, unknown>>[] }).notices;
+    };
+    try {
+      // The claude advertisement admits `internal` on the inbox, so a secret
+      // notice is withheld there while it is still admitted on next-event.
+      const session = await openInMemoryMcpServer({
+        context: { session: { source: 'native', state: 'available', value: { sessionId: 's1' } } },
+        state: {
+          definition: stateDefinition,
+          driver: createSqliteStateDriver({ root }),
+          noticeDelivery: createDefaultRegistry().noticeDelivery('claude'),
+        },
+      });
+      try {
+        // The fixture keys idempotency on the message, so each class gets its own text.
+        for (const sensitivity of ['internal', 'public', 'secret'] as const) {
+          await expect(session.client.callTool({
+            arguments: { message: `${secretText} (${sensitivity})`, recipientSession: 's1', sensitivity },
+            name: 'publish-notice',
+          })).resolves.toMatchObject({ structuredContent: { sensitivity, state: 'pending' } });
+        }
+        const notices = await readInbox(session);
+        const shown = notices
+          .map((notice) => ({ disclosure: notice.disclosure, sensitivity: notice.sensitivity, text: (notice.content as { root: { text: string } }).root.text }))
+          .toSorted((left, right) => String(left.sensitivity).localeCompare(String(right.sensitivity)));
+        expect(shown).toEqual([
+          {
+            disclosure: { redacted: true, route: 'mcp-inbox' },
+            sensitivity: 'internal',
+            text: 'Rotate [REDACTED] at [REDACTED]vault.example.test/x (internal)',
+          },
+          {
+            disclosure: { redacted: false, route: 'mcp-inbox' },
+            sensitivity: 'public',
+            text: `${secretText} (public)`,
+          },
+        ]);
+      } finally {
+        await session.close();
+      }
+      // Reading the inbox exposed the disclosed notices and recorded the
+      // refusal on the withheld one; nothing was exposed for it. The store
+      // keeps every notice as authored: redaction happened on egress only.
+      const driver = createSqliteStateDriver({ root });
+      try {
+        const store = await driver.open(agentNoticeStateDefinition());
+        const durable = await store.read();
+        const byClass = new Map(durable.state.notices.map((notice) => [notice.sensitivity, notice]));
+        expect(byClass.get('internal')?.exposure?.count).toBe(1);
+        expect(byClass.get('public')?.exposure?.count).toBe(1);
+        expect(byClass.get('secret')?.exposure).toBeUndefined();
+        expect(byClass.get('secret')?.withheld).toEqual({
+          'mcp-inbox': expect.objectContaining({ count: 1, reason: 'sensitivity-exceeds-route' }),
+        });
+        expect(durable.state.notices.every((notice) => (notice.content.root as { text: string }).text.startsWith(secretText))).toBe(true);
+      } finally {
+        await driver.close();
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   // Issue #369: task-augmented tool calls are deferred until the MCP SDK ships

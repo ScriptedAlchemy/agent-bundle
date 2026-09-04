@@ -321,6 +321,169 @@ availability and exposure receipts. `selectNoticeDeliveryRoutes()` chooses
 cross-request routes from a per-host advertisement and returns a typed
 unavailable outcome when none is supported; it never fabricates a channel.
 
+### Redaction (#99 acceptance item 7)
+
+A notice's free text lives only in its detached `AgentDocumentSnapshot` —
+`text`, `markdown`, `context`, `progress.message`, `error.message`,
+`resource.name`/`uri`, and every string inside `json.value`, `result.metadata`,
+and the document `value`. Recipient, priority, dedupe key, timestamps, and
+receipts are identity and evidence, never prose; hosts receive them unredacted
+and they must not carry secrets. The store keeps content exactly as authored;
+redaction happens on egress, per route.
+
+`publish()` accepts `sensitivity: 'public' | 'internal' | 'secret'` (default
+`internal`, persisted explicitly on new notices; notices journaled before the
+contract have no class and are `internal`):
+
+- `public` — safe for any surface; delivered as authored.
+- `internal` — for the recipient's own context; every route passes it through
+  `redactSecretText()` first, so a credential pasted into a coordination
+  message never crosses into another actor's context.
+- `secret` — delivered as authored, but only over a route whose host row
+  admits `secret`; otherwise it never leaves the store through that route.
+
+Each route has a structural shape (`AGENT_NOTICE_ROUTE_SHAPES`): `mcp-inbox`,
+`next-event`, `current-response`, and `directed-push` carry the document
+(`body`); `host-toast` carries one bounded line (`title`, `noticeTitle()`);
+`mcp-resource-updated` carries only the inbox URI (`signal`). A supported route
+in an `AgentNoticeDeliveryAdvertisement` may name `sensitivity`, the most
+sensitive class it carries in full, with dated `sensitivityEvidence`; an
+absent ceiling means `internal`, the pre-sensitivity contract, so `secret`
+notices are withheld everywhere until a host row says otherwise.
+`resolveNoticeDisclosure(route, sensitivity, advertisement)` is the whole
+decision: `withheld` (`route-unavailable` or `sensitivity-exceeds-route`) or
+`disclosed` with `shape` and `redacted`; a row naming a ceiling outside the
+vocabulary admits nothing. `createAgentNoticeLedger(store, { delivery })` and
+`createNoticeInboxSignaller({ delivery })` take the host's advertisement and
+validate it at construction (`validateNoticeDeliveryAdvertisement`, typed
+`invalid-input`): `inbox()` omits withheld notices and hands out disclosed content
+(the inbox resource projection reports `sensitivity` and
+`disclosure.redacted`), event admission neither authorizes nor attempts a
+withheld notice, `read()` deliveries carry `disclosure` and the disclosed
+`content`, `acknowledge()` returns the notice only as the acknowledging
+request's route may disclose it (an admitted event is held to `next-event`,
+every other invocation to the inbox ceiling; a withheld class comes back as
+the `[REDACTED]` mark, so an id learned from a redacted inbox unlocks nothing),
+and the signaller never sends `resources/updated` for a notice the inbox would
+withhold, recording that refusal itself through
+`recordWithholding()` once per subscription. Admission stays one commit per
+invocation: a retry of the same invocation id whose recomputed decision differs
+(a notice published or a ceiling changed in between) replays the committed
+admission instead of failing `idempotency-conflict`. Every refusal is durable evidence,
+not a state change: the notice records
+`withheld[route] = { count, firstAt, lastAt, reason }` and stays eligible for
+a route whose row admits it. The built-in hosts admit
+`secret` on `current-response` and `next-event` (the hook response returns to
+the recipient's own host process) and `internal` on `mcp-inbox` and
+`mcp-resource-updated` (transport-derived identity the host does not
+authenticate to the plugin); `portable` has only the MCP routes.
+
+The secret pass (`redactSecretText()`, `redactNoticeDocument()`,
+`containsSecretText()`) is not written here. Which fields are prose, which
+class each route may carry, and what a refusal records are this package's
+policy; recognizing a credential is delegated to
+[`flare-redact`](https://www.npmjs.com/package/flare-redact), a runtime
+dependency pinned to an exact version (a range would let a publish change
+what `internal` notices disclose without a changeset; a test keeps the pin
+exact). The ledger runs it with its default detectors and default
+credential-shaped member names, every finding replaced whole by `[REDACTED]`
+(the library's own masks keep a hint such as `AKIA***`; a notice crossing into
+another actor's context keeps nothing). Coverage: provider tokens (OpenAI,
+Anthropic, AWS, GitHub, GitLab, Slack, Stripe, Google, npm, and the other
+default detectors), JWTs, PEM private keys, `Bearer` / `Basic` headers,
+`user:password@` URL credentials, `key=value` / `key: value` credential
+assignments in any language (the whole assignment is masked, key included),
+e-mail addresses (a recipient's identity is never surfaced through another
+actor's notice), card numbers, and IBANs; a string held directly under a
+credential-shaped member name (`password`, `token`, `apiKey`,
+`authorization`, …) is masked whole regardless of content, and member names
+themselves are scanned like any other string. Not redacted: paths (coordination
+notices legitimately name files), numbers, base64 image and audio payloads,
+and vocabulary fields (`kind`, `status`, `code`, `mimeType`). Two detector
+limits at the pinned version are part of the contract, not patched here: the
+assignment detector needs a value of at least four characters (`password=abc`
+in free text is not a finding; the same value as `{ "password": "abc" }` is
+masked by member name), and the OpenAI detector caps at 64 key characters, so
+a project-scoped `sk-proj-…` key of production length (~160) is not
+recognized. Authors pasting either should publish as `secret`; both are
+reportable upstream fixes. A redacted document that has grown past the
+Agent Document byte bound (the mark is longer than the shortest values it
+replaces) is handed out as the one-line `[REDACTED]` placeholder instead
+(`noticeRedactionPlaceholder(snapshot)`, the same document a withholding
+route hands out, keeping the original `status` and `version`), so the bound
+made at publish holds on egress. The compiler keeps its
+own, older credential pass for probe and log text
+(`packages/agent-bundle/src/core/credentials.ts`); the two are not held in
+parity, and no vendored-code notice is involved — `flare-redact` is an
+ordinary npm dependency under its own MIT license.
+
+Libraries evaluated for the pass (September 2026), against: MIT/Apache
+license, pure JS with no native dependencies and no Node-only globals (the
+Workbench renders notice content in a browser bundle), a stable API with
+recent releases, structured-field redaction, and a pattern pass for common
+credentials:
+
+| Package | License | Unpacked size | Last release | Module / runtime | Coverage | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `flare-redact` 1.6.1 | MIT | 949 kB (root entry a fraction; zero dependencies) | 2026-08 | ESM, Node ≥ 20, browser and edge safe | Deep object walk with sensitive-member-name masking plus 51 default text detectors (provider tokens, JWT, PEM, Bearer/Basic, URL credentials, generic assignments with a multilingual key vocabulary, e-mail, cards, IBAN); opt-in PII and high-entropy detectors left off | **Chosen**: the only candidate covering both halves in one dependency without Node-only code; young (first release 2026-07), hence the exact pin |
+| `fast-redact` 3.5.0 | MIT | 93 kB | 2024-03 | CJS, zero dependencies; compiles redactors with `Function()`, so it needs `unsafe-eval` under a browser CSP | Field-path redaction of known keys only, no pattern detection, no arbitrary-depth wildcards | Not chosen: covers structured fields but has no credential pass, and notice free text needs one |
+| `@sanity-labs/secret-scan` 1.1.0 | MIT | 1.1 MB | 2026-09 | ESM + CJS, zero dependencies, browser safe | 1,100+ TruffleHog-derived provider-token rules, JWT, connection strings; no generic `password=` assignments, no key-name masking, no e-mail | Not chosen: strong provider coverage but no structured-field or assignment redaction |
+| `redact-pii` 3.4.0 | MIT | 462 kB | 2022-07 | CJS; depends on `lodash` and `@google-cloud/dlp` (gRPC, Node only) | PII (names, addresses, cards, phones, e-mail) with optional Google DLP | Not chosen: Node-only heavy dependency, no releases since 2022, PII rather than credentials |
+| `@redact-pii/core`, `secret-scan`, `gitleaks-regexes` | — | — | — | — | — | Do not exist on npm |
+| `detect-secrets` 1.0.6 | Apache-2.0 | 37 kB | 2025-10 | CJS, CLI oriented (`which`, `debug`) | Yelp-style detectors for CI and pre-commit scanning, reports rather than redacts | Not chosen: a scanner for files, not a redaction primitive |
+| `secretlint` / `@secretlint/secretlint-rule-preset-recommend` 13.0.5 | MIT | 56 kB + 633 kB | 2026-08 | ESM, Node ≥ 22 | gitleaks-class rule presets through an async linting engine | Not chosen: async file-linting API and a large dependency graph for a synchronous egress pass |
+| `@zapier/secret-scrubber` 1.1.6 | ISC | 22 kB | 2026-07 | CJS; uses `node:url`, `Buffer`, `process.env`, `create-hash` | Scrubs values you already know are secret from objects | Not chosen: value-driven (needs the secrets up front), Node-only, ISC |
+| `is-secret` 1.2.1 | MIT | 4 kB | 2022-06 | CJS | Nine key-name regexes and one card-number regex | Not chosen: a key classifier, not a redactor |
+| `scrubtext` 0.1.1 | MIT | 90 kB | 2026-06 | ESM + CJS, zero dependencies | Text-only secrets and PII, no assignment or key-name pass | Not chosen: pre-1.0, two releases, no structured input |
+
+### Retention (#99 acceptance item 7)
+
+Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
+`attempted` with an exhausted retry budget (`noticeSettledAt()`) — no longer
+stay in the ledger forever. `createAgentNoticeLedger(store, { retention })`
+takes an `AgentNoticeRetentionPolicy` (`resolveNoticeRetentionPolicy()`
+validates it; defaults are `AGENT_NOTICE_DEFAULT_RETENTION`: `terminalTtlMs`
+seven days, `maxTerminal` 500, `maxJournalBytes` 16 MiB). Generated runtimes
+resolve it from the project's `notices.retention` config (`AB4833` when
+malformed). `retain({ at, idempotencyKey })` applies it once: settled notices
+older than the TTL, plus the earliest-settled beyond the cap, leave the state
+through one `pruned` event (the reducer skips any id that is live again, so a
+stale decision can never drop a pending notice, and records
+`retention = { lastPrunedAt, pruneRuns, prunedTotal }` on the state and
+snapshot); then, when the store's retained journal exceeds `maxJournalBytes`,
+the journal is compacted (`store.compact()`). Event admission runs the same
+pass after it commits, under a per-invocation key, so retention rides
+admitted events only — V1 implies no timer — and the prune key is
+content-addressed on the selected ids, so a retry that selects the same set
+replays and one that selects a different set commits its own decision instead
+of an idempotency conflict. `inspect()` reports the policy, live counts by
+state, the number of terminal notices, the retention summary, and the store's
+`AgentStateJournalInspection`; it never returns content. A process killed
+between the prune and the compaction leaves a pruned state over an unfolded
+journal, which the next pass finishes; a compaction over an already-compact
+journal is a no-op with no new revision.
+
+Journal compaction is a state-kernel operation (`AgentStateStore.compact()`,
+`AgentStateStore.inspect()`), available on both drivers and pinned by the
+conformance suite: the head is materialized as a `compact` baseline record
+that takes the next revision, every earlier record is deleted, exact reads
+below the baseline become `revision-unavailable` (as below a migration), the
+change cursor delivers the baseline as a `compact` discontinuity so a
+subscriber positioned before it re-reads, and the idempotency keys of the
+deleted records are remembered without their results — replaying one is
+`revision-unavailable` (the commit happened; its result is gone) and reusing
+one with a different input is still `idempotency-conflict`. On SQLite the
+baseline insert, key bookkeeping, delete, head update, and the kernel-format
+bump commit in one `BEGIN IMMEDIATE` transaction under `synchronous = FULL`,
+so a writer killed mid-compaction leaves the full journal or the compacted
+one, never a journal missing records its head needs; concurrent processes
+serialize on the database lock and reopen through the same head-vs-replay
+check. The first compaction moves a store to kernel format 2, which a
+pre-compaction kernel refuses with a typed `corrupt` error rather than
+misreading the truncated journal; a store that was never compacted stays
+readable by both. The `maxRevisions` budget still counts absolute revisions:
+compaction bounds bytes and terminal history, not the revision counter.
+
 ## License
 
 Apache License 2.0. The published tarball carries the repository

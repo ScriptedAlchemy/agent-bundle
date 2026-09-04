@@ -9,6 +9,7 @@
  */
 export {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
+  AGENT_NOTICE_DEFAULT_RETENTION,
   AGENT_NOTICE_STATES,
   AgentNoticeError,
 } from './contract.js';
@@ -25,10 +26,12 @@ export type {
   AgentNoticeAvailabilityReservationOptions,
   AgentNoticeAvailabilitySignalOptions,
   AgentNoticeDelivery,
+  AgentNoticeDisclosureReceipt,
   AgentNoticeErrorCode,
   AgentNoticeExposure,
   AgentNoticeExpiryOptions,
   AgentNoticeLedger,
+  AgentNoticeLedgerInspection,
   AgentNoticeLedgerSnapshot,
   AgentNoticePrincipal,
   AgentNoticePriority,
@@ -36,15 +39,52 @@ export type {
   AgentNoticePublishOptions,
   AgentNoticePublishResult,
   AgentNoticeRequest,
+  AgentNoticeRetainOptions,
+  AgentNoticeRetentionPolicy,
+  AgentNoticeRetentionReport,
+  AgentNoticeRetentionSummary,
   AgentNoticeState,
   AgentNoticesHandle,
   AgentNoticeUnavailableReason,
   AgentNoticeWithdrawOptions,
+  AgentNoticeWithheldEntry,
+  AgentNoticeWithholding,
+  AgentNoticeWithholdingOptions,
+  AgentNoticeWithholdingReason,
+  AgentNoticeWithholdings,
   AgentRecipient,
 } from './contract.js';
 export {
+  AGENT_NOTICE_DEFAULT_SENSITIVITY,
+  AGENT_NOTICE_SENSITIVITIES,
+  NOTICE_REDACTION_MARK,
+  NOTICE_TITLE_MAX_LENGTH,
+  compareNoticeSensitivity,
+  containsSecretText,
+  disclosedNoticeContent,
+  isNoticeSensitivity,
+  noticeRedactionPlaceholder,
+  noticeTitle,
+  redactNoticeDocument,
+  redactSecretText,
+} from './redaction.js';
+export type {
+  AgentNoticeDisclosure,
+  AgentNoticeDisclosureShape,
+  AgentNoticeSensitivity,
+} from './redaction.js';
+export {
+  resolveNoticeRetentionPolicy,
+  selectPrunableNotices,
+} from './retention.js';
+export type { AgentNoticeRetentionInput } from './retention.js';
+export {
   AGENT_NOTICE_DELIVERY_ROUTES,
+  AGENT_NOTICE_ROUTE_SHAPES,
+  resolveNoticeDisclosure,
+  routeSensitivityCeiling,
   selectNoticeDeliveryRoutes,
+  validateNoticeDeliveryAdvertisement,
 } from './router.js';
 export type {
   AgentNoticeDeliveryAdvertisement,
@@ -72,6 +112,7 @@ export {
   AGENT_NOTICE_STATE_VERSION,
   agentNoticeEventSchemas,
   agentNoticeStateDefinition,
+  noticeSettledAt,
   recipientMatchesPrincipal,
 } from './state.js';
 export type {

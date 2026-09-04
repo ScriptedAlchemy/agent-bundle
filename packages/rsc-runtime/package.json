@@ -83,6 +83,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
     "effect": "4.0.0-rc.112",
+    "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
     "zod": "4.5.4"
   },

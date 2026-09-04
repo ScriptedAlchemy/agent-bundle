@@ -125,6 +125,7 @@ export const cliBinRslibEntries = (
         name: model.metadata.name,
         version: model.metadata.version,
       },
+      ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
       providers: model.providers ?? [],
       routes: cli.routes,
       ...(model.state === undefined ? {} : { state: model.state }),
@@ -147,6 +148,7 @@ export const cliBinRslibEntries = (
       sourceInputs: entry.sourceInputs,
       virtualSource: generatedRenderedRouteWorkerSource({
         layouts: model.layouts ?? [],
+        ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
         providers: model.providers ?? [],
         routes: renderedRoutes,
         ...(model.state === undefined ? {} : { state: model.state }),

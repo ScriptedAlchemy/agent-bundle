@@ -183,6 +183,35 @@ describe('renderRoute through the real renderer', () => {
     expect(typeof (rendered.result as { noticeId: unknown }).noticeId).toBe('string');
   });
 
+  it('publishes with an author-declared sensitivity and defaults to internal (#99 redaction contract)', async () => {
+    const state = {
+      lifetime: 'workspace-durable',
+      changes: async function*() {},
+      dispatch: async () => ({ replayed: false, revision: 0, state: { entries: [] } }),
+      read: async () => ({ revision: 0, state: { entries: [] } }),
+    } as never;
+    const defaulted = await renderRoute('tool:harness/publish-notice', {
+      context: { state },
+      input: { message: 'token=abc123 for the next session', recipientSession: 'sess-b' },
+    });
+    expectDocument(defaulted).toHaveStatus('success');
+    expect(defaulted.result).toMatchObject({ sensitivity: 'internal', state: 'pending' });
+
+    const classified = await renderRoute('tool:harness/publish-notice', {
+      context: { state },
+      input: { message: 'rotate the deploy key', recipientSession: 'sess-b', sensitivity: 'secret' },
+    });
+    expectDocument(classified).toHaveStatus('success');
+    expect(classified.result).toMatchObject({ sensitivity: 'secret', state: 'pending' });
+    expectDocument(classified).toContainText('(secret)');
+
+    // The route's own input schema, not the ledger, refuses an unknown class.
+    await expect(renderRoute('tool:harness/publish-notice', {
+      context: { state },
+      input: { message: 'x', recipientSession: 'sess-b', sensitivity: 'loud' } as never,
+    })).rejects.toThrow();
+  });
+
   it('auto-mounts state when the caller supplied noticeLedger alone', async () => {
     const noticeLedger = {
       expire: async () => ({ notices: [] }),

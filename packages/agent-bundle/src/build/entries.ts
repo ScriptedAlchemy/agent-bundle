@@ -15,6 +15,7 @@ import type {
   AgentBundleToolsConfig,
   NormalizedHook,
   NormalizedMcpServer,
+  NormalizedNoticeRetentionPolicy,
   NormalizedScript,
   NormalizedStateDefinition,
 } from '../core/types.ts';
@@ -163,6 +164,7 @@ export const compileEntries = async (
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly providers?: readonly CompiledProvider[];
+    readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -196,7 +198,8 @@ export const compileEntries = async (
             virtualSource: generatedRenderedScriptEntrySource({
               name,
               routeId: rendered.routeId,
-              ...(options.state === undefined ? {} : { state: options.state }),
+              ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
+        ...(options.state === undefined ? {} : { state: options.state }),
               workerFile: rendered.workerFile,
             }),
           }),
@@ -217,7 +220,8 @@ export const compileEntries = async (
                 provenance: { kind: 'conventional', relativePath: `scripts/${name}` },
                 source,
               }],
-              ...(options.state === undefined ? {} : { state: options.state }),
+              ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
+        ...(options.state === undefined ? {} : { state: options.state }),
             }),
           }),
         ];
@@ -328,6 +332,7 @@ export const compileMcpEntries = async (
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
+    readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly target: string;
     readonly tools?: AgentBundleToolsConfig;
@@ -365,6 +370,7 @@ export const compileMcpEntries = async (
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
+        ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
         target: options.target,
         workerFile: `${entry.name}-flight.mjs`,
@@ -382,6 +388,7 @@ export const compileMcpEntries = async (
         providers: options.providers ?? [],
         routes: server.generatedRoutes,
         serverName: server.name,
+        ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
       });
   });
@@ -525,6 +532,7 @@ export const compileHooks = async (
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
+    readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -560,6 +568,7 @@ export const compileHooks = async (
         providers: options.providers ?? [],
         routes: [],
         serverName: 'hooks',
+        ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
       }),
     };

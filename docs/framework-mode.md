@@ -317,6 +317,45 @@ release-identity config rejects absolute paths. The per-invocation CLI
 subject to the same project-root containment check; absolute and external
 output roots are unsupported.
 
+### `notices`
+
+`notices.retention` is the retention policy of the notice ledger a stateful
+project co-mounts beside `src/state.ts` (#99):
+
+```ts
+export default defineConfig({
+  plugin: { ... },
+  notices: {
+    retention: {
+      terminalTtl: '7d',        // ms, or '<n>ms' | '<n>s' | '<n>m' | '<n>h' | '<n>d'
+      maxTerminal: 500,
+      maxJournalBytes: 16_777_216,
+    },
+  },
+});
+```
+
+Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`, and
+`attempted` with an exhausted retry budget — leave the ledger once they have
+been settled for `terminalTtl`, or earliest-settled first once more than
+`maxTerminal` remain; the store's journal is compacted onto its head once it
+exceeds `maxJournalBytes`. Every field is optional and defaults to the values
+shown; pruning runs only on admitted events and explicit `retain()` calls, so
+no timer is implied. A malformed policy — an unknown key, a non-positive or
+fractional value, a duration outside that grammar, or a policy declared by a
+project without a state module — is `AB4833`. `inspect --state` and the
+Workbench State panel show the resolved policy and whether it was declared or
+defaulted.
+
+Redaction is not configured here: it follows the notice's author-declared
+`sensitivity` (`public | internal | secret`, default `internal`, passed to
+`notices.publish()`) and each host's dated per-route ceiling in its pinned
+`noticeDelivery` table. `internal` content is passed through the runtime's
+secret pass (`flare-redact`, pinned exact; see the runtime README) on every
+route, `public` travels as authored, and `secret` travels only over a route
+whose ceiling admits it — otherwise it stays in the store and the route
+records the refusal on the notice.
+
 ## Live development into hosts
 
 `agent-bundle dev` is the webpack-HMR analog for plugins that are installed

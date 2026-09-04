@@ -10,14 +10,17 @@ import {
 import { createSqliteStateDriver } from '../../dist/state/sqlite.js';
 
 const [file, mode] = process.argv.slice(2);
-if (typeof file !== 'string' || (mode !== 'publish' && mode !== 'deliver')) {
-  throw new Error('usage: notices-sqlite-process.mjs <file> <publish|deliver>');
+if (typeof file !== 'string' || (mode !== 'publish' && mode !== 'deliver' && mode !== 'retain')) {
+  throw new Error('usage: notices-sqlite-process.mjs <file> <publish|deliver|retain>');
 }
 
 const driver = createSqliteStateDriver({ file });
 const store = await driver.open(agentNoticeStateDefinition());
 const ledger = createAgentNoticeLedger(store, {
   authorize: () => ({ state: 'authorized' }),
+  // A one-byte bound makes the retain pass compact whatever journal it finds,
+  // so the cross-process proof exercises compaction without a large fixture.
+  ...(mode === 'retain' ? { retention: { maxJournalBytes: 1 } } : {}),
 });
 
 try {
@@ -50,6 +53,12 @@ try {
       id: result.notice.id,
       state: result.notice.state,
     }));
+  } else if (mode === 'retain') {
+    const report = await ledger.retain({
+      at: '2026-09-01T19:02:00.000Z',
+      idempotencyKey: 'retain:cross-process',
+    });
+    process.stdout.write(JSON.stringify(report));
   } else {
     const result = await runAgentRequest({
       actor: available({ id: 'recipient' }, 'native'),

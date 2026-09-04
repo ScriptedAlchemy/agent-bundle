@@ -48,7 +48,6 @@ import type {
   Observed,
   WarmFlightHost,
 } from '@agent-bundle/runtime';
-import type { AgentNoticeInboxSignaller, AgentNoticeInboxSignalOutcome } from '@agent-bundle/runtime/notices';
 import type { AgentLineageRegistry } from '@agent-bundle/runtime/lineage';
 
 /** One route the generated server hosts, as the generated module records it. */
@@ -542,14 +541,48 @@ export interface GeneratedEventRuntimeBinding {
 }
 
 /**
+ * The observed identity a notice inbox subscription is recorded under: the
+ * runtime's `AgentNoticePrincipal`, spelled here from the root runtime types
+ * so this declaration never resolves through the runtime's `notices` subpath.
+ */
+export interface GeneratedNoticePrincipal {
+  readonly actor: Observed<AgentActorIdentity>;
+  readonly host: Observed<AgentHostIdentity>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** Outcome of one post-render inbox observation; mirrors the runtime's `AgentNoticeInboxSignalOutcome`. */
+export type GeneratedNoticeInboxSignalOutcome =
+  | {
+    readonly kind: 'idle';
+    readonly reason: 'no-subscription' | 'nothing-eligible';
+    readonly revision: number | undefined;
+  }
+  | { readonly kind: 'signalled'; readonly noticeIds: readonly string[]; readonly revision: number }
+  | { readonly error: unknown; readonly kind: 'failed'; readonly stage: 'read' | 'record' | 'send' };
+
+/**
  * The `mcp-resource-updated` delivery route for the notice inbox (#99 stage
  * 4): the server process's own handle on the durable notice store its Flight
  * worker mounts, wrapped by the runtime's inbox signaller. Present only when
  * the artifact's state is workspace-durable — that is the only lifetime two
  * processes can share — so `resources.subscribe` is advertised exactly when a
  * subscription can be honoured. Closed when the server closes.
+ *
+ * Structurally the runtime's `AgentNoticeInboxSignaller`, spelled locally so
+ * the emitted `mcp-server-runtime.d.ts` stays self-contained for a packed
+ * consumer without the optional runtime peer's `notices` subpath;
+ * `mcp-server-runtime.test.ts` pins the two mutually assignable.
  */
-export type GeneratedNoticeDeliveryBinding = AgentNoticeInboxSignaller;
+export interface GeneratedNoticeDeliveryBinding {
+  readonly inboxUri: string;
+  readonly subscribed: boolean;
+  close(): Promise<void>;
+  observe(send: () => Promise<void>): Promise<GeneratedNoticeInboxSignalOutcome>;
+  subscribe(principal: GeneratedNoticePrincipal): Promise<void>;
+  unsubscribe(): Promise<void>;
+}
 
 export interface CreateGeneratedRouteMcpServerOptions {
   readonly apps?: readonly GeneratedMcpAppRecord[];
@@ -639,7 +672,7 @@ const installNoticeInboxSubscriptions = (
   const send = async (): Promise<void> => {
     await protocol.sendResourceUpdated({ uri: notices.inboxUri });
   };
-  const report = (outcome: AgentNoticeInboxSignalOutcome): void => {
+  const report = (outcome: GeneratedNoticeInboxSignalOutcome): void => {
     switch (outcome.kind) {
       case 'idle':
       case 'signalled':

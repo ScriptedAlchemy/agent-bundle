@@ -34,6 +34,7 @@ export default defineConfig({
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
+| `notices` | `{ retention?: { terminalTtl?, maxTerminal?, maxJournalBytes? } }` | Runtime defaults (`7d`, `500`, `16777216`). |
 | `marketplace` | `boolean` | Adapter-selected. |
 | `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
@@ -59,6 +60,7 @@ by TypeDoc on every documentation build, so they cannot drift from the published
 | `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
 | `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
 | `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
+| `notices` | [`AgentBundleNoticesConfig`](../api/interfaces/index.AgentBundleNoticesConfig.md) · [`AgentBundleNoticeRetentionConfig`](../api/interfaces/index.AgentBundleNoticeRetentionConfig.md) |
 | `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
 | host extensions | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
 | validation | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
@@ -104,6 +106,27 @@ in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
 default floor for generated executables, never lower it, and the selected floor is recorded as
 `runtime.node` in the artifact manifest. The floor itself is described in
 [Configuration model](../guide/authoring/index.mdx).
+
+## notices
+
+`notices.retention` sets the retention policy of the notice ledger a stateful project co-mounts
+beside `src/state.ts`. Terminal notices — `expired`, `unavailable`, `withdrawn`, `acknowledged`,
+and `attempted` with an exhausted retry budget — are pruned from the ledger once they have been
+settled for `terminalTtl`, or earliest-settled first once more than `maxTerminal` remain, and the
+store's journal is compacted onto its head once it exceeds `maxJournalBytes`. Pruning runs only
+on admitted events and explicit `retain()` calls; no timer is implied.
+
+| Field | Default | Rule |
+| --- | --- | --- |
+| `terminalTtl` | `'7d'` | Positive integer of milliseconds, or a duration `<integer><ms\|s\|m\|h\|d>` such as `'7d'`, `'12h'`, `'30m'`. |
+| `maxTerminal` | `500` | Positive integer. |
+| `maxJournalBytes` | `16777216` | Positive integer of bytes. |
+
+Anything else — an unknown key, a non-positive or fractional value, a duration the grammar does
+not spell, or a policy declared by a project without a state module — is `AB4833`. `inspect
+--state` and the Workbench State panel show the resolved policy and whether it was declared or
+defaulted; live counts and the last compaction belong to each installed store
+(`AgentNoticeLedger.inspect()`).
 
 ## payload
 

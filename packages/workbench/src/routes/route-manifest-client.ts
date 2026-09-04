@@ -150,6 +150,15 @@ const stateBudgetsSchema = z.strictObject({
   maxStateBytes: z.number().finite(),
 });
 
+const noticeRetentionSchema = z.strictObject({
+  resolved: z.strictObject({
+    maxJournalBytes: z.number().finite(),
+    maxTerminal: z.number().finite(),
+    terminalTtlMs: z.number().finite(),
+  }),
+  source: z.enum(['declared', 'defaults']),
+});
+
 const stateSchema: z.ZodType<RouteManifestState> = z.strictObject({
   budgets: z.union([
     z.strictObject({
@@ -164,6 +173,8 @@ const stateSchema: z.ZodType<RouteManifestState> = z.strictObject({
   durableLocation: z.string().optional(),
   id: z.string(),
   lifetime: z.enum(['process', 'request', 'workspace-durable']),
+  // Optional: a dev server predating the retention projection omits it.
+  noticeRetention: noticeRetentionSchema.optional(),
   notices: z.array(z.string()),
   source: z.string(),
 });

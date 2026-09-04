@@ -381,6 +381,10 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const compiledMcpApps: CompiledMcpApp[] = [];
     const compiledMcpEntries: CompiledMcpEntry[] = [];
     const tools = options.tools === undefined ? {} : { tools: options.tools };
+    // The resolved `notices.retention`; generated ledgers fall back to the runtime defaults without it.
+    const noticePolicy = options.model.notices === undefined
+      ? {}
+      : { noticeRetention: options.model.notices.retention.resolved };
     // One identity feeds every compiled surface, exactly the identity the
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
@@ -413,6 +417,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
             layouts: options.model.layouts ?? [],
             meta,
             outDir: target.root,
+            ...noticePolicy,
             providers: options.model.providers ?? [],
             ...(options.model.state === undefined ? {} : { state: options.model.state }),
             ...tools,
@@ -425,6 +430,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         cwd: options.projectRoot,
         meta,
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+        ...noticePolicy,
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         providers: options.model.providers ?? [],
@@ -441,6 +447,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         layouts: options.model.layouts ?? [],
         meta,
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+        ...noticePolicy,
         outDir: target.root,
         plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
         providers: options.model.providers ?? [],

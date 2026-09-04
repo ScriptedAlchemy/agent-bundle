@@ -73,6 +73,13 @@ const EmptyServerSurface = ({ server }: { readonly server: RouteCatalogServer })
   <p className="route-server-summary">{emptyServerSummary(server)}</p>
 </section>;
 
+/** Whole units only, so `7d` reads as the config author wrote it; odd values fall back to milliseconds. */
+const formatDuration = (milliseconds: number): string => {
+  const units: readonly [string, number][] = [['d', 86_400_000], ['h', 3_600_000], ['m', 60_000], ['s', 1000]];
+  const unit = units.find(([, size]) => milliseconds % size === 0);
+  return unit === undefined ? `${milliseconds}ms` : `${milliseconds / unit[1]}${unit[0]} (${milliseconds}ms)`;
+};
+
 const StatePanel = ({ state }: { readonly state?: RouteManifestState }) => <section
   aria-label="State"
   className="route-group route-state-panel"
@@ -104,6 +111,15 @@ const StatePanel = ({ state }: { readonly state?: RouteManifestState }) => <sect
       {state.durableLocation === undefined ? undefined : <div className="route-state-detail">
         <h3>Durable location</h3>
         <p>{state.durableLocation}</p>
+      </div>}
+      {state.noticeRetention === undefined ? undefined : <div className="route-state-detail route-state-retention">
+        <h3>Notice retention</h3>
+        <p className="route-state-source">{state.noticeRetention.source}</p>
+        <dl className="route-state-budgets">
+          <div><dt>terminalTtl</dt><dd>{formatDuration(state.noticeRetention.resolved.terminalTtlMs)}</dd></div>
+          <div><dt>maxTerminal</dt><dd>{state.noticeRetention.resolved.maxTerminal}</dd></div>
+          <div><dt>maxJournalBytes</dt><dd>{state.noticeRetention.resolved.maxJournalBytes}</dd></div>
+        </dl>
       </div>}
       {state.notices.map((notice) => <p className="route-state-notice" key={notice}>{notice}</p>)}
     </>}

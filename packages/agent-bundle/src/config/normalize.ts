@@ -72,6 +72,7 @@ import type { SkillIr } from '../skills/ir.ts';
 import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
 import { parseSkillIr } from '../skills/parse-ir.ts';
 import type { SkillHost } from '../skills/tokens.ts';
+import { normalizeNoticeRetention } from './notice-retention.ts';
 import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './script-routes.ts';
 
 const isSkillHost = (name: string): name is SkillHost =>
@@ -1299,6 +1300,7 @@ export const normalizeProject = async (
       provenance: { kind: 'conventional', sourcePath: discovered.state.source },
       source: discovered.state.source,
     };
+  const notices = normalizeNoticeRetention(loaded.config, loaded.configPath, state !== undefined).retention;
   const packageBuild = normalizePackageBuild(
     loaded.config,
     loaded.context.projectRoot,
@@ -1331,6 +1333,7 @@ export const normalizeProject = async (
     mcpServers,
     hooks: normalizeHooks(loaded, discovered, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
+    ...(notices === undefined ? {} : { notices: { retention: notices } }),
     ...(packageBuild === undefined ? {} : { packageBuild }),
     ...(payloads.length === 0 ? {} : { payloads }),
     ...(providers.length === 0 ? {} : { providers }),
