@@ -185,20 +185,45 @@ const nulTerminated = (bytes: Uint8Array): string => {
   return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString('utf8');
 };
 
+const octalField = (bytes: Uint8Array): number | undefined => {
+  const text = nulTerminated(bytes).trim();
+  return /^[0-7]*$/u.test(text) ? Number.parseInt(text || '0', 8) : undefined;
+};
+
+/** Whether a 512-byte ustar header's stored checksum matches its bytes (the checksum field itself read as spaces). */
+const headerChecksumValid = (header: Buffer): boolean => {
+  const stored = octalField(header.subarray(148, 156));
+  if (stored === undefined) return false;
+  let sum = 0;
+  for (const [index, byte] of header.entries()) sum += index >= 148 && index < 156 ? 0x20 : byte;
+  return sum === stored;
+};
+
 /**
- * Whether a tar archive holds a package: an entry `<dir>/package.json` one
- * level down, the layout npm strips one component from on install. Headers
- * are the 512-byte ustar records; an all-zero record ends the archive.
+ * Whether a tar archive holds a package npm can install: an entry
+ * `<dir>/package.json` one level down (the layout npm strips one component
+ * from on install) whose payload parses to a JSON object. Headers are the
+ * 512-byte ustar records, each with a valid checksum and a payload within the
+ * archive; an all-zero record ends the archive. A malformed or truncated
+ * archive (`TAR_BAD_ARCHIVE`) or a manifest that does not parse (`EJSONPARSE`)
+ * fails the consumer's install, so neither counts.
  */
 const tarHoldsPackage = (archive: Buffer): boolean => {
   for (let offset = 0; offset + 512 <= archive.length;) {
     const header = archive.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) return false;
+    const size = octalField(header.subarray(124, 136));
+    if (size === undefined || !headerChecksumValid(header) || offset + 512 + size > archive.length) return false;
     const name = nulTerminated(header.subarray(0, 100));
     const prefix = nulTerminated(header.subarray(345, 500));
-    const size = Number.parseInt(nulTerminated(header.subarray(124, 136)).trim() || '0', 8);
-    if (!Number.isFinite(size) || size < 0) return false;
-    if (/^[^/]+\/package\.json$/u.test(prefix === '' ? name : `${prefix}/${name}`)) return true;
+    if (/^[^/]+\/package\.json$/u.test(prefix === '' ? name : `${prefix}/${name}`)) {
+      try {
+        const parsed: unknown = JSON.parse(archive.subarray(offset + 512, offset + 512 + size).toString('utf8'));
+        return isRecord(parsed);
+      } catch {
+        return false;
+      }
+    }
     offset += 512 + Math.ceil(size / 512) * 512;
   }
   return false;
@@ -287,12 +312,15 @@ const callArguments = (() => {
   return String.raw`[(](?:[^()]|${nested})*[)]`;
 })();
 
+// Whitespace and comments, the trivia JavaScript allows around a call's parentheses: `require /* x */ ("y")`.
+const trivia = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
+
 /** The resolvers a file loads packages through, each followed by its argument list. */
 const loadCall = (loaders: readonly string[], factories: readonly string[]): string =>
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*${callArguments}(?:\.resolve)?)\s*[(]\s*`;
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})${trivia}${callArguments}(?:\.resolve)?)${trivia}[(]${trivia}`;
 
 const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`${loadCall(loaders, factories)}${quotedLiteral}\s*[)]`,
+  String.raw`${loadCall(loaders, factories)}${quotedLiteral}${trivia}[)]`,
   'gu',
 );
 
@@ -306,7 +334,8 @@ const literalLoad = (loaders: readonly string[], factories: readonly string[]): 
  * `Promise.resolve(x)` are not resolution and never match.
  */
 const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`${loadCall(loaders, factories)}(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
+  // A comment is trivia the call prefix already consumed, not the start of a computed argument.
+  String.raw`${loadCall(loaders, factories)}(?:(?!/[*/])[^"'\s)]|"[^"\n]*"${trivia}(?!/[*/])[^)\s]|'[^'\n]*'${trivia}(?!/[*/])[^)\s])`,
   'u',
 );
 
@@ -523,9 +552,14 @@ const delegatedRun = new RegExp(
   'gu',
 );
 
-/** A shell command's words, quoted arguments kept whole and unquoted: `node "scripts/my install.cjs"` is two words. */
+/**
+ * A shell command's words: quoted arguments kept whole and unquoted (`node
+ * "scripts/my install.cjs"` is two words), and the operators `&&`, `||`, `;`,
+ * `|`, `&` split off even without surrounding whitespace (`node install.js&&echo
+ * done` is four words).
+ */
 const shellWords = (command: string): readonly string[] =>
-  Array.from(command.matchAll(/"[^"\n]*"|'[^'\n]*'|[^\s"']+/gu), (match) => match[0].replace(shellQuotes, '$2'));
+  Array.from(command.matchAll(/"[^"\n]*"|'[^'\n]*'|&&|\|\||[;|&]|[^\s"'&|;]+/gu), (match) => match[0].replace(shellQuotes, '$2'));
 
 /**
  * The text a consumer's install lifecycle executes: the lifecycle scripts,
@@ -650,6 +684,12 @@ const installScriptModuleDependencies = (
       }
       const targets = specifier.startsWith('#') ? packageImportTargets(packageDocument) : [specifier];
       for (const target of targets) {
+        // An `imports` target of the package's own file (`"#setup": "./setup.js"`) is relative to the package root.
+        if (relativeSpecifier.test(target)) {
+          const module = packedModule(target, packed);
+          if (module !== undefined) queue.push(module);
+          continue;
+        }
         const name = packageNameOf(target);
         if (name !== undefined) names.add(name);
       }

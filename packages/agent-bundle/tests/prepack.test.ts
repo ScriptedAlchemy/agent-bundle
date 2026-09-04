@@ -303,6 +303,14 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       // The same factory argument, computed target: nothing can be called unused.
       await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const any = (name) => createRequire(new URL("./entry.js", import.meta.url))(name);\n');
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      // Comments between the loader and its parentheses, and around the literal, are trivia — and not a computed argument.
+      await writeFile(consumer, 'module.exports = require /* driver */ ( // which\n /* a */ "driver-package" /* b */ );\n');
+      const [commented] = withCode(await diagnostics(pack), 'AB7014');
+      expect(commented?.message).toContain('"never-loaded"');
+      expect(commented?.message).not.toContain('"driver-package"');
+      // Comment trivia before a computed argument still leaves the load computed.
+      await writeFile(consumer, 'module.exports = (name) => require /* any */ (/* of */ name);\n');
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
     }
@@ -334,26 +342,32 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       'not-vendored': 'file:vendor/not-vendored',
       'not-archive': 'file:vendor/not-archive.tgz',
       'bad-manifest': 'file:vendor/bad-manifest',
+      // A well-formed archive whose `package/package.json` is not JSON: npm fails the install with EJSONPARSE.
+      'bad-tarred-manifest': 'file:vendor/bad-tarred-manifest.tgz',
     };
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips these three after the failed fetch too — and then postinstall fails: on the missing command, and on
+      // npm skips these four after the failed fetch too — and then postinstall fails: on the missing command, and on
       // the missing modules packed files it runs require. The files are reached as `node scripts/install` (Node
-      // resolves `scripts/install.js`), and as `npm test` running a script whose quoted path contains a space.
+      // resolves `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
+      // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependency
+      // through an `imports` entry mapped to the package's own file.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'optional-driver': 'github:owner/optional-driver',
       'optional-tester': 'github:owner/optional-tester',
+      'optional-hook': 'github:owner/optional-hook',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
+    document.imports = { '#hook-setup': './scripts/hook-setup.cjs' };
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       postinstall: 'setup-tool --init && node scripts/install && npm test',
-      test: 'node "scripts/my install.cjs"',
+      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo done',
     };
   },
   async () => {
@@ -364,9 +378,12 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       writeFile(join(projectRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
       writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
       writeFile(join(projectRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
+      writeFile(join(projectRoot, 'scripts', 'hooks.cjs'), 'require("#hook-setup");\n'),
+      writeFile(join(projectRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
       writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
       writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
       writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
+      writeFile(join(projectRoot, 'vendor', 'bad-tarred-manifest.tgz'), packageTarball('not json\n')),
       writeFile(join(projectRoot, 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
     ]);
     const pack = { ...result.pack, files: [...result.pack.files,
@@ -374,15 +391,18 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       { path: 'vendor/vendored/package.json' },
       { path: 'vendor/bad-manifest/package.json' },
       { path: 'vendor/tarred.tgz' },
+      { path: 'vendor/bad-tarred-manifest.tgz' },
       { path: 'vendor/not-archive.tgz' },
       { path: 'scripts/install.js' },
       { path: 'scripts/driver-setup.cjs' },
       { path: 'scripts/my install.cjs' },
+      { path: 'scripts/hooks.cjs' },
+      { path: 'scripts/hook-setup.cjs' },
     ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
@@ -390,10 +410,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
     expect(reported[1]?.message).not.toContain('"scp"');
-    for (const name of ['setup-tool', 'optional-driver', 'optional-tester']) {
+    for (const name of ['setup-tool', 'optional-driver', 'optional-tester', 'optional-hook']) {
       expect(reported[2]?.message).not.toContain(JSON.stringify(name));
     }
-    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest']) {
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest', 'bad-tarred-manifest']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
