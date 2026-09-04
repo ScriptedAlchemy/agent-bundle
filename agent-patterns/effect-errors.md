@@ -26,9 +26,9 @@ onto those classes at the boundary — it does not replace them.
 - Typed fail, framework-process class (dev seam / eval service, extends
   `YieldableFrameworkError` or `YieldableCodedError` from
   `packages/agent-bundle/src/effect/errors.ts`):
-  `return yield* new McpSessionError('session-closed', message)`.
-  `Effect.fail(new McpSessionError(...))` is equally valid; do not churn
-  call sites for style.
+  `return yield* new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', message)`.
+  `Effect.fail(new RuntimeMcpRegistryError(...))` is equally valid; do not
+  churn call sites for style.
 - Defect (bug): `Effect.die(defect)` — not for expected fail-closed states.
 - Recover: `Effect.catch`, `Effect.catchTag` when the error is tagged.
   None of our classes are tagged (`Data.Error`, not `Data.TaggedError` or
@@ -46,9 +46,9 @@ explicitly lifts the Schema deferral.
 ```ts
 import { YieldableCodedError, YieldableFrameworkError } from '../effect/errors.ts';
 
-export class McpSessionError extends YieldableCodedError<McpSessionErrorCode> {
-  constructor(code: McpSessionErrorCode, message: string) {
-    super('McpSessionError', code, message);
+export class ScriptPlaygroundFailure extends YieldableCodedError<ScriptPlaygroundFailureCode> {
+  constructor(code: ScriptPlaygroundFailureCode, message: string) {
+    super('ScriptPlaygroundFailure', code, message);
   }
 }
 
@@ -70,14 +70,19 @@ the plain-`Error` observable shape — `JSON.stringify`, `stableJson`,
 constructor fields; its `[nodejs.util.inspect.custom]` prints that instead
 of the stack). Never extend `Data.Error` directly.
 
-Stay on plain `Error` / `CodedError` when the class is exported from a
-package entry (Effect must not reach user-facing `.d.ts`), when it is
-reachable from an Effect-free entry (`agent-bundle/config`, `meta`,
-`rstest`, `test/browser`, the CLI `--help` path, the host MCP proxy), or
-when it ships inside an emitted artifact. `docs/effect-conventions.md`
-§ "Yieldable framework errors" lists the current carve-outs;
-`tests/emitted-artifact-effect-surface.test.ts` and `tests/cli.test.ts`
-fail if one is crossed.
+Stay on plain `Error` / `CodedError` when the class's declaration file is
+reachable from any `package.json` export's `types` — exported or not; a
+consumer's `tsc` follows the whole `.d.ts` graph, so `McpSessionError`
+(reached from `.` / `./api` through the dev types) stays plain even though
+it is never exported — when it is reachable from an Effect-free entry
+(`agent-bundle/config`, `meta`, `rstest`, `test/browser`, the CLI `--help`
+path, the host MCP proxy), or when it ships inside an emitted artifact.
+`docs/effect-conventions.md` § "Yieldable framework errors" lists the
+current carve-outs; `tests/public-api.test.ts` ("keeps every public
+declaration graph free of effect"), `tests/emitted-artifact-effect-surface.test.ts`,
+and `tests/cli.test.ts` fail if one is crossed. Before migrating a class,
+run `pnpm build` and that `public-api` test; if it reports the class's
+`.d.ts`, the class is on a public graph and keeps its plain base.
 
 ## Boundary mapping
 

@@ -32,9 +32,12 @@ import { Data } from 'effect';
  * `agent-bundle/rstest`, `agent-bundle/test/browser`, the CLI's `--help` /
  * `--version` path, the host MCP proxy, emitted hook / MCP / bin runtime)
  * keeps `CodedError` / `Error`; `tests/cli.test.ts` and
- * `tests/emitted-artifact-effect-surface.test.ts` pin that. Public classes
- * (exported from a package entry) also stay plain so Effect types never
- * appear in user-facing declarations. Carve-out list:
+ * `tests/emitted-artifact-effect-surface.test.ts` pin that. Any class whose
+ * declaration file a `package.json` export's `types` reaches (exported or
+ * merely imported by the public `.d.ts` graph, e.g. `McpSessionError`) also
+ * stays plain: a consumer's `tsc` would otherwise need `effect` for
+ * `Cause.YieldableError`; `tests/public-api.test.ts` walks every export's
+ * declaration graph and pins it. Carve-out list:
  * `docs/effect-conventions.md` § Yieldable framework errors.
  */
 

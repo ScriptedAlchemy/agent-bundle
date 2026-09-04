@@ -39,7 +39,6 @@ import {
 import type { RuntimeClientSurfaceContentPolicy } from './runtime-client-surface-proxy.ts';
 import type { DevRuntimeClientSurfaceProxyBinding, DevRuntimeMcpRegistryMessage, DevRuntimeMcpSessionView, DevRuntimeSession } from './runtime-provider.ts';
 import type { DevRuntimeMcpAppRunBinding, DevRuntimeMcpConnectionState, RuntimeVector } from './runtime-protocol.ts';
-import { YieldableFrameworkError } from '../effect/errors.ts';
 
 export type McpAppBindingOperation =
   | Readonly<{ readonly kind: 'tools/list' }>
@@ -130,7 +129,7 @@ export interface McpAppRuntimeOperationOptions {
 }
 
 /** Closed, phase-safe diagnostics intended for the authenticated runtime App route. */
-export class McpAppRuntimePreviewError extends YieldableFrameworkError {
+export class McpAppRuntimePreviewError extends Error {
   readonly code: 'AB8023' | 'AB8201' | 'AB8203' | 'AB8204';
   readonly status: 400 | 404 | 409 | 502;
 

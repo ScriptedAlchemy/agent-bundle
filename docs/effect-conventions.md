@@ -65,7 +65,14 @@ Internals keep the existing classes.
 ### Yieldable framework errors (`Data.Error`, decided 2026-09-03)
 
 Framework-process error classes — the ones raised inside Effect programs in
-the dev seam and the eval service — extend the yieldable bases in
+the dev seam and the eval service whose declarations no package export
+reaches (today: `DevCoordinatorCloseError`, `RuntimeMcpRegistryError` /
+`RuntimeMcpRegistryCloseError`, `RuntimeGenerationStoreError` /
+`RuntimeGenerationStoreCloseError`, `DevRuntimeProviderLoadError`,
+`ScriptPlaygroundFailure` / `ScriptPlaygroundAbortError`,
+`LifecycleReplayRequestError`, `ArtifactInspectionServiceError`,
+`HookSimulationAbortError` / `HookSimulationTerminationError`,
+`CodexEvalHarnessError`, `SmokeStepError`) — extend the yieldable bases in
 [`packages/agent-bundle/src/effect/errors.ts`](../packages/agent-bundle/src/effect/errors.ts):
 `YieldableFrameworkError` (the `Data.Error` twin of `Error`, same
 `(message?, options?)` constructor) and `YieldableCodedError<TCode>` (the
@@ -100,14 +107,35 @@ moves into one of these positions moves back:
   module, #530). Measured: the base swap would put a static `effect` import
   on all five entries. `McpAppBridgeCloseError` stays plain for the same
   reason (`agent-bundle/rstest` and `agent-bundle/test/browser` reach it).
-- **Public classes.** Anything exported from a package entry (`Agent*` and
-  `McpProjectionError` in `@agent-bundle/runtime`, `CliUsageError` /
-  `CliInputError`, `EventRuntimeTransportError`, `Eval*Error` on
-  `agent-bundle/eval`, `EvalServiceError`, `AgentTestError`,
-  `BrowserAppTestError`, `UsageError` in `create-agent-bundle`): a
-  `Data.Error` base would put `Cause.YieldableError` in the user-facing
-  `.d.ts`, and Effect never appears in user-facing types. The `@agent-bundle/runtime`
+- **The public declaration graph.** Any class whose declaration file a
+  `package.json` export's `types` reaches — not only classes that are
+  themselves exported. A consumer's `tsc` resolves every `.d.ts` the entry
+  imports, so `class X extends YieldableCodedError` in a reachable file
+  makes `effect` a type dependency of the package (`public-api.test.ts`'s
+  root-declaration consumer failed exactly this way with `McpSessionError`
+  migrated: `dev/mcp-session/mcp-session-types.d.ts` is reached from `.` and
+  `./api` through the dev types). That keeps plain: everything exported from
+  an entry (`Agent*` and `McpProjectionError` in `@agent-bundle/runtime`,
+  `CliUsageError` / `CliInputError`, `EventRuntimeTransportError`,
+  `Eval*Error` on `agent-bundle/eval`, `EvalServiceError`, `AgentTestError`,
+  `BrowserAppTestError`, `UsageError` in `create-agent-bundle`) and the
+  dev-seam classes the root / `api` / `eval` declaration graphs reach
+  (`McpSessionError` and its stale-epoch / close siblings,
+  `EpochStoreError` and the epoch cleanup / durability errors,
+  `ProjectEventHubError`, `HostMcpEpochDriftError`, `AgentApiCloseError`,
+  `DevLogServiceError`, `DevServerStartError` /
+  `DevServerLifecycleCloseError`, `ForegroundServer*Error`,
+  `DevRuntimeUnavailableError` / `DevRuntimeGenerationConflictError`,
+  `PlaygroundService*Error` / `PlaygroundSessionCloseError`,
+  `HookPlaygroundCloseError`, `McpProbeTargetNotFoundError`,
+  `McpAppRuntimePreviewError`, `SkillDocumentError`,
+  `InspectorLauncherError`, `EvalRunEvent*Error`, and
+  `EvalServiceBackgroundFailureOverflowError`). The `@agent-bundle/runtime`
   `plugin` entry also has no `effect` import today.
+  `public-api.test.ts` "keeps every public declaration graph free of effect"
+  walks each export's emitted `.d.ts` graph and fails on any `effect`
+  import; a class is eligible for the yieldable base only while that test
+  stays green with it migrated.
 - **Emitted artifacts.** Hook wrappers, CLI bins, and the framework MCP
   shell bundle `src/effect/boundary.ts` (plain `CodedError`); the raw stdio
   MCP server and `install.mjs` carry no Effect at all. Measured on the
@@ -703,8 +731,12 @@ resolved the current repo practice stands, and new code follows it.
   (`CodedError`, `DiagnosticError`, `DevLockError`, `McpAppBridgeCloseError`
   — the swap was measured to add a static `effect` import to
   `agent-bundle/config`, `meta`, `rstest`, the CLI `--help` path, and the host
-  MCP proxy), every class exported from a package entry (the `Agent*`
-  classes included: `Cause.YieldableError` would enter user-facing `.d.ts`),
+  MCP proxy), every class on a public declaration graph — exported from a
+  package entry (the `Agent*` classes included) or merely reached by one
+  through the emitted `.d.ts` files (`McpSessionError`, `EpochStoreError`,
+  `ProjectEventHubError`, …), because `Cause.YieldableError` would make
+  `effect` a type dependency for consumers; `public-api.test.ts` walks every
+  export's declaration graph and pins it —
   emitted artifacts (66 `examples/host-test` files byte-identical in size
   before/after; the +12 kB figure was `effect/PlatformError`'s
   `Schema.TaggedError`, not `Data.Error`, which lives in the Effect core the

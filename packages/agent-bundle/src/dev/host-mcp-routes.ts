@@ -15,14 +15,13 @@ import {
   type McpSession,
   type McpSessionService,
 } from './mcp-session/mcp-session-service.ts';
-import { YieldableFrameworkError } from '../effect/errors.ts';
 
 const hostMcpPathPrefix = '/mcp/host/';
 const internalErrorCode = -32_603;
 
 export const hostMcpEpochDriftCode = 'AB8024';
 
-export class HostMcpEpochDriftError extends YieldableFrameworkError {
+export class HostMcpEpochDriftError extends Error {
   readonly code = hostMcpEpochDriftCode;
   readonly epochId: string;
 

@@ -69,7 +69,6 @@ import { SkillDocumentService } from './skill-document-service.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { YieldableFrameworkError } from '../effect/errors.ts';
 
 
 export interface DevServerSession {
@@ -91,7 +90,7 @@ export interface DevServerLifecycleCloseFailure {
 }
 
 /** Reports session and coordinator cleanup failures without hiding either resource. */
-export class DevServerLifecycleCloseError extends YieldableFrameworkError {
+export class DevServerLifecycleCloseError extends Error {
   readonly failures: readonly DevServerLifecycleCloseFailure[];
 
   constructor(failures: readonly DevServerLifecycleCloseFailure[]) {
@@ -156,7 +155,7 @@ export interface DevServerStartFailure {
 }
 
 /** Preserves a failed post-listener startup and every release failure needed to unwind it. */
-export class DevServerStartError extends YieldableFrameworkError {
+export class DevServerStartError extends Error {
   readonly failures: readonly DevServerStartFailure[];
 
   constructor(failures: readonly DevServerStartFailure[]) {
@@ -171,7 +170,7 @@ interface McpAppLifecycleCloseFailure {
   readonly resource: 'previews' | 'runtime-previews' | 'sandbox';
 }
 
-class McpAppLifecycleCloseError extends YieldableFrameworkError {
+class McpAppLifecycleCloseError extends Error {
   readonly failures: readonly McpAppLifecycleCloseFailure[];
 
   constructor(failures: readonly McpAppLifecycleCloseFailure[]) {

@@ -619,7 +619,7 @@ export class DevCoordinator {
         ...(hasBuildInFlight ? closeFailure(buildExit, 'build') : []),
         ...releases.flatMap((exit, index) => closeFailure(exit, resources[index]!.resource)),
       ];
-      if (failures.length > 0) return yield* Effect.fail(new DevCoordinatorCloseError(failures));
+      if (failures.length > 0) return yield* new DevCoordinatorCloseError(failures);
     }));
   }
 }

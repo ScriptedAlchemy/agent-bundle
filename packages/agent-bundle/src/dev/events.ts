@@ -1,3 +1,4 @@
+import { CodedError } from '../core/errors.ts';
 import {
   freezeJsonValue,
   freezeProjectEvent,
@@ -7,7 +8,6 @@ import {
   type ProjectEventType,
   type ProjectReplayGap,
 } from './types.ts';
-import { YieldableCodedError } from '../effect/errors.ts';
 
 type EpochScopedProjectEventType = 'artifact.available' | 'dev.contract.status' | 'dev.host.sync';
 
@@ -55,7 +55,7 @@ export type ProjectEventHubErrorCode =
   | 'PROJECT_EVENT_PAYLOAD_INVALID'
   | 'PROJECT_EVENT_TYPE_INVALID';
 
-export class ProjectEventHubError extends YieldableCodedError<ProjectEventHubErrorCode> {
+export class ProjectEventHubError extends CodedError<ProjectEventHubErrorCode> {
   constructor(code: ProjectEventHubErrorCode, message: string) {
     super('ProjectEventHubError', code, message);
   }

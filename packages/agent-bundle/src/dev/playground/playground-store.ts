@@ -10,7 +10,6 @@ import { isInsideOrEqual } from '../../core/paths.ts';
 import { hasExactOwnKeys, isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import type { DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
-import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 
 export type PlaygroundJsonPrimitive = boolean | null | number | string;
@@ -171,7 +170,7 @@ export type PlaygroundServiceErrorCode =
   | 'PLAYGROUND_STORE_CORRUPT'
   | 'PLAYGROUND_VALUE_INVALID';
 
-export class PlaygroundServiceError extends YieldableFrameworkError {
+export class PlaygroundServiceError extends Error {
   readonly code: PlaygroundServiceErrorCode;
 
   constructor(code: PlaygroundServiceErrorCode, message: string) {
@@ -181,7 +180,7 @@ export class PlaygroundServiceError extends YieldableFrameworkError {
   }
 }
 
-export class PlaygroundSessionCloseError extends YieldableFrameworkError {
+export class PlaygroundSessionCloseError extends Error {
   readonly failures: readonly PlaygroundCleanupFailure[];
   readonly sessionId: string;
 
@@ -198,7 +197,7 @@ export interface PlaygroundServiceCloseFailure {
   readonly sessionId: string;
 }
 
-export class PlaygroundServiceCloseError extends YieldableFrameworkError {
+export class PlaygroundServiceCloseError extends Error {
   readonly failures: readonly PlaygroundServiceCloseFailure[];
 
   constructor(failures: readonly PlaygroundServiceCloseFailure[]) {

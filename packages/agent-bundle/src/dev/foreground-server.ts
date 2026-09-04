@@ -39,7 +39,6 @@ import {
   singleHeader,
   type RequestDiagnostic,
 } from './http.ts';
-import { YieldableFrameworkError } from '../effect/errors.ts';
 
 const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
@@ -53,7 +52,7 @@ interface QueuedSseFrame {
 export type ForegroundServerErrorCode = 'AB8000';
 
 /** Configuration errors that prevent a foreground server from starting. */
-export class ForegroundServerError extends YieldableFrameworkError {
+export class ForegroundServerError extends Error {
   readonly code: ForegroundServerErrorCode;
 
   constructor(code: ForegroundServerErrorCode, message: string) {
@@ -74,7 +73,7 @@ export interface ForegroundServerStartFailure {
 }
 
 /** Reports all releases that failed after every foreground resource was asked to close. */
-export class ForegroundServerCloseError extends YieldableFrameworkError {
+export class ForegroundServerCloseError extends Error {
   readonly failures: readonly ForegroundServerCloseFailure[];
 
   constructor(failures: readonly ForegroundServerCloseFailure[]) {
@@ -85,7 +84,7 @@ export class ForegroundServerCloseError extends YieldableFrameworkError {
 }
 
 /** Preserves a failed startup and every release failure needed to unwind it. */
-export class ForegroundServerStartError extends YieldableFrameworkError {
+export class ForegroundServerStartError extends Error {
   readonly failures: readonly ForegroundServerStartFailure[];
 
   constructor(failures: readonly ForegroundServerStartFailure[]) {

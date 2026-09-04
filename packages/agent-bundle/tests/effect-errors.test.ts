@@ -6,8 +6,8 @@ import { describe, expect, it } from '@rstest/core';
 import { stableJson } from '../src/core/digest.ts';
 import { CodedError } from '../src/core/errors.ts';
 import { DevCoordinatorCloseError } from '../src/dev/coordinator.ts';
-import { EpochStoreError } from '../src/dev/epoch-store.ts';
-import { McpSessionError } from '../src/dev/mcp-session/mcp-session-types.ts';
+import { RuntimeMcpRegistryError } from '../src/dev/runtime-mcp-registry.ts';
+import { ScriptPlaygroundFailure } from '../src/dev/playground/script-playground-service.ts';
 import { isTypedDevError, runPromise, runPromiseExit } from '../src/effect/boundary.ts';
 import { YieldableCodedError, YieldableFrameworkError } from '../src/effect/errors.ts';
 
@@ -32,7 +32,7 @@ class YieldableCoded extends YieldableCodedError<'AB0001'> {
 
 describe('yieldable framework error bases (src/effect/errors.ts)', () => {
   it('fails an Effect.gen program by yield* with the same instance Effect.fail would carry', async () => {
-    const error = new McpSessionError('session-closed', 'Session "s1" is closed.');
+    const error = new ScriptPlaygroundFailure('spawn-failed', 'Script failed.', { stderr: '', stdout: '' });
     const program = Effect.gen(function* () {
       return yield* error;
     });
@@ -51,8 +51,8 @@ describe('yieldable framework error bases (src/effect/errors.ts)', () => {
   });
 
   it('types the yielded error into the fail channel', () => {
-    const program: Effect.Effect<never, EpochStoreError> = Effect.gen(function* () {
-      return yield* new EpochStoreError('EPOCH_NOT_FOUND', 'No active artifact epoch is available.');
+    const program: Effect.Effect<never, RuntimeMcpRegistryError> = Effect.gen(function* () {
+      return yield* new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', 'Runtime MCP registry is closed.');
     });
     expect(program).toBeDefined();
   });

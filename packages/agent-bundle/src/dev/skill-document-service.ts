@@ -5,13 +5,12 @@ import { projectMeta } from '../build/meta.ts';
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isErrno } from '../core/errors.ts';
+import { CodedError, isErrno } from '../core/errors.ts';
 import type { NormalizedPlugin, NormalizedSkill, SourceProvenance } from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { YieldableCodedError } from '../effect/errors.ts';
 
 
 export type SkillDocumentErrorCode =
@@ -21,7 +20,7 @@ export type SkillDocumentErrorCode =
   | 'SKILL_TARGET_UNAVAILABLE';
 
 /** Stable, route-safe failures from the explicit source/epoch Skill bases. */
-export class SkillDocumentError extends YieldableCodedError<SkillDocumentErrorCode> {
+export class SkillDocumentError extends CodedError<SkillDocumentErrorCode> {
   constructor(code: SkillDocumentErrorCode, message: string) {
     super('SkillDocumentError', code, message);
   }

@@ -18,7 +18,6 @@ import type {
   EvalPluginFailure,
   EvalTrialEvidence,
 } from './types.ts';
-import { YieldableFrameworkError } from '../effect/errors.ts';
 
 export interface EvalArtifactBinding {
   readonly manifestPath: string;
@@ -132,7 +131,7 @@ export interface EvalRunEvent {
 }
 
 /** The full JSONL event line exists, but fsync or descriptor close could not confirm its durability. */
-export class EvalRunEventDurabilityError extends YieldableFrameworkError {
+export class EvalRunEventDurabilityError extends Error {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
@@ -145,7 +144,7 @@ export class EvalRunEventDurabilityError extends YieldableFrameworkError {
 }
 
 /** A failed append may have left bytes that could not be durably rolled back to the prior journal boundary. */
-export class EvalRunEventWriteUncertainError extends YieldableFrameworkError {
+export class EvalRunEventWriteUncertainError extends Error {
   readonly event: EvalRunEvent;
   readonly failures: readonly unknown[];
 
