@@ -202,6 +202,38 @@ describe('the in-memory MCP projection level', () => {
     expect(invocation.structuredContent).toEqual({ genre: 'mystery', titles: ['Piranesi', 'Solaris'] });
   });
 
+  it('notifies the client of a streamed Agent.Progress fallback under its own progress token (#448)', async () => {
+    await using session = await openInMemoryMcpServer();
+    const notifications: unknown[] = [];
+    session.client.setNotificationHandler('notifications/progress', (notification) => {
+      notifications.push(notification.params);
+    });
+
+    // Without a token the same render produces no notification at all.
+    await session.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' });
+    expect(notifications).toEqual([]);
+
+    // The catalog route never calls `progress.report()`; the request's own
+    // `_meta.progressToken` is what turns its streamed fallback into the wire
+    // notification, exactly as for an explicit report.
+    const result = await session.client.callTool({
+      arguments: { genre: 'mystery' },
+      name: 'catalog',
+      _meta: { progressToken: 'tok-448' },
+    });
+
+    expect(notifications).toEqual([
+      { message: 'loading mystery', progress: 0, progressToken: 'tok-448', total: 2 },
+    ]);
+    expect(result).toMatchObject({
+      content: [
+        { text: 'catalog: mystery', type: 'text' },
+        { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
+      ],
+      structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
+    });
+  });
+
   it('reads a compiled resource route by its configured URI', async () => {
     const read = await readMcpResource('harness://notes');
 

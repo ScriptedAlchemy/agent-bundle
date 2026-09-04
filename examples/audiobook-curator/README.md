@@ -138,14 +138,15 @@ structured shelf and render an explicit unavailable notice.
 
 ### Suspense becomes MCP progress
 
-`audit_library` first reports progress through the request's
-`context.progress`, then places the asynchronous `LibraryAnalysis` component
-behind React `Suspense`. While that component re-stats duplicate candidates and
+`audit_library` places the asynchronous `LibraryAnalysis` component behind
+React `Suspense`. While that component re-stats duplicate candidates and
 calculates reclaimable bytes, its fallback is an `Agent.Progress` document
-node. The generated MCP projector streams the progress state and then replaces
-it with the completed analysis without changing the final structured
-`LibraryAuditReceipt`. The rendered `library-audit` CLI route composes the same
-analysis and fallback.
+node — and that node is the whole progress story: the generated MCP projector
+turns the streamed fallback into `notifications/progress` for a client that
+sent a progress token, then replaces it with the completed analysis without
+changing the final structured `LibraryAuditReceipt`. No `progress.report()`
+call repeats the fallback's message. The rendered `library-audit` CLI route
+composes the same analysis and fallback.
 
 ### CLI routes have rendered and plain modes
 

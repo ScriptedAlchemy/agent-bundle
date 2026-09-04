@@ -1,4 +1,4 @@
-import { Agent, agent } from '@agent-bundle/runtime';
+import { Agent } from '@agent-bundle/runtime';
 import React, { Suspense } from 'react';
 import type { ToolRouteProps } from 'agent-bundle';
 
@@ -20,12 +20,9 @@ export const resultSchema = operation.resultSchema;
 
 export default async function Route({ input, signal }: ToolRouteProps<typeof inputSchema>) {
   const receipt = await operation.handler(input, { signal }) as LibraryAuditReceipt;
-  const context = await agent();
-  await context.progress.report({
-    completed: 0,
-    message: 'Analyzing duplicate and multipart groups',
-    total: 1,
-  });
+  // The Suspense fallback is the progress surface: the MCP projector turns the
+  // streamed `Agent.Progress` node into `notifications/progress` for a client
+  // that sent a progress token, so no `progress.report()` repeats the message.
   return (
     <Agent.Result value={receipt}>
       <Agent.Text>{libraryAuditHeadline(receipt)}</Agent.Text>

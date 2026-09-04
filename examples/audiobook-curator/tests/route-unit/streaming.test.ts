@@ -54,8 +54,6 @@ it('streams library analysis after the audit shell while preserving the canonica
       summary: { files: 2 },
     });
 
-    const completeIndex = rendered.events.findIndex((event) => event.type === 'complete');
-    const progressIndex = rendered.events.findIndex((event) => event.type === 'progress');
     const projected = await projectTargetCapabilities(
       rendered,
       createTargetCapabilityFixture({
@@ -67,14 +65,14 @@ it('streams library analysis after the audit shell while preserving the canonica
       }),
     );
 
-    expect(progressIndex).toBeGreaterThanOrEqual(0);
-    expect(progressIndex).toBeLessThan(completeIndex);
-    expect(projected.progress.length).toBeGreaterThanOrEqual(1);
-    expect(projected.progress[0]).toMatchObject({
+    // The route never calls `progress.report()`: the streamed Suspense fallback
+    // alone is what the MCP projector announces (agent-bundle#448).
+    expect(rendered.events.some((event) => event.type === 'progress')).toBe(false);
+    expect(projected.progress).toEqual([{
       message: 'Analyzing duplicate and multipart groups',
       progress: 0,
       progressToken: 'agent-bundle-target-capability-fixture',
-    });
+    }]);
     expect(projected.structuredContent).toEqual(rendered.document.value);
   } finally {
     await rm(directory, { force: true, recursive: true });

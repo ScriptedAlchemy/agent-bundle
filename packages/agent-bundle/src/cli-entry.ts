@@ -482,9 +482,44 @@ export const projectCliDocumentToMarkdown = (document: CliRenderedDocument): str
   return blocks.length === 0 ? '' : `${blocks.join('\n\n')}\n`;
 };
 
-const progressLine = (event: { readonly completed: number; readonly message?: string; readonly total?: number }): string => {
+/** The progress fields a render `progress` event and an `Agent.Progress` document node share. */
+interface CliProgressSource {
+  readonly completed: number;
+  readonly message?: string;
+  readonly total?: number;
+}
+
+const progressLine = (event: CliProgressSource): string => {
   const counter = event.total === undefined ? String(event.completed) : `${String(event.completed)}/${String(event.total)}`;
   return event.message === undefined ? counter : `${event.message} (${counter})`;
+};
+
+/**
+ * The `Agent.Progress` nodes of a streamed `shell`/`replace` document, in
+ * document order — a `Suspense` fallback rendered as `Agent.Progress` is the
+ * route's progress surface, so the interactive TTY shows it exactly as it
+ * shows an explicit `progress.report()` (#448).
+ */
+const progressNodes = (node: CliRenderedDocumentNode): readonly CliProgressSource[] => {
+  switch (node.kind) {
+    case 'result':
+      return node.children.flatMap(progressNodes);
+    case 'progress':
+      return [node];
+    case 'audio':
+    case 'context':
+    case 'error':
+    case 'image':
+    case 'json':
+    case 'markdown':
+    case 'resource':
+    case 'text':
+      return [];
+    default: {
+      const unreachable: never = node;
+      throw new TypeError(`Unsupported Agent Document node ${String((unreachable as { kind?: string }).kind)}.`);
+    }
+  }
 };
 
 const clearProgressLine = '\r\u001B[2K';
@@ -509,6 +544,21 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
   const reader = options.session.events().getReader();
   let complete: CliRenderedDocument | undefined;
   let progressShown = false;
+  const showProgress = (source: CliProgressSource): void => {
+    if (mode !== 'tty') return;
+    writeOut(`${clearProgressLine}${progressLine(source)}`);
+    progressShown = true;
+  };
+  // A fallback is re-streamed with every chunk that leaves its boundary
+  // pending; the line is redrawn only when the fallback itself changed. A TTY
+  // has no monotonic constraint, so an explicit report always redraws.
+  const shownFallbacks = new Set<string>();
+  const showFallback = (node: CliProgressSource): void => {
+    const key = JSON.stringify([node.completed, node.message, node.total]);
+    if (shownFallbacks.has(key)) return;
+    shownFallbacks.add(key);
+    showProgress(node);
+  };
   const clearProgress = (): void => {
     if (progressShown) {
       writeOut(clearProgressLine);
@@ -526,12 +576,10 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
       switch (event.type) {
         case 'shell':
         case 'replace':
+          for (const node of progressNodes(event.document.root)) showFallback(node);
           break;
         case 'progress':
-          if (mode === 'tty') {
-            writeOut(`${clearProgressLine}${progressLine(event)}`);
-            progressShown = true;
-          }
+          showProgress(event);
           break;
         case 'error':
           if (mode !== 'ndjson') {

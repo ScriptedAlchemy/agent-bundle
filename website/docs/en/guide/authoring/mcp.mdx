@@ -93,6 +93,52 @@ siblings claimed blind, places a start no spawn window could, and moves a child 
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
 
+## Streaming and progress
+
+A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
+place, and each resolved boundary replaces it. `Agent.Progress` is the fallback to use — it is the
+framework's streaming progress surface on MCP, in the rendered CLI, and in the Workbench:
+
+```tsx
+// src/mcp/curator/tools/search.tsx
+import React, { Suspense } from 'react';
+import { Agent } from '@agent-bundle/runtime';
+
+export default async function Search({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  return (
+    <Suspense fallback={<Agent.Progress completed={0} message={`Searching for ${input.query}`} />}>
+      <Results input={input} signal={signal} />
+    </Suspense>
+  );
+}
+```
+
+On MCP, the projector reads the `Agent.Progress` node out of each streamed `shell` and `replace`
+document and sends one `notifications/progress` — `progress` from `completed`, `message` and
+`total` when present — to a client whose request carried `_meta.progressToken`. A request without
+a token gets no notification. The fallback alone is enough: there is no need for an `announce()`
+helper that repeats the fallback's message through `(await agent()).progress.report()`, and doing
+both does not duplicate the notification. `progress.report()` remains the way to announce steps
+that have no boundary of their own (a loop over files, for example).
+
+Both sources obey the MCP rule that `progress` increases with every notification: a fallback
+re-streamed on a later chunk, or one whose `completed` an earlier report already reached, is not
+re-sent, and a later fallback that advances `completed` is. Give nested boundaries increasing
+`completed` values when each stage should reach the client. A progress node never becomes a
+`content` block, and one left in the final document is content only.
+
+The same route exposed as a rendered CLI command (`routes.mcpCommands`) or written as a rendered
+`src/cli/**` command shows the fallback on an interactive terminal too: the in-place progress line
+is drawn from the streamed `Agent.Progress` node exactly as from an explicit report, redrawn only
+when the fallback changes, and never printed to piped Markdown, `--json`, or `--ndjson` output
+(where the node stays a document event). The Workbench renders the node as document content.
+Hooks have no progress channel.
+
+The route-unit and `mcp-in-memory` test levels prove this without a host:
+`projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
+returns the notifications the fixture's token produced, and an `openInMemoryMcpServer()` client
+that sets `_meta.progressToken` on `callTool` receives them over the real protocol.
+
 ## Shared layouts
 
 `src/layout.tsx` is the composition point around every rendered route — the `layout.tsx` idea from

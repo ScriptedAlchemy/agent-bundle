@@ -24,6 +24,24 @@ describe('rendered commands at the CLI dispatch level', () => {
     expect(run.stdout.endsWith('# Report: books\n\nGenerated for books.\n\nitems: 2\n')).toBe(true);
   });
 
+  it('shows a streamed Agent.Progress Suspense fallback on the TTY without an explicit report (#448)', async () => {
+    // The projected `harness catalog` command never calls `progress.report()`;
+    // its only progress surface is the `<Suspense fallback={<Agent.Progress …/>}>`.
+    const tty = await invokeCli(['harness', 'catalog', '--input', '{"genre":"mystery"}', '--yes'], { tty: true });
+
+    expect(tty.exitCode).toBe(0);
+    expect(tty.stderr).toBe('');
+    expect(tty.stdout).toContain('\r\u001B[2Kloading mystery (0/2)');
+    // Drawn once, although the shell and the replace both carried the node.
+    expect(tty.stdout.split('loading mystery (0/2)')).toHaveLength(2);
+    expect(tty.stdout.endsWith('catalog: mystery\n\n## mystery\n\n- Piranesi\n- Solaris\n')).toBe(true);
+
+    // Piped output is the final document only: the fallback never prints.
+    const piped = await invokeCli(['harness', 'catalog', '--input', '{"genre":"mystery"}', '--yes']);
+    expect(piped.stdout).toBe('catalog: mystery\n\n## mystery\n\n- Piranesi\n- Solaris\n');
+    expect(piped.stdout).not.toContain('loading mystery');
+  });
+
   describe('a projected MCP command whose route throws (#492)', () => {
     it('reports a root throw on stderr with exit 1 and nothing on stdout', async () => {
       const run = await invokeCli(['harness', 'fault', '--input', '{"mode":"throw"}']);

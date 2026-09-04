@@ -85,6 +85,47 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
 
+## 流式输出与进度
+
+路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
+boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——它是框架在 MCP、渲染式 CLI 与 Workbench 上的
+流式进度表面：
+
+```tsx
+// src/mcp/curator/tools/search.tsx
+import React, { Suspense } from 'react';
+import { Agent } from '@agent-bundle/runtime';
+
+export default async function Search({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+  return (
+    <Suspense fallback={<Agent.Progress completed={0} message={`Searching for ${input.query}`} />}>
+      <Results input={input} signal={signal} />
+    </Suspense>
+  );
+}
+```
+
+在 MCP 上，投影器会从每个流式传输的 `shell` 与 `replace` 文档中读取 `Agent.Progress` 节点，并向请求携带了
+`_meta.progressToken` 的客户端发送一条 `notifications/progress`——`progress` 取自 `completed`，存在时附带
+`message` 与 `total`。没有 token 的请求不会收到任何通知。仅有回退内容就足够了：不需要再写一个 `announce()`
+之类的辅助函数，把回退的消息通过 `(await agent()).progress.report()` 重复一遍；即使两者都做，通知也不会重复。
+`progress.report()` 仍然用于宣告那些没有自己 boundary 的步骤（例如对一批文件的循环）。
+
+两种来源都遵守 MCP 的规则：每条通知的 `progress` 必须递增。因此在后续 chunk 中再次流出的同一回退、或其
+`completed` 已被先前报告到达的回退，不会被重发；而推进了 `completed` 的后续回退会被发送。当嵌套的每一级
+boundary 都应到达客户端时，请给它们递增的 `completed` 值。进度节点永远不会成为 `content` 块；留在最终
+文档中的进度节点只是内容。
+
+同一条路由以渲染式 CLI 命令形式暴露（`routes.mcpCommands`）或作为渲染式 `src/cli/**` 命令编写时，交互式
+终端同样会显示这个回退：就地更新的进度行会像来自显式报告一样从流式传输的 `Agent.Progress` 节点绘制，
+仅在回退变化时重绘，并且永远不会打印到管道 Markdown、`--json` 或 `--ndjson` 输出中（在那里该节点只是一个
+文档事件）。Workbench 把该节点渲染为文档内容。钩子没有进度通道。
+
+route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一点：
+`projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
+返回 fixture 的 token 产生的通知；而在 `callTool` 上设置了 `_meta.progressToken` 的
+`openInMemoryMcpServer()` 客户端会通过真实协议收到它们。
+
 ## 共享布局
 
 `src/layout.tsx` 是每个渲染式路由外层的组合点——页面框架中 `layout.tsx` 的思路应用到 Agent Document 上。
