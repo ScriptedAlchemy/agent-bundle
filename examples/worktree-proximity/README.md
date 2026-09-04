@@ -139,10 +139,18 @@ addressed through `recipient.workspace.root`. `recipient.root` (every
 conversation under one root) is available but unused here: proximity is a
 message to one peer, not to the tree.
 `(await agent()).notices.read()` exposes only deliveries attempted for the
-current invocation; publisher-scoped visibility is
-[#460](https://github.com/scriptedalchemy/agent-bundle/issues/460). The
-coordinator status therefore reports topology facts only and does not claim a
-whole-ledger pending count.
+current invocation, and `inbox()` only what is pending for the current
+recipient. The coordinator status reports, beside the topology facts, what
+became of the notices *the calling agent* published — `pending`,
+`attempted`, `acknowledged`, and the other ledger states, counted from
+`(await agent()).notices.published()`
+([#460](https://github.com/scriptedalchemy/agent-bundle/issues/460)). That
+view is scoped by the publisher identity the ledger recorded at publish, the
+agent's lineage conversation, so a status call correlated to agent B's
+conversation (Claude names the pre-tool hook's `tool_use_id` in the MCP call's
+`_meta`) counts agent B's notices whatever the MCP client name, session id, or
+server cwd; a call whose lineage the runtime cannot resolve counts zero. It is
+never a whole-ledger count and never another agent's.
 
 ## Evidence boundary
 

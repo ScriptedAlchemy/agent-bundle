@@ -1,5 +1,5 @@
 ---
-description: '完整的 agent-bundle 命令行表面：dev、build、prepack、install、doctor、validate、eval、inspect、mcp 与 hooks，及其全部选项与退出码。'
+description: '完整的 agent-bundle 命令行表面：dev、serve-app、build、prepack、install、doctor、validate、eval、inspect、mcp 与 hooks，及其全部选项与退出码。'
 ---
 
 # 命令行
@@ -15,6 +15,7 @@ npx agent-bundle --version
 | --- | --- |
 | `agent-bundle dev` | 在 loopback 上提供打包好的开发 workbench。 |
 | `agent-bundle dev proxy` | 把宿主的 stdio MCP 流量桥接到正在运行的开发服务器。 |
+| `agent-bundle serve-app <app>` | 在浏览器里独立提供一个已构建的 MCP App，绑定到它自己打包好的 MCP 服务器。 |
 | `agent-bundle build` | 构建一份已校验的 Agent Bundle 产物。 |
 | `agent-bundle prepack` | 构建并校验 npm pack 清单。 |
 | `agent-bundle install <host>` | 把已构建的捆绑包安装进受支持的宿主。 |
@@ -39,10 +40,10 @@ npx agent-bundle --version
 | `--target <target>` | 全部已配置 | 要选择的 target。可重复。 |
 | `--json` | 关闭 | 写出一份机器可读的 JSON 文档。 |
 
-**产物命令** —— `mcp list`、`mcp invoke`、`mcp run`、`hooks list`、`hooks simulate`：同样的
+**产物命令** —— `mcp list`、`mcp invoke`、`mcp run`、`serve-app`、`hooks list`、`hooks simulate`：同样的
 `--root`、`--config`、`--mode` 与 `--json`，外加 `--artifact <path>`（精确使用某一份已构建产物）与
 `--target <target>`（选择产物 target）。对 `mcp list`、`mcp invoke`、`mcp run` 与 `hooks simulate`
-来说，`--target` 是**必填**的。
+来说，`--target` 是**必填**的；`serve-app` 默认取 `portable`，且不接受 `--json`。
 
 ## dev
 
@@ -66,6 +67,36 @@ npx agent-bundle --version
 | `--url <url>` | 自动发现 | 显式指定 loopback 开发服务器 origin。 |
 
 proxy 从父命令 `dev` 继承 `--root`，并把诊断写到 stderr。
+
+## serve-app
+
+```sh
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] [--input <json>] [--port <port>] [--open]
+```
+
+在一个普通浏览器标签页里独立提供一个已构建的 MCP App——不在任何 MCP 宿主之内，也不需要
+Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器，通过 Workbench MCP 页面
+所用的同一套宿主栈（沙箱代理、同意授权、桥接）把 App 绑定到它上面，先调用一次 App 的工具让它带着数据
+打开，然后打印 loopback URL。它在前台运行，直到收到终止信号，或服务器自行退出。
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `<app>` | **必填** | `<server>/<app>`——生成的 MCP 服务器名与 App 名（其 `ui://` URI 去掉 `.html` 的最后一段，例如 `status/status`）——或 `<server>/ui://...` 以精确选择某个资源 URI。 |
+| `--root`、`--config`、`--mode` | 同产物命令 | 项目选项。 |
+| `--artifact <path>` | 一次性构建 | 精确使用这份已构建产物。不带它时，项目会被构建进根目录旁的暂存目录，并在宿主关闭时删除。 |
+| `--target <target>` | `portable` | 包含该 MCP 服务器的产物 target。 |
+| `--tool <tool>` | 该 App 唯一的工具 | 用其结果打开 App 的工具：声明了该 App `_meta.ui.resourceUri` 的那一个。有多个时必填。 |
+| `--input <json>` / `--input-file <path>` | `{}` | 那次开场工具调用的 JSON 对象输入；二者至多一个。 |
+| `--port <port>` | 临时端口 | 宿主页面的 loopback TCP 端口。 |
+| `--profile <profile>` | `portable` | 模拟的 MCP Apps 宿主 profile：`portable`、`claude` 或 `chatgpt`。 |
+| `--allow <capability>` | 无 | 在 App 请求时代你批准某一项同意能力：`call-tool`、`download-file`、`open-external-link` 或 `request-display-mode`。可重复。其余能力与 Workbench 一样，在宿主页面里等待 Allow/Deny 决定。 |
+| `--open` / `--no-open` | `--no-open` | 宿主开始监听后打开默认浏览器。 |
+| `--env-file`、`--no-env`、`--plugin-root` | 同 `mcp run` | 服务器的 `.env` 分层与 plugin-root 锚点，与 [`mcp run`](#mcp) 完全一致。 |
+
+宿主只绑定 `127.0.0.1`，只提供一份文档与经过认证的 `/api/mcp/...` 路由（每次启动一个令牌，加同源检查；
+拒绝时为 `AB8003` / `AB8004`），并且只通过桥接暴露所选的那个服务器。App 文档本身运行在框架沙箱内的第二个
+loopback origin 上。它是本地预览宿主，不是部署目标。编程形式是 `agent-bundle/api` 中的 `serveApp`；见
+[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)。
 
 ## build 与 prepack
 

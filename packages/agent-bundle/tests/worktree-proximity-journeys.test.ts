@@ -31,6 +31,12 @@ interface ActorStatus {
 interface StatusResult {
   readonly activeActivities: number;
   readonly actors: readonly ActorStatus[];
+  readonly notices: {
+    readonly pending: number;
+    readonly reason?: string;
+    readonly state: 'available' | 'unavailable';
+    readonly total: number;
+  };
   readonly reason?: string;
   readonly refusals: number;
   readonly revision: number;
@@ -159,6 +165,7 @@ const callStatus = async (client: Client): Promise<StatusResult> => {
   expect(Object.keys(result as Record<string, unknown>).sort()).toEqual([
     'activeActivities',
     'actors',
+    'notices',
     'refusals',
     'revision',
     'state',
@@ -254,9 +261,22 @@ it('proves worktree proximity journeys across real processes and linked worktree
   liveSession = await startServer();
   expect(liveSession.pid).toBeGreaterThan(0);
   await expect(stat(fixture.endpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+  // This client call carries no `_meta` correlation, so its lineage is
+  // unresolved and it is nobody's publisher: the published-notice count is
+  // honestly zero for it, never the ledger's total.
   await expect(callStatus(liveSession.client)).resolves.toEqual({
     activeActivities: 0,
     actors: [],
+    notices: {
+      acknowledged: 0,
+      attempted: 0,
+      expired: 0,
+      pending: 0,
+      state: 'available',
+      total: 0,
+      unavailable: 0,
+      withdrawn: 0,
+    },
     refusals: 0,
     revision: 0,
     state: 'available',

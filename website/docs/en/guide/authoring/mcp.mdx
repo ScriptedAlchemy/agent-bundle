@@ -418,6 +418,76 @@ silently at run time.
 An App declared on a *prebuilt* server stays a development surface: the Workbench compiles it
 live, and the build assumes the payload already serves the resource.
 
+### Serving an App standalone
+
+Outside an MCP host, an App is normally reached through the Workbench MCP page. When a plugin
+wants an "open the dashboard" command instead — a live view of its own server, in a plain browser
+tab, from a terminal — `agent-bundle serve-app` hosts one built App standalone:
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+The command launches the plugin's packed MCP server exactly as `mcp run` does (same artifact
+resolution, same `.env` layering, same plugin-data root), binds the App to it through the same
+host stack the Workbench MCP page uses — sandbox proxy, consent authority, `McpAppBridge` — calls
+the App's tool once so it opens populated, and prints the loopback URL. The host binds `127.0.0.1`
+only, serves one page plus the authenticated `/api/mcp/...` routes behind a per-launch token, and
+exposes only that server through the bridge; the App document runs on a second loopback origin in
+the framework's sandbox. It is a local preview host, not a deployment target. Every option is in
+the [CLI reference](../../reference/cli.mdx#serve-app).
+
+The same host is available programmatically as `serveApp` in `agent-bundle/api`, so a plugin's
+own routed CLI can offer the command. It returns `{ url, close, closed }`: `close()` tears down the
+host and the server, `closed` settles when the server connection ends for any reason.
+
+```ts
+// src/cli/dashboard.ts — `hauler dashboard`: open the App against the running daemon.
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  try {
+    // Settles on Ctrl-C (through the signal) or when the daemon exits on its own.
+    await served.closed;
+  } finally {
+    // `closed` tracks only the server connection; close() also releases the
+    // host, the sandbox proxy, and any throwaway artifact.
+    await served.close();
+  }
+  return { url: served.url };
+}
+```
+
+`serveApp` runs in the plugin's dev-time or CLI process, never inside the MCP server shell: import
+it lazily from the route that needs it, as above, so the emitted artifact stays free of the host
+runtime, and expect `agent-bundle` to be resolvable where that CLI runs. Always `close()` when
+you are done — `closed` settling means the server connection ended, not that the host was torn
+down. `autoApprove` grants the
+listed consent capabilities on the operator's behalf as the App requests them (`call-tool` lets a
+polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision in the
+host page, as in the Workbench.
+
 ## Server modes
 
 `routes.servers.<server>` opts a server out of route generation when the directory convention
