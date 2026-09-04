@@ -317,6 +317,46 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
   },
 ));
 
+it.each([
+  ['a namespace import', 'import * as Module from "node:module";\nexport const driver = Module.createRequire(import.meta.url)("driver-package");'],
+  ['the default import', 'import module from "node:module";\nexport const driver = module.createRequire(import.meta.url)("driver-package");'],
+  ['require("node:module")', 'module.exports = require("node:module").createRequire(__filename)("driver-package");'],
+  ["require('module')", "module.exports = require('module').createRequire(__filename)('driver-package');"],
+  ['require("node:module") and .resolve', 'module.exports = require("node:module").createRequire(__filename).resolve("driver-package");'],
+  ['a two-level namespace, bound first', 'import * as ns from "node:module";\nconst load = ns.default.createRequire(import.meta.url);\nexport const driver = load("driver-package");'],
+])('accepts a package loaded by a createRequire() call qualified through %s, direct or bound', (_form, source) => withPackageDocument(
+  (document) => { document.dependencies = { 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
+    await writeFile(consumer, `${source}\n`);
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      const [reported] = withCode(await diagnostics(pack), 'AB7014');
+      expect(reported?.message).toContain('"never-loaded"');
+      expect(reported?.message).not.toContain('"driver-package"');
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
+it.each([
+  ['a namespace import', 'import * as Module from "node:module";\nexport const load = (name) => Module.createRequire(import.meta.url)(name);'],
+  ['require("node:module")', 'module.exports = (name) => require("node:module").createRequire(__filename)(name);'],
+])('withholds AB7014 for a computed direct createRequire()() call qualified through %s', (_form, source) => withPackageDocument(
+  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
+    await writeFile(consumer, `${source}\n`);
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
 it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifiers as AB7015', () => withPackageDocument(
   (document) => {
     document.dependencies = {
@@ -652,6 +692,48 @@ it('accepts a dependency reached through a package imports map or run by a consu
     } finally {
       await rm(wrapper, { force: true, recursive: true });
       await rm(consumer, { force: true });
+    }
+  },
+));
+
+it.each([
+  ['a literal import()', 'node -e "import(\'optional-driver\')"', 'error'],
+  ['an awaited import() in an ES module program', 'node --input-type=module -e "await import(\'optional-driver\')"', 'error'],
+  ['a computed import(), which may load any declared package', 'node -e "import(process.argv[1])"', 'error'],
+  ['a literal require()', 'node -e "require(\'optional-driver\')"', 'error'],
+  ['import.meta, which loads nothing', 'node --input-type=module -p "typeof import.meta"', 'warning'],
+  ['the package name in a string', 'node -p "\'optional-driver\'"', 'warning'],
+])('an inline node program with %s (%s) leaves a skipped optional dependency at severity %s', (_form, postinstall, severity) => withPackageDocument(
+  (document) => {
+    document.optionalDependencies = { 'optional-driver': 'github:owner/optional-driver' };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall };
+  },
+  async () => {
+    const [reported] = withCode(await diagnostics(), 'AB7015');
+    expect(reported?.message).toContain('"optional-driver"');
+    expect(reported?.severity).toBe(severity);
+  },
+));
+
+it('reads a dependency whose installed manifest is not JSON as an unknown executable instead of failing the gate', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { 'broken-dep': '^1.0.0', 'never-loaded': '^1.0.0' };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'broken-dep --init' };
+  },
+  async () => {
+    // The fixture's node_modules is the workspace's; the manifest is removed again below.
+    const broken = join(workspaceNodeModules, 'broken-dep');
+    await mkdir(broken, { recursive: true });
+    await writeFile(join(broken, 'package.json'), '{ not json');
+    try {
+      // No throw; the unscoped name stands in for the unreadable manifest's bins, and the script runs it.
+      const reported = await diagnostics();
+      const [unused] = withCode(reported, 'AB7014');
+      expect(unused?.message).toContain('"never-loaded"');
+      expect(unused?.message).not.toContain('"broken-dep"');
+      expect(withCode(reported, 'AB7015')).toHaveLength(0);
+    } finally {
+      await rm(broken, { force: true, recursive: true });
     }
   },
 ));

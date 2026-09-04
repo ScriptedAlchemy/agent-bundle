@@ -7,7 +7,7 @@ import npa from 'npm-package-arg';
 
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { readModuleImports, type ModuleImport } from './module-imports.ts';
 
 /**
@@ -329,9 +329,24 @@ const callArguments = (() => {
 // Whitespace and comments, the trivia JavaScript allows around a call's parentheses: `require /* x */ ("y")`.
 const trivia = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
 
+/**
+ * What may qualify a factory: nothing (`createRequire(…)` after a named
+ * import), a dotted namespace (`Module.createRequire(…)` after `import * as
+ * Module from "node:module"`, `module.createRequire(…)`), or a CommonJS load
+ * (`require("node:module").createRequire(…)`, `require('module')…`; any
+ * argument, since a same-named factory from elsewhere can only keep a
+ * declaration). No capture group: the literal patterns after it count theirs
+ * by number.
+ */
+const factoryQualifier = String.raw`(?:(?:[A-Za-z_$][\w$]*\s*\.\s*)*|\brequire\s*${callArguments}\s*\.\s*)`;
+
+/** A factory call producing a loader, qualified or not: `createRequire(import.meta.url)`, `Module.createRequire(…)`, `require("node:module").createRequire(…)`. */
+const factoryCall = (factories: readonly string[]): string =>
+  String.raw`${factoryQualifier}\b(?:${factories.join('|')})${trivia}${callArguments}`;
+
 /** The resolvers a file loads packages through, each followed by its argument list. */
 const loadCall = (loaders: readonly string[], factories: readonly string[]): string =>
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})${trivia}${callArguments}(?:\.resolve)?)${trivia}[(]${trivia}`;
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|${factoryCall(factories)}(?:\.resolve)?)${trivia}[(]${trivia}`;
 
 const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
   String.raw`${loadCall(loaders, factories)}${quotedLiteral}${trivia}[)]`,
@@ -368,13 +383,11 @@ const factoryNames = (source: string): readonly string[] => [
 ];
 
 /**
- * `const load = <factory>(…)`, the factory bare, namespace-qualified
- * (`Module.createRequire(…)` after `import * as Module from "node:module"`),
- * or chained off a CommonJS load (`require("node:module").createRequire(…)`):
- * the binding is a loader, called like `require` from then on.
+ * `const load = <factory>(…)`, the factory qualified as `factoryQualifier`
+ * allows or not: the binding is a loader, called like `require` from then on.
  */
 const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:(?:[A-Za-z_$][\w$]*|\brequire\s*${callArguments})\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
+  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${factoryQualifier}\b(?:${factories.join('|')})\s*[(]`,
   'gu',
 );
 
@@ -488,11 +501,17 @@ const commandLiteral = (command: string): RegExp =>
  * which bundled library docblocks are full of — plus literal `require` calls;
  * and the dependencies it runs by one of their `bin` commands.
  */
-const javaScriptEvidence = async (bytes: Buffer, executables: ExecutableCommands): Promise<FileEvidence> => {
-  const source = bytes.toString('utf8');
+/**
+ * The module specifiers JavaScript source loads — the lexer's static and
+ * dynamic literal imports, plus literal `require`/`createRequire` calls —
+ * and whether that is all of them: a computed `import(x)` or `require(x)`,
+ * or a loader passed on as a value, means it is not. Packed files and inline
+ * `node -e` programs are read alike.
+ */
+const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEvidence, 'complete' | 'specifiers'>> => {
   let imports: readonly ModuleImport[];
   try {
-    imports = await readModuleImports(source, { check: 'lexed', sha256: sha256Hex(bytes) });
+    imports = await readModuleImports(source, { check: 'lexed', ...(sha256 === undefined ? {} : { sha256 }) });
   } catch {
     // Syntax is another gate's concern; skipping can only keep a declaration.
     imports = [];
@@ -503,13 +522,20 @@ const javaScriptEvidence = async (bytes: Buffer, executables: ExecutableCommands
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
       && !computedLoad(loaders, factories).test(source)
       && !loaderReference(loaders).test(codeOnly(source)),
-    executed: [...executables]
-      .filter(([, { commands, known }]) => known && commands.some((command) => commandLiteral(command).test(source)))
-      .map(([name]) => name),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
       ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => decodeLiteral(match[2] ?? '')),
     ],
+  };
+};
+
+const javaScriptEvidence = async (bytes: Buffer, executables: ExecutableCommands): Promise<FileEvidence> => {
+  const source = bytes.toString('utf8');
+  return {
+    ...await moduleLoads(source, sha256Hex(bytes)),
+    executed: [...executables]
+      .filter(([, { commands, known }]) => known && commands.some((command) => commandLiteral(command).test(source)))
+      .map(([name]) => name),
   };
 };
 
@@ -635,18 +661,26 @@ const unscopedName = (name: string): string => name.replace(/^@[^/]+\//u, '');
  * The executables a dependency puts on `PATH`, from its own manifest under
  * `node_modules`. A string-form `bin` is one command named after the installed
  * manifest's unscoped `name` — `real` for an alias `"wrapper":
- * "npm:@scope/real@1"`, not `wrapper`. When the manifest is unreadable the
- * dependency's unscoped name stands in, marked as a guess.
+ * "npm:@scope/real@1"`, not `wrapper`. When the manifest is unreadable —
+ * absent, not JSON, or not an object — the dependency's unscoped name stands
+ * in, marked as a guess; a broken install never fails the gate.
  */
 const executableCommands = async (names: readonly string[], projectRoot: string): Promise<ExecutableCommands> => {
+  const readManifest = async (name: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
+    try {
+      const parsed = parseJsonWithoutDuplicateKeys(await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8'));
+      return isRecord(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const binCommands = async (name: string): Promise<DependencyExecutables> => {
-    const manifest = await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8').catch(() => undefined);
-    if (manifest === undefined) return { commands: [unscopedName(name)], known: false };
-    const parsed: unknown = JSON.parse(manifest);
-    const bin = isRecord(parsed) ? parsed.bin : undefined;
+    const parsed = await readManifest(name);
+    if (parsed === undefined) return { commands: [unscopedName(name)], known: false };
+    const bin = parsed.bin;
     if (isRecord(bin)) return { commands: Object.keys(bin), known: true };
     if (typeof bin !== 'string') return { commands: [], known: true };
-    return { commands: [unscopedName(isRecord(parsed) && typeof parsed.name === 'string' ? parsed.name : name)], known: true };
+    return { commands: [unscopedName(typeof parsed.name === 'string' ? parsed.name : name)], known: true };
   };
   return new Map(await Promise.all(names.map(async (name) => [name, await binCommands(name)] as const)));
 };
@@ -885,19 +919,20 @@ const nodeOptionValues = (commands: readonly SimpleCommand[], options: RegExp): 
  * their `bin` commands in command position (`setup-tool --init`, `npx
  * setup-tool`, `./node_modules/.bin/setup-tool`), a file of theirs run
  * directly (`node node_modules/setup-tool/install.js`), or a load in an
- * inline `node -e` program (`node -e "require('setup-tool')"`; a computed
- * load there may reach any declared package). An optional dependency npm
+ * inline `node -e` program (`node -e "require('setup-tool')"`, `node
+ * --input-type=module -e "await import('setup-tool')"`, read as a packed
+ * file is; a computed load there may reach any declared package). An optional dependency npm
  * skipped after a failed fetch then fails the script, so this is what turns
  * a survivable `AB7015` fatal; `echo setup-tool` never does. The packages
  * the files and preloads a `node` command runs then load are
  * `installScriptModuleDependencies`'s.
  */
-const installScriptCommandDependencies = (
+const installScriptCommandDependencies = async (
   text: string,
   commands: readonly SimpleCommand[],
   executables: ExecutableCommands,
   declared: readonly string[],
-): readonly string[] => {
+): Promise<readonly string[]> => {
   if (text === '') return [];
   const run = new Set(commands.map(({ command }) => command));
   const words = shellWords(text);
@@ -907,9 +942,10 @@ const installScriptCommandDependencies = (
     if (words.some((word) => word.replace(/^\.\//u, '').startsWith(`node_modules/${name}/`))) names.add(name);
   }
   for (const program of nodeOptionValues(commands, inlineOptions)) {
-    if (computedLoad(['require'], ['createRequire']).test(program)) for (const name of declared) names.add(name);
-    for (const match of program.matchAll(literalLoad(['require'], ['createRequire']))) {
-      const name = packageNameOf(decodeLiteral(match[2] ?? ''));
+    const { complete, specifiers } = await moduleLoads(program);
+    if (!complete) for (const name of declared) names.add(name);
+    for (const specifier of specifiers) {
+      const name = packageNameOf(specifier);
       if (name !== undefined) names.add(name);
     }
   }
@@ -1079,7 +1115,7 @@ export const importedPackageNames = async (options: {
   const scriptText = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
   const commands = simpleCommands(scriptText);
   const neededByScripts = [
-    ...installScriptCommandDependencies(scriptText, commands, executables, options.declared),
+    ...await installScriptCommandDependencies(scriptText, commands, executables, options.declared),
     ...installScriptModuleDependencies({
       declared: options.declared,
       evidenceByPath,
