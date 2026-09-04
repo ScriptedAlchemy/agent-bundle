@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -58,6 +58,35 @@ export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund
  * are skipped.
  */
 export const cachedNpmInstallArguments = [...npmInstallArguments, '--prefer-offline'] as const;
+
+/**
+ * Link the workspace's `typescript` and ambient `@types/*` packages into a
+ * consumer fixture so declaration generation resolves them from the consumer
+ * project, exactly like a real devDependency install. Entries the packed
+ * install already brought (an `agent-bundle` install carries `@types/ws` and
+ * `@types/node` through `@effect/platform-node`) are left as installed;
+ * `EEXIST` on any of them is not a fixture failure.
+ */
+export const linkWorkspaceTypes = async (
+  consumerRoot: string,
+  options: Readonly<{ readonly typescript?: boolean }> = {},
+): Promise<void> => {
+  const source = join(workspaceRoot, 'node_modules');
+  const target = join(consumerRoot, 'node_modules');
+  await mkdir(join(target, '@types'), { recursive: true });
+  const link = async (relativePath: string): Promise<void> => {
+    try {
+      await symlink(join(source, relativePath), join(target, relativePath), 'dir');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  };
+  const types = await readdir(join(source, '@types'));
+  await Promise.all([
+    ...(options.typescript === true ? [link('typescript')] : []),
+    ...types.map((name) => link(join('@types', name))),
+  ]);
+};
 
 const packs = new Map<SharedPackPackage, Promise<SharedPack>>();
 let fallbackBuild: Promise<void> | undefined;

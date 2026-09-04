@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,7 +8,7 @@ import { beforeAll, expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
-import { cachedNpmInstallArguments, sharedPackedTarball } from './support/shared-pack.ts';
+import { cachedNpmInstallArguments, linkWorkspaceTypes, sharedPackedTarball } from './support/shared-pack.ts';
 
 interface PackageManifest {
   bin: {
@@ -134,11 +134,7 @@ it('imports the externalized config entry from a packed npm consumer', async () 
         ].join('\n'),
       ], { cwd: consumerRoot, env: isolatedCommandEnvironment() }),
     ).resolves.toMatchObject({ stderr: '', stdout: '' });
-    await symlink(
-      join(workspaceRoot, 'node_modules', '@types'),
-      join(consumerRoot, 'node_modules', '@types'),
-      'dir',
-    );
+    await linkWorkspaceTypes(consumerRoot);
     await writeFile(join(consumerRoot, 'config.mts'), [
       "import { defineConfig, type AgentBundleConfig } from 'agent-bundle/config';",
       '',

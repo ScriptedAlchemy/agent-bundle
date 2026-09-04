@@ -1,12 +1,25 @@
-import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, type Layer } from 'effect';
+import * as NodeChildProcessSpawner from '@effect/platform-node-shared/NodeChildProcessSpawner';
+import * as NodeCrypto from '@effect/platform-node-shared/NodeCrypto';
+import * as NodeFileSystem from '@effect/platform-node-shared/NodeFileSystem';
+import * as NodePath from '@effect/platform-node-shared/NodePath';
+import * as NodeStdio from '@effect/platform-node-shared/NodeStdio';
+import * as NodeTerminal from '@effect/platform-node-shared/NodeTerminal';
+import { Effect, FileSystem, Layer } from 'effect';
 import { PlatformError } from 'effect/PlatformError';
 
 import { runPromise, type RunPromiseOptions } from './boundary.ts';
 
 /**
- * The Node platform layer for this package's Effect programs
- * (`FileSystem`, `Path`, and the rest of `NodeServices`).
+ * The Node platform layer for this package's Effect programs: the same
+ * services, composed the same way, as `@effect/platform-node`'s
+ * `NodeServices.layer`, but built from `@effect/platform-node-shared`, the
+ * package that actually implements them (`@effect/platform-node`'s
+ * `NodeFileSystem` etc. are re-exports). `agent-bundle` is a runtime
+ * dependency of every consumer, and `@effect/platform-node@rc.112` would add
+ * `undici`, `mime`, and — through a non-optional `redis` peer that npm
+ * auto-installs — a Redis client (+23 MB, +17 packages) to each install for
+ * a filesystem layer. `create-agent-bundle`, which bundles its
+ * dependencies, keeps `NodeServices.layer`.
  *
  * Provided at Promise edges only — the public API functions in `api.ts` and
  * the exported host validators are the composition roots for programmatic
@@ -21,9 +34,19 @@ import { runPromise, type RunPromiseOptions } from './boundary.ts';
  * compiler hot paths never import this module. See
  * `docs/effect-conventions.md`, "Effect platform services".
  */
-export type PlatformServices = NodeServices.NodeServices;
+export const platformLayer = Layer.provideMerge(
+  NodeChildProcessSpawner.layer,
+  Layer.mergeAll(
+    NodeFileSystem.layer,
+    NodeCrypto.layer,
+    NodePath.layer,
+    NodeStdio.layer,
+    NodeTerminal.layer,
+  ),
+);
 
-export const platformLayer: Layer.Layer<PlatformServices> = NodeServices.layer;
+/** `ChildProcessSpawner | Crypto | FileSystem | Path | Stdio | Terminal` — the `NodeServices` union. */
+export type PlatformServices = Layer.Success<typeof platformLayer>;
 
 /**
  * A `PlatformError` carries the `NodeJS.ErrnoException` that `node:fs`
