@@ -417,33 +417,82 @@ const cursorLocalOwnership = async (
   };
 };
 
+/** The `PLUGIN_DATA` directory the emitted installer creates for an Agent Plugins pack copied into Cursor (spec §9.1). */
+export const cursorPluginDataDirectory = (cursorRoot: string, plugin: string): string =>
+  join(cursorRoot, 'agent-bundle', 'plugin-data', plugin);
+
+interface CursorLocalData {
+  /** Installer-created `PLUGIN_DATA` directory that nothing wrote to: pruned like a created host directory, never "data". */
+  readonly emptyPluginData?: string;
+  /** Whether any durable state (state/ or a written PLUGIN_DATA) exists. */
+  readonly present: boolean;
+  /** A written `PLUGIN_DATA` directory kept by `--keep-data`: it lives outside the plugin root, so the root must survive to carry it. */
+  readonly retainedPluginData?: string;
+  readonly report: UninstallDataReport;
+}
+
 const cursorLocalData = async (
   destination: string,
   policy: UninstallDataPolicy,
-): Promise<{ readonly present: boolean; readonly report: UninstallDataReport }> => {
+  receipt: InstallReceipt | undefined,
+  cursorRoot: string,
+  plugin: string,
+): Promise<CursorLocalData> => {
   const stateDirectory = join(destination, 'state');
-  const metadata = await realDirectory(stateDirectory, 'cursor');
-  if (metadata === undefined) {
+  const paths: string[] = [];
+  const kinds: string[] = [];
+  if (await realDirectory(stateDirectory, 'cursor') !== undefined) {
+    paths.push(stateDirectory);
+    kinds.push('state/ (state kernel, notices journal)');
+  }
+  // The receipt's cursorExpansion records the PLUGIN_DATA directory the installer created for this copy; only the
+  // directory at this home's own plugin-data location is receipt-owned — a recorded path elsewhere is left alone.
+  const recorded = receipt?.cursorExpansion?.pluginData;
+  const expected = cursorPluginDataDirectory(cursorRoot, plugin);
+  let emptyPluginData: string | undefined;
+  let foreignPluginData: string | undefined;
+  if (recorded !== undefined) {
+    if (recorded !== expected) {
+      foreignPluginData = recorded;
+    } else if (await realDirectory(recorded, 'cursor') !== undefined) {
+      if ((await readdir(recorded)).length === 0) {
+        emptyPluginData = recorded;
+      } else {
+        paths.push(recorded);
+        kinds.push(`the PLUGIN_DATA directory ${recorded}`);
+      }
+    }
+  }
+  const foreignNote = foreignPluginData === undefined
+    ? ''
+    : ` The receipt records PLUGIN_DATA at ${foreignPluginData}, outside this home's agent-bundle/plugin-data; it is not touched.`;
+  if (paths.length === 0) {
     return {
+      ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
       present: false,
       report: Object.freeze({
-        detail: 'No durable runtime state (state/) exists under the installed plugin root.',
+        detail: `No durable runtime state exists (no state/ under the installed plugin root${
+          emptyPluginData === undefined ? '' : `; the installer-created PLUGIN_DATA directory ${emptyPluginData} is empty and is pruned`
+        }).${foreignNote}`,
         outcome: 'absent',
         paths: Object.freeze([]),
         policy,
       }),
     };
   }
+  const retainedPluginData = policy === 'purge' ? undefined : paths.find((path) => path === expected);
   return {
+    ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
     present: true,
     report: Object.freeze({
       detail: policy === 'purge'
-        ? 'Durable runtime state (state kernel, notices journal) under state/ is removed (--purge-data --confirm-purge).'
-        : 'Durable runtime state (state kernel, notices journal) under state/ is kept; pass --purge-data --confirm-purge to remove it.',
+        ? `Durable runtime state — ${kinds.join(' and ')} — is removed (--purge-data --confirm-purge).${foreignNote}`
+        : `Durable runtime state — ${kinds.join(' and ')} — is kept; pass --purge-data --confirm-purge to remove it.${foreignNote}`,
       outcome: policy === 'purge' ? 'purged' : 'kept',
-      paths: Object.freeze([stateDirectory]),
+      paths: Object.freeze(paths),
       policy,
     }),
+    ...(retainedPluginData === undefined ? {} : { retainedPluginData }),
   };
 };
 
@@ -486,7 +535,7 @@ const uninstallCursorLocal = async (
   const owned = new Set(ownership.files);
   // A symlinked ancestor would let a leaf-only delete reach outside the plugin root: refused before any change.
   await assertRealAncestors(destination, ownership.files);
-  const data = await cursorLocalData(destination, policy);
+  const data = await cursorLocalData(destination, policy, ownership.receipt, cursorRoot, identity.plugin);
   const files: string[] = [];
   for (const file of ownership.files) {
     const path = join(destination, file);
@@ -501,10 +550,18 @@ const uninstallCursorLocal = async (
     files.push(path);
   }
   if (ownership.receipt !== undefined || await exists(receiptPath)) files.push(receiptPath);
+  // A written PLUGIN_DATA directory kept by --keep-data lives outside the plugin root, so the root stays (with a
+  // remnant receipt carrying the expansion) to keep that data receipt-owned for a later purge.
+  const keepRoot = data.retainedPluginData !== undefined;
+  const pluginDataRecorded = ownership.receipt?.cursorExpansion?.pluginData === cursorPluginDataDirectory(cursorRoot, identity.plugin);
   const directoryCandidates = [
     ...ownership.directories.map((directory) => join(destination, directory)),
-    destination,
+    ...(keepRoot ? [] : [destination]),
     ...ownership.hostDirectories.map((directory) => join(cursorRoot, directory)),
+    // The installer created PLUGIN_DATA and its agent-bundle parents; once empty they go too — never while
+    // receipts, marketplaces, or another plugin's data keep them alive.
+    ...(data.emptyPluginData === undefined ? [] : [data.emptyPluginData]),
+    ...(pluginDataRecorded ? [join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle')] : []),
   ];
   const ownedDirectories = new Set(ownership.directories);
   const retained = await listRetained(destination, owned, ownedDirectories);
@@ -541,7 +598,8 @@ const uninstallCursorLocal = async (
   const purgedDirectories = purging ? data.report.paths : [];
   if (options.plan === true) {
     const directories = await simulatePrune(directoryCandidates, new Set([...files, ...purgedDirectories]));
-    // The plugin root survives (retained state or unowned entries) exactly when the simulation cannot prune it.
+    // The plugin root survives (retained state, unowned entries, or kept PLUGIN_DATA) exactly when the simulation
+    // cannot prune it.
     const survives = !directories.includes(destination);
     return Object.freeze({
       ...base,
@@ -569,6 +627,10 @@ const uninstallCursorLocal = async (
     // directories this install created so a later purge can still prune them, and lets Doctor explain the
     // directory instead of calling it corrupt. A reinstall fills it back in as an `installed`.
     await writeInstallReceipt(destination, createInstallReceipt({
+      // A kept PLUGIN_DATA directory stays receipt-owned through the remnant's expansion record.
+      ...(ownership.receipt?.cursorExpansion === undefined || data.retainedPluginData === undefined
+        ? {}
+        : { cursorExpansion: ownership.receipt.cursorExpansion }),
       host: 'cursor',
       hostDirectories: ownership.hostDirectories,
       ...(ownership.receipt === undefined ? {} : { installedAt: ownership.receipt.installedAt }),

@@ -890,7 +890,16 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   plugin root survives (retained state or unowned entries), a **remnant
   receipt** — `files: []`, `registrations: []`, the carried `hostDirectories` —
   is written there so a later purge can still prune the created directories and
-  Doctor can explain the directory.
+  Doctor can explain the directory. When the receipt records a Cursor
+  placeholder expansion (`cursorExpansion`, written by the emitted `install.mjs`
+  for an Agent Plugins pack), its `PLUGIN_DATA` directory
+  (`~/.cursor/agent-bundle/plugin-data/<name>`) is receipt-owned durable state:
+  a written one is kept (the plugin root then survives with a remnant receipt
+  carrying the expansion, so a later `--purge-data --confirm-purge` still finds
+  it) or purged; an empty, installer-created one is pruned together with its
+  `agent-bundle/plugin-data` and `agent-bundle` parents once they empty out; a
+  recorded path outside this home's `plugin-data` is never touched and the
+  `data.detail` says so.
 - **Cursor marketplace** — verifies the staged repository's `HEAD` against the
   commit the store receipt recorded and its working tree against that commit
   (`git --no-optional-locks status --porcelain --untracked-files=all

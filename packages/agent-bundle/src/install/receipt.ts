@@ -568,12 +568,14 @@ export const readInstallReceipt = (destination: string): Promise<InstallReceipt 
  * exactly the directories they created.
  */
 export const createInstallReceipt = (options: InstallReceiptIdentity & {
+  readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
   readonly inventory: TreeInventory;
 }): InstallReceipt => {
   const installedAt = options.installedAt ?? new Date().toISOString();
   return Object.freeze({
     contentHash: options.inventory.hash,
+    ...(options.cursorExpansion === undefined ? {} : { cursorExpansion: options.cursorExpansion }),
     directories: options.directories ?? directoriesOf(options.inventory.files),
     files: options.inventory.files,
     format: installReceiptFormat,

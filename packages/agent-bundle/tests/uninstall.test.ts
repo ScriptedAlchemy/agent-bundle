@@ -285,6 +285,54 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(consumed).toMatchObject({ data: { outcome: 'absent' }, removed: emptyPlan.removed, state: 'uninstalled' });
     expect(consumed.remnantReceipt).toBeUndefined();
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // A receipt recording a PLUGIN_DATA expansion (written by the emitted install.mjs for an Agent Plugins pack):
+    // the directory is receipt-owned durable state outside the plugin root. Written → kept behind a remnant that
+    // carries the expansion (the root survives to own it), purged only when confirmed; empty → pruned with its
+    // agent-bundle parents; recorded at another home → never touched.
+    const pluginData = join(cursorRoot, 'agent-bundle', 'plugin-data', 'uninstall-fixture');
+    const withExpansion = async (recordedPluginData: string) => {
+      await installBundle(options);
+      const receipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+      await writeFile(join(destination, installReceiptFile), JSON.stringify({
+        ...receipt,
+        cursorExpansion: { documents: { 'mcp.json': '{}\n' }, pluginData: recordedPluginData, pluginRoot: destination },
+      }));
+    };
+    await withExpansion(pluginData);
+    await mkdir(join(pluginData, 'cache'), { recursive: true });
+    await writeFile(join(pluginData, 'cache', 'index.json'), '{}\n');
+    const keptPlan = await uninstallBundle({ ...options, plan: true });
+    expect(keptPlan).toMatchObject({ data: { outcome: 'kept', paths: [pluginData] }, remnantReceipt: join(destination, installReceiptFile), state: 'planned' });
+    expect(keptPlan.removed.directories).not.toContain(destination);
+    const keptData = await uninstallBundle(options);
+    expect(keptData).toMatchObject({ data: { outcome: 'kept', paths: [pluginData] }, remnantReceipt: join(destination, installReceiptFile), state: 'uninstalled' });
+    expect(keptData.removed).toEqual(keptPlan.removed);
+    expect(await readFile(join(pluginData, 'cache', 'index.json'), 'utf8')).toBe('{}\n');
+    expect(await readInstallReceipt(destination)).toMatchObject({ cursorExpansion: { pluginData, pluginRoot: destination }, files: [], registrations: [] });
+    expect(await uninstallBundle(options)).toMatchObject({ data: { outcome: 'kept', paths: [pluginData] }, receipt: { status: 'remnant' }, state: 'not-installed' });
+    const purgedData = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
+    expect(purgedData).toMatchObject({ data: { outcome: 'purged', paths: [pluginData] }, state: 'uninstalled' });
+    expect(purgedData.removed.directories).toEqual(expect.arrayContaining([pluginData, join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle'), destination]));
+    expect(purgedData.remnantReceipt).toBeUndefined();
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
+    await withExpansion(pluginData);
+    await mkdir(pluginData, { recursive: true });
+    const emptyData = await uninstallBundle({ ...options, plan: true });
+    expect(emptyData).toMatchObject({ data: { detail: expect.stringContaining('is empty and is pruned'), outcome: 'absent' }, state: 'planned' });
+    expect(emptyData.removed.directories).toEqual(expect.arrayContaining([pluginData, join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle')]));
+    expect((await uninstallBundle(options)).removed).toEqual(emptyData.removed);
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
+    const elsewhere = join(fixture.cleanupRoot, 'other-home', '.cursor', 'agent-bundle', 'plugin-data', 'uninstall-fixture');
+    await withExpansion(elsewhere);
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(elsewhere, 'note.txt'), 'theirs\n');
+    const foreignData = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
+    expect(foreignData).toMatchObject({ data: { detail: expect.stringContaining(`records PLUGIN_DATA at ${elsewhere}`), outcome: 'absent' }, state: 'uninstalled' });
+    expect(await readFile(join(elsewhere, 'note.txt'), 'utf8')).toBe('theirs\n');
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

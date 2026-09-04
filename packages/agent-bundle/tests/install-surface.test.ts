@@ -260,6 +260,42 @@ it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy o
     expect(repaired.stdout).toContain('Replaced install-fixture@1.2.3');
     expect((await readInstallReceipt(destination))?.cursorExpansion?.pluginRoot).toBe(destination);
 
+    // PLUGIN_DATA through --uninstall: a written directory is durable state — kept by default behind a remnant
+    // receipt that carries the expansion (the data lives outside the plugin root, so the root stays to own it),
+    // purged only by --purge-data --confirm-purge; an empty, installer-created one is pruned with its parents.
+    await mkdir(join(pluginData, 'cache'), { recursive: true });
+    await writeFile(join(pluginData, 'cache', 'index.json'), '{}\n');
+    const keptPlan = await run(installer, ['--uninstall', '--plan'], home);
+    expect(keptPlan).toMatchObject({ code: 0, stderr: '' });
+    expect(keptPlan.stdout).toContain(`Data (keep): kept — Durable runtime state — the PLUGIN_DATA directory ${pluginData} — is kept`);
+    expect(keptPlan.stdout).toContain('Remnant receipt (would be written)');
+    const kept = await run(installer, ['--uninstall'], home);
+    expect(kept).toMatchObject({ code: 0, stderr: '' });
+    expect(kept.stdout).toContain('Uninstalled install-fixture@1.2.3');
+    expect(await readFile(join(pluginData, 'cache', 'index.json'), 'utf8')).toBe('{}\n');
+    expect(await readInstallReceipt(destination)).toMatchObject({
+      cursorExpansion: { pluginData, pluginRoot: destination },
+      files: [],
+      registrations: [],
+    });
+    expect(await readdir(destination)).toEqual([installReceiptFile]);
+    const purged = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    expect(purged).toMatchObject({ code: 0, stderr: '' });
+    expect(purged.stdout).toContain(`Data (purge): purged — Durable runtime state — the PLUGIN_DATA directory ${pluginData} — is removed`);
+    expect(await stat(pluginData).catch(() => undefined)).toBeUndefined();
+    expect(await stat(join(home, '.cursor', 'agent-bundle')).catch(() => undefined)).toBeUndefined();
+    expect(await stat(destination).catch(() => undefined)).toBeUndefined();
+    // Fresh install, nothing written to PLUGIN_DATA: the default uninstall prunes it (and the empty agent-bundle parents).
+    await writeFile(join(bundle, 'mcp.json'), mcpText);
+    expect(await run(installer, [], home)).toMatchObject({ code: 0, stderr: '' });
+    expect((await stat(pluginData)).isDirectory()).toBe(true);
+    const emptyPlan = await run(installer, ['--uninstall', '--plan'], home);
+    expect(emptyPlan.stdout).toContain(`the installer-created PLUGIN_DATA directory ${pluginData} is empty and is pruned`);
+    expect(emptyPlan.stdout).toContain(`  ${pluginData}\n`);
+    expect(await run(installer, ['--uninstall'], home)).toMatchObject({ code: 0, stderr: '' });
+    expect(await stat(pluginData).catch(() => undefined)).toBeUndefined();
+    expect(await stat(join(home, '.cursor', 'agent-bundle')).catch(() => undefined)).toBeUndefined();
+
     // A skills-only Agent Plugins pack (no stdio server) is copied byte-identically and records no expansion.
     await rm(destination, { force: true, recursive: true });
     await writeFile(join(bundle, 'mcp.json'), `${JSON.stringify({
