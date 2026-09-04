@@ -4,7 +4,7 @@
 import { pluginReact } from '@rsbuild/plugin-react';
 import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
 import { readFile, realpath } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
@@ -290,31 +290,66 @@ const assertNoResidualReservedImports = async (
   }));
 };
 
-const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
-  let bytes: string;
-  try {
-    bytes = await readFile(resolve(cwd, 'package.json'), 'utf8');
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return Object.freeze([]);
-    throw error;
-  }
-  const manifest = JSON.parse(bytes) as Record<string, unknown>;
+const projectDependencyFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+/** What a dependency's bundle can pull in: its devDependencies never ship. */
+const runtimeDependencyFields = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
+
+const declaredDependencyNames = (manifest: Record<string, unknown>, fields: readonly string[]): readonly string[] => {
   const names = new Set<string>();
-  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+  for (const field of fields) {
     const dependencies = manifest[field];
     if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies)) continue;
-    for (const name of Object.keys(dependencies)) names.add(name);
-  }
-  const roots = await Promise.all([...names].map(async (name) => {
-    if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name)) return undefined;
-    try {
-      return await realpath(resolve(cwd, 'node_modules', ...name.split('/')));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
+    for (const name of Object.keys(dependencies)) {
+      if (/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu.test(name)) names.add(name);
     }
-  }));
-  return Object.freeze(roots.filter((root): root is string => root !== undefined));
+  }
+  return [...names];
+};
+
+const readManifest = async (packageRoot: string): Promise<Record<string, unknown> | undefined> => {
+  try {
+    return JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw error;
+  }
+};
+
+const isBeneathNodeModules = (path: string): boolean => path.split(sep).includes('node_modules');
+
+/**
+ * Real roots of the project's declared dependencies, followed transitively
+ * through each linked dependency's own runtime dependencies. Provenance already
+ * discards modules beneath a `node_modules` directory, but pnpm links workspace
+ * packages by symlink and Rspack records their modules at real paths, which
+ * carry no such segment: `@agent-bundle/runtime` resolved to
+ * `packages/rsc-runtime` must be excluded by root, and so must the workspace
+ * packages *it* depends on (`rsc-markdown-stream`), which the project never
+ * declares itself. Registry packages resolve beneath `node_modules`, so their
+ * trees are never walked.
+ */
+const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
+  const roots = new Set<string>();
+  const visited = new Set<string>();
+  const visit = async (packageRoot: string, fields: readonly string[]): Promise<void> => {
+    if (visited.has(packageRoot)) return;
+    visited.add(packageRoot);
+    const manifest = await readManifest(packageRoot);
+    if (manifest === undefined) return;
+    await Promise.all(declaredDependencyNames(manifest, fields).map(async (name) => {
+      let root: string;
+      try {
+        root = await realpath(resolve(packageRoot, 'node_modules', ...name.split('/')));
+      } catch (error) {
+        if (isErrno(error, 'ENOENT')) return;
+        throw error;
+      }
+      roots.add(root);
+      if (!isBeneathNodeModules(root)) await visit(root, runtimeDependencyFields);
+    }));
+  };
+  await visit(resolve(cwd), projectDependencyFields);
+  return Object.freeze([...roots].sort((left, right) => left.localeCompare(right)));
 };
 
 interface InspectedBundlerConfig {

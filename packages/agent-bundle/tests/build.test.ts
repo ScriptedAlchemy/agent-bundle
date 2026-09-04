@@ -1,5 +1,5 @@
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
-import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1159,6 +1159,66 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     }]);
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+/**
+ * A workspace layout as pnpm lays it out: the project's dependency is a
+ * symlink to a sibling package, and that package's own dependency is another
+ * symlink. Rspack records both at their real paths, which carry no
+ * `node_modules` segment, so provenance must exclude them by root — including
+ * the transitive one the project never declares (`@agent-bundle/runtime` →
+ * `rsc-markdown-stream` in this repository).
+ */
+const linkedWorkspaceProject = async (): Promise<{ readonly entry: RslibEntry; readonly root: string }> => {
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-linked-workspace-'));
+  const root = join(parent, 'project');
+  const linkedA = join(parent, 'packages', 'linked-a');
+  const linkedB = join(parent, 'packages', 'linked-b');
+  await Promise.all([
+    mkdir(join(root, 'src'), { recursive: true }),
+    mkdir(join(root, 'node_modules'), { recursive: true }),
+    mkdir(join(linkedA, 'node_modules'), { recursive: true }),
+    mkdir(linkedB, { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module","dependencies":{"linked-a":"workspace:*"}}\n'),
+    writeFile(join(root, 'src', 'entry.ts'), "import { a } from 'linked-a';\nconsole.log(a);\n"),
+    writeFile(join(linkedA, 'package.json'), '{"name":"linked-a","type":"module","exports":"./index.js","dependencies":{"linked-b":"workspace:*"}}\n'),
+    writeFile(join(linkedA, 'index.js'), "import { b } from 'linked-b';\nexport const a = `a:${b}`;\n"),
+    writeFile(join(linkedB, 'package.json'), '{"name":"linked-b","type":"module","exports":"./index.js"}\n'),
+    writeFile(join(linkedB, 'index.js'), "export const b = 'linked-b-marker';\n"),
+  ]);
+  await Promise.all([
+    symlink(linkedA, join(root, 'node_modules', 'linked-a'), 'dir'),
+    symlink(linkedB, join(linkedA, 'node_modules', 'linked-b'), 'dir'),
+  ]);
+  return {
+    entry: {
+      name: 'linked',
+      outputRelativePath: 'scripts/linked.mjs',
+      source: join(root, 'src', 'entry.ts'),
+      sourceInputs: [join(root, 'src', 'entry.ts')],
+    },
+    root: parent,
+  };
+};
+
+it('bundles symlinked workspace dependencies, transitively, without attributing them as project sources', async () => {
+  const { entry, root: parent } = await linkedWorkspaceProject();
+  const root = join(parent, 'project');
+  try {
+    const evidence = await buildWithRslib({
+      cwd: root,
+      entries: [entry],
+      meta: testMeta,
+      outputRoot: join(root, 'dist'),
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'linked.mjs'), 'utf8');
+    expect(bundle).toContain('linked-b-marker');
+    expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: [join(root, 'src', 'entry.ts')] }]);
+  } finally {
+    await rm(parent, { force: true, recursive: true });
   }
 }, 20_000);
 
