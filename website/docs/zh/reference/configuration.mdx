@@ -165,6 +165,9 @@ export default defineConfig({
 
 唯一的打包器逃生舱。两个片段都会以「最后但有界」的方式合并进框架合成的每一份打包器配置，并且产物不变式
 断言仍会在合并之后运行，因此破坏产物契约的逃生舱取值是一条硬性诊断，而不是一次无声的覆盖（`AB472x`）。
+`AB4720`–`AB4723` 检查 `tools`、`tools.rsbuild` 与 `tools.rspack` 的形状；`AB4724` 会拒绝在
+`tools.rsbuild.plugins` 中再次添加框架自有插件（`@rsbuild/plugin-react`，`rsbuild:react`）的条目，
+因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。
 
 逃生舱在两份打包器引擎副本下执行：产物脚本、MCP 入口、钩子与包构建通过 Rslib 内嵌的 Rsbuild/Rspack 编译，
 而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。绝不要基于导入的 `@rspack/core` 构造插件或执行

@@ -3,6 +3,7 @@ import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } fr
 
 import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
@@ -1850,6 +1851,20 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
   const rsbuild = (tools as Record<string, unknown>).rsbuild;
   if (rsbuild !== undefined && !isRecord(rsbuild)) {
     diagnostics.push(sourceDiagnostic('AB4722', 'Tools rsbuild must be an Rsbuild environment-config object.', loaded.configPath));
+  } else if (rsbuild !== undefined) {
+    // AB4724: the hatch merges *beside* the framework profile, and Rsbuild
+    // never dedupes plugins by name, so a framework-owned plugin supplied
+    // here would register twice. A config problem with one deterministic fix,
+    // so it is an error at validation time like the rest of the AB472x family.
+    for (const name of frameworkOwnedPluginCollisions(rsbuild.plugins)) {
+      const specifier = frameworkOwnedRsbuildPlugins.get(name) ?? name;
+      diagnostics.push(sourceDiagnostic(
+        'AB4724',
+        `Tools rsbuild plugin ${JSON.stringify(name)} (${specifier}) is already registered by agent-bundle; Rsbuild does not dedupe plugins by name, so the build would run it twice.`,
+        loaded.configPath,
+        `Remove ${specifier} from tools.rsbuild.plugins; agent-bundle registers it in every config it synthesizes.`,
+      ));
+    }
   }
   const rspack = (tools as Record<string, unknown>).rspack;
   if (

@@ -319,6 +319,20 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(config).not.toContain("'codex'");
   }));
 
+  // The generated `.agent-bundle/routes.d.ts` types `renderRoute` only when
+  // the project's TypeScript program compiles it, so every template's
+  // tsconfig includes the (gitignored) file by default rather than leaving
+  // route ids as `string` until the user finds the note in the docs.
+  for (const template of ['minimal', 'mcp-server', 'cli-tool'] as const) {
+    it.effect(`includes the generated route declarations in the ${template} tsconfig program`, () => Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { root } = yield* scaffoldTemplate(template);
+      const tsconfig = yield* readJson<{ readonly include: readonly string[] }>(path.join(root, 'tsconfig.json'));
+      expect(tsconfig.include).toContain('.agent-bundle/routes.d.ts');
+      expect(yield* readText(path.join(root, '.gitignore'))).toContain('.agent-bundle/');
+    }));
+  }
+
   it.effect('validates local runtime tarballs before writing scaffold files', () => Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

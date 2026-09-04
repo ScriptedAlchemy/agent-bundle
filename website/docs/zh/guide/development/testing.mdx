@@ -53,7 +53,9 @@ export const summarizes = async (): Promise<void> => {
 
 编译器生成的 `.agent-bundle/routes.d.ts` 会把项目的路由契约注册到 `@agent-bundle/runtime` 的
 `Register` 接口上——与它已经声明 provider 键的方式相同。一旦该文件成为项目 TypeScript 程序的一部分
-（把 `".agent-bundle/routes.d.ts"` 加入 `tsconfig.json` 的 `include`），用字符串字面量写出的
+（`create-agent-bundle` 模板默认就把 `".agent-bundle/routes.d.ts"` 列在 `tsconfig.json` 的 `include`
+中，文件本身仍被 gitignore；当一个编译了路由或 provider 的项目漏掉它时，`agent-bundle validate` 会以
+`AB4834` 警告），用字符串字面量写出的
 `renderRoute` 调用就会针对编译后的 route id 做检查——编辑器会补全它们，写错时会被拒绝并列出已注册的
 备选项——而 `input` 与 `result` 来自该路由自己的 `inputSchema` 与 `resultSchema`：
 

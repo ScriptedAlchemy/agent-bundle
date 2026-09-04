@@ -12,6 +12,7 @@ import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
 import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
+import agentTopologyProvider from '../../src/providers/agent-topology.js';
 import {
   topologyStateDefinition,
   type TopologyEvents,
@@ -38,6 +39,15 @@ const provider = (root: string) => ({
   root,
   source: 'native-cwd' as const,
   state: 'available' as const,
+});
+
+// The generated `.agent-bundle/routes.d.ts` (in this project's tsconfig program)
+// makes every declared provider key required on an explicit map, so the fixture
+// carries `agentTopology` too; its factory is pure and reports the same honest
+// unavailable value the harness would mount.
+const providers = (root: string) => ({
+  agentTopology: agentTopologyProvider(),
+  gitWorktree: provider(root),
 });
 
 const eventInput = (
@@ -80,7 +90,7 @@ const renderEventInput = async (
         },
         ...(lineage === undefined ? {} : { lineage }),
         noticeLedger: bindings.noticeLedger,
-        providers: { gitWorktree: provider(worktreeRoot) },
+        providers: providers(worktreeRoot),
         session: available({ sessionId: 'root-session' }, 'native'),
         state: bindings.state,
         workspace: available({ root: worktreeRoot }, 'native'),
@@ -438,7 +448,7 @@ describe('worktree proximity journeys', () => {
       rendered = await renderRoute('tool:coordinator/status', {
         context: {
           noticeLedger: bindings.noticeLedger,
-          providers: { gitWorktree: provider(worktrees.root) },
+          providers: providers(worktrees.root),
           state: bindings.state,
         },
         input: {},
@@ -465,7 +475,7 @@ describe('worktree proximity journeys', () => {
     const rendered = await renderRoute({ default: BeforeTool }, {
       context: {
         actor: available({ id: 'agent-a' }, 'native'),
-        providers: { gitWorktree: provider(worktrees.a) },
+        providers: providers(worktrees.a),
       },
       input: eventInput(
         'tool/before',

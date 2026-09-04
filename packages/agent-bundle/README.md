@@ -512,7 +512,9 @@ kind, and the module provenance.
 
 The same generated `.agent-bundle/routes.d.ts` registers the route contracts on
 `@agent-bundle/runtime`'s `Register` interface. With that file in the project's
-TypeScript program (add it to `tsconfig.json` `include`), a string-literal route
+TypeScript program (`create-agent-bundle` templates list it in `tsconfig.json`
+`include` by default; `agent-bundle validate` warns with `AB4834` when a routed
+project's tsconfig leaves it out), a string-literal route
 id is checked against the compiled ids, `input` is typed from the route's
 `inputSchema`, and `result` from its `resultSchema` (an event route's `input`
 is its `{ canonical, native }` payload and its `result` `undefined`);
