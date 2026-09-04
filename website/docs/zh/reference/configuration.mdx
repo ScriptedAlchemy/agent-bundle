@@ -173,3 +173,29 @@ export default defineConfig({
 而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。绝不要基于导入的 `@rspack/core` 构造插件或执行
 `instanceof` 检查——请使用传给 `tools.rspack` 变更函数的 `utils` 参数
 （`(config, { rspack }) => ...`），它总会交给你当前执行引擎自己的 `rspack` 对象。
+
+### 插件
+
+框架在它合成的配置中只注册一个 Rsbuild 插件：`@rsbuild/plugin-react`（插件名 `rsbuild:react`），
+它作用于每个产物入口（路由以 TSX 编写，该插件选择自动 JSX 运行时）以及每个源文件为 `.jsx`/`.tsx` 的
+MCP App 视图。这个集合就是 `packages/agent-bundle/src/build/framework-plugins.ts` 中的
+`frameworkOwnedRsbuildPlugins`；有一条单元测试从合成的配置中推导它，因此不会漂移。绝不要通过
+`tools.rsbuild.plugins` 再次添加框架拥有的插件：Rsbuild 会追加交给它的每个插件，不会按名称去重。
+
+其他每个[官方 Rsbuild 插件](https://rslib.rs/config/rsbuild/plugins)都以自己的名称注册，可以通过
+`tools.rsbuild.plugins` 添加。该片段会到达每一份合成配置；下表说明每个插件与哪一类构建面相关：
+
+| 插件 | 相关范围 | 说明 |
+| --- | --- | --- |
+| `@rsbuild/plugin-babel` | 产物入口与 MCP App 视图 | 在 SWC 之外再加一道 Babel 转换。 |
+| `@rsbuild/plugin-svgr`、`@rsbuild/plugin-styled-components` | MCP App 视图 | 仅限 React 的关注点；JSX 仍由框架的 `@rsbuild/plugin-react` 负责。 |
+| `@rsbuild/plugin-sass`、`@rsbuild/plugin-less`、`@rsbuild/plugin-stylus`、`@rsbuild/plugin-tailwindcss`、`@rsbuild/plugin-typed-css-modules`、`@rsbuild/plugin-css-minimizer` | MCP App 视图 | CSS 只存在于浏览器包中；视图会把它内联进自包含的 HTML。 |
+| `@rsbuild/plugin-yaml`、`@rsbuild/plugin-toml`、`@rsbuild/plugin-mdx` | 产物入口与 MCP App 视图 | 额外的模块类型。 |
+| `@rsbuild/plugin-type-check`、`@rsbuild/plugin-eslint` | 产物入口与 MCP App 视图 | 独立进程中的检查；生产模式下失败会让构建失败。 |
+| `@rsbuild/plugin-check-syntax` | 仅 MCP App 视图 | 该插件会跳过非 `web` 环境，因此产物入口（`target: 'node'`）永远不会被它检查。 |
+| `@rsbuild/plugin-node-polyfill`、`@rsbuild/plugin-assets-retry`、`@rsbuild/plugin-image-compress` | MCP App 视图 | 仅限浏览器的关注点。 |
+
+不适用：Vue、Vue JSX、Preact、Solid 与 Svelte 插件（路由与视图都是 React；这些插件会重新配置
+React 插件所拥有的 JSX 转换）、`@rsbuild/plugin-umd`（框架输出 ESM），以及包发布检查
+`rsbuild-plugin-publint` 与 `rsbuild-plugin-arethetypeswrong`（它们在构建后检查构建根目录的
+`package.json`，而不是产物）。

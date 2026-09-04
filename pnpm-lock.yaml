@@ -74,9 +74,6 @@ importers:
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
-      publint:
-        specifier: 0.3.24
-        version: 0.3.24
       rsbuild-plugin-publint:
         specifier: 1.0.0
         version: 1.0.0(@rsbuild/core@2.2.1)

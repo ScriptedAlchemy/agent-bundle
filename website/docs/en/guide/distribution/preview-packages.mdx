@@ -62,9 +62,11 @@ Before that path is enabled, the release owner has to resolve two things: the fi
 and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
 not currently overridden with `publishConfig.access`.
 
-`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
-`pnpm test:packed:release` — before publishing. That gate is release-only and does not replace the
-ordinary `pnpm check` delivery gate.
+`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release` (`attw` on the
+packed `agent-bundle` tarball with the `esm-only` profile), and `pnpm test:packed:release` — before
+publishing. publint is not a separate gate: every publishable package's `rslib build` runs it
+through `rsbuild-plugin-publint` and fails the build on a warning. That gate is release-only and
+does not replace the ordinary `pnpm check` delivery gate.
 
 ## Next
 

@@ -10,7 +10,6 @@
   "packageManager": "pnpm@11.23.0",
   "scripts": {
     "build": "pnpm --filter @agent-bundle/runtime build && pnpm --filter agent-bundle build && pnpm --filter create-agent-bundle build",
-    "lint:package": "publint packages/agent-bundle && publint packages/rsc-runtime && publint packages/create-agent-bundle",
     "test": "pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration",
     "test:unit": "rstest --config rstest.unit.config.ts",
     "test:route-unit": "rstest --config rstest.route-unit.config.ts",
@@ -49,7 +48,7 @@
     "release": "pnpm check:release && changeset publish",
     "preview:publish": "pkg-pr-new publish --previewVersion --peerDeps --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime' './packages/create-agent-bundle'",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
-    "lint:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle",
+    "lint:release": "attw --pack --profile esm-only packages/agent-bundle",
     "check:release": "pnpm pack:dry-run && pnpm lint:release && pnpm test:packed:release",
     "check:release:ci": "pnpm pack:dry-run && pnpm lint:release && pnpm test:packed",
     "example:hooks": "pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev",
@@ -81,7 +80,6 @@
     "pkg-pr-new": "0.0.88",
     "playwright": "1.62.1",
     "playwright-core": "1.62.1",
-    "publint": "0.3.24",
     "rsbuild-plugin-publint": "1.0.0",
     "typescript": "7.0.2"
   }
