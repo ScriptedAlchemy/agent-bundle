@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 
-import { Agent } from '@agent-bundle/runtime';
+import { Agent, MarkdownContent } from '@agent-bundle/runtime';
 import React from 'react';
 
 import type { LibraryAuditReceipt } from '../library.ts';
@@ -20,6 +20,26 @@ interface MeasuredFile {
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : 'File metadata is unavailable.';
+
+/** JSX-authored GFM table lowered to Markdown by the runtime's renderer. */
+const MeasuredFilesTable = ({ measured }: { readonly measured: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th>Bytes</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {measured.map((file) => (
+          <tr key={file.path}>
+            <td>{file.path}</td>
+            <td>{file.bytes === undefined ? '' : String(file.bytes)}</td>
+            <td>{file.error ?? 'measured'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
 
 const measureFiles = async (
   files: readonly string[],
@@ -62,6 +82,7 @@ export const LibraryAnalysis = async ({ receipt, signal }: LibraryAnalysisProps)
               { label: 'Measured files', value: available.length },
               { label: 'Reclaimable bytes', value: reclaimableBytes },
             ]} />
+            <MeasuredFilesTable measured={measured} />
             {unavailable.length > 0
               ? (
                 <>
