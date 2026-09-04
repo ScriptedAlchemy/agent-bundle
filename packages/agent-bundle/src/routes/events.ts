@@ -1,3 +1,4 @@
+import { deepFreeze } from '../core/freeze.ts';
 import type { JsonValue } from '../core/strict-json.ts';
 
 /** The event-route families admitted by the recorded #97 v1/G10 decision. */
@@ -103,7 +104,7 @@ export type AgentEventPayloadFieldKind =
   | 'string-array'
   | 'trigger';
 
-export const agentEventPayloadFieldKinds = Object.freeze({
+export const agentEventPayloadFieldKinds = deepFreeze({
   agentId: 'string',
   agentTranscriptPath: 'nullable-string',
   agentType: 'string',
@@ -153,8 +154,10 @@ const modelSwitchFields = [...sessionFields, 'fromModel', 'toModel', 'requestedM
  * The canonical payload fields of every event-route family, in the order the
  * payload object carries them. This is the one per-family table; the types
  * ({@link AgentEventPayload}) and the runtime projection derive from it.
+ * Frozen through (the family arrays share instances), so a consumer holding
+ * the export cannot change what later invocations project.
  */
-export const agentEventPayloadFields = Object.freeze({
+export const agentEventPayloadFields = deepFreeze({
   'agent/idle': [...sessionFields, 'teammateName', 'teamName'],
   'agent/start': threeHostFields,
   'agent/stop': [...threeHostFields, 'agentTranscriptPath', 'reentry', 'lastAssistantMessage'],
@@ -301,7 +304,7 @@ const cursorTool = [...cursorSession, 'cwd', 'toolName', 'toolInput', 'toolUseId
  */
 export const agentEventPayloadNativeKeys: Readonly<
   Record<AgentEventPayloadHost, Readonly<Partial<Record<CanonicalAgentEvent, NativeKeyTable>>>>
-> = Object.freeze({
+> = deepFreeze({
   claude: Object.freeze({
     'agent/idle': pick(standardKeys, [...claudeSession, 'teammateName', 'teamName']),
     'agent/start': pick(standardKeys, claudeSession),

@@ -302,3 +302,17 @@ it('admits a family field only when at least two supporting hosts report it, or 
     expect(used.has(field as AgentEventPayloadFieldName), `${field} belongs to a family`).toBe(true);
   }
 });
+
+it('exports the tables frozen through, so a consumer cannot change what later invocations project', () => {
+  for (const fields of Object.values(agentEventPayloadFields)) {
+    expect(Object.isFrozen(fields)).toBe(true);
+  }
+  for (const host of hosts) {
+    for (const mapping of Object.values(agentEventPayloadNativeKeys[host])) {
+      expect(Object.isFrozen(mapping)).toBe(true);
+      for (const entry of Object.values(mapping)) expect(Object.isFrozen(entry)).toBe(true);
+    }
+  }
+  expect(() => (agentEventPayloadFields['tool/before'] as unknown as string[]).push('reentry')).toThrow(TypeError);
+  expect(Object.isFrozen(agentEventPayloadFieldKinds)).toBe(true);
+});
