@@ -335,6 +335,7 @@ const withContextIdentity = (
   subscribe: (principal: GeneratedNoticePrincipal) => signaller.subscribe({
     actor: context.actor ?? principal.actor,
     host: context.host ?? principal.host,
+    lineage: context.lineage ?? principal.lineage,
     session: context.session ?? principal.session,
     workspace: context.workspace ?? principal.workspace,
   }),

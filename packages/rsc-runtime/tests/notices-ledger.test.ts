@@ -12,13 +12,20 @@ import {
   selectNoticeDeliveryRoutes,
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
+  recipientMatchesPrincipal,
+  recordedNoticePrincipal,
   type AgentNoticeAuthorizationRequest,
+  type AgentNoticePrincipal,
   type AgentNoticeState,
+  type AgentRecipient,
 } from '../src/notices/index.js';
 import {
   agent,
   available,
   runAgentRequest,
+  unavailable,
+  type AgentLineage,
+  type Observed,
 } from '../src/index.js';
 import { createMemoryStateDriver, defineState } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
@@ -52,6 +59,7 @@ const run = async <T>(
     readonly actorId: string;
     readonly id: string;
     readonly kind: 'event' | 'tool';
+    readonly lineage?: Observed<AgentLineage>;
     readonly startedAt: string;
   },
   operation: () => Promise<T>,
@@ -63,10 +71,19 @@ const run = async <T>(
     kind: input.kind,
     startedAt: input.startedAt,
   },
+  ...(input.lineage === undefined ? {} : { lineage: input.lineage }),
   noticeLedger: ledger,
   session,
   workspace,
 }, operation);
+
+/** A Claude/Codex-shaped lineage: every subagent shares the root `session_id`, only `conversation` tells them apart. */
+const lineageOf = (conversation: string, root = 'root-session'): Observed<AgentLineage> => available(
+  conversation === root
+    ? { conversation, depth: 0, resolution: 'native', root }
+    : { conversation, depth: 1, parent: root, resolution: 'registry', root, subagent: { id: conversation } },
+  conversation === root ? 'native' : 'derived',
+);
 
 describe('notice state taxonomy', () => {
   it('declares only framework-evidenced v1 states', () => {
@@ -1422,5 +1439,261 @@ describe('notice ledger schema version', () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  });
+});
+
+describe('lineage-addressed recipients (#458)', () => {
+  const principalOf = (overrides: Partial<AgentNoticePrincipal>): AgentNoticePrincipal => ({
+    actor: unavailable(),
+    host,
+    lineage: unavailable('not-provided'),
+    session,
+    workspace,
+    ...overrides,
+  });
+  const matches = (recipient: AgentRecipient, principal: AgentNoticePrincipal): boolean =>
+    recipientMatchesPrincipal(recipient, principal);
+
+  it('matches conversation exactly, root as the whole subtree, and both in conjunction with the other axes', () => {
+    const child = principalOf({ lineage: lineageOf('agent-a') });
+    const sibling = principalOf({ lineage: lineageOf('agent-b') });
+    const rootPrincipal = principalOf({ lineage: lineageOf('root-session') });
+    const otherTree = principalOf({ lineage: lineageOf('agent-z', 'other-root') });
+
+    expect(matches({ conversation: 'agent-a' }, child)).toBe(true);
+    expect(matches({ conversation: 'agent-a' }, sibling)).toBe(false);
+    expect(matches({ conversation: 'agent-a' }, rootPrincipal)).toBe(false);
+
+    expect(matches({ root: 'root-session' }, child)).toBe(true);
+    expect(matches({ root: 'root-session' }, sibling)).toBe(true);
+    expect(matches({ root: 'root-session' }, rootPrincipal)).toBe(true);
+    expect(matches({ root: 'root-session' }, otherTree)).toBe(false);
+
+    // Every present axis must hold: the session both children share does not
+    // widen a conversation-addressed notice, and a workspace mismatch still
+    // refuses a conversation match.
+    expect(matches({ conversation: 'agent-a', session: { sessionId: 'session-1' } }, child)).toBe(true);
+    expect(matches({ conversation: 'agent-a', session: { sessionId: 'session-1' } }, sibling)).toBe(false);
+    expect(matches({ conversation: 'agent-a', workspace: { root: '/elsewhere' } }, child)).toBe(false);
+    expect(matches({ conversation: 'agent-a', root: 'other-root' }, child)).toBe(false);
+    expect(matches({ root: 'root-session', workspace: { root: '/workspace' } }, sibling)).toBe(true);
+  });
+
+  it('never matches a lineage axis the request could not resolve, and the other axes keep working without lineage', () => {
+    const unresolved = principalOf({ lineage: unavailable('no-shared-runtime') });
+    expect(matches({ conversation: 'agent-a' }, unresolved)).toBe(false);
+    expect(matches({ root: 'root-session' }, unresolved)).toBe(false);
+    expect(matches({ session: { sessionId: 'session-1' } }, unresolved)).toBe(true);
+    // An admission journaled before the axis existed carries no lineage at all.
+    const legacy = { actor: unavailable(), host, session, workspace } as const;
+    expect(recipientMatchesPrincipal({ conversation: 'agent-a' }, legacy)).toBe(false);
+    expect(recipientMatchesPrincipal({ workspace: { root: '/workspace' } }, legacy)).toBe(true);
+  });
+
+  it('journals only the conversation and root of the admitting lineage', () => {
+    const recorded = recordedNoticePrincipal(principalOf({ lineage: lineageOf('agent-a') }));
+    expect(recorded.lineage).toEqual({
+      source: 'derived',
+      state: 'available',
+      value: { conversation: 'agent-a', root: 'root-session' },
+    });
+    expect(recordedNoticePrincipal(principalOf({ lineage: unavailable('id-not-resolvable') })).lineage)
+      .toEqual({ reason: 'id-not-resolvable', state: 'unavailable' });
+  });
+
+  it('admits a conversation-addressed notice only on that conversation, not on a sibling sharing its session and workspace', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-conversation',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('for agent-a only'),
+      priority: 'high',
+      recipient: { conversation: 'agent-a' },
+    }, { idempotencyKey: 'publish:conversation' }));
+    expect(published.notice.recipient).toEqual({ conversation: 'agent-a' });
+
+    // The sibling's event: same host, session, workspace — different conversation.
+    const sibling = await run(ledger, {
+      actorId: 'agent-b',
+      id: 'event-sibling',
+      kind: 'event',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(sibling).toEqual([]);
+    // The root's own event does not receive it either, nor one without lineage.
+    const rootEvent = await run(ledger, {
+      actorId: 'root',
+      id: 'event-root',
+      kind: 'event',
+      lineage: lineageOf('root-session'),
+      startedAt: '2026-09-01T19:01:30.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(rootEvent).toEqual([]);
+    const unresolved = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'event-unresolved',
+      kind: 'event',
+      startedAt: '2026-09-01T19:01:45.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(unresolved).toEqual([]);
+    expect((await ledger.read()).notices[0]?.state).toBe('pending');
+
+    const delivered = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'event-agent-a',
+      kind: 'event',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(delivered.map(({ notice }) => notice.id)).toEqual([published.notice.id]);
+    const snapshot = await ledger.read();
+    expect(snapshot.notices[0]).toMatchObject({
+      attempts: [{ invocationId: 'event-agent-a' }],
+      state: 'attempted',
+    });
+    await driver.close();
+  });
+
+  it('admits a root-addressed notice on every conversation under that root and on none outside it', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'publish-root',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('everyone under root-session'),
+      priority: 'normal',
+      recipient: { root: 'root-session' },
+      retryBudget: 3,
+    }, { idempotencyKey: 'publish:root' }));
+
+    const elsewhere = await run(ledger, {
+      actorId: 'agent-z',
+      id: 'event-other-tree',
+      kind: 'event',
+      lineage: lineageOf('agent-z', 'other-root'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(elsewhere).toEqual([]);
+
+    const seen: string[] = [];
+    for (const [conversation, id] of [['agent-b', 'event-b'], ['root-session', 'event-root'], ['agent-a', 'event-a']] as const) {
+      const deliveries = await run(ledger, {
+        actorId: conversation,
+        id,
+        kind: 'event',
+        lineage: lineageOf(conversation),
+        startedAt: `2026-09-01T19:02:0${String(seen.length)}.000Z`,
+      }, async () => (await agent()).notices!.read());
+      if (deliveries.length > 0) seen.push(conversation);
+    }
+    // The subtree includes the root conversation and the publisher itself:
+    // `root` is a pure match, not "everyone but me".
+    expect(seen).toEqual(['agent-b', 'root-session', 'agent-a']);
+    expect((await ledger.read()).notices[0]).toMatchObject({
+      attempts: [
+        { invocationId: 'event-b' },
+        { invocationId: 'event-root' },
+        { invocationId: 'event-a' },
+      ],
+      id: published.notice.id,
+      state: 'attempted',
+    });
+    await driver.close();
+  });
+
+  it('scopes the inbox and acknowledgement to the addressed conversation', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-inbox-conversation',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('inbox for agent-a'),
+      priority: 'normal',
+      recipient: { conversation: 'agent-a', workspace: { root: '/workspace' } },
+    }, { idempotencyKey: 'publish:inbox-conversation' }));
+
+    expect(await run(ledger, {
+      actorId: 'agent-b',
+      id: 'inbox-sibling',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.inbox())).toEqual([]);
+    await expect(run(ledger, {
+      actorId: 'agent-b',
+      id: 'ack-sibling',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:30.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id))).rejects.toMatchObject({
+      code: 'unauthorized',
+    });
+
+    const inbox = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'inbox-agent-a',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.inbox());
+    expect(inbox.map((notice) => notice.id)).toEqual([published.notice.id]);
+    const acknowledged = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'ack-agent-a',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:03:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+    expect(acknowledged.state).toBe('acknowledged');
+    await driver.close();
+  });
+
+  it('rejects blank lineage axes at publish and persists them as additive optional fields', async () => {
+    const { driver, ledger, store } = await openLedger();
+    await expect(run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-blank-conversation',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('blank'),
+      priority: 'normal',
+      recipient: { conversation: '  ' },
+    }, { idempotencyKey: 'publish:blank-conversation' }))).rejects.toMatchObject({ code: 'invalid-input' });
+    await expect(run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-blank-root',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:01.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('blank'),
+      priority: 'normal',
+      recipient: { root: '' },
+    }, { idempotencyKey: 'publish:blank-root' }))).rejects.toMatchObject({ code: 'invalid-input' });
+    expect((await ledger.read()).notices).toEqual([]);
+
+    // A pre-#458 admission — no `lineage` on its principal — still journals
+    // and replays under the same definition version.
+    const legacy = await store.dispatch('admitted', {
+      at: '2026-09-01T19:05:00.000Z',
+      authorizedIds: [],
+      invocationId: 'legacy-admission',
+      principal: { actor: { state: 'unavailable', reason: 'not-provided' }, host, session, workspace },
+      unavailableIds: [],
+    }, { idempotencyKey: 'legacy:admitted' });
+    expect(legacy.state.notices).toEqual([]);
+    expect(AGENT_NOTICE_STATE_VERSION).toBe(2);
+    await driver.close();
   });
 });

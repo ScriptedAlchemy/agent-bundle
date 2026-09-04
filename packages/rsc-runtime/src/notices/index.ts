@@ -33,11 +33,13 @@ export type {
   AgentNoticeLedger,
   AgentNoticeLedgerInspection,
   AgentNoticeLedgerSnapshot,
+  AgentNoticeLineageScope,
   AgentNoticePrincipal,
   AgentNoticePriority,
   AgentNoticePublishInput,
   AgentNoticePublishOptions,
   AgentNoticePublishResult,
+  AgentNoticeRecordedPrincipal,
   AgentNoticeRequest,
   AgentNoticeRetainOptions,
   AgentNoticeRetentionPolicy,
@@ -114,6 +116,7 @@ export {
   agentNoticeStateDefinition,
   noticeSettledAt,
   recipientMatchesPrincipal,
+  recordedNoticePrincipal,
 } from './state.js';
 export type {
   AgentNoticeLedgerState,
