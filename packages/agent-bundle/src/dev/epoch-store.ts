@@ -12,6 +12,7 @@ import { runPromise, runSync } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 
 export interface EpochStoreOptions {
@@ -69,7 +70,7 @@ export interface EpochCleanupFailure {
   readonly resource: EpochCleanupResource;
 }
 
-export class EpochCleanupError extends Error {
+export class EpochCleanupError extends YieldableFrameworkError {
   readonly failures: readonly EpochCleanupFailure[];
 
   constructor(failures: readonly EpochCleanupFailure[]) {
@@ -80,7 +81,7 @@ export class EpochCleanupError extends Error {
   }
 }
 
-export class EpochPostCommitCleanupError extends Error {
+export class EpochPostCommitCleanupError extends YieldableFrameworkError {
   readonly committedEpoch: ArtifactEpoch;
 
   constructor(committedEpoch: ArtifactEpoch, cleanupError: unknown) {
@@ -91,7 +92,7 @@ export class EpochPostCommitCleanupError extends Error {
   }
 }
 
-export class EpochPostCommitDurabilityError extends Error {
+export class EpochPostCommitDurabilityError extends YieldableFrameworkError {
   readonly committedEpoch: ArtifactEpoch;
 
   constructor(committedEpoch: ArtifactEpoch, durabilityError: unknown) {
@@ -104,7 +105,7 @@ export class EpochPostCommitDurabilityError extends Error {
   }
 }
 
-export class EpochStoreError extends Error {
+export class EpochStoreError extends YieldableFrameworkError {
   readonly code: EpochStoreErrorCode;
 
   constructor(code: EpochStoreErrorCode, message: string) {

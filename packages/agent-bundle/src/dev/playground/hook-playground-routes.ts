@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { CodedError } from '../../core/errors.ts';
 import { isRecord } from '../../core/strict-json.ts';
 import { isHookSimulationCancellation } from '../../services/hook-service.ts';
 import {
@@ -24,6 +23,7 @@ import type {
   HookPlaygroundSimulation,
   HookPlaygroundSimulationOptions,
 } from './hook-playground-service.ts';
+import { YieldableCodedError } from '../../effect/errors.ts';
 
 type Route = Readonly<{ readonly kind: 'hooks' | 'simulations' | 'replays' }>;
 
@@ -37,7 +37,7 @@ export interface HookPlaygroundCloseFailure {
 }
 
 /** Reports every in-flight operation that failed to settle once shutdown cancelled it. */
-export class HookPlaygroundCloseError extends CodedError<'AB8034'> {
+export class HookPlaygroundCloseError extends YieldableCodedError<'AB8034'> {
   readonly failures: readonly HookPlaygroundCloseFailure[];
 
   constructor(failures: readonly HookPlaygroundCloseFailure[]) {

@@ -26,6 +26,7 @@ import {
   type SourceStatus,
   type SucceededBuildAttempt,
 } from './types.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 export interface DevLockHandle {
   close(): Promise<void>;
@@ -57,7 +58,7 @@ export interface DevCoordinatorCloseFailure {
 }
 
 /** Reports every resource that could not be released during coordinator shutdown. */
-export class DevCoordinatorCloseError extends Error {
+export class DevCoordinatorCloseError extends YieldableFrameworkError {
   readonly failures: readonly DevCoordinatorCloseFailure[];
 
   constructor(failures: readonly DevCoordinatorCloseFailure[]) {

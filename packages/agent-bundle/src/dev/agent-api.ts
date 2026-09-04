@@ -22,6 +22,7 @@ import type { EvalService } from './eval/eval-service.ts';
 import { runtimeAppFiniteOrdinaryJsonByteLength } from './runtime-app-message-limits.ts';
 import type { ProjectStatus } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 
 export const agentApiToolNames = Object.freeze([
@@ -105,7 +106,7 @@ export interface AgentApiOptions {
 
 export type AgentApiCloseFailure = Readonly<{ readonly error: unknown; readonly resource: 'eval' | 'handler' }>;
 
-export class AgentApiCloseError extends Error {
+export class AgentApiCloseError extends YieldableFrameworkError {
   readonly failures: readonly AgentApiCloseFailure[];
 
   constructor(failures: readonly AgentApiCloseFailure[]) {
@@ -232,7 +233,7 @@ const maximumAgentApiJsonDepth = 32;
 const maximumAgentApiJsonNodes = 4_096;
 const maximumAgentApiToolResultBytes = 1_024 * 1_024;
 
-class AgentApiRequestError extends Error {
+class AgentApiRequestError extends YieldableFrameworkError {
   readonly code: 'AGENT_API_REQUEST_INVALID' | 'AGENT_API_REQUEST_TOO_LARGE';
   readonly status: 400 | 413;
 

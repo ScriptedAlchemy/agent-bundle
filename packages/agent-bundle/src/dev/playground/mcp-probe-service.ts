@@ -36,6 +36,7 @@ import {
 } from '../mcp-session/mcp-session-launch.ts';
 import type { McpSessionInspectorConfig } from '../mcp-session/mcp-session-protocol.ts';
 import type { RemoteTransportOptions, StdioOptions } from '../mcp-session/mcp-session-types.ts';
+import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 export const mcpProbeTimeoutMs = 10_000;
 export const mcpProbeToolLimit = 200;
@@ -131,14 +132,14 @@ export interface McpProbeServiceOptions {
   readonly timers?: McpProbeTimers;
 }
 
-export class McpProbeTargetNotFoundError extends Error {
+export class McpProbeTargetNotFoundError extends YieldableFrameworkError {
   constructor(message: string) {
     super(message);
     this.name = 'McpProbeTargetNotFoundError';
   }
 }
 
-class McpProbeTimeoutError extends Error {
+class McpProbeTimeoutError extends YieldableFrameworkError {
   readonly kind: McpProbeFailureKind;
 
   constructor(kind: McpProbeFailureKind) {
@@ -148,7 +149,7 @@ class McpProbeTimeoutError extends Error {
   }
 }
 
-class McpProbeProtocolError extends Error {
+class McpProbeProtocolError extends YieldableFrameworkError {
   readonly kind: McpProbeFailureKind;
 
   constructor(kind: McpProbeFailureKind, message: string, options?: ErrorOptions) {

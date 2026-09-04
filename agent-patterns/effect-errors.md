@@ -21,17 +21,63 @@ onto those classes at the boundary — it does not replace them.
 ## Inside Effect
 
 - Succeed: `Effect.succeed(value)`, `Effect.sync(() => value)`.
-- Typed fail: `Effect.fail(new AgentRequestError('request-closed', message))`.
+- Typed fail, public or Effect-free class:
+  `Effect.fail(new AgentRequestError('request-closed', message))`.
+- Typed fail, framework-process class (dev seam / eval service, extends
+  `YieldableFrameworkError` or `YieldableCodedError` from
+  `packages/agent-bundle/src/effect/errors.ts`):
+  `return yield* new McpSessionError('MCP_SESSION_CLOSED', message)`.
+  `Effect.fail(new McpSessionError(...))` is equally valid; do not churn
+  call sites for style.
 - Defect (bug): `Effect.die(defect)` — not for expected fail-closed states.
 - Recover: `Effect.catch`, `Effect.catchTag` when the error is tagged.
-  Our `Agent*` classes are **not** Schema tagged errors. Catch them with
-  `Effect.catch((error) => ...)` and `instanceof` / `error.name`.
+  None of our classes are tagged (`Data.Error`, not `Data.TaggedError` or
+  `Schema.TaggedError`). Catch them with `Effect.catch((error) => ...)` and
+  `instanceof` / `error.name` / `error.code`.
 - Inspect after run: `Exit.isSuccess` / `isFailure`, then `Cause.squash`,
   `Cause.hasInterruptsOnly`, `Cause.hasFails`, `Cause.hasDies`.
 
 The Wave 3.5 brief defers Effect Schema. Do **not** convert `Agent*Error` to
 `Schema.TaggedError` to unlock `catchTag`. Revisit only if a later wave
 explicitly lifts the Schema deferral.
+
+## Declaring a framework-process error (decided 2026-09-03)
+
+```ts
+import { YieldableCodedError, YieldableFrameworkError } from '../effect/errors.ts';
+
+export class McpSessionError extends YieldableCodedError<McpSessionErrorCode> {
+  constructor(code: McpSessionErrorCode, message: string) {
+    super('McpSessionError', code, message);
+  }
+}
+
+export class DevCoordinatorCloseError extends YieldableFrameworkError {
+  readonly failures: readonly DevCoordinatorCloseFailure[];
+  constructor(failures: readonly DevCoordinatorCloseFailure[]) {
+    super('DevCoordinator could not close every resource.');
+    this.name = 'DevCoordinatorCloseError';
+    this.failures = failures;
+  }
+}
+```
+
+The bases keep the `Error` / `CodedError` constructor shapes, so migrating
+an existing class is the `extends` clause plus the import. They also keep
+the plain-`Error` observable shape — `JSON.stringify`, `stableJson`,
+`{ ...error }`, `util.inspect`, non-enumerable `cause` — which rc.112
+`Data.Error` alone would change (its prototype `toJSON` spreads the
+constructor fields; its `[nodejs.util.inspect.custom]` prints that instead
+of the stack). Never extend `Data.Error` directly.
+
+Stay on plain `Error` / `CodedError` when the class is exported from a
+package entry (Effect must not reach user-facing `.d.ts`), when it is
+reachable from an Effect-free entry (`agent-bundle/config`, `meta`,
+`rstest`, `test/browser`, the CLI `--help` path, the host MCP proxy), or
+when it ships inside an emitted artifact. `docs/effect-conventions.md`
+§ "Yieldable framework errors" lists the current carve-outs;
+`tests/emitted-artifact-effect-surface.test.ts` and `tests/cli.test.ts`
+fail if one is crossed.
 
 ## Boundary mapping
 

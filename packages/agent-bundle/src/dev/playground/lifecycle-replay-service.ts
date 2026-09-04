@@ -39,6 +39,7 @@ import type {
   LifecycleRenderChildResponse,
   LifecycleRenderChildResult,
 } from './lifecycle-render-protocol.ts';
+import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 const concreteHosts = new Set(['claude', 'codex', 'cursor']);
 const projectionDiagnosticCode = 'lifecycle.projection.unsupported';
@@ -144,7 +145,7 @@ export interface LifecycleReplayServiceOptions {
   readonly render?: typeof renderRouteEvents;
 }
 
-export class LifecycleReplayRequestError extends Error {
+export class LifecycleReplayRequestError extends YieldableFrameworkError {
   readonly code: 'AB8211' | 'AB8213';
   readonly status: 400 | 409;
 

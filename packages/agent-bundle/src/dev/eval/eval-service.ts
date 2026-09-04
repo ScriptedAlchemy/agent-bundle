@@ -37,6 +37,7 @@ import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import { isInsideOrEqual, toPosixRelative } from '../../core/paths.ts';
 import { isErrno } from '../../core/errors.ts';
 import { deepFreeze } from '../../core/freeze.ts';
+import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 
 export type EvalServiceErrorCode =
@@ -199,7 +200,7 @@ const serviceError = (code: EvalServiceErrorCode, message: string): EvalServiceE
   new EvalServiceError(code, message);
 
 /** Explicit evidence that Eval shutdown observed more distinct background failures than it retained. */
-export class EvalServiceBackgroundFailureOverflowError extends Error {
+export class EvalServiceBackgroundFailureOverflowError extends YieldableFrameworkError {
   readonly droppedCount: number;
 
   constructor(droppedCount: number) {

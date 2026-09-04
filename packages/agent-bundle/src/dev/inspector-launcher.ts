@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { sleep as delay } from '../core/async.ts';
-import { CodedError } from '../core/errors.ts';
 import { taskkill, terminateProcessTree } from '../services/process-tree.ts';
+import { YieldableCodedError } from '../effect/errors.ts';
 
 const inspectorPackage = '@modelcontextprotocol/inspector';
 const startupBudgetMs = 30_000;
@@ -54,7 +54,7 @@ export interface InspectorLauncher {
 }
 
 /** Coded refusals a caller can act on without reading inspector internals. */
-export class InspectorLauncherError extends CodedError<InspectorLauncherErrorCode> {
+export class InspectorLauncherError extends YieldableCodedError<InspectorLauncherErrorCode> {
   constructor(code: InspectorLauncherErrorCode, message: string) {
     super('InspectorLauncherError', code, message);
   }

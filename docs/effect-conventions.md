@@ -23,7 +23,7 @@ Read `repos/effect/LLMS.md` before writing Effect code. Refresh
 Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 - [`packages/rsc-runtime/src/effect/boundary.ts`](../packages/rsc-runtime/src/effect/boundary.ts) — runtime + state kernel internals.
-- [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts) — the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` subclasses, `DiagnosticError`) unchanged.
+- [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts) — the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` / `YieldableCodedError` subclasses, `DiagnosticError`) unchanged.
 - [`packages/create-agent-bundle/src/effect/boundary.ts`](../packages/create-agent-bundle/src/effect/boundary.ts) — the scaffolder (FileSystem phase 1). Rethrows `UsageError` / `Error` unchanged; unwraps `PlatformError` to its Node cause.
 
 The boundary owns:
@@ -61,6 +61,64 @@ zod stays at every schema boundary (MCP SDK interop; recorded G-decisions).
 [Effect Schema wire contracts](#effect-schema-wire-contracts-schema-projections))
 — do not introduce `Schema.TaggedError` on the public or MCP-facing contracts.
 Internals keep the existing classes.
+
+### Yieldable framework errors (`Data.Error`, decided 2026-09-03)
+
+Framework-process error classes — the ones raised inside Effect programs in
+the dev seam and the eval service — extend the yieldable bases in
+[`packages/agent-bundle/src/effect/errors.ts`](../packages/agent-bundle/src/effect/errors.ts):
+`YieldableFrameworkError` (the `Data.Error` twin of `Error`, same
+`(message?, options?)` constructor) and `YieldableCodedError<TCode>` (the
+twin of `CodedError`, same `(name, code, message, options?)` constructor and
+`code` field). A program raises one with `return yield* new X(...)`;
+`Effect.fail(new X(...))` still works and existing call sites were not
+churned. Untagged on purpose: `Schema.TaggedError` stays deferred, `catchTag`
+is not the goal, and recovery keeps using `Effect.catch` + `instanceof` /
+`error.code`.
+
+What does not change: `instanceof Error` / `instanceof X`, `.name`,
+`.message`, `.code`, `.cause`, `.stack`, the boundary's identity-preserving
+rethrow (`isTypedDevError` matches the string `code`), `JSON.stringify`,
+`stableJson`, `{ ...error }`, and `util.inspect`. rc.112 `Data.Error` would
+otherwise change the last four — its prototype `toJSON` spreads the
+constructor fields (`message`, `cause`) into the JSON and its
+`[nodejs.util.inspect.custom]` prints that instead of the stack — so the
+base shadows both with non-functions and installs `cause` non-enumerable;
+`tests/effect-errors.test.ts` pins byte-identical output against the plain
+twin. Migration is mechanical per file: swap the `extends` clause, import
+the base; constructors and call sites stay.
+
+Carve-outs — these stay on plain `Error` / `CodedError`, and a class that
+moves into one of these positions moves back:
+
+- **Effect-free entry graphs.** `src/effect/errors.ts` imports `effect`.
+  `CodedError` (`core/errors.ts`) and `DiagnosticError`
+  (`core/diagnostics.ts`) sit on `agent-bundle/config` (`CapabilityStateError`),
+  `agent-bundle/meta` and `agent-bundle/rstest` (`MetaUnavailableError`), the
+  host MCP proxy (`DevLockError`), and the CLI's `--help` / `--version` path
+  (`cli.test.ts` fails the trivial invocations that resolve an `effect`
+  module, #530). Measured: the base swap would put a static `effect` import
+  on all five entries. `McpAppBridgeCloseError` stays plain for the same
+  reason (`agent-bundle/rstest` and `agent-bundle/test/browser` reach it).
+- **Public classes.** Anything exported from a package entry (`Agent*` and
+  `McpProjectionError` in `@agent-bundle/runtime`, `CliUsageError` /
+  `CliInputError`, `EventRuntimeTransportError`, `Eval*Error` on
+  `agent-bundle/eval`, `EvalServiceError`, `AgentTestError`,
+  `BrowserAppTestError`, `UsageError` in `create-agent-bundle`): a
+  `Data.Error` base would put `Cause.YieldableError` in the user-facing
+  `.d.ts`, and Effect never appears in user-facing types. The `@agent-bundle/runtime`
+  `plugin` entry also has no `effect` import today.
+- **Emitted artifacts.** Hook wrappers, CLI bins, and the framework MCP
+  shell bundle `src/effect/boundary.ts` (plain `CodedError`); the raw stdio
+  MCP server and `install.mjs` carry no Effect at all. Measured on the
+  `examples/host-test` build: all 66 emitted files byte-identical in size
+  before and after the migration.
+  `tests/emitted-artifact-effect-surface.test.ts` (integration lane, reads
+  the built `dist`) pins that no emitted file contains the yieldable base,
+  the Effect-free classes stay Effect-free, and hook wrappers keep the plain
+  `CodedError`.
+- **Workbench** client errors (`AB82xx`): browser code; `effect` is allowed
+  only in the atom modules.
 
 | Effect channel | Runtime contract |
 | --- | --- |
@@ -632,18 +690,26 @@ resolved the current repo practice stands, and new code follows it.
   budget for hooks that would newly import `effect/Predicate`. Either way
   the emitted-string copies stay: generated host-side JS has no `effect`
   import by design.
-- **`Data.Error` for internal class errors.** Every typed error is a plain
-  `Error` subclass (82 `export class … extends CodedError | Error`), so they
-  enter the channel through `Effect.fail(...)`; `Effect.gen` cannot
-  `yield*` them. rc.112 `Data.Error<Fields>` is a yieldable, untagged error
-  (`Cause.YieldableError`), which would let programs `yield* new X(...)`
-  without `Effect.fail` and without the `Schema.TaggedError` that the
-  [Error mapping](#error-mapping) section keeps off public and MCP
-  contracts. It changes the constructor to a single fields object and adds a
-  `Data` import (measured `Data.TaggedError` cost for hooks: +12 kB, see
-  [Effect platform services](#effect-platform-services-effectplatform-node)),
-  so it would apply to internals only — the `Agent*` classes and the
-  boundary's identity-preserving rethrow table stay as they are either way.
+- **`Data.Error` for internal class errors — decided 2026-09-03: adopt,
+  internals only.** The rule and its carve-outs live in
+  [Yieldable framework errors](#yieldable-framework-errors-dataerror-decided-2026-09-03).
+  Summary: framework-process error classes in Effect-native modules extend
+  `YieldableFrameworkError` / `YieldableCodedError`
+  (`packages/agent-bundle/src/effect/errors.ts`, thin subclasses of rc.112
+  `Data.Error` that keep the `Error` / `CodedError` constructor shapes and
+  restore plain-`Error` `toJSON` / `util.inspect`), so programs write
+  `return yield* new X(...)`. `Schema.TaggedError` stays deferred. Plain
+  `Error` / `CodedError` remain for the bases on Effect-free entry graphs
+  (`CodedError`, `DiagnosticError`, `DevLockError`, `McpAppBridgeCloseError`
+  — the swap was measured to add a static `effect` import to
+  `agent-bundle/config`, `meta`, `rstest`, the CLI `--help` path, and the host
+  MCP proxy), every class exported from a package entry (the `Agent*`
+  classes included: `Cause.YieldableError` would enter user-facing `.d.ts`),
+  emitted artifacts (66 `examples/host-test` files byte-identical in size
+  before/after; the +12 kB figure was `effect/PlatformError`'s
+  `Schema.TaggedError`, not `Data.Error`, which lives in the Effect core the
+  wrappers already bundle), and Workbench client errors. The boundary's
+  identity-preserving rethrow table is unchanged.
 
 ## Parked toolchain follow-ups
 

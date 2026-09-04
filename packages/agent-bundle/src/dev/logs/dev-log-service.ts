@@ -13,6 +13,7 @@ import {
   type DevLogLevel,
   type DevLogProducer,
 } from './dev-log-kinds.ts';
+import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 export { devLogKinds, devLogLevels, devLogProducers } from './dev-log-kinds.ts';
 export type { DevLogKindFor, DevLogKindMap, DevLogLevel, DevLogProducer } from './dev-log-kinds.ts';
@@ -88,7 +89,7 @@ export interface DevLogServiceOptions {
 
 export type DevLogServiceErrorCode = 'DEV_LOG_CURSOR_AHEAD' | 'DEV_LOG_CURSOR_INVALID' | 'DEV_LOG_SERVICE_CLOSED';
 
-export class DevLogServiceError extends Error {
+export class DevLogServiceError extends YieldableFrameworkError {
   readonly code: DevLogServiceErrorCode;
 
   constructor(code: DevLogServiceErrorCode, message: string) {

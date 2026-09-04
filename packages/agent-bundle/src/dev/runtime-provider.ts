@@ -20,6 +20,7 @@ import type {
   DevRuntimeStatus,
   DevRuntimeSurface,
 } from './runtime-protocol.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 /** Trusted-process-only compiler endpoint; never serialize it into runtime JSON. */
 export interface DevRuntimeClientSurfaceEndpoint {
@@ -182,7 +183,7 @@ export interface DevRuntimeProvider {
 
 export type CreateDevRuntimeProvider = () => DevRuntimeProvider | Promise<DevRuntimeProvider>;
 
-export class DevRuntimeUnavailableError extends Error {
+export class DevRuntimeUnavailableError extends YieldableFrameworkError {
   readonly code = 'AB8201' as const;
 
   constructor(message = 'Development runtime is not available.') {
@@ -191,7 +192,7 @@ export class DevRuntimeUnavailableError extends Error {
   }
 }
 
-export class DevRuntimeGenerationConflictError extends Error {
+export class DevRuntimeGenerationConflictError extends YieldableFrameworkError {
   readonly actualGenerationId?: string;
   readonly code = 'AB8204' as const;
   readonly expectedGenerationId: string;

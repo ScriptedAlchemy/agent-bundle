@@ -19,8 +19,8 @@ import type {
   McpSessionReplayOverflow,
 } from './mcp-session-protocol.ts';
 import type { McpSessionTraceSink } from './mcp-session-trace.ts';
-import { CodedError } from '../../core/errors.ts';
 import { deepFreeze } from '../../core/freeze.ts';
+import { YieldableCodedError, YieldableFrameworkError } from '../../effect/errors.ts';
 
 
 export interface McpRequestOptions {
@@ -159,11 +159,11 @@ export type McpSessionErrorCode =
  * Expected session-lifecycle failures on the Effect error channel: the
  * session or its service is closed, a protocol call ran before `initialize`,
  * or a request was admitted with an invalid or already-active `requestId`.
- * These ride the fail channel as a `CodedError` (never `Effect.die`) and
+ * These ride the fail channel as a coded error (never `Effect.die`) and
  * rethrow unchanged at `src/effect/boundary.ts`, so Promise callers keep the
  * exact messages they saw before the class existed.
  */
-export class McpSessionError extends CodedError<McpSessionErrorCode> {
+export class McpSessionError extends YieldableCodedError<McpSessionErrorCode> {
   constructor(code: McpSessionErrorCode, message: string) {
     super('McpSessionError', code, message);
   }
@@ -202,7 +202,7 @@ export class McpSessionError extends CodedError<McpSessionErrorCode> {
  * retention, which cannot observe this process's epoch leases). Tool calls
  * fail closed with this error instead of hanging against a vanished artifact.
  */
-export class McpSessionStaleEpochError extends Error {
+export class McpSessionStaleEpochError extends YieldableFrameworkError {
   readonly epochId: string;
 
   constructor(epochId: string, options?: Readonly<{ readonly cause?: unknown }>) {
@@ -216,7 +216,7 @@ export class McpSessionStaleEpochError extends Error {
 }
 
 /** Reports every session-service lifecycle failure after all tracked work settles. */
-export class McpSessionServiceCloseError extends Error {
+export class McpSessionServiceCloseError extends YieldableFrameworkError {
   readonly failures: readonly McpSessionServiceCloseFailure[];
 
   constructor(failures: readonly McpSessionServiceCloseFailure[]) {
