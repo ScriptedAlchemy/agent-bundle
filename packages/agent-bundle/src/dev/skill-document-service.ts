@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 
 import { projectMeta } from '../build/meta.ts';
@@ -11,6 +11,7 @@ import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { readFileBytes, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
 
 
 export type SkillDocumentErrorCode =
@@ -78,6 +79,8 @@ export interface SkillDocumentServiceOptions {
   readonly epochStore: EpochStore;
   readonly projectService: ProjectService;
   readonly root: string;
+  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
+  readonly runPlatform?: PlatformRun;
 }
 
 const contentTypes: Readonly<Record<string, string>> = Object.freeze({
@@ -196,9 +199,11 @@ const assertedDirectory = async (root: string): Promise<string> => {
   return realpath(root);
 };
 
+/** The `lstat` / `realpath` checks refuse symlinks and stay on `node:fs`; only the final read is ordinary. */
 const readAllowedResource = async (
   root: string,
   resource: SkillResource,
+  run: PlatformRun,
 ): Promise<ServedSkillResource> => {
   const realRoot = await assertedDirectory(root);
   const candidate = resolve(root, resource.relativePath);
@@ -220,7 +225,7 @@ const readAllowedResource = async (
   }
   const contentType = contentTypeFor(resource.relativePath);
   return Object.freeze({
-    body: new Uint8Array(await readFile(realCandidate)),
+    body: new Uint8Array(await run(readFileBytes(realCandidate))),
     ...(contentDispositionFor(contentType) === undefined ? {} : { contentDisposition: 'attachment' as const }),
     contentType,
     relativePath: resource.relativePath,
@@ -235,11 +240,13 @@ export class SkillDocumentService {
   readonly #epochStore: EpochStore;
   readonly #projectService: ProjectService;
   readonly #root: string;
+  readonly #run: PlatformRun;
 
   constructor(options: SkillDocumentServiceOptions) {
     this.#epochStore = options.epochStore;
     this.#projectService = options.projectService;
     this.#root = resolve(options.root);
+    this.#run = options.runPlatform ?? runWithPlatform;
   }
 
   async sourceTree(): Promise<SkillDocumentTree> {
@@ -269,7 +276,7 @@ export class SkillDocumentService {
       throw error;
     }
     const resource = resourceByPath(skill.resources, segments);
-    return readAllowedResource(skill.dir, resource);
+    return readAllowedResource(skill.dir, resource, this.#run);
   }
 
   async generatedTree(epochId: string, target: string): Promise<SkillDocumentTree> {
@@ -298,7 +305,7 @@ export class SkillDocumentService {
     return this.#withEpochTarget(epochId, target, async (targetRoot) => {
       const document = await this.#generatedParser(skillId, targetRoot);
       const resource = resourceByPath(document.resources, segments);
-      return readAllowedResource(document.dir, resource);
+      return readAllowedResource(document.dir, resource, this.#run);
     });
   }
 

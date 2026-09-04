@@ -3,17 +3,18 @@ import {
   lstat,
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
   rename,
   rm,
   symlink,
-  writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
+
 import { stableJson } from '../core/digest.ts';
+import { isPlatformErrno, readFileString, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   installBundle as defaultInstallBundle,
@@ -44,6 +45,8 @@ export interface DevHostInstallManagerOptions {
   readonly hosts: readonly InstallHost[];
   readonly installBundle?: (options: InstallBundleOptions) => Promise<InstallResult>;
   readonly projectRoot: string;
+  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
+  readonly runPlatform?: PlatformRun;
 }
 
 interface InstalledDevHost {
@@ -80,13 +83,14 @@ const rewriteMcpDocument = async (
   bundleRoot: string,
   host: InstallHost,
   projectRoot: string,
+  run: PlatformRun,
 ): Promise<void> => {
   const path = join(bundleRoot, mcpDocumentPath(host));
   let document: unknown;
   try {
-    document = JSON.parse(await readFile(path, 'utf8')) as unknown;
+    document = JSON.parse(await run(readFileString(path))) as unknown;
   } catch (error) {
-    if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isPlatformErrno(error, 'ENOENT')) return;
     throw error;
   }
   if (!isRecord(document) || !isRecord(document.mcpServers)) {
@@ -103,7 +107,7 @@ const rewriteMcpDocument = async (
         },
       ] as const),
   ));
-  await writeFile(path, `${stableJson({ ...document, mcpServers })}\n`, 'utf8');
+  await run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(path, `${stableJson({ ...document, mcpServers })}\n`)));
 };
 
 const marker = (
@@ -117,18 +121,27 @@ const marker = (
   schemaVersion: 1,
 });
 
+/**
+ * Stays on `node:fs` for the staging copy: `cp` with `verbatimSymlinks` and
+ * `errorOnExist` has no `FileSystem.copy` equivalent, and the parent's
+ * ownership transfers to the returned `cleanup`, so it is not a bracket.
+ */
 const prepareDevBundle = async (
   source: string,
   host: InstallHost,
   epochId: string,
   projectRoot: string,
+  run: PlatformRun,
 ): Promise<Readonly<{ readonly cleanup: () => Promise<void>; readonly root: string }>> => {
   const parent = await mkdtemp(join(tmpdir(), `agent-bundle-dev-${host}-`));
   const root = join(parent, 'bundle');
   try {
     await cp(source, root, { errorOnExist: true, force: false, recursive: true, verbatimSymlinks: true });
-    await rewriteMcpDocument(root, host, projectRoot);
-    await writeFile(join(root, DEV_INSTALL_MARKER), `${stableJson(marker(epochId, host, projectRoot))}\n`, 'utf8');
+    await rewriteMcpDocument(root, host, projectRoot, run);
+    await run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(
+      join(root, DEV_INSTALL_MARKER),
+      `${stableJson(marker(epochId, host, projectRoot))}\n`,
+    )));
     return Object.freeze({
       cleanup: () => rm(parent, { force: true, recursive: true }),
       root,
@@ -296,6 +309,7 @@ export class DevHostInstallManager {
   readonly #installBundle: (options: InstallBundleOptions) => Promise<InstallResult>;
   readonly #installed = new Map<InstallHost, InstalledDevHost>();
   readonly #projectRoot: string;
+  readonly #run: PlatformRun;
   #closed = false;
   #pending: Promise<void> = Promise.resolve();
   #subscription: ProjectEventSubscription | undefined;
@@ -309,6 +323,7 @@ export class DevHostInstallManager {
     this.#hosts = Object.freeze([...new Set(options.hosts)]);
     this.#installBundle = options.installBundle ?? defaultInstallBundle;
     this.#projectRoot = resolve(options.projectRoot);
+    this.#run = options.runPlatform ?? runWithPlatform;
   }
 
   start(): void {
@@ -384,7 +399,7 @@ export class DevHostInstallManager {
   }
 
   async #syncHost(epochRoot: string, epochId: string, host: InstallHost): Promise<void> {
-    const prepared = await prepareDevBundle(join(epochRoot, host), host, epochId, this.#projectRoot);
+    const prepared = await prepareDevBundle(join(epochRoot, host), host, epochId, this.#projectRoot, this.#run);
     try {
       let installed = this.#installed.get(host);
       if (installed === undefined) {

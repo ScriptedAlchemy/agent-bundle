@@ -8,7 +8,7 @@ import { Effect, FileSystem, Layer } from 'effect';
 import { PlatformError } from 'effect/PlatformError';
 
 import { isErrno } from '../core/errors.ts';
-import { runPromise, type RunPromiseOptions } from './boundary.ts';
+import { runPromise, type RunPromiseOptions, type ScopedEffectRuntime } from './boundary.ts';
 
 /**
  * The Node platform layer for this package's Effect programs: the same
@@ -147,3 +147,22 @@ export const runWithPlatform = <A, E>(
   Effect.provide(effect, platformLayer).pipe(Effect.mapError(unwrapPlatformError)),
   options,
 );
+
+/**
+ * The Promise edge a service runs its platform programs through: either
+ * `runWithPlatform` (one layer per call — the default for library callers)
+ * or a long-lived runtime's edge from `platformRunner`. Same failure
+ * contract either way: `PlatformError` unwrapped to its Node cause.
+ */
+export type PlatformRun = <A, E>(
+  effect: Effect.Effect<A, E, PlatformServices>,
+  options?: RunPromiseOptions,
+) => Promise<A>;
+
+/**
+ * `PlatformRun` over one `makeScopedEffectRuntime(platformLayer)`: the dev
+ * server builds the runtime once in `startDevServer`, hands this edge to its
+ * services, and disposes the runtime from the session's `close`.
+ */
+export const platformRunner = (runtime: ScopedEffectRuntime<PlatformServices>): PlatformRun =>
+  (effect, options) => runtime.run(Effect.mapError(effect, unwrapPlatformError), options);

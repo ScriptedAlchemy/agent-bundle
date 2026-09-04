@@ -1,11 +1,14 @@
-import { rm, rmdir } from 'node:fs/promises';
+import { rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+
+import { Effect, FileSystem } from 'effect';
 
 import { toPosixRelative } from '../core/paths.ts';
 
 import { buildPackageOutputs } from '../build/package-build.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
+import { runWithPlatform, type PlatformRun } from '../effect/platform.ts';
 import type { PreparedProject } from './project-service.ts';
 import type { Invalidation } from './types.ts';
 
@@ -46,6 +49,8 @@ export interface DevPackageBuilder {
 export interface DevPackageBuildServiceOptions {
   /** Injectable only for deterministic unit tests. */
   readonly buildOutputs?: typeof buildPackageOutputs;
+  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
+  readonly runPlatform?: PlatformRun;
 }
 
 /** Files that change the package build without appearing in bundle provenance. */
@@ -85,6 +90,7 @@ const relativePosix = toPosixRelative;
 
 export class DevPackageBuildService implements DevPackageBuilder {
   readonly #buildOutputs: typeof buildPackageOutputs;
+  readonly #run: PlatformRun;
   #last: Readonly<{
     identity: string;
     inputs: ReadonlySet<string>;
@@ -95,6 +101,7 @@ export class DevPackageBuildService implements DevPackageBuilder {
 
   constructor(options: DevPackageBuildServiceOptions = {}) {
     this.#buildOutputs = options.buildOutputs ?? buildPackageOutputs;
+    this.#run = options.runPlatform ?? runWithPlatform;
   }
 
   async build(prepared: PreparedProject, invalidation: Invalidation): Promise<DevPackageBuildOutcome> {
@@ -155,11 +162,16 @@ export class DevPackageBuildService implements DevPackageBuilder {
     if (published === undefined) return outcome('absent');
     this.#published = undefined;
     try {
-      for (const path of published.paths) {
-        await rm(join(published.outputRoot, path), { force: true });
-      }
+      const outputRoot = published.outputRoot;
+      await this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => Effect.forEach(
+        published.paths,
+        (path) => fs.remove(join(outputRoot, path), { force: true }),
+        { discard: true },
+      )));
       // Prune now-empty directories, deepest first; a directory that still
-      // holds files another producer wrote simply stays.
+      // holds files another producer wrote simply stays. `rmdir` has no
+      // `FileSystem` equivalent (`remove` is `rm`, which refuses directories
+      // without `recursive`), so this loop stays on `node:fs`.
       const directories = [...new Set(published.paths
         .map((path) => dirname(path))
         .filter((directory) => directory !== '.'))]

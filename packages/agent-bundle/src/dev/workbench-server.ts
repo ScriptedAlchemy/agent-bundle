@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { makeScopedEffectRuntime } from '../effect/boundary.ts';
+import { platformLayer, platformRunner, type PlatformRun } from '../effect/platform.ts';
 import type { InstallHost } from '../install/install.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
+import { DevPackageBuildService } from './package-build-service.ts';
 import { runDevEpochContracts } from './dev-contract-runner.ts';
 import { EpochAdoptionPolicy } from './epoch-adoption-policy.ts';
 import { DevLogService } from './logs/dev-log-service.ts';
@@ -541,6 +544,41 @@ const withMcpSessionLifecycle = (
 
 /** Starts one loopback foreground session over the current project services. */
 export const startDevServer = async (options: StartDevServerOptions): Promise<DevServerSession> => {
+  // One platform runtime per dev-server session, created here rather than at
+  // module top level: `effect` is a CLI cold-start cost (#530), and the
+  // runtime's Scope is disposed from the returned session's `close`.
+  const effectRuntime = makeScopedEffectRuntime(platformLayer);
+  const runPlatform = platformRunner(effectRuntime);
+  let session: DevServerSession;
+  try {
+    session = await startDevServerSession(options, runPlatform);
+  } catch (error) {
+    const [cleanup] = await Promise.allSettled([effectRuntime.close()]);
+    if (cleanup?.status === 'rejected') {
+      throw new DevServerStartError([
+        Object.freeze({ error, resource: 'start' }),
+        Object.freeze({ error: cleanup.reason, resource: 'cleanup' }),
+      ]);
+    }
+    throw error;
+  }
+  return Object.freeze({
+    close: async (): Promise<void> => {
+      try {
+        await session.close();
+      } finally {
+        // Every service that ran on the runtime has closed above; only then
+        // is its Scope released.
+        await effectRuntime.close();
+      }
+    },
+    openRuntimeClientSurface: (surfaceId: string) => session.openRuntimeClientSurface(surfaceId),
+    status: () => session.status(),
+    url: session.url,
+  });
+};
+
+const startDevServerSession = async (options: StartDevServerOptions, runPlatform: PlatformRun): Promise<DevServerSession> => {
   const root = resolve(options.root);
   const registry = options.registry ?? createDefaultRegistry();
   const openBrowser = options.openBrowser ?? openInBrowser;
@@ -555,6 +593,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     outputRoots: ['dist', '.agent-bundle/runtime', '.agent-bundle/playground'],
     registry,
     root,
+    runPlatform,
   });
   const initialPreparedProject = await projectService.prepare('dev');
   const agentApiEnabled = options.agentApi ?? initialPreparedProject.devAgentApiEnabled ?? false;
@@ -583,7 +622,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     let providerLoadError: unknown;
     if (initialPreparedProject.devRuntime !== undefined) {
       try {
-        provider = await resolveDevRuntimeProvider(root, initialPreparedProject.devRuntime);
+        provider = await resolveDevRuntimeProvider(root, initialPreparedProject.devRuntime, undefined, runPlatform);
       } catch (error) {
         providerLoadError = error;
       }
@@ -707,6 +746,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       '.agent-bundle/runtime',
       '.agent-bundle/playground',
     ],
+    packageBuildService: new DevPackageBuildService({ runPlatform }),
     prepareCommand: 'dev',
     projectService,
     root,
@@ -715,6 +755,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     epochStore,
     projectRoot: root,
     registry,
+    runPlatform,
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const epochAdoption = new EpochAdoptionPolicy({
@@ -742,9 +783,10 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
         eventHub,
         hosts: options.installHosts,
         projectRoot: root,
+        runPlatform,
       });
   const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
-  const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry });
+  const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry, runPlatform });
   const preparedBundle = () => {
     const prepared = latestValidPreparedProject;
     if (prepared?.model === undefined) return undefined;
@@ -756,6 +798,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     });
   };
   const hostDiscovery = new HostDiscoveryService({
+    runPlatform,
     ...options.testing?.hostDiscoveryOptions,
     prepared: preparedBundle,
     registry,
@@ -764,6 +807,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     prepared: preparedBundle,
     projectRoot: root,
     registry,
+    runPlatform,
     ...options.testing?.mcpProbeOptions,
   });
   const lifecycleReplay = new LifecycleReplayService({
@@ -781,9 +825,9 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     },
     registry,
   });
-  const skillDocuments = new SkillDocumentService({ epochStore, projectService, root });
+  const skillDocuments = new SkillDocumentService({ epochStore, projectService, root, runPlatform });
   const artifacts = new ArtifactInspectionService(epochStore, registry);
-  const evals = new EvalService({ logger: logs, projectRoot: root, registry });
+  const evals = new EvalService({ logger: logs, projectRoot: root, registry, runPlatform });
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
   const trace = new PlaygroundService({
     logger: logs,
@@ -796,8 +840,8 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
     epochStore,
     hookPlayground,
     mcpSessions,
-    native: new NativePlaygroundService({ projectRoot: root }),
-    scripts: new ScriptPlaygroundService({ epochStore, registry }),
+    native: new NativePlaygroundService({ projectRoot: root, runPlatform }),
+    scripts: new ScriptPlaygroundService({ epochStore, registry, runPlatform }),
     skillDocuments,
     trace,
   });
@@ -843,7 +887,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   const foreground = await (options.testing?.startForegroundServer ?? startForegroundServer)({
     ...(agentApi === undefined ? {} : { agentApi }),
     artifacts,
-    assets: options.assets ?? createWorkbenchAssetSource(),
+    assets: options.assets ?? createWorkbenchAssetSource({ runPlatform }),
     coordinator: withMcpSessionLifecycle(
       coordinator,
       mcpSessions,

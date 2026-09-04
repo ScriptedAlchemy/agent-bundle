@@ -182,6 +182,7 @@ const lazyRenderRouteEvents: typeof renderRouteEvents = async (target, options) 
   return renderer.renderRouteEvents(target, options);
 };
 
+/** Synchronous probe from a sync resolver; stays on `node:fs` (no `FileSystem` sync API). */
 const lifecycleRenderChildPath = (): string => {
   const current = fileURLToPath(import.meta.url);
   const candidates = current.endsWith('.ts')

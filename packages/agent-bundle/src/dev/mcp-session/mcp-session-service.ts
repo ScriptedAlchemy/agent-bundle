@@ -4,9 +4,8 @@ import {
   type Transport,
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, FileSystem, Scope } from 'effect';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -17,6 +16,7 @@ import { joinArtifact } from '../../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { runPromise } from '../../effect/boundary.ts';
 import { liftPromise, liftTry } from '../../effect/lift.ts';
+import { readFileString, runWithPlatform, unwrapPlatformError, type PlatformRun } from '../../effect/platform.ts';
 import {
   readTargetMcpServer,
   type ModernMcpServer,
@@ -231,6 +231,7 @@ export class McpSessionService {
   readonly #epochStore: EpochStore;
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
+  readonly #run: PlatformRun;
   readonly #traceSink: McpSessionTraceSink | undefined;
   readonly #openingSessions = new Set<OpeningSession>();
   readonly #sessions = new Map<string, ActiveSession>();
@@ -249,6 +250,7 @@ export class McpSessionService {
     this.#epochStore = options.epochStore;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#run = options.runPlatform ?? runWithPlatform;
     this.#traceSink = options.traceSink;
   }
 
@@ -263,7 +265,7 @@ export class McpSessionService {
     let cleanupFailed = false;
     let cleanupFailure: unknown;
     try {
-      return await runPromise(this.#openEffect({ ...options, signal, timeoutMs }, (error) => {
+      return await this.#run(this.#openEffect({ ...options, signal, timeoutMs }, (error) => {
         if (!cleanupFailed) {
           cleanupFailed = true;
           cleanupFailure = error;
@@ -284,11 +286,17 @@ export class McpSessionService {
    * a finalizer — only while the session has not been constructed. Once the
    * `McpSession` exists it owns every resource, the scope finalizers disarm,
    * and a later open failure is cleaned up by `session.close()` instead.
+   *
+   * The plugin-data directory is not a `withTempDirectory` bracket: it
+   * outlives this call. It is acquired into its own session-lifetime
+   * {@link Scope}, whose only finalizer removes it, and the session closes
+   * that scope from `close()` — until the session exists, the open scope's
+   * release closes it instead.
    */
   #openEffect(
     options: OpenMcpSessionOptions,
     reportCleanupFailure: (error: unknown) => void,
-  ): Effect.Effect<McpSession, unknown> {
+  ): Effect.Effect<McpSession, unknown, FileSystem.FileSystem> {
     return Effect.suspend(() => {
       const cleanupFailures: unknown[] = [];
       let constructed: McpSession | undefined;
@@ -321,9 +329,23 @@ export class McpSessionService {
         if (errors.length > 0) return yield* Effect.fail(new DiagnosticError(errors));
         const targetRoot = yield* liftTry(() => joinArtifact(epochRoot, target));
         const server = yield* liftPromise(() => this.#server(targetRoot, target, runtime, options.serverName));
+        const fs = yield* FileSystem.FileSystem;
+        const pluginDataScope = yield* Scope.make();
+        const releasePluginData = (): Promise<void> => runPromise(Scope.close(pluginDataScope, Exit.void));
         const pluginData = yield* Effect.acquireRelease(
-          liftPromise(() => mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-'))),
-          (directory) => releaseUnlessTransferred(() => rm(directory, { force: true, recursive: true })),
+          Effect.tap(
+            fs.makeTempDirectory({ directory: tmpdir(), prefix: 'agent-bundle-mcp-' }),
+            (directory) => Scope.addFinalizer(
+              pluginDataScope,
+              // The session's close step reports this failure (last-failure-wins);
+              // `runPromise` rethrows the defect as the unwrapped Node error.
+              fs.remove(directory, { force: true, recursive: true }).pipe(
+                Effect.mapError(unwrapPlatformError),
+                Effect.orDie,
+              ),
+            ),
+          ),
+          () => releaseUnlessTransferred(releasePluginData),
         );
         const sessionId = randomUUID();
         const session = yield* liftTry(() => new McpSession({
@@ -340,6 +362,7 @@ export class McpSessionService {
           onClose: () => this.#invalidateSession(sessionId, new Error('MCP session closed.')),
           onClosing: () => this.#invalidateSession(sessionId, new Error('MCP session is closing.')),
           pluginData,
+          releasePluginData,
           resolved: { runtime, server, target, targetRoot },
           timeoutMs: options.timeoutMs,
           ...(this.#traceSink === undefined ? {} : { traceSink: this.#traceSink }),
@@ -480,7 +503,7 @@ export class McpSessionService {
     const path = joinArtifact(targetRoot, runtime.manifestPath);
     let document: unknown;
     try {
-      document = parseJsonWithoutDuplicateKeys(await readFile(path, 'utf8'));
+      document = parseJsonWithoutDuplicateKeys(await this.#run(readFileString(path)));
     } catch (error) {
       if (error instanceof SyntaxError) {
         throw new Error(`MCP manifest for target ${JSON.stringify(target)} is not valid JSON.`, { cause: error });

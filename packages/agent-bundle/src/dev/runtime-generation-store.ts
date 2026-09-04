@@ -4,14 +4,16 @@ import {
   mkdir,
   open,
   readdir,
-  readFile,
   rename,
   rm,
   writeFile,
 } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
+
 import { digest, stableJson } from '../core/digest.ts';
+import { readFileBytes, readFileString, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue } from './types.ts';
 import { YieldableFrameworkError } from '../effect/errors.ts';
 import type {
@@ -242,6 +244,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
   #prepared = new Map<RuntimeGenerationPreparedActivation<TMetadata>, PreparedRecord<TMetadata>>();
   readonly #remove: (path: string) => Promise<void>;
   readonly #retainInactive: number;
+  readonly #run: PlatformRun;
   readonly #stagingRoot: string;
   readonly #storageRoot: string;
   readonly #validateMetadata: RuntimeGenerationValidator<TMetadata>;
@@ -275,6 +278,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
     this.#now = options.now ?? (() => new Date());
     this.#retainInactive = options.retainInactive ?? defaultRetainInactive;
     this.#remove = options.remove ?? (async (path) => rm(path, { force: true, recursive: true }));
+    this.#run = options.runPlatform ?? runWithPlatform;
   }
 
   active(): RuntimeGeneration<TMetadata> | undefined {
@@ -537,12 +541,14 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
     if (this.#initialized) return;
     if (this.#initialization === undefined) {
       this.#initialization = (async () => {
-        await mkdir(this.#storageRoot, { recursive: true });
+        const makeDirectory = (path: string): Promise<void> =>
+          this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true })));
+        await makeDirectory(this.#storageRoot);
         await this.#remove(this.#stagingRoot);
         await this.#remove(this.#generationsRoot);
         await Promise.all([
-          mkdir(this.#stagingRoot, { recursive: true }),
-          mkdir(this.#generationsRoot, { recursive: true }),
+          makeDirectory(this.#stagingRoot),
+          makeDirectory(this.#generationsRoot),
         ]);
         this.#initialized = true;
       })();
@@ -603,7 +609,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
   ): Promise<RuntimeGeneration<TMetadata>> {
     const manifestPath = join(root, manifestFileName);
     assertInside(root, manifestPath);
-    const bytes = await readFile(manifestPath, 'utf8');
+    const bytes = await this.#run(readFileString(manifestPath));
     let parsed: JsonValue;
     try {
       parsed = freezeJsonValue(JSON.parse(bytes) as unknown);
@@ -699,7 +705,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
       if (status.size !== asset.bytes) {
         throw invalid(`Runtime generation asset ${JSON.stringify(asset.path)} did not match its byte length.`);
       }
-      const bytes = await readFile(path);
+      const bytes = await this.#run(readFileBytes(path));
       if (bytesSha256(bytes) !== asset.sha256) {
         throw invalid(`Runtime generation asset ${JSON.stringify(asset.path)} did not match its SHA-256 digest.`);
       }

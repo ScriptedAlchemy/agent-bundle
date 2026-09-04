@@ -7,14 +7,14 @@ import type {
   Tool,
   Transport,
 } from '@modelcontextprotocol/client';
-import { Effect, type Scope, Semaphore } from 'effect';
+import { Effect, FileSystem, type Scope, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
 import type { Stream } from 'node:stream';
 
 import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
 import { runPromise, runSync } from '../../effect/boundary.ts';
 import { liftPromise, liftTry } from '../../effect/lift.ts';
+import { runWithPlatform } from '../../effect/platform.ts';
 import type { EpochReference } from '../epoch-store.ts';
 import type {
   McpSessionBinding,
@@ -139,6 +139,7 @@ export class McpSession {
   readonly #onClose: () => void;
   readonly #onClosing: () => void;
   readonly #pluginData: string;
+  readonly #releasePluginData: () => Promise<void>;
   readonly #resolved: ResolvedMcpSessionServer;
   readonly #launch: ResolvedMcpSessionLaunch;
   readonly #timeoutMs: number;
@@ -177,6 +178,11 @@ export class McpSession {
     readonly onClose: () => void;
     readonly onClosing?: () => void;
     readonly pluginData: string;
+    /**
+     * Releases `pluginData` on close; the service passes the close of its
+     * session-lifetime scope. Default: remove the directory.
+     */
+    readonly releasePluginData?: () => Promise<void>;
     readonly resolved: ResolvedMcpSessionServer;
     readonly timeoutMs?: number;
     readonly traceSink?: McpSessionTraceSink;
@@ -192,6 +198,10 @@ export class McpSession {
     this.#onClose = options.onClose;
     this.#onClosing = options.onClosing ?? (() => undefined);
     this.#pluginData = options.pluginData;
+    this.#releasePluginData = options.releasePluginData ?? (() => runWithPlatform(Effect.flatMap(
+      FileSystem.FileSystem,
+      (fs) => fs.remove(this.#pluginData, { force: true, recursive: true }),
+    )));
     this.#resolved = options.resolved;
     this.#timeoutMs = resolveTimeoutMs(options.timeoutMs ?? defaultTimeoutMs);
     this.#traceLog = new McpSessionTraceLog(this.#binding, options.traceSink);
@@ -463,7 +473,7 @@ export class McpSession {
       return Effect.gen({ self: this }, function* (this: McpSession) {
         this.#cancelAll('MCP session closed.');
         yield* step(() => this.#closeClient());
-        yield* step(() => rm(this.#pluginData, { force: true, recursive: true }));
+        yield* step(this.#releasePluginData);
         yield* step(() => this.#epochReference.close());
         this.#onClose();
         if (failures.length > 0) {

@@ -1,12 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+
+import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../../build/validate-artifact.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInside } from '../../core/paths.ts';
+import { runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
 import {
   taskkill,
   terminateProcessTree,
@@ -118,6 +120,8 @@ export interface ScriptPlaygroundServiceOptions {
   readonly resolveScript?: (request: Omit<ScriptPlaygroundRunRequest, 'signal'>) => Promise<ResolvedPlaygroundScript>;
   /** Internal test seam for the epoch lease paired with resolveScript. */
   readonly releaseEpochReference?: () => Promise<void>;
+  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
+  readonly runPlatform?: PlatformRun;
   /** Internal test seam; production invokes Windows taskkill directly. */
   readonly taskkill?: ProcessTreeTaskkill;
   readonly timeoutMs?: number;
@@ -137,12 +141,20 @@ const interpreterFor = (suffix: string): PlaygroundScriptInterpreter | undefined
   return undefined;
 };
 
-const workspace = async (): Promise<PlaygroundWorkspaceLease> => {
-  const path = await mkdtemp(join(tmpdir(), 'agent-bundle-playground-script-'));
+/**
+ * Not a `withTempDirectory` bracket: the lease's `close` is a separate step
+ * of the run so that a workspace removal failure is reported in the result
+ * (`cleanupFailures`) instead of replacing the script's outcome.
+ */
+const workspace = async (run: PlatformRun): Promise<PlaygroundWorkspaceLease> => {
+  const path = await run(Effect.flatMap(
+    FileSystem.FileSystem,
+    (fs) => fs.makeTempDirectory({ directory: tmpdir(), prefix: 'agent-bundle-playground-script-' }),
+  ));
   let closePromise: Promise<void> | undefined;
   return Object.freeze({
     close: () => {
-      closePromise ??= rm(path, { force: true, recursive: true });
+      closePromise ??= run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(path, { force: true, recursive: true })));
       return closePromise;
     },
     path,
@@ -389,7 +401,8 @@ export class ScriptPlaygroundService {
     const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
     if (!Number.isSafeInteger(outputLimit) || outputLimit < 1) throw new Error('Script playground output limit must be a positive safe integer.');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Script playground timeout must be a positive safe integer.');
-    this.#createWorkspace = options.createWorkspace ?? workspace;
+    const run = options.runPlatform ?? runWithPlatform;
+    this.#createWorkspace = options.createWorkspace ?? (() => workspace(run));
     this.#epochStore = options.epochStore;
     this.#outputLimit = outputLimit;
     this.#platform = options.platform ?? process.platform;

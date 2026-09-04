@@ -1,6 +1,8 @@
-import { cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { Effect, FileSystem } from 'effect';
 
 import { canonicalHookEventFor, type TargetHookContract } from '../../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
@@ -14,6 +16,8 @@ import { HookService } from '../../services/hook-service.ts';
 import { EpochStore, type EpochReference } from '../epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
+import { liftPromise } from '../../effect/lift.ts';
+import { readFileString, runWithPlatform, withTempDirectory, type PlatformRun } from '../../effect/platform.ts';
 
 
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
@@ -102,6 +106,8 @@ export interface HookPlaygroundServiceOptions {
   /** Optional non-throwing producer-wide diagnostics sink. */
   readonly logger?: DevLogSink;
   readonly registry?: TargetRegistry;
+  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
+  readonly runPlatform?: PlatformRun;
 }
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
@@ -154,10 +160,11 @@ const matcherFor = async (
   hook: ArtifactHook,
   contract: TargetHookContract,
   nativeSelector: string,
+  run: PlatformRun,
 ): Promise<string | undefined | HookPlaygroundDiagnosticResult> => {
   let document: unknown;
   try {
-    document = JSON.parse(await readFile(join(artifact, hook.target, contract.manifestPath), 'utf8'));
+    document = JSON.parse(await run(readFileString(join(artifact, hook.target, contract.manifestPath))));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return missingManifest(hook.target, hook.event, contract.manifestPath);
     return undefined;
@@ -182,6 +189,7 @@ const hostMappingFor = async (
   artifact: string,
   hook: ArtifactHook,
   contract: TargetHookContract,
+  run: PlatformRun,
 ): Promise<HookPlaygroundHostMapping | HookPlaygroundDiagnosticResult> => {
   const canonicalEvent = canonicalHookEventFor(hook.event);
   if (canonicalEvent === undefined) return unsupportedEvent(hook.target, hook.event);
@@ -189,7 +197,7 @@ const hostMappingFor = async (
   if (typeof nativeSelector !== 'string' || nativeSelector.trim().length === 0) {
     return unsupportedEvent(hook.target, hook.event);
   }
-  const matcher = await matcherFor(artifact, hook, contract, nativeSelector);
+  const matcher = await matcherFor(artifact, hook, contract, nativeSelector, run);
   if (typeof matcher === 'object' && matcher !== null) return matcher;
   return Object.freeze({
     canonicalEvent,
@@ -243,9 +251,11 @@ export class HookPlaygroundService {
   readonly #hookService: Pick<HookService, 'list' | 'simulate'>;
   readonly #logger: DevLogSink | undefined;
   readonly #registry: TargetRegistry;
+  readonly #run: PlatformRun;
 
   constructor(options: HookPlaygroundServiceOptions) {
     this.#copy = options.copy ?? cp;
+    this.#run = options.runPlatform ?? runWithPlatform;
     this.#epochStore = options.epochStore;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#hookService = options.hookService ?? new HookService({ registry: this.#registry });
@@ -287,7 +297,7 @@ export class HookPlaygroundService {
         if (clonedMatches.length !== 1) {
           throw new Error(`Expected exactly one ${target} hook matching ${JSON.stringify(options.hook)} in the simulation clone.`);
         }
-        const mapping = await hostMappingFor(simulationArtifact, clonedMatches[0]!, contract);
+        const mapping = await hostMappingFor(simulationArtifact, clonedMatches[0]!, contract, this.#run);
         if ('diagnostics' in mapping) return mapping;
 
         const canonicalResult = canonicalResultFor(await this.#hookService.simulate({
@@ -376,17 +386,23 @@ export class HookPlaygroundService {
   ): Promise<T> {
     const targetDigest = storedTargetDigestFor(reference, target);
     await assertTargetDigest(reference.root, target, targetDigest);
-    const artifact = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-playground-'));
-    try {
-      // Copies stay sequential: a failed copy must settle before the artifact directory is released.
-      for (const entry of await readdir(reference.root)) {
-        if (entry === epochStagingMarkerName) continue;
-        await this.#copy(join(reference.root, entry), join(artifact, entry), { recursive: true });
-      }
-      await assertTargetDigest(artifact, target, targetDigest);
-      return await action(artifact);
-    } finally {
-      await rm(artifact, { force: true, recursive: true });
-    }
+    // The simulation artifact lives exactly as long as the action: the
+    // `mkdtemp` + `finally rm` bracket. The clone copy stays on the injectable
+    // `fs.cp` (a test seam), sequential so a failed copy settles before the
+    // directory is released.
+    return this.#run(withTempDirectory(
+      { directory: tmpdir(), prefix: 'agent-bundle-hook-playground-' },
+      (artifact) => Effect.flatMap(
+        Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readDirectory(reference.root)),
+        (entries) => liftPromise(async () => {
+          for (const entry of entries) {
+            if (entry === epochStagingMarkerName) continue;
+            await this.#copy(join(reference.root, entry), join(artifact, entry), { recursive: true });
+          }
+          await assertTargetDigest(artifact, target, targetDigest);
+          return action(artifact);
+        }),
+      ),
+    ));
   }
 }
