@@ -275,6 +275,14 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       const [inline] = withCode(await diagnostics(pack), 'AB7014');
       expect(inline?.message).toContain('"never-loaded"');
       expect(inline?.message).not.toContain('"driver-package"');
+      // Factory argument with nested calls, literal target.
+      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const driver = createRequire(new URL("./entry.js", import.meta.url))("driver-package");\n');
+      const [nested] = withCode(await diagnostics(pack), 'AB7014');
+      expect(nested?.message).toContain('"never-loaded"');
+      expect(nested?.message).not.toContain('"driver-package"');
+      // The same factory argument, computed target: nothing can be called unused.
+      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const any = (name) => createRequire(new URL("./entry.js", import.meta.url))(name);\n');
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
     }
@@ -410,12 +418,13 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks, behind
-      // options with values (`--prefix .`, `-w .`) and without (`--silent`), and through npm's `rum` alias.
+      // options with values (`--prefix .`, `-w .`) and without (`--silent`), through npm's `rum` alias, and with
+      // the script name quoted for the shell.
       postinstall: 'named-in-script --init && npm --silent --prefix . run setup',
       setup: 'echo setup',
       presetup: 'npm rum typecheck',
       typecheck: 'tsc --version',
-      postsetup: 'pnpm run -w . finish',
+      postsetup: 'pnpm run -w . "finish"',
       finish: 'node-pre-gyp install && real --check',
       prepare: 'prepare-only --generate',
     };

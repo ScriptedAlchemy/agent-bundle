@@ -189,8 +189,23 @@ const decodeLiteral = (body: string): string => body.replace(escapeSequence, (..
  * inside a comment or string can only mark a dependency as imported, never as
  * unused, so the pattern otherwise errs toward keeping a declaration.
  */
+/**
+ * A parenthesised argument list with calls nested up to two deep —
+ * `(new URL("./entry.js", import.meta.url))`, `(join(dirname(x), "y"))` — the
+ * shapes a `createRequire` argument takes.
+ */
+const callArguments = (() => {
+  const flat = String.raw`[(][^()]*[)]`;
+  const nested = String.raw`[(](?:[^()]|${flat})*[)]`;
+  return String.raw`[(](?:[^()]|${nested})*[)]`;
+})();
+
+/** The resolvers a file loads packages through, each followed by its argument list. */
+const loadCall = (loaders: readonly string[], factories: readonly string[]): string =>
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*${callArguments}(?:\.resolve)?)\s*[(]\s*`;
+
 const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)](?:\.resolve)?)\s*[(]\s*${quotedLiteral}\s*[)]`,
+  String.raw`${loadCall(loaders, factories)}${quotedLiteral}\s*[)]`,
   'gu',
 );
 
@@ -204,8 +219,7 @@ const literalLoad = (loaders: readonly string[], factories: readonly string[]): 
  * `Promise.resolve(x)` are not resolution and never match.
  */
 const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)](?:\.resolve)?)\s*[(]\s*`
-    + String.raw`(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
+  String.raw`${loadCall(loaders, factories)}(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
   'u',
 );
 
@@ -230,7 +244,7 @@ const factoryNames = (source: string): readonly string[] => [
  * the binding is a loader, called like `require` from then on.
  */
 const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:(?:[A-Za-z_$][\w$]*|\brequire\s*[(][^)]*[)])\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
+  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:(?:[A-Za-z_$][\w$]*|\brequire\s*${callArguments})\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
   'gu',
 );
 
@@ -412,6 +426,7 @@ const installScripts = ['preinstall', 'install', 'postinstall'] as const;
  * names a script is one the command may run.
  */
 const runSubcommand = String.raw`(?:run(?:-script)?|rum|urn)\b`;
+const shellQuotes = /^(["'])(.*)\1$/u;
 const delegatedRun = new RegExp(
   String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand})[^\s&|;]+\s+)*${runSubcommand}([^&|;\n]*)`,
   'gu',
@@ -431,8 +446,10 @@ const installScriptText = (scripts: Readonly<Record<string, unknown>>): string =
     seen.add(name);
     for (const match of body.matchAll(delegatedRun)) {
       for (const token of (match[1] ?? '').trim().split(/\s+/u)) {
-        if (token === '' || token.startsWith('-') || !Object.hasOwn(scripts, token)) continue;
-        for (const hook of [`pre${token}`, token, `post${token}`]) visit(hook);
+        // The shell strips the quotes of `npm run "setup"` before npm sees the name.
+        const candidate = token.replace(shellQuotes, '$2');
+        if (candidate === '' || candidate.startsWith('-') || !Object.hasOwn(scripts, candidate)) continue;
+        for (const hook of [`pre${candidate}`, candidate, `post${candidate}`]) visit(hook);
       }
     }
   };

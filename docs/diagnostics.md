@@ -194,7 +194,8 @@ literal `require("…")` and `.resolve("…")` calls (`require.resolve`, `create
 `import.meta.resolve`: a package located only to find an asset is still a runtime dependency; a
 binding such as `const load = createRequire(import.meta.url)` is a loader and `load("…")` counts like
 `require("…")`, whether the factory is imported under its own name, renamed with `as`, reached through a
-namespace import, or chained off `require("node:module")`; `createRequire(…)("…")` inline counts too), and
+namespace import, or chained off `require("node:module")`; `createRequire(…)("…")` inline counts too, the
+factory's argument nesting calls such as `new URL("./entry.js", import.meta.url)`), and
 every `.d.ts`/`.d.mts`/`.d.cts` file is scanned for `from "…"`,
 `import("…")`, `import x = require("…")`, `declare module "…"` (a module augmentation), and `/// <reference types="…" />` (a consumer needs the
 package that provides those types even without a runtime import; a type directive counts for the
@@ -210,7 +211,7 @@ and a dependency named by a consumer-side `preinstall`/`install`/`postinstall` s
 runs on `pack`, local installs, and git dependencies but never for a published tarball), or by any
 script those reach through `npm run <name>` (also `pnpm`/`yarn`/`bun run` and npm's `run-script`/`rum`/`urn` aliases; options before or after
 `run`, with or without values — `npm --prefix . run setup`, `npm run -w pkg setup` — and every token of the
-command that names a script is visited, with its `pre<name>`/`post<name>` hooks) — by
+command that names a script, shell quotes stripped (`npm run "setup"`), is visited, with its `pre<name>`/`post<name>` hooks) — by
 package name or by one of its `bin` commands, read from `node_modules/<name>/package.json` (a string-form `bin`
 is one command named after the installed manifest's unscoped `name` — `real` for an alias `"wrapper":
 "npm:@scope/real@1"`), with the unscoped dependency name standing in when that manifest is unreadable — counts as used. A computed `import(expression)` or
