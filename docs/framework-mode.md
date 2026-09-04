@@ -504,7 +504,7 @@ that expansion itself in the `~/.cursor/plugins/local/<name>` copy of
 as `PLUGIN_DATA`, plugin-root `cwd`, resolved `./` command, `PLUGIN_ROOT` /
 `PLUGIN_DATA` in each stdio server's `env`), keeps the shipped document in the
 install receipt (`cursorExpansion`), and `doctor` proves the expansion with
-`AB7325` while validating the Agent Plugins contract against the shipped
+`AB7326` while validating the Agent Plugins contract against the shipped
 document. The bundle stays spec-conformant; the provenance is `derived`.
 
 The framework CLI performs those same operations:
@@ -562,6 +562,6 @@ plugin's manifest hook registration as `registered`, `stale` (a
 unparsable; `AB7324` reports a staged marketplace as imported or still
 awaiting the Customize step, and `doctor --from` resolves a marketplace-mode
 bundle to that staged copy instead of reporting it missing. For Agent Plugins
-installs, `AB7325` reports the installer's placeholder expansion as
+installs, `AB7326` reports the installer's placeholder expansion as
 `expanded`, `unexpanded` (spec forms Cursor cannot launch), or `drifted`
 (moved, duplicated, or edited after the expansion was recorded).

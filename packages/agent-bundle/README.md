@@ -203,7 +203,7 @@ variables; omitted `cwd` → home directory; `./` commands → workspace folder)
 rewrites `mcp.json` in that copy only with absolute paths
 (`PLUGIN_DATA` = `~/.cursor/agent-bundle/plugin-data/<name>`, created), keeps
 the shipped document in the install receipt (`cursorExpansion`), and
-`agent-bundle doctor --host cursor` proves the expansion (`AB7325`). The bundle
+`agent-bundle doctor --host cursor` proves the expansion (`AB7326`). The bundle
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and

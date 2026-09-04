@@ -133,7 +133,7 @@ it('documents native Agent Plugins clients for the portable profile', () => {
   // The Cursor-only placeholder expansion is documented where the installer is (#426).
   expect(install).toContain('### Cursor placeholder expansion');
   expect(install).toContain('`~/.cursor/agent-bundle/plugin-data/<name>`');
-  expect(install).toContain('`AB7325`');
+  expect(install).toContain('`AB7326`');
   expect(install).toContain('The bundle itself');
 });
 

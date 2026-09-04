@@ -154,7 +154,7 @@ const portableInstructions = (): string[] => [
   '(created by the installer), an omitted `cwd` becomes the plugin root, `./` commands resolve against',
   'it, and every stdio server gains `PLUGIN_ROOT` / `PLUGIN_DATA` in its environment. The bundle itself',
   `stays spec-conformant; the pre-expansion document is kept in \`${installReceiptFile}\` (\`cursorExpansion\`),`,
-  'and `agent-bundle doctor --host cursor` verifies the expanded paths (`AB7325`). Nothing is changed for',
+  'and `agent-bundle doctor --host cursor` verifies the expanded paths (`AB7326`). Nothing is changed for',
   'other Agent Plugins clients, which expand the placeholders themselves.',
   '',
   '### Reinstall after a same-version rebuild',

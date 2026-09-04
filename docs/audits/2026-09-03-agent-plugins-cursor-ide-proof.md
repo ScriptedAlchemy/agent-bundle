@@ -178,7 +178,7 @@ the §7.2.1/§9 resolution itself, for the Cursor copy only:
   `{ pluginRoot, pluginData, documents: { "mcp.json": <shipped text> } }`.
 - `agent-bundle doctor --host cursor` validates the Agent Plugins contract
   (`AB7320`) against the shipped document from the receipt and proves the
-  expansion (`AB7325`: `expanded`, `unexpanded` for a copy still in spec
+  expansion (`AB7326`: `expanded`, `unexpanded` for a copy still in spec
   shape, `drifted` for a moved/duplicated/edited copy).
 - Provenance is `derived` everywhere it is reported
   (`portable-1.0.0.json` `plugin.cursorLocalInstall.placeholderExpansion`);

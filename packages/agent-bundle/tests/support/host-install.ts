@@ -332,7 +332,7 @@ export interface PortableHostInstallReport {
   readonly pluginVariables: {
     readonly allowedLocations: 'args/env values/cwd only';
     readonly cursorExpansion: {
-      readonly doctor: 'AB7325 expanded';
+      readonly doctor: 'AB7326 expanded';
       readonly installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left';
       readonly pluginData: string;
       readonly receipt: 'cursorExpansion records the bundle mcp.json verbatim';
@@ -1645,10 +1645,10 @@ export const runPortableHostInstallProof = async (
       `Portable installed bytes failed the pinned Agent Plugins byte lane: ${JSON.stringify(contractDiagnostics)}`,
     );
     const doctorReport = await runDoctor({ home, hosts: ['cursor'] });
-    const launchFindings = doctorReport.diagnostics.filter((entry) => entry.code === 'AB7325');
+    const launchFindings = doctorReport.diagnostics.filter((entry) => entry.code === 'AB7326');
     assertProof(
       launchFindings.length === 1 && launchFindings[0]?.severity === 'info' && launchFindings[0].message.includes('were expanded for Cursor at install'),
-      `Doctor did not prove the Cursor expansion (AB7325): ${JSON.stringify(launchFindings)}`,
+      `Doctor did not prove the Cursor expansion (AB7326): ${JSON.stringify(launchFindings)}`,
     );
     assertProof(
       !doctorReport.diagnostics.some((entry) => entry.code === 'AB7320' && entry.severity === 'error'),
@@ -1696,7 +1696,7 @@ export const runPortableHostInstallProof = async (
       pluginVariables: Object.freeze({
         allowedLocations: 'args/env values/cwd only',
         cursorExpansion: Object.freeze({
-          doctor: 'AB7325 expanded',
+          doctor: 'AB7326 expanded',
           installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
           pluginData: normalizedRelative(home, pluginData),
           receipt: 'cursorExpansion records the bundle mcp.json verbatim',

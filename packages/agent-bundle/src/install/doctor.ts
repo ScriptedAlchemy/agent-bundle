@@ -605,7 +605,7 @@ const installedCursorStaticIssues = async (
     target: 'cursor',
   });
   if (!isAgentPluginsManifest(installed)) return symlinks;
-  // The Cursor copy of an expanded package is conformant only as the bundle shipped it (AB7325 proves the expansion).
+  // The Cursor copy of an expanded package is conformant only as the bundle shipped it (AB7326 proves the expansion).
   const documents = launch?.documents;
   const [portable, containment] = await Promise.all([
     validatePortablePluginFiles({

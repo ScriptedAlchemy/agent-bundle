@@ -491,7 +491,7 @@ it(
       pluginVariables: {
         allowedLocations: 'args/env values/cwd only',
         cursorExpansion: {
-          doctor: 'AB7325 expanded',
+          doctor: 'AB7326 expanded',
           installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
           pluginData: '.cursor/agent-bundle/plugin-data/host-install-portable-proof',
           receipt: 'cursorExpansion records the bundle mcp.json verbatim',

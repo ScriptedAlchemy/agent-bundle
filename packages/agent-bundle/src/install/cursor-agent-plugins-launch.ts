@@ -50,7 +50,7 @@ export interface InspectCursorAgentPluginsLaunchOptions {
   readonly caseInsensitivePaths?: boolean;
 }
 
-const DIAGNOSTIC_CODE = 'AB7325';
+const DIAGNOSTIC_CODE = 'AB7326';
 const REINSTALL_RECOVERY =
   "Reinstall the package with its bundle's emitted `install.mjs`, which expands the Agent Plugins placeholders for the Cursor copy " +
   '(absolute plugin root and data directory, plugin-root `cwd`, resolved `./` command, `PLUGIN_ROOT`/`PLUGIN_DATA` environment) and records them in the receipt.';

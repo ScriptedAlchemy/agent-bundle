@@ -312,12 +312,12 @@ it('validates root plugin.json installs that declare an Agent Plugins schema aga
   }
 });
 
-it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the emitted installer\'s expansion is verified, drift is corrupt (AB7325)', async () => {
+it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the emitted installer\'s expansion is verified, drift is corrupt (AB7326)', async () => {
   const fixture = await temporaryDoctor();
   const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
   const pluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
   const mcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
-  const ab7325 = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7325');
+  const ab7325 = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7326');
   const ab7320Errors = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7320' && entry.severity === 'error');
   const doctor = () => runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
   try {

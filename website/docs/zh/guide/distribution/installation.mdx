@@ -48,7 +48,7 @@ node ./install.mjs
 插件根、作为数据目录的 `~/.cursor/agent-bundle/plugin-data/<name>`（由安装器创建）、指向插件根的 `cwd`、已解析的
 `./` 命令，以及每个 stdio 服务器环境中的 `PLUGIN_ROOT` / `PLUGIN_DATA`。捆绑包本身不被改动，对其他 Agent Plugins
 客户端仍然符合规范；展开前的文档保存在安装回执中（`cursorExpansion`），`agent-bundle doctor --host cursor` 以
-`AB7325` 证明这次展开。这里没有任何内容是 Cursor 的行为：来源为 `derived`，而 `cursor` target 的捆绑包绝不会被重写。
+`AB7326` 证明这次展开。这里没有任何内容是 Cursor 的行为：来源为 `derived`，而 `cursor` target 的捆绑包绝不会被重写。
 
 产物校验会拒绝缺少必需安装表面的内置 target，因此捆绑包不可能在缺少它所承诺的安装器的情况下发布。
 
@@ -107,7 +107,7 @@ Claude Code 列出了该副本却拒绝加载它——它在 `claude plugin list
 | `AB7322` | info / error | 已安装的 Cursor 插件从清单注册了插件级 hook 且每条命令的脚本都存在于插件根之下时为 info；声明的 hooks 文件缺失或格式错误、或被执行的脚本不存在时为 error。 |
 | `AB7323` | warning | `~/.cursor/hooks.json` 注册了指向某个已安装插件目录的命令，Cursor 会把该 hook 投递两次；仅靠清单注册就已足够。 |
 | `AB7324` | info / warning / error | 由 `install cursor --mode marketplace` 暂存的市场已被导入（`registered`）、仍在等待 Customize 导入步骤（`unregistered`），或不完整（`corrupt`）。 |
-| `AB7325` | info / warning / error | `~/.cursor/plugins/local` 下的某个 Agent Plugins 安装：其 `mcp.json` 占位符已由输出的 `install.mjs` 展开且每个展开后的路径仍可解析（`expanded`）；仍带有 Cursor 3.18.25 不会解析的规范形式，因此其 stdio 服务器无法启动（`unexpanded`）；或在记录展开之后被移动、复制或编辑（`drifted`，条目为 `corrupt`）。请在当前位置用捆绑包的 `install.mjs` 重新安装。 |
+| `AB7326` | info / warning / error | `~/.cursor/plugins/local` 下的某个 Agent Plugins 安装：其 `mcp.json` 占位符已由输出的 `install.mjs` 展开且每个展开后的路径仍可解析（`expanded`）；仍带有 Cursor 3.18.25 不会解析的规范形式，因此其 stdio 服务器无法启动（`unexpanded`）；或在记录展开之后被移动、复制或编辑（`drifted`，条目为 `corrupt`）。请在当前位置用捆绑包的 `install.mjs` 重新安装。 |
 | `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个，因此统一 `plugin` 捆绑包中与 `hooks/hooks-cursor.json` 并存的 Claude 格式 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
 
 ## 下一步
