@@ -269,14 +269,15 @@ the first-party CLI's user-facing text — see
   the scope closes, which is too early there.
 - File handles whose use is bounded by one program: scoped `open`.
 - Layer wiring: one composition root per process. The scaffolder provides
-  `NodeServices.layer` immediately before its boundary's `runPromise`;
-  `agent-bundle`'s public API functions provide `platformLayer` through
-  `runWithPlatform`; the first-party CLI's root is the
-  `makeScopedEffectRuntime(nodeCliServices)` in `runCli` (today `NodeTerminal`
-  + `NodeStdio`, see [Terminal and
-  Stdio](#terminal-and-stdio-user-facing-cli-text)) and widens to
-  `platformLayer` there when CLI code adopts the filesystem services; the dev
-  server (phase 2) gets one `makeScopedEffectRuntime(platformLayer)` in
+  `NodeServices.layer` immediately before its boundary's `runPromise`
+  (`src/scaffold-cli.ts`, loaded by `runCli` only once a scaffold is
+  requested); `agent-bundle`'s public API functions provide `platformLayer`
+  through `runWithPlatform`; the first-party CLI's root is the
+  `makeCliTerminal(services)` in `src/effect/cli-runtime.ts` (today
+  `NodeTerminal` + `NodeStdio`, built on the first command write, see
+  [Terminal and Stdio](#terminal-and-stdio-user-facing-cli-text)) and widens
+  to `platformLayer` there when CLI code adopts the filesystem services; the
+  dev server (phase 2) gets one `makeScopedEffectRuntime(platformLayer)` in
   `startDevServer`, disposed from the session's `close`. Never provide a
   platform layer deep inside library code.
 - Errors: `PlatformError` flows through the Effect error channel and is
@@ -323,12 +324,18 @@ the first-party CLI's user-facing text — see
 
 `packages/create-agent-bundle/src/effect/boundary.ts` is the scaffolder's
 sole run edge (phase 1 pilot): `runPromise` rethrows `UsageError` and plain
-`Error` unchanged and unwraps `PlatformError` to its Node cause. `runCli`
-provides `NodeServices.layer` once. Measured on rc.112 (bundled by Rslib,
-`node` target): `dist/index.js` 73.7 kB → 456.8 kB with `NodeServices.layer`
-(264.7 kB with only `NodeFileSystem` + `NodePath`); packed tarball 33.0 kB →
-110.2 kB; `--help` cold start ≈40 ms → ≈65 ms. `undici` is not pulled into
-the bundle.
+`Error` unchanged and unwraps `PlatformError` to its Node cause.
+`src/scaffold-cli.ts` provides `NodeServices.layer` once; `src/index.ts`
+(`runCli`) parses argv, answers `--help` and flag errors itself, and loads
+that module with a dynamic `import()` only for an actual scaffold. Measured
+on rc.112 (bundled by Rslib, `node` target): the bundle grew from 73.7 kB to
+456.8 kB with `NodeServices.layer` (264.7 kB with only `NodeFileSystem` +
+`NodePath`); packed tarball 33.0 kB → 110.2 kB. Rslib splits the dynamic
+import into its own chunk (`dist/scaffold-cli.js`, 447.5 kB; the argv layer
+is 10.8 kB), so `--help` no longer evaluates it: cold start ≈40 ms before
+`NodeServices.layer`, ≈65 ms with it evaluated eagerly (the 2026-09-03
+regression, ≈69 ms on the 2026-09-03 re-measurement below), ≈40 ms with the
+split. `undici` is not pulled into the bundle.
 
 `packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
 layer: `platformLayer` (the `NodeServices` union composed from
@@ -357,36 +364,78 @@ Node implementations come from `@effect/platform-node-shared@4.0.0-rc.112`,
 the same dependency `platform.ts` builds `platformLayer` from (never
 `@effect/platform-node`, for the consumer-footprint reason above).
 `effect/Terminal` is the sanctioned way to touch stdin/stdout for
-**user-facing text**: human command output, Commander help and argv errors,
-and the Workbench startup URL line go through `Terminal.display`, and any
-future interactive prompt goes through `terminal.readLine` (EOF surfaces as
+**user-facing command output**: human command output and the Workbench
+startup URL line go through `Terminal.display`, and any future interactive
+prompt goes through `terminal.readLine` (EOF surfaces as
 `Terminal.QuitError`, so a prompt must handle it). `Terminal.display` is
 stdout-only; **diagnostics** (the canonical JSON diagnostics document) go
 through `Stdio.stderr()`, and **machine output** (`--json`, stable JSON
 lines) goes through `Stdio.stdout()` so its bytes stay exact. The helpers
 live in `src/effect/terminal.ts` (`display`, `writeStderr`, `writeStdout`).
+**Argv-layer text** — Commander's `--help`, `--version`, and argv errors —
+is the one exception: it is written synchronously to the process streams
+before any command runs (see the cold-start budget below).
+
+Cold-start budget (measured 2026-09-03, Node v22.23.2, 30 runs, median wall
+time of the built `bin/agent-bundle.js`; `node -e 0` is ≈28 ms on the same
+machine): `--version` ≈60 ms before the adoption, ≈300 ms with the runtime
+built eagerly in `runCli`, ≈60 ms with the lazy runtime; `--help` the same;
+`validate` on `examples/host-test` unchanged (≈1.7–2.3 s, dominated by the
+compiler). Where the +240 ms went: loading the `effect` module graph
+(≈300 ms for the `effect` barrel in an unbundled process; ≈100 ms of it is
+`effect/Terminal` alone, and the minimal `effect/Effect` + `Layer` +
+`Stream` + `Terminal` + `Stdio` + `ManagedRuntime` subpath set still costs
+≈240 ms) plus ≈10 ms for the two platform-node-shared subpaths.
+Constructing the runtime is not the cost: `Layer.mergeAll` +
+`ManagedRuntime.make` + the first `runPromise` that builds the layer total
+≈6 ms. Memoizing the runtime therefore buys nothing; not loading the modules
+is the whole fix.
 
 Wiring rules:
 
-- Provide the process-backed layers **once**, at the CLI composition root
-  (`runCli`), through one `makeScopedEffectRuntime(nodeCliServices)` from
-  `src/effect/boundary.ts`, and close it when the command finishes (a
-  foreground `dev` session keeps it until the session closes). No other
-  module provides `NodeTerminal.layer` / `NodeStdio.layer`.
+- Provide the process-backed layers **once**, at the CLI composition root,
+  through one `makeCliTerminal(services)` from `src/effect/cli-runtime.ts`
+  (a `makeScopedEffectRuntime(nodeCliServices)` behind Promise-shaped
+  `display` / `writeStdout` / `writeStderr` / `close`), and close it when
+  the command finishes (a foreground `dev` session keeps it until the
+  session closes). No other module provides `NodeTerminal.layer` /
+  `NodeStdio.layer`.
+- **Build it lazily.** `src/cli.ts` imports `cli-runtime.ts` type-only and
+  loads it with a dynamic `import()` on the first command write, after
+  Commander has parsed argv. `cli-runtime.ts` is the only module that pulls
+  `effect`, `effect/Terminal`, `effect/Stdio`, and the platform-node-shared
+  layers into the CLI process; `--version`, `--help`, and argv errors must
+  never reach it. `packages/agent-bundle/tests/cli.test.ts` proves this by
+  running the built CLI under a `module.registerHooks` resolve recorder
+  (`tests/support/record-module-loads.mjs`) and asserting no `effect` or
+  `@effect/platform-node-shared` URL resolves for those three invocations
+  (and that a real command does load them). The same dynamic-import pattern
+  already keeps `./api.ts` out of the trivial path.
+- Commander writes its own text (help, version, argv errors) synchronously
+  through `configureOutput` to `CliOutput.argvText` (default: the process
+  streams). It only writes before aborting parsing, so it never interleaves
+  with Effect-written command output, and routing it through
+  `Terminal.display` would load the runtime for exactly the invocations the
+  budget protects.
 - `nodeCliServices` is `Layer.mergeAll(NodeTerminal.layer, NodeStdio.layer)`
   from the `@effect/platform-node-shared/NodeTerminal` and `/NodeStdio`
-  subpaths, not the whole `platformLayer`: the CLI's help/version path does
-  not use child-process, crypto, or filesystem services, and loading them
-  measured at roughly +400 ms of startup.
-- The scaffolder (`packages/create-agent-bundle/src/index.ts`) uses the same
-  two services from its existing `NodeServices.layer` root for `--help`
-  (`Terminal.display`) and flag errors (`Stdio.stderr()`); Clack stays the
-  prompt renderer and is not replaced by `readLine`.
+  subpaths, not the whole `platformLayer`: the CLI does not use
+  child-process, crypto, or filesystem services, and loading them measured
+  at roughly +400 ms on top.
+- The scaffolder (`packages/create-agent-bundle/src/index.ts`) follows the
+  same split: `runCli` parses flags and writes `--help` (stdout) and flag
+  errors (stderr) synchronously to its `CliStreams` (default: the process
+  streams), then loads `src/scaffold-cli.ts` — the `NodeServices.layer`
+  root, the scaffold program, and Clack — with a dynamic `import()`. Clack
+  stays the prompt renderer and is not replaced by `readLine`.
 - Keep `display` text explicit about line endings (`\n`); the service writes
   what it is given.
-- Tests provide a capture layer (`tests/support/cli-terminal.ts`:
-  `Terminal.make({ display })` + `Stdio.layerTest({ stdout, stderr })`)
-  through `runCli(args, { services })`; they never spy on `process.stdout`.
+- Tests provide a capture layer plus capture argv sinks
+  (`tests/support/cli-terminal.ts`: `Terminal.make({ display })` +
+  `Stdio.layerTest({ stdout, stderr })` + `argvText`) through
+  `runCli(args, { argvText, services })`; they never spy on
+  `process.stdout`. The scaffolder's `tests/cli-text.test.ts` passes capture
+  `CliStreams` to `runCli`.
 - **Protocol stdout stays raw.** MCP stdio JSON-RPC (`mcp-entry.ts`,
   `mcp run`), hook result JSON (`adapters/hook-contract.ts`), the emitted
   routed-CLI shell (`cli-entry.ts`'s `writeOut`/`writeErr` ports and the
@@ -472,7 +521,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
 | `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
-| `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI user-facing text, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`) and `create-agent-bundle`'s `--help` / flag-error text (2026-09-03) | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded +180 ms budget |
+| `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
 ## Language service

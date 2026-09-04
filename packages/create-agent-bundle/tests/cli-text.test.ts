@@ -1,59 +1,42 @@
-import { Effect, FileSystem, Layer, Path, Sink, Stdio, Terminal } from 'effect';
 import { describe, expect, it } from '@rstest/core';
 
-import { runPromise } from '../src/effect/boundary.ts';
-import { cliProgram } from '../src/index.ts';
+import { runCli, type CliStreams } from '../src/index.ts';
 import { helpText } from '../src/options.ts';
 
 /**
- * The scaffolder's plain text — `--help` and a flag error — goes through the
- * `Terminal` / `Stdio` services, so it is proven against a capture layer
- * rather than by spying on `process.stdout`. Clack renders the prompts and is
- * not under test here.
+ * The scaffolder's plain text — `--help` and a flag error — is written by the
+ * argv layer's synchronous sinks before the scaffold chunk (Effect, the Node
+ * platform layer, Clack) is ever loaded, so it is proven against capture
+ * sinks rather than by spying on `process.stdout`. Clack renders the prompts
+ * and is not under test here.
  */
 
-type CliLayer = Layer.Layer<FileSystem.FileSystem | Path.Path | Stdio.Stdio | Terminal.Terminal>;
-
-/**
- * Terminal and Stdio capture what the CLI writes; the filesystem is a noop
- * stub because neither `--help` nor a flag error may touch it (a call would
- * fail with `NotFound` and surface as a test failure).
- */
-const captureLayer = (): { readonly layer: CliLayer; readonly stderr: () => string; readonly stdout: () => string } => {
+const captureStreams = (): { readonly stderr: () => string; readonly stdout: () => string; readonly streams: CliStreams } => {
   const out: string[] = [];
   const err: string[] = [];
-  const decode = (chunk: string | Uint8Array): string => (typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
-  const terminal = Terminal.make({
-    columns: Effect.succeed(80),
-    display: (text) => Effect.sync(() => void out.push(text)),
-    readInput: Effect.die('key input is not used by create-agent-bundle'),
-    readLine: Effect.fail(new Terminal.QuitError({})),
-    rows: Effect.succeed(24),
-  });
-  const stdio = Stdio.layerTest({
-    stderr: () => Sink.forEach((chunk: string | Uint8Array) => Effect.sync(() => void err.push(decode(chunk)))),
-    stdout: () => Sink.forEach((chunk: string | Uint8Array) => Effect.sync(() => void out.push(decode(chunk)))),
-  });
   return {
-    layer: Layer.mergeAll(Layer.succeed(Terminal.Terminal, terminal), stdio, FileSystem.layerNoop({}), Path.layer),
     stderr: () => err.join(''),
     stdout: () => out.join(''),
+    streams: {
+      stderr: (text) => void err.push(text),
+      stdout: (text) => void out.push(text),
+    },
   };
 };
 
 describe('create-agent-bundle plain CLI text', () => {
-  it('prints --help through Terminal.display on stdout and exits 0', async () => {
-    const captured = captureLayer();
-    const exitCode = await runPromise(Effect.provide(cliProgram(['--help']), captured.layer));
+  it('prints --help on stdout and exits 0', async () => {
+    const captured = captureStreams();
+    const exitCode = await runCli(['--help'], captured.streams);
 
     expect(exitCode).toBe(0);
     expect(captured.stdout()).toBe(helpText);
     expect(captured.stderr()).toBe('');
   });
 
-  it('prints a flag error and the help text through Stdio.stderr and exits 2', async () => {
-    const captured = captureLayer();
-    const exitCode = await runPromise(Effect.provide(cliProgram(['one', 'two']), captured.layer));
+  it('prints a flag error and the help text on stderr and exits 2', async () => {
+    const captured = captureStreams();
+    const exitCode = await runCli(['one', 'two'], captured.streams);
 
     expect(exitCode).toBe(2);
     expect(captured.stdout()).toBe('');
