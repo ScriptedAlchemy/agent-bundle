@@ -14,6 +14,7 @@ import {
   declaredDependencies,
   importedPackageNames,
   isNpmParseable,
+  isValidPackageName,
   isRegistrySpecifier,
   isWorkspaceProtocol,
   type DeclaredDependency,
@@ -150,10 +151,10 @@ const perField = (
  */
 /** An optional dependency npm parses but cannot fetch: the install continues without it. */
 const survivable = (dependency: DeclaredDependency): boolean =>
-  dependency.field === 'optionalDependencies' && isNpmParseable(dependency.specifier);
+  dependency.field === 'optionalDependencies' && isValidPackageName(dependency.name) && isNpmParseable(dependency.specifier);
 
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
-  `package.json ${field} names packages a consumer's npm cannot resolve through a registry: ${own.map((dependency) =>
+  `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
     `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `;
 
 const unresolvableRecovery = 'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
@@ -181,9 +182,10 @@ const dependencyDiagnostics = async (options: {
     dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`);
   // A consumer's install fails on a workspace protocol the packer leaves in place, on a fetch npm refuses
   // (installed entries only), or on a scheme npm cannot parse — which it reads even for a peer it never installs.
-  const unresolvable = declared.filter((dependency) => !embedded(dependency) && (isWorkspaceProtocol(dependency.specifier)
-    ? !options.packerRewritesWorkspaceProtocols
-    : dependency.installed ? !isRegistrySpecifier(dependency.specifier) : !isNpmParseable(dependency.specifier)));
+  const unresolvable = declared.filter((dependency) => !embedded(dependency) && (!isValidPackageName(dependency.name)
+    || (isWorkspaceProtocol(dependency.specifier)
+      ? !options.packerRewritesWorkspaceProtocols
+      : dependency.installed ? !isRegistrySpecifier(dependency.specifier) : !isNpmParseable(dependency.specifier))));
   // A computed import() may load any declared package; nothing can then be called unused.
   const unused = imported.complete
     ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))

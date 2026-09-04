@@ -152,8 +152,17 @@ const nonRegistrySpecifier = new RegExp([
   String.raw`^[^\s@]+@[^\s:]+:`, // scp-style git@host:path
   windowsDrivePath.source,
   String.raw`^(?:\.|/|~[\\/])`, // relative, absolute, or home path
+  String.raw`\.(?:tgz|tar\.gz|tar)$`, // a bare tarball filename, which npm reads from disk
   String.raw`^[^\s@/]+/[^\s/]+$`, // owner/repo[#ref] GitHub shorthand
 ].join('|'), 'iu');
+
+/**
+ * A package name npm accepts in a dependency key: optionally scoped, URL-safe,
+ * no leading `.` or `_`, at most 214 characters. npm validates the key as well
+ * as the specifier, and rejects the manifest with `EINVALIDPACKAGENAME`.
+ */
+export const isValidPackageName = (name: string): boolean =>
+  name.length <= 214 && /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/iu.test(name);
 
 /**
  * The semver range grammar npm accepts: `||`-separated sets of

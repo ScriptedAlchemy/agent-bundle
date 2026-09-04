@@ -4,6 +4,7 @@ import {
   declaredDependencies,
   isNpmParseable,
   isRegistrySpecifier,
+  isValidPackageName,
   isWorkspaceProtocol,
   declarationSpecifiers,
   packageNameOf,
@@ -74,6 +75,10 @@ it.each([
   ['file:', false],
   ['github:', false],
   ['http:%zz', false],
+  // A bare tarball filename is a file source npm reads from disk.
+  ['foo.tgz', false],
+  ['vendor/foo.tar.gz', false],
+  ['foo.tar', false],
 ])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
   expect(isRegistrySpecifier(specifier)).toBe(registry);
 });
@@ -102,8 +107,25 @@ it.each([
   ['http:%zz', false],
   ['https://', false],
   ['github:', false],
+  ['foo.tgz', true],
 ])('isNpmParseable(%j) is %s', (specifier, parseable) => {
   expect(isNpmParseable(specifier)).toBe(parseable);
+});
+
+it.each([
+  ['name', true],
+  ['@scope/name', true],
+  ['some.pkg_name-1~', true],
+  ['UPPER', true], // legacy names npm still installs
+  ['bad name', false],
+  ['.hidden', false],
+  ['_private', false],
+  ['@scope', false],
+  ['@scope/', false],
+  ['name/extra', false],
+  ['a'.repeat(215), false],
+])('isValidPackageName(%j) is %s', (name, valid) => {
+  expect(isValidPackageName(name)).toBe(valid);
 });
 
 it('tells workspace protocols apart and knows which packers rewrite them', () => {
