@@ -286,17 +286,25 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       'not-embedded': 'file:../not-embedded',
     };
     document.bundleDependencies = ['embedded', 'not-embedded'];
-    document.optionalDependencies = { scp: 'git@github.com:owner/repo.git' };
+    document.optionalDependencies = {
+      scp: 'git@github.com:owner/repo.git',
+      // npm parses these two only to fail, so optional or not, the consumer's install dies.
+      'typo-optional': 'foo:bar',
+      'tag-optional': 'not a valid spec',
+    };
   },
   async () => {
     const pack = { ...result.pack, files: [...result.pack.files, { path: 'node_modules/embedded/package.json' }] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
-    // npm survives an optional dependency it cannot fetch, so that entry warns rather than blocks the release.
-    expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'warning']);
+    // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
+    // release; a specifier it cannot parse fails the manifest read and stays fatal.
+    expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
+    expect(reported[1]?.message).not.toContain('"scp"');
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }

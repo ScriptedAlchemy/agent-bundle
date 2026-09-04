@@ -148,6 +148,18 @@ const perField = (
  * fail outright when the specifier is one a consumer's npm cannot resolve
  * (git, remote tarball, path, or an unrewritten workspace protocol).
  */
+/** An optional dependency npm parses but cannot fetch: the install continues without it. */
+const survivable = (dependency: DeclaredDependency): boolean =>
+  dependency.field === 'optionalDependencies' && isNpmParseable(dependency.specifier);
+
+const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
+  `package.json ${field} names packages a consumer's npm cannot resolve through a registry: ${own.map((dependency) =>
+    `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `;
+
+const unresolvableRecovery = 'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
+  + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and never accepts workspace: or catalog:, '
+  + 'which only pnpm, Yarn, or Bun rewrite while packing.';
+
 const dependencyDiagnostics = async (options: {
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
@@ -183,18 +195,18 @@ const dependencyDiagnostics = async (options: {
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
       'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
     )),
-    // npm skips an optional dependency it cannot fetch, so the install survives; the entry is still dead weight every consumer fails to fetch.
-    ...perField(unresolvable, (field, own) => diagnostic(
+    // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed;
+    // an unsupported protocol or invalid selector fails the manifest read itself, whichever field declares it.
+    ...perField(unresolvable.filter((dependency) => !survivable(dependency)), (field, own) => diagnostic(
       'AB7015',
-      `package.json ${field} names packages a consumer's npm cannot resolve through a registry: ${own.map((dependency) =>
-        `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `
-        + (field === 'optionalDependencies'
-          ? 'every consumer install tries and fails to fetch them, then continues without them.'
-          : 'consumers cannot install the package.'),
-      'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
-        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and never accepts workspace: or catalog:, '
-        + 'which only pnpm, Yarn, or Bun rewrite while packing.',
-      field === 'optionalDependencies' ? 'warning' : 'error',
+      `${unresolvableMessage(field, own)}consumers cannot install the package.`,
+      unresolvableRecovery,
+    )),
+    ...perField(unresolvable.filter(survivable), (field, own) => diagnostic(
+      'AB7015',
+      `${unresolvableMessage(field, own)}every consumer install tries and fails to fetch them, then continues without them.`,
+      unresolvableRecovery,
+      'warning',
     )),
   ];
 };

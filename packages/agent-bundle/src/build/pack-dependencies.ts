@@ -131,13 +131,6 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
  */
 const npmScheme = /^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file|npm):/iu;
 const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
-
-/** Whether npm parses this specifier; a Windows drive path (`c:\…`) is a path, not a scheme. */
-export const isNpmParseable = (specifier: string): boolean => {
-  const trimmed = specifier.trim();
-  return !anyScheme.test(trimmed) || npmScheme.test(trimmed) || windowsDrivePath.test(trimmed);
-};
-
 const windowsDrivePath = /^[a-z]:[\\/]/iu;
 
 /**
@@ -154,6 +147,45 @@ const nonRegistrySpecifier = new RegExp([
   String.raw`^(?:\.|/|~[\\/])`, // relative, absolute, or home path
   String.raw`^[^\s@/]+/[^\s/]+$`, // owner/repo[#ref] GitHub shorthand
 ].join('|'), 'iu');
+
+/**
+ * The semver range grammar npm accepts: `||`-separated sets of
+ * whitespace-separated comparators (`>=`, `<=`, `>`, `<`, `=`, `~`, `~>`,
+ * `^`) or a hyphen range, over partial versions with `x`/`X`/`*` wildcards,
+ * an optional `v`, and prerelease/build tails. An empty range is `*`.
+ */
+const semverRange = (() => {
+  const part = String.raw`(?:\d+|x|X|\*)`;
+  const partial = String.raw`v?${part}(?:\.${part}(?:\.${part})?)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`;
+  const comparator = String.raw`(?:>=|<=|>|<|=|~>|~|\^)?\s*${partial}`;
+  const set = String.raw`(?:${partial}\s+-\s+${partial}|${comparator}(?:\s+${comparator})*)?`;
+  return new RegExp(String.raw`^\s*${set}(?:\s*\|\|\s*${set})*\s*$`, 'u');
+})();
+
+/**
+ * A scheme-less registry selector npm accepts: a semver range, or a dist-tag,
+ * which npm validates as URL-safe (`encodeURIComponent` leaves it unchanged;
+ * `"not a valid spec"` fails with `EINVALIDTAGNAME`).
+ */
+const isRegistrySelector = (selector: string): boolean =>
+  semverRange.test(selector) || encodeURIComponent(selector) === selector;
+
+/**
+ * Whether npm parses this specifier at all: a known scheme, a Windows drive
+ * path, a git/path/GitHub-shorthand form, an `npm:` alias with a parseable
+ * target, or a valid registry selector. Anything else fails every consumer's
+ * install before any fetch, whichever field declares it.
+ */
+export const isNpmParseable = (specifier: string): boolean => {
+  const trimmed = specifier.trim();
+  const alias = registryAlias.exec(trimmed);
+  if (alias !== null) {
+    const target = alias.groups?.target;
+    return target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target));
+  }
+  if (anyScheme.test(trimmed)) return npmScheme.test(trimmed) || windowsDrivePath.test(trimmed);
+  return nonRegistrySpecifier.test(trimmed) || isRegistrySelector(trimmed);
+};
 
 /**
  * Whether a consumer's npm resolves this dependency specifier, as written,

@@ -57,6 +57,18 @@ it.each([
   ['foo:bar', false],
   ['jsr:@scope/name', false],
   ['npm:name@foo:bar', false],
+  // Scheme-less selectors: every range form npm accepts, and URL-safe dist-tags; anything else is EINVALIDTAGNAME.
+  ['', true],
+  ['*', true],
+  ['1.x', true],
+  ['>=1.2.3 <2.0.0', true],
+  ['1.2.3 - 2.3.4', true],
+  ['^1.0.0 || ^2.0.0', true],
+  ['v1.2.3', true],
+  ['1.2.3-beta.1+build.5', true],
+  ['next', true],
+  ['not a valid spec', false],
+  ['npm:name@not a valid spec', false],
 ])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
   expect(isRegistrySpecifier(specifier)).toBe(registry);
 });
@@ -75,6 +87,10 @@ it.each([
   ['link:../local', false],
   ['portal:../local', false],
   ['foo:bar', false],
+  ['git@github.com:owner/repo.git', true],
+  ['owner/repo', true],
+  ['../local', true],
+  ['not a valid spec', false],
 ])('isNpmParseable(%j) is %s', (specifier, parseable) => {
   expect(isNpmParseable(specifier)).toBe(parseable);
 });
