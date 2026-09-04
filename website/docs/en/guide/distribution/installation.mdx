@@ -114,8 +114,8 @@ created, the host registrations it performed, and timestamps. Cursor local copie
 `.agent-bundle-install.json`; Claude, Codex, and Cursor marketplace-mode installs keep theirs under
 `<host root>/agent-bundle/receipts/`. `uninstall` removes exactly what the receipt owns and
 reverses exactly the registrations it recorded — never anything else; unowned entries are listed
-as retained. Durable runtime state (`state/`) is kept unless you pass
-`--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
+as retained. Durable runtime state (`state/`, and for a Cursor copy of an Agent Plugins pack the
+`PLUGIN_DATA` directory the receipt records) is kept unless you pass `--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
 Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; Codex deletes the
 cached tree and offers no keep-data option). A missing receipt (`AB7009`) or a content mismatch
 (`AB7007`) is refused unless `--force`; a directory that belongs to another plugin is refused

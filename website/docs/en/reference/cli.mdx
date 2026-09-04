@@ -123,7 +123,7 @@ agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <m
 | `--from <bundle-dir>` | `process.cwd()` | Bundle directory or artifact root that identifies the plugin (name, version, marketplace). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
-| `--keep-data` | on | Keep durable runtime state (`state/`: state kernel, notices journal). This is the default; the flag makes it explicit. |
+| `--keep-data` | on | Keep durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. |
 | `--purge-data` | off | Also remove durable runtime state. Refused (`AB7008`) without `--confirm-purge`. |
 | `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |

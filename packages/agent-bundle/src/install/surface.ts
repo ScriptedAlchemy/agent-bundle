@@ -160,8 +160,11 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
   'Uninstall removes exactly what the receipt owns: the listed files, the directories the installer',
   `created (including \`~/.cursor/plugins/local\` when the installer made it), and nothing else. Durable`,
-  'runtime state under `state/` (state kernel, notices journal) is kept unless `--purge-data --confirm-purge`',
-  'is passed; unowned files are left in place and listed. A directory without a receipt is refused unless',
+  'runtime state under `state/` (state kernel, notices journal) — and, for an Agent Plugins pack with a stdio',
+  'server, the `~/.cursor/agent-bundle/plugin-data/<name>` directory the receipt records as `PLUGIN_DATA` — is kept',
+  'unless `--purge-data --confirm-purge` is passed (a kept data directory leaves a remnant receipt behind so a later',
+  'purge still finds it; an empty one is pruned); unowned files are left in place and listed. A directory without a',
+  'receipt is refused unless',
   '`--force` (which removes a pre-receipt legacy copy by its inventory); owned content that no longer matches',
   'the receipt is refused unless `--force`; a directory that is not this plugin\'s install is always refused.',
   'A second run is a `Not installed` no-op. `agent-bundle uninstall cursor --from ./ [--mode marketplace]`',
@@ -227,7 +230,8 @@ const portableInstructions = (): string[] => [
   '```',
   '',
   'Uninstall removes exactly what the receipt owns (files, installer-created directories) and keeps',
-  'durable runtime state under `state/` unless `--purge-data --confirm-purge` is passed. A missing',
+  'durable runtime state under `state/` (and the recorded `PLUGIN_DATA` directory of an Agent Plugins pack)',
+  'unless `--purge-data --confirm-purge` is passed. A missing',
   'receipt or modified owned content is refused unless `--force`; foreign directories are always refused.',
   '',
 ];
@@ -260,8 +264,10 @@ const installMarkdown = (model: NormalizedPlugin, target: BuiltInTarget): string
  * plugin bounds what leaves (owned files, installer-created directories, the
  * host directories it created), owned content must hash to the receipt unless
  * `--force`, a pre-receipt legacy copy needs `--force`, foreign directories
- * are refused regardless, `state/` is kept unless `--purge-data --confirm-purge`,
- * `--plan` prints the exact paths and writes nothing, and a second run is a
+ * are refused regardless, `state/` and the receipt's recorded `PLUGIN_DATA`
+ * directory are kept unless `--purge-data --confirm-purge` (a kept data
+ * directory leaves a remnant receipt that records it), `--plan` prints the
+ * exact paths and writes nothing, and a second run is a
  * `Not installed` no-op.
  */
 const cursorUninstallerSource = (): readonly string[] => [

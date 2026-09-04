@@ -309,9 +309,10 @@ receipt and remove exactly what it owns:
   host no longer holds is `already-absent`, so an orphaned receipt is consumed
   without running a host verb.
 
-Durable runtime state (`state/`: state kernel, notices journal) is kept by
-default; `--purge-data --confirm-purge` removes it (`AB7008` without the
-confirmation). The typed `data.outcome` is honest per host: Cursor `kept` /
+Durable runtime state (`state/`: state kernel, notices journal; for a Cursor
+copy of an Agent Plugins pack, also the `PLUGIN_DATA` directory the receipt
+records) is kept by default; `--purge-data --confirm-purge` removes it
+(`AB7008` without the confirmation). The typed `data.outcome` is honest per host: Cursor `kept` /
 `purged` / `absent`; Claude `retained-by-host` (Claude 2.1.257 orphans the
 cached copy for its ~14-day grace period; a purge also removes `state/` and
 `plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (codex-cli

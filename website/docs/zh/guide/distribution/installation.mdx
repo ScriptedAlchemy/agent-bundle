@@ -96,8 +96,8 @@ node artifact/cursor/install.mjs --uninstall [--mode marketplace]
 每次安装都会写入生命周期回执（`agent-bundle-install-receipt/2`）：版本、内容哈希、投递模式、作用域、归属的文件与
 目录、安装器创建的宿主目录、执行过的宿主注册，以及时间戳。Cursor 本地副本以 `.agent-bundle-install.json` 携带它；
 Claude、Codex 与 Cursor 市场模式的安装把回执放在 `<宿主根目录>/agent-bundle/receipts/` 下。`uninstall` 只删除回执
-归属的内容，只撤销它记录的注册——绝不多删；非归属条目会被列为保留。持久运行时状态（`state/`）除非传入
-`--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
+归属的内容，只撤销它记录的注册——绝不多删；非归属条目会被列为保留。持久运行时状态（`state/`，以及 Agent Plugins
+包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录）除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
 副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。缺少回执（`AB7009`）或内容不匹配
 （`AB7007`）会被拒绝，除非 `--force`；属于另一个插件的目录无论如何都被拒绝；再次运行是 `not-installed` 空操作。
 格式 2 之前写入的回执会在补全生命周期字段后读取并给出诊断（`AB7329`），绝不被拒绝。
