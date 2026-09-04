@@ -553,6 +553,80 @@ it.live('reports a takeover that fails for a reason other than "still owned" and
   yield* expectMissing(`${endpoint}.lock`);
 }), 20_000);
 
+it.live('keeps standing by and takes over later even when the error reporter itself throws', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-throwing-reporter-${crypto.randomUUID()}`;
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  let failedAttempts = 0;
+  const reported: EventRuntimeTransportError[] = [];
+  const standby = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServerForTest({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      onStandbyError: (error) => {
+        reported.push(error);
+        throw new Error('reporter exploded');
+      },
+      whenOwned: 'standby',
+    }, {
+      afterEndpointProbe: async (state) => {
+        if (state === 'live' || failedAttempts > 0) return;
+        failedAttempts += 1;
+        throw new Error('probe hook failed once');
+      },
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(standby.role()).toBe('standby');
+  const takeover = nextRole(standby);
+
+  yield* Effect.promise(() => owner.close());
+  // The first attempt's failure reached the reporter, whose throw did not end the loop.
+  expect(yield* Effect.promise(() => takeover)).toBe('owner');
+  expect(failedAttempts).toBe(1);
+  expect(reported.map((error) => error.message)).toEqual(['Event runtime endpoint probe hook failed.']);
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+}), 20_000);
+
+it.live('still reaches a later role listener when an earlier listener and the error reporter both throw', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-throwing-listener-and-reporter-${crypto.randomUUID()}`;
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  let reports = 0;
+  const standby = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      onStandbyError: () => {
+        reports += 1;
+        throw new Error('reporter exploded');
+      },
+      whenOwned: 'standby',
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  standby.onRoleChange(() => { throw new Error('listener exploded'); });
+  const roles: EventRuntimeServerRole[] = [];
+  standby.onRoleChange((role) => { roles.push(role); });
+
+  yield* Effect.promise(() => owner.close());
+  yield* Effect.promise(() => eventually(() => roles.length > 0, 5_000));
+  expect(roles).toEqual(['owner']);
+  expect(reports).toBe(1);
+  expect(standby.role()).toBe('owner');
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+}), 20_000);
+
 it.live('keeps notifying the remaining role listeners when an earlier one throws, and reports the throw', () => Effect.gen(function*() {
   if (process.platform === 'win32') return;
   const endpointId = `event-ipc-role-listener-${crypto.randomUUID()}`;

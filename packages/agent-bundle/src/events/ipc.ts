@@ -156,8 +156,9 @@ export interface CreateEventRuntimeServerOptions {
    * than "still owned": a takeover attempt that failed for any other reason
    * (a probe, claim, stale-path removal, listen, or release failure) and a
    * role listener that threw (`Event runtime role listener failed.`). The
-   * standby keeps probing regardless; without this callback those failures
-   * are invisible, and the process looks healthy while shared-only hooks stay
+   * standby keeps probing regardless — including when this callback itself
+   * throws, which is swallowed; without this callback those failures are
+   * invisible, and the process looks healthy while shared-only hooks stay
    * unavailable.
    */
   readonly onStandbyError?: (error: EventRuntimeTransportError) => void;
@@ -962,23 +963,41 @@ const closeServer = Effect.fnUntraced(function*(
   yield* releaseOwnedEndpoint(listener, listener.endpointIdentity, testHooks);
 });
 
+type StandbyErrorReporter = (error: EventRuntimeTransportError) => void;
+
+/**
+ * The one way the standby path ever calls `onStandbyError`. The reporter is
+ * the caller's last line of diagnostics, so a reporter that itself throws has
+ * nowhere safe left to report to and is swallowed: it must never end the
+ * standby fiber (which would leave the process looking healthy and never
+ * taking over) or stop the role listeners after it.
+ */
+const guardedStandbyErrorReporter = (onStandbyError: StandbyErrorReporter | undefined): StandbyErrorReporter =>
+  (error) => {
+    try {
+      onStandbyError?.(error);
+    } catch {
+      // Nothing safe is left to report to.
+    }
+  };
+
 /**
  * Delivers the one `standby` → `owner` notification to every listener. Each
- * runs in its own guard: a listener that throws is reported through
- * `onStandbyError` and neither stops the listeners after it nor the role
+ * runs in its own guard: a listener that throws is reported through the
+ * (guarded) reporter and neither stops the listeners after it nor the role
  * transition, which has already happened.
  */
 const notifyRoleListeners = (
   roleListeners: ReadonlySet<(role: EventRuntimeServerRole) => void>,
   role: EventRuntimeServerRole,
-  onStandbyError: ((error: EventRuntimeTransportError) => void) | undefined,
+  report: StandbyErrorReporter,
 ): Effect.Effect<void> =>
   Effect.sync(() => {
     for (const notify of roleListeners) {
       try {
         notify(role);
       } catch (error) {
-        onStandbyError?.(transportError('runtime-failed', 'Event runtime role listener failed.', error));
+        report(transportError('runtime-failed', 'Event runtime role listener failed.', error));
       }
     }
   });
@@ -1000,10 +1019,10 @@ const standByForEndpoint = Effect.fnUntraced(function*(
   endpoint: string,
   acquire: Effect.Effect<EventSocketListener, EventRuntimeTransportError, Scope.Scope>,
   roleListeners: ReadonlySet<(role: EventRuntimeServerRole) => void>,
-  onStandbyError: ((error: EventRuntimeTransportError) => void) | undefined,
+  report: StandbyErrorReporter,
 ): Effect.fn.Return<void, never, Scope.Scope> {
   const reportAndStandBy = (error: EventRuntimeTransportError): Effect.Effect<undefined> => Effect.sync(() => {
-    onStandbyError?.(error);
+    report(error);
     return undefined;
   });
   while (true) {
@@ -1016,7 +1035,7 @@ const standByForEndpoint = Effect.fnUntraced(function*(
       Effect.catch(reportAndStandBy),
     );
     if (listener === undefined) continue;
-    yield* notifyRoleListeners(roleListeners, 'owner', onStandbyError);
+    yield* notifyRoleListeners(roleListeners, 'owner', report);
     return;
   }
 });
@@ -1043,7 +1062,7 @@ const eventSocketLayer = (
     const opened = yield* acquire.pipe(Effect.catchIf(isEndpointOwned, () => Effect.succeed(undefined)));
     if (opened !== undefined) return { endpoint, listener, roleListeners, standby: undefined };
     const standby = yield* Effect.forkScoped(
-      standByForEndpoint(endpoint, acquire, roleListeners, options.onStandbyError),
+      standByForEndpoint(endpoint, acquire, roleListeners, guardedStandbyErrorReporter(options.onStandbyError)),
     );
     return { endpoint, listener, roleListeners, standby };
   }));
