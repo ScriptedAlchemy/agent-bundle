@@ -196,23 +196,39 @@ const literalLoad = (loaders: readonly string[]): RegExp =>
  * no word boundary before `require` and never match; `path.resolve(x)` and
  * `Promise.resolve(x)` are not resolution and never match.
  */
-const computedLoad = (loaders: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*`
+const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)])\s*[(]\s*`
     + String.raw`(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
   'u',
 );
 
-/** `const load = createRequire(…)`: the binding is a loader, called like `require` from then on. */
-const createRequireBinding = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*createRequire\s*[(]/gu;
+const escapeIdentifier = (name: string): string => name.replace(/\$/gu, String.raw`\$`);
+
+/**
+ * `createRequire` renamed on import or destructuring: `import { createRequire
+ * as makeRequire } from "node:module"` or `const { createRequire: makeRequire }
+ * = require("node:module")`. Each alias is a factory like `createRequire` itself.
+ */
+const createRequireAlias = /\bcreateRequire\s*(?:as|:)\s*([A-Za-z_$][\w$]*)/gu;
+
+const factoryNames = (source: string): readonly string[] => [
+  'createRequire',
+  ...Array.from(source.matchAll(createRequireAlias), (match) => escapeIdentifier(match[1] ?? '')),
+];
+
+/** `const load = <factory>(…)`: the binding is a loader, called like `require` from then on. */
+const loaderBinding = (factories: readonly string[]): RegExp =>
+  new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:${factories.join('|')})\s*[(]`, 'gu');
 
 /**
  * The identifiers a file loads packages through: `require` itself plus every
- * name bound to a `createRequire(…)` result, so `const load =
- * createRequire(import.meta.url); load("driver")` counts like `require("driver")`.
+ * name bound to a `createRequire(…)` result — under the factory's own name or
+ * an alias — so `const load = createRequire(import.meta.url); load("driver")`
+ * counts like `require("driver")`.
  */
 const loaderNames = (source: string): readonly string[] => [
   'require',
-  ...Array.from(source.matchAll(createRequireBinding), (match) => (match[1] ?? '').replace(/\$/gu, String.raw`\$`)),
+  ...Array.from(source.matchAll(loaderBinding(factoryNames(source))), (match) => escapeIdentifier(match[1] ?? '')),
 ];
 
 /**
@@ -267,7 +283,7 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
   const loaders = loaderNames(source);
   return {
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad(loaders).test(source),
+      && !computedLoad(loaders, factoryNames(source)).test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
       ...Array.from(source.matchAll(literalLoad(loaders)), (match) => match[2] ?? ''),
@@ -327,8 +343,10 @@ const installScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as co
  * (and `prepare` when installing from git), so a script that names a
  * dependency, or one of its `bin` commands, needs it installed even though no
  * packed JavaScript imports it. Bin names come from the dependency's own
- * manifest under `node_modules`; an uninstalled dependency contributes its
- * package name only.
+ * manifest under `node_modules`; when that manifest is unreadable (Plug'n'Play,
+ * a platform-specific optional dependency not installed here) the unscoped
+ * package name stands in, npm's default bin name — `node-pre-gyp` for
+ * `@mapbox/node-pre-gyp`.
  */
 const installScriptDependencies = async (
   packageDocument: Readonly<Record<string, unknown>>,
@@ -338,15 +356,17 @@ const installScriptDependencies = async (
   const scripts = isRecord(packageDocument.scripts) ? packageDocument.scripts : {};
   const text = installScripts.flatMap((script) => (typeof scripts[script] === 'string' ? [scripts[script]] : [])).join('\n');
   if (text === '') return [];
-  const mentioned = async (name: string): Promise<boolean> => {
-    if (text.includes(name)) return true;
+  const binCommands = async (name: string): Promise<readonly string[]> => {
+    const unscoped = name.replace(/^@[^/]+\//u, '');
     const manifest = await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8').catch(() => undefined);
-    if (manifest === undefined) return false;
+    if (manifest === undefined) return [unscoped];
     const parsed: unknown = JSON.parse(manifest);
     const bin = isRecord(parsed) ? parsed.bin : undefined;
-    const commands = typeof bin === 'string' ? [name.replace(/^@[^/]+\//u, '')] : isRecord(bin) ? Object.keys(bin) : [];
-    return commands.some((command) => new RegExp(String.raw`(?<![\w-])${command.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![\w-])`, 'u').test(text));
+    return typeof bin === 'string' ? [unscoped] : isRecord(bin) ? Object.keys(bin) : [];
   };
+  const mentioned = async (name: string): Promise<boolean> =>
+    text.includes(name) || (await binCommands(name)).some((command) =>
+      new RegExp(String.raw`(?<![\w-])${command.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![\w-])`, 'u').test(text));
   const used = await Promise.all(names.map(async (name) => ((await mentioned(name)) ? [name] : [])));
   return used.flat();
 };

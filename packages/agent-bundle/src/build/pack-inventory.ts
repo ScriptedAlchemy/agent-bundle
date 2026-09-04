@@ -162,9 +162,14 @@ const dependencyDiagnostics = async (options: {
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
   });
+  // `bundleDependencies` exempts an entry only when npm actually packed it: a name absent from node_modules
+  // at pack time is silently dropped from the tarball, and the consumer neither fetches nor finds it.
+  const packed = new Set(options.packedPaths);
+  const embedded = (dependency: DeclaredDependency): boolean =>
+    dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`);
   // A consumer's install fails on a workspace protocol the packer leaves in place, on a fetch npm refuses
   // (installed entries only), or on a scheme npm cannot parse — which it reads even for a peer it never installs.
-  const unresolvable = declared.filter((dependency) => !dependency.bundled && (isWorkspaceProtocol(dependency.specifier)
+  const unresolvable = declared.filter((dependency) => !embedded(dependency) && (isWorkspaceProtocol(dependency.specifier)
     ? !options.packerRewritesWorkspaceProtocols
     : dependency.installed ? !isRegistrySpecifier(dependency.specifier) : !isNpmParseable(dependency.specifier)));
   // A computed import() may load any declared package; nothing can then be called unused.

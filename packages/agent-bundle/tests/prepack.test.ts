@@ -248,8 +248,9 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
   async () => {
     const consumer = join(projectRoot, 'dist', 'aliased.mjs');
     await writeFile(consumer, [
-      'import { createRequire } from "node:module";',
-      'const load = createRequire(import.meta.url);',
+      // The factory renamed on import is still a factory.
+      'import { createRequire as makeRequire } from "node:module";',
+      'const load = makeRequire(import.meta.url);',
       'export const driver = load("driver-package");',
       '',
     ].join('\n'));
@@ -280,19 +281,22 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       sibling: 'workspace:*',
       // npm embeds bundled dependencies in the tarball; a consumer never fetches their specifier.
       embedded: 'file:../embedded',
+      // Declared bundled but absent from node_modules at pack time: npm silently packs nothing, so the consumer fetches it.
+      'not-embedded': 'file:../not-embedded',
     };
-    document.bundleDependencies = ['embedded'];
+    document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = { scp: 'git@github.com:owner/repo.git' };
   },
   async () => {
-    const reported = withCode(await diagnostics(), 'AB7015');
+    const pack = { ...result.pack, files: [...result.pack.files, { path: 'node_modules/embedded/package.json' }] };
+    const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it cannot fetch, so that entry warns rather than blocks the release.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'warning']);
-    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling']) {
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
     for (const name of ['alias', 'tilde', 'versioned', 'embedded']) {
@@ -300,7 +304,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     }
     expect(reported[0]?.recovery).toContain('registry');
 
-    const underPnpm = withCode(await diagnostics(result.pack, true), 'AB7015');
+    const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');
     expect(underPnpm[0]?.message).not.toContain('"sibling"');
   },
 ));
@@ -358,9 +362,18 @@ it('still reports AB7014 when the only non-literal resolve() calls are path or P
 
 it('accepts a dependency reached through a package imports map or run by a consumer install script', () => withPackageDocument(
   (document) => {
-    document.dependencies = { 'driver-package': '^1.0.0', 'named-in-script': '^1.0.0', typescript: '^5.0.0' };
+    document.dependencies = {
+      'driver-package': '^1.0.0',
+      'named-in-script': '^1.0.0',
+      typescript: '^5.0.0',
+      // Not installed here, so its bin names are unknowable; the unscoped name stands in for npm's default bin.
+      '@mapbox/node-pre-gyp': '^1.0.0',
+    };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
-    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'named-in-script --init && tsc --version' };
+    document.scripts = {
+      ...(document.scripts as Record<string, string> | undefined),
+      postinstall: 'named-in-script --init && tsc --version && node-pre-gyp install',
+    };
   },
   async () => {
     const consumer = join(projectRoot, 'dist', 'mapped.mjs');
@@ -373,6 +386,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
       const [reported] = withCode(await diagnostics(), 'AB7014');
       expect(reported?.message).toContain('"driver-package"');
       expect(reported?.message).not.toContain('"typescript"');
+      expect(reported?.message).not.toContain('"@mapbox/node-pre-gyp"');
     } finally {
       await rm(consumer, { force: true });
     }
