@@ -245,7 +245,9 @@ const generatedStateOwner = (
  * worker stdout guarded onto stderr (machine output owns stdout).
  */
 const renderedSessionSource = (workerFile: string): readonly string[] => [
-  'const openRenderedSession = ({ invocation, props, request, routeId, signal, terminal, validate }) => {',
+  // `limits` is the route's compiled render budget (#454), absent for the
+  // runtime default; it rides the dispatch so one dispatcher serves every budget.
+  'const openRenderedSession = ({ invocation, limits, props, request, routeId, signal, terminal, validate }) => {',
   `  const worker = new Worker(new URL(${JSON.stringify(`./${workerFile}`)}, import.meta.url), { stderr: true, stdout: true });`,
   "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
   "  worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -291,7 +293,7 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
   '  const dispatcher = createAgentRenderDispatcher(host);',
   '  return Object.freeze({',
   '    close: async () => { await worker.terminate(); },',
-  '    events: () => dispatcher.stream({ invocation, signal }),',
+  '    events: () => dispatcher.stream({ invocation, ...(limits === undefined ? {} : { limits }), signal }),',
   '    validate,',
   '  });',
   '};',
@@ -397,6 +399,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '  if (command.mcp !== undefined) {',
         '    return openRenderedSession({',
         "      invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } },",
+        '      limits: command.render,',
         '      props: { input: parsed },',
         `      request: { artifactEpoch: ${JSON.stringify(generatedRouteArtifactEpoch(options.plugin))}, kind: 'tool', operationId: command.routeId, surface: command.mcp.tool },`,
         '      routeId: command.routeId,',
@@ -407,6 +410,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '  }',
         '  return openRenderedSession({',
         "    invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
+        '    limits: command.render,',
         '    props: { input: parsed },',
         "    request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
         '    routeId: command.routeId,',

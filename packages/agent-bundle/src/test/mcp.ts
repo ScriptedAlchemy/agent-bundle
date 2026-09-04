@@ -21,6 +21,7 @@ import type {
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
 import type {
+  AgentRenderLimits,
   LineageHost,
   RegisteredMcpRouteId,
   RegisteredMcpRouteKind,
@@ -82,6 +83,14 @@ export interface InMemoryMcpSessionOptionsBase<
    * exactly as the artifact does; omitted sessions observe `request.lineage`
    * as `unavailable('not-provided')`.
    */
+  /**
+   * The server dispatcher's base render limits, as the generated entry's
+   * dispatcher has them (the runtime defaults when omitted). A route's compiled
+   * `config.render` budget layers over them per call exactly as in the
+   * artifact, so a low `maxElapsedMs` here observes a route's raised budget
+   * without waiting out the 60-second default.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
   readonly lineage?: AgentLineageRegistry;
   /** The host vocabulary the registry applies when the in-memory client name maps to none. */
   readonly lineageHost?: LineageHost;
@@ -540,6 +549,7 @@ export const openInMemoryMcpServer = async <
             target: options.lineageHost,
           },
         }),
+    ...(options.limits === undefined ? {} : { limits: options.limits }),
     plugin: manifest.plugin,
     routes: routes as never,
   });

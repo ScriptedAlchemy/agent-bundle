@@ -181,6 +181,37 @@ route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一�
 返回 fixture 的 token 产生的通知；而在 `callTool` 上设置了 `_meta.progressToken` 的
 `openInMemoryMcpServer()` 客户端会通过真实协议收到它们。
 
+## 渲染预算
+
+每次调用都在一个受运行时默认上限约束的渲染会话中进行，其中挂钟上限是 60 秒
+（`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`）。一条合理工作时间超过这一上限的路由——等待一次构建、
+对守护进程长轮询——应在 `config.render` 中声明自己的预算，而不是截短自己的等待再让调用方反复轮询：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Wait for a ticket to settle.',
+  render: { maxElapsedMs: 7_200_000 },
+} satisfies ToolConfig;
+```
+
+`maxElapsedMs` 是一个以毫秒计的正整数，上限为框架天花板 24 小时（从 `agent-bundle` 导出的
+`MAX_ROUTE_RENDER_ELAPSED_MS`）；其他任何值都会在构建时报 `AB4835`。编译器随 `config` 的其余部分静态读取
+该值，因此生成式 MCP 服务器会在该路由的每次 `tools/call`、`resources/read` 与 `prompts/get` 上把它应用到
+渲染会话；该工具的 `routes.mcpCommands` 投影以及渲染式 `src/cli/**` 命令在编译后的命令上携带同一个键
+（`CliRouteConfig` 上的 `config.render`；纯 `.ts` 命令没有渲染会话，会拒绝它）。`renderRoute` 与
+`openInMemoryMcpServer` 同样应用它，叠加在测试作为分发器基线传入的 `limits` 之上。省略 `render` 即保留
+默认值，其他上限（文档大小、事件数量、事件速率）保持不变。
+
+预算只约束框架自身的会话；宿主自己的工具调用期限仍然生效，因此整个等待期间都要持续汇报进度——调用运行
+期间，每次 `progress.report()` 与流式传输的 `Agent.Progress` 回退都会作为 `notifications/progress` 转发。
+Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，或按服务器配置的 `timeout`），其空闲
+计时器（stdio 服务器为 30 分钟）正是由这些通知重置；Codex 以 `tool_timeout_sec` 约束一次调用，除非操作者
+在 `config.toml` 中提高，否则为 60 秒。`agent-bundle inspect --routes` 会随每条路由编译后的 `config`
+一并显示该预算。
+
 ## 共享布局
 
 `src/layout.tsx` 是每个渲染式路由外层的组合点——页面框架中 `layout.tsx` 的思路应用到 Agent Document 上。

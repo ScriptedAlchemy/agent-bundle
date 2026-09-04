@@ -20,7 +20,7 @@ export type {
   SkillTokenId,
   SkillTreeLayoutDecision,
 } from './skills/index.ts';
-export { canonicalAgentEvents } from './routes/public.ts';
+export { canonicalAgentEvents, MAX_ROUTE_RENDER_ELAPSED_MS } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
@@ -47,6 +47,7 @@ export type {
   PromptConfig,
   ResourceConfig,
   RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
   RouteUiMeta,

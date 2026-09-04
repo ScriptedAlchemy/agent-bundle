@@ -32,6 +32,7 @@ import {
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
+import { routeRenderLimits } from './routes/render-budget.ts';
 import { noTerminal } from './terminal-capability.ts';
 import type {
   AgentActorIdentity,
@@ -41,6 +42,7 @@ import type {
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
+  AgentRenderLimits,
   AgentSessionIdentity,
   AgentTerminal,
   AgentWorkspaceIdentity,
@@ -259,9 +261,13 @@ export const renderGeneratedRoute = async (
 }, async () => {
   // State and notice admission live only in the render scope. This host scope
   // establishes identity and forwards it so one invocation is admitted once.
+  // The route's compiled `config.render` budget (#454) bounds this render
+  // session; the projector keeps forwarding progress for as long as it runs.
+  const render = routeRenderLimits(route.config);
   const projected = await projectMcpRenderStream(dispatcher.stream({
     artifactEpoch,
     invocation: { kind: 'tool', props: { input: input as never, operationId: route.id } },
+    ...(render === undefined ? {} : { limits: render }),
     signal: context.mcpReq.signal,
   }), projectorOptions(context));
   return {
@@ -670,6 +676,13 @@ export interface CreateGeneratedRouteMcpServerOptions {
    * call reads `request.lineage` from it. Absent registries leave the axis
    * `unavailable('not-provided')`.
    */
+  /**
+   * The dispatcher's base render limits; a route's compiled `config.render`
+   * budget layers over them per call. Generated entries leave the runtime
+   * defaults in place; the in-memory proof level lowers them to observe a
+   * route's budget without waiting out the default.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
   readonly lineage?: AgentLineageRegistry;
   readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
@@ -933,7 +946,10 @@ export const createGeneratedRouteMcpServer = async (
   options: CreateGeneratedRouteMcpServerOptions,
 ): Promise<McpServer> => {
   const server = new McpServer(options.plugin);
-  const dispatcher = createAgentRenderDispatcher(options.host);
+  const dispatcher = createAgentRenderDispatcher(
+    options.host,
+    options.limits === undefined ? {} : { limits: options.limits },
+  );
   // The subscribe bit registers before any transport connects; the SDK merges
   // its own resources.listChanged into the same capability object when the
   // inbox resource route registers below.

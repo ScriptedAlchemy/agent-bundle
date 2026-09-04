@@ -49,7 +49,9 @@ export {
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
-export { appResourceUri, canonicalAgentEvents } from './public.ts';
+export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
+export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
+export { appResourceUri, canonicalAgentEvents, MAX_ROUTE_RENDER_ELAPSED_MS } from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
@@ -70,6 +72,7 @@ export type {
   PromptConfig,
   ResourceConfig,
   RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
   RouteUiMeta,

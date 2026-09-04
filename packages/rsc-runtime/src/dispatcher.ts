@@ -14,6 +14,12 @@ export { decodeAgentDocument } from './decode-document.js';
 export interface AgentRenderDispatch {
   readonly artifactEpoch?: string;
   readonly invocation: AgentRenderInvocation;
+  /**
+   * Per-dispatch render limits layered over the dispatcher's own: the route's
+   * declared render budget (`config.render.maxElapsedMs`) travels here, so one
+   * long-lived dispatcher serves routes with different budgets.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
   readonly progress?: AgentProgressReporter;
   readonly signal: AbortSignal;
 }
@@ -91,7 +97,7 @@ export const createAgentRenderDispatcher = (
         }
         return current;
       },
-      limits: options.limits,
+      limits: { ...options.limits, ...request.limits },
       signal: request.signal,
     });
     const rememberFlight = (flight: Promise<ReadableStream<Uint8Array>>): Promise<ReadableStream<Uint8Array>> => {

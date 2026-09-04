@@ -898,6 +898,52 @@ describe('AgentRenderDispatcher streaming', () => {
     }
   });
 
+  it('layers per-dispatch render limits over the dispatcher base (#454)', { retry: 2, timeout: 5_000 }, async () => {
+    const finiteReader = (
+      await createWorkerHost('ready').execute({
+        invocation,
+        signal: new AbortController().signal,
+      })
+    ).getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const next = await finiteReader.read();
+      if (next.done) break;
+      chunks.push(next.value);
+    }
+    // The Flight bytes arrive at once; EOF only after 400ms of real time, so
+    // the render session's elapsed budget decides whether the document lands.
+    const host: AgentFlightExecutionHost = {
+      execute: async () => {
+        let eof: NodeJS.Timeout | undefined;
+        return new ReadableStream<Uint8Array>({
+          cancel() {
+            clearTimeout(eof);
+          },
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(chunk);
+            eof = setTimeout(() => controller.close(), 400);
+          },
+        });
+      },
+    };
+    const dispatcher = createAgentRenderDispatcher(host, { limits: { maxElapsedMs: 100 } });
+    const signal = new AbortController().signal;
+
+    // The dispatcher's base limit alone: the 400ms EOF is past the budget.
+    await expect(dispatcher.dispatch({ invocation, signal })).rejects.toMatchObject({
+      code: 'elapsed-time-exceeded',
+    });
+    // The same dispatcher, one dispatch declaring its own budget: the route's
+    // `config.render.maxElapsedMs` rides here and the document completes.
+    const document = await dispatcher.dispatch({ invocation, limits: { maxElapsedMs: 5_000 }, signal });
+    expect(document.status).toBe('success');
+    // Other limits stay the dispatcher's own; only the declared key changes.
+    await expect(dispatcher.dispatch({ invocation, limits: { maxDocumentNodes: 5_000 }, signal })).rejects.toMatchObject({
+      code: 'elapsed-time-exceeded',
+    });
+  });
+
   it('converts a synchronous host throw into a stream failure', async () => {
     const host: AgentFlightExecutionHost = {
       execute: () => {
