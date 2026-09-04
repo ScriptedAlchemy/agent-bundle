@@ -231,6 +231,13 @@ hooks 文件（`manifest.hooks` 只用于额外文档）。每个包装层都拿
 `runtime-unavailable`（没有活的 socket）时触发。`runtime-timeout`、`epoch-mismatch`、`invalid-message`
 与 `runtime-failed` 都以非零退出——过期的代码绝不会作答，也绝不会输出伪造的响应。
 
+运行时一侧同样是失败即关闭。生成的 MCP 服务端拥有这个 socket：它用一个独占锁文件认领端点、开始监听，
+并在关停时只有当它们仍是自己创建的那些文件时才把两者删除。无法删除自己 socket 路径的关停——或无法
+释放认领锁的启动——会报告 code 为 `runtime-failed` 的 `EventRuntimeTransportError`（`Unable to remove
+the event runtime endpoint.` / `Unable to release the event runtime endpoint claim.`），而不是静默退出；
+启动失败时会先关掉已经起来的监听器，因此绝不会在错误背后留下一个活的服务端。崩溃进程留下的过期
+socket 或锁会由下一个服务端恢复：它探测端点，并回收所有者已被证明死亡的认领。
+
 `runtime: 'standalone'` 的路由把它的模块打进包装层自身：同样的规范身份、同样的投影、没有共享的进程状态。
 `AB4817` 会拒绝这样的路由：它需要共享运行时，但在某个 target 上没有生成的 MCP 入口承载它，也没有独立
 回退。

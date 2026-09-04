@@ -260,6 +260,16 @@ also compiled its standalone form, and it fires **only** for `runtime-unavailabl
 socket). `runtime-timeout`, `epoch-mismatch`, `invalid-message`, and `runtime-failed` exit
 nonzero — stale code never answers, and a fabricated response is never emitted.
 
+The runtime side fails closed too. The generated MCP server owns the socket: it claims the
+endpoint with an exclusive lock file, listens, and removes both again on shutdown only while
+they are still the files it created. A shutdown that cannot remove its own socket path — or a
+startup that cannot release its claim lock — reports an `EventRuntimeTransportError` with code
+`runtime-failed` (`Unable to remove the event runtime endpoint.` / `Unable to release the event
+runtime endpoint claim.`) instead of exiting silently; the failed startup shuts its listener
+down first, so it never leaves a live server behind the error. A stale socket or lock left by a
+crashed process is recovered by the next server, which probes the endpoint and reclaims a
+claim whose owner is provably dead.
+
 A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
 canonical identity, the same projection, no shared process state. `AB4817` refuses a route
 that requires the shared runtime on a target where no generated MCP entry hosts it and no
