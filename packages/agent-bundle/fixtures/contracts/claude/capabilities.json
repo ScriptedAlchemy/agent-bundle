@@ -13,7 +13,7 @@
     "marketplace": ".claude-plugin/marketplace.json",
     "mcp": ".mcp.json"
   },
-  "observedCliVersion": "2.1.250",
+  "observedCliVersion": "2.1.260",
   "pathTokens": {
     "pluginData": "${CLAUDE_PLUGIN_DATA}",
     "pluginRoot": "${CLAUDE_PLUGIN_ROOT}",

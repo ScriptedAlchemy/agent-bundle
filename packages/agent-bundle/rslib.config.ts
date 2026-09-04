@@ -112,6 +112,7 @@ export default defineConfig({
       // into its generated bundle.
       routes: './src/routes/public.ts',
       rstest: './src/rstest/index.ts',
+      'terminal-capability': './src/terminal-capability.ts',
       test: './src/test/index.ts',
       'test/browser': './src/test/browser.ts',
     },

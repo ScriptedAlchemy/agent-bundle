@@ -453,7 +453,7 @@ and `agent-bundle inspect` reports the judgment per target (see
 [component accounting](entry-conventions.md#agent-bundle-inspect-component-accounting)).
 A host with no row for a kind reads as an honest `unavailable`, never a silent
 pass. The matrix below is the state of the pinned tables (Claude Code
-2.1.250, Codex 0.147.0, Cursor 2026-08-28, Agent Plugins 1.0.0); the JSON
+2.1.260, Codex 0.147.0, Cursor 2026-08-28, Agent Plugins 1.0.0); the JSON
 tables under `packages/agent-bundle/src/adapters/capabilities/` carry the
 evidence strings themselves.
 

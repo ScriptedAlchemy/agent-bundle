@@ -58,16 +58,24 @@ function, receives the generated process envelope:
 
 ```ts
 // src/cli.ts — the whole CLI entry a consumer writes
-export const main = async (argv: readonly string[]): Promise<number> => {
-  // ...
+import type { ExecutableMainContext } from 'agent-bundle';
+
+export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+  if (terminal.stderr.color !== 'none') { /* paint progress on stderr */ }
   return 0;
 };
 ```
 
-The envelope awaits `main(process.argv.slice(2))`, adopts a numeric return as the process exit
-code, and lets an escaped rejection surface through Node's top-level failure path (stack to
-stderr, exit code 1). Self-executing modules with no `main` export bundle directly, byte for
-byte.
+The envelope awaits `main(process.argv.slice(2), { terminal })`, adopts a numeric return as the
+process exit code, and lets an escaped rejection surface through Node's top-level failure path
+(stack to stderr, exit code 1). `terminal` is the process's
+[terminal capability](./mcp.mdx#the-terminal-capability): TTY-ness, color, and size for stdout
+and stderr, plus whether the two share one target, probed once before `main` runs by a
+dependency-free module the envelope inlines — a plain script or bin loads no runtime for it.
+`hostSurface` is `cli` for a package bin and `script` for an artifact script, so a module shipped
+on both surfaces sees the one it was launched from. A `main` declared with one parameter keeps
+working; the second argument is simply unread. Self-executing modules with no `main` export
+bundle directly, byte for byte, and receive no probe.
 
 ## The routed CLI
 

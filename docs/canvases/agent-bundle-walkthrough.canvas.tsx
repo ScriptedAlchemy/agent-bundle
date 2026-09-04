@@ -275,7 +275,7 @@ const WIRE_IPC_REQUEST = `{
   "protocolVersion": 1,
   "artifactEpoch": "17903a885df8d142e2fc4457e61bb34479e81a8f4cc64e24cb92db49eaabe3f1",
   "event": "tool/before",
-  "hostContractRevision": "2.1.250",
+  "hostContractRevision": "2.1.260",
   "target": "claude",
   "native": { ...the validated stdin envelope, value-preserving (re-serialized JSON, not raw bytes)... }
 }
@@ -287,7 +287,7 @@ const WIRE_RENDER_PROPS = `props = {
     event: "tool/before",
     idempotencyKey: sha256({ event, native, target }),
     observedAt: "2026-09-01T23:41:07.512Z",
-    provenance: { host: "claude", hostContractRevision: "2.1.250",
+    provenance: { host: "claude", hostContractRevision: "2.1.260",
                   nativeEvent: "PreToolUse", source: "native" },
     sequence: 1,
   },
@@ -499,7 +499,7 @@ export default function AgentBundleWalkthrough() {
           silent guess.
         </Text>
         <Table
-          headers={["Surface", "Claude 2.1.250", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
+          headers={["Surface", "Claude 2.1.260", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
           columnAlign={["left", "left", "left", "left", "left"]}
           rows={[
             ["Plugin manifest",
@@ -735,7 +735,7 @@ else try { output = await requestEventRuntime({ ... }); }
           Codex — with a written reason per host, not a silent gap.
         </Text>
         <Table
-          headers={["Canonical event", "Claude 2.1.250", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
+          headers={["Canonical event", "Claude 2.1.260", "Codex 0.147.0", "Cursor 2026-08-28", "Portable 1.0.0"]}
           rowTone={["success", "success", "success", "success", "success", "success", "warning"]}
           rows={[
             [<Text as="span" style={{ fontFamily: MONO }} size="small">session/start</Text>, "SessionStart", "SessionStart", "sessionStart", "—"],
@@ -963,7 +963,7 @@ agent-bundle install cursor --from artifact/cursor   # staged copy`}
           docs/framework-mode.md · examples/&#123;hooks-and-scripts,audiobook-curator,rsc-agent-runtime&#125;.
           Wire payloads in section 4 are illustrative values over verified shapes. Reflects the
           post-PR-#280 split of React rendering (events/project.ts) from envelope projection
-          (events/projection.ts). Host capability facts pinned at Claude Code 2.1.250, Codex
+          (events/projection.ts). Host capability facts pinned at Claude Code 2.1.260, Codex
           0.147.0, Cursor 2026-08-28, Agent Plugins 1.0.0 (observed 2026-08-28 … 2026-09-01).
         </Text>
         <Text size="small" tone="quaternary">

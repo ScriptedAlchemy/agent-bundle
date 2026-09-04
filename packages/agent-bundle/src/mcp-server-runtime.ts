@@ -32,6 +32,7 @@ import {
 import type { createEventRuntimeServer } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
+import { noTerminal } from './terminal-capability.ts';
 import type {
   AgentActorIdentity,
   AgentDocument,
@@ -41,6 +42,7 @@ import type {
   AgentRenderDispatch,
   AgentRenderDispatcher,
   AgentSessionIdentity,
+  AgentTerminal,
   AgentWorkspaceIdentity,
   LineageHost,
   McpProgressNotificationParams,
@@ -107,6 +109,7 @@ interface GeneratedRouteIdentity {
   readonly host?: Observed<AgentHostIdentity>;
   readonly lineage: Observed<AgentLineage>;
   readonly session?: Observed<AgentSessionIdentity>;
+  readonly terminal: Observed<AgentTerminal>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
 
@@ -205,6 +208,9 @@ const requestIdentity = (
   ...(typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
     ? { session: available({ sessionId: context.sessionId }, 'native') }
     : {}),
+  // An MCP server's stdout is the protocol wire and its stderr the host's
+  // log: no terminal, whatever the descriptors happen to be (#511).
+  terminal: available(noTerminal('mcp'), 'derived'),
   workspace: available({ root: process.cwd() }, 'derived'),
 });
 
@@ -571,6 +577,7 @@ export const createFlightWorkerHost = (
             lineage: context.lineage,
             requestInvocation: context.invocation,
             session: context.session,
+            terminal: context.terminal,
             type: 'render',
             workspace: context.workspace,
           });
@@ -610,6 +617,8 @@ export interface GeneratedEventRuntimeBinding {
 export interface GeneratedNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /** Optional like the runtime's: absent is unavailable lineage. */
+  readonly lineage?: Observed<AgentLineage>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
@@ -707,12 +716,14 @@ const installNoticeInboxSubscriptions = (
   ) => {
     assertInboxUri(request.params.uri);
     // Subscriptions are not tool calls: no pre-tool hook precedes them, so
-    // there is no correlation window to resolve lineage through.
+    // there is no correlation window to resolve lineage through — a
+    // subscriber therefore never matches a `conversation`/`root` recipient.
     const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'));
     try {
       await notices.subscribe({
         actor: identity.actor ?? unavailable(),
         host: identity.host ?? unavailable(),
+        lineage: identity.lineage,
         session: identity.session ?? unavailable(),
         workspace: identity.workspace,
       });
@@ -880,6 +891,8 @@ const startEventRuntime = async (
       lineage,
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
       signal,
+      // A hook's stdout is its host envelope: no terminal (#511).
+      terminal: available(noTerminal('hook'), 'derived'),
       ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, 'native') }),
     }, async () => events.projectEventDocument(
       // The host scope remains ledger-free: the Flight worker owns the one

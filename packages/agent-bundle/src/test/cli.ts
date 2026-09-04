@@ -30,6 +30,7 @@ import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.
 import { claimProcessHit, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
+import { harnessTerminal } from './terminal.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
 export type { CliRenderedEvent };
@@ -38,8 +39,11 @@ export interface InvokeCliOptionsBase {
   readonly manifest?: AgentBundleTestManifest;
   readonly signal?: AbortSignal;
   /**
-   * Selects interactive rendered output explicitly. Generated binaries use
-   * `process.stdout.isTTY`; the in-process harness defaults to piped output.
+   * Selects interactive rendered output explicitly. Generated binaries probe
+   * `process.stdout`; the in-process harness defaults to piped output. The
+   * same knob shapes the `request.terminal` the command observes (#511): a
+   * synthetic 80×24 basic-color terminal on both streams, or two color-free
+   * pipes. Inject `context.terminal` to choose other values.
    */
   readonly tty?: boolean;
 }
@@ -262,6 +266,7 @@ export const invokeCli = async (
             projectRoot: runtime.available({ root }, 'derived'),
           },
           host: runtime.unavailable('unsupported-surface'),
+          terminal: runtime.available(execution.terminal, 'native'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,
           providers,
@@ -280,7 +285,6 @@ export const invokeCli = async (
         value = module.resultSchema.parse(result);
         return value;
       },
-      isTty: () => options.tty === true,
       name: manifest.plugin.name,
       ...(renderHost === undefined
         ? {}
@@ -291,6 +295,7 @@ export const invokeCli = async (
             },
           }),
       signal,
+      terminal: harnessTerminal('cli', options.tty === true),
       version: manifest.plugin.version,
       writeErr: (text) => { err += text; },
       writeOut: (text) => { out += text; },

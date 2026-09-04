@@ -1,8 +1,15 @@
 import type { RscApplication } from './application.js';
-import { available, runAgentRequest, unavailable } from './agent-request.js';
+import { available, runAgentRequest, unavailable, type AgentTerminal } from './agent-request.js';
 
 export interface RscCliOptions {
   readonly signal?: AbortSignal;
+  /**
+   * The terminal capability to mount as `request.terminal` (#511). This
+   * adapter owns no probe — the generated routed-CLI shell does — so a host
+   * that knows its streams passes the value; omitted, the axis is honestly
+   * `unavailable` (`not-provided`).
+   */
+  readonly terminal?: AgentTerminal;
   readonly write?: (value: string) => void;
 }
 
@@ -48,6 +55,7 @@ export const runRscCli = async (
       surface: cli.name,
     },
     signal,
+    ...(options.terminal === undefined ? {} : { terminal: available(options.terminal, 'native') }),
     workspace: available({ root: cwd }, 'derived'),
   }, async () => operation.execute(cli.parse(commandArguments), { signal }));
   signal.throwIfAborted();
