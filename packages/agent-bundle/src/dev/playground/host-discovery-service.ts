@@ -14,7 +14,9 @@ import type {
   HostDiscoveryReport,
 } from '../../contracts/discovery.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
-import { readFileString, runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
+import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import {
   runDoctor,
   type DoctorDurableStateReport,
@@ -41,8 +43,8 @@ export interface HostDiscoveryServiceOptions {
     readonly manifestDigest?: string;
   }> | undefined;
   readonly registry?: TargetRegistry;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 const discoveryDiagnostic = (
@@ -179,7 +181,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
     this.#now = options.now ?? (() => new Date());
     this.#prepared = options.prepared ?? (() => undefined);
     this.#registry = options.registry ?? createDefaultRegistry();
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
   }
 
   discover(): Promise<HostDiscoveryReport> {

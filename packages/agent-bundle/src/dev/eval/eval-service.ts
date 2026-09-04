@@ -7,7 +7,9 @@ import { Readable } from 'node:stream';
 import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
-import { runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
+import { type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import { digest } from '../../core/digest.ts';
@@ -155,8 +157,8 @@ export interface EvalServiceOptions {
   readonly now?: () => Date;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly targets?: readonly string[];
 }
 
@@ -467,7 +469,7 @@ export class EvalService {
     this.#now = options.now ?? (() => new Date());
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
     this.#targets = options.targets;
   }
 

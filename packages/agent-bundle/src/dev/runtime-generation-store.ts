@@ -278,7 +278,7 @@ export class RuntimeGenerationStore<TMetadata = unknown> implements DevRuntimeGe
     this.#now = options.now ?? (() => new Date());
     this.#retainInactive = options.retainInactive ?? defaultRetainInactive;
     this.#remove = options.remove ?? (async (path) => rm(path, { force: true, recursive: true }));
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = runWithPlatform;
   }
 
   active(): RuntimeGeneration<TMetadata> | undefined {

@@ -11,7 +11,9 @@ import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { readFileBytes, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import { readFileBytes, type PlatformRun } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 
 
 export type SkillDocumentErrorCode =
@@ -79,8 +81,8 @@ export interface SkillDocumentServiceOptions {
   readonly epochStore: EpochStore;
   readonly projectService: ProjectService;
   readonly root: string;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 const contentTypes: Readonly<Record<string, string>> = Object.freeze({
@@ -246,7 +248,7 @@ export class SkillDocumentService {
     this.#epochStore = options.epochStore;
     this.#projectService = options.projectService;
     this.#root = resolve(options.root);
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
   }
 
   async sourceTree(): Promise<SkillDocumentTree> {

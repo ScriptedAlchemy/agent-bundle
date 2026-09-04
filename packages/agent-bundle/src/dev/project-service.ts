@@ -3,7 +3,9 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import { readFileBytes, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import { readFileBytes } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import {
   loadDevContractMatrix,
   type PreparedDevContractMatrix,
@@ -60,8 +62,8 @@ export interface ProjectServiceOptions {
   readonly outputRoots?: readonly string[];
   readonly registry?: TargetRegistry;
   readonly root: string;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly targets?: readonly string[];
 }
 
@@ -744,7 +746,7 @@ export class ProjectService {
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     const configIdentity = async (): Promise<string | undefined> => {
       try {
-        return createHash('sha256').update(await (this.#options.runPlatform ?? runWithPlatform)(readFileBytes(configPath))).digest('hex');
+        return createHash('sha256').update(await platformRunOf(this.#options.platformRuntime)(readFileBytes(configPath))).digest('hex');
       } catch {
         return undefined;
       }

@@ -16,7 +16,8 @@ import { joinArtifact } from '../../core/paths.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { runPromise } from '../../effect/boundary.ts';
 import { liftPromise, liftTry } from '../../effect/lift.ts';
-import { readFileString, runWithPlatform, unwrapPlatformError, type PlatformRun } from '../../effect/platform.ts';
+import { readFileString, unwrapPlatformError, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
 import {
   readTargetMcpServer,
   type ModernMcpServer,
@@ -250,7 +251,7 @@ export class McpSessionService {
     this.#epochStore = options.epochStore;
     this.#projectRoot = resolve(options.projectRoot);
     this.#registry = options.registry ?? createDefaultRegistry();
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
     this.#traceSink = options.traceSink;
   }
 

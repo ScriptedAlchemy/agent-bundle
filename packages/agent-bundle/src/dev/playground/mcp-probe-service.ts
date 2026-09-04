@@ -26,7 +26,9 @@ import type {
 } from '../../contracts/mcp-probe.ts';
 import { redactCredentialText } from '../../core/credentials.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
-import { readFileString, runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
+import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { resolveBundleRoot } from '../../install/doctor.ts';
 import {
   readTargetMcpServer,
@@ -129,8 +131,8 @@ export interface McpProbeServiceOptions {
   readonly prepared: () => Readonly<{ readonly bundleSource: string }> | undefined;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly timeoutMs?: number;
   /** Testing seam for every probe delay; production keeps Node timers. */
   readonly timers?: McpProbeTimers;
@@ -368,7 +370,7 @@ export class McpProbeService {
         { name: 'agent-bundle', version: '0.1.0' },
         { capabilities: {} },
       ));
-    this.#runPlatform = options.runPlatform ?? runWithPlatform;
+    this.#runPlatform = platformRunOf(options.platformRuntime);
     // Ownership of the directory passes to the transport teardown, so this is
     // a plain `makeTempDirectory`, not a `withTempDirectory` bracket.
     this.#createPluginData = options.createPluginData ??

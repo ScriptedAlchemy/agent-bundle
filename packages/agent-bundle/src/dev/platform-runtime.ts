@@ -1,24 +1,18 @@
-import { Effect } from 'effect';
-
-import { makeScopedEffectRuntime, type ScopedEffectRuntime } from '../effect/boundary.ts';
-import { platformLayer, unwrapPlatformError, type PlatformRun, type PlatformServices } from '../effect/platform.ts';
-
 /**
- * The dev server's platform runtime: one `makeScopedEffectRuntime(platformLayer)`
- * per `startDevServer` call, whose `run` is the `PlatformRun` every dev service
- * takes as `runPlatform`, and whose `close` releases the runtime's Scope after
- * the last service has closed. Created inside `startDevServer`, never at
- * module top level: `effect` is a CLI cold-start cost (#530). Lives here, not
- * in `src/effect/platform.ts`, so the emitted installer that bundles that
- * module stays byte-identical.
+ * The dev server's platform runtime, as the services see it: one per
+ * `startDevServer` call, created inside that function (never at module top
+ * level — `effect` is a CLI cold-start cost, #530) and closed from the returned
+ * session's `close` after the last service that ran on it has closed.
+ *
+ * Deliberately Effect-free. Every dev service names this type in its exported
+ * options (`platformRuntime?: DevPlatformRuntime`), and those declarations sit
+ * on the package's public declaration graph, which must not import `effect`
+ * (`public-api.test.ts` "keeps every public declaration graph free of
+ * effect"). The Effect-typed edge lives in `./platform-run.ts`
+ * (`createDevPlatformRuntime`, `platformRunOf`), which services import for
+ * their implementation only.
  */
 export interface DevPlatformRuntime {
+  /** Releases the runtime's Scope. Call after every service that ran on it has closed. */
   close(): Promise<void>;
-  readonly run: PlatformRun;
 }
-
-export const createDevPlatformRuntime = (): DevPlatformRuntime => {
-  const runtime: ScopedEffectRuntime<PlatformServices> = makeScopedEffectRuntime(platformLayer);
-  const run: PlatformRun = (effect, options) => runtime.run(Effect.mapError(effect, unwrapPlatformError), options);
-  return Object.freeze({ close: () => runtime.close(), run });
-};

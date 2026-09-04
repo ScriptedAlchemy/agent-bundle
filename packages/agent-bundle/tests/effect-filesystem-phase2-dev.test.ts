@@ -2,22 +2,23 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Effect, FileSystem, type Layer, Option } from 'effect';
+import { Effect, FileSystem, Layer, Option } from 'effect';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { McpSession } from '../src/dev/mcp-session/mcp-session.ts';
+import { createDevPlatformRuntime, platformRunOf } from '../src/dev/platform-run.ts';
+import type { DevPlatformRuntime } from '../src/dev/platform-runtime.ts';
 import { ScriptPlaygroundService } from '../src/dev/playground/script-playground-service.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
-import { runPromise } from '../src/effect/boundary.ts';
-import { platformLayer, runWithPlatform, type PlatformRun } from '../src/effect/platform.ts';
+import { platformLayer, runWithPlatform } from '../src/effect/platform.ts';
 import { mcpCatalogStub, stdioTransportStub } from './support/mcp-client-stub.ts';
 
 /**
  * Phase-2 FileSystem adoption, dev-server slice: every dev service takes a
- * `runPlatform` edge (the dev server passes its one session runtime's) and
- * the ordinary reads, temp directories, and removals run through it. These
- * tests pin the seam with `FileSystem.layerNoop` runners and the OS
+ * `platformRuntime` handle (the dev server passes its one session runtime) and
+ * the ordinary reads, temp directories, and removals run through its edge.
+ * These tests pin the seam with `FileSystem.layerNoop` runtimes and the OS
  * semantics with real directories.
  */
 const roots: string[] = [];
@@ -27,13 +28,22 @@ const scratch = async (prefix: string): Promise<string> => {
   return root;
 };
 
+const runtimes: DevPlatformRuntime[] = [];
+
 afterEach(async () => {
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-/** A `PlatformRun` whose `FileSystem` is the given stub; every other platform service is real. */
-const noopRunner = (fileSystem: Layer.Layer<FileSystem.FileSystem>): PlatformRun =>
-  (effect, options) => runPromise(Effect.provide(Effect.provide(effect, fileSystem), platformLayer), options);
+/**
+ * A session runtime whose `FileSystem` is the given stub; every other platform
+ * service is real (`Context.mergeAll` keeps the later layer's service).
+ */
+const noopRuntime = (fileSystem: Layer.Layer<FileSystem.FileSystem>): DevPlatformRuntime => {
+  const runtime = createDevPlatformRuntime(Layer.mergeAll(platformLayer, fileSystem));
+  runtimes.push(runtime);
+  return runtime;
+};
 
 const fileInfo = (size: number): FileSystem.File.Info => ({
   atime: Option.none(),
@@ -56,7 +66,7 @@ describe('workbench assets over the session runtime', () => {
   it('resolves the root once and reads a contained asset through the given runner', async () => {
     const calls: string[] = [];
     const body = Buffer.from('body { color: red }');
-    const run = noopRunner(FileSystem.layerNoop({
+    const run = noopRuntime(FileSystem.layerNoop({
       readFile: (path) => Effect.sync(() => {
         calls.push(`readFile ${path}`);
         return new Uint8Array(body);
@@ -70,7 +80,7 @@ describe('workbench assets over the session runtime', () => {
         return fileInfo(body.byteLength);
       }),
     }));
-    const assets = createWorkbenchAssetSource({ root: '/srv/workbench', runPlatform: run });
+    const assets = createWorkbenchAssetSource({ root: '/srv/workbench', platformRuntime: run });
     const first = await assets.read('styles/app.css');
     expect(first).toEqual({ body, contentType: 'text/css; charset=utf-8' });
     expect(await assets.read('styles/app.css')).toBe(first);
@@ -107,7 +117,7 @@ describe('script playground workspace lease', () => {
     const script = await temporaryScript('process.stdout.write(process.cwd());\n');
     const workspace = await scratch('agent-bundle-fs-phase2-workspace-');
     const calls: string[] = [];
-    const run = noopRunner(FileSystem.layerNoop({
+    const run = noopRuntime(FileSystem.layerNoop({
       makeTempDirectory: (options) => Effect.sync(() => {
         calls.push(`makeTempDirectory ${options?.directory ?? ''} ${options?.prefix ?? ''}`);
         return workspace;
@@ -122,7 +132,7 @@ describe('script playground workspace lease', () => {
         name: 'review',
         path: script,
       }),
-      runPlatform: run,
+      platformRuntime: run,
     });
     await expect(service.run(request)).resolves.toMatchObject({ exitCode: 0, stdout: workspace });
     expect(calls).toEqual([
@@ -134,7 +144,7 @@ describe('script playground workspace lease', () => {
   it('reports a failed workspace removal in the result instead of replacing the script outcome', async () => {
     const script = await temporaryScript('process.stdout.write("ok");\n');
     const workspace = await scratch('agent-bundle-fs-phase2-workspace-');
-    const run = noopRunner(FileSystem.layerNoop({
+    const run = noopRuntime(FileSystem.layerNoop({
       makeTempDirectory: () => Effect.succeed(workspace),
       remove: () => Effect.die(new Error('workspace removal failed')),
     }));
@@ -144,7 +154,7 @@ describe('script playground workspace lease', () => {
         name: 'review',
         path: script,
       }),
-      runPlatform: run,
+      platformRuntime: run,
     });
     await expect(service.run(request)).resolves.toMatchObject({
       cleanupFailures: [{ code: 'workspace-release-failed' }],
@@ -214,8 +224,25 @@ describe('MCP session plugin-data release', () => {
   });
 });
 
+describe('platformRunOf', () => {
+  it('resolves a session runtime to its edge and rejects a foreign handle', async () => {
+    const runtime = noopRuntime(FileSystem.layerNoop({ readFileString: () => Effect.succeed('stubbed') }));
+    await expect(platformRunOf(runtime)(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString('/any')))).resolves.toBe('stubbed');
+    expect(platformRunOf(undefined)).toBe(runWithPlatform);
+    expect(() => platformRunOf({ close: async () => undefined })).toThrow(TypeError);
+  });
+
+  it('unwraps PlatformError to the Node cause on the session runtime, like runWithPlatform', async () => {
+    const root = await scratch('agent-bundle-fs-phase2-errno-');
+    const runtime = createDevPlatformRuntime();
+    runtimes.push(runtime);
+    await expect(platformRunOf(runtime)(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(join(root, 'absent')))))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
 describe('runWithPlatform stays the default edge', () => {
-  it('reads through the shared layer when no runner is given', async () => {
+  it('reads through the shared layer when no runtime is given', async () => {
     const root = await scratch('agent-bundle-fs-phase2-default-');
     await writeFile(join(root, 'a.txt'), 'a');
     const text = await runWithPlatform(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(join(root, 'a.txt'))));

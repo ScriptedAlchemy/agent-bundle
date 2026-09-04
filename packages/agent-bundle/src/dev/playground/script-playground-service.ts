@@ -8,7 +8,9 @@ import { createDefaultRegistry, type TargetRegistry } from '../../adapters/regis
 import { validateArtifactWithSnapshot } from '../../build/validate-artifact.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isInside } from '../../core/paths.ts';
-import { runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
+import { type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import {
   taskkill,
   terminateProcessTree,
@@ -120,8 +122,8 @@ export interface ScriptPlaygroundServiceOptions {
   readonly resolveScript?: (request: Omit<ScriptPlaygroundRunRequest, 'signal'>) => Promise<ResolvedPlaygroundScript>;
   /** Internal test seam for the epoch lease paired with resolveScript. */
   readonly releaseEpochReference?: () => Promise<void>;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   /** Internal test seam; production invokes Windows taskkill directly. */
   readonly taskkill?: ProcessTreeTaskkill;
   readonly timeoutMs?: number;
@@ -401,7 +403,7 @@ export class ScriptPlaygroundService {
     const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
     if (!Number.isSafeInteger(outputLimit) || outputLimit < 1) throw new Error('Script playground output limit must be a positive safe integer.');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Script playground timeout must be a positive safe integer.');
-    const run = options.runPlatform ?? runWithPlatform;
+    const run = platformRunOf(options.platformRuntime);
     this.#createWorkspace = options.createWorkspace ?? (() => workspace(run));
     this.#epochStore = options.epochStore;
     this.#outputLimit = outputLimit;

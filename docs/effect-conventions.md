@@ -414,14 +414,20 @@ the first-party CLI's user-facing text — see
   dev server has one `makeScopedEffectRuntime(platformLayer)`, created
   inside `startDevServer` (never at module top level — `effect` is a CLI
   cold-start cost) and disposed from the returned session's `close` after
-  every service has closed (`src/dev/platform-runtime.ts`,
-  `createDevPlatformRuntime`). Its `run` is a `PlatformRun` (the
-  `runWithPlatform` signature over a long-lived runtime; the type lives in
-  `platform.ts`, the runtime-backed edge does not — that module is bundled
-  into the emitted installer) that every dev service takes as an optional
-  `runPlatform` constructor option, defaulting to `runWithPlatform` so the
-  services stay usable on their own. Never provide a platform layer deep
-  inside library code.
+  every service has closed (`createDevPlatformRuntime` in
+  `src/dev/platform-run.ts`). Every dev service takes the runtime as an
+  optional `platformRuntime` constructor option typed as `DevPlatformRuntime`
+  (`src/dev/platform-runtime.ts`), a deliberately Effect-free handle with only
+  `close()`: service options sit on the package's public declaration graph,
+  which `public-api.test.ts` keeps free of `effect` imports. The service's
+  implementation resolves the handle to its `PlatformRun` edge with
+  `platformRunOf(options.platformRuntime)` (`runWithPlatform`'s signature
+  over the long-lived runtime, `PlatformError` unwrapped the same way);
+  absent a handle, `platformRunOf` returns `runWithPlatform`, so the services
+  stay usable on their own. Both modules live under `dev/`, not in
+  `platform.ts` — that module is bundled into the emitted installer, which
+  stays byte-identical. Never provide a platform layer deep inside library
+  code.
 - Errors: `PlatformError` flows through the Effect error channel and is
   mapped once, at the boundary, onto the existing contract. Where a
   user-facing AB#### diagnostic already exists for the failure, map to it
@@ -538,13 +544,18 @@ modules `cli.ts` loads eagerly never import this module (`cli.test.ts`
 fails if `--version` / `--help` resolve an `effect` module). The dev server
 (phase 2, second PR, 2026-09-03) runs on one
 `makeScopedEffectRuntime(platformLayer)` created in `startDevServer`
-(`dev/platform-runtime.ts`) and handed to every service as `runPlatform`:
-the ordinary reads, temp directories, and removals of `dev/project-service.ts`,
-`package-build-service.ts`, `host-install-manager.ts`,
-`skill-document-service.ts`, `workbench-assets.ts`,
-`runtime-generation-store.ts`, `runtime-provider-loader.ts`,
+(`dev/platform-run.ts`) and handed to every service as the Effect-free
+`platformRuntime` handle (`dev/platform-runtime.ts`), resolved to its edge
+with `platformRunOf`: the ordinary reads, temp directories, and removals of
+`dev/project-service.ts`, `package-build-service.ts`,
+`host-install-manager.ts`, `skill-document-service.ts`,
+`workbench-assets.ts`, `runtime-provider-loader.ts`,
 `playground/{hook,host-discovery,mcp-probe,native,script}-playground-service.ts`,
-and `eval/eval-service.ts`. Two directories outlive their call and are
+and `eval/eval-service.ts`. `runtime-generation-store.ts` reads through
+`FileSystem` too but on `runWithPlatform`: providers construct it through
+the public `createRuntimeGenerationStore` factory, whose effect-free options
+contract (`runtime-store-contracts.ts`, exported from `agent-bundle/api`)
+has no session runtime to hand it. Two directories outlive their call and are
 therefore not `withTempDirectory` brackets: the MCP session's plugin-data
 directory is acquired into its own session-lifetime `Scope` whose only
 finalizer removes it — the session closes that scope from `close()`, and

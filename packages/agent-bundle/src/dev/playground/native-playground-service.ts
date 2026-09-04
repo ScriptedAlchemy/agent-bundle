@@ -5,7 +5,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { Effect, FileSystem } from 'effect';
 
 import { digest, stableJson } from '../../core/digest.ts';
-import { runWithPlatform, type PlatformRun } from '../../effect/platform.ts';
+import { type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { hasExactOwnKeys, isJsonRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { PreparedEvalArtifact } from '../../eval/artifact.ts';
@@ -114,8 +116,8 @@ export interface NativePlaygroundServiceOptions {
   readonly projectRoot: string;
   /** @internal Deterministic cleanup seam for lifecycle tests. */
   readonly removeWorkspace?: (root: string) => Promise<void>;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 export interface NativePlaygroundCatalogStorage {
@@ -647,7 +649,7 @@ export class NativePlaygroundService {
     this.#stagingSettleDeadlineMs = options.catalogStagingSettleDeadlineMs ?? stagingPublicationSettleDeadlineMs;
     this.#catalogMove = options.catalogStorage?.move ?? rename;
     this.#projectRoot = options.projectRoot;
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
     this.#removeWorkspace = options.removeWorkspace ??
       ((root) => this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(root, { force: true, recursive: true }))));
     this.#environment = options.environment;

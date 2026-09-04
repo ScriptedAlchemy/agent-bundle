@@ -8,7 +8,9 @@ import { toPosixRelative } from '../core/paths.ts';
 import { buildPackageOutputs } from '../build/package-build.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
-import { runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import { type PlatformRun } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import type { PreparedProject } from './project-service.ts';
 import type { Invalidation } from './types.ts';
 
@@ -49,8 +51,8 @@ export interface DevPackageBuilder {
 export interface DevPackageBuildServiceOptions {
   /** Injectable only for deterministic unit tests. */
   readonly buildOutputs?: typeof buildPackageOutputs;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 /** Files that change the package build without appearing in bundle provenance. */
@@ -101,7 +103,7 @@ export class DevPackageBuildService implements DevPackageBuilder {
 
   constructor(options: DevPackageBuildServiceOptions = {}) {
     this.#buildOutputs = options.buildOutputs ?? buildPackageOutputs;
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
   }
 
   async build(prepared: PreparedProject, invalidation: Invalidation): Promise<DevPackageBuildOutcome> {

@@ -17,7 +17,9 @@ import { EpochStore, type EpochReference } from '../epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 import { liftPromise } from '../../effect/lift.ts';
-import { readFileString, runWithPlatform, withTempDirectory, type PlatformRun } from '../../effect/platform.ts';
+import { readFileString, withTempDirectory, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 
 
 type CanonicalHookInput = Readonly<Record<string, unknown>>;
@@ -106,8 +108,8 @@ export interface HookPlaygroundServiceOptions {
   /** Optional non-throwing producer-wide diagnostics sink. */
   readonly logger?: DevLogSink;
   readonly registry?: TargetRegistry;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
 
@@ -255,7 +257,7 @@ export class HookPlaygroundService {
 
   constructor(options: HookPlaygroundServiceOptions) {
     this.#copy = options.copy ?? cp;
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
     this.#epochStore = options.epochStore;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#hookService = options.hookService ?? new HookService({ registry: this.#registry });

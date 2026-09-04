@@ -3,15 +3,17 @@ import { basename, extname, resolve } from 'node:path';
 import { Effect, FileSystem, Option } from 'effect';
 
 import { isInside } from '../core/paths.ts';
-import { isPlatformErrno, readFileBytes, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import { isPlatformErrno, readFileBytes } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 
 import type { WorkbenchAssetSource } from './foreground-server.ts';
 
 export interface WorkbenchAssetSourceOptions {
   /** Root of the prebuilt workbench asset tree. */
   readonly root?: string;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 const contentTypes: Readonly<Record<string, string>> = Object.freeze({
@@ -48,7 +50,7 @@ export const createWorkbenchAssetSource = (
   options: WorkbenchAssetSourceOptions = {},
 ): WorkbenchAssetSource => {
   const root = resolve(options.root ?? defaultRoot());
-  const run = options.runPlatform ?? runWithPlatform;
+  const run = platformRunOf(options.platformRuntime);
   // Resolved once, like the former eager `realpath(root)` promise: a missing
   // root surfaces on the first read, as it did.
   let resolvedRoot: Promise<string> | undefined;

@@ -4,7 +4,9 @@ import { Effect, FileSystem } from 'effect';
 import { createJiti } from 'jiti';
 
 import type { AgentBundleDevRuntimeConfig } from '../core/types.ts';
-import { runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import type { PlatformRun } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import type { DevRuntimeDescriptor } from './runtime-protocol.ts';
 import type { DevRuntimeProvider } from './runtime-provider.ts';
 import { YieldableFrameworkError } from '../effect/errors.ts';
@@ -151,9 +153,9 @@ export const resolveDevRuntimeProvider = async (
   projectRoot: string,
   declaration: AgentBundleDevRuntimeConfig,
   importer: DevRuntimeModuleImporter = importProviderModule,
-  run: PlatformRun = runWithPlatform,
+  platformRuntime?: DevPlatformRuntime,
 ): Promise<DevRuntimeProvider> => {
-  const providerPath = await containedProviderPath(projectRoot, declaration, run);
+  const providerPath = await containedProviderPath(projectRoot, declaration, platformRunOf(platformRuntime));
   let loaded: ProviderModule;
   try {
     loaded = await importer(providerPath);

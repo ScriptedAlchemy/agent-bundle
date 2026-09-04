@@ -14,7 +14,9 @@ import { basename, join, relative, resolve } from 'node:path';
 import { Effect, FileSystem } from 'effect';
 
 import { stableJson } from '../core/digest.ts';
-import { isPlatformErrno, readFileString, runWithPlatform, type PlatformRun } from '../effect/platform.ts';
+import { isPlatformErrno, readFileString, type PlatformRun } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
   installBundle as defaultInstallBundle,
@@ -45,8 +47,8 @@ export interface DevHostInstallManagerOptions {
   readonly hosts: readonly InstallHost[];
   readonly installBundle?: (options: InstallBundleOptions) => Promise<InstallResult>;
   readonly projectRoot: string;
-  /** Platform edge; the dev server passes its session runtime's. Default `runWithPlatform`. */
-  readonly runPlatform?: PlatformRun;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 interface InstalledDevHost {
@@ -323,7 +325,7 @@ export class DevHostInstallManager {
     this.#hosts = Object.freeze([...new Set(options.hosts)]);
     this.#installBundle = options.installBundle ?? defaultInstallBundle;
     this.#projectRoot = resolve(options.projectRoot);
-    this.#run = options.runPlatform ?? runWithPlatform;
+    this.#run = platformRunOf(options.platformRuntime);
   }
 
   start(): void {
