@@ -594,6 +594,72 @@ the in-memory MCP proof level accepts a registry
 (`openInMemoryMcpServer({ lineage, lineageHost })`) so hook→MCP correlation
 is testable without a spawned process.
 
+#### Terminal capability (`request.terminal`)
+
+`(await agent()).terminal` is an `Observed<AgentTerminal>` (#511): what the
+process's output streams are, computed **once per invocation by the framework
+shell** with the same rules that pick the CLI output mode, so a route that
+colors its own stderr or sizes its own table agrees with the framework's
+rendering instead of re-probing `process.stdout` per plugin. It is information
+only — never a writer — and it never changes what `Agent.*` components render.
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: AgentTerminalStream;
+  stderr: AgentTerminalStream;
+  sharesTarget: boolean;           // fd 1 and fd 2 name one open file (`2>&1`, one shared terminal)
+}
+interface AgentTerminalStream {
+  kind: 'tty' | 'pipe' | 'none';   // interactive terminal | any other open descriptor | no stream for the route
+  color: 'none' | 'basic' | '256' | 'truecolor';
+  columns?: number;                // present for a terminal, or when COLUMNS overrides
+  rows?: number;                   // present for a terminal, or when LINES overrides
+}
+```
+
+The probe (`src/terminal-capability.ts`, plain Node, dependency-free, aliased
+into emitted executables as `agent-bundle/terminal-capability`) reads
+`isTTY`, `columns`, and `rows` off `process.stdout`/`process.stderr`, `fstat`s
+the descriptors (`tty`; any other open descriptor is `pipe`; a closed one is
+`none`; `sharesTarget` compares device and inode), and resolves color in the
+informal standards' precedence: `FORCE_COLOR` decides outright when set
+(`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor — Node's
+reading), then `CLICOLOR_FORCE` forces color on even for a pipe at the depth
+`COLORTERM`/`TERM` advertise, `NO_COLOR` (any non-empty value) and `CLICOLOR=0`
+force it off, `TERM=dumb` renders none, and otherwise a terminal renders at its
+advertised depth while a pipe renders none. `COLUMNS`/`LINES` override the
+reported size whatever the stream is. The routed CLI derives its `tty` versus
+piped-Markdown mode from this same value (`stdout.kind === 'tty'`), so the two
+can never disagree.
+
+Per surface, the value the generated request scope mounts:
+
+| Surface | `hostSurface` | `stdout` / `stderr` | Source |
+| --- | --- | --- | --- |
+| Routed CLI executable (`dist/bin/<name>.js`, `<target>/bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
+| Rendered script (`scripts/<name>.mjs` from `src/scripts/<name>.tsx`) | `script` | Probed, as above. | `native` |
+| Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
+| Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
+| Workbench lifecycle replay | `workbench` | `none` on both — the document renders into a panel. | `derived` |
+| `createRscMcpServer` (the `defineRscApplication` MCP adapter) | `mcp` | `none` on both, as above. | `derived` |
+| `runRscCli` (the `defineRscApplication` CLI adapter) | `cli` when the caller passes `terminal` in its options | The adapter owns no probe — the generated routed-CLI shell does — so the caller's value is mounted `native`; omitted, the axis is `unavailable` (`not-provided`). | `native` / — |
+| Custom host calling `runAgentRequest` without `terminal` | — | `unavailable` (`not-provided`) | — |
+
+Plain `main`-exporting scripts and bins have no request scope, so the
+executable envelope hands them the same probe directly as the second argument
+of `main` (see [The executable envelope](#the-executable-envelope-bin--scripts)).
+
+The `agent-bundle/test` harness never probes the test runner's own streams:
+`invokeCli` and `runScript` mount a deterministic synthetic value shaped by
+their `tty` knob (an 80×24 `basic`-color terminal on both streams with
+`sharesTarget: true`, or two `color: 'none'` pipes), `renderRoute` mounts what
+the artifact's scope for that route kind would (`none` for MCP and event
+routes, the piped shape for `cli` and `script` kinds), the in-memory MCP level
+forwards the real server's `none`, and a plain script's `main` receives the
+real child process's probe (two pipes). A test that wants other values injects
+`context.terminal` through the same seam as every identity axis.
+
 ### Migration nudges
 
 Source validation reports **informational** nudges (never errors — migrations
@@ -625,17 +691,27 @@ default function for bin entries) receives the generated process envelope:
 
 ```ts
 // src/cli.ts — the whole CLI entry a consumer writes
-export const main = async (argv: readonly string[]): Promise<number> => {
-  // ...
+import type { ExecutableMainContext } from 'agent-bundle';
+
+export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+  if (terminal.stderr.color !== 'none') { /* paint progress on stderr */ }
   return 0;
 };
 ```
 
-The envelope awaits `main(process.argv.slice(2))`, adopts a numeric return as
-the process exit code, and lets an escaped rejection surface through Node's
-top-level failure path (stack to stderr, exit code 1). Self-executing modules
-(no `main` export) bundle directly, byte for byte — existing Scripts keep
-their behavior.
+The envelope awaits `main(process.argv.slice(2), { terminal })`, adopts a
+numeric return as the process exit code, and lets an escaped rejection surface
+through Node's top-level failure path (stack to stderr, exit code 1).
+`terminal` is the process's [terminal capability](#terminal-capability-requestterminal)
+(#511), probed once before `main` runs by the dependency-free
+`agent-bundle/terminal-capability` module the envelope aliases in — plain
+scripts and bins load no Effect runtime and no `@agent-bundle/runtime` for it.
+Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js`) and
+`script` for an artifact script (`scripts/<name>.mjs`); a module shipped on
+both surfaces sees the surface it was launched from. A `main` declared with
+one parameter keeps working — the second argument is simply unread.
+Self-executing modules (no `main` export) bundle directly, byte for byte —
+existing Scripts keep their behavior and receive no probe.
 
 ### The routed CLI shell (#102 stages 2-3)
 
@@ -1182,3 +1258,38 @@ content-hashed bundle inside the target root). `--plugin-root <path>`
 overrides the env-anchor root, e.g. point it at `artifact/<target>` for a
 byte-faithful rehearsal of a copied-artifact launch; under a host install the
 anchor still means the durable install root, exactly as before.
+
+## `agent-bundle serve-app`
+
+```sh
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--target <target>]
+  [--tool <name>] [--input <json> | --input-file <path>] [--port <port>]
+  [--profile <profile>] [--allow <capability>]... [--open]
+  [--env-file <path>]... [--no-env] [--plugin-root <path>]
+```
+
+Serves one built MCP App standalone in a browser, outside any MCP host and
+without the Workbench. The command launches the App's packed MCP server
+through exactly the `mcp run` launcher above (same manifest resolution, same
+three-layer environment, same durable-state anchors), binds the App to that
+one session through the Workbench's own MCP App host stack
+(`McpAppBindingService` → `McpAppPreviewService` → `McpAppRoutes`, the
+loopback sandbox proxy, the consent authority, `McpAppBridge`), calls the
+App's tool once so it opens populated, and prints the loopback URL. It runs
+in the foreground until SIGINT/SIGTERM, or until the server exits on its own,
+which is reported as one `AB5000` diagnostic with exit code 1. Without
+`--artifact`, a throwaway artifact is built into a staging directory beside
+the project root and removed when the host closes.
+
+The host document is served on `127.0.0.1` only, at `/`, with the
+authenticated `/api/mcp/...` routes behind a per-launch token plus
+same-origin and loopback `Host` checks (`AB8003` / `AB8004` on refusal); the
+App document runs on a second loopback origin inside the framework sandbox,
+and the bridge exposes only the selected server. This is a local preview
+host, not a deployment target.
+
+`serveApp` in `agent-bundle/api` is the programmatic form (`{ url, close,
+closed }`) for a plugin's own routed CLI (`hauler dashboard`). It belongs to
+the plugin's dev-time / CLI process — import it lazily from the route that
+needs it — never to the MCP server shell, so emitted artifacts stay free of
+the host runtime.

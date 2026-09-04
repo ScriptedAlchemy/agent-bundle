@@ -131,4 +131,56 @@ describe('the CLI dispatch level', () => {
     expect(invocationCwd).not.toBe(run.provenance.projectRoot);
     expect(observed).toEqual({ projectRoot: invocationCwd, workspace: invocationCwd });
   });
+
+  describe('the terminal capability (#511)', () => {
+    const piped = {
+      hostSurface: 'cli',
+      sharesTarget: false,
+      stderr: { color: 'none', kind: 'pipe' },
+      stdout: { color: 'none', kind: 'pipe' },
+    };
+    const interactive = {
+      hostSurface: 'cli',
+      sharesTarget: true,
+      stderr: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
+      stdout: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
+    };
+
+    it('mounts the piped shape for a plain command by default and the interactive shape under tty', async () => {
+      const observe = async (tty: boolean): Promise<unknown> => {
+        let observed: unknown;
+        const run = await invokeCli(['inventory', 'fiction'], {
+          context: { progress: { report: async () => { observed = (await agent()).terminal; } } },
+          tty,
+        });
+        expect(run.exitCode).toBe(0);
+        return observed;
+      };
+      expect(await observe(false)).toEqual({ source: 'native', state: 'available', value: piped });
+      expect(await observe(true)).toEqual({ source: 'native', state: 'available', value: interactive });
+    });
+
+    it('reports the executable surface, not the MCP one, for a projected tool rendered through the CLI', async () => {
+      const run = await invokeCli(['harness', 'context', '--yes', '--json']);
+      expect(run.exitCode).toBe(0);
+      // `--json` changes what stdout carries, never what the terminal is.
+      expect(cliJson(run)).toMatchObject({ terminal: { source: 'native', state: 'available', value: piped } });
+
+      const tty = await invokeCli(['harness', 'context', '--yes', '--json'], { tty: true });
+      expect(cliJson(tty)).toMatchObject({ terminal: { source: 'native', state: 'available', value: interactive } });
+    });
+
+    it('lets a test inject the capability through the context seam', async () => {
+      const injected = {
+        hostSurface: 'cli' as const,
+        sharesTarget: false,
+        stderr: { color: 'truecolor' as const, columns: 200, kind: 'tty' as const, rows: 50 },
+        stdout: { color: 'none' as const, kind: 'pipe' as const },
+      };
+      const run = await invokeCli(['harness', 'context', '--yes', '--json'], {
+        context: { terminal: { source: 'native', state: 'available', value: injected } },
+      });
+      expect(cliJson(run)).toMatchObject({ terminal: { source: 'native', state: 'available', value: injected } });
+    });
+  });
 });

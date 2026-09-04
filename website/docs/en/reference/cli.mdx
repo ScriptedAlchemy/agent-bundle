@@ -1,5 +1,5 @@
 ---
-description: 'The complete agent-bundle command-line surface: dev, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
+description: 'The complete agent-bundle command-line surface: dev, serve-app, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
 ---
 
 # CLI
@@ -15,6 +15,7 @@ npx agent-bundle --version
 | --- | --- |
 | `agent-bundle dev` | Serve the packaged development workbench on loopback. |
 | `agent-bundle dev proxy` | Bridge host stdio MCP traffic to a running development server. |
+| `agent-bundle serve-app <app>` | Serve one built MCP App standalone in a browser, bound to its packed MCP server. |
 | `agent-bundle build` | Build a validated Agent Bundle artifact. |
 | `agent-bundle prepack` | Build and validate the npm pack inventory. |
 | `agent-bundle install <host>` | Install a built bundle into a supported host. |
@@ -39,10 +40,11 @@ npx agent-bundle --version
 | `--target <target>` | all configured | Target to select. Repeatable. |
 | `--json` | off | Write one machine-readable JSON document. |
 
-**Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `hooks list`, `hooks simulate`:
+**Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
 the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
 one built artifact and `--target <target>` to select the artifact target. `--target` is
-**required** for `mcp list`, `mcp invoke`, `mcp run`, and `hooks simulate`.
+**required** for `mcp list`, `mcp invoke`, `mcp run`, and `hooks simulate`; `serve-app` defaults it
+to `portable` and takes no `--json`.
 
 ## dev
 
@@ -66,6 +68,39 @@ one built artifact and `--target <target>` to select the artifact target. `--tar
 | `--url <url>` | discovered | Explicit loopback development server origin. |
 
 The proxy inherits `--root` from the parent `dev` command and writes diagnostics to stderr.
+
+## serve-app
+
+```sh
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] [--input <json>] [--port <port>] [--open]
+```
+
+Serves one built MCP App in a plain browser tab, outside any MCP host and without the
+Workbench: the command launches the plugin's packed MCP server exactly as `mcp run` does, binds
+the App to it through the same host stack the Workbench MCP page uses (sandbox proxy, consent
+authority, bridge), calls the App's tool once so it opens populated, and prints the loopback URL.
+It runs in the foreground until a termination signal or until the server exits on its own.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `<app>` | **required** | `<server>/<app>` — the generated MCP server name and the App name (the last segment of its `ui://` URI without `.html`, for example `status/status`) — or `<server>/ui://...` to select an exact resource URI. |
+| `--root`, `--config`, `--mode` | as for artifact commands | Project options. |
+| `--artifact <path>` | throwaway build | Use exactly this built artifact. Without it the project is built into a staging directory beside the root and removed when the host closes. |
+| `--target <target>` | `portable` | Artifact target containing the MCP server. |
+| `--tool <tool>` | the App's only tool | The tool whose result opens the App: one that declares the App's `_meta.ui.resourceUri`. Required when several do. |
+| `--input <json>` / `--input-file <path>` | `{}` | JSON object input for that opening tool call; at most one of the two. |
+| `--port <port>` | ephemeral | Loopback TCP port for the host page. |
+| `--profile <profile>` | `portable` | Simulated MCP Apps host profile: `portable`, `claude`, or `chatgpt`. |
+| `--allow <capability>` | none | Approve one consent capability on your behalf as the App requests it: `call-tool`, `download-file`, `open-external-link`, or `request-display-mode`. Repeatable. Everything else waits for an Allow/Deny decision in the host page, as in the Workbench. |
+| `--open` / `--no-open` | `--no-open` | Open the default browser once the host is listening. |
+| `--env-file`, `--no-env`, `--plugin-root` | as for `mcp run` | The server's `.env` layering and plugin-root anchor, unchanged from [`mcp run`](#mcp). |
+
+The host binds to `127.0.0.1` only, serves one document and the authenticated `/api/mcp/...`
+routes (a per-launch token plus same-origin checks; `AB8003` / `AB8004` on refusal), and exposes
+only the selected server through the bridge. The App document itself runs on a second loopback
+origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
+programmatic form is `serveApp` in `agent-bundle/api`; see
+[Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone).
 
 ## build and prepack
 

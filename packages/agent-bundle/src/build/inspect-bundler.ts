@@ -13,6 +13,8 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  terminalCapabilityRuntimePath,
+  terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import { planCompiledMcpEntries } from './entries.ts';
@@ -145,9 +147,11 @@ const scriptEntries = async (
         sourceInputs: [],
         ...(exports.hasMainExport
           ? {
+            aliases: { [terminalCapabilityRuntimeSpecifier]: terminalCapabilityRuntimePath() },
             virtualSource: generatedExecutableEntrySource({
               entrySource: script.source,
               exportName: 'main',
+              hostSurface: 'script',
             }),
           }
           : {}),
