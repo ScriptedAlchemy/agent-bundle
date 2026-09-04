@@ -16,6 +16,7 @@ import {
   type DigestSnapshot,
 } from './native-host-spine.ts';
 import { runBoundedChildProcess } from './process.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 const codexExecutable = 'codex';
 const minimumCodexVersion = '0.147.0';
@@ -104,7 +105,7 @@ export interface CodexNativeSmokeResult {
 type CodexStateSite = 'auth' | 'config' | 'plugins';
 type CodexStateSnapshot = DigestSnapshot<CodexStateSite>;
 
-class SmokeStepError extends Error {
+class SmokeStepError extends YieldableFrameworkError {
   readonly code?: string;
   readonly failure?: 'output-limit' | 'timeout';
   readonly output?: string;
