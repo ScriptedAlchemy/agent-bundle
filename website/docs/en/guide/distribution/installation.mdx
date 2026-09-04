@@ -5,7 +5,11 @@ description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: t
 # Host installation
 
 Every built target directory contains a generated `INSTALL.md` with commands that use the
-bundle's real plugin and marketplace names. The framework CLI performs those same operations:
+bundle's real plugin and marketplace names. Every command in it is a host command (`claude plugin
+…`, `codex plugin …`) or the bundled `install.mjs`, so a consumer who receives the built pack —
+from npm, a marketplace checkout, or a zip — never needs the `agent-bundle` CLI to install,
+reinstall, or uninstall it; `INSTALL.md` says so and marks the CLI optional wherever it is
+mentioned. The framework CLI performs those same operations for developers who have it:
 
 ```sh
 npx agent-bundle install claude --from artifact/claude --scope user

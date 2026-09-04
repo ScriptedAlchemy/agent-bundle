@@ -23,12 +23,16 @@ export interface SharedPack {
   readonly tarball: string;
 }
 
-export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'runtime';
+export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'markdown-stream' | 'runtime';
 
 /** packages/ directory and npm package name for each shared-pack key. */
 const sharedPackPackages: Readonly<Record<SharedPackPackage, Readonly<{ directory: string; npmName: string }>>> = {
   'agent-bundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
   'create-agent-bundle': { directory: 'create-agent-bundle', npmName: 'create-agent-bundle' },
+  // `@agent-bundle/runtime` depends on it by exact version; a consumer that
+  // installs the runtime tarball needs this one alongside until that version
+  // is on the registry (npm dedupes the runtime's edge onto it).
+  'markdown-stream': { directory: 'rsc-markdown-stream', npmName: 'rsc-markdown-stream' },
   runtime: { directory: 'rsc-runtime', npmName: '@agent-bundle/runtime' },
 };
 

@@ -253,14 +253,19 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
 
   // Routed commands execute inside the typed Agent request context, so the
   // cli-tool template now pairs the runtime package like mcp-server does.
-  it.effect('pins the paired runtime for the routed cli-tool template', () => Effect.gen(function* () {
+  // Every dependency is bundled into the emitted outputs, so the templates
+  // declare the whole stack under devDependencies: a published plugin installs
+  // nothing (`agent-bundle prepack` reports a stray runtime dependency as AB7014).
+  it.effect('pins the paired runtime for the routed cli-tool template as a dev dependency', () => Effect.gen(function* () {
     const path = yield* Path.Path;
     const { frameworkSpec, root } = yield* scaffoldTemplate('cli-tool', { pluginName: 'greeter' });
     const manifest = yield* readJson<{
-      readonly dependencies: Record<string, string>;
+      readonly dependencies?: Record<string, string>;
+      readonly devDependencies: Record<string, string>;
     }>(path.join(root, 'package.json'));
-    expect(manifest.dependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
-    expect(manifest.dependencies['zod']).toBeDefined();
+    expect(manifest.dependencies).toBeUndefined();
+    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
+    expect(manifest.devDependencies['zod']).toBeDefined();
   }));
 
   it.effect('replaces every placeholder and pins the framework spec', () => Effect.gen(function* () {
@@ -283,7 +288,8 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(manifest.name).toBe('@scope/status-plugin');
     expect(manifest.devDependencies['agent-bundle']).toBe(frameworkSpec);
     expect(files).toContain('src/cli/greet.ts');
-    expect(manifest.dependencies?.['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
+    expect(manifest.dependencies).toBeUndefined();
+    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe(runtimeSpecForFramework(frameworkSpec));
     expect(manifest.bin).toEqual({
       'status-plugin': './dist/bin/status-plugin.js',
       'status-plugin-install': './dist/bin/status-plugin-install.js',
@@ -461,9 +467,9 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     });
     expect(files).toContain('package.json');
     const manifest = yield* readJson<{
-      readonly dependencies: Record<string, string>;
+      readonly devDependencies: Record<string, string>;
     }>(path.join(targetDirectory, 'package.json'));
-    expect(manifest.dependencies['@agent-bundle/runtime']).toBe('file:../agent-bundle-runtime-0.0.0.tgz');
+    expect(manifest.devDependencies['@agent-bundle/runtime']).toBe('file:../agent-bundle-runtime-0.0.0.tgz');
   }));
 });
 

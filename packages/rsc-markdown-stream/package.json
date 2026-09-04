@@ -1,0 +1,59 @@
+{
+  "name": "rsc-markdown-stream",
+  "version": "0.1.0",
+  "description": "Render React / RSC trees to a Markdown stream. A custom renderer: React → Markdown, never HTML.",
+  "license": "Apache-2.0",
+  "keywords": [
+    "react",
+    "rsc",
+    "markdown",
+    "stream",
+    "renderer",
+    "react-server-components"
+  ],
+  "homepage": "https://github.com/ScriptedAlchemy/agent-bundle/tree/main/packages/rsc-markdown-stream#readme",
+  "bugs": {
+    "url": "https://github.com/ScriptedAlchemy/agent-bundle/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ScriptedAlchemy/agent-bundle.git",
+    "directory": "packages/rsc-markdown-stream"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "UPSTREAM-LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/sync-license-files.mjs && rslib build",
+    "test": "rstest tests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@rslib/core": "0.23.2",
+    "@rstest/core": "0.11.10",
+    "@types/react": "19.2.18",
+    "react": "19.2.8"
+  }
+}
