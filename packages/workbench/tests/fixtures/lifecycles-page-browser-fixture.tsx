@@ -77,6 +77,7 @@ const replayFor = (request: LifecycleReplayRequest): LifecycleReplay => {
       event: 'tool/after',
       idempotencyKey: `${request.binding.target}-receipt`,
       observedAt: '2026-09-01T12:00:00.000Z',
+      payload: { toolName: { nativeKey: 'tool_name', value: 'Write' } },
       provenance: {
         host: request.binding.target,
         hostContractRevision: target.hostContractRevision,

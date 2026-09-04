@@ -169,18 +169,38 @@ export interface GeneratedCliBinEntryOptions {
   readonly workerFile?: string;
 }
 
+/**
+ * The Node imports the plugin-root fallback expression needs: the artifact
+ * root is the parent of the module's own directory (`mcp/`, `bin/`, `hooks/`),
+ * the npm bin anchors on the caller's `.agent-bundle`. Emitted once per
+ * generated module, ahead of every other `node:path` / `node:url` import.
+ */
+const pluginRootImports = (fallback: GeneratedStateFallback): readonly string[] =>
+  fallback === 'artifact'
+    ? ["import { fileURLToPath } from 'node:url';"]
+    : ["import { join } from 'node:path';"];
+
+const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string =>
+  fallback === 'artifact'
+    ? "fileURLToPath(new URL('..', import.meta.url))"
+    : "join(process.cwd(), '.agent-bundle')";
+
+/**
+ * The one plugin-root resolution of a generated module (#468): the SQLite
+ * kernel, the notice ledger, the lineage journal, and every request scope the
+ * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
+ * directory they mount by construction.
+ */
+const pluginRootDeclaration = (fallback: GeneratedStateFallback): string =>
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback)} });`;
+
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
-  fallback: GeneratedStateFallback,
 ): readonly string[] => {
   if (state === undefined) return [];
   return [
     ...(state.lifetime === 'workspace-durable'
-      ? [
-        "import { join } from 'node:path';",
-        ...(fallback === 'artifact' ? ["import { fileURLToPath } from 'node:url';"] : []),
-        "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
-      ]
+      ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"]
       : ["import { createMemoryStateDriver } from '@agent-bundle/runtime/state';"]),
     "import { createGeneratedRuntimeState } from '@agent-bundle/runtime/mount';",
     `import stateDefinition from ${JSON.stringify(state.source)};`,
@@ -213,9 +233,9 @@ const noticePolicyFields = (policy: GeneratedNoticePolicy): string => [
   ...(policy.noticeRetention === undefined ? [] : [', noticeRetention: noticeRetentionPolicy']),
 ].join('');
 
+/** The state owner, mounted on the module's `pluginRoot` (declared by {@link pluginRootDeclaration}). */
 const generatedStateOwner = (
   state: NormalizedStateDefinition | undefined,
-  fallback: GeneratedStateFallback,
   policy: GeneratedNoticePolicy,
 ): readonly string[] => {
   if (state === undefined) return [];
@@ -226,13 +246,9 @@ const generatedStateOwner = (
       '',
     ];
   }
-  const fallbackExpression = fallback === 'artifact'
-    ? "fileURLToPath(new URL('..', import.meta.url))"
-    : "join(process.cwd(), '.agent-bundle')";
   return [
     ...noticePolicyDeclarations(policy),
-    `const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? ${fallbackExpression};`,
-    `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') })${noticePolicyFields(policy)} });`,
+    `const runtimeState = createGeneratedRuntimeState({ definition: stateDefinition, driver: createSqliteStateDriver({ root: pluginRoot.stateRoot })${noticePolicyFields(policy)} });`,
     '',
   ];
 };
@@ -322,14 +338,16 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   return [
     `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
-      ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
-      : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+      ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
+      : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports(stateFallback),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
-    ...generatedStateImports(options.state, stateFallback),
+    ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    ...generatedStateOwner(options.state, stateFallback, options),
+    pluginRootDeclaration(stateFallback),
+    ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
     'const routes = Object.freeze({',
@@ -364,6 +382,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...providerExecutionSource(providers, {
       indent: plainIndent,
       invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+      plugin: 'pluginRoot.identity',
       signal: 'context.signal',
     }),
     `${plainIndent}const result = await runAgentRequest({`,
@@ -377,6 +396,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "    invocation: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
     "    lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '    plugin: pluginRoot.identity,',
     `    providers: ${providerValuesExpression(providers)},`,
     '    signal: context.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
@@ -535,13 +555,15 @@ export const generatedRenderedRouteWorkerSource = (
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...generatedStateImports(options.state, stateFallback),
+    "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports(stateFallback),
+    ...generatedStateImports(options.state),
     ...routeImports(options.routes),
     ...providerImports(providers),
     ...layoutImports(layouts),
     '',
-    ...generatedStateOwner(options.state, stateFallback, options),
+    pluginRootDeclaration(stateFallback),
+    ...generatedStateOwner(options.state, options),
     '// Generated routes contain only intrinsic Agent protocol elements, so no client references exist.',
     'globalThis.__rspack_rsc_manifest__ ??= Object.freeze({ clientManifest: Object.freeze({}) });',
     "if (parentPort === null) throw new Error('Generated render worker requires a parent port.');",
@@ -568,7 +590,7 @@ export const generatedRenderedRouteWorkerSource = (
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
     ...(options.state === undefined ? [] : ['    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', signal: 'controller.signal' }),
+    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'pluginRoot.identity', signal: 'controller.signal' }),
     '    await runAgentRequest({',
     '      capabilities: {',
     '        command: unavailable(),',
@@ -580,6 +602,7 @@ export const generatedRenderedRouteWorkerSource = (
     '      invocation: message.request,',
     "      lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
     `      providers: ${providerValuesExpression(providers)},`,
     '      signal: controller.signal,',
@@ -769,22 +792,19 @@ const wiresResourceUpdatedRoute = (options: NoticeRouteSelection): boolean =>
 const noticeDeliveryImports = (wired: boolean): readonly string[] =>
   wired
     ? [
-      "import { join } from 'node:path';",
-      "import { fileURLToPath } from 'node:url';",
       "import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';",
       "import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';",
-      "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
     ]
     : [];
 
+/** The server process's notice store, opened on the module's `pluginRoot` (#468). */
 const noticeDeliveryOwner = (wired: boolean, policy: GeneratedNoticePolicy): readonly string[] =>
   wired
     ? [
       ...noticePolicyDeclarations(policy),
-      "const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
       `const noticeDelivery = createNoticeInboxSignaller({ ${
         policy.noticeDelivery === undefined ? '' : 'delivery: noticeDeliveryAdvertisement, '
-      }store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable'${noticePolicyFields(policy)} }) });`,
+      }store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: pluginRoot.stateRoot }), lifetime: 'workspace-durable'${noticePolicyFields(policy)} }) });`,
       '',
     ]
     : [];
@@ -847,10 +867,16 @@ const processLifetimeValueSource = 'processHit';
  */
 const providerExecutionSource = (
   providers: readonly CompiledProvider[],
-  expressions: { readonly indent: string; readonly invocation: string; readonly signal: string },
+  expressions: {
+    readonly indent: string;
+    readonly invocation: string;
+    /** The observed plugin root the request scope publishes (#468); providers receive the same value. */
+    readonly plugin: string;
+    readonly signal: string;
+  },
 ): readonly string[] => {
   if (providers.length === 0) return [];
-  const { indent, invocation, signal } = expressions;
+  const { indent, invocation, plugin, signal } = expressions;
   return [
     `${indent}const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
     `${indent}for (const provider of providers) {`,
@@ -858,7 +884,7 @@ const providerExecutionSource = (
     `${indent}    throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
     `${indent}  }`,
     `${indent}  try {`,
-    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, signal: ${signal} });`,
+    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, plugin: ${plugin}, signal: ${signal} });`,
     `${indent}  } catch (error) {`,
     `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
     `${indent}  }`,
@@ -881,8 +907,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...generatedStateImports(options.state, 'artifact'),
+    "import { resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...pluginRootImports('artifact'),
+    ...generatedStateImports(options.state),
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     ...eventRouteImports(eventRoutes, routes.length),
@@ -895,7 +922,11 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    ...generatedStateOwner(options.state, 'artifact', options),
+    // The worker resolves the same anchor as the server process beside it
+    // (same environment, same artifact layout); the server's observed value
+    // rides each render message and wins when present.
+    pluginRootDeclaration('artifact'),
+    ...generatedStateOwner(options.state, options),
     ...providerRegistrySource(providers),
     ...composeLayoutsSource(layouts),
     'const routes = Object.freeze({',
@@ -920,13 +951,15 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...(options.state === undefined
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', signal: 'controller.signal' }),
+    '    const plugin = message.plugin ?? pluginRoot.identity;',
+    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'plugin', signal: 'controller.signal' }),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
     '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
     "      lineage: message.lineage ?? unavailable('not-provided'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
+    '      plugin,',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
     `      providers: ${providerValuesExpression(providers)},`,
     '      ...(message.session === undefined ? {} : { session: message.session }),',
@@ -1036,10 +1069,9 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   // appears inside an artifact that declared none.
   const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
-    ...(hasEvents || durableLineage
-      ? [`import { ${[...(hasEvents ? ['dirname'] : []), ...(durableLineage ? ['join'] : []), 'resolve'].join(', ')} } from 'node:path';`]
-      : []),
-    ...(durableLineage ? ["import { fileURLToPath } from 'node:url';"] : []),
+    ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
+    ...pluginRootImports('artifact'),
+    "import { resolvePluginRoot } from '@agent-bundle/runtime';",
     `import { createFlightWorkerHost, createGeneratedRouteMcpServer } from ${JSON.stringify(mcpServerRuntimeSpecifier)};`,
     ...(hasEvents
       ? [
@@ -1048,22 +1080,24 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
         ]
       : []),
     `import { ${durableLineage ? 'agentLineageStateDefinition, ' : ''}createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';`,
-    ...(durableLineage ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"] : []),
+    ...(durableLineage || wiresResourceUpdated ? ["import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';"] : []),
     "import mcpApps from 'agent-bundle/mcp-apps';",
     ...noticeDeliveryImports(wiresResourceUpdated),
     ...noticeInboxImport(wiresInbox),
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
+    // The server process's one anchor (#468): the lineage journal, the notice
+    // store, and every request identity it publishes read `pluginRoot`.
+    pluginRootDeclaration('artifact'),
     ...(durableLineage
       ? [
           // Beside the project's own durable state, so a restarted MCP process
           // still knows which subagents are alive. A store that cannot open
           // degrades to memory rather than failing the server: lineage is an
           // observed axis, never a precondition.
-          "const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
           'const openLineage = async () => {',
-          "  const driver = createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') });",
+          '  const driver = createSqliteStateDriver({ root: pluginRoot.stateRoot });',
           '  try {',
           '    const store = await driver.open(agentLineageStateDefinition());',
           '    return { dispose: async () => { await store.close(); await driver.close(); }, registry: createAgentLineageRegistry({ store }) };',
@@ -1113,6 +1147,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     '    lineage: lineage.registry,',
     ...(wiresResourceUpdated ? ['    notices: noticeDelivery,'] : []),
     `    plugin: ${stableJson(options.plugin)},`,
+    '    pluginRoot: pluginRoot.identity,',
     '    routes,',
     '  });',
     '};',

@@ -75,7 +75,11 @@ const chapters: number | undefined = result?.chapters; // no cast
 
 An event route registers what the harness actually takes and gives back: `input` is the
 `{ canonical, native }` payload (the harness supplies `signal` itself), and `result` is
-`undefined`, since event modules export no `resultSchema`.
+`undefined`, since event modules export no `resultSchema`. Build that input from a host envelope
+with `createEventRouteInput('tool/after', envelope, { host: 'claude' })` rather than by hand: it
+validates the envelope per host and event and projects `canonical.payload` through the same table
+the artifact's wrapper uses, and a route typed `AgentEventRouteProps<'tool/after'>` narrows the
+registered `input` to that family, so passing a `stop` envelope's input to it is a type error.
 
 Nothing about it is required. A target typed `string` rather than a literal stays legal for
 dynamic lookups, a directly imported module target is unaffected, and a project that does not

@@ -51,12 +51,27 @@ export {
 export type { RouteModuleExports } from './contract.ts';
 export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
 export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
-export { appResourceUri, canonicalAgentEvents, MAX_ROUTE_RENDER_ELAPSED_MS } from './public.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  appResourceUri,
+  canonicalAgentEvents,
+  MAX_ROUTE_RENDER_ELAPSED_MS,
+} from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
@@ -65,6 +80,8 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,

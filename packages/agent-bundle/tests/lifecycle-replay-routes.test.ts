@@ -64,6 +64,7 @@ class RecordingService implements LifecycleReplayRouteService {
       event: 'tool/after',
       idempotencyKey: 'key',
       observedAt: '2026-09-02T00:00:00.000Z',
+      payload: Object.freeze({ toolName: Object.freeze({ nativeKey: 'tool_name', value: 'Write' }) }),
       provenance: Object.freeze({
         host: 'claude',
         hostContractRevision: '2.1.250',

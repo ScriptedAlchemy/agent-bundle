@@ -3,13 +3,15 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
+import { withIntent, withNotices } from '../../coordination.js';
 import { findProximity } from '../../domain/proximity.js';
 import {
   actorForWorktree,
   deliveryContexts,
   extractIntent,
+  liveConversations,
   noticeRecipientFor,
+  requestLineage,
 } from '../../event-support.js';
 
 export const config = {
@@ -19,8 +21,7 @@ export const config = {
 
 export default async function BeforeTool({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'tool/before'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -29,10 +30,16 @@ export default async function BeforeTool({
       </Agent.Result>
     );
   }
-  const intent = extractIntent(native);
-  const topologyResult = await withTopology(async (topology) => {
-    const { actor } = await actorForWorktree(topology, currentWorktree, canonical, native);
-    const committed = await topology.dispatch('intentRecorded', {
+  // `canonical.payload` is the framework's cross-host reading of the envelope:
+  // `toolName`/`toolInput` under Claude's PreToolUse and Codex's alike.
+  const intent = extractIntent(canonical.payload);
+  // Who else is alive comes from the runtime's lineage registry, not from
+  // this application's bookkeeping: an intent left behind by an agent the
+  // registry no longer lists under our root is stale and warns nobody.
+  const live = liveConversations(await requestLineage());
+  const intentResult = await withIntent(async (store) => {
+    const { actor } = await actorForWorktree(store, currentWorktree, canonical);
+    const committed = await store.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],
       idempotencyKey: canonical.idempotencyKey,
@@ -48,22 +55,22 @@ export default async function BeforeTool({
     });
     return {
       actor,
-      actors: committed.state.actors,
+      bindings: committed.state.bindings,
       conflicts: findProximity(committed.state, currentWorktree.root, {
         actorId: actor.id,
         dependencies: intent.dependencies,
         paths: intent.paths,
-      }),
+      }, live === undefined ? {} : { liveConversations: live }),
     };
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result value={{ outcome: 'continue' }}>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }
-  const resolution = topologyResult.value;
+  const resolution = intentResult.value;
 
   const noticeResult = await withNotices(async (notices) => {
     const deliveries = await notices.read();
@@ -72,7 +79,7 @@ export default async function BeforeTool({
       // thread admits the notice, even when a sibling shares its worktree.
       // A derived actor has no conversation, so its worktree is addressed.
       const recipient = noticeRecipientFor(
-        resolution.actors.find((actor) => actor.id === conflict.actorId),
+        resolution.bindings.find((binding) => binding.actorId === conflict.actorId),
         conflict.worktreeRoot,
       );
       await notices.publish({

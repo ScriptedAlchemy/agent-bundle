@@ -93,7 +93,7 @@ export const config = {
 ```
 
 Call `await agent()` only when the route needs context. The handle exposes the invocation plus
-the `host`, `session`, `actor`, and `workspace` identity axes. Each axis is *observed*: a
+the `host`, `session`, `actor`, `workspace`, and `plugin` identity axes. Each axis is *observed*: a
 transport publishes an `available` value and its source when it knows one, or `unavailable` with
 a typed reason when it does not. Bare stdio supplies neither a session id nor HTTP actor
 authentication, so those axes stay honestly unavailable rather than being fabricated.
@@ -114,6 +114,27 @@ to the single pending `subagentStart`). A confirmation also fills in `subagent.t
 siblings claimed blind, places a start no spawn window could, and moves a child the window
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
+
+When the registry placed the request, the lineage also carries `tree` — who else is alive, read
+from the same registry and never invented:
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // every other live conversation under the same root (any depth,
+                               // the root itself included for a subagent), oldest first
+  lineage.value.tree.children; // live conversations whose parent is this one
+  lineage.value.tree.roots;    // other live root conversations (Cursor: same workspace_roots)
+}
+```
+
+Each peer is `{ conversation, depth, parent?, startedAt, subagent?, resolution }` — the
+registry's facts about that node, with the trust level of *its* placement, judged exactly as on
+a request that node made itself. Stopped conversations are not listed; a Cursor child whose
+conversation has not spoken yet is listed under its `subagent_id`. The tree is absent when the
+registry did not place the request (a standalone hook, or a Codex `_meta` naming a thread it
+never saw start): the axis then still says who you are, not who else is here. Route-unit tests
+inject it through the same `context.lineage` seam as the rest of the axis.
 
 ### The terminal capability
 
@@ -411,6 +432,32 @@ import { pluginRootEnvAnchor } from 'agent-bundle';
 const readPluginRoot = (env: Record<string, string | undefined>): string | undefined =>
   env[pluginRootEnvAnchor];
 ```
+
+Inside a route there is no need to read the variable at all. Every generated shell — the MCP
+entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers —
+resolves the anchor once at startup with `resolvePluginRoot` from `@agent-bundle/runtime`, mounts
+its SQLite state, notice ledger, and lineage journal under `<root>/state`, and publishes the same
+value on every request it opens as `(await agent()).plugin`:
+
+```ts
+const { plugin } = await agent();
+if (plugin.state === 'available') {
+  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT, or the shell's fallback
+  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage already live
+  plugin.source;          // 'native' from the variable, 'derived' from the fallback
+}
+```
+
+`source: 'native'` means the host supplied an expanded `AGENT_BUNDLE_PLUGIN_ROOT`; `'derived'`
+means the shell fell back — to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
+a built artifact, or to `$PWD/.agent-bundle` for the npm package bin. A value still carrying an
+unexpanded `${…}` token (a host that passed its manifest through literally) is treated as unset,
+reported once on stderr, and never joined into a path. Conventional providers receive the same
+observed value as `plugin` in their factory context, beside `invocation` and `signal`, so a
+provider that keeps files beside the framework's state derives nothing itself. The route-unit and
+`mcp-in-memory` harnesses resolve it the same way (falling back to `<project root>/.agent-bundle`)
+and accept `context.plugin` as an override like every other axis; outside a generated scope the
+axis is `unavailable('not-provided')`.
 
 ## MCP Apps
 

@@ -1,4 +1,6 @@
-import type { AgentProviderValues } from '@agent-bundle/runtime';
+import { join } from 'node:path';
+
+import type { AgentPluginIdentity, AgentProviderValues, Observed, resolvePluginRoot } from '@agent-bundle/runtime';
 
 import {
   executeProviders,
@@ -43,6 +45,8 @@ export interface MountProvidersOptions {
   readonly invocation: unknown;
   /** Absent for a module rendered directly: no project, so nothing to discover. */
   readonly manifest: AgentBundleTestManifest | undefined;
+  /** The observed plugin root the simulated scope publishes as `request.plugin` (#468). */
+  readonly plugin: unknown;
   /**
    * This request's claimed hit on the simulated executable's process identity
    * (see {@link claimProcessHit}); mounted verbatim as `providers.processLifetime`.
@@ -89,6 +93,28 @@ export const claimProcessHit = (processLifetime: ProviderProcessLifetime): Provi
   return providerProcessLifetimeValue(processLifetime);
 };
 
+export interface HarnessPluginRootOptions {
+  /** The test's context seam; an explicit `plugin` wins, as every other injected axis does. */
+  readonly context: { readonly plugin?: Observed<AgentPluginIdentity> };
+  /** Absent for a module rendered directly. */
+  readonly manifest: AgentBundleTestManifest | undefined;
+  /** The runtime's resolver, loaded with the rest of the renderer. */
+  readonly resolvePluginRoot: typeof resolvePluginRoot;
+}
+
+/**
+ * The plugin root a harness request scope publishes as `request.plugin` and
+ * hands its providers (#468): the test's `context.plugin` when injected,
+ * otherwise the runtime's own resolution — `AGENT_BUNDLE_PLUGIN_ROOT` when the
+ * environment sets it, else the project root's `.agent-bundle` (the npm
+ * package bin's fallback; the working directory's for a module rendered
+ * directly). Harness state itself mounts in a temporary directory, so this
+ * value describes where an artifact would anchor, not where the test wrote.
+ */
+export const harnessPluginRoot = (options: HarnessPluginRootOptions): Observed<AgentPluginIdentity> =>
+  options.context.plugin
+    ?? options.resolvePluginRoot({ fallback: join(options.manifest?.projectRoot ?? process.cwd(), '.agent-bundle') }).identity;
+
 /**
  * The `providers` value for one harness request scope: the explicit map when
  * the test supplied one, otherwise the project's conventional providers
@@ -105,6 +131,7 @@ export const mountProviders = async (options: MountProvidersOptions): Promise<Ag
   }
   return executeProviders({
     invocation: options.invocation,
+    plugin: options.plugin,
     processLifetime: { ...options.processHit },
     providers,
     signal: options.signal,

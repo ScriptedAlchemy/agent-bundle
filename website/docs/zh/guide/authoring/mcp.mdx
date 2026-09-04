@@ -87,7 +87,7 @@ export const config = {
 ```
 
 只有在路由确实需要上下文时才调用 `await agent()`。该句柄暴露本次调用，以及 `host`、`session`、
-`actor`、`workspace` 四个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
+`actor`、`workspace`、`plugin` 五个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
 其来源，不知道时则发布带有类型化原因的 `unavailable`。裸 stdio 既不提供 session id 也不提供 HTTP
 actor 认证，因此这两个轴保持诚实的不可用，而不是被伪造出来。
 
@@ -104,6 +104,24 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 唯一一个待定的 `subagentStart`）。一次确认还会为盲选认领的同胞补上 `subagent.toolCallId`，安放 spawn
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
+
+当注册表安放了这次请求时，lineage 还会带有 `tree`——还有谁在线，读自同一个注册表，绝不凭空编造：
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // 同一根会话之下所有其他在线会话（任意深度，
+                               // 对子代理而言包含根会话本身），按启动时间从早到晚
+  lineage.value.tree.children; // 以本会话为父节点的在线会话
+  lineage.value.tree.roots;    // 其他在线的根会话（Cursor：同一 workspace_roots）
+}
+```
+
+每个对等节点是 `{ conversation, depth, parent?, startedAt, subagent?, resolution }`——注册表关于该
+节点的事实，以及*它自己*安放的可信级别，与该节点自己发出请求时得到的判断完全一致。已停止的会话不会
+列出；尚未开口的 Cursor 子会话以其 `subagent_id` 列出。注册表没有安放这次请求时（独立钩子进程，或
+Codex `_meta` 指向一个注册表从未见过其启动的线程），`tree` 不存在：此时这一轴仍然回答"我是谁"，但不
+回答"还有谁在这里"。路由单元测试通过与该轴其余部分相同的 `context.lineage` 接缝注入它。
 
 ### 终端能力
 
@@ -371,6 +389,28 @@ import { pluginRootEnvAnchor } from 'agent-bundle';
 const readPluginRoot = (env: Record<string, string | undefined>): string | undefined =>
   env[pluginRootEnvAnchor];
 ```
+
+在路由内部完全不需要读取这个变量。每个生成的外壳——MCP 入口及其 Flight worker、路由式 CLI 可执行文件
+及其渲染 worker、hook 包装器——都在启动时用 `@agent-bundle/runtime` 的 `resolvePluginRoot` 解析一次
+锚点，把 SQLite 状态、通知账本与 lineage 日志挂载在 `<root>/state` 之下，并在它打开的每个请求上以
+`(await agent()).plugin` 发布同一个值：
+
+```ts
+const { plugin } = await agent();
+if (plugin.state === 'available') {
+  plugin.value.root;      // 安装根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
+  plugin.value.stateRoot; // `<root>/state`，defineState / 通知 / lineage 已经存放于此
+  plugin.source;          // 来自变量为 'native'，来自回退为 'derived'
+}
+```
+
+`source: 'native'` 表示宿主提供了已展开的 `AGENT_BUNDLE_PLUGIN_ROOT`；`'derived'` 表示外壳使用了回退——
+在构建产物内是产物根目录（`mcp/`、`bin/` 或 `hooks/` 的父目录），对 npm 包 bin 则是 `$PWD/.agent-bundle`。
+仍带有未展开 `${…}` token 的值（宿主把清单原样透传）会被视为未设置，在 stderr 上报告一次，且绝不会被
+拼接进路径。约定式 provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
+因此把文件放在框架状态旁边的 provider 自己不必再推导任何东西。route-unit 与 `mcp-in-memory` 测试层级
+以同样方式解析它（回退到 `<项目根目录>/.agent-bundle`），并像其他每个轴一样接受 `context.plugin` 覆盖；
+在生成的作用域之外，该轴为 `unavailable('not-provided')`。
 
 ## MCP App
 

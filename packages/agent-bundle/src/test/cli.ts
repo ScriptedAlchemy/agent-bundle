@@ -27,7 +27,7 @@ import type { CompiledCliCommand } from '../routes/types.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.ts';
-import { claimProcessHit, mountProviders } from './providers.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
 import { harnessTerminal } from './terminal.ts';
@@ -116,6 +116,7 @@ const noCommands = (manifest: AgentBundleTestManifest): AgentTestError => new Ag
 
 interface Runtime {
   readonly available: typeof AgentRuntime.available;
+  readonly resolvePluginRoot: typeof AgentRuntime.resolvePluginRoot;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
   readonly unavailable: typeof AgentRuntime.unavailable;
 }
@@ -131,6 +132,7 @@ const loadRuntime = async (): Promise<Runtime> => {
   runtimePromise ??= import('@agent-bundle/runtime')
     .then((runtime) => ({
       available: runtime.available,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
       unavailable: runtime.unavailable,
     }))
@@ -249,11 +251,13 @@ export const invokeCli = async (
           throw cliInputError(command, input, error);
         }
         const root = process.cwd();
+        const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).
         const providers = await mountProviders({
           explicit: context.providers,
           invocation: { kind: 'cli', props: { args: execution.args, command: commandPath(command) } },
           manifest,
+          plugin,
           processHit: claimProcessHit(processLifetime),
           provenance: { ...provenance, kind: 'cli', routeId: command.routeId, source: 'manifest', targets: [] },
           signal: execution.signal,
@@ -266,6 +270,7 @@ export const invokeCli = async (
             projectRoot: runtime.available({ root }, 'derived'),
           },
           host: runtime.unavailable('unsupported-surface'),
+          plugin,
           terminal: runtime.available(execution.terminal, 'native'),
           workspace: runtime.available({ root }, 'derived'),
           ...context,

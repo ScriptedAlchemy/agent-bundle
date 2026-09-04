@@ -1,3 +1,4 @@
+export { projectEventPayload } from './payload.ts';
 export {
   createCanonicalEventProps,
   projectEventDocument,

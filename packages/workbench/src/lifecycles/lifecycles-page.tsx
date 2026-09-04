@@ -148,6 +148,7 @@ export const LifecycleReplayView = ({ view }: LifecycleReplayViewProps) => {
       </section>
       <DiagnosticList diagnostics={view.resultDiagnostics} label="Replay result diagnostics" />
       <DetailRows label="Canonical identity" rows={view.canonicalRows} />
+      <DetailRows label="Canonical payload" rows={view.payloadRows} />
       <DetailRows label="Request context" rows={view.requestRows} />
       <LineageTree
         chain={lineageChainFor(replay)}

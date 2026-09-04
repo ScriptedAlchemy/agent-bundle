@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
 import { available, type AgentLineage } from '@agent-bundle/runtime';
-import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
+import { createEventRouteInput, expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import { LOG_DIR_ENV } from '../../src/log.js';
 import { DEFAULT_DUMP_LIMIT } from '../../src/mcp/host-test/tools/dump.js';
@@ -19,25 +19,24 @@ let logDir: string;
 let mounted: MountedTestState<CapturesState, CaptureEvents>;
 let sequence = 0;
 
+// The probe records the whole envelope, so its tests hand it partial ones
+// (`validate: false`); the harness still projects `canonical.payload` from them.
 const eventInput = (
   event: 'agent/start' | 'agent/stop' | 'session/start' | 'tool/before',
   native: Record<string, unknown>,
   host = 'claude',
-) => ({
-  canonical: {
-    event,
-    idempotencyKey: `${event}:${String(sequence)}`,
-    observedAt: `2026-09-03T08:00:${String(sequence++).padStart(2, '0')}.000Z`,
-    provenance: {
-      host,
-      hostContractRevision: 'route-unit',
-      nativeEvent: native.hook_event_name as string,
-      source: 'native',
+) => {
+  const built = createEventRouteInput(event, native, { host, validate: false });
+  return {
+    canonical: {
+      ...built.canonical,
+      idempotencyKey: `${event}:${String(sequence)}`,
+      observedAt: `2026-09-03T08:00:${String(sequence++).padStart(2, '0')}.000Z`,
+      sequence,
     },
-    sequence,
-  },
-  native,
-});
+    native: built.native,
+  };
+};
 
 const render = async (
   route: string,
