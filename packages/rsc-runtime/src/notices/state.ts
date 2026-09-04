@@ -295,7 +295,7 @@ export const recordedNoticePrincipal = (principal: AgentNoticePrincipal): AgentN
 export const noticePublisherOf = (principal: AgentNoticePrincipal): AgentNoticePublisher | undefined => {
   const publisher: AgentNoticePublisher = Object.freeze({
     ...(principal.actor.state === 'available' ? { actor: Object.freeze({ id: principal.actor.value.id }) } : {}),
-    ...(principal.lineage.state === 'available' ? { conversation: principal.lineage.value.conversation } : {}),
+    ...(principal.lineage?.state === 'available' ? { conversation: principal.lineage.value.conversation } : {}),
     ...(principal.host.state === 'available' ? { host: Object.freeze({ name: principal.host.value.name }) } : {}),
     ...(principal.session.state === 'available'
       ? { session: Object.freeze({ sessionId: principal.session.value.sessionId }) }
@@ -322,7 +322,7 @@ export const publisherMatchesPrincipal = (
 ): boolean => {
   if (publisher === undefined) return false;
   if (publisher.conversation !== undefined) {
-    return principal.lineage.state === 'available' && principal.lineage.value.conversation === publisher.conversation;
+    return principal.lineage?.state === 'available' && principal.lineage.value.conversation === publisher.conversation;
   }
   if (publisher.actor !== undefined) {
     if (principal.actor.state !== 'available' || principal.actor.value.id !== publisher.actor.id) return false;

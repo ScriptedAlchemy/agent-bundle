@@ -1773,6 +1773,10 @@ describe('publisher-scoped visibility (#460)', () => {
 
     const withoutLineage = noticePublisherOf(principalOf({ actor: actor('a1') }));
     expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a1') }))).toBe(true);
+    // A four-axis principal (no `lineage` key at all) records and matches by its axes.
+    expect(noticePublisherOf({ actor: actor('a1'), host, session, workspace })).toEqual(withoutLineage);
+    expect(publisherMatchesPrincipal(withoutLineage, { actor: actor('a1'), host, session, workspace })).toBe(true);
+    expect(publisherMatchesPrincipal(withLineage, { actor: actor('a1'), host, session, workspace })).toBe(false);
     expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a1'), lineage: lineageOf('agent-a') }))).toBe(true);
     expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a2') }))).toBe(false);
     expect(publisherMatchesPrincipal(withoutLineage, principalOf({}))).toBe(false);
