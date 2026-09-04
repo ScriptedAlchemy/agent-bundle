@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { McpServer } from '@modelcontextprotocol/server';
+import { specTypeSchemas as clientSchemas } from '@modelcontextprotocol/client';
 import { describe, expect, it } from '@rstest/core';
 import { agentNoticeStateDefinition } from '@agent-bundle/runtime/notices';
 import { createMemoryStateDriver, defineState, type AgentStateDriver } from '@agent-bundle/runtime/state';
@@ -554,42 +554,154 @@ describe('the in-memory MCP projection level', () => {
     }
   });
 
-  // Issue #369: task-augmented tool calls are deferred until the MCP SDK ships
-  // a task runtime (docs/mcp-conformance.md). Until then the generated server
-  // must stay fail-closed — no `tasks` capability claim — and must process a
-  // task-augmented request as an ordinary one, which is what the 2025-11-25
-  // Tasks utility requires of a receiver that declared no task support.
-  it('never advertises the MCP Tasks capability', async () => {
-    await using session = await openInMemoryMcpServer();
-
-    const capabilities = session.client.getServerCapabilities();
-    expect(capabilities).toMatchObject({ tools: expect.any(Object) });
-    expect(Object.hasOwn(capabilities ?? {}, 'tasks')).toBe(false);
-  });
-
-  it('processes a task-augmented tools/call as an ordinary request', async () => {
-    await using session = await openInMemoryMcpServer();
-
-    const result = await session.client.request({
+  describe('task-augmented tool calls (#369)', () => {
+    const RELATED_TASK = 'io.modelcontextprotocol/related-task';
+    const createTask = (
+      client: Awaited<ReturnType<typeof openInMemoryMcpServer>>['client'],
+      name: string,
+      args: Record<string, unknown>,
+      meta?: Record<string, unknown>,
+    ) => client.request({
       method: 'tools/call',
-      params: { arguments: { message: 'deferred' }, name: 'echo', task: { ttl: 60_000 } },
+      params: { ...(meta === undefined ? {} : { _meta: meta }), arguments: args, name, task: { pollInterval: 100, ttl: 60_000 } },
+    }, clientSchemas.CreateTaskResult);
+    const getTask = (client: Awaited<ReturnType<typeof openInMemoryMcpServer>>['client'], taskId: string) =>
+      client.request({ method: 'tasks/get', params: { taskId } }, clientSchemas.GetTaskResult);
+    const getResult = (client: Awaited<ReturnType<typeof openInMemoryMcpServer>>['client'], taskId: string) =>
+      client.request({ method: 'tasks/result', params: { taskId } }, clientSchemas.CallToolResult);
+    const rpcError = async (promise: Promise<unknown>): Promise<{ readonly code: number; readonly message: string }> => {
+      try {
+        await promise;
+      } catch (error) {
+        const { code, message } = error as { code: number; message: string };
+        return { code, message };
+      }
+      throw new Error('Expected the request to fail');
+    };
+
+    it('advertises the tasks capability and the compiled execution.taskSupport of the routes that opted in', async () => {
+      await using session = await openInMemoryMcpServer();
+
+      expect(session.client.getServerCapabilities()?.tasks).toEqual({ cancel: {}, list: {}, requests: { tools: { call: {} } } });
+      const listed = await session.client.listTools();
+      const byName = new Map(listed.tools.map((tool) => [tool.name, tool]));
+      expect(byName.get('wait')?.execution).toEqual({ taskSupport: 'optional' });
+      expect(byName.get('catalog')?.execution).toEqual({ taskSupport: 'optional' });
+      expect(byName.get('echo')?.execution).toBeUndefined();
     });
 
-    expect(result).toMatchObject({ structuredContent: { message: 'deferred' } });
-    for (const key of ['task', 'taskId', 'status', 'createdAt', 'ttl', 'pollInterval']) {
-      expect(Object.hasOwn(result, key)).toBe(false);
-    }
-  });
+    it('returns a CreateTaskResult first and the same final CallToolResult through tasks/result', async () => {
+      await using session = await openInMemoryMcpServer();
 
-  // Compile-time half of the #369 sentinel: the SDK's spec-method handler
-  // overload rejects task methods today. When a release admits them, this
-  // directive becomes unused, `pnpm typecheck` fails, and the deferral in
-  // docs/mcp-conformance.md must be re-audited. Never invoked at runtime.
-  const typedTaskSurfaceSentinel = (server: McpServer): void => {
-    // @ts-expect-error tasks/get is 2025-11-25 wire vocabulary without an SDK runtime.
-    server.server.setRequestHandler('tasks/get', async () => ({}));
-  };
-  void typedTaskSurfaceSentinel;
+      const created = await createTask(session.client, 'wait', { holdMs: 200, tickMs: 100 });
+      expect(created.task).toMatchObject({ pollInterval: 100, status: 'working', ttl: 60_000 });
+      // The render is still running behind the task when the response lands.
+      const early = await getTask(session.client, created.task.taskId);
+      expect(early.status).toBe('working');
+
+      const result = await getResult(session.client, created.task.taskId);
+      // Content, structuredContent, and the layout `_meta` of an ordinary call,
+      // plus the related-task key tasks/result must carry.
+      const ordinary = await session.client.callTool({ arguments: { holdMs: 200 }, name: 'wait' });
+      expect(result).toEqual({
+        ...ordinary,
+        _meta: { ...ordinary._meta, [RELATED_TASK]: { taskId: created.task.taskId } },
+      });
+      expect(result).toMatchObject({ content: [{ text: 'waited 200ms', type: 'text' }], structuredContent: { waitedMs: 200 } });
+      expect(result).not.toHaveProperty('isError');
+      const completed = await getTask(session.client, created.task.taskId);
+      expect(completed.status).toBe('completed');
+    });
+
+    it('surfaces the render\'s progress through tasks/get, from progress.report() and from a streamed Agent.Progress fallback alike', async () => {
+      await using session = await openInMemoryMcpServer();
+      const notifications: unknown[] = [];
+      session.client.setNotificationHandler('notifications/progress', (notification) => {
+        notifications.push(notification.params);
+      });
+
+      // No progress token: the task still observes every report — the last one
+      // stays on the settled task under `_meta['agent-bundle/progress']` — and
+      // nothing reaches the wire as notifications/progress. (This level hands
+      // the dispatcher the whole Flight payload at once, so the reports it
+      // buffered before the shell arrive together with the result; the
+      // mid-render `statusMessage` is pinned by tests/mcp-tasks.test.ts.)
+      const reported = await createTask(session.client, 'wait', { holdMs: 300, tickMs: 100 });
+      await getResult(session.client, reported.task.taskId);
+      const settled = await getTask(session.client, reported.task.taskId);
+      expect(settled.status).toBe('completed');
+      expect(settled).not.toHaveProperty('statusMessage');
+      expect(settled._meta?.['agent-bundle/progress']).toEqual({ message: 'waiting', progress: 3, total: 3 });
+      expect(notifications).toEqual([]);
+
+      // The catalog route never calls progress.report(); its Suspense fallback
+      // is an Agent.Progress node the projector reads (#448), and the task
+      // records it exactly as the ordinary call would have notified it — under
+      // the client's own token, stamped with the related-task key.
+      const streamed = await createTask(session.client, 'catalog', { genre: 'mystery' }, { progressToken: 'tok-369' });
+      const result = await getResult(session.client, streamed.task.taskId);
+      expect(result).toMatchObject({ structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] } });
+      expect(notifications).toEqual([{
+        _meta: { [RELATED_TASK]: { taskId: streamed.task.taskId } },
+        message: 'loading mystery',
+        progress: 0,
+        progressToken: 'tok-369',
+        total: 2,
+      }]);
+      expect((await getTask(session.client, streamed.task.taskId))._meta?.['agent-bundle/progress']).toEqual({ message: 'loading mystery', progress: 0, total: 2 });
+    });
+
+    it('cancels a working task through the render\'s own AbortSignal', async () => {
+      await using session = await openInMemoryMcpServer();
+
+      const created = await createTask(session.client, 'wait', { holdMs: 5000 });
+      const cancelled = await session.client.request(
+        { method: 'tasks/cancel', params: { taskId: created.task.taskId } },
+        clientSchemas.CancelTaskResult,
+      );
+      expect(cancelled).toMatchObject({ status: 'cancelled', taskId: created.task.taskId });
+      // The interrupted render settles as the SDK's tool error for the abort,
+      // which is exactly what tasks/result then returns.
+      const result = await getResult(session.client, created.task.taskId);
+      expect(result).toMatchObject({ isError: true });
+      expect((await getTask(session.client, created.task.taskId)).status).toBe('cancelled');
+      expect((await rpcError(session.client.request(
+        { method: 'tasks/cancel', params: { taskId: created.task.taskId } },
+        clientSchemas.CancelTaskResult,
+      ))).code).toBe(-32_602);
+    });
+
+    it('lists the session\'s tasks and refuses a task call to a tool that did not opt in', async () => {
+      await using session = await openInMemoryMcpServer();
+
+      expect((await session.client.request({ method: 'tasks/list' }, clientSchemas.ListTasksResult)).tasks).toEqual([]);
+      const first = await createTask(session.client, 'wait', { holdMs: 50 });
+      const second = await createTask(session.client, 'catalog', {});
+      const listed = await session.client.request({ method: 'tasks/list' }, clientSchemas.ListTasksResult);
+      expect(listed.tasks.map((task) => task.taskId)).toEqual([first.task.taskId, second.task.taskId]);
+      await Promise.all([getResult(session.client, first.task.taskId), getResult(session.client, second.task.taskId)]);
+
+      const refused = await rpcError(createTask(session.client, 'echo', { message: 'not a task' }));
+      expect(refused.code).toBe(-32_601);
+      expect((await rpcError(getTask(session.client, 'no-such-task'))).code).toBe(-32_602);
+    });
+
+    it('leaves a client that never asks for a task on the ordinary contract', async () => {
+      await using session = await openInMemoryMcpServer();
+      const notifications: unknown[] = [];
+      session.client.setNotificationHandler('notifications/progress', (notification) => {
+        notifications.push(notification.params);
+      });
+
+      const result = await session.client.callTool({ arguments: { holdMs: 50 }, name: 'wait' });
+      expect(result).toMatchObject({ content: [{ text: 'waited 50ms', type: 'text' }], structuredContent: { waitedMs: 50 } });
+      for (const key of ['task', 'taskId', 'status', 'createdAt', 'ttl', 'pollInterval']) {
+        expect(Object.hasOwn(result, key)).toBe(false);
+      }
+      expect(notifications).toEqual([]);
+      expect((await session.client.request({ method: 'tasks/list' }, clientSchemas.ListTasksResult)).tasks).toEqual([]);
+    });
+  });
 
   it('emits notifications/resources/updated for the notice inbox only to subscribed matching sessions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-inbox-updated-'));

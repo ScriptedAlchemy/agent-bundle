@@ -80,7 +80,16 @@ export type McpRouteOperation =
   | Readonly<{ readonly operation: 'initialize' | 'prompts/list' | 'resources/list' | 'resources/templates/list' | 'tools/list' }>
   | Readonly<{ readonly arguments?: Readonly<Record<string, string>>; readonly name: string; readonly operation: 'prompts/get' }>
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
-  | Readonly<{ readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
+  | Readonly<{
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly name: string;
+    readonly operation: 'tools/call';
+    readonly requestId?: string;
+    /** A task-augmented call (#369): the `params.task` the server receives; answered by a `CreateTaskResult`. */
+    readonly task?: Readonly<{ readonly pollInterval?: number; readonly ttl?: number }>;
+  }>
+  | Readonly<{ readonly operation: 'tasks/cancel' | 'tasks/get' | 'tasks/result'; readonly taskId: string }>
+  | Readonly<{ readonly cursor?: string; readonly operation: 'tasks/list' }>;
 
 export interface ForegroundRouteClientOptions {
   readonly fetch?: typeof fetch;

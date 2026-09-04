@@ -241,10 +241,31 @@ export interface RouteRenderConfig {
  */
 export const MAX_ROUTE_RENDER_ELAPSED_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How a tool may be called as an MCP task (the `2025-11-25` Tasks utility,
+ * `Tool.execution.taskSupport`). `forbidden` — the wire default when the
+ * field is absent — means every call is an ordinary request. `optional` lets
+ * a client that asks for task-augmented execution receive a `CreateTaskResult`
+ * at once and poll `tasks/get` / `tasks/result` for the final `CallToolResult`
+ * while the render continues; a client that does not ask sees no change.
+ * `required` refuses an ordinary call with JSON-RPC `-32601`. The compiler
+ * validates the value (`AB4836`); the generated server advertises it in
+ * `tools/list` and declares the `tasks` capability only when at least one
+ * tool opted in.
+ */
+export type ToolTaskSupport = 'forbidden' | 'optional' | 'required';
+
+/** The `Tool.execution` block a tool route declares statically in `config.execution`. */
+export interface ToolExecutionConfig {
+  readonly taskSupport?: ToolTaskSupport;
+}
+
 export interface ToolConfig {
   readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
+  /** Task-augmented execution of this tool (`execution.taskSupport`); see {@link ToolTaskSupport}. */
+  readonly execution?: ToolExecutionConfig;
   /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
   readonly exitCode?: 'result';
   /** The render budget of one call; also inherited by the tool's projected CLI command. */
