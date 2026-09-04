@@ -71,6 +71,21 @@ const chapters: number | undefined = result?.chapters; // 无需强制类型转�
 `RegisteredRouteId`、`RegisteredRouteInput` 与 `RegisteredRouteResult` 直接命名这一注册表面，便于
 你自己封装。
 
+同一份注册会流向测试工具中每一个接受 route id 或路由载荷的表面，正如 TanStack Router 的那一个
+`Register` 会流向 `Link to`、`useNavigate` 与 `RoutesByPath`。`invokeMcpTool('find', { input })` 与
+`getMcpPrompt('brief', { input })` 会把线上名称对照已注册的工具或提示名称做检查（`tool:curator/find`
+对应 `find`），并根据该路由的 `inputSchema` 为 `input` 定型——若两个服务器注册了同名路由，则为二者的
+联合类型；`runContractMatrix`、`runPackedContractMatrix`、`runDevEpochContractMatrix` 与
+`runInstalledHostContractMatrix` 会根据对应路由为 `fixtures` 中每个已注册键定型（`input`、`inputs`、
+`cancellation.input` 与生命周期 transition），而 MCP App 路由的键或动态构造的
+`Record<string, ContractRouteFixture>` 仍然合法；`invokeCli` 把已执行命令的 `routeId` 报告为已注册的
+`cli:` 或 `tool:` id（`argv` 仍为 `readonly string[]`）；`agent-bundle/eval` 的
+`expectMcpCall({ server, tool })` 会把字面量 `tool` 对照本项目字面量 `server` 上已注册的工具做检查，
+第三方服务器则不受约束。`RegisteredMcpServerName`、`RegisteredMcpRouteName` 与 `RegisteredMcpRouteId`
+命名一个已注册 id 所编码的服务器与协议名称。以下表面有意保持不定型：`readMcpResource`（线上 URI，注册
+表中并不携带）、`runScript`（脚本路由不注册契约）、`structuredContent`（线上仅在文档取值为对象时携带）
+以及 `agent-bundle/api`（它面向任意项目 `root`）。
+
 `testManifest()` 暴露编译后的路由清单，因此一个测试套件可以在进程内遍历每个路由，而不必为每个路由付出
 一次构建的代价。任何失败——未知路由、被拒绝的路由种类、被拒的输入、渲染错误——都会指明 route id、target
 种类与模块 provenance。

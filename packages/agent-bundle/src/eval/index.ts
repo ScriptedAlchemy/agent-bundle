@@ -32,6 +32,7 @@ export {
 } from './assertions.ts';
 export type {
   EvalEvidenceOptions,
+  EvalMcpToolConstraint,
   ExpectMcpCallOptions,
   ExpectNoMcpCallOptions,
   ExpectNoSkillActivationOptions,

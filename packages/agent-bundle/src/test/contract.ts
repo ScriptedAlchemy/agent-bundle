@@ -52,6 +52,7 @@
  * Boundaries without an event runtime report identity as not-applicable.
  */
 import type { Client } from '@modelcontextprotocol/client';
+import type { RegisteredRouteId, RegisteredRouteInput } from '@agent-bundle/runtime';
 
 import {
   requestEventRuntimeStatus,
@@ -92,20 +93,24 @@ export type ContractLifecyclePhase =
   | 'repeated-progress'
   | 'terminal';
 
-export interface ContractLifecycleTransition {
+/**
+ * One lifecycle phase's invocation. `Input` is the route's input, bound to
+ * its registered type by {@link ContractRouteFixtures} for a registered id.
+ */
+export interface ContractLifecycleTransition<Input = unknown> {
   readonly expectedStructuredContent: unknown;
-  readonly input: unknown;
+  readonly input: Input;
   readonly phase: ContractLifecyclePhase;
   readonly progressNotifications: number;
   readonly renderedTextIncludes?: string;
 }
 
-export interface ContractLifecycleFixture {
+export interface ContractLifecycleFixture<Input = unknown> {
   readonly state?: {
     readonly budget?: {
       readonly codePath: readonly string[];
       readonly expectedCode: string;
-      readonly input: unknown;
+      readonly input: Input;
       readonly revisionPath: readonly string[];
     };
     readonly catalog?: {
@@ -114,7 +119,7 @@ export interface ContractLifecycleFixture {
     };
     readonly durability?: {
       readonly expectedStructuredContent: unknown;
-      readonly input: unknown;
+      readonly input: Input;
     };
     readonly idempotency?: {
       readonly phase: ContractLifecyclePhase;
@@ -132,7 +137,7 @@ export interface ContractLifecycleFixture {
     };
   };
   /** Pure deterministic phase driver; transport and assertions remain framework-owned. */
-  readonly transitionDriver: () => readonly ContractLifecycleTransition[];
+  readonly transitionDriver: () => readonly ContractLifecycleTransition<Input>[];
 }
 
 /**
@@ -144,7 +149,15 @@ export interface ContractResourceFixture {
   readonly kind: 'resource';
 }
 
-export interface ContractRouteFixture {
+/**
+ * One route's contract fixture. Every `input` here is handed to the route as
+ * its tool or prompt input, so `Input` is that route's input type:
+ * {@link ContractRouteFixtures} binds it to the registered input for a
+ * registered route id and leaves it `unknown` otherwise. `previousResults`
+ * stays `unknown` by design — those payloads come from previous server
+ * versions and need not match the current schema's type.
+ */
+export interface ContractRouteFixture<Input = unknown> {
   /**
    * `'resource'` marks a resource/MCP App fixture (see `ContractResourceFixture`).
    * Omit it for tool and prompt fixtures; a legacy `{}` still covers a
@@ -152,9 +165,9 @@ export interface ContractRouteFixture {
    */
   readonly kind?: ContractResourceFixture['kind'];
   /** Valid input for the sweep invocation (tools/prompts; resources need none). */
-  readonly input?: unknown;
+  readonly input?: Input;
   /** Additional valid inputs — e.g. one per declared status/discriminant value. */
-  readonly inputs?: readonly unknown[];
+  readonly inputs?: readonly Input[];
   /** Declared serialized-result compatibility policy. REQUIRED for tool routes. */
   readonly resultCompat?: ResultCompatPolicy;
   /**
@@ -168,10 +181,27 @@ export interface ContractRouteFixture {
    * `abortAfterMs` (default 50ms); an invocation that settles before the abort
    * fires is reported `not-applicable`, not `failed`.
    */
-  readonly cancellation?: { readonly abortAfterMs?: number; readonly input?: unknown };
+  readonly cancellation?: { readonly abortAfterMs?: number; readonly input?: Input };
   /** Optional stateful replay over this matrix run's single open client. */
-  readonly lifecycle?: ContractLifecycleFixture;
+  readonly lifecycle?: ContractLifecycleFixture<Input>;
 }
+
+/**
+ * Route id -> fixture, the `fixtures` member of every contract-matrix entry
+ * point. Once the generated `.agent-bundle/routes.d.ts` registers the
+ * project's routes, a registered id's fixture carries that route's registered
+ * input in `input`, `inputs`, `cancellation.input`, and its lifecycle
+ * transitions (a mistyped literal is rejected at the key), while any other
+ * key — an MCP App route, which the registration never lists, or a value typed
+ * `Record<string, ContractRouteFixture>` built dynamically — stays legal with
+ * `unknown` inputs, exactly as before. Without a registration every key is a
+ * string and every input `unknown`.
+ */
+export type ContractRouteFixtures = {
+  readonly [Id in RegisteredRouteId]?: ContractRouteFixture<RegisteredRouteInput<Id>>;
+} & {
+  readonly [routeId: string]: ContractRouteFixture;
+};
 
 /**
  * How MCP App routes are covered at boundaries that register app resources.
@@ -217,7 +247,7 @@ export interface ContractMatrixOptions extends InMemoryMcpSessionOptions {
    * the server must be covered. App routes are not registered at
    * `mcp-in-memory`; entries for them are accepted and ignored.
    */
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly fixtures: ContractRouteFixtures;
   /** Accepted for parity with the other entry points; apps are never registered here. */
   readonly apps?: ContractAppCoverage;
   /** Reopens the same durable store after the matrix closes its initial in-memory session. */
@@ -261,7 +291,7 @@ export interface PackedContractMatrixOptions {
    * the server must be covered; app routes are auto-covered unless
    * `apps: 'explicit'`.
    */
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open packed session; this entry point never opens or closes it. */
@@ -286,7 +316,7 @@ export interface DevEpochContractMatrixSession {
 export interface DevEpochContractMatrixOptions {
   /** App route coverage at this boundary; defaults to `'auto'`. */
   readonly apps?: ContractAppCoverage;
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open epoch-pinned generated stdio session; this entry point never opens or closes it. */
@@ -296,7 +326,7 @@ export interface DevEpochContractMatrixOptions {
 export interface InstalledHostContractMatrixOptions {
   /** App route coverage at this boundary; defaults to `'auto'`. */
   readonly apps?: ContractAppCoverage;
-  readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
+  readonly fixtures: ContractRouteFixtures;
   readonly manifest: AgentBundleTestManifest;
   readonly server?: string;
   /** An already-open installed-host session; this entry point never opens or closes it. */

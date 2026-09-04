@@ -117,6 +117,7 @@ export type {
   ContractCheckStatus,
   ContractEventRuntimeAddress,
   ContractResourceFixture,
+  ContractRouteFixtures,
   ContractLifecycleFixture,
   ContractLifecyclePhase,
   ContractLifecycleTransition,
@@ -147,6 +148,8 @@ export type {
   McpProjectionProvenance,
   McpPromptResult,
   McpResourceRead,
+  McpRouteInput,
+  McpRouteNameConstraint,
   McpSurfaceListing,
   McpToolInvocation,
 } from './mcp.ts';

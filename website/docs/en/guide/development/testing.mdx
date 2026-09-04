@@ -82,6 +82,24 @@ types: any string id, `unknown` input, `unknown` result. `RegisteredRouteId`,
 `RegisteredRouteInput`, and `RegisteredRouteResult` from `@agent-bundle/runtime` name the
 registered surface directly, for a wrapper of your own.
 
+The same registration reaches every other harness surface that takes a route id or a route
+payload, the way TanStack Router's one `Register` reaches `Link to`, `useNavigate`, and
+`RoutesByPath`. `invokeMcpTool('find', { input })` and `getMcpPrompt('brief', { input })` check
+their wire name against the registered tool or prompt names (`find` for `tool:curator/find`) and
+type `input` from that route's `inputSchema` — a union when two servers register the same name;
+`runContractMatrix`, `runPackedContractMatrix`, `runDevEpochContractMatrix`, and
+`runInstalledHostContractMatrix` type each registered key of `fixtures` (`input`, `inputs`,
+`cancellation.input`, and lifecycle transitions) from that route, while an MCP App route key or a
+`Record<string, ContractRouteFixture>` built dynamically stays legal; `invokeCli` reports the
+executed command's `routeId` as a registered `cli:` or `tool:` id (`argv` stays
+`readonly string[]`); and `agent-bundle/eval`'s `expectMcpCall({ server, tool })` checks a
+literal `tool` against the registered tools of a literal `server` of this project, leaving a
+third-party server free. `RegisteredMcpServerName`, `RegisteredMcpRouteName`, and
+`RegisteredMcpRouteId` name the server and protocol names a registered id encodes. Not typed,
+deliberately: `readMcpResource` (a wire URI, which the registration does not carry), `runScript`
+(script routes register no contract), `structuredContent` (the wire carries it only for
+object-valued documents), and `agent-bundle/api`, which addresses an arbitrary project `root`.
+
 `testManifest()` exposes the compiled route inventory, so a suite can iterate every route in
 process rather than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target kind, and the
