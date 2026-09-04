@@ -115,6 +115,27 @@ siblings claimed blind, places a start no spawn window could, and moves a child 
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
 
+When the registry placed the request, the lineage also carries `tree` — who else is alive, read
+from the same registry and never invented:
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // every other live conversation under the same root (any depth,
+                               // the root itself included for a subagent), oldest first
+  lineage.value.tree.children; // live conversations whose parent is this one
+  lineage.value.tree.roots;    // other live root conversations (Cursor: same workspace_roots)
+}
+```
+
+Each peer is `{ conversation, depth, parent?, startedAt, subagent?, resolution }` — the
+registry's facts about that node, with the trust level of *its* placement, judged exactly as on
+a request that node made itself. Stopped conversations are not listed; a Cursor child whose
+conversation has not spoken yet is listed under its `subagent_id`. The tree is absent when the
+registry did not place the request (a standalone hook, or a Codex `_meta` naming a thread it
+never saw start): the axis then still says who you are, not who else is here. Route-unit tests
+inject it through the same `context.lineage` seam as the rest of the axis.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in

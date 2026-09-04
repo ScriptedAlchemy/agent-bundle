@@ -110,6 +110,49 @@ export interface AgentLineageSubagent {
 export type AgentLineageResolution = 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
 
 /**
+ * One other live conversation in the registry's tree (#457). Every field is
+ * what the registry recorded when the host said the conversation started —
+ * nothing is derived from the current request — and `resolution` is the trust
+ * level of that node's own `parent`/`depth` placement, judged exactly as it
+ * would be on a request the node itself made.
+ */
+export interface AgentLineagePeer {
+  readonly conversation: string;
+  /** Root is depth 0; each subagent level adds one. */
+  readonly depth: number;
+  /** Absent at a root. */
+  readonly parent?: string;
+  readonly resolution: AgentLineageResolution;
+  /** When the registry saw the conversation start (the hook's `observedAt`). */
+  readonly startedAt: string;
+  readonly subagent?: AgentLineageSubagent;
+}
+
+/**
+ * The live tree around this request, as the same registry that placed the
+ * request holds it, scoped to what the conversation may see: everything alive
+ * under its own root, and the other live roots beside it. Stopped nodes are
+ * never listed; a conversation the registry could not place has no tree.
+ */
+export interface AgentLineageTree {
+  /** Live conversations whose `parent` is this conversation, oldest first. */
+  readonly children: readonly AgentLineagePeer[];
+  /**
+   * Other live depth-0 conversations the registry holds — on Cursor, only
+   * those seen in the same `workspace_roots` — oldest first. Never includes
+   * this conversation's own root.
+   */
+  readonly roots: readonly AgentLineagePeer[];
+  /**
+   * Every other live conversation under the same root, at any depth, oldest
+   * first: the root itself when this conversation is a subagent, its
+   * ancestors, same-parent siblings, cousins, and descendants (so `children`
+   * is a subset). Filter by `parent` for conventional same-parent siblings.
+   */
+  readonly siblings: readonly AgentLineagePeer[];
+}
+
+/**
  * Where this request sits in the conversation tree (#host-lineage). The shape
  * is identical on every surface: events, generated MCP tools, routed CLI, and
  * rendered scripts. `conversation` identifies the agent whose activity this is
@@ -126,6 +169,13 @@ export interface AgentLineage {
   readonly resolution: AgentLineageResolution;
   readonly root: string;
   readonly subagent?: AgentLineageSubagent;
+  /**
+   * The live tree around this conversation (#457), present when the warm
+   * runtime's registry placed it; absent for lineages a payload proved on its
+   * own (a standalone hook, a Codex `_meta` the registry never saw start) —
+   * the axis then still answers "who am I" but not "who else is here".
+   */
+  readonly tree?: AgentLineageTree;
 }
 
 export interface AgentFilesystemAuthority {

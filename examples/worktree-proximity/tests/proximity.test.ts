@@ -1,9 +1,9 @@
 import { describe, expect, it } from '@rstest/core';
 
 import { findProximity } from '../src/domain/proximity.js';
-import type { TopologyState } from '../src/state.js';
+import type { IntentState } from '../src/state.js';
 
-const snapshot = (path: string, dependency: string): TopologyState => ({
+const snapshot = (path: string, dependency: string): IntentState => ({
   activities: [{
     actorId: 'agent-b',
     dependencies: [dependency],
@@ -16,29 +16,15 @@ const snapshot = (path: string, dependency: string): TopologyState => ({
       paths: 'native',
     },
   }],
-  actors: [
+  bindings: [
     {
-      id: 'agent-a',
-      kind: 'child',
-      parentSessionId: 'root-session',
-      provenance: {
-        id: 'native',
-        parentSessionId: 'native',
-        worktreeRoot: 'native',
-      },
-      status: 'active',
+      actorId: 'agent-a',
+      provenance: { actorId: 'native', worktreeRoot: 'native' },
       worktreeRoot: '/repo/worktrees/a',
     },
     {
-      id: 'agent-b',
-      kind: 'child',
-      parentSessionId: 'root-session',
-      provenance: {
-        id: 'native',
-        parentSessionId: 'native',
-        worktreeRoot: 'native',
-      },
-      status: 'active',
+      actorId: 'agent-b',
+      provenance: { actorId: 'native', worktreeRoot: 'native' },
       worktreeRoot: '/repo/worktrees/b',
     },
   ],
@@ -81,10 +67,10 @@ describe('findProximity', () => {
   });
 
   it('ignores an actor in the same worktree', () => {
-    const sameWorktree: TopologyState = {
+    const sameWorktree: IntentState = {
       ...snapshot('src/shared.ts', 'zod'),
-      actors: snapshot('src/shared.ts', 'zod').actors.map((actor) => ({
-        ...actor,
+      bindings: snapshot('src/shared.ts', 'zod').bindings.map((binding) => ({
+        ...binding,
         worktreeRoot: '/repo/worktrees/a',
       })),
     };
@@ -93,5 +79,31 @@ describe('findProximity', () => {
       '/repo/worktrees/a',
       { actorId: 'agent-a', dependencies: ['zod'], paths: ['src/shared.ts'] },
     )).toEqual([]);
+  });
+
+  it('ignores an intent whose host-identified actor the runtime lineage tree no longer lists as alive', () => {
+    const state = snapshot('src/shared.ts', 'zod');
+    const intent = { actorId: 'agent-a', dependencies: [], paths: ['src/shared.ts'] };
+    expect(findProximity(state, '/repo/worktrees/a', intent, { liveConversations: new Set(['agent-a', 'root-session']) })).toEqual([]);
+    expect(findProximity(state, '/repo/worktrees/a', intent, { liveConversations: new Set(['agent-a', 'agent-b']) })).toHaveLength(1);
+    // Without a tree nothing is presumed stopped.
+    expect(findProximity(state, '/repo/worktrees/a', intent)).toHaveLength(1);
+  });
+
+  it('never filters a derived worktree actor by the lineage tree: it is not a conversation', () => {
+    const base = snapshot('src/shared.ts', 'zod');
+    const state: IntentState = {
+      ...base,
+      activities: base.activities.map((activity) => ({ ...activity, actorId: 'worktree:/repo/worktrees/b', provenance: { ...activity.provenance, actorId: 'derived' } })),
+      bindings: base.bindings.map((binding) => binding.actorId === 'agent-b'
+        ? { actorId: 'worktree:/repo/worktrees/b', provenance: { actorId: 'derived', worktreeRoot: 'derived' }, worktreeRoot: binding.worktreeRoot }
+        : binding),
+    };
+    expect(findProximity(
+      state,
+      '/repo/worktrees/a',
+      { actorId: 'agent-a', dependencies: [], paths: ['src/shared.ts'] },
+      { liveConversations: new Set(['agent-a']) },
+    )).toHaveLength(1);
   });
 });

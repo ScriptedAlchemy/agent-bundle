@@ -448,8 +448,41 @@ interface AgentLineage {
   generation?: string;    // Cursor generation_id, Codex turn_id, Claude prompt_id
   subagent?: { id: string; type?: string; toolCallId?: string; isParallelWorker?: boolean };
   resolution: 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
+  tree?: AgentLineageTree;  // who else is alive, when the registry placed this request
+}
+
+interface AgentLineageTree {
+  siblings: readonly AgentLineagePeer[];  // every other live conversation under the same root, any depth
+  children: readonly AgentLineagePeer[];  // live conversations whose parent is this one
+  roots: readonly AgentLineagePeer[];     // other live depth-0 conversations (Cursor: same workspace_roots)
+}
+
+interface AgentLineagePeer {
+  conversation: string;
+  depth: number;
+  parent?: string;
+  startedAt: string;      // when the registry saw it start
+  subagent?: AgentLineageSubagent;
+  resolution: AgentLineageResolution;  // the trust level of *that* node's placement
 }
 ```
+
+`tree` is the other half of "where am I": the live conversations around this
+one, read from the same registry that placed the request (#457). It lists
+only what the registry holds — no node is invented, and a stopped node is not
+listed — scoped to what the conversation may see: everything alive under its
+own root (`siblings`, oldest first, the root itself included for a subagent,
+so a coordinator sees the whole live tree it belongs to; filter by `parent`
+for same-parent siblings), its direct `children`, and the other live `roots`
+(on Cursor only roots seen in the same `workspace_roots`, the rule that scopes
+child binding; a Cursor child whose conversation has not spoken yet is listed
+under its `subagent_id`). Each peer carries the registry's own `resolution`
+for its placement, judged exactly as on a request that node itself made. The
+tree is absent when the registry did not place the request: a standalone
+hook, or a Codex `_meta` that names a thread the registry never saw start,
+still answers "who am I" but not "who else is here". It travels as plain
+frozen data, so the Flight worker receives it unchanged and route-unit tests
+inject it through the same `context.lineage` seam.
 
 `resolution` is the trust level of `parent`/`root`/`depth`: `native` — the
 host named them on this payload (a Claude/Codex root, a Codex tool call's

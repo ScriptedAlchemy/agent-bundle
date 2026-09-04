@@ -15,22 +15,43 @@ const execFile = promisify(executeFile);
 const exampleRoot = resolve(import.meta.dirname, '../../../examples/worktree-proximity');
 const sessionId = 'root-session';
 
-interface ActorStatus {
-  readonly id: string;
-  readonly kind: 'child' | 'root';
-  readonly parentSessionId?: string;
+interface BindingStatus {
+  readonly actorId: string;
   readonly provenance: {
-    readonly id: 'derived' | 'native';
-    readonly parentSessionId?: 'derived' | 'native';
-    readonly worktreeRoot?: 'derived' | 'native';
+    readonly actorId: 'derived' | 'native' | 'registry' | 'confirmed' | 'inferred' | 'transcript';
+    readonly worktreeRoot: 'derived' | 'native';
   };
-  readonly status: 'active' | 'stopped';
-  readonly worktreeRoot?: string;
+  readonly worktreeRoot: string;
 }
+
+interface PeerStatus {
+  readonly conversation: string;
+  readonly depth: number;
+  readonly parent?: string;
+  readonly resolution: string;
+  readonly startedAt: string;
+  readonly subagent?: { readonly id: string; readonly toolCallId?: string; readonly type?: string };
+}
+
+type AgentsStatus =
+  | {
+    readonly children: readonly PeerStatus[];
+    readonly conversation: string;
+    readonly depth: number;
+    readonly parent?: string;
+    readonly resolution: string;
+    readonly root: string;
+    readonly roots: readonly PeerStatus[];
+    readonly siblings: readonly PeerStatus[];
+    readonly state: 'available';
+  }
+  | { readonly reason: string; readonly state: 'unavailable' };
 
 interface StatusResult {
   readonly activeActivities: number;
-  readonly actors: readonly ActorStatus[];
+  readonly activities: readonly { readonly actorId: string; readonly paths: readonly string[] }[];
+  readonly agents: AgentsStatus;
+  readonly bindings: readonly BindingStatus[];
   readonly reason?: string;
   readonly refusals: number;
   readonly revision: number;
@@ -43,6 +64,7 @@ interface JourneyFixture {
   readonly hooks: {
     readonly afterTool: string;
     readonly agentStart: string;
+    readonly agentStop: string;
     readonly beforeTool: string;
     readonly sessionStart: string;
   };
@@ -158,12 +180,45 @@ const callStatus = async (client: Client): Promise<StatusResult> => {
   expect(result).toBeDefined();
   expect(Object.keys(result as Record<string, unknown>).sort()).toEqual([
     'activeActivities',
-    'actors',
+    'activities',
+    'agents',
+    'bindings',
     'refusals',
     'revision',
     'state',
   ]);
   return result as StatusResult;
+};
+
+/** The Claude spelling of the coordinator's `status` tool on a plugin-installed server. */
+const STATUS_TOOL = 'mcp__plugin_worktree-proximity_coordinator__status';
+
+/**
+ * Calls `status` the way a host conversation does: inside the root's own
+ * pre-/post-tool hook window, so the generated server correlates the call to
+ * the root conversation and `request.lineage` — and its tree — resolves.
+ */
+const callStatusAsRoot = async (
+  client: Client,
+  repoRoot: string,
+  toolUseId: string,
+  env: Readonly<Record<string, string>>,
+  transcriptPath: string,
+): Promise<StatusResult> => {
+  const envelope = {
+    cwd: repoRoot,
+    session_id: sessionId,
+    tool_input: {},
+    tool_name: STATUS_TOOL,
+    tool_use_id: toolUseId,
+    transcript_path: transcriptPath,
+  };
+  await runHook(fixture.hooks.beforeTool, repoRoot, { ...envelope, hook_event_name: 'PreToolUse' }, env);
+  try {
+    return await callStatus(client);
+  } finally {
+    await runHook(fixture.hooks.afterTool, repoRoot, { ...envelope, hook_event_name: 'PostToolUse', tool_response: { ok: true } }, env);
+  }
 };
 
 const hookText = (
@@ -216,6 +271,7 @@ beforeAll(async () => {
     hooks: {
       afterTool: hook('afterTool'),
       agentStart: hook('agentStart'),
+      agentStop: hook('agentStop'),
       beforeTool: hook('beforeTool'),
       sessionStart: hook('sessionStart'),
     },
@@ -254,9 +310,13 @@ it('proves worktree proximity journeys across real processes and linked worktree
   liveSession = await startServer();
   expect(liveSession.pid).toBeGreaterThan(0);
   await expect(stat(fixture.endpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+  // A client the registry cannot place (no pre-tool hook window names this
+  // call) gets no agent tree: the server never guesses who is asking.
   await expect(callStatus(liveSession.client)).resolves.toEqual({
     activeActivities: 0,
-    actors: [],
+    activities: [],
+    agents: { reason: 'lineage unavailable (id-not-resolvable)', state: 'unavailable' },
+    bindings: [],
     refusals: 0,
     revision: 0,
     state: 'available',
@@ -271,22 +331,52 @@ it('proves worktree proximity journeys across real processes and linked worktree
     source: 'startup',
     transcript_path: transcriptPath,
   }, hookEnvironment);
-  await runHook(fixture.hooks.agentStart, fixture.worktreeA, {
-    agent_id: 'agent-a',
-    agent_type: 'implementation',
-    cwd: fixture.worktreeA,
-    hook_event_name: 'SubagentStart',
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }, hookEnvironment);
-  await runHook(fixture.hooks.agentStart, fixture.worktreeB, {
-    agent_id: 'agent-b',
-    agent_type: 'implementation',
-    cwd: fixture.worktreeB,
-    hook_event_name: 'SubagentStart',
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }, hookEnvironment);
+  // Each child is spawned the way Claude does it: the root's `Agent` PreToolUse
+  // opens the spawn window the registry places the SubagentStart under, and
+  // the PostToolUse names the child, confirming the edge (#422).
+  const spawn = async (agentId: string, worktree: string, toolUseId: string): Promise<void> => {
+    const call = {
+      cwd: fixture.repoRoot,
+      session_id: sessionId,
+      tool_input: { description: agentId, prompt: `work in ${worktree}`, subagent_type: 'implementation' },
+      tool_name: 'Agent',
+      tool_use_id: toolUseId,
+      transcript_path: transcriptPath,
+    };
+    await runHook(fixture.hooks.beforeTool, fixture.repoRoot, { ...call, hook_event_name: 'PreToolUse' }, hookEnvironment);
+    await runHook(fixture.hooks.agentStart, worktree, {
+      agent_id: agentId,
+      agent_type: 'implementation',
+      cwd: worktree,
+      hook_event_name: 'SubagentStart',
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+    }, hookEnvironment);
+    await runHook(fixture.hooks.afterTool, fixture.repoRoot, {
+      ...call,
+      hook_event_name: 'PostToolUse',
+      tool_response: { agentId, isAsync: true, status: 'async_launched' },
+    }, hookEnvironment);
+  };
+  await spawn('agent-a', fixture.worktreeA, 'spawn-a');
+  await spawn('agent-b', fixture.worktreeB, 'spawn-b');
+
+  // The root sees both children alive in the registry's tree, each edge
+  // host-confirmed, through the same `status` tool the test client called
+  // blind above.
+  const rootView = await callStatusAsRoot(liveSession.client, fixture.repoRoot, 'status-1', hookEnvironment, transcriptPath);
+  expect(rootView.agents).toMatchObject({
+    children: [
+      { conversation: 'agent-a', depth: 1, parent: sessionId, resolution: 'confirmed', subagent: { id: 'agent-a', toolCallId: 'spawn-a', type: 'implementation' } },
+      { conversation: 'agent-b', depth: 1, parent: sessionId, resolution: 'confirmed', subagent: { id: 'agent-b', toolCallId: 'spawn-b', type: 'implementation' } },
+    ],
+    conversation: sessionId,
+    depth: 0,
+    root: sessionId,
+    roots: [],
+    state: 'available',
+  });
+  expect(rootView.agents.state === 'available' ? rootView.agents.siblings.map((peer) => peer.conversation) : []).toEqual(['agent-a', 'agent-b']);
 
   const intentA = {
     cwd: fixture.worktreeA,
@@ -362,43 +452,31 @@ it('proves worktree proximity journeys across real processes and linked worktree
   );
   await expect(callStatus(liveSession.client)).resolves.toEqual(beforeMalformedEnvelope);
 
-  const expectedActors: readonly ActorStatus[] = [
+  // The application keeps only worktree bindings; the agent tree (parent,
+  // depth, who is alive) is the runtime's. The child starts were placed by the
+  // registry, so their bindings carry the lineage's own resolution.
+  const expectedBindings: readonly BindingStatus[] = [
     {
-      id: `session:${sessionId}`,
-      kind: 'root',
-      provenance: { id: 'native', worktreeRoot: 'native' },
-      status: 'active',
+      actorId: sessionId,
+      provenance: { actorId: 'native', worktreeRoot: 'native' },
       worktreeRoot: fixture.repoRoot,
     },
     {
-      id: 'agent-a',
-      kind: 'child',
-      parentSessionId: sessionId,
-      provenance: {
-        id: 'native',
-        parentSessionId: 'native',
-        worktreeRoot: 'native',
-      },
-      status: 'active',
+      actorId: 'agent-a',
+      provenance: { actorId: 'registry', worktreeRoot: 'native' },
       worktreeRoot: fixture.worktreeA,
     },
     {
-      id: 'agent-b',
-      kind: 'child',
-      parentSessionId: sessionId,
-      provenance: {
-        id: 'native',
-        parentSessionId: 'native',
-        worktreeRoot: 'native',
-      },
-      status: 'active',
+      actorId: 'agent-b',
+      provenance: { actorId: 'registry', worktreeRoot: 'native' },
       worktreeRoot: fixture.worktreeB,
     },
   ];
   const beforeRestart = await callStatus(liveSession.client);
   expect(beforeRestart).toMatchObject({
     activeActivities: 1,
-    actors: expectedActors,
+    agents: { state: 'unavailable' },
+    bindings: expectedBindings,
     refusals: 0,
     state: 'available',
   });
@@ -416,9 +494,31 @@ it('proves worktree proximity journeys across real processes and linked worktree
   expect(afterRestart).toEqual(beforeRestart);
   expect(afterRestart).toMatchObject({
     activeActivities: 1,
-    actors: expectedActors,
+    bindings: expectedBindings,
     refusals: 0,
     state: 'available',
   });
+  // The lineage journal is durable beside the intent state: the restarted
+  // server still lists both children under the root.
+  const rootAfterRestart = await callStatusAsRoot(liveSession.client, fixture.repoRoot, 'status-2', hookEnvironment, transcriptPath);
+  expect(rootAfterRestart.agents.state === 'available' ? rootAfterRestart.agents.children.map((peer) => peer.conversation) : []).toEqual(['agent-a', 'agent-b']);
+
+  // agent-b stops: the registry drops it from the tree, and the route releases
+  // its worktree binding and the intent it still held on src/shared.ts.
+  await runHook(fixture.hooks.agentStop, fixture.worktreeB, {
+    agent_id: 'agent-b',
+    agent_transcript_path: join(fixture.repoRoot, 'agent-b.jsonl'),
+    agent_type: 'implementation',
+    cwd: fixture.worktreeB,
+    hook_event_name: 'SubagentStop',
+    last_assistant_message: 'done',
+    session_id: sessionId,
+    stop_hook_active: false,
+    transcript_path: transcriptPath,
+  }, hookEnvironment);
+  const afterStop = await callStatusAsRoot(liveSession.client, fixture.repoRoot, 'status-3', hookEnvironment, transcriptPath);
+  expect(afterStop.agents.state === 'available' ? afterStop.agents.children.map((peer) => peer.conversation) : []).toEqual(['agent-a']);
+  expect(afterStop.bindings.map((binding) => binding.actorId)).toEqual([sessionId, 'agent-a']);
+  expect(afterStop.activities.filter((activity) => activity.paths.length > 0)).toEqual([]);
   expect(liveSession.diagnostics()).not.toContain('"jsonrpc"');
 });

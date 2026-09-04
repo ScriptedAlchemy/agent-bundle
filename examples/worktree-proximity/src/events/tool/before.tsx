@@ -3,12 +3,14 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
+import { withIntent, withNotices } from '../../coordination.js';
 import { findProximity } from '../../domain/proximity.js';
 import {
   actorForWorktree,
   deliveryContexts,
   extractIntent,
+  liveConversations,
+  requestLineage,
 } from '../../event-support.js';
 
 export const config = {
@@ -29,9 +31,13 @@ export default async function BeforeTool({
     );
   }
   const intent = extractIntent(native);
-  const topologyResult = await withTopology(async (topology) => {
-    const { actor } = await actorForWorktree(topology, currentWorktree, canonical, native);
-    const committed = await topology.dispatch('intentRecorded', {
+  // Who else is alive comes from the runtime's lineage registry, not from
+  // this application's bookkeeping: an intent left behind by an agent the
+  // registry no longer lists under our root is stale and warns nobody.
+  const live = liveConversations(await requestLineage());
+  const intentResult = await withIntent(async (store) => {
+    const { actor } = await actorForWorktree(store, currentWorktree, canonical, native);
+    const committed = await store.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],
       idempotencyKey: canonical.idempotencyKey,
@@ -51,17 +57,17 @@ export default async function BeforeTool({
         actorId: actor.id,
         dependencies: intent.dependencies,
         paths: intent.paths,
-      }),
+      }, live === undefined ? {} : { liveConversations: live }),
     };
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result value={{ outcome: 'continue' }}>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }
-  const resolution = topologyResult.value;
+  const resolution = intentResult.value;
 
   const noticeResult = await withNotices(async (notices) => {
     const deliveries = await notices.read();

@@ -2,48 +2,45 @@ import { Agent } from '@agent-bundle/runtime';
 import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
-import { worktree } from '../../api.js';
 import { withIntent, withNotices } from '../../coordination.js';
-import { actorForWorktree, deliveryContexts } from '../../event-support.js';
+import { carriedChild, deliveryContexts, nativeString } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
   targets: ['claude', 'codex'],
 };
 
-export default async function AfterTool({
+/**
+ * A subagent finished. Routing this family is what lets the runtime's lineage
+ * registry mark the child stopped — from then on no sibling lists it in
+ * `request.lineage.tree` — and what releases the child's worktree binding and
+ * any intent it left behind, so a stale path claim never warns anyone.
+ */
+export default async function AgentStop({
   canonical,
   native,
 }: AgentEventRouteProps) {
-  const currentWorktree = await worktree();
-  if (currentWorktree.state === 'unavailable') {
+  const child = await carriedChild(native);
+  if (child === undefined) {
     return (
-      <Agent.Result value={{ outcome: 'continue' }}>
-        <Agent.Context>{`Activity completion unavailable: ${currentWorktree.reason}`}</Agent.Context>
+      <Agent.Result>
+        <Agent.Context>
+          {`Child stop ignored: agent/stop omitted native ${nativeString(native, 'agent_id') === undefined ? 'agent_id' : 'session_id'}; refused to release an actor by guess.`}
+        </Agent.Context>
       </Agent.Result>
     );
   }
   const intentResult = await withIntent(async (intent) => {
-    const resolved = await actorForWorktree(intent, currentWorktree, canonical, native);
-    await intent.dispatch('intentRecorded', {
-      actorId: resolved.actor.id,
-      dependencies: [],
-      idempotencyKey: canonical.idempotencyKey,
+    await intent.dispatch('actorReleased', {
+      actorId: child.id,
       observedAt: canonical.observedAt,
-      paths: [],
-      provenance: {
-        actorId: resolved.actor.source,
-        dependencies: 'native',
-        paths: 'native',
-      },
     }, {
-      idempotencyKey: `${canonical.idempotencyKey}:completion`,
+      idempotencyKey: `${canonical.idempotencyKey}:released`,
     });
-    return resolved.actor;
   });
   if (intentResult.state === 'unavailable') {
     return (
-      <Agent.Result value={{ outcome: 'continue' }}>
+      <Agent.Result>
         <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
@@ -53,7 +50,7 @@ export default async function AfterTool({
     ? deliveryContexts(noticeResult.value)
     : [noticeResult.reason];
   return (
-    <Agent.Result value={{ outcome: 'continue' }}>
+    <Agent.Result>
       {contexts.map((context) =>
         <Agent.Context key={context}>{context}</Agent.Context>)}
     </Agent.Result>

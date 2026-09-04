@@ -1354,3 +1354,191 @@ describe('lineage registry Claude spawn confirmation from the Agent PostToolUse 
     expect(registry.snapshot().unplacedStarts).toEqual([]);
   });
 });
+
+describe('lineage tree: siblings, children and live roots on the request (#457)', () => {
+  type Replayed = Awaited<ReturnType<typeof replay>>;
+  /** The lineage the fixture row (1-based) resolved to; every row asserted here is an available one. */
+  const atRow = (lineages: Replayed, row: number) => {
+    const entry = lineages.find((candidate) => candidate.index === row);
+    expect(entry, `row ${String(row)} was replayed`).toBeDefined();
+    return value(entry!.lineage);
+  };
+  const tree = (lineages: Replayed, row: number) => {
+    const lineage = atRow(lineages, row);
+    expect(lineage.tree, `row ${String(row)} carries a tree`).toBeDefined();
+    return lineage.tree!;
+  };
+  const ids = (peers: readonly { readonly conversation: string }[]) => peers.map((peer) => peer.conversation);
+
+  it('Claude 2.1.259 orchestration: every hook sees the live nodes under its root as the registry holds them at that moment', async () => {
+    const registry = createAgentLineageRegistry();
+    const records = fixture('claude-2.1.259-orchestration.ndjson');
+    const lineages = await replay('claude', records, registry);
+    const root = records[0]!.event!.native['session_id'] as string;
+    const [explore, parallel, sequential, nested] = records
+      .filter((record) => record.event?.canonical.event === 'agent/start')
+      .map((record) => record.event!.native['agent_id'] as string);
+    const startedAt = (agentId: string) => records
+      .find((record) => record.event?.canonical.event === 'agent/start' && record.event.native['agent_id'] === agentId)!
+      .event!.canonical.observedAt;
+
+    // Row → [siblings, children]: siblings are every other live node under the root (the root
+    // itself included for a subagent); children only the direct ones. No second root exists.
+    const expected: readonly [number, readonly string[], readonly string[]][] = [
+      [1, [], []],
+      [14, [root], []],
+      [16, [root, explore], []],
+      [18, [explore, parallel], [explore, parallel]],
+      [22, [root, parallel], []],
+      [29, [root, parallel], []],
+      [42, [root, explore], []],
+      [58, [parallel], [parallel]],
+      [62, [], []],
+      [65, [root], []],
+      [82, [root, sequential], []],
+      [91, [root, sequential], []],
+      [99, [root], []],
+      [101, [], []],
+      [104, [], []],
+    ];
+    for (const [row, siblings, children] of expected) {
+      const view = tree(lineages, row);
+      expect(ids(view.siblings), `row ${String(row)} siblings`).toEqual(siblings);
+      expect(ids(view.children), `row ${String(row)} children`).toEqual(children);
+      expect(view.roots, `row ${String(row)} roots`).toEqual([]);
+      // A node never lists itself.
+      expect(ids(view.siblings)).not.toContain(atRow(lineages, row).conversation);
+    }
+
+    // Each peer carries the registry's facts about that node and its own placement trust:
+    // the root is `native`; the background pair is `confirmed` from the moment the root's
+    // Agent PostToolUse named it; the foreground sequential agent stays `registry` while alive.
+    const rootPeer = tree(lineages, 14).siblings[0]!;
+    expect(rootPeer).toEqual({ conversation: root, depth: 0, resolution: 'native', startedAt: records[0]!.event!.canonical.observedAt });
+    expect(tree(lineages, 16).siblings[1]).toEqual({
+      conversation: explore,
+      depth: 1,
+      parent: root,
+      resolution: 'confirmed',
+      startedAt: startedAt(explore),
+      subagent: { id: explore, toolCallId: records[11]!.event!.native['tool_use_id'], type: 'Explore' },
+    });
+    expect(tree(lineages, 22).siblings[1]).toMatchObject({ conversation: parallel, depth: 1, parent: root, resolution: 'confirmed', startedAt: startedAt(parallel) });
+    expect(tree(lineages, 82).siblings[1]).toMatchObject({ conversation: sequential, depth: 1, parent: root, resolution: 'registry', startedAt: startedAt(sequential) });
+    // The nested child, seen from its parent's next hook while both were alive, sits at depth 2 under it.
+    const nestedFromParent = lineages.filter((entry) => entry.native?.['agent_id'] === sequential && entry.index > 82 && entry.index < 98);
+    expect(nestedFromParent).toEqual([]);
+    expect(tree(lineages, 91).siblings.map((peer) => peer.depth)).toEqual([0, 1]);
+    expect(atRow(lineages, 91)).toMatchObject({ conversation: nested, depth: 2, parent: sequential });
+    // A peer's resolution is what that node's own request resolved to at the same moment.
+    expect(tree(lineages, 20).siblings.find((peer) => peer.conversation === explore)?.resolution).toBe(atRow(lineages, 22).resolution);
+    expect(tree(lineages, 83).siblings.find((peer) => peer.conversation === sequential)?.resolution).toBe(atRow(lineages, 81).resolution);
+  });
+
+  it('Codex 0.147.0: the tree rides both hook resolutions and _meta-resolved MCP calls, and only for threads the registry saw start', async () => {
+    const registry = createAgentLineageRegistry();
+    const lineages = await replay('codex', fixture('codex-0.147.0.ndjson'), registry);
+    const root = '01a06660-110e-7290-8d1c-8ef1b2b68fc2';
+    const subagent = '01a06660-8faf-7122-80af-24ba2da81ad7';
+    const nested = '01a06661-100a-7ad3-a0f5-b0e6ffdb4b11';
+
+    expect(tree(lineages, 13)).toEqual({ children: [], roots: [], siblings: [] });
+    expect(ids(tree(lineages, 17).siblings)).toEqual([root]);
+    expect(ids(tree(lineages, 18).children)).toEqual([subagent]);
+    expect(ids(tree(lineages, 28).siblings)).toEqual([root, subagent]);
+    // `_meta` names the caller's own chain natively; the tree is still the registry's view.
+    expect(atRow(lineages, 24)).toMatchObject({ conversation: subagent, resolution: 'native' });
+    expect(ids(tree(lineages, 24).siblings)).toEqual([root]);
+    expect(ids(tree(lineages, 35).siblings)).toEqual([root, subagent]);
+    expect(tree(lineages, 35).siblings[1]).toMatchObject({ conversation: subagent, depth: 1, parent: root, resolution: atRow(lineages, 23).resolution, subagent: { id: subagent } });
+    expect(ids(tree(lineages, 38).children)).toEqual([]);
+    expect(ids(tree(lineages, 38).siblings)).toEqual([root]);
+    expect(tree(lineages, 40)).toEqual({ children: [], roots: [], siblings: [] });
+
+    // A thread the registry never saw start still resolves its own chain from `_meta` but has no tree to offer.
+    const cold = await createAgentLineageRegistry().resolveToolCall({
+      host: 'codex',
+      meta: { 'x-codex-turn-metadata': { parent_thread_id: root, session_id: root, thread_id: nested, turn_id: 't' } },
+      toolName: 'probe',
+    });
+    expect(value(cold)).toMatchObject({ conversation: nested, depth: 1, parent: root, resolution: 'native' });
+    expect(value(cold).tree).toBeUndefined();
+  });
+
+  it('Cursor 3.18.25: a pending child is listed under its subagent id until it speaks, then under its conversation; stops drop it', async () => {
+    const registry = createAgentLineageRegistry();
+    const records = fixture('cursor-3.18.25.ndjson');
+    const lineages = await replay('cursor', records, registry);
+    const root = 'b60ae0c1-2f85-4c4d-b3e5-b512f9b06e4c';
+    const child = 'bf617dfd-e03d-4d6b-adef-8f97e7df6b71';
+    const firstSpawn = records[35]!.event!.native['subagent_id'] as string;
+    const thirdSpawn = records[67]!.event!.native['subagent_id'] as string;
+    const nestedId = (id: string) => id.startsWith('46efda32');
+
+    // The parent's subagentStart lists the child by the only id the host has given it so far.
+    expect(tree(lineages, 36).children).toEqual([expect.objectContaining({ conversation: firstSpawn, depth: 1, parent: root, resolution: 'inferred', subagent: expect.objectContaining({ id: firstSpawn, type: 'general-purpose' }) })]);
+    // Once bound, the child sees the root; the root's next hook lists it under its conversation.
+    expect(ids(tree(lineages, 37).siblings)).toEqual([root]);
+    expect(ids(tree(lineages, 49).siblings)).toEqual([root, child]);
+    expect(tree(lineages, 49).siblings[1]).toMatchObject({ conversation: child, depth: 1, parent: root, resolution: 'inferred' });
+    expect(ids(tree(lineages, 53).children)).toEqual([]);
+    // The nested child, from the first child's stop hook: gone by then (row 56 stopped it).
+    expect(ids(tree(lineages, 58).siblings)).toEqual([]);
+    expect(ids(tree(lineages, 69).siblings)).toEqual([root]);
+    expect(ids(tree(lineages, 87).siblings)).toEqual([]);
+    for (const row of [36, 37, 49, 58, 69, 87]) expect(tree(lineages, row).roots).toEqual([]);
+    // Nobody else fires a hook while the nested child is alive (its parent's next hook is the
+    // stop that retires it, resolved after the stop applied), so only its own rows show it placed.
+    expect(lineages.filter((entry) => entry.lineage.state === 'available' && nestedId(entry.lineage.value.conversation)).map((entry) => ids(entry.lineage.value.tree!.siblings)))
+      .toEqual(Array.from({ length: 7 }, () => [root, child]));
+    expect(lineages.some((entry) => entry.lineage.state === 'available' && ids(entry.lineage.value.tree?.siblings ?? []).some(nestedId))).toBe(false);
+  });
+
+  it('lists other live roots, scoped on Cursor to the same workspace, and drops a root that ended', async () => {
+    const registry = createAgentLineageRegistry();
+    const claude = (event: string, key: string, native: Record<string, unknown>, observedAt: string) =>
+      registry.observe({ event, host: 'claude', idempotencyKey: key, native, observedAt });
+    const startedA = value(await claude('session/start', 'a', { hook_event_name: 'SessionStart', session_id: 'session-a' }, '2026-09-03T00:00:00.000Z'));
+    expect(startedA.tree).toEqual({ children: [], roots: [], siblings: [] });
+    const startedB = value(await claude('session/start', 'b', { hook_event_name: 'SessionStart', session_id: 'session-b' }, '2026-09-03T00:00:01.000Z'));
+    expect(startedB.tree).toEqual({ children: [], roots: [{ conversation: 'session-a', depth: 0, resolution: 'native', startedAt: '2026-09-03T00:00:00.000Z' }], siblings: [] });
+    await claude('tool/before', 'a:spawn', { hook_event_name: 'PreToolUse', session_id: 'session-a', tool_input: { prompt: 'x' }, tool_name: 'Agent', tool_use_id: 'spawn-a' }, '2026-09-03T00:00:02.000Z');
+    const child = value(await claude('agent/start', 'a:start', { agent_id: 'child-a', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'session-a' }, '2026-09-03T00:00:03.000Z'));
+    // A subagent sees its own root's subtree and the other live roots, never the other root's children.
+    expect(child.tree).toMatchObject({ children: [], roots: [{ conversation: 'session-b' }], siblings: [{ conversation: 'session-a', depth: 0 }] });
+    const rootA = value(await claude('prompt/submit', 'a:prompt', { hook_event_name: 'UserPromptSubmit', prompt: 'x', session_id: 'session-a' }, '2026-09-03T00:00:04.000Z'));
+    expect(rootA.tree).toMatchObject({ children: [{ conversation: 'child-a', resolution: 'registry' }], roots: [{ conversation: 'session-b' }], siblings: [{ conversation: 'child-a' }] });
+    const rootB = value(await claude('prompt/submit', 'b:prompt', { hook_event_name: 'UserPromptSubmit', prompt: 'x', session_id: 'session-b' }, '2026-09-03T00:00:05.000Z'));
+    expect(rootB.tree).toEqual({ children: [], roots: [{ conversation: 'session-a', depth: 0, resolution: 'native', startedAt: '2026-09-03T00:00:00.000Z' }], siblings: [] });
+    await claude('session/end', 'b:end', { hook_event_name: 'SessionEnd', reason: 'other', session_id: 'session-b' }, '2026-09-03T00:00:06.000Z');
+    const afterEnd = value(await claude('prompt/submit', 'a:prompt-2', { hook_event_name: 'UserPromptSubmit', prompt: 'y', session_id: 'session-a' }, '2026-09-03T00:00:07.000Z'));
+    expect(afterEnd.tree?.roots).toEqual([]);
+
+    // Two Cursor windows sharing one durable registry: each root sees only roots of its own workspace.
+    const cursorRegistry = createAgentLineageRegistry();
+    const cursor = (key: string, conversation: string, roots: readonly string[], observedAt: string) => cursorRegistry.observe({
+      event: 'prompt/submit',
+      host: 'cursor',
+      idempotencyKey: key,
+      native: { conversation_id: conversation, generation_id: `${key}-gen`, hook_event_name: 'beforeSubmitPrompt', prompt: 'x', workspace_roots: roots },
+      observedAt,
+    });
+    await cursor('w1', 'window-1', ['/w1'], '2026-09-03T00:00:00.000Z');
+    await cursor('w2', 'window-2', ['/w2'], '2026-09-03T00:00:01.000Z');
+    const window3 = value(await cursor('w3', 'window-3', ['/w1'], '2026-09-03T00:00:02.000Z'));
+    expect(ids(window3.tree!.roots)).toEqual(['window-1']);
+    const window2 = value(await cursor('w2-again', 'window-2', ['/w2'], '2026-09-03T00:00:03.000Z'));
+    expect(window2.tree!.roots).toEqual([]);
+  });
+
+  it('freezes the tree and hands out plain data that survives structured cloning to the Flight worker', async () => {
+    const registry = createAgentLineageRegistry();
+    await registry.observe({ event: 'session/start', host: 'claude', idempotencyKey: 's', native: { hook_event_name: 'SessionStart', session_id: 'root' }, observedAt: '2026-09-03T00:00:00.000Z' });
+    await registry.observe({ event: 'tool/before', host: 'claude', idempotencyKey: 'sp', native: { hook_event_name: 'PreToolUse', session_id: 'root', tool_input: {}, tool_name: 'Agent', tool_use_id: 'sp' }, observedAt: '2026-09-03T00:00:01.000Z' });
+    const lineage = value(await registry.observe({ event: 'agent/start', host: 'claude', idempotencyKey: 'st', native: { agent_id: 'child', agent_type: 'general-purpose', hook_event_name: 'SubagentStart', session_id: 'root' }, observedAt: '2026-09-03T00:00:02.000Z' }));
+    expect(Object.isFrozen(lineage.tree)).toBe(true);
+    expect(Object.isFrozen(lineage.tree!.siblings)).toBe(true);
+    expect(Object.isFrozen(lineage.tree!.siblings[0])).toBe(true);
+    expect(structuredClone(lineage)).toEqual(lineage);
+  });
+});

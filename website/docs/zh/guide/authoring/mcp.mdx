@@ -105,6 +105,24 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
 
+当注册表安放了这次请求时，lineage 还会带有 `tree`——还有谁在线，读自同一个注册表，绝不凭空编造：
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // 同一根会话之下所有其他在线会话（任意深度，
+                               // 对子代理而言包含根会话本身），按启动时间从早到晚
+  lineage.value.tree.children; // 以本会话为父节点的在线会话
+  lineage.value.tree.roots;    // 其他在线的根会话（Cursor：同一 workspace_roots）
+}
+```
+
+每个对等节点是 `{ conversation, depth, parent?, startedAt, subagent?, resolution }`——注册表关于该
+节点的事实，以及*它自己*安放的可信级别，与该节点自己发出请求时得到的判断完全一致。已停止的会话不会
+列出；尚未开口的 Cursor 子会话以其 `subagent_id` 列出。注册表没有安放这次请求时（独立钩子进程，或
+Codex `_meta` 指向一个注册表从未见过其启动的线程），`tree` 不存在：此时这一轴仍然回答"我是谁"，但不
+回答"还有谁在这里"。路由单元测试通过与该轴其余部分相同的 `context.lineage` 接缝注入它。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的

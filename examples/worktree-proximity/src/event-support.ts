@@ -2,13 +2,14 @@ import {
   agent,
   type AgentDocumentNode,
   type AgentLineage,
+  type AgentLineageTree,
   type AgentNoticeDelivery,
   type Observed,
 } from '@agent-bundle/runtime';
 
 import type { AvailableWorktree } from './api.js';
-import type { TopologyAccess } from './coordination.js';
-import type { IdentityProvenance, TopologyState } from './state.js';
+import type { IntentAccess } from './coordination.js';
+import type { IdentityProvenance, IntentState } from './state.js';
 
 export interface EventIdentity {
   readonly idempotencyKey: string;
@@ -32,6 +33,55 @@ export interface CarriedChild extends ResolvedActor {
 
 /** The conversation lineage the runtime resolved for the current request. */
 export const requestLineage = async (): Promise<Observed<AgentLineage>> => (await agent()).lineage;
+
+/**
+ * The live conversations this request may treat as present: itself and every
+ * other live node under its root, as the runtime's lineage registry holds
+ * them (`request.lineage.tree.siblings`, #457). `undefined` when the runtime
+ * resolved no tree — a lineage a payload proved on its own, or none at all —
+ * so callers fall back to their own evidence instead of treating an unknown
+ * tree as an empty one.
+ */
+export const liveConversations = (lineage: Observed<AgentLineage>): ReadonlySet<string> | undefined => {
+  if (lineage.state !== 'available' || lineage.value.tree === undefined) return undefined;
+  return new Set([lineage.value.conversation, ...lineage.value.tree.siblings.map((peer) => peer.conversation)]);
+};
+
+/** The agent tree around a request: its own chain plus the live peers the registry lists, or why there is none. */
+export type AgentTreeView =
+  | ({
+      readonly state: 'available';
+    } & Pick<AgentLineage, 'conversation' | 'depth' | 'parent' | 'resolution' | 'root'> & AgentLineageTree)
+  | { readonly reason: string; readonly state: 'unavailable' };
+
+/**
+ * The whole-tree view the coordinator reports, read from `request.lineage`
+ * and nothing else. A lineage with no `tree` (a payload that proved only its
+ * own chain, or a standalone hook) is reported as unavailable rather than as
+ * an empty tree.
+ */
+export const agentTreeOf = (lineage: Observed<AgentLineage>): AgentTreeView => {
+  if (lineage.state !== 'available') {
+    return { reason: `lineage unavailable (${lineage.reason})`, state: 'unavailable' };
+  }
+  const { conversation, depth, parent, resolution, root, tree } = lineage.value;
+  if (tree === undefined) {
+    return { reason: `lineage resolved ${resolution} without the registry tree`, state: 'unavailable' };
+  }
+  return {
+    children: tree.children,
+    conversation,
+    depth,
+    ...(parent === undefined ? {} : { parent }),
+    resolution,
+    root,
+    roots: tree.roots,
+    siblings: tree.siblings,
+    state: 'available',
+  };
+};
+
+export const agentTree = async (): Promise<AgentTreeView> => agentTreeOf(await requestLineage());
 
 /**
  * The subagent a request speaks for, when the runtime's `request.lineage`
@@ -114,50 +164,41 @@ export const extractIntent = (
 /**
  * The actor a tool or stop envelope belongs to, in order of evidence: the
  * child the envelope itself names (runtime lineage, then native `agent_id`),
- * the active actor already bound to the event worktree, and finally the
- * explicit derived identity `worktree:<root>`. A carried child the topology
- * has not seen yet (its `agent/start` was missed) is observed and bound with
- * the provenance the evidence carried; a derived actor is never upgraded.
+ * the actor already bound to the event worktree, and finally the explicit
+ * derived identity `worktree:<root>`. A carried child not yet bound (its
+ * `agent/start` was missed) is bound with the provenance the evidence
+ * carried; a derived actor is never upgraded. Whether an actor is *alive* is
+ * not recorded here: that is the runtime lineage registry's answer
+ * (`request.lineage.tree`), and a stop releases the binding outright.
  */
 export const actorForWorktree = async (
-  topology: TopologyAccess,
+  intent: IntentAccess,
   worktree: AvailableWorktree,
   canonical: EventIdentity,
   native: Readonly<Record<string, unknown>> = {},
-): Promise<{ readonly actor: ResolvedActor; readonly snapshot: TopologyState }> => {
-  const before = await topology.read();
+): Promise<{ readonly actor: ResolvedActor; readonly snapshot: IntentState }> => {
+  const before = await intent.read();
   const carried = await carriedChild(native);
   if (carried !== undefined) {
-    const known = before.state.actors.find((actor) => actor.id === carried.id);
+    const known = before.state.bindings.find((binding) => binding.actorId === carried.id);
     if (known !== undefined) {
-      return { actor: { id: known.id, source: known.provenance.id }, snapshot: before.state };
+      return { actor: { id: known.actorId, source: known.provenance.actorId }, snapshot: before.state };
     }
-    await topology.dispatch('actorObserved', {
-      id: carried.id,
-      kind: 'child',
-      parentSessionId: carried.parentSessionId,
-      provenance: { id: carried.source, parentSessionId: carried.source },
-      status: 'active',
-    }, {
-      idempotencyKey: `${canonical.idempotencyKey}:carried-actor`,
-    });
-    const boundResult = await topology.dispatch('actorBound', {
+    const boundResult = await intent.dispatch('actorBound', {
       actorId: carried.id,
-      provenance: 'native',
+      provenance: { actorId: carried.source, worktreeRoot: 'native' },
       worktreeRoot: worktree.root,
     }, {
       idempotencyKey: `${canonical.idempotencyKey}:carried-worktree`,
     });
     return { actor: { id: carried.id, source: carried.source }, snapshot: boundResult.state };
   }
-  const bound = before.state.actors.find(
-    (actor) => actor.status === 'active' && actor.worktreeRoot === worktree.root && actor.kind === 'child',
-  ) ?? before.state.actors.find(
-    (actor) => actor.status === 'active' && actor.worktreeRoot === worktree.root,
-  );
+  // The actor most recently bound to this worktree, so a root-level envelope
+  // in a linked worktree stays attributed to the agent working there.
+  const bound = before.state.bindings.findLast((binding) => binding.worktreeRoot === worktree.root);
   if (bound !== undefined) {
     return {
-      actor: { id: bound.id, source: bound.provenance.id },
+      actor: { id: bound.actorId, source: bound.provenance.actorId },
       snapshot: before.state,
     };
   }
@@ -166,17 +207,9 @@ export const actorForWorktree = async (
     id: `worktree:${worktree.root}`,
     source: 'derived',
   };
-  await topology.dispatch('actorObserved', {
-    id: actor.id,
-    kind: 'child',
-    provenance: { id: 'derived' },
-    status: 'active',
-  }, {
-    idempotencyKey: `${canonical.idempotencyKey}:derived-actor`,
-  });
-  const boundResult = await topology.dispatch('actorBound', {
+  const boundResult = await intent.dispatch('actorBound', {
     actorId: actor.id,
-    provenance: 'derived',
+    provenance: { actorId: 'derived', worktreeRoot: 'derived' },
     worktreeRoot: worktree.root,
   }, {
     idempotencyKey: `${canonical.idempotencyKey}:derived-worktree`,
