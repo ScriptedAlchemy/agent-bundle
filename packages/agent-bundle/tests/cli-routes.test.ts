@@ -419,6 +419,79 @@ describe('compiled command graph', () => {
     ]);
   });
 
+  describe('the render budget a route declares in config.render (#454)', () => {
+    const renderedCommandModule = (config: string): string => [
+      `export const config = ${config};`,
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n');
+
+    it('carries a valid budget on the compiled command, and a projected MCP command inherits its tool budget', async () => {
+      const root = await createRoot();
+      await writeTree(root, {
+        'src/cli/await.tsx': renderedCommandModule('{ render: { maxElapsedMs: 7_200_000 } }'),
+        'src/cli/plain.ts': plainCommandModule(),
+        'src/mcp/alpha/tools/poll.tsx': toolModule("{ annotations: { readOnlyHint: true }, render: { maxElapsedMs: 120000 } }"),
+        'src/mcp/alpha/tools/quick.tsx': toolModule("{ annotations: { readOnlyHint: true } }"),
+      });
+
+      const graph = await compileRouteGraph(root, fixtureConfig({ routes: { mcpCommands: true } }));
+
+      expect(graph.diagnostics).toEqual([]);
+      expect(graph.cli?.commands?.map((command) => [command.path.join(' '), command.render, command.rendered])).toEqual([
+        ['alpha poll', { maxElapsedMs: 120_000 }, true],
+        ['alpha quick', undefined, true],
+        ['await', { maxElapsedMs: 7_200_000 }, true],
+        ['plain', undefined, false],
+      ]);
+      // Absent budgets are absent keys, so pre-#454 graphs digest unchanged.
+      expect(graph.cli?.commands?.map((command) => Object.hasOwn(command, 'render'))).toEqual([true, false, true, false]);
+      // The compiled tool config keeps the budget for the generated server to read.
+      expect(graph.servers[0]!.routes.find((route) => route.id === 'tool:alpha/poll')?.config).toEqual({
+        annotations: { readOnlyHint: true },
+        render: { maxElapsedMs: 120_000 },
+      });
+    });
+
+    it('errors with AB4835 on a malformed budget, one over the 24-hour ceiling, or one on a plain command', async () => {
+      const root = await createRoot();
+      await writeTree(root, {
+        'src/cli/ceiling.tsx': renderedCommandModule('{ render: { maxElapsedMs: 86_400_001 } }'),
+        'src/cli/fraction.tsx': renderedCommandModule('{ render: { maxElapsedMs: 1.5 } }'),
+        'src/cli/negative.tsx': renderedCommandModule('{ render: { maxElapsedMs: -1 } }'),
+        'src/cli/plain.ts': plainCommandModule({ config: '{ render: { maxElapsedMs: 1000 } }' }),
+        // Type-valid but meaningless on a plain command: the declaration itself is the defect.
+        'src/cli/plain-empty.ts': plainCommandModule({ config: '{ render: {} }' }),
+        'src/cli/shape.tsx': renderedCommandModule("{ render: 'long' }"),
+        'src/cli/unknown.tsx': renderedCommandModule('{ render: { timeoutMs: 1000 } }'),
+        'src/mcp/alpha/tools/text.tsx': toolModule("{ render: { maxElapsedMs: '60000' } }"),
+      });
+
+      const graph = await compileRouteGraph(root, fixtureConfig());
+
+      expect(codesOf(graph.diagnostics)).toEqual(['AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835', 'AB4835']);
+      const messages = graph.diagnostics.map((diagnostic) => diagnostic.message);
+      // Server routes are validated with their server, before the CLI surface compiles.
+      expect(messages).toEqual([
+        expect.stringContaining('MCP route src/mcp/alpha/tools/text.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/ceiling.tsx config.render.maxElapsedMs 86400001 exceeds the framework ceiling of 86400000 (24 hours)'),
+        expect.stringContaining('CLI route src/cli/fraction.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/negative.tsx config.render.maxElapsedMs must be a positive integer of milliseconds'),
+        expect.stringContaining('CLI route src/cli/plain.ts declares config.render, but a plain .ts command executes without a render session'),
+        expect.stringContaining('CLI route src/cli/plain-empty.ts declares config.render, but a plain .ts command executes without a render session'),
+        expect.stringContaining('CLI route src/cli/shape.tsx config.render must be an object'),
+        expect.stringContaining('CLI route src/cli/unknown.tsx config.render declares unknown key "timeoutMs"'),
+      ]);
+      expect(graph.diagnostics[0]!.recovery).toContain('maxElapsedMs');
+      expect(graph.diagnostics[0]!.sourcePath).toBe(join(root, 'src/mcp/alpha/tools/text.tsx'));
+      // A route with a rejected config compiles no command; the route stays in the graph.
+      expect(graph.cli?.commands).toEqual([]);
+      expect(graph.cli?.routes.map((route) => route.id)).toContain('cli:plain');
+    });
+  });
+
   it('selects projected tools with literal-star patterns and reports every unmatched pattern', async () => {
     const root = await createRoot();
     await writeTree(root, {

@@ -21,6 +21,7 @@ import type {
   AgentStateEventSchemas,
 } from '@agent-bundle/runtime/state';
 import type {
+  AgentRenderLimits,
   LineageHost,
   RegisteredMcpRouteId,
   RegisteredMcpRouteKind,
@@ -39,7 +40,7 @@ import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { claimProcessHit, mountProviders } from './providers.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { HarnessOptionsArguments, RenderRouteContext, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
@@ -82,6 +83,14 @@ export interface InMemoryMcpSessionOptionsBase<
    * exactly as the artifact does; omitted sessions observe `request.lineage`
    * as `unavailable('not-provided')`.
    */
+  /**
+   * The server dispatcher's base render limits, as the generated entry's
+   * dispatcher has them (the runtime defaults when omitted). A route's compiled
+   * `config.render` budget layers over them per call exactly as in the
+   * artifact, so a low `maxElapsedMs` here observes a route's raised budget
+   * without waiting out the 60-second default.
+   */
+  readonly limits?: Partial<AgentRenderLimits>;
   readonly lineage?: AgentLineageRegistry;
   /** The host vocabulary the registry applies when the in-memory client name maps to none. */
   readonly lineageHost?: LineageHost;
@@ -254,6 +263,7 @@ interface Renderer {
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
   readonly noticeInboxRoute: typeof import('@agent-bundle/runtime/notices/inbox-route');
   readonly renderAgentFlight: typeof import('@agent-bundle/runtime/flight/server').renderAgentFlight;
+  readonly resolvePluginRoot: typeof import('@agent-bundle/runtime').resolvePluginRoot;
   readonly runAgentRequest: typeof import('@agent-bundle/runtime').runAgentRequest;
 }
 
@@ -295,6 +305,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
       createWarmFlightHost: runtime.createWarmFlightHost,
       noticeInboxRoute,
       renderAgentFlight: flight.renderAgentFlight,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
     };
   })().catch((error: unknown) => {
@@ -437,6 +448,8 @@ export const openInMemoryMcpServer = async <
   const runtimeState = options.state === undefined
     ? undefined
     : dependencies.createGeneratedRuntimeState(options.state);
+  // One resolution per open server, as the generated entry does at startup.
+  const pluginRoot = harnessPluginRoot({ context, manifest, resolvePluginRoot: dependencies.resolvePluginRoot });
   const host = dependencies.createWarmFlightHost({
     artifactEpoch,
     host: {
@@ -460,10 +473,15 @@ export const openInMemoryMcpServer = async <
           // Conventional providers run before the scope opens, over the same
           // tool invocation the generated Flight worker hands them.
           const descriptor = manifest.routes[route.id];
+          // The server process's anchor, as the artifact's host scope forwards
+          // it into the Flight worker; the context seam overrides it like every
+          // other identity axis.
+          const plugin = transport.plugin.state === 'available' ? transport.plugin : pluginRoot;
           const providers = await mountProviders({
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
+            plugin,
             processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
             signal: request.signal,
@@ -474,6 +492,7 @@ export const openInMemoryMcpServer = async <
             actor: transport.actor,
             host: transport.host,
             lineage: transport.lineage,
+            plugin,
             session: transport.session,
             terminal: transport.terminal,
             workspace: transport.workspace,
@@ -540,7 +559,9 @@ export const openInMemoryMcpServer = async <
             target: options.lineageHost,
           },
         }),
+    ...(options.limits === undefined ? {} : { limits: options.limits }),
     plugin: manifest.plugin,
+    pluginRoot,
     routes: routes as never,
   });
   const client = new dependencies.Client({ name: 'agent-bundle-in-memory-projection', version: '1.0.0' });

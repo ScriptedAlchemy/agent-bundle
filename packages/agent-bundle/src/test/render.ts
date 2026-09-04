@@ -32,12 +32,13 @@ import type {
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
+import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LayoutChainTarget, type LoadedLayout } from './layouts.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { claimProcessHit, mountProviders } from './providers.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { routeKindTerminal } from './terminal.ts';
 import {
   registeredManifestIdentity,
@@ -119,6 +120,12 @@ export interface RenderRouteOptionsBase<Target = RenderRouteTarget> {
   readonly input?: RouteTargetInput<Target>;
   /** Overrides the route kind when a module is rendered directly; ignored for manifest routes. */
   readonly kind?: RenderableRouteKind;
+  /**
+   * The dispatcher's base render limits, as the generated executable's
+   * dispatcher has them. A manifest route's compiled `config.render` budget
+   * layers over them exactly as in the generated MCP server and routed CLI;
+   * a module rendered directly has no compiled config, so these apply alone.
+   */
   readonly limits?: Partial<AgentRenderLimits>;
   /** Renders against an explicit manifest instead of the one the generated configuration registered. */
   readonly manifest?: AgentBundleTestManifest;
@@ -154,6 +161,7 @@ interface Renderer {
   readonly createGeneratedRuntimeState: typeof AgentMount.createGeneratedRuntimeState;
   readonly createMemoryStateDriver: typeof AgentState.createMemoryStateDriver;
   readonly renderAgentFlight: typeof AgentFlightServer.renderAgentFlight;
+  readonly resolvePluginRoot: typeof AgentRuntime.resolvePluginRoot;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
   readonly unavailable: typeof AgentRuntime.unavailable;
 }
@@ -184,6 +192,7 @@ const loadRenderer = async (): Promise<Renderer> => {
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createMemoryStateDriver: state.createMemoryStateDriver,
       renderAgentFlight: flight.renderAgentFlight,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
       unavailable: runtime.unavailable,
     };
@@ -344,6 +353,8 @@ interface ResolvedTarget {
   readonly manifest?: AgentBundleTestManifest;
   readonly module: AgentRouteModule;
   readonly provenance: RenderedRouteProvenance;
+  /** The route's compiled `config.render` budget; absent for a module rendered directly or a route without one. */
+  readonly render?: RouteRenderBudget;
 }
 
 /** The protocol name a generated server registers, and the request surface it records. */
@@ -441,6 +452,7 @@ const resolveTarget = async (
   const manifest = options.manifest ?? testManifest();
   const loaded = await loadManifestRouteModule(manifest, target);
   const layouts = await loadLayoutChain(manifest, loaded.descriptor, loaded.provenance);
+  const render = routeRenderLimits(loaded.descriptor.config);
   return {
     component: componentOf(loaded.module, loaded.provenance),
     kind: loaded.kind,
@@ -448,6 +460,7 @@ const resolveTarget = async (
     manifest,
     module: loaded.module,
     provenance: loaded.provenance,
+    ...(render === undefined ? {} : { render }),
   };
 };
 
@@ -1109,13 +1122,18 @@ export const prepareCliRenderHost = async (
         contextProgress: context.progress,
         layoutRoute: descriptor ?? { id: command.routeId, kind: command.mcp === undefined ? 'cli' : 'tool' },
         layouts: layoutsByRoute.get(command.routeId) ?? [],
+        // The compiled command carries its route's render budget (#454), as
+        // the generated executable's command table does.
+        ...(command.render === undefined ? {} : { limits: command.render }),
         renderer,
         requestInit: async (request) => {
           const root = process.cwd();
+          const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
           const providers = await mountProviders({
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
+            plugin,
             processHit: claimProcessHit(options.processLifetime),
             provenance: { ...options.provenance, routeId: command.routeId },
             signal: request.signal,
@@ -1128,6 +1146,7 @@ export const prepareCliRenderHost = async (
               projectRoot: renderer.available({ root }, 'derived'),
             },
             host: renderer.unavailable('unsupported-surface'),
+            plugin,
             terminal: renderer.available(execution.terminal, 'native'),
             workspace: renderer.available({ root }, 'derived'),
             ...context,
@@ -1310,10 +1329,12 @@ export const prepareScriptRenderHost = async (
             const root = process.cwd();
             // The generated script's render worker hands its providers the
             // `script` invocation with the path-derived name, never the route id.
+            const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
             const providers = await mountProviders({
               explicit: context.providers,
               invocation,
               manifest: options.manifest,
+              plugin,
               processHit: claimProcessHit(options.processLifetime),
               provenance: options.provenance,
               signal: request.signal,
@@ -1326,6 +1347,7 @@ export const prepareScriptRenderHost = async (
                 projectRoot: renderer.available({ root }, 'derived'),
               },
               host: renderer.unavailable('unsupported-surface'),
+              plugin,
               terminal: renderer.available(execution.terminal, 'native'),
               workspace: renderer.available({ root }, 'derived'),
               ...context,
@@ -1411,6 +1433,7 @@ const prepareRender = async (
   // request; nothing is warm across renders, so each starts at hit 1.
   const processLifetime = createProviderProcessLifetime();
   const mounted = await mountManifestState(resolved.manifest, resolved.provenance, context, renderer, signal);
+  const plugin = harnessPluginRoot({ context, manifest: resolved.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
   const dispatcher = createFlightDispatcher({
     collected,
     component: resolved.component,
@@ -1422,9 +1445,14 @@ const prepareRender = async (
       ...(resolved.provenance.serverId === undefined ? {} : { serverId: resolved.provenance.serverId }),
     },
     layouts: resolved.layouts,
-    limits: options.limits,
+    // The route's compiled budget layers over the base limits, as it does on
+    // the generated dispatchers.
+    ...(options.limits === undefined && resolved.render === undefined
+      ? {}
+      : { limits: { ...options.limits, ...resolved.render } }),
     renderer,
     requestInit: async (request) => ({
+      plugin,
       // What the artifact's scope for this route kind mounts (#511): no
       // terminal under MCP or a hook, the harness's piped shape otherwise.
       terminal: renderer.available(routeKindTerminal(resolved.kind), 'derived'),
@@ -1436,6 +1464,7 @@ const prepareRender = async (
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
+        plugin,
         processHit: claimProcessHit(processLifetime),
         provenance: resolved.provenance,
         signal: request.signal,

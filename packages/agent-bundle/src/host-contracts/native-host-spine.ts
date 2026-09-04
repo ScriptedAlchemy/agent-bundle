@@ -22,6 +22,8 @@ export interface DigestFileTreeOptions {
 /**
  * Sorted-children, NUL-delimited sha256 tree hash. Missing paths hash as `absent`.
  * Callers that compare before/after snapshots must keep a stable preimage per site.
+ * Stays on `lstat` + `Dirent` (keep-raw list): the digest records link
+ * identity, which `stat` would follow.
  */
 export const digestFileTree = async (
   path: string,

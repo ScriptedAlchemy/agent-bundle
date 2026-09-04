@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withIntent, withNotices } from '../../coordination.js';
-import { deliveryContexts, nativeString, requestLineage } from '../../event-support.js';
+import { deliveryContexts, nonEmpty, requestLineage } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -13,8 +13,7 @@ export const config = {
 
 export default async function SessionStart({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'session/start'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -24,14 +23,15 @@ export default async function SessionStart({
     );
   }
   // The runtime's lineage names the root conversation on every host; the
-  // native `session_id` is the fallback when no lineage was resolved. The
-  // root actor is that conversation itself, so the binding it gets here is
-  // keyed by the same id `request.lineage.tree` lists it under everywhere else.
+  // payload's `sessionId` (Claude and Codex `session_id`) is the fallback when
+  // no lineage was resolved. The root actor is that conversation itself, so
+  // the binding it gets here is keyed by the same id `request.lineage.tree`
+  // lists it under everywhere else.
   const lineage = await requestLineage();
   const root = lineage.state === 'available'
     ? { id: lineage.value.root, source: lineage.value.resolution }
     : (() => {
-        const sessionId = nativeString(native, 'session_id');
+        const sessionId = nonEmpty(canonical.payload.sessionId?.value);
         return sessionId === undefined ? undefined : { id: sessionId, source: 'native' as const };
       })();
   if (root === undefined) {

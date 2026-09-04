@@ -65,7 +65,11 @@ const chapters: number | undefined = result?.chapters; // 无需强制类型转�
 ```
 
 事件路由注册的是测试工具实际接受与返回的内容：`input` 是 `{ canonical, native }` 载荷（`signal` 由测试
-工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。
+工具自行提供），而 `result` 为 `undefined`，因为事件模块不导出 `resultSchema`。请用
+`createEventRouteInput('tool/after', envelope, { host: 'claude' })` 从宿主信封构造这个输入，而不要手写：它按
+宿主与事件校验信封，并通过与制品包装器相同的表投影出 `canonical.payload`；标注为
+`AgentEventRouteProps<'tool/after'>` 的路由会把注册的 `input` 收窄到该事件族，因此把 `stop` 信封的输入传给它是
+类型错误。
 
 这一切都不是必需的。目标若类型为 `string` 而非字面量，仍然合法，可用于动态查找；直接导入模块作为目标
 不受影响；而没有把生成文件纳入程序的项目——或尚未运行过一次构建或 `agent-bundle dev` 的项目——看到的

@@ -3,7 +3,7 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { withIntent, withNotices } from '../../coordination.js';
-import { carriedChild, deliveryContexts, nativeString } from '../../event-support.js';
+import { carriedChild, deliveryContexts, nonEmpty } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -18,14 +18,15 @@ export const config = {
  */
 export default async function AgentStop({
   canonical,
-  native,
-}: AgentEventRouteProps) {
-  const child = await carriedChild(native);
+}: AgentEventRouteProps<'agent/stop'>) {
+  // The runtime lineage names the child first; the payload's `agentId` +
+  // `sessionId` pair (Claude and Codex `agent_id`/`session_id`) is the fallback.
+  const child = await carriedChild(canonical.payload);
   if (child === undefined) {
     return (
       <Agent.Result>
         <Agent.Context>
-          {`Child stop ignored: agent/stop omitted native ${nativeString(native, 'agent_id') === undefined ? 'agent_id' : 'session_id'}; refused to release an actor by guess.`}
+          {`Child stop ignored: agent/stop omitted native ${nonEmpty(canonical.payload.agentId?.value) === undefined ? 'agent_id' : 'session_id'}; refused to release an actor by guess.`}
         </Agent.Context>
       </Agent.Result>
     );

@@ -90,6 +90,7 @@ describe('the compiled test manifest', () => {
       'tool:harness/layout-probe',
       'tool:harness/lifecycle',
       'tool:harness/mutation-probe',
+      'tool:harness/plugin-root',
       'tool:harness/publish-notice',
       'tool:harness/strict-report',
       'tool:harness/ticket',
@@ -308,6 +309,7 @@ describe('the compiled test manifest', () => {
       tool: string,
       description: string | undefined,
       confirm: boolean,
+      render?: { readonly maxElapsedMs: number },
     ) => ({
       aliases: [],
       ...(description === undefined ? {} : { description }),
@@ -315,6 +317,7 @@ describe('the compiled test manifest', () => {
       mcp: { confirm, server: 'harness', tool },
       options: confirm ? [inputOption, confirmationOption] : [inputOption],
       path: ['harness', tool],
+      ...(render === undefined ? {} : { render }),
       rendered: true,
       routeId: `tool:harness/${tool}`,
     });
@@ -327,12 +330,14 @@ describe('the compiled test manifest', () => {
       projected('layout-probe', 'Renders a bare valued result so the layout chain around it is observable.', false),
       projected('lifecycle', 'Replays a deterministic durable lifecycle through mounted state.', true),
       projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
+      projected('plugin-root', 'Reports the plugin root and durable-state anchor this route observes.', false),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
       projected('tooling', 'Reports the request providers an MCP tool observes.', false),
       projected('unavailable', 'Returns a typed unavailable result for projection checks.', true),
-      projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true),
+      // The projected command inherits the tool's declared render budget (#454).
+      projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true, { maxElapsedMs: 120_000 }),
     ]);
   });
 

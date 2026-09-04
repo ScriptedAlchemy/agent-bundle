@@ -21,8 +21,7 @@ export const config = {
 
 export default async function BeforeTool({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'tool/before'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -31,13 +30,15 @@ export default async function BeforeTool({
       </Agent.Result>
     );
   }
-  const intent = extractIntent(native);
+  // `canonical.payload` is the framework's cross-host reading of the envelope:
+  // `toolName`/`toolInput` under Claude's PreToolUse and Codex's alike.
+  const intent = extractIntent(canonical.payload);
   // Who else is alive comes from the runtime's lineage registry, not from
   // this application's bookkeeping: an intent left behind by an agent the
   // registry no longer lists under our root is stale and warns nobody.
   const live = liveConversations(await requestLineage());
   const intentResult = await withIntent(async (store) => {
-    const { actor } = await actorForWorktree(store, currentWorktree, canonical, native);
+    const { actor } = await actorForWorktree(store, currentWorktree, canonical);
     const committed = await store.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],

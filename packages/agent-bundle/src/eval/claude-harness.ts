@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import {
   createNativeClaudeChildEnvironment,
@@ -118,7 +118,7 @@ const candidateSkills = (evalCase: EvalCase): readonly string[] => {
 const readPluginName = async (pluginDirectory: string): Promise<string | undefined> => {
   let parsed: unknown;
   try {
-    parsed = parseJsonWithoutDuplicateKeys(await readFile(join(pluginDirectory, ...pluginManifestSegments), 'utf8'));
+    parsed = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(join(pluginDirectory, ...pluginManifestSegments))));
   } catch {
     return undefined;
   }

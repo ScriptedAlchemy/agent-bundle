@@ -129,6 +129,11 @@ Run 'curator doctor --help' for usage.
 [脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
 作为依赖，因为生成的可执行文件通过它装配请求上下文。
 
+渲染式命令运行在一个挂钟默认为 60 秒的渲染会话中。合理运行时间更长的命令——例如在两小时的构建上执行
+`<bin> await <ticket>`——以 `config.render: { maxElapsedMs }` 声明自己的预算（以毫秒计的正整数，最多 24
+小时，否则报 `AB4835`）；编译后的命令把它带进生成的可执行文件，投影的 MCP 命令（`routes.mcpCommands`）
+则继承其工具的预算。纯 `.ts` 命令没有渲染会话，会拒绝该键。参见[渲染预算](./mcp.mdx#渲染预算)。
+
 退出方式：`bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。
 
 ### 宿主产物中的路由式 CLI

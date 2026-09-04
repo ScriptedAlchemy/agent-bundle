@@ -947,7 +947,13 @@ it('renders one tool/after event route through two native thin clients', { retry
       'export default async function AfterTool({ canonical, native }) {',
       '  const context = await agent();',
       '  const requestValue = context.providers.requestValue as { kind: string };',
-      '  const tool = typeof native.tool_name === "string" ? native.tool_name : "unknown";',
+      '  // The canonical payload names the tool through the host key it came from and, on Cursor, the',
+      '  // parsed tool_output; `native` keeps the raw string (#466).',
+      '  const payloadTool = canonical.payload.toolName;',
+      '  const response = canonical.payload.toolResponse;',
+      '  const tool = payloadTool === undefined || typeof native.tool_name !== "string" || native.tool_name !== payloadTool.value',
+      '    ? "unknown"',
+      '    : `${payloadTool.value}@${payloadTool.nativeKey}/${response?.nativeKey ?? "none"}=${JSON.stringify(response?.value)}/${typeof native[response?.nativeKey ?? ""]}`;',
       "  const actor = context.actor.state === 'unavailable' ? `unavailable:${context.actor.reason}` : `available:${context.actor.value.id}`;",
       "  const host = context.host.state === 'unavailable' ? `unavailable:${context.host.reason}` : `available:${context.host.source}:${context.host.value.name}`;",
       "  const session = context.session.state === 'unavailable' ? `unavailable:${context.session.reason}` : `available:${context.session.source}:${context.session.value.sessionId}`;",
@@ -1028,10 +1034,10 @@ it('renders one tool/after event route through two native thin clients', { retry
           };
       const response = await runHook(hook.output, native);
       expect(response).toEqual(target === 'cursor'
-        ? { additional_context: `cursor:Write:event:true:host:available:native:cursor:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided` }
+        ? { additional_context: `cursor:Write@tool_name/tool_output={"ok":true}/string:event:true:host:available:native:cursor:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided` }
         : {
             hookSpecificOutput: {
-              additionalContext: `claude:Write:event:true:host:available:native:claude:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided`,
+              additionalContext: `claude:Write@tool_name/tool_response={"ok":true}/object:event:true:host:available:native:claude:session:available:native:session-1:workspace:available:native:${root}:actor:unavailable:not-provided`,
               hookEventName: 'PostToolUse',
             },
           });

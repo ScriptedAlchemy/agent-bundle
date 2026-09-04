@@ -33,7 +33,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'plugin-root', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -49,6 +49,7 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/layout-probe',
         'tool:harness/lifecycle',
         'tool:harness/mutation-probe',
+        'tool:harness/plugin-root',
         'tool:harness/publish-notice',
         'tool:harness/strict-report',
         'tool:harness/ticket',
@@ -242,6 +243,75 @@ describe('the in-memory MCP projection level', () => {
         { text: '## mystery\n\n- Piranesi\n- Solaris', type: 'text' },
       ],
       structuredContent: { genre: 'mystery', titles: ['Piranesi', 'Solaris'] },
+    });
+  });
+
+  describe('a tool that declares its own render budget (#454)', () => {
+    // The `wait` route declares `config.render.maxElapsedMs: 120_000`. With
+    // the server dispatcher's base lowered to 100ms, a 300ms hold completes
+    // only because the compiled budget reached the render session; a route
+    // without one (`catalog` here, held by its own Suspense boundary) is
+    // still bound by the base. The projector keeps forwarding progress for
+    // the whole render, which is what keeps a host's idle timer alive.
+    it('renders past the base limit under its declared budget and keeps progress notifications flowing', async () => {
+      await using session = await openInMemoryMcpServer({ limits: { maxElapsedMs: 100 } });
+      const notifications: { readonly progress: number; readonly total?: number }[] = [];
+      session.client.setNotificationHandler('notifications/progress', (notification) => {
+        notifications.push({ progress: notification.params.progress, ...(notification.params.total === undefined ? {} : { total: notification.params.total }) });
+      });
+
+      const result = await session.client.callTool({
+        _meta: { progressToken: 'tok-454' },
+        arguments: { holdMs: 300, tickMs: 100 },
+        name: 'wait',
+      });
+
+      expect(result).toMatchObject({ structuredContent: { waitedMs: 300 } });
+      expect(result).not.toHaveProperty('isError');
+      expect(notifications).toEqual([
+        { progress: 1, total: 3 },
+        { progress: 2, total: 3 },
+        { progress: 3, total: 3 },
+      ]);
+    });
+
+    it('still bounds a route without a declared budget by the dispatcher base', async () => {
+      await using session = await openInMemoryMcpServer({ limits: { maxElapsedMs: 1 } });
+
+      // The route reaches emit time past a 1ms budget on any machine; the
+      // contract error is the SDK's default tool error on the wire.
+      const result = await session.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' });
+      expect(result).toMatchObject({
+        content: [{ text: expect.stringContaining('elapsed time exceeds 1ms'), type: 'text' }],
+        isError: true,
+      });
+    });
+  });
+
+  it('publishes the plugin root the server process resolved on every tool call, and forwards a context override (#468)', async () => {
+    const anchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
+    const previous = process.env[anchor];
+    process.env[anchor] = '/installs/harness';
+    try {
+      // The server resolves the anchor once when it opens, exactly as the
+      // generated entry does at startup; every request then observes it.
+      await using session = await openInMemoryMcpServer();
+      const result = await session.client.callTool({ arguments: {}, name: 'plugin-root' });
+      expect(result).toMatchObject({
+        structuredContent: {
+          plugin: { source: 'native', state: 'available', value: { root: '/installs/harness', stateRoot: '/installs/harness/state' } },
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env[anchor];
+      else process.env[anchor] = previous;
+    }
+
+    const injected = await invokeMcpTool('plugin-root', {
+      context: { plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } } as never },
+    });
+    expect(injected.structuredContent).toEqual({
+      plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } },
     });
   });
 

@@ -141,6 +141,13 @@ same props and renders through the runtime dispatcher against a sibling
 [Scripts and assets](./scripts-assets.mdx). Routed CLI projects need `@agent-bundle/runtime` as a
 dependency, because the generated executable installs the request context through it.
 
+A rendered command runs inside a render session whose wall clock defaults to 60 seconds. A command
+that legitimately runs longer — `<bin> await <ticket>` over a two-hour build — declares its budget
+as `config.render: { maxElapsedMs }` (a positive integer of milliseconds up to 24 hours, `AB4835`
+otherwise); the compiled command carries it into the generated executable, and a projected MCP
+command (`routes.mcpCommands`) inherits its tool's. A plain `.ts` command executes without a render
+session and rejects the key. See [Render budget](./mcp.mdx#render-budget).
+
 Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
 
 ### The routed CLI inside host artifacts

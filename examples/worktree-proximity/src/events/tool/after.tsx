@@ -13,8 +13,7 @@ export const config = {
 
 export default async function AfterTool({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'tool/after'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -24,7 +23,7 @@ export default async function AfterTool({
     );
   }
   const intentResult = await withIntent(async (intent) => {
-    const resolved = await actorForWorktree(intent, currentWorktree, canonical, native);
+    const resolved = await actorForWorktree(intent, currentWorktree, canonical);
     await intent.dispatch('intentRecorded', {
       actorId: resolved.actor.id,
       dependencies: [],

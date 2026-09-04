@@ -89,6 +89,7 @@ const typeScriptCli = (projectRoot: string): string | undefined => {
     return undefined;
   }
   const cli = join(dirname(manifest), 'lib', 'tsc.js');
+  // Synchronous probe beside `createRequire`'s synchronous resolution; stays raw.
   return existsSync(cli) ? cli : undefined;
 };
 

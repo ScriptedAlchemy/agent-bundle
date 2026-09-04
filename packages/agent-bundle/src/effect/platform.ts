@@ -7,6 +7,7 @@ import * as NodeTerminal from '@effect/platform-node-shared/NodeTerminal';
 import { Effect, FileSystem, Layer } from 'effect';
 import { PlatformError } from 'effect/PlatformError';
 
+import { isErrno } from '../core/errors.ts';
 import { runPromise, type RunPromiseOptions } from './boundary.ts';
 
 /**
@@ -58,6 +59,34 @@ export const unwrapPlatformError = <E>(error: E): Exclude<E, PlatformError> | Er
   error instanceof PlatformError
     ? (error.cause instanceof Error ? error.cause : error)
     : (error as Exclude<E, PlatformError>);
+
+/**
+ * `isErrno(error, code)` for a failure that may still be wrapped in a
+ * `PlatformError`: true when the wrapped Node error (or the value itself)
+ * carries one of `codes`. Programs that branch on `ENOENT` / `ENOTDIR` the
+ * way their `try`/`catch` predecessors did use this inside `Effect.catch`.
+ */
+export const isPlatformErrno = (error: unknown, ...codes: readonly string[]): boolean => {
+  const cause = unwrapPlatformError(error);
+  return codes.some((code) => isErrno(cause, code));
+};
+
+/**
+ * `readFile(path, 'utf8')` as a program. Not `fs.readFileString`: that
+ * decodes through `TextDecoder`, which drops a leading UTF-8 BOM, while
+ * Node's `utf8` decoding keeps it as U+FEFF — and the sites that moved here
+ * parse JSON and compare digests of what they read, so the bytes must decode
+ * exactly as before.
+ */
+export const readFileString = (path: string): Effect.Effect<string, PlatformError, FileSystem.FileSystem> =>
+  Effect.map(readFileBytes(path), (bytes) => bytes.toString('utf8'));
+
+/** `readFile(path)` as a program: the bytes as a `Buffer`, for digests and parsers that expect one. */
+export const readFileBytes = (path: string): Effect.Effect<Buffer, PlatformError, FileSystem.FileSystem> =>
+  Effect.map(
+    Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(path)),
+    (bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+  );
 
 /**
  * `try { return await use } finally { await rm(path, { recursive: true,

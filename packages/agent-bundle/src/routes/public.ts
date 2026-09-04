@@ -1,5 +1,24 @@
 import type { JsonValue } from '../core/strict-json.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
+import type { AgentEventPayload, CanonicalAgentEvent } from './events.ts';
+
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  canonicalAgentEvents,
+} from './events.ts';
+export type {
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
+  CanonicalAgentEvent,
+} from './events.ts';
 
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
@@ -8,34 +27,6 @@ export interface RouteSchema<Output = unknown> {
 
 export type RouteSchemaOutput<Schema> = Schema extends RouteSchema<infer Output> ? Output : never;
 
-/** The event-route families admitted by the recorded #97 v1/G10 decision. */
-export const canonicalAgentEvents = Object.freeze([
-  'session/start',
-  'tool/before',
-  'tool/after',
-  'stop',
-  'agent/start',
-  'agent/stop',
-  'workspace/open',
-  'session/end',
-  'prompt/submit',
-  'tool/failure',
-  'compact/before',
-  'compact/after',
-  'permission/request',
-  'permission/denied',
-  'stop/failure',
-  'file/change',
-  'config/change',
-  'task/create',
-  'task/complete',
-  'agent/idle',
-  'model-switch/before',
-  'model-switch/after',
-] as const);
-
-export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];
-
 export interface AgentEventProvenance {
   readonly host: string;
   readonly hostContractRevision: string;
@@ -43,11 +34,19 @@ export interface AgentEventProvenance {
   readonly source: 'native';
 }
 
-/** Cross-host identity supplied to an event route without fabricated host fields. */
-export interface AgentEventCanonicalIdentity {
-  readonly event: CanonicalAgentEvent;
+/**
+ * Cross-host identity supplied to an event route without fabricated host
+ * fields, plus the canonical `payload` of its family (#466): the fields at
+ * least two hosts report — tool name, input, and response, session id,
+ * transcript path, stop re-entry, prompt text, agent id and type, … — each
+ * carrying the host's own key as provenance, and absent when the host did
+ * not send it. `E` narrows `payload` to the family the route handles.
+ */
+export interface AgentEventCanonicalIdentity<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
+  readonly event: E;
   readonly idempotencyKey: string;
   readonly observedAt: string;
+  readonly payload: AgentEventPayload<E>;
   readonly provenance: AgentEventProvenance;
   readonly sequence: number;
 }
@@ -57,6 +56,9 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
 
 /**
  * Props received by an event route's async default Server Component.
+ * `canonical.payload` is the cross-host reading of the envelope for the
+ * route's family; `native` is the frozen host envelope itself, for the
+ * host-specific fields the payload does not model.
  *
  * Read transport-owned request context with `await agent()` from
  * `@agent-bundle/runtime`. The invocation, host, session, actor, workspace,
@@ -67,8 +69,8 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
  * is unavailable on hook-driven event scopes. The framework never derives or
  * surfaces the operator's identity from a host payload.
  */
-export interface AgentEventRouteProps {
-  readonly canonical: AgentEventCanonicalIdentity;
+export interface AgentEventRouteProps<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
+  readonly canonical: AgentEventCanonicalIdentity<E>;
   readonly native: AgentEventNativePayload;
   readonly signal: AbortSignal;
 }
@@ -95,9 +97,30 @@ type AgentProviderInvocation =
     readonly props: { readonly input?: JsonValue; readonly view: string };
   };
 
+/**
+ * The plugin install root and durable-state anchor a generated scope resolved
+ * (#468), as `(await agent()).plugin` observes it: `root` is the expanded
+ * `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's fallback
+ * (`'derived'`), and `stateRoot` is `<root>/state`, where the SQLite kernel,
+ * the notice ledger, and the lineage journal live. Declared here so
+ * config-only consumers need no runtime import; structurally identical to the
+ * runtime's `AgentPluginIdentity`.
+ */
+export interface AgentProviderPluginRoot {
+  readonly root: string;
+  readonly stateRoot: string;
+}
+
+/** The observed plugin root a provider receives; the same shape as every `agent()` identity axis. */
+export type AgentProviderObservedPluginRoot =
+  | { readonly source: 'native' | 'receipt' | 'derived'; readonly state: 'available'; readonly value: AgentProviderPluginRoot }
+  | { readonly reason: string; readonly state: 'unavailable' };
+
 /** Request-scoped inputs supplied to a conventional context provider factory. */
 export interface AgentProviderContext {
   readonly invocation: AgentProviderInvocation;
+  /** The resolved plugin root, exactly what the route will read as `(await agent()).plugin`. */
+  readonly plugin: AgentProviderObservedPluginRoot;
   readonly signal: AbortSignal;
 }
 
@@ -195,12 +218,37 @@ export type RouteMeta = Readonly<Record<string, unknown>> & {
  */
 export const appResourceUri = (reference: string): string => reference;
 
+/**
+ * The render budget a rendered route declares statically in `config.render`.
+ * Every rendered route runs inside one render session bounded by the runtime's
+ * default limits; a long-running route (a build await, a long poll) raises
+ * `maxElapsedMs` here instead of clamping its own waits. The compiler
+ * validates the value (`AB4835`: a positive integer of milliseconds up to
+ * {@link MAX_ROUTE_RENDER_ELAPSED_MS}), and the generated MCP server, the
+ * routed CLI, and the route-unit harness apply it to that route's render
+ * session — the host's own tool-call deadline still applies on top.
+ */
+export interface RouteRenderConfig {
+  /** Wall-clock budget of one render of this route, in milliseconds; the runtime default is 60 000. */
+  readonly maxElapsedMs?: number;
+}
+
+/**
+ * The ceiling `config.render.maxElapsedMs` may declare: 24 hours. The value
+ * stays inside Claude Code's default per-call wall clock (`MCP_TOOL_TIMEOUT`,
+ * about 28 hours); Codex (`tool_timeout_sec`, 60 s by default) and any
+ * per-server host setting must be raised separately by the operator.
+ */
+export const MAX_ROUTE_RENDER_ELAPSED_MS = 24 * 60 * 60 * 1000;
+
 export interface ToolConfig {
   readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
   /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
   readonly exitCode?: 'result';
+  /** The render budget of one call; also inherited by the tool's projected CLI command. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
 }
 
@@ -208,6 +256,8 @@ export interface ResourceConfig {
   readonly _meta?: RouteMeta;
   readonly description?: string;
   readonly mimeType?: string;
+  /** The render budget of one read. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
   readonly uri: string;
 }
@@ -215,6 +265,8 @@ export interface ResourceConfig {
 export interface PromptConfig {
   readonly _meta?: RouteMeta;
   readonly description?: string;
+  /** The render budget of one get. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
 }
 
@@ -252,6 +304,8 @@ export interface CliRouteConfig {
    * named here become `--options`.
    */
   readonly positionals?: readonly string[];
+  /** The render budget of one rendered (`.tsx`) command run; plain commands ignore it. */
+  readonly render?: RouteRenderConfig;
 }
 
 /**

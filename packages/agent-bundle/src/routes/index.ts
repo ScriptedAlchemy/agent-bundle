@@ -49,12 +49,29 @@ export {
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
-export { appResourceUri, canonicalAgentEvents } from './public.ts';
+export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
+export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  appResourceUri,
+  canonicalAgentEvents,
+  MAX_ROUTE_RENDER_ELAPSED_MS,
+} from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
@@ -63,6 +80,8 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,
@@ -70,6 +89,7 @@ export type {
   PromptConfig,
   ResourceConfig,
   RouteMeta,
+  RouteRenderConfig,
   RouteSchema,
   RouteSchemaOutput,
   RouteUiMeta,

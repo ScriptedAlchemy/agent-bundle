@@ -46,6 +46,14 @@ export const unavailableCapability = (reason: string): CapabilityState => Object
 
 export interface EventRouteCapabilityTableEntry {
   readonly nativeEvent?: string;
+  /**
+   * The host's spelling of each canonical payload field for this family (#466):
+   * the native key, or `{ nativeKey, decode }` when a transformation applies.
+   * Mirrors `agentEventPayloadNativeKeys` in `routes/events.ts` (the runtime
+   * table) so the generated events reference documents the mapping per host;
+   * `tests/event-payload.test.ts` holds the two equal.
+   */
+  readonly payload?: Readonly<Record<string, string | { readonly decode?: string; readonly nativeKey: string }>>;
   readonly reason?: string;
   /** JSON imports widen literals; unsupported table states fail closed below. */
   readonly state: string;
