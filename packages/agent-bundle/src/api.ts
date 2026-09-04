@@ -33,8 +33,9 @@ import {
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
-import { parseServeAppSelector, serveMcpApp, type ServedMcpApp, type ServeMcpAppOptions } from './serve-app/serve-mcp-app.ts';
-export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/serve-mcp-app.ts';
+import { parseServeAppSelector, serveMcpApp } from './serve-app/serve-mcp-app.ts';
+import type { ServedMcpApp, ServeMcpAppPublicOptions } from './serve-app/types.ts';
+export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/types.ts';
 export type { OpenBrowser } from './dev/mcp-apps/mcp-app-preview-host.ts';
 export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
 import { deepFreeze } from './core/freeze.ts';
@@ -531,7 +532,7 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   readonly target: string;
 }
 
-export interface ServeAppOptions extends ArtifactOperationOptions, Pick<ServeMcpAppOptions, 'autoApprove' | 'input' | 'open' | 'openBrowser' | 'port' | 'profile' | 'timeoutMs' | 'tool'> {
+export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPublicOptions {
   /** The MCP App to serve: `<server>/<app>` (for example `status/status`), or `<server>/ui://...` for an exact resource URI. */
   readonly app: string;
   /** Explicit `.env` files replacing the conventional project-root set; see {@link RunMcpOptions.envFiles}. */

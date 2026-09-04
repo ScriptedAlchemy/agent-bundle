@@ -9,6 +9,7 @@ import type { Stream } from 'node:stream';
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { McpAppProfileId } from '../dev/mcp-app-profile-descriptors.ts';
+import type { ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
 import {
   McpAppBindingService,
   selectMcpAppResourceUri,
@@ -21,12 +22,10 @@ import {
   type McpAppToolDefinition,
 } from '../dev/mcp-apps/mcp-app-binding-service.ts';
 import { MCP_APP_MIME_TYPE } from '../dev/mcp-apps/mcp-app-bridge.ts';
-import type { McpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
 import {
   mcpAppPreviewHost,
   mcpAppPreviewHostInfo,
   openInBrowser,
-  type OpenBrowser,
 } from '../dev/mcp-apps/mcp-app-preview-host.ts';
 import { McpAppPreviewService } from '../dev/mcp-apps/mcp-app-preview-service.ts';
 import { McpAppRoutes } from '../dev/mcp-apps/mcp-app-routes.ts';
@@ -63,56 +62,17 @@ import { renderServeAppPage, SERVE_APP_TOKEN_HEADER } from './serve-app-page.ts'
  * session.
  */
 
-export type { McpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
+export type { McpAppConsentCapability, ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
 
-export interface ServeMcpAppOptions extends Omit<McpLaunchEnvironmentOptions, 'artifact' | 'registry' | 'server'> {
-  /** The MCP App to serve: `<server>/<app>`, or a full `ui://` resource URI. */
+export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<McpLaunchEnvironmentOptions, 'artifact' | 'registry' | 'server'> {
+  /** The MCP App to serve: `<server>/<app>`, or `<server>/ui://...` for an exact resource URI. */
   readonly app: string;
   /**
    * A built artifact root, or an Effect that acquires one into the served
    * App's scope (a throwaway build removed on `close()`).
    */
   readonly artifact: string | Effect.Effect<string, unknown, Scope.Scope>;
-  /**
-   * Consent capabilities approved on the operator's behalf as the App
-   * requests them; everything else waits for a decision in the host page,
-   * exactly as in the Workbench.
-   */
-  readonly autoApprove?: readonly McpAppConsentCapability[];
-  /** Arguments for the opening tool call; defaults to `{}`. */
-  readonly input?: Readonly<Record<string, unknown>>;
-  /** Open the default browser on the served URL once the host is listening. */
-  readonly open?: boolean;
-  /** Injectable only to keep browser launching deterministic in tests. */
-  readonly openBrowser?: OpenBrowser;
-  /** Loopback TCP port for the host document; `0` (default) picks an ephemeral one. */
-  readonly port?: number;
-  /** The simulated MCP Apps host profile; defaults to `portable`. */
-  readonly profile?: McpAppProfileId;
   readonly registry?: TargetRegistry;
-  /** Per-request timeout for the bound session, in milliseconds. */
-  readonly timeoutMs?: number;
-  /**
-   * The tool whose result the App opens with. Defaults to the only tool that
-   * declares the App's `_meta.ui.resourceUri`; required when several do.
-   */
-  readonly tool?: string;
-}
-
-export interface ServedMcpApp {
-  /** The App's canonical `ui://` resource URI. */
-  readonly resourceUri: string;
-  /** Loopback origin of the sandbox proxy the App document runs on. */
-  readonly sandboxOrigin: string;
-  /** The generated MCP server the App is bound to. */
-  readonly server: string;
-  /** The tool whose call opened the App. */
-  readonly tool: string;
-  /** The host document URL. */
-  readonly url: string;
-  /** Settles once the bound MCP server connection has ended, whether by `close()` or on its own. */
-  readonly closed: Promise<void>;
-  close(): Promise<void>;
 }
 
 const defaultTimeoutMs = 30_000;
