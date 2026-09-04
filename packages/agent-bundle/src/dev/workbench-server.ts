@@ -59,7 +59,7 @@ import {
 } from './runtime-client-surface-proxy.ts';
 import { resolveDevRuntimeProvider } from './runtime-provider-loader.ts';
 import {
-  DevRuntimeUnavailableError,
+  isDevRuntimeUnavailableError,
   type DevRuntimeClientSurfaceEndpoint,
   type DevRuntimeClientSurfaceProxyBinding,
   type DevRuntimeEventInput,
@@ -361,7 +361,7 @@ export class RuntimeClientSurfaceBindings implements Closeable {
     try {
       endpoint = this.#runtime?.clientSurface(surfaceId);
     } catch (error) {
-      if (error instanceof DevRuntimeUnavailableError) return undefined;
+      if (isDevRuntimeUnavailableError(error)) return undefined;
       throw error;
     }
     if (endpoint === undefined) return undefined;
@@ -671,7 +671,7 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
       // registration, so a foreground close cannot expose a half-owned lane.
       if (!appPreviews.attachRuntime(runtimePreviews)) void runtimePreviews.prepareClose().catch(() => undefined);
     } catch (error) {
-      if (!(error instanceof DevRuntimeUnavailableError)) throw error;
+      if (!isDevRuntimeUnavailableError(error)) throw error;
     } finally {
       installingRuntimePreviews = false;
     }
