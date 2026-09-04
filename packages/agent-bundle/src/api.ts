@@ -10,6 +10,7 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -1171,7 +1172,7 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
-    packerUserAgent: process.env.npm_config_user_agent,
+    packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
     projectRoot: options.root,
   });
   if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);

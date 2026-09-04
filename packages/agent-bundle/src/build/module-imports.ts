@@ -32,11 +32,10 @@ const importKind = (dynamic: number): ModuleImport['kind'] =>
 /**
  * Imports already read from bytes with a known SHA-256, keyed by check level
  * and digest. Within one process the same emitted bundle is scanned by the
- * post-compile self-containment check, by artifact validation (twice: before
- * and after the manifest is written), and by the npm prepack dependency gate;
- * the bytes never change between those passes, so the imports of a
- * multi-megabyte bundle are lexed once. The records are a few dozen
- * specifiers per module; the map stays bounded.
+ * post-compile self-containment check and then by artifact validation, twice
+ * (before and after the manifest is written); the bytes never change between
+ * those passes, so the imports of a multi-megabyte bundle are lexed once.
+ * The records are a few dozen specifiers per module; the map stays bounded.
  */
 const importsByDigest = new Map<string, readonly ModuleImport[]>();
 const importsByDigestLimit = 512;
@@ -50,27 +49,18 @@ const remember = (key: string, imports: readonly ModuleImport[]): void => {
 };
 
 /**
- * Both check levels read the same import records; `parsed` only adds acorn's
- * veto first. A remembered `parsed` result therefore answers a `lexed`
- * request, never the reverse.
- */
-const remembered = (check: ModuleSyntaxCheck, sha256: string): readonly ModuleImport[] | undefined =>
-  importsByDigest.get(`${check}:${sha256}`)
-  ?? (check === 'lexed' ? importsByDigest.get(`parsed:${sha256}`) : undefined);
-
-/**
  * Reads the imports of one ES module source, throwing on invalid syntax
  * (the lexer's or, for `parsed`, acorn's). When the source's SHA-256 is
- * known, a result remembered for those bytes at this check level (or a
- * stronger one) is returned as is, and a fresh read is remembered for the
- * next pass over the same bytes.
+ * known, a result remembered for those bytes at this check level is
+ * returned as is, and a fresh read is remembered for the next pass over the
+ * same bytes.
  */
 export const readModuleImports = async (
   source: string,
   options: { readonly check: ModuleSyntaxCheck; readonly sha256?: string },
 ): Promise<readonly ModuleImport[]> => {
   if (options.sha256 !== undefined) {
-    const known = remembered(options.check, options.sha256);
+    const known = importsByDigest.get(`${options.check}:${options.sha256}`);
     if (known !== undefined) return known;
   }
   await init;

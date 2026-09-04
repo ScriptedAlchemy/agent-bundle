@@ -10,7 +10,8 @@ import { readModuleImports, type ModuleImport } from './module-imports.ts';
 /**
  * Evidence for the npm prepack dependency gate (`AB7014`/`AB7015`, emitted by
  * `pack-inventory.ts`): what `package.json` asks npm to install alongside the
- * package, and which packages the packed JavaScript actually imports.
+ * package, and which packages the packed JavaScript and declaration files
+ * actually reference.
  */
 
 /**
@@ -32,23 +33,25 @@ export interface DeclaredDependency {
   readonly specifier: string;
 }
 
-/** Peers `peerDependenciesMeta` marks optional are never installed by npm, so they are not installed dependencies. */
-const isOptionalPeer = (packageDocument: Readonly<Record<string, unknown>>, name: string): boolean => {
+/** Peers `peerDependenciesMeta` marks optional: npm never installs them, so they are not installed dependencies. */
+const optionalPeers = (packageDocument: Readonly<Record<string, unknown>>): ReadonlySet<string> => {
   const meta = packageDocument.peerDependenciesMeta;
-  if (!isRecord(meta)) return false;
-  const entry = meta[name];
-  return isRecord(entry) && entry.optional === true;
+  return new Set(isRecord(meta)
+    ? Object.entries(meta).filter(([, entry]) => isRecord(entry) && entry.optional === true).map(([name]) => name)
+    : []);
 };
 
-export const declaredDependencies = (packageDocument: Readonly<Record<string, unknown>>): readonly DeclaredDependency[] =>
-  installedDependencyFields.flatMap((field) => {
+export const declaredDependencies = (packageDocument: Readonly<Record<string, unknown>>): readonly DeclaredDependency[] => {
+  const skipped = optionalPeers(packageDocument);
+  return installedDependencyFields.flatMap((field) => {
     const value = packageDocument[field];
     if (!isRecord(value)) return [];
     return Object.entries(value)
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-      .filter(([name]) => field !== 'peerDependencies' || !isOptionalPeer(packageDocument, name))
+      .filter(([name]) => field !== 'peerDependencies' || !skipped.has(name))
       .map(([name, specifier]) => ({ field, name, specifier }));
   });
+};
 
 /** Relative, package-imports (`#`), absolute, and URL-scheme specifiers (`node:`, `data:`, `file:`, `C:\`) name no package. */
 const nonPackageSpecifier = /^(?:[.#/]|[a-z][a-z0-9+.-]*:)/iu;
@@ -68,6 +71,8 @@ const registryAlias = /^npm:/u;
  * verbatim and every consumer then fails with `EUNSUPPORTEDPROTOCOL`.
  */
 const workspaceProtocol = /^(?:workspace|catalog):/u;
+
+export const isWorkspaceProtocol = (specifier: string): boolean => workspaceProtocol.test(specifier.trim());
 
 /**
  * Whether the package manager running this pack (its `npm_config_user_agent`,
@@ -93,29 +98,18 @@ const nonRegistrySpecifier = new RegExp([
   String.raw`^[^\s@/]+/[^\s/]+$`, // owner/repo[#ref] GitHub shorthand
 ].join('|'), 'iu');
 
-export interface RegistrySpecifierOptions {
-  /** Whether `workspace:`/`catalog:` will be rewritten before the tarball is published. */
-  readonly workspaceProtocols: boolean;
-}
-
-/** Whether a consumer's npm resolves this dependency specifier through a package registry. */
-export const isRegistrySpecifier = (specifier: string, options: RegistrySpecifierOptions): boolean => {
+/**
+ * Whether a consumer's npm resolves this dependency specifier, as written,
+ * through a package registry. A workspace protocol is not one; whether the
+ * packer rewrites it first is the caller's policy (`isWorkspaceProtocol`).
+ */
+export const isRegistrySpecifier = (specifier: string): boolean => {
   const trimmed = specifier.trim();
-  if (registryAlias.test(trimmed)) return true;
-  if (workspaceProtocol.test(trimmed)) return options.workspaceProtocols;
-  return !nonRegistrySpecifier.test(trimmed);
+  return registryAlias.test(trimmed) || !(workspaceProtocol.test(trimmed) || nonRegistrySpecifier.test(trimmed));
 };
 
-const javaScriptSuffix = /\.(?:[cm]?js)$/u;
-const declarationSuffix = /\.d\.(?:[cm]?ts)$/u;
-
-/**
- * The module specifiers a declaration file resolves: `from "…"`,
- * `import("…")`, `import x = require("…")`, and `/// <reference types="…" />`.
- * Consumers need the package that provides these types even though the
- * bundled JavaScript has no runtime import.
- */
-const declarationSpecifier = /(?:\b(?:from|import|require)\s*\(?\s*(["'])((?:(?!\1)[^\\\n]|\\.)+)\1)|(?:<reference\s+types\s*=\s*(["'])([^"'\n]+)\3)/gu;
+/** A single- or double-quoted string literal; the group after the opening quote is its body. */
+const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
 
 /**
  * A `require("…")` call with a literal argument. The ESM lexer reports
@@ -124,15 +118,30 @@ const declarationSpecifier = /(?:\b(?:from|import|require)\s*\(?\s*(["'])((?:(?!
  * mark a dependency as imported, never as unused, so the pattern errs
  * toward keeping a declaration.
  */
-const requireCall = /\brequire\s*\(\s*(["'])((?:(?!\1)[^\\\n]|\\.)+)\1\s*\)/gu;
+const requireCall = new RegExp(String.raw`\brequire\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
 
-const packageNames = (specifiers: readonly (string | undefined)[]): readonly string[] =>
-  specifiers.flatMap((specifier) => {
-    const name = specifier === undefined ? undefined : packageNameOf(specifier);
-    return name === undefined ? [] : [name];
-  });
+/**
+ * Every module specifier a declaration file resolves: `from "…"`,
+ * `import("…")`, `import x = require("…")`, and `/// <reference types="…" />`.
+ * A consumer needs the package that provides these types even though the
+ * bundled JavaScript has no runtime import. Declarations are not ES modules
+ * the lexer accepts, so this is a text scan with the same keep-only bias.
+ */
+const declarationSpecifier = new RegExp(
+  String.raw`\b(?:from|import|require)\s*\(?\s*${quotedLiteral}|<reference\s+types\s*=\s*(["'])([^"'\n]+)\3`,
+  'gu',
+);
 
-const javaScriptSpecifiers = async (bytes: Buffer): Promise<readonly (string | undefined)[]> => {
+/** The literal module specifiers a declaration file resolves, in order of appearance. */
+export const declarationSpecifiers = (source: string): readonly string[] =>
+  Array.from(source.matchAll(declarationSpecifier), (match) => match[2] ?? match[4] ?? '');
+
+/**
+ * The module specifiers packed JavaScript resolves: the lexer's static and
+ * dynamic literal imports — never a mention inside a comment or string,
+ * which bundled library docblocks are full of — plus literal `require` calls.
+ */
+const javaScriptSpecifiers = async (bytes: Buffer): Promise<readonly string[]> => {
   const source = bytes.toString('utf8');
   let imports: readonly ModuleImport[];
   try {
@@ -142,13 +151,13 @@ const javaScriptSpecifiers = async (bytes: Buffer): Promise<readonly (string | u
     imports = [];
   }
   return [
-    ...imports.filter((record) => record.kind !== 'meta').map((record) => record.specifier),
-    ...Array.from(source.matchAll(requireCall), (match) => match[2]),
+    ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
+    ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),
   ];
 };
 
-const declarationSpecifiers = (bytes: Buffer): readonly (string | undefined)[] =>
-  Array.from(bytes.toString('utf8').matchAll(declarationSpecifier), (match) => match[2] ?? match[4]);
+const javaScriptSuffix = /\.[cm]?js$/u;
+const declarationSuffix = /\.d\.[cm]?ts$/u;
 
 const packageNamesIn = async (path: string): Promise<readonly string[]> => {
   let bytes: Buffer;
@@ -159,7 +168,13 @@ const packageNamesIn = async (path: string): Promise<readonly string[]> => {
     if (isErrno(error, 'ENOENT')) return [];
     throw error;
   }
-  return packageNames(declarationSuffix.test(path) ? declarationSpecifiers(bytes) : await javaScriptSpecifiers(bytes));
+  const specifiers = declarationSuffix.test(path)
+    ? declarationSpecifiers(bytes.toString('utf8'))
+    : await javaScriptSpecifiers(bytes);
+  return specifiers.flatMap((specifier) => {
+    const name = packageNameOf(specifier);
+    return name === undefined ? [] : [name];
+  });
 };
 
 /**

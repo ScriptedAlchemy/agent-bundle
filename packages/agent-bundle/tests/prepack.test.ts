@@ -61,14 +61,14 @@ afterAll(async () => {
 
 const diagnostics = (
   packOutput: PackOutput = result.pack,
-  packerUserAgent: string | undefined = 'npm/11.4.2 node/v24.0.0 linux x64 workspaces/false',
+  packerRewritesWorkspaceProtocols = false,
 ): Promise<readonly Diagnostic[]> =>
   packInventoryDiagnostics({
     artifactRoot: result.build.build.outputRoot,
     model: result.build.model,
     packageBuild: result.build.packageBuild!,
     packOutput,
-    packerUserAgent,
+    packerRewritesWorkspaceProtocols,
     projectRoot,
   });
 
@@ -250,7 +250,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     }
     expect(reported[0]?.recovery).toContain('registry');
 
-    const underPnpm = withCode(await diagnostics(result.pack, 'pnpm/10.18.0 npm/? node/v24.0.0 linux x64'), 'AB7015');
+    const underPnpm = withCode(await diagnostics(result.pack, true), 'AB7015');
     expect(underPnpm[0]?.message).not.toContain('"sibling"');
   },
 ));

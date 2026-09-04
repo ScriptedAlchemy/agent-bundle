@@ -3,11 +3,11 @@ import { expect, it } from '@rstest/core';
 import {
   declaredDependencies,
   isRegistrySpecifier,
+  isWorkspaceProtocol,
+  declarationSpecifiers,
   packageNameOf,
   rewritesWorkspaceProtocols,
 } from '../src/build/pack-dependencies.ts';
-
-const npm = { workspaceProtocols: false };
 
 it.each([
   // Registry: semver ranges, dist-tags, and protocols the workspace manager rewrites at publish time.
@@ -18,7 +18,7 @@ it.each([
   ['latest', true],
   ['>=1 <2 || 3.x', true],
   ['npm:effect@^4.0.0', true],
-  // Workspace protocols are registry specifiers only when the packer rewrites them (see below).
+  // Workspace protocols, as written, are not registry specifiers; whether the packer rewrites them is the caller's policy.
   ['workspace:*', false],
   ['catalog:', false],
   // Git.
@@ -45,15 +45,15 @@ it.each([
   ['~/vendor/dep', false],
   ['C:\\vendor\\dep', false],
   ['c:/vendor/dep', false],
-])('isRegistrySpecifier(%j) under npm is %s', (specifier, registry) => {
-  expect(isRegistrySpecifier(specifier, npm)).toBe(registry);
+])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
+  expect(isRegistrySpecifier(specifier)).toBe(registry);
 });
 
-it('accepts workspace protocols only for a packer that rewrites them', () => {
-  const pnpm = { workspaceProtocols: true };
-  expect(isRegistrySpecifier('workspace:*', pnpm)).toBe(true);
-  expect(isRegistrySpecifier('catalog:default', pnpm)).toBe(true);
-  expect(isRegistrySpecifier('github:owner/repo', pnpm)).toBe(false);
+it('tells workspace protocols apart and knows which packers rewrite them', () => {
+  expect(isWorkspaceProtocol('workspace:*')).toBe(true);
+  expect(isWorkspaceProtocol(' catalog:default')).toBe(true);
+  expect(isWorkspaceProtocol('npm:effect@^4')).toBe(false);
+  expect(isWorkspaceProtocol('github:owner/repo')).toBe(false);
   expect(rewritesWorkspaceProtocols('pnpm/10.18.0 npm/? node/v24.0.0 linux x64')).toBe(true);
   expect(rewritesWorkspaceProtocols('yarn/4.9.1 npm/? node/v24.0.0 linux x64')).toBe(true);
   expect(rewritesWorkspaceProtocols('bun/1.2.0 npm/? node/v24.0.0 linux x64')).toBe(true);
@@ -82,6 +82,22 @@ it.each([
   ['', undefined],
 ])('packageNameOf(%j) is %j', (specifier, name) => {
   expect(packageNameOf(specifier)).toBe(name);
+});
+
+it.each([
+  ['import { a } from "effect";', ['effect']],
+  ["import type { ZodType } from 'zod';", ['zod']],
+  ['export * from "@scope/name/deep";', ['@scope/name/deep']],
+  ['import "side-effect";', ['side-effect']],
+  ['type T = import("types-only").T;', ['types-only']],
+  ['import x = require("legacy");', ['legacy']],
+  ["declare const y: typeof import ( 'spaced' );", ['spaced']],
+  ['/// <reference types="node" />', ['node']],
+  ["/// <reference types = 'react' />", ['react']],
+  ['import a from "one"; export { b } from "two"; import c = require("three");', ['one', 'two', 'three']],
+  ['declare const n: string;', []],
+])('declarationSpecifiers(%j) is %j', (source, specifiers) => {
+  expect(declarationSpecifiers(source)).toEqual(specifiers);
 });
 
 it('lists installed-dependency fields only, skipping non-string specifiers and optional peers', () => {

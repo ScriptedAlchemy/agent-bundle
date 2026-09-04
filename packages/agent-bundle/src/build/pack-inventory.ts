@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { sha256Hex } from '../core/digest.ts';
+import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
@@ -13,10 +14,9 @@ import {
   declaredDependencies,
   importedPackageNames,
   isRegistrySpecifier,
-  rewritesWorkspaceProtocols,
+  isWorkspaceProtocol,
   type DeclaredDependency,
   type InstalledDependencyField,
-  type RegistrySpecifierOptions,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
 
@@ -88,7 +88,7 @@ const exists = async (path: string): Promise<boolean> => {
     await lstat(path);
     return true;
   } catch (error) {
-    if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (isErrno(error, 'ENOENT')) return false;
     throw error;
   }
 };
@@ -146,36 +146,38 @@ const perField = (
 
 /**
  * `AB7014`/`AB7015`: the build inlines every dependency into `dist/bin` and
- * the host packs, so an installed-dependency entry no packed JavaScript
- * imports only makes every consumer's `npm install` fetch a build-time
- * package — and fail outright when the specifier is one npm 12 refuses by
- * default (git, remote tarball, path).
+ * the host packs, so an installed-dependency entry no packed file references
+ * only makes every consumer's `npm install` fetch a build-time package — and
+ * fail outright when the specifier is one a consumer's npm cannot resolve
+ * (git, remote tarball, path, or an unrewritten workspace protocol).
  */
 const dependencyDiagnostics = async (options: {
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
-  readonly packerUserAgent: string | undefined;
+  readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
   const imported = await importedPackageNames({ paths: options.packedPaths, projectRoot: options.projectRoot });
-  const registry: RegistrySpecifierOptions = { workspaceProtocols: rewritesWorkspaceProtocols(options.packerUserAgent) };
+  const unresolvable = declared.filter((dependency) => isWorkspaceProtocol(dependency.specifier)
+    ? !options.packerRewritesWorkspaceProtocols
+    : !isRegistrySpecifier(dependency.specifier));
   return [
     ...perField(declared.filter((dependency) => !imported.has(dependency.name)), (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages no packed JavaScript or declaration file imports: ${quoteAll(own.map((dependency) => dependency.name))}. `
+      `package.json ${field} names packages no packed JavaScript or declaration file references: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
       'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime.',
     )),
-    ...perField(declared.filter((dependency) => !isRegistrySpecifier(dependency.specifier, registry)), (field, own) => diagnostic(
+    ...perField(unresolvable, (field, own) => diagnostic(
       'AB7015',
-      `package.json ${field} resolves packages outside a registry: ${own.map((dependency) =>
-        `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}. `
-        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and rejects workspace protocols outright, so '
+      `package.json ${field} names packages a consumer's npm cannot resolve through a registry: ${own.map((dependency) =>
+        `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `
         + (field === 'optionalDependencies' ? 'every consumer install fails to fetch them.' : 'consumers cannot install the package.'),
       'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
-        + 'workspace: and catalog: are accepted only when pnpm, Yarn, or Bun runs the pack and rewrites them.',
+        + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and never accepts workspace: or catalog:, '
+        + 'which only pnpm, Yarn, or Bun rewrite while packing.',
     )),
   ];
 };
@@ -185,8 +187,8 @@ export const packInventoryDiagnostics = async (options: {
   readonly model: NormalizedPlugin;
   readonly packageBuild: PackageBuildResult;
   readonly packOutput: PackOutput;
-  /** `npm_config_user_agent` of the package manager running the pack; decides whether workspace protocols are rewritten. */
-  readonly packerUserAgent: string | undefined;
+  /** Whether the package manager packing the tarball rewrites `workspace:`/`catalog:` to registry versions. */
+  readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
   const projectRoot = resolve(options.projectRoot);
@@ -219,7 +221,7 @@ export const packInventoryDiagnostics = async (options: {
   const stale: string[] = [];
   for (const file of manifest.files) {
     const bytes = await readFile(join(artifactRoot, file.path));
-    if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
+    if (sha256Hex(bytes) !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
   }
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
@@ -272,7 +274,7 @@ export const packInventoryDiagnostics = async (options: {
   diagnostics.push(...await dependencyDiagnostics({
     packageDocument,
     packedPaths: [...packed],
-    packerUserAgent: options.packerUserAgent,
+    packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,
     projectRoot,
   }));
 

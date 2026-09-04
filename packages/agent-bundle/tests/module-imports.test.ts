@@ -30,14 +30,10 @@ it('remembers imports by digest and check level so the same bytes are lexed once
   expect(Object.isFrozen(imports)).toBe(true);
   // The same bytes at the same level come back as the remembered object, even from a different source string.
   expect(await readModuleImports('/* replaced */', { check: 'lexed', sha256 })).toBe(imports);
-  // A full parse is a stronger claim than a lex: a lexed result never answers a parsed request …
+  // A full parse is a stronger claim than a lex; each level is remembered on its own.
   const parsed = await readModuleImports(bytes, { check: 'parsed', sha256 });
   expect(parsed).not.toBe(imports);
   expect(parsed).toEqual(imports);
-  // … but a parsed result answers a later lexed request.
-  const fresh = `${source}// parsed first\n`;
-  const freshParsed = await readModuleImports(fresh, { check: 'parsed', sha256: sha256Hex(fresh) });
-  expect(await readModuleImports(fresh, { check: 'lexed', sha256: sha256Hex(fresh) })).toBe(freshParsed);
   // Without a digest nothing is remembered.
   const unkeyed = `${source}// unkeyed\n`;
   const first = await readModuleImports(unkeyed, { check: 'lexed' });

@@ -40,6 +40,7 @@ const optionalCliReinstall = (host: 'claude' | 'codex'): string[] => [
   '(alias `--force`) forces it.',
 ];
 
+/** Its uninstall twin: the CLI replays the recorded host-native removal. */
 const optionalCliUninstall = (host: 'claude' | 'codex'): string[] => [
   `With the optional \`agent-bundle\` CLI, \`agent-bundle uninstall ${host} --from ./ --plan\` prints exactly what`,
   `would be removed and \`agent-bundle uninstall ${host} --from ./\` reverses the recorded registrations.`,
