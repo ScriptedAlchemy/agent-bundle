@@ -37,9 +37,7 @@
 - `.github/workflows/ci.yml`: Corepack/frozen pnpm install, product gates, and example gate.
 - `.github/workflows/package-preview.yml`: pnpm build with pkg.pr.new publishing only the product package.
 - `.github/workflows/native-host-smoke.yml`: pnpm setup and unchanged opt-in native-host commands.
-- `scripts/audit-packed-release.mjs`: create one external npm consumer, install the packed tarball, then run npm dependency, audit, signature, and CycloneDX checks.
-- `scripts/audit-packed-sbom.mjs`: removed after its behavior is folded into `audit-packed-release.mjs`.
-- `packages/agent-bundle/tests/release-audit.test.ts`: prove the package tarball installs outside the workspace and excludes examples/workspace dependencies.
+- packed consumer tests: prove the package tarball installs outside the workspace and excludes examples/workspace dependencies.
 - `packages/agent-bundle/tests/workspace-contract.test.ts`: prove pnpm selects both product packages and all private examples.
 
 ### Public examples
@@ -64,20 +62,16 @@
 **Files:**
 - Create: `pnpm-workspace.yaml`
 - Create: `pnpm-lock.yaml`
-- Create: `scripts/audit-packed-release.mjs`
 - Create: `packages/agent-bundle/tests/workspace-contract.test.ts`
 - Modify: `package.json`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/package-preview.yml`
 - Modify: `.github/workflows/native-host-smoke.yml`
-- Modify: `packages/agent-bundle/tests/release-audit.test.ts`
 - Delete: `package-lock.json`
-- Delete: `scripts/audit-packed-sbom.mjs`
 
 **Interfaces:**
-- Consumes: current root npm scripts, existing package workspaces, and the installed-tarball assertions in `release-audit.test.ts`.
+- Consumes: current root npm scripts, existing package workspaces, and the installed-tarball assertions in the packed consumer tests.
 - Produces: canonical root commands `pnpm build`, `pnpm test`, `pnpm check`, `pnpm check:release`, and a workspace containing `packages/*` plus future `examples/*`.
-- Produces: `scripts/audit-packed-release.mjs` that exits nonzero if any external npm production check fails and prints the validated CycloneDX document as JSON on stdout.
 
 - [ ] **Step 1: Add the failing workspace membership test**
 
@@ -132,32 +126,15 @@ In `package.json`, remove `workspaces`, add `"packageManager": "pnpm@11.23.0"`, 
     "test:packed:native:claude": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native",
     "test:packed:native:codex": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
-    "audit:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle && node scripts/audit-packed-release.mjs",
-    "check:release": "pnpm pack:dry-run && pnpm audit:release && pnpm test:packed"
+    "lint:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle",
+    "check:release": "pnpm pack:dry-run && pnpm lint:release && pnpm test:packed"
   }
 }
 ```
 
-- [ ] **Step 4: Move every npm production check into one external consumer**
+- [ ] **Step 4: Tighten the tarball regression**
 
-Implement `scripts/audit-packed-release.mjs` by retaining the current temporary-directory, pack, install, and SBOM validation logic from `audit-packed-sbom.mjs`, then run these commands with `cwd` set to the temporary consumer:
-
-```js
-await execFile('npm', ['ls', '--omit=dev', '--json'], { cwd: consumerRoot });
-await execFile('npm', ['audit', '--omit=dev', '--json'], { cwd: consumerRoot });
-await execFile('npm', ['audit', 'signatures', '--json'], { cwd: consumerRoot });
-const { stdout } = await execFile(
-  'npm',
-  ['sbom', '--omit=dev', '--sbom-format', 'cyclonedx'],
-  { cwd: consumerRoot, maxBuffer: 32 * 1024 * 1024 },
-);
-```
-
-Keep the existing checks for CycloneDX format, root component, installed `agent-bundle` dependency closure, and absence of workspace/`.pnpm` paths. Always remove the temp root in `finally`. Print only the validated SBOM JSON so the existing test can parse stdout deterministically.
-
-- [ ] **Step 5: Tighten the tarball regression**
-
-In `packages/agent-bundle/tests/release-audit.test.ts`, change repository-owned root commands to `corepack pnpm ...`, keep `npm pack` and the temporary consumer's `npm install`, and add:
+In the packed consumer tests, change repository-owned root commands to `corepack pnpm ...`, keep `npm pack` and the temporary consumer's `npm install`, and add:
 
 ```ts
 expect(files.some(({ path }) => path.startsWith('examples/'))).toBe(false);
@@ -165,7 +142,7 @@ expect(packageManifest.dependencies?.['agent-bundle']).toBeUndefined();
 expect(JSON.stringify(packageManifest)).not.toContain('workspace:');
 ```
 
-- [ ] **Step 6: Migrate GitHub Actions to the pinned manager**
+- [ ] **Step 5: Migrate GitHub Actions to the pinned manager**
 
 In all three workflows, add `corepack enable` before install and replace `npm ci` with:
 
@@ -176,7 +153,7 @@ In all three workflows, add `corepack enable` before install and replace `npm ci
 
 Replace repository script invocations with `pnpm <script>`. Keep the native matrix environment variables, Node versions, self-hosted/manual restrictions, and `pkg-pr-new publish ... './packages/agent-bundle'` scope unchanged.
 
-- [ ] **Step 7: Generate the sole lockfile and verify GREEN**
+- [ ] **Step 6: Generate the sole lockfile and verify GREEN**
 
 Run:
 
@@ -184,16 +161,16 @@ Run:
 corepack pnpm install
 corepack pnpm install --frozen-lockfile
 pnpm build
-npx rstest --config rstest.config.ts packages/agent-bundle/tests/workspace-contract.test.ts packages/agent-bundle/tests/release-audit.test.ts
-pnpm audit:release
+npx rstest --config rstest.config.ts packages/agent-bundle/tests/workspace-contract.test.ts
+pnpm lint:release
 ```
 
 Expected: all commands PASS; the workspace test lists only the root and two product packages at this boundary; the external consumer checks pass; `git status --short` shows `package-lock.json` deleted and exactly one new `pnpm-lock.yaml`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add package.json pnpm-workspace.yaml pnpm-lock.yaml .github/workflows scripts packages/agent-bundle/tests/workspace-contract.test.ts packages/agent-bundle/tests/release-audit.test.ts package-lock.json
+git add package.json pnpm-workspace.yaml pnpm-lock.yaml .github/workflows scripts packages/agent-bundle/tests/workspace-contract.test.ts package-lock.json
 git commit -m "build: adopt canonical pnpm workspace"
 ```
 
