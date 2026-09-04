@@ -16,6 +16,7 @@ export const resultSchema = z.object({
   host: z.unknown(),
   lineage: z.unknown(),
   session: z.unknown(),
+  terminal: z.unknown(),
   workspace: z.unknown(),
 }).strict();
 
@@ -36,11 +37,15 @@ export default async function Context() {
   const lineage: JsonValue = context.lineage.state === 'available'
     ? { source: context.lineage.source, state: context.lineage.state, value: JSON.parse(JSON.stringify(context.lineage.value)) as JsonValue }
     : { reason: context.lineage.reason, state: context.lineage.state };
+  const terminal: JsonValue = context.terminal.state === 'available'
+    ? { source: context.terminal.source, state: context.terminal.state, value: JSON.parse(JSON.stringify(context.terminal.value)) as JsonValue }
+    : { reason: context.terminal.reason, state: context.terminal.state };
   const result = {
     actor,
     host,
     lineage,
     session,
+    terminal,
     workspace,
   };
   return (

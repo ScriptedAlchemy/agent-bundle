@@ -1,5 +1,13 @@
 import type { CompiledCliCommand, CompiledCliOption } from './routes/types.ts';
 import { stableJson } from './core/digest.ts';
+import {
+  detectProcessTerminal,
+  type AgentTerminal,
+  type ProbedTerminalSurface,
+  type TerminalStreamProbe,
+} from './terminal-capability.ts';
+
+export type { AgentTerminal } from './terminal-capability.ts';
 
 /**
  * The framework-owned routed-CLI shell (#102 stage 2): command-tree
@@ -286,13 +294,39 @@ export interface GeneratedCliExecuteContext {
   /** True when `--json` was passed; plain commands already emit canonical JSON. */
   readonly json: boolean;
   readonly signal: AbortSignal;
+  /** The process's terminal capability (#511), probed once by the shell; the executable mounts it as `request.terminal`. */
+  readonly terminal: AgentTerminal;
 }
 
 export interface GeneratedCliRenderContext {
   /** The raw argv the command consumed, for the dispatch invocation's `args`. */
   readonly args: readonly string[];
   readonly signal: AbortSignal;
+  /** The process's terminal capability (#511), the same value that selected the output mode. */
+  readonly terminal: AgentTerminal;
 }
+
+/**
+ * The terminal capability one shell invocation reports (#511): an explicit
+ * value wins (the in-process harness supplies one), otherwise the process's
+ * own streams are probed, with the legacy `isTty` knob standing in for
+ * stdout's TTY-ness so callers that only override that still see a
+ * consistent capability and output mode.
+ */
+const resolveTerminal = (
+  hostSurface: ProbedTerminalSurface,
+  options: { readonly isTty?: () => boolean; readonly terminal?: AgentTerminal },
+): AgentTerminal => {
+  if (options.terminal !== undefined) return options.terminal;
+  if (options.isTty === undefined) return detectProcessTerminal(hostSurface);
+  const stdout: TerminalStreamProbe = {
+    columns: process.stdout.columns,
+    fd: 1,
+    isTTY: options.isTty(),
+    rows: process.stdout.rows,
+  };
+  return detectProcessTerminal(hostSurface, { stdout });
+};
 
 export interface RunGeneratedCliOptions {
   readonly argv: readonly string[];
@@ -304,7 +338,7 @@ export interface RunGeneratedCliOptions {
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliExecuteContext,
   ) => Promise<unknown>;
-  /** True when stdout is an interactive terminal; rendered commands then update progress in place. */
+  /** Overrides stdout's TTY-ness only; rendered commands then update progress in place. Prefer `terminal`. */
   readonly isTty?: () => boolean;
   readonly name: string;
   /** Opens one rendered run for a resolved `.tsx` command with parsed input. */
@@ -314,6 +348,11 @@ export interface RunGeneratedCliOptions {
     context: GeneratedCliRenderContext,
   ) => GeneratedCliRenderSession;
   readonly signal?: AbortSignal;
+  /**
+   * The terminal capability to report and select the output mode from (#511).
+   * Omitted, the shell probes this process's stdout and stderr once.
+   */
+  readonly terminal?: AgentTerminal;
   readonly version: string;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
@@ -886,6 +925,9 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
     }
     parsed = parseMcpCommandInput(command, parseCommandArgv(command, rest));
     signal.throwIfAborted();
+    // Probed once: the same value selects the output mode and reaches the
+    // route as `request.terminal`, so the two can never disagree.
+    const terminal = resolveTerminal('cli', options);
     if (command.rendered) {
       if (options.render === undefined) {
         throw new Error(`Rendered command ${command.path.join(' ')} has no render host.`);
@@ -894,10 +936,10 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
         ? 'ndjson'
         : parsed.json
           ? 'json'
-          : (options.isTty ?? (() => process.stdout.isTTY === true))()
+          : terminal.stdout.kind === 'tty'
             ? 'tty'
             : 'markdown';
-      const session = options.render(command, parsed.input, { args: rest, signal });
+      const session = options.render(command, parsed.input, { args: rest, signal, terminal });
       try {
         return await runRenderedInvocation({
           exitCode: command.exitCode,
@@ -912,7 +954,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       }
     }
     if (parsed.ndjson) throw new CliUsageError('--ndjson requires a rendered command.');
-    const result = await options.execute(command, parsed.input, { args: rest, json: parsed.json, signal });
+    const result = await options.execute(command, parsed.input, { args: rest, json: parsed.json, signal, terminal });
     signal.throwIfAborted();
     const exitCode = resultExitCode(command.exitCode, result);
     writeOut(`${stableJson(result === undefined ? null : result)}\n`);
@@ -992,11 +1034,14 @@ export interface RunGeneratedRenderedScriptOptions {
   /** Opens one rendered run for the script with the mode flags removed from argv. */
   readonly createSession: (
     argv: readonly string[],
-    context: { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
   ) => GeneratedCliRenderSession;
+  /** Overrides stdout's TTY-ness only. Prefer `terminal`. */
   readonly isTty?: () => boolean;
   readonly name: string;
   readonly signal?: AbortSignal;
+  /** The terminal capability to report and select the output mode from (#511); probed from the process when omitted. */
+  readonly terminal?: AgentTerminal;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
 }
@@ -1024,14 +1069,15 @@ export const runGeneratedRenderedScript = async (
   }
   const argv = options.argv.filter((argument, index) =>
     (terminator !== -1 && index > terminator) || (argument !== '--json' && argument !== '--ndjson'));
+  const terminal = resolveTerminal('script', options);
   const mode: CliOutputMode = ndjson
     ? 'ndjson'
     : json
       ? 'json'
-      : (options.isTty ?? (() => process.stdout.isTTY === true))()
+      : terminal.stdout.kind === 'tty'
         ? 'tty'
         : 'markdown';
-  const session = options.createSession(argv, { signal });
+  const session = options.createSession(argv, { signal, terminal });
   try {
     return await runRenderedInvocation({
       exitCode: 'zero',

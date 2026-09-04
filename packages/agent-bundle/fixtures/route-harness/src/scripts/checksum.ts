@@ -1,16 +1,24 @@
+import type { ExecutableMainContext } from 'agent-bundle';
+
 /**
  * A plain script with the `main` process-envelope contract: the generated
- * `scripts/checksum.mjs` awaits `main(process.argv.slice(2))` and adopts a
- * numeric return as the exit code. No renderer, no request context.
+ * `scripts/checksum.mjs` awaits `main(process.argv.slice(2), { terminal })`
+ * and adopts a numeric return as the exit code. No renderer, no request
+ * context; the terminal capability (#511) arrives through the envelope.
  */
 
 /** Module state: a fresh process starts at zero, a cached module would not. */
 let calls = 0;
 
-export const main = async (argv: readonly string[]): Promise<number | undefined> => {
+export const main = async (argv: readonly string[], context: ExecutableMainContext): Promise<number | undefined> => {
   calls += 1;
   if (argv.includes('--explode')) {
     throw new Error('checksum exploded');
+  }
+  if (argv.includes('--terminal')) {
+    // What the envelope probed for this process, as one canonical JSON line.
+    process.stdout.write(`${JSON.stringify(context.terminal)}\n`);
+    return 0;
   }
   if (argv.includes('--calls')) {
     process.stdout.write(`checksum call ${String(calls)} in ${process.argv[1]!}\n`);

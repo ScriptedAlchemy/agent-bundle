@@ -78,6 +78,13 @@ Rendered scripts and rendered routed-CLI commands share one output contract:
 written as non-MCP bytes to an MCP server's stdout. Diagnostics stay on stderr; machine output
 owns stdout.
 
+The mode is selected from the executable's probed
+[terminal capability](./mcp.mdx#the-terminal-capability), and the component reads the same
+value from `(await agent()).terminal` (`hostSurface: 'script'`) — so a script that writes its
+own progress to stderr colors and sizes it exactly as the framework would, without probing
+`process.stdout` itself. A plain `main`-exporting script receives the same value as
+`main`'s second argument (see [Package entries](./package-entries.mdx#the-executable-envelope)).
+
 ### Running a script
 
 `script.run` is a production-mounted, trusted-local Workbench Playground operation. It runs only

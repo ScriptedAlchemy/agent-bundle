@@ -102,6 +102,50 @@ it('serves compiled routes and durable state across packed process restarts', as
       `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
+    // The artifact-hosted routed CLI and the `main`-envelope script probe
+    // their own process for `request.terminal` (#511): spawned here with one
+    // pipe per stream, so neither is a terminal and they share no target,
+    // while the informal color and size conventions still apply to pipes.
+    const colorAndSizeVariables = new Set(['CLICOLOR', 'CLICOLOR_FORCE', 'COLORTERM', 'COLUMNS', 'FORCE_COLOR', 'LINES', 'NO_COLOR']);
+    const plainEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !colorAndSizeVariables.has(key)));
+    const probe = async (file: string, args: readonly string[], overrides: Readonly<Record<string, string>>): Promise<unknown> => {
+      const { stdout } = await execFile(process.execPath, [file, ...args], {
+        cwd: project,
+        env: { ...plainEnv, TERM: 'xterm-256color', ...overrides },
+      });
+      return JSON.parse(stdout) as unknown;
+    };
+    const cliBin = join(pluginRoot, 'bin', 'route-harness.mjs');
+    const cliTerminal = async (overrides: Readonly<Record<string, string>>): Promise<unknown> =>
+      ((await probe(cliBin, ['harness', 'context', '--yes', '--json'], overrides)) as { readonly terminal: unknown }).terminal;
+    const pipe = { color: 'none', kind: 'pipe' };
+    await expect(cliTerminal({})).resolves.toEqual({
+      source: 'native',
+      state: 'available',
+      value: { hostSurface: 'cli', sharesTarget: false, stderr: pipe, stdout: pipe },
+    });
+    await expect(cliTerminal({ COLUMNS: '120', FORCE_COLOR: '3' })).resolves.toMatchObject({
+      value: {
+        stderr: { color: 'truecolor', columns: 120, kind: 'pipe' },
+        stdout: { color: 'truecolor', columns: 120, kind: 'pipe' },
+      },
+    });
+    await expect(cliTerminal({ CLICOLOR_FORCE: '1', NO_COLOR: '1' })).resolves.toMatchObject({
+      // CLICOLOR_FORCE forces color on for a pipe at the advertised depth ...
+      value: { stdout: { color: '256', kind: 'pipe' } },
+    });
+    await expect(cliTerminal({ NO_COLOR: '1' })).resolves.toMatchObject({
+      // ... and NO_COLOR alone keeps it off.
+      value: { stdout: pipe },
+    });
+    await expect(probe(join(pluginRoot, 'scripts', 'checksum.mjs'), ['--terminal'], { FORCE_COLOR: '1', LINES: '50' }))
+      .resolves.toEqual({
+        hostSurface: 'script',
+        sharesTarget: false,
+        stderr: { color: 'basic', kind: 'pipe', rows: 50 },
+        stdout: { color: 'basic', kind: 'pipe', rows: 50 },
+      });
+
     const firstSession = await openPackedMcpServer({
       cwd: project,
       deletedSource,
@@ -154,6 +198,17 @@ it('serves compiled routes and durable state across packed process restarts', as
             },
             lineage: { reason: 'id-not-resolvable', state: 'unavailable' },
             session: { reason: 'not-provided', state: 'unavailable' },
+            // The packed server's stdout is the protocol wire: no terminal (#511).
+            terminal: {
+              source: 'derived',
+              state: 'available',
+              value: {
+                hostSurface: 'mcp',
+                sharesTarget: false,
+                stderr: { color: 'none', kind: 'none' },
+                stdout: { color: 'none', kind: 'none' },
+              },
+            },
             workspace: {
               source: 'derived',
               state: 'available',
@@ -292,6 +347,8 @@ it('serves compiled routes and durable state across packed process restarts', as
         );
       }
       expect(JSON.stringify(eventResponse)).toContain('actor unavailable:not-provided');
+      // The event route ran in the shared runtime under a hook: no terminal (#511).
+      expect(JSON.stringify(eventResponse)).toContain('terminal available:derived hook/none/none');
       expect(JSON.stringify(eventResponse)).toContain(noticeId);
       expect(JSON.stringify(eventResponse)).toContain('cross-process notice');
       expect(secondSession.stderr()).not.toContain('"jsonrpc"');

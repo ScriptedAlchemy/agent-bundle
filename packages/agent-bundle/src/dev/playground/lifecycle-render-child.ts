@@ -3,6 +3,7 @@ import { createJiti } from 'jiti';
 import * as React from 'react';
 
 import { createCanonicalEventProps } from '../../events/project.ts';
+import { noTerminal } from '../../terminal-capability.ts';
 import { renderRouteEvents } from '../../test/render.ts';
 import type { AgentRouteModule } from '../../test/types.ts';
 import type {
@@ -69,6 +70,8 @@ const render = async (request: LifecycleRenderChildRequest): Promise<LifecycleRe
         },
         lineage: request.requestContext.lineage,
         session: request.requestContext.session,
+        // A replay renders into a Workbench panel: no terminal (#511).
+        terminal: AgentRuntime.available(noTerminal('workbench'), 'derived'),
         workspace: request.requestContext.workspace,
       },
       input: props,

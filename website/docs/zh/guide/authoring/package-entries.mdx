@@ -54,14 +54,21 @@ export default defineConfig({
 
 ```ts
 // src/cli.ts — the whole CLI entry a consumer writes
-export const main = async (argv: readonly string[]): Promise<number> => {
-  // ...
+import type { ExecutableMainContext } from 'agent-bundle';
+
+export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+  if (terminal.stderr.color !== 'none') { /* 在 stderr 上绘制进度 */ }
   return 0;
 };
 ```
 
-封套会 await `main(process.argv.slice(2))`，把数值返回值作为进程退出码，并让逃逸的 rejection 走
-Node 的顶层失败路径（堆栈打到 stderr，退出码 1）。没有 `main` 导出的自执行模块则逐字节直接打包。
+封套会 await `main(process.argv.slice(2), { terminal })`，把数值返回值作为进程退出码，并让逃逸的
+rejection 走 Node 的顶层失败路径（堆栈打到 stderr，退出码 1）。`terminal` 是该进程的
+[终端能力](./mcp.mdx#终端能力)：stdout 与 stderr 各自的 TTY 属性、颜色与尺寸，以及两者是否指向同一
+目标，由封套内联的一个无依赖模块在 `main` 运行前探测一次——普通脚本或 bin 不会为此加载任何运行时。
+包 bin 的 `hostSurface` 为 `cli`，产物脚本的为 `script`，因此同时发布到两个表面的模块看到的是它实际
+被启动的那个表面。只声明一个参数的 `main` 照常工作，第二个参数只是没有被读取。没有 `main` 导出的
+自执行模块则逐字节直接打包，也不会收到探测结果。
 
 ## 路由式 CLI
 
