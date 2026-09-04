@@ -219,3 +219,90 @@ Decision implemented in this change:
   { events: ['sessionStart'], state: 'registered', userHooksJson: 'absent' }`
   and runs the emitted `install.mjs --mode marketplace` twice (`Staged`, then
   `Already staged` with the same commit) and Doctor's `AB7324` guidance.
+
+## 7. Local versus marketplace install and hook delivery — 2026-09-04 re-read and Remote-SSH observation
+
+Question put to this record on 2026-09-03: do marketplace-installed plugins
+get their hooks fired while user-local installs (`~/.cursor/plugins/local/<name>`)
+do not, so that the installer should switch to a marketplace mechanism?
+
+### 7.1 What the sections above show
+
+| Claim | Supported by | Verdict |
+| --- | --- | --- |
+| User-local plugin hooks fire on the desktop client | §3: on the isolated 3.18.25 instance the emitted pack under `~/.cursor/plugins/local/ab-hooks-probe` fired `preToolUse` / `postToolUse` (`^Shell$`) and `stop` with **no** `~/.cursor/hooks.json`; the hand-written local probe and `~/.cursor/plugins/local/tracedecay` (maintainer's daily instance, "ground truth") did the same. Confirmed again on the maintainer's desktop instance on 2026-09-03 (below). | contradicts the premise for desktop windows |
+| Marketplace-installed plugin hooks fire | §3 has **no** row for a marketplace-installed plugin: the local-repository import is a native folder picker that could not be driven unattended (§5, strategy 2), and the isolated instance had no account-enabled marketplace plugin. The desktop hooks log on 2026-09-03 shows one `sessionStart` execution from `~/.cursor/plugins/cache/cursor-public/superpowers/…` (below), so marketplace hooks do run on the desktop — alongside, not instead of, local ones. | not a differentiator on desktop |
+| Marketplace state can be produced by the installer | §4–§5: enabled-plugin identity is a server-assigned numeric id in `state.vscdb`; writing `plugins/cache/**` + `.cache-complete` is not honoured; no plugin/marketplace install deeplink exists; `cursor-agent plugin marketplace add` needs a hosted Git URL; the local-repository import is UI-only. | not automatable — the existing `--mode marketplace` stages the repository and stops at the Customize step |
+
+Cursor's own hooks log on the maintainer's desktop instance (3.18.25, log dir
+`~/.config/Cursor/logs/20260903T041607`, window for `/fast/projects/agent-bundle`,
+`cursor.hooks.workspaceId-19017dde…log`, 8402 lines, 2026-09-03 20:43–20:56Z)
+counts 220 `Executing hook … from claude-plugin config` lines — Cursor labels
+every plugin-delivered hook this way — of which 121 ran with
+`Running script in directory: /home/zack/.cursor/plugins/local/tracedecay`
+and 77 with `…/plugins/local/cargo-hauler` (an agent-bundle emitted `cursor`
+pack), for `preToolUse` (124 steps), `postToolUse` (78), `afterShellExecution`
+(40), `sessionStart` (2), `stop` (1), `workspaceOpen` (1). The same log
+records `No user hooks configuration found`. The cargo-hauler pack's own
+flight log (`~/.cache/cargo-hauler/hook-events.jsonl`) holds the matching
+`host: "cursor"` `beforeTool`/`afterTool` rows for those sessions.
+
+### 7.2 Where the premise does hold: Remote-SSH windows
+
+#407 was filed from `~/.cursor-server` (Remote-SSH). The same configuration
+was live on this machine on 2026-09-04 (client and server `3.19.3`, server
+commit `3b4eb8dd53`, the desktop instance closed at 20:57Z the day before)
+and was probed non-interactively from an agent session inside it:
+
+| Step | Observation |
+| --- | --- |
+| Remote extension host loads plugins from the **remote** home | `~/.cursor-server/data/logs/20260903T034649/exthost2/anysphere.cursor-agent-exec/Cursor Plugins.log`: `loadUserLocalPlugin cargo-hauler loaded`, `loadUserLocalPlugin tracedecay loaded`, 17 `loadFromMarketplaceSource: Found cached plugin … at /home/zack/.cursor/plugins/cache/…`, `loadAllPlugins completed … (claude=false, userLocal=true, marketplace=2 sources, total=20 plugins, failures=0)`. |
+| A throwaway local plugin is picked up without a UI step | `~/.cursor/plugins/local/ab-hooks-probe` (`.cursor-plugin/plugin.json`, `hooks/hooks.json` with `preToolUse`/`postToolUse` `^Shell$`, `stop`, `sessionStart` → `sh "${CURSOR_PLUGIN_ROOT}/hooks/log.sh"`) written at 01:17:19Z; `loadUserLocalPlugin ab-hooks-probe loaded in 327.2ms` at 01:17:29Z, `Plugins reload completed: 21 plugins loaded … 0 failures`. |
+| Its hooks never ran | Five `Shell` tool calls from the probing conversation over the next two minutes, plus the Shell traffic of six other concurrent conversations in the same window: **0** events in `/tmp/ab-hooks-probe/events.jsonl`. No `cursor.hooks.*.log` exists on the remote side at all; the hooks service log lives with the client. |
+| The identical commands from user-level `~/.cursor/hooks.json` on the remote ran at once | `~/.cursor/hooks.json` written at 01:19:25Z pointing at the same `log.sh`: 28 events (15 `preToolUse`, 13 `postToolUse`) from 7 conversations in 20 s, executed on the remote host (`hostname` `ubuntu-main`, `cwd` `/home/zack/.cursor`), payload `cursor_version: "3.19.3"`, `workspace_roots: ["/fast/projects/agent-bundle"]`, `tool_name: "Shell"`. Removed at 01:20:04Z; the probe plugin removed at 01:20:39Z (`loadUserLocalPlugins completed … (3 plugins loaded)` at 01:20:42Z). |
+| tracedecay and cargo-hauler telemetry agree | Both record their last `cursor` hook delivery at 2026-09-03 20:56Z — the desktop instance's last minute — and none during the Remote-SSH hours that followed, although the same plugins were loaded by the remote extension host throughout. |
+
+Read-out: in a Remote-SSH window the remote extension host loads local
+plugins from the remote `~/.cursor/plugins/local`, but their hooks are not
+executed on the remote host, while user-level `~/.cursor/hooks.json` on the
+remote is. This reproduces #407 (also `~/.cursor-server`) on a current build
+and is independent of the emitted shape (the probe was hand-written).
+Whether hooks of **marketplace** plugins execute in a Remote-SSH window —
+and if so on which machine — was **not** observed: the only marketplace
+plugin on this machine with a hook whose effect is observable here
+(`cursor-public/continual-learning`, `stop` → `bun run …`) left no
+`.cursor/hooks/state/continual-learning*.json` newer than 2026-08-25 anywhere
+under `/fast/projects` or `~`. A marketplace plugin is present in the
+**client's** `~/.cursor/plugins/cache` as well as the remote's (the enabled
+set is account state, §4), whereas a local install exists only where the
+installer ran; if the client-side hooks service resolves plugin hooks against
+the client's copies, that asymmetry alone would make marketplace installs
+appear to "fire" and local ones not in Remote-SSH windows. That is a
+hypothesis, not an observation.
+
+### 7.3 What a complete proof needs
+
+1. Two hosts joined by Remote-SSH, client and server on the same build
+   (record `cursor_version` from a hook payload, and `~/.cursor-server/bin/*/product.json`
+   `version`/`commit`).
+2. Three plugins declaring the same `preToolUse`/`postToolUse` (`^Shell$`),
+   `stop`, and `sessionStart` hooks, each command appending its plugin name,
+   `hostname`, `$PWD`, and `${CURSOR_PLUGIN_ROOT}` to a file on **both**
+   machines' filesystems (so the executing side is identifiable):
+   a. local install on the remote (`~/.cursor/plugins/local/<name>`),
+   b. local install on the client,
+   c. an account-enabled marketplace plugin (a published repository, or
+   the local-repository import performed once by hand through Customize →
+   Plugins → "Add Plugins from Local Repository").
+3. One agent chat in the Remote-SSH window running a shell tool call and
+   finishing; then the same in a plain desktop window on the client.
+4. Read `Cursor Plugins.log` on the remote (`loadUserLocalPlugin` /
+   `loadFromMarketplaceSource` rows), the client's
+   `cursor.hooks.workspaceId-*.log` (`Executing hook … from … config`,
+   `Running script in directory: …`), and the two marker files.
+
+Until that matrix is filled in, the install default stays `--mode local`
+(hooks proven on desktop windows, no UI step), `--mode marketplace` stays the
+staged Customize hand-off, and Doctor keeps proving registration (`AB7322`)
+rather than assuming it. Nothing here can be turned into a non-interactive
+marketplace install: the blocking facts in §4–§5 are unchanged.
