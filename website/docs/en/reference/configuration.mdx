@@ -199,8 +199,8 @@ The framework registers exactly one Rsbuild plugin in the configs it synthesizes
 authored as TSX and the plugin selects the automatic JSX runtime — and on every MCP App view whose
 source is `.jsx`/`.tsx`. That set is `frameworkOwnedRsbuildPlugins` in
 `packages/agent-bundle/src/build/framework-plugins.ts`; a unit test derives it from the synthesized
-configs, so it cannot drift. Never add a framework-owned plugin again through
-`tools.rsbuild.plugins`: Rsbuild appends every plugin it is handed and does not dedupe by name.
+configs, so it cannot drift, and `validateTools` reads the same map to report `AB4724` when a
+`tools.rsbuild.plugins` entry re-adds one of its names.
 
 Every other [official Rsbuild plugin](https://rslib.rs/config/rsbuild/plugins) registers under its
 own name and may be added through `tools.rsbuild.plugins`. The fragment reaches every synthesized
