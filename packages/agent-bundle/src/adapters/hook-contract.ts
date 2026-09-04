@@ -1,6 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
+import { operatorEnvImports, operatorEnvStatement } from '../build/launch-env-shell.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -649,6 +650,10 @@ const eventRouteHookWrapperSource = (
     : ['const target = artifactTarget;'];
   return [
     "import { dirname, resolve } from 'node:path';",
+    // Only a wrapper that can render in-process needs the operator `.env`
+    // layer (#469): a shared-runtime wrapper forwards the event to the warm
+    // MCP process, which applied the layer itself when it started.
+    ...(standalone ? operatorEnvImports({ importsFileUrlToPath: retiresLineage }) : []),
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
       ? [
@@ -676,6 +681,7 @@ const eventRouteHookWrapperSource = (
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
+    ...(standalone ? [operatorEnvStatement] : []),
     '',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
@@ -818,7 +824,11 @@ const eventRouteHookWrapperSource = (
 
 /** Emits the published Cursor hook wrapper source; see encodeCursorPlaygroundInput for the envelope contract. */
 export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
+  ...operatorEnvImports({ importsFileUrlToPath: false }),
   `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+  // The installed pack's operator `.env` layer (#469), applied before the
+  // handler runs; the handler module itself is a static import.
+  operatorEnvStatement,
   'const target = "cursor";',
   `const canonicalEvent = ${JSON.stringify(entry.event)};`,
   `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
@@ -1233,7 +1243,11 @@ export const nativeHookWrapperSource = (
       ]
     : [`const target = ${JSON.stringify(entry.target)};`];
   return [
+    ...operatorEnvImports({ importsFileUrlToPath: false }),
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+    // The installed pack's operator `.env` layer (#469), applied before the
+    // handler runs; the handler module itself is a static import.
+    operatorEnvStatement,
     ...targetSource,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -56,6 +56,27 @@ it('serves compiled routes and durable state across packed process restarts', as
 
   try {
     await cp(fixtureRoot, project, { recursive: true });
+    // The operator `.env` probe (#469) lives in this packed copy only: the
+    // shared fixture's lists stay untouched, and the packed level is the one
+    // that spawns the real entry whose shell applies the layer.
+    await writeFile(join(project, 'src', 'mcp', 'harness', 'tools', 'env-probe.tsx'), [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      '',
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one environment variable as the server process sees it.' };",
+      'export const inputSchema = z.object({ name: z.string().min(1) }).strict();',
+      'export const resultSchema = z.object({ name: z.string(), value: z.string().nullable() }).strict();',
+      '',
+      'export default async function EnvProbe({ input }: { readonly input: z.infer<typeof inputSchema> }) {',
+      '  const value = process.env[input.name] ?? null;',
+      '  return (',
+      '    <Agent.Result value={{ name: input.name, value }}>',
+      '      <Agent.Text>{`${input.name}: ${value ?? "(unset)"}`}</Agent.Text>',
+      '    </Agent.Result>',
+      '  );',
+      '}',
+      '',
+    ].join('\n'));
     await execFile('npm', ['install', ...cachedNpmInstallArguments,
       agentBundle.tarball,
       runtime.tarball,
@@ -90,7 +111,13 @@ it('serves compiled routes and durable state across packed process restarts', as
     const env = {
       ...installedEnvironment(),
       ...serverEnvironment,
+      // The host exported this one; the operator file must not override it.
+      HARNESS_HOST_WINS: 'from-host',
     } as Record<string, string>;
+    // The operator configuration of an installed pack (#469): a file the
+    // receipt never owns, beside the manifest, read by the shell at launch.
+    await writeFile(join(pluginRoot, '.env'), 'HARNESS_FROM_FILE=s3cr3t-from-file\nHARNESS_HOST_WINS=from-file\n');
+    await writeFile(join(pluginRoot, '.env.local'), 'HARNESS_LOCAL=from-local\n');
     const worker = entry.replace(/\.mjs$/u, '-flight.mjs');
     const workerSource = await readFile(worker, 'utf8');
     expect(workerSource).toContain('node:sqlite');
@@ -167,6 +194,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'catalog',
         'context',
         'echo',
+        'env-probe',
         'fault',
         'journal',
         'layout-probe',
@@ -220,6 +248,19 @@ it('serves compiled routes and durable state across packed process restarts', as
             },
           },
         });
+      // The pack's operator `.env` layer reached the server process: the file
+      // fills `HARNESS_FROM_FILE` and `.env.local`'s `HARNESS_LOCAL`, the host's
+      // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
+      for (const [name, value] of [
+        ['HARNESS_FROM_FILE', 's3cr3t-from-file'],
+        ['HARNESS_LOCAL', 'from-local'],
+        ['HARNESS_HOST_WINS', 'from-host'],
+        ['HARNESS_ABSENT', null],
+      ] as const) {
+        await expect(firstSession.client.callTool({ arguments: { name }, name: 'env-probe' }))
+          .resolves.toMatchObject({ structuredContent: { name, value } });
+      }
+      expect(firstSession.stderr()).not.toContain('s3cr3t');
       await expect(firstSession.client.callTool({ arguments: { genre: 'mystery' }, name: 'catalog' }))
         .resolves.toMatchObject({
           content: [
@@ -293,7 +334,10 @@ it('serves compiled routes and durable state across packed process restarts', as
       });
       const matrixReport = await runPackedContractMatrix({
         eventRuntime: { endpointId: eventRuntimeEndpointId },
-        fixtures: routeHarnessPackedContractFixtures(),
+        fixtures: {
+          ...routeHarnessPackedContractFixtures(),
+          'tool:harness/env-probe': { input: { name: 'HARNESS_FROM_FILE' }, resultCompat: 'closed' },
+        },
         manifest: harnessManifest,
         restart: async () => {
           await firstSession.close();

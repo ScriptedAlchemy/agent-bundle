@@ -529,14 +529,31 @@ That guard matters because stdout carries JSON-RPC framing: one stray `console.l
 imported module would corrupt the protocol stream.
 
 Self-connecting entries — modules that construct and connect a transport at top level without a
-default export — keep their existing behavior byte for byte. Source validation reports the
-informational `AB4730` nudge suggesting the factory upgrade; it is never an error.
+default export — keep their existing behavior byte for byte: no lifecycle shell, and no operator
+`.env` layer, since there is no shell to apply it before the module's own top-level code runs.
+Source validation reports the informational `AB4730` nudge suggesting the factory upgrade; it is
+never an error.
 
-The same lifecycle is public API for hand-rolled entries:
+The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
+generated shell applies before it imports the server module (see
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)).
+Both imports are inlined into the emitted entry, which stays self-contained;
+`agent-bundle/launch-env` is aliased into every stdio entry, so it resolves whether or not the
+entry has a shell. A self-connecting entry that needs the layer applies it first thing, anchored
+the way the generated shell is (the artifact root is the parent of `mcp/`):
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` prefers an `AGENT_BUNDLE_PLUGIN_ROOT` the host set over the directory you
+pass, so the entry reads the same files as the pack's hook wrappers and CLI.
 
 ## Declaring servers in config
 

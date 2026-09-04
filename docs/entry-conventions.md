@@ -1013,7 +1013,12 @@ race against wedged transports, and heartbeat/activity logging on stderr
 name).
 
 Self-connecting entries — modules that construct and connect a transport at
-top level without a default export — keep today's behavior byte for byte.
+top level without a default export — keep today's behavior byte for byte: no
+lifecycle shell and no operator `.env` layer (#469); an entry that wants the
+layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself. That
+module is aliased into every stdio entry, shell or not, so the import is
+inlined from this package rather than resolved through the plugin's own
+`node_modules`, and a `tools` hatch can never externalize it.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
@@ -1346,6 +1351,23 @@ canonical precedence order (highest wins):
 | 3 (highest) | Operator `process.env` | The real environment `mcp run` was started with. An exported variable always wins. |
 | 2 | `.env` file layer | The conventional project-root set, or the explicit `--env-file` list in order. Fills gaps only; never beats an exported variable. |
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
+
+Installed packs get the same layer without `mcp run` (#469): every artifact
+shell that runs plugin code — the stdio MCP entry of a factory-exporting
+server (before its deferred server import; a self-connecting entry has no
+shell), the hook wrappers that execute handlers or render standalone, and the
+artifact CLI `bin/<name>.mjs` — applies `agent-bundle/launch-env`
+(`src/launch-env.ts`, plain Node, inlined into the bundle) at startup. It
+reads `<plugin root>/.env` then `.env.local`, where the plugin root is the
+expanded `AGENT_BUNDLE_PLUGIN_ROOT` or the shell's parent directory, or the
+files `AGENT_BUNDLE_ENV_FILE` names (platform-delimited list; `none` disables
+the layer); it fills only variables the host did not set, never logs a value,
+treats a missing file as the normal case and an unreadable one as skipped.
+The dotenv grammar has no `${VAR}` interpolation. Under `mcp run` the plugin
+root is the project root, so the shell's pass is a no-op; `--env-file` and
+`--no-env` are handed down as `AGENT_BUNDLE_ENV_FILE` so the shell follows the
+operator's choice. The npm package bin reads no pack file. Doctor reports the
+presence and variable count of each file (`AB7331`).
 
 ### Durable-state anchors
 

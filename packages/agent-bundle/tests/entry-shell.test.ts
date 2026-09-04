@@ -93,6 +93,55 @@ describe('generated entry templates', () => {
     // The consumer module must never be statically imported: the console
     // guard has to activate before its side effects can reach stdout.
     expect(source).not.toMatch(/^import[^\n]*curator\.ts/mu);
+    // The operator `.env` layer (#469) lands before the deferred import, so
+    // server code reads a composed process.env; the anchor is the artifact
+    // root (the parent of `mcp/`) unless the host set AGENT_BUNDLE_PLUGIN_ROOT.
+    expect(source).toContain("import { applyOperatorEnv, operatorEnvPluginRoot } from \"agent-bundle/launch-env\";");
+    expect(source.indexOf("applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });"))
+      .toBeLessThan(source.indexOf('await runGeneratedStdioMcpEntry('));
+  });
+
+  it('applies the operator .env layer in every artifact shell that runs plugin code, and only there (#469)', () => {
+    const route = {
+      config: {},
+      id: 'cli:report',
+      kind: 'cli' as const,
+      provenance: { kind: 'conventional' as const, relativePath: 'src/cli/report.ts' },
+      source: '/project/src/cli/report.ts',
+    };
+    const command = { aliases: [], exitCode: 'zero' as const, options: [], path: ['report'], rendered: false, routeId: 'cli:report' };
+    const artifactBin = entryShellModule.generatedCliBinEntrySource({
+      commands: [command],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [route],
+      stateFallback: 'artifact',
+    });
+    expect(artifactBin).toContain("from \"agent-bundle/launch-env\"");
+    expect(artifactBin).toContain("import { fileURLToPath } from 'node:url';");
+    expect(artifactBin.indexOf("applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });"))
+      .toBeLessThan(artifactBin.indexOf('const processLifetime'));
+    // With durable state the bin already imports fileURLToPath; the layer must not declare it twice.
+    const durableBin = entryShellModule.generatedCliBinEntrySource({
+      commands: [command],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [route],
+      state: {
+        id: 'project/tasks',
+        lifetime: 'workspace-durable',
+        provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+        source: '/project/src/state.ts',
+      },
+      stateFallback: 'artifact',
+    });
+    expect(durableBin.match(/import \{ fileURLToPath \} from 'node:url';/gu)).toHaveLength(1);
+    // The npm package bin runs from the operator's own shell and reads no pack file.
+    const npmBin = entryShellModule.generatedCliBinEntrySource({
+      commands: [command],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [route],
+    });
+    expect(npmBin).not.toContain('agent-bundle/launch-env');
+    expect(npmBin).not.toContain('applyOperatorEnv');
   });
 
   it('generates a process envelope that adopts numeric exit codes and hands main the terminal capability (#511)', () => {
