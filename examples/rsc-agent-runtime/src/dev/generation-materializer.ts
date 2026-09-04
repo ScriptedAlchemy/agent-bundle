@@ -26,7 +26,7 @@ import type {
   RuntimeGenerationManifestInput,
   RuntimeGenerationMetadataCodec,
   RuntimeGenerationPreparedActivation,
-  RuntimeGenerationStore,
+  DevRuntimeGenerationStore,
   RuntimeGenerationValidationInput,
 } from 'agent-bundle/api';
 
@@ -86,7 +86,7 @@ export interface MaterializeRuntimeGenerationOptions {
   readonly guard?: RuntimeGenerationActivationGuard<RscRuntimeGenerationMetadata>;
   readonly snapshot: RscRuntimeCapturedGenerationSnapshot;
   readonly stateStoreId?: string;
-  readonly store: RuntimeGenerationStore<RscRuntimeGenerationMetadata>;
+  readonly store: DevRuntimeGenerationStore<RscRuntimeGenerationMetadata>;
 }
 
 const digestBytes = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');

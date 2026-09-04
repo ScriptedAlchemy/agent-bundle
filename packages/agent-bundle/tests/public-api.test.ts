@@ -19,12 +19,10 @@ import {
 import {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
-  RuntimeGenerationStore,
-  RuntimeGenerationStoreError,
-  RuntimeMcpRegistry,
-  RuntimeMcpRegistryError,
   TargetRegistry,
   createDefaultRegistry,
+  createRuntimeGenerationStore,
+  createRuntimeMcpRegistry,
 } from '../src/api.ts';
 import type {
   DevRuntimeDescriptor,
@@ -184,10 +182,10 @@ it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () 
     code: 'AB8204',
     expectedGenerationId: 'gen-2',
   });
-  expect(typeof RuntimeGenerationStore).toBe('function');
-  expect(typeof RuntimeMcpRegistry).toBe('function');
-  expect(new RuntimeGenerationStoreError('RUNTIME_GENERATION_CLOSED', 'closed').code).toBe('RUNTIME_GENERATION_CLOSED');
-  expect(new RuntimeMcpRegistryError('RUNTIME_MCP_REGISTRY_CLOSED', 'closed').code).toBe('RUNTIME_MCP_REGISTRY_CLOSED');
+  // The store and registry ship as effect-free contracts plus constructors;
+  // their classes throw YieldableFrameworkErrors and stay behind the boundary.
+  expect(typeof createRuntimeGenerationStore).toBe('function');
+  expect(typeof createRuntimeMcpRegistry).toBe('function');
 });
 
 it('loads every public subpath and reports the package version', async () => {

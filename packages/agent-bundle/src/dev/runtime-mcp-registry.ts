@@ -1,6 +1,5 @@
 import type {
   DevRuntimeEventInput,
-  DevRuntimeMcpRegistry,
   DevRuntimeMcpRegistryListener,
   DevRuntimeMcpRegistrySubscription,
   DevRuntimeMcpSession,
@@ -25,9 +24,34 @@ import type {
   RuntimeVector,
 } from './runtime-protocol.ts';
 import { isRecord } from '../core/strict-json.ts';
-import { RuntimeGenerationStore, type RuntimeGeneration } from './runtime-generation-store.ts';
+import type {
+  DevRuntimeProviderMcpRegistry,
+  RuntimeGeneration,
+  RuntimeMcpCommittedActivationReconcile,
+  RuntimeMcpConnection,
+  RuntimeMcpExecutionValue,
+  RuntimeMcpPreparedActivationReconcile,
+  RuntimeMcpRegistryCloseFailure,
+  RuntimeMcpRegistryErrorCode,
+  RuntimeMcpRegistryOptions,
+} from './runtime-store-contracts.ts';
 import type { JsonObject, JsonValue } from './types.ts';
 import { YieldableFrameworkError } from '../effect/errors.ts';
+
+// The contracts live in `runtime-store-contracts.ts` (effect-free, exported
+// from `agent-bundle/api`); re-exported here for the internal callers.
+export type {
+  DevRuntimeProviderMcpRegistry,
+  RuntimeMcpCommittedActivationReconcile,
+  RuntimeMcpConnection,
+  RuntimeMcpConnector,
+  RuntimeMcpExecutionContext,
+  RuntimeMcpExecutionValue,
+  RuntimeMcpPreparedActivationReconcile,
+  RuntimeMcpRegistryCloseFailure,
+  RuntimeMcpRegistryErrorCode,
+  RuntimeMcpRegistryOptions,
+} from './runtime-store-contracts.ts';
 
 const maxRetainedResults = 64;
 const restartDrainTimeoutMs = 10_000;
@@ -103,62 +127,6 @@ interface Subscription {
   replaying: boolean;
 }
 
-export interface RuntimeMcpConnection {
-  readonly state: DevRuntimeMcpConnectionState;
-  close(): Promise<void>;
-  relist(): Promise<DevRuntimeMcpConnectionState>;
-}
-
-export interface RuntimeMcpConnector {
-  connect(input: Readonly<{
-    readonly descriptor: DevRuntimeMcpServerDescriptor;
-    readonly sessionId: string;
-    readonly signal: AbortSignal;
-  }>): Promise<RuntimeMcpConnection>;
-}
-
-export interface RuntimeMcpExecutionContext {
-  readonly descriptor: DevRuntimeMcpServerDescriptor;
-  readonly generation: RuntimeGeneration;
-  readonly request: DevRuntimeMcpOperationRequest;
-  readonly sessionId: string;
-  readonly signal: AbortSignal;
-}
-
-export interface RuntimeMcpExecutionValue {
-  readonly stateVersion: number;
-  readonly value: JsonValue;
-}
-
-export interface RuntimeMcpRegistryOptions {
-  readonly artifactEpochId: () => string | undefined;
-  readonly connector: RuntimeMcpConnector;
-  readonly createOperationId?: () => string;
-  readonly createSessionId?: () => string;
-  readonly emit: (event: DevRuntimeEventInput) => void;
-  readonly executor: (context: RuntimeMcpExecutionContext) => Promise<RuntimeMcpExecutionValue>;
-  readonly generationStore: RuntimeGenerationStore;
-  readonly initialRegistry?: DevRuntimeMcpRegistryReconcileInput;
-  readonly providerSessionId: string;
-  readonly stateStoreId: string;
-}
-
-export interface RuntimeMcpPreparedActivationReconcile {
-  readonly input: DevRuntimeMcpRegistryReconcileInput;
-  readonly reservationRevision: number;
-}
-
-export interface RuntimeMcpCommittedActivationReconcile {
-  readonly result: DevRuntimeMcpRegistryReconcileResult;
-  finalize(): Promise<void>;
-  publish(): void;
-}
-
-export interface RuntimeMcpRegistryCloseFailure {
-  readonly error: unknown;
-  readonly resource: string;
-}
-
 export class RuntimeMcpRegistryCloseError extends YieldableFrameworkError {
   readonly failures: readonly RuntimeMcpRegistryCloseFailure[];
 
@@ -168,12 +136,6 @@ export class RuntimeMcpRegistryCloseError extends YieldableFrameworkError {
     this.failures = Object.freeze([...failures]);
   }
 }
-
-export type RuntimeMcpRegistryErrorCode =
-  | 'RUNTIME_MCP_REGISTRY_CLOSED'
-  | 'RUNTIME_MCP_REGISTRY_CONFLICT'
-  | 'RUNTIME_MCP_REGISTRY_INVALID'
-  | 'RUNTIME_MCP_REGISTRY_NOT_FOUND';
 
 export class RuntimeMcpRegistryError extends YieldableFrameworkError {
   readonly code: RuntimeMcpRegistryErrorCode;
@@ -294,7 +256,7 @@ const timeout = (durationMs: number): Promise<void> => new Promise((resolve) => 
   setTimeout(resolve, durationMs);
 });
 
-export class RuntimeMcpRegistry implements DevRuntimeMcpRegistry {
+export class RuntimeMcpRegistry implements DevRuntimeProviderMcpRegistry {
   readonly #activation = new WeakMap<RuntimeMcpPreparedActivationReconcile, PreparedActivationRecord>();
   readonly #preparedActivations = new Set<RuntimeMcpPreparedActivationReconcile>();
   readonly #closeAbort = new AbortController();

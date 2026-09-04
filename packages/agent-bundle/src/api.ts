@@ -255,8 +255,8 @@ export type {
 // The `dev.runtime.provider` protocol (#485): everything a provider module
 // accepts through `start()` or hands back through its session, the two errors
 // a provider throws to get the documented Workbench behaviour, and the
-// generation store and MCP registry a session drives. Test-only services
-// (`ProjectService`, `EpochStore`, the provider loader) stay internal.
+// generation store and MCP registry a session drives (below). Test-only
+// services (`ProjectService`, `EpochStore`, the provider loader) stay internal.
 export {
   DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
@@ -313,12 +313,13 @@ export type {
   DevRuntimeTreeNode,
   RuntimeVector,
 } from './dev/runtime-protocol.ts';
-export {
-  RuntimeGenerationStore,
-  RuntimeGenerationStoreCloseError,
-  RuntimeGenerationStoreError,
-} from './dev/runtime-generation-store.ts';
+// The generation store and MCP registry a session drives, as effect-free
+// contracts plus their constructors: the classes behind them throw
+// `YieldableFrameworkError`s and so may not enter a public declaration graph.
+export { createRuntimeGenerationStore, createRuntimeMcpRegistry } from './dev/runtime-store-factories.ts';
 export type {
+  DevRuntimeGenerationStore,
+  DevRuntimeProviderMcpRegistry,
   RuntimeGeneration,
   RuntimeGenerationActivationGuard,
   RuntimeGenerationAsset,
@@ -334,13 +335,6 @@ export type {
   RuntimeGenerationStoreOptions,
   RuntimeGenerationValidationInput,
   RuntimeGenerationValidator,
-} from './dev/runtime-generation-store.ts';
-export {
-  RuntimeMcpRegistry,
-  RuntimeMcpRegistryCloseError,
-  RuntimeMcpRegistryError,
-} from './dev/runtime-mcp-registry.ts';
-export type {
   RuntimeMcpCommittedActivationReconcile,
   RuntimeMcpConnection,
   RuntimeMcpConnector,
@@ -350,7 +344,7 @@ export type {
   RuntimeMcpRegistryCloseFailure,
   RuntimeMcpRegistryErrorCode,
   RuntimeMcpRegistryOptions,
-} from './dev/runtime-mcp-registry.ts';
+} from './dev/runtime-store-contracts.ts';
 
 export interface StructuredLogger {
   log?(event: string, details: Readonly<Record<string, unknown>>): void;

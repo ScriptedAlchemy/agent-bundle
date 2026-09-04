@@ -18,7 +18,7 @@ import {
   validateStagedRscEnvironmentCheckpoint,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
-import { RuntimeGenerationStore } from 'agent-bundle/api';
+import { createRuntimeGenerationStore } from 'agent-bundle/api';
 import { writeCompilerCohort } from './support/compiler-cohort.ts';
 
 const preparedRuntime = Object.freeze({
@@ -158,7 +158,7 @@ test('keeps a pinned cohort immutable while newer compiles land, then garbage-co
   const compilerRoot = join(storageRoot, 'compiler');
   const checkpointsRoot = join(storageRoot, 'environment-checkpoints');
   const store = createCheckpointStore(checkpointsRoot);
-  const generationStore = new RuntimeGenerationStore<RscRuntimeGenerationMetadata>({
+  const generationStore = createRuntimeGenerationStore<RscRuntimeGenerationMetadata>({
     metadataCodec: rscRuntimeGenerationMetadataCodec,
     storageRoot: join(storageRoot, 'generation-store'),
     validateMetadata: validateRscRuntimeGenerationMetadata,

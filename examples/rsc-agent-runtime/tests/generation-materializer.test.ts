@@ -26,7 +26,7 @@ import {
   type RscRuntimeCapturedGenerationSnapshot,
   type RscRuntimeGenerationMetadata,
 } from '../src/dev/generation-materializer.js';
-import { RuntimeGenerationStore, type DevRuntimePreparedProject, type RuntimeGenerationCandidate } from 'agent-bundle/api';
+import { createRuntimeGenerationStore, type DevRuntimeGenerationStore, type DevRuntimePreparedProject, type RuntimeGenerationCandidate } from 'agent-bundle/api';
 // Test-only wiring: the digest helpers are not part of the provider protocol.
 import { digest, stableJson } from '../../../packages/agent-bundle/src/core/digest.ts';
 import { writeCompilerCohort } from './support/compiler-cohort.ts';
@@ -70,8 +70,8 @@ const preparedRuntimeWithApp = (
   ...runtime,
 });
 
-const createStore = (storageRoot: string): RuntimeGenerationStore<RscRuntimeGenerationMetadata> =>
-  new RuntimeGenerationStore({
+const createStore = (storageRoot: string): DevRuntimeGenerationStore<RscRuntimeGenerationMetadata> =>
+  createRuntimeGenerationStore({
     metadataCodec: rscRuntimeGenerationMetadataCodec,
     now: () => new Date('2026-08-15T00:00:00.000Z'),
     storageRoot,
