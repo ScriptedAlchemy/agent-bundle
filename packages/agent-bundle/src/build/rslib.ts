@@ -96,7 +96,18 @@ const asRslibRspackHatch = (
   hatch: NonNullable<AgentBundleToolsConfig['rspack']>,
 ): RslibToolsRspack => hatch as RslibToolsRspack;
 
-const entryLibId = (entry: Pick<RslibEntry, 'name'>): string => `agent-bundle-${entry.name}`;
+/**
+ * The Rslib lib id — and so the Rsbuild environment name and the Rspack
+ * compiler name — of an entry. It derives from the artifact destination,
+ * which the planner already asserts unique within a target, rather than
+ * from the entry name: surfaces sharing one run may legitimately reuse a
+ * name (a script authored as `hooks-flight` emits `scripts/hooks-flight.mjs`
+ * beside the hook surface's standalone worker `hooks/hooks-flight.mjs`).
+ * Visible only in `inspect --bundler` and bundler stats, never in emitted
+ * bytes.
+ */
+export const entryLibId = (entry: Pick<RslibEntry, 'outputRelativePath'>): string =>
+  `agent-bundle-${entry.outputRelativePath.replace(/\.[^./]+$/u, '').replaceAll('/', '-')}`;
 
 /**
  * rsbuild-plugin-dts aborts a failed declaration pass with a stackless prose
@@ -629,9 +640,8 @@ export interface RslibRunOptions {
 
 /**
  * Lib ids key Rslib environments and `mergeRslibConfig` folds same-id libs
- * into one, so two surfaces of one run may not synthesize the same entry
- * name. Surfaces prefix their names (`bin-`, `hooks-`, MCP output stems),
- * and the planner rejects duplicate destinations before any run, so this
+ * into one, so two entries of one run may not share an id. Ids derive from
+ * artifact destinations the planner already rejects as duplicates, so this
  * is an internal invariant rather than a consumer-facing diagnostic.
  */
 const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {

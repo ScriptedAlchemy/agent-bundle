@@ -199,13 +199,13 @@ it('does not share a persistent Rslib cache between generated executables', asyn
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-cache-probe',
+          name: 'agent-bundle-hooks-cache-probe',
           output: { asyncChunks: false, path: outputRoot },
           performance: { buildCache: false },
           target: 'node',
           ...resolvedVirtualModules(outputRoot),
         }],
-        environmentConfigs: { 'agent-bundle-cache-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-cache-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -268,12 +268,12 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       origin: {
         bundlerConfigs: [{
           entry: { 'close-probe': [virtualEntryPath] },
-          name: 'agent-bundle-close-probe',
+          name: 'agent-bundle-hooks-close-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
           ...resolvedVirtualModules(outputRoot),
         }],
-        environmentConfigs: { 'agent-bundle-close-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-close-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -343,12 +343,12 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-lost-probe',
+          name: 'agent-bundle-hooks-lost-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
           ...bundlerConfig,
         }],
-        environmentConfigs: { 'agent-bundle-lost-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-lost-probe': { output: { cleanDistPath: false } } },
       },
     }),
   });
@@ -402,12 +402,12 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-residual-probe',
+          name: 'agent-bundle-hooks-residual-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
           ...resolvedVirtualModules(outputRoot),
         }],
-        environmentConfigs: { 'agent-bundle-residual-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-residual-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };
@@ -442,12 +442,12 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
     inspectConfig: async () => ({
       origin: {
         bundlerConfigs: [{
-          name: 'agent-bundle-close-error-probe',
+          name: 'agent-bundle-hooks-close-error-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
           ...resolvedVirtualModules(outputRoot),
         }],
-        environmentConfigs: { 'agent-bundle-close-error-probe': { output: { cleanDistPath: false } } },
+        environmentConfigs: { 'agent-bundle-hooks-close-error-probe': { output: { cleanDistPath: false } } },
       },
     }),
   };

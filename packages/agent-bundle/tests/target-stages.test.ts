@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
-import { buildRslibSurfaces, compileRslibSurfaces, settledRslibSurface, type RslibEntry } from '../src/build/rslib.ts';
+import { buildRslibSurfaces, compileRslibSurfaces, entryLibId, settledRslibSurface, type RslibEntry } from '../src/build/rslib.ts';
 import { planTargetStages } from '../src/build/target-stages.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 
@@ -90,7 +90,7 @@ describe('planTargetStages', () => {
  */
 const resolvedEnvironment = (outputRoot: string, entry: RslibEntry) => ({
   bundler: {
-    name: `agent-bundle-${entry.name}`,
+    name: entryLibId(entry),
     output: { asyncChunks: false, path: outputRoot },
     plugins: [new rspack.experiments.VirtualModulesPlugin({})],
     resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(outputRoot) } },
@@ -148,7 +148,7 @@ describe('buildRslibSurfaces', () => {
         origin: {
           bundlerConfigs: entries.map((entry) => resolvedEnvironment(outputRoot, entry).bundler),
           environmentConfigs: Object.fromEntries(entries.map((entry) => [
-            `agent-bundle-${entry.name}`,
+            entryLibId(entry),
             resolvedEnvironment(outputRoot, entry).environment,
           ])),
         },
@@ -169,7 +169,7 @@ describe('buildRslibSurfaces', () => {
       // One instance, one environment per entry across all four surfaces,
       // reporting at the most verbose level any surface asked for.
       expect(instances).toHaveLength(1);
-      expect(instances[0]!.config.lib.map((lib) => lib.id)).toEqual(entries.map((entry) => `agent-bundle-${entry.name}`));
+      expect(instances[0]!.config.lib.map((lib) => lib.id)).toEqual(entries.map(entryLibId));
       expect(instances[0]!.config.logLevel).toBe('error');
 
       // Evidence comes back per surface, and each surface's exclusions apply
@@ -207,11 +207,19 @@ describe('buildRslibSurfaces', () => {
     expect(evidence).toEqual([[], []]);
   });
 
-  it('refuses two surfaces that synthesize the same lib id', async () => {
+  it('lets two surfaces reuse an entry name because lib ids derive from destinations, and refuses a shared destination', async () => {
+    const createRslib = async () => { throw new Error('unreachable'); };
+    // A script authored as `hooks-flight` beside the hook surface's standalone
+    // worker: distinct destinations, distinct ids, one run.
+    expect(entryLibId(surfaceEntry('hooks-flight', 'scripts/hooks-flight.mjs', '/project/src/scripts/hooks-flight.ts')))
+      .toBe('agent-bundle-scripts-hooks-flight');
+    expect(entryLibId(surfaceEntry('hooks-flight', 'hooks/hooks-flight.mjs', '/project/src/hooks/stop.ts')))
+      .toBe('agent-bundle-hooks-hooks-flight');
+    expect(entryLibId(surfaceEntry('index', 'lib/index.js', '/project/src/index.ts'))).toBe('agent-bundle-lib-index');
     await expect(buildRslibSurfaces({ cwd: '/project', meta, outputRoot: '/staged/claude' }, [
       { entries: [surfaceEntry('tool', 'scripts/tool.mjs', '/project/src/tool.ts')] },
-      { entries: [surfaceEntry('tool', 'hooks/tool.mjs', '/project/src/hooks/tool.ts')] },
-    ], { createRslib: async () => { throw new Error('unreachable'); } }))
-      .rejects.toThrow(/same lib id "agent-bundle-tool" for "scripts\/tool.mjs" and "hooks\/tool.mjs"/u);
+      { entries: [surfaceEntry('other', 'scripts/tool.mjs', '/project/src/hooks/tool.ts')] },
+    ], { createRslib }))
+      .rejects.toThrow(/same lib id "agent-bundle-scripts-tool" for "scripts\/tool.mjs" and "scripts\/tool.mjs"/u);
   });
 });
