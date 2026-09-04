@@ -109,6 +109,31 @@ process rather than paying for a build per route. Every failure — an unknown r
 route kind, a rejected input, a render error — names the route id, the target kind, and the
 module provenance.
 
+`loadRouteModule(id)` returns the evaluated module behind one of those ids, through the same lazy
+loader `renderRoute` uses. It is the module object itself, so `inputSchema` and `resultSchema` are
+the route's own schema instances by reference, `config` is its static config export, and `default`
+its component (a plain `.ts` script exports `main` instead). A schema-identity suite therefore
+needs no hand-maintained list of static route imports: iterate `testManifest().routes` and load
+each id.
+
+```ts
+import { loadRouteModule, testManifest } from 'agent-bundle/test';
+
+for (const route of Object.values(testManifest().routes)) {
+  if (route.kind === 'app') continue; // browser builds load at the browser level
+  const module = await loadRouteModule(route.id);
+  expect(module.inputSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.config ?? {}).toEqual(route.config);
+}
+```
+
+A literal id is checked against the registered ids exactly as `renderRoute` checks its target, and
+the schemas' parsed values are typed from the registration, so a removed placement is a type error.
+Loading evaluates the module as an import would. Outside a pool built with `agentBundleRstest()`
+the call fails closed with `manifest-unavailable`; a manifest describing another project rejects
+with the same mismatch report `renderRoute` gives, because route loaders are bound to the
+compilation that produced them.
+
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`, `toContainText`,
 `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
 
