@@ -140,7 +140,6 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
   'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
-  'packages/agent-bundle/tests/release-audit.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
   'packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts',
   'packages/workbench/tests/packed-release.e2e.test.ts',

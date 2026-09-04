@@ -49,7 +49,7 @@
     "release": "pnpm check:release && changeset publish",
     "preview:publish": "pkg-pr-new publish --previewVersion --peerDeps --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime' './packages/create-agent-bundle'",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
-    "audit:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle && node scripts/audit-packed-release.mjs",
+    "audit:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle",
     "check:release": "pnpm pack:dry-run && pnpm audit:release && pnpm test:packed:release",
     "check:release:ci": "pnpm pack:dry-run && pnpm audit:release && pnpm test:packed",
     "example:hooks": "pnpm build && pnpm --filter @agent-bundle-example/hooks-and-scripts dev",

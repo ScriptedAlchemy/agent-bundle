@@ -1010,5 +1010,4 @@ Run the complete local delivery gate with `pnpm check && pnpm check:release`.
 Native Claude/Codex smokes stay intentionally opt-in and skipped in ordinary CI.
 npm publishing is deferred until the release owner picks the final package name/scope;
 pkg.pr.new previews are the interim channel, and the first npm release will use npm
-package provenance (`publishConfig.provenance` is already set). `pnpm audit:release` fails if any
-publishable tarball lacks `LICENSE`, `NOTICE`, or the `"license": "Apache-2.0"` manifest field.
+package provenance (`publishConfig.provenance` is already set).
