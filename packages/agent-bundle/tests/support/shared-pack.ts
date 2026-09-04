@@ -43,11 +43,9 @@ export const installedEnvironment = (): NodeJS.ProcessEnv => isolatedCommandEnvi
  * Canonical flags for installing a packed tarball into a consumer fixture.
  * They keep npm's default metadata staleness checks, so the install resolves
  * the tree a consumer would get today. That is the point of the proofs that
- * stand in for a real consumer — release-audit's production entrypoint walk,
- * the scaffolder template matrix, the native host smoke — and exact direct
- * pins do not make it free: transitive ranges still move underneath them, and
- * scripts/audit-packed-release.mjs audits the installed tree without ever
- * exercising it.
+ * stand in for a real consumer — the scaffolder template matrix, the native
+ * host smoke — and exact direct pins do not make it free: transitive ranges
+ * still move underneath them.
  */
 export const npmInstallArguments = ['--ignore-scripts', '--no-audit', '--no-fund'] as const;
 

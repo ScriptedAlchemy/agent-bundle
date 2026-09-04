@@ -547,7 +547,7 @@ pnpm test:packed
 pnpm lint:package
 ```
 
-Expected: pack dry-run, publint, ATTW, dependency/audit/signature/SBOM checks, and packed Workbench tests all pass.
+Expected: pack dry-run, publint, ATTW, and packed Workbench tests all pass.
 
 - [ ] **Step 4: Audit every design requirement against current evidence**
 

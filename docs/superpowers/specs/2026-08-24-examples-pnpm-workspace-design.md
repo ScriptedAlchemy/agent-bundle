@@ -175,9 +175,8 @@ CI path adds `pnpm examples:check`; full test and release gates remain separate.
 The release boundary stays package-manager-neutral:
 
 - `publint` and `attw` inspect the built package;
-- the package tarball is installed into an external temporary npm consumer;
-- npm dependency, signature, audit, and CycloneDX SBOM checks run against that
-  clean production consumer rather than pnpm's workspace store;
+- the package tarball is installed into external temporary npm consumers by
+  the packed test pool rather than pnpm's workspace store;
 - packed browser tests continue exercising the installed tarball, not a
   workspace link.
 
