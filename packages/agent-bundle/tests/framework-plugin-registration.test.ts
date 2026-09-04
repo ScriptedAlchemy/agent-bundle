@@ -44,12 +44,12 @@ describe('framework-owned Rsbuild plugin registry', () => {
   const owned = [...frameworkOwnedRsbuildPlugins.keys()].sort(byName);
 
   it('matches exactly the plugins every synthesized entry lib registers', () => {
-    const lib = composeEntryLibConfig(entry, { meta, outputRoot: '/staged/portable' });
+    const lib = composeEntryLibConfig(entry, { cwd: '/project', meta, outputRoot: '/staged/portable' });
     expect(registeredPluginNames(lib.plugins)).toEqual(owned);
   });
 
   it('matches exactly the plugins a React-syntax MCP App view registers, and nothing for a plain view', () => {
-    const apps = composeMcpAppsRsbuildConfig([reactView, plainView], { meta, outDir: '/staged/portable' });
+    const apps = composeMcpAppsRsbuildConfig([reactView, plainView], { cwd: '/project', meta, outDir: '/staged/portable' });
     expect(registeredPluginNames(apps.environments?.[reactView.name]?.plugins)).toEqual(owned);
     expect(registeredPluginNames(apps.environments?.[plainView.name]?.plugins)).toEqual([]);
     // The framework registers plugins per environment, never at the root the
@@ -58,8 +58,8 @@ describe('framework-owned Rsbuild plugin registry', () => {
   });
 
   it('registers no framework-owned plugin twice on either path', () => {
-    const lib = composeEntryLibConfig(entry, { meta, outputRoot: '/staged/portable' });
-    const apps = composeMcpAppsRsbuildConfig([reactView], { meta, outDir: '/staged/portable' });
+    const lib = composeEntryLibConfig(entry, { cwd: '/project', meta, outputRoot: '/staged/portable' });
+    const apps = composeMcpAppsRsbuildConfig([reactView], { cwd: '/project', meta, outDir: '/staged/portable' });
     for (const names of [registeredPluginNames(lib.plugins), registeredPluginNames(apps.environments?.[reactView.name]?.plugins)]) {
       expect(new Set(names).size).toBe(names.length);
     }
