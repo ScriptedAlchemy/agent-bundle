@@ -11,6 +11,7 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -582,6 +583,8 @@ export interface BuildProjectResult {
 
 export interface PrepackResult {
   readonly build: BuildProjectResult;
+  /** Non-error pack-inventory diagnostics; errors throw `DiagnosticError` instead. */
+  readonly diagnostics: readonly Diagnostic[];
   readonly pack: PackOutput;
 }
 
@@ -1292,10 +1295,11 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
+    packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
     projectRoot: options.root,
   });
-  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
-  return deepFreeze({ build: result, pack });
+  if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
+  return deepFreeze({ build: result, diagnostics, pack });
 };
 
 /** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */

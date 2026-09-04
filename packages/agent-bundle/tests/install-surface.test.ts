@@ -85,6 +85,37 @@ it('emits always-installable Claude and Codex local marketplaces with exact comm
   );
 });
 
+// A consumer never needs the framework CLI: the bundle is self-contained, so
+// install, reinstall, and uninstall are host commands, and `agent-bundle
+// install`/`uninstall`/`doctor` are documented as optional automation only.
+it.each(['claude', 'codex', 'cursor', 'portable'])(
+  'documents host-native install and uninstall for %s and marks the agent-bundle CLI optional',
+  (target) => {
+    const install = writesFor(target).get('INSTALL.md')!;
+    expect(install).toContain('nothing requires the `agent-bundle` CLI');
+    const codeBlocks = [...install.matchAll(/```sh\n([\s\S]*?)```/gu)].map((match) => match[1]!);
+    expect(codeBlocks.length).toBeGreaterThan(0);
+    for (const block of codeBlocks) expect(block).not.toContain('agent-bundle ');
+    // Every paragraph that names a framework CLI verb says the CLI is optional.
+    const paragraphs = install.split('\n\n').filter((paragraph) => /`agent-bundle (?:install|uninstall|doctor)/u.test(paragraph));
+    expect(paragraphs.length).toBeGreaterThan(0);
+    for (const paragraph of paragraphs) expect(paragraph).toMatch(/optional/u);
+  },
+);
+
+it('emits the exact host uninstall commands the framework CLI itself runs, with marketplace removal gated on an inventory check', () => {
+  const claude = writesFor('claude').get('INSTALL.md')!;
+  expect(claude).toContain('```sh\nclaude plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data\n```');
+  // `plugin marketplace remove` applies to every scope, so it never sits in the same executable block.
+  expect(claude).not.toMatch(/--keep-data\nclaude plugin marketplace remove/u);
+  // Claude's project/local installs elsewhere are invisible to `plugin list`; the registry is the inventory.
+  expect(claude).toMatch(/stays registered\. Remove it only when nothing else installs from it:\n(?:[^\n]+\n){4}\n```sh\nclaude plugin marketplace remove install-fixture-marketplace\n```/u);
+  expect(claude).toContain('`claude plugin list` shows only\nthe current project, so also check `~/.claude/plugins/installed_plugins.json`');
+  const codex = writesFor('codex').get('INSTALL.md')!;
+  expect(codex).toContain('```sh\ncodex plugin remove install-fixture@install-fixture-marketplace\n```');
+  expect(codex).toMatch(/Remove it only when nothing else installs from it:\n`codex plugin list` shows every other plugin from it\.\n\n```sh\ncodex plugin marketplace remove install-fixture-marketplace\n```/u);
+});
+
 it('emits a standalone safe-copy installer only for Cursor-compatible fallback profiles', () => {
   for (const target of ['cursor', 'portable', 'plugin']) {
     const writes = writesFor(target);
@@ -393,7 +424,7 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(claude).toContain('agent-bundle uninstall claude --from ./ --plan');
   expect(claude).toContain('~/.claude/agent-bundle/receipts/install-fixture.install-fixture-marketplace.user.json');
   expect(codex).toContain('agent-bundle uninstall codex --from ./ --plan');
-  expect(codex).toContain('no\nkeep-data option');
+  expect(codex).toMatch(/has no\s+keep-data\s+option/u);
   expect(writesFor('cursor').get('INSTALL.md')).toContain('node ./install.mjs --replace');
   expect(writesFor('cursor').get('INSTALL.md')).toContain('content-hash comparison');
 

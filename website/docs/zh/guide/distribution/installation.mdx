@@ -4,8 +4,10 @@ description: '把已构建的 agent-bundle 安装进 Claude Code、Codex 或 Cur
 
 # 宿主安装
 
-每个已构建 target 目录都包含一份生成的 `INSTALL.md`，其中的命令使用捆绑包真实的插件名与市场名。框架
-CLI 执行的正是同样的操作：
+每个已构建 target 目录都包含一份生成的 `INSTALL.md`，其中的命令使用捆绑包真实的插件名与市场名。其中每条
+命令都是宿主命令（`claude plugin …`、`codex plugin …`）或随行的 `install.mjs`，因此无论从 npm、市场检出
+还是 zip 拿到已构建包的消费者，安装、重装或卸载它都不需要 `agent-bundle` CLI；`INSTALL.md` 明言这一点，
+并在每处提及该 CLI 时标注其为可选。框架 CLI 为拥有它的开发者执行同样的操作：
 
 ```sh
 npx agent-bundle install claude --from artifact/claude --scope user
