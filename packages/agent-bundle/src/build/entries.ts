@@ -492,7 +492,9 @@ export const planMcpEntriesSurface = async (
       : {
         ignoredSourcePaths: [
           ...(runtimeShell === undefined ? [] : [runtimeShell]),
-          ...(launchEnvRuntime === undefined ? [] : [launchEnvRuntime]),
+          // The package root, not the file: from the built package the
+          // module shares chunks with its siblings under `dist/`.
+          ...(launchEnvRuntime === undefined ? [] : [runtimeIgnoredRoot(launchEnvRuntime)]),
           ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
           ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
         ],
@@ -625,7 +627,7 @@ export const planHooksSurface = (
       ...(workerEntry === undefined ? [] : [workerEntry]),
     ],
     ignoredSourcePaths: [
-      launchEnvRuntime,
+      runtimeIgnoredRoot(launchEnvRuntime),
       ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
     ],
     finish: async (evidence) => {

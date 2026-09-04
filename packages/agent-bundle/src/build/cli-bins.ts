@@ -196,7 +196,7 @@ export const planCliBinsSurface = (
           }),
       })));
     },
-    ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath()), launchEnvRuntimePath()],
+    ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath()), runtimeIgnoredRoot(launchEnvRuntimePath())],
     logLevel: 'error',
   };
 };
