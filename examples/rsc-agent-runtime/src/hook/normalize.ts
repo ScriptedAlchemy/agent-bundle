@@ -55,39 +55,45 @@ const resolveNativePath = (cwd: string, path: string): string => {
   return resolve(cwd, path);
 };
 
-export const normalizeClaudeHook = (input: NativeHookInput): CanonicalPostToolUse => {
-  const event = readBaseEvent('claude', input);
-  if (event.toolName !== 'Write' && event.toolName !== 'Edit') {
+/**
+ * The edited file a tool call names. This is the one genuinely host-specific
+ * reading left in the hook: Claude's `Write`/`Edit` carry `file_path`, while
+ * Codex's `apply_patch` names the file inside its patch header. The tool name
+ * and input themselves arrive host-independently on `canonical.payload`.
+ */
+export const editedPath = (
+  host: CanonicalPostToolUse['host'],
+  cwd: string,
+  toolName: string,
+  rawToolInput: unknown,
+): string => {
+  if (host === 'claude' && toolName !== 'Write' && toolName !== 'Edit') {
     throw new Error('Claude hook supports only Write and Edit');
   }
-
-  const toolInput = asRecord(input.tool_input);
-  if (toolInput === undefined) {
-    throw new Error('Native hook input requires tool_input');
-  }
-
-  return {
-    ...event,
-    path: resolveNativePath(event.cwd, readRequiredString(toolInput, 'file_path')),
-  };
-};
-
-export const normalizeCodexHook = (input: NativeHookInput): CanonicalPostToolUse => {
-  const event = readBaseEvent('codex', input);
-  if (event.toolName !== 'apply_patch') {
+  if (host === 'codex' && toolName !== 'apply_patch') {
     throw new Error('Codex hook supports only apply_patch');
   }
-
-  const toolInput = asRecord(input.tool_input);
+  const toolInput = asRecord(rawToolInput);
   if (toolInput === undefined) {
     throw new Error('Native hook input requires tool_input');
   }
-
+  if (host === 'claude') {
+    return resolveNativePath(cwd, readRequiredString(toolInput, 'file_path'));
+  }
   const command = readRequiredString(toolInput, 'command');
   const path = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$/m.exec(command)?.[1];
   if (path === undefined) {
     throw new Error('Codex apply_patch command requires a file header');
   }
+  return resolveNativePath(cwd, path);
+};
 
-  return { ...event, path: resolveNativePath(event.cwd, path) };
+export const normalizeClaudeHook = (input: NativeHookInput): CanonicalPostToolUse => {
+  const event = readBaseEvent('claude', input);
+  return { ...event, path: editedPath('claude', event.cwd, event.toolName, input.tool_input) };
+};
+
+export const normalizeCodexHook = (input: NativeHookInput): CanonicalPostToolUse => {
+  const event = readBaseEvent('codex', input);
+  return { ...event, path: editedPath('codex', event.cwd, event.toolName, input.tool_input) };
 };

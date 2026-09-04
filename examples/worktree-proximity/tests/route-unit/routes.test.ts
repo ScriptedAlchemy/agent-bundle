@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
 import { agent, available, runAgentRequest, type AgentLineage, type Observed } from '@agent-bundle/runtime';
-import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
+import { createEventRouteInput, expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
 import agentTopologyProvider from '../../src/providers/agent-topology.js';
@@ -39,25 +39,25 @@ const providers = (root: string) => ({
   gitWorktree: provider(root),
 });
 
+// The harness projects the envelope into `canonical.payload` exactly as the
+// artifact does; the journeys keep their own readable idempotency keys and
+// clock. `validate: false` admits the deliberately partial envelopes below.
 const eventInput = (
   event: 'agent/start' | 'session/start' | 'stop' | 'tool/after' | 'tool/before',
   native: Record<string, unknown>,
   id: string,
-) => ({
-  canonical: {
-    event,
-    idempotencyKey: id,
-    observedAt: `2026-09-01T20:00:${String(sequence++).padStart(2, '0')}.000Z`,
-    provenance: {
-      host: 'claude',
-      hostContractRevision: 'route-unit',
-      nativeEvent: native.hook_event_name as string,
-      source: 'native',
+) => {
+  const built = createEventRouteInput(event, native, { host: 'claude', validate: false });
+  return {
+    canonical: {
+      ...built.canonical,
+      idempotencyKey: id,
+      observedAt: `2026-09-01T20:00:${String(sequence++).padStart(2, '0')}.000Z`,
+      sequence,
     },
-    sequence,
-  },
-  native,
-});
+    native: built.native,
+  };
+};
 
 const renderEventInput = async (
   route: string,

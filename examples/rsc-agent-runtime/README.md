@@ -14,16 +14,18 @@ This private, opt-in example shows one React Server Components (RSC) runtime sha
 Native hooks are fresh requests: the compiler-generated client validates one host event, invokes `src/events/tool/after.tsx` in its explicit standalone mode, projects the final Agent Document, and exits. The durable kernel—not a Node module cache or React state—connects later hook processes and MCP calls.
 
 ```tsx
-// The semantic event route receives canonical identity plus the complete native payload.
+// The semantic event route receives canonical identity — including the family's
+// cross-host `payload` — plus the complete native envelope for host-specific fields.
 import { Agent } from '@agent-bundle/runtime';
 import type { AgentEventRouteProps } from 'agent-bundle';
 
 export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };
 
-export default async function AfterFileEdit({ canonical, native }: AgentEventRouteProps) {
+export default async function AfterFileEdit({ canonical }: AgentEventRouteProps<'tool/after'>) {
+  const toolName = canonical.payload.toolName?.value ?? 'an unnamed tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded ${String(native.tool_name)} from ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>{`Recorded ${toolName} from ${canonical.provenance.host}.`}</Agent.Context>
     </Agent.Result>
   );
 }

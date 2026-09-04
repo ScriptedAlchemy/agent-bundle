@@ -56,6 +56,7 @@ const replay: LifecycleReplay = {
     event: 'tool/after',
     idempotencyKey: 'receipt-a',
     observedAt: '2026-09-01T12:00:00.000Z',
+    payload: { toolName: { nativeKey: 'tool_name', value: 'Write' } },
     provenance: {
       host: 'claude',
       hostContractRevision: 'claude-hooks@1',
@@ -135,6 +136,10 @@ it('derives one correlated replay view with identity, context, and diagnostics',
     { label: 'Host', value: 'claude' },
     { label: 'Native event', value: 'PostToolUse' },
     { label: 'Host contract revision', value: 'claude-hooks@1' },
+  ]);
+  // The canonical payload shows each mapped field beside the host key it came from (#466).
+  expect(view.payloadRows).toEqual([
+    { label: 'toolName', value: 'Write · tool_name' },
   ]);
   expect(view.requestRows).toEqual([
     { label: 'Invocation kind', value: 'event' },

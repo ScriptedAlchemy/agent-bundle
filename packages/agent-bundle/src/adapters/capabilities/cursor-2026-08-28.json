@@ -125,11 +125,27 @@
       "agent/start": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "subagentStart",
+        "payload": {
+          "agentId": "subagent_id",
+          "agentType": "subagent_type",
+          "model": "model",
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "agent/stop": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "subagentStop",
+        "payload": {
+          "agentId": "subagent_id",
+          "agentTranscriptPath": "agent_transcript_path",
+          "agentType": "subagent_type",
+          "model": "model",
+          "reentry": { "decode": "positive-count", "nativeKey": "loop_count" },
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "compact/after": {
@@ -139,6 +155,12 @@
       "compact/before": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "preCompact",
+        "payload": {
+          "model": "model",
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path",
+          "trigger": "trigger"
+        },
         "state": "supported"
       },
       "config/change": {
@@ -168,6 +190,12 @@
       "prompt/submit": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "beforeSubmitPrompt",
+        "payload": {
+          "model": "model",
+          "prompt": "prompt",
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "session/end": {
@@ -179,6 +207,12 @@
           "desktop": { "state": "supported" }
         },
         "nativeEvent": "sessionEnd",
+        "payload": {
+          "model": "model",
+          "reason": "reason",
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "session/start": {
@@ -190,11 +224,22 @@
           "desktop": { "state": "supported" }
         },
         "nativeEvent": "sessionStart",
+        "payload": {
+          "model": "model",
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "stop": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "stop",
+        "payload": {
+          "model": "model",
+          "reentry": { "decode": "positive-count", "nativeKey": "loop_count" },
+          "sessionId": "conversation_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "stop/failure": {
@@ -212,16 +257,45 @@
       "tool/after": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "postToolUse",
+        "payload": {
+          "cwd": "cwd",
+          "model": "model",
+          "sessionId": "conversation_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolResponse": { "decode": "json-string", "nativeKey": "tool_output" },
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "tool/before": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "preToolUse",
+        "payload": {
+          "cwd": "cwd",
+          "model": "model",
+          "sessionId": "conversation_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "tool/failure": {
         "availability": { "cloud": { "state": "supported" }, "desktop": { "state": "supported" } },
         "nativeEvent": "postToolUseFailure",
+        "payload": {
+          "cwd": "cwd",
+          "error": "error_message",
+          "isInterrupt": "is_interrupt",
+          "sessionId": "conversation_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
         "state": "supported"
       },
       "workspace/open": {
@@ -233,6 +307,9 @@
           "desktop": { "state": "supported" }
         },
         "nativeEvent": "workspaceOpen",
+        "payload": {
+          "workspaceRoots": "workspace_roots"
+        },
         "state": "supported"
       }
     },

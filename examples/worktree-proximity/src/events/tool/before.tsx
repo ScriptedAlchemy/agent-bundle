@@ -19,8 +19,7 @@ export const config = {
 
 export default async function BeforeTool({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'tool/before'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -29,9 +28,11 @@ export default async function BeforeTool({
       </Agent.Result>
     );
   }
-  const intent = extractIntent(native);
+  // `canonical.payload` is the framework's cross-host reading of the envelope:
+  // `toolName`/`toolInput` under Claude's PreToolUse and Codex's alike.
+  const intent = extractIntent(canonical.payload);
   const topologyResult = await withTopology(async (topology) => {
-    const { actor } = await actorForWorktree(topology, currentWorktree, canonical, native);
+    const { actor } = await actorForWorktree(topology, currentWorktree, canonical);
     const committed = await topology.dispatch('intentRecorded', {
       actorId: actor.id,
       dependencies: [...intent.dependencies],

@@ -6,6 +6,7 @@ import {
   type AgentRecipient,
   type Observed,
 } from '@agent-bundle/runtime';
+import type { AgentEventCanonicalIdentity, AgentEventPayload } from 'agent-bundle';
 
 import type { AvailableWorktree } from './api.js';
 import type { TopologyAccess } from './coordination.js';
@@ -16,10 +17,14 @@ export const ROOT_ACTOR_PREFIX = 'session:';
 /** The application's own fallback identity for a worktree no envelope names an agent for. */
 export const DERIVED_ACTOR_PREFIX = 'worktree:';
 
-export interface EventIdentity {
-  readonly idempotencyKey: string;
-  readonly observedAt: string;
-}
+/**
+ * The slice of an event's canonical identity the topology reads: the
+ * idempotency key and timestamp it journals under, and the cross-host
+ * `payload` the framework projected from the envelope (session id, agent id,
+ * tool name and input) — the same fields on Claude and Codex, so no route
+ * here spells a host key.
+ */
+export type EventIdentity = Pick<AgentEventCanonicalIdentity, 'idempotencyKey' | 'observedAt' | 'payload'>;
 
 export interface ExtractedIntent {
   readonly dependencies: readonly string[];
@@ -81,32 +86,28 @@ export const noticeRecipientFor = (actor: Actor | undefined, worktreeRoot: strin
 
 /**
  * The child actor one envelope carries: the runtime lineage first, then the
- * host's own `agent_id` (Claude and Codex put the subagent's id on every one
- * of its hook payloads) with the root `session_id` as its parent. `undefined`
- * means the envelope names no subagent.
+ * payload's `agentId` (Claude and Codex put the subagent's id on every one of
+ * its hook payloads) with the payload's `sessionId` as its parent. `undefined`
+ * means the envelope names no subagent. The payload carries a field only when
+ * the host sent it, so an absent id is the host's silence, never a default.
  */
 export const carriedChild = async (
-  native: Readonly<Record<string, unknown>>,
+  payload: AgentEventPayload,
 ): Promise<CarriedChild | undefined> => {
   const fromLineage = childFromLineage(await requestLineage());
   if (fromLineage !== undefined) return fromLineage;
-  const agentId = nativeString(native, 'agent_id');
-  const sessionId = nativeString(native, 'session_id');
+  const agentId = nonEmpty(payload.agentId?.value);
+  const sessionId = nonEmpty(payload.sessionId?.value);
   if (agentId === undefined || sessionId === undefined) return undefined;
   return { id: agentId, parentSessionId: sessionId, source: 'native' };
 };
 
-export const nativeString = (
-  native: Readonly<Record<string, unknown>>,
-  key: string,
-): string | undefined => {
-  const value = native[key];
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
-};
+export const nonEmpty = (value: string | undefined): string | undefined =>
+  value !== undefined && value.trim() !== '' ? value : undefined;
 
-const inputRecord = (native: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => {
-  const input = native.tool_input;
-  return input !== null && typeof input === 'object' && !Array.isArray(input)
+const inputRecord = (payload: AgentEventPayload): Readonly<Record<string, unknown>> => {
+  const input = payload.toolInput?.value;
+  return input !== undefined && input !== null && typeof input === 'object' && !Array.isArray(input)
     ? input as Readonly<Record<string, unknown>>
     : {};
 };
@@ -123,10 +124,10 @@ const dependenciesFrom = (input: Readonly<Record<string, unknown>>): readonly st
 };
 
 export const extractIntent = (
-  native: Readonly<Record<string, unknown>>,
+  payload: AgentEventPayload,
 ): ExtractedIntent => {
-  const input = inputRecord(native);
-  const toolName = nativeString(native, 'tool_name');
+  const input = inputRecord(payload);
+  const toolName = payload.toolName?.value;
   const path = input.file_path;
   const paths =
     (toolName === 'Write' || toolName === 'Edit' || toolName === 'Read')
@@ -142,20 +143,20 @@ export const extractIntent = (
 
 /**
  * The actor a tool or stop envelope belongs to, in order of evidence: the
- * child the envelope itself names (runtime lineage, then native `agent_id`),
- * the active actor already bound to the event worktree, and finally the
- * explicit derived identity `worktree:<root>`. A carried child the topology
- * has not seen yet (its `agent/start` was missed) is observed and bound with
- * the provenance the evidence carried; a derived actor is never upgraded.
+ * child the envelope itself names (runtime lineage, then the payload's
+ * `agentId`), the active actor already bound to the event worktree, and
+ * finally the explicit derived identity `worktree:<root>`. A carried child
+ * the topology has not seen yet (its `agent/start` was missed) is observed
+ * and bound with the provenance the evidence carried; a derived actor is
+ * never upgraded.
  */
 export const actorForWorktree = async (
   topology: TopologyAccess,
   worktree: AvailableWorktree,
   canonical: EventIdentity,
-  native: Readonly<Record<string, unknown>> = {},
 ): Promise<{ readonly actor: ResolvedActor; readonly snapshot: TopologyState }> => {
   const before = await topology.read();
-  const carried = await carriedChild(native);
+  const carried = await carriedChild(canonical.payload);
   if (carried !== undefined) {
     const known = before.state.actors.find((actor) => actor.id === carried.id);
     if (known !== undefined) {

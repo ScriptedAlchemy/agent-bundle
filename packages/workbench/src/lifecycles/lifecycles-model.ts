@@ -52,6 +52,7 @@ export interface LifecyclesView {
   readonly canonicalRows: readonly LifecycleDetailRow[];
   readonly listDiagnostics: readonly LifecycleDiagnostic[];
   readonly options: readonly LifecycleOption[];
+  readonly payloadRows: readonly LifecycleDetailRow[];
   readonly replay: LifecycleReplay | undefined;
   readonly replayDiagnostics: readonly LifecycleDiagnostic[];
   readonly requestRows: readonly LifecycleDetailRow[];
@@ -121,6 +122,25 @@ export const canonicalRowsFor = (replay: LifecycleReplay): readonly LifecycleDet
   row('Native event', replay.canonical.provenance.nativeEvent),
   row('Host contract revision', replay.canonical.provenance.hostContractRevision),
 ]);
+
+const payloadValueText = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value) ?? String(value);
+};
+
+/**
+ * The canonical payload the route received (#466): one row per mapped field,
+ * showing the value beside the host key it was read from, so the evidence
+ * panel makes the mapped-versus-missing distinction visible. An empty payload
+ * is one row saying so rather than an absent section.
+ */
+export const payloadRowsFor = (replay: LifecycleReplay): readonly LifecycleDetailRow[] => {
+  const entries = Object.entries(replay.canonical.payload)
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) return Object.freeze([row('Payload', 'No canonical field mapped from this envelope')]);
+  return Object.freeze(entries.map(([field, mapped]) =>
+    row(field, `${payloadValueText(mapped.value)} · ${mapped.nativeKey}`)));
+};
 
 export const requestRowsFor = (replay: LifecycleReplay): readonly LifecycleDetailRow[] => Object.freeze([
   row('Invocation kind', replay.requestContext.invocation.kind),
@@ -222,6 +242,7 @@ export const lifecyclesViewFor = (options: LifecyclesViewOptions): LifecyclesVie
     canonicalRows: replay === undefined ? noRows : canonicalRowsFor(replay),
     listDiagnostics,
     options: lifecycleOptions,
+    payloadRows: replay === undefined ? noRows : payloadRowsFor(replay),
     replay,
     replayDiagnostics,
     requestRows: replay === undefined ? noRows : requestRowsFor(replay),

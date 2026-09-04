@@ -179,19 +179,49 @@ export const config = {
   tools: ['file.write'], // 规范选择器 -> 各宿主的原生匹配器
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps) {
+export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
+  // 在每个宿主上，canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' }
+  const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
     </Agent.Result>
   );
 }
 ```
 
 `canonical` 是框架推导出的跨宿主身份——`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
-`observedAt`、一个 `sequence`，以及记录触发宿主与原生事件名的 `provenance`。`native` 是经过校验的宿主
-信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的轴保持不可用。
+`observedAt`、一个 `sequence`、记录触发宿主与原生事件名的 `provenance`，以及该事件族的规范 `payload`。
+`native` 是经过校验的宿主信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的字段保持缺失。
+
+### 规范载荷
+
+`canonical.payload` 是该路由事件族对信封的跨宿主读法：至少两个宿主以各自名字报告的那些字段——工具族上的
+`toolName`、`toolInput`、`toolResponse`，`sessionId`（Claude 与 Codex 的 `session_id`、Cursor 的
+`conversation_id`）、`transcriptPath`、`cwd`、`prompt`、`agentId` 与 `agentType`、`reentry`（Claude 与 Codex 的
+`stop_hook_active`、Cursor 的 `loop_count > 0`）等等。每个字段以 `{ value, nativeKey }` 的形式到达：解码后的值
+旁边是它读取自的宿主键，因此路由既能区分「已映射」与「缺失」，也能在自己的输出里说出宿主的拼法。宿主未发送的
+字段是 `undefined`，绝不补默认值。只有两处读法超出「按键取值」：Cursor 的 `tool_output` JSON 字符串会被解析为
+`toolResponse`（不是合法 JSON 时保留为字符串），Cursor 的 `loop_count` 计数变为 `reentry` 布尔值。
+
+把路由类型标注到它的事件族——`AgentEventRouteProps<'tool/after'>`——`payload` 就收窄为该族的字段，于是在工具
+路由上读取 `payload.reentry` 是编译错误；生成的 `.agent-bundle/routes.d.ts` 把同样的收窄带进 `renderRoute`。
+用裸的 `AgentEventRouteProps` 标注的路由把所有字段都视为可选。载荷未建模的一切——Cursor 的 `attachments`、
+Claude 的 `background_tasks`、只有一个宿主才有的 `duration`——仍在 `native` 上。按事件族、按宿主的表（字段 ×
+宿主 → 原生键）是生成的事件参考中的[规范载荷字段](../../reference/events.md#规范载荷字段)一节，由固定的
+能力表渲染而来；运行时读取的是同一张表，以 `agentEventPayloadFields` 与 `agentEventPayloadNativeKeys` 导出。
+
+路由单元测试用 `agent-bundle/test` 的 `createEventRouteInput` 从宿主信封构造同样的 props，这样 fixture 练的是
+`payload`，而不是手写的身份：
+
+```ts
+import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
+
+const rendered = await renderRoute('event:tool/after', {
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+});
+```
 
 路由通过它渲染出的文档作答。`Agent.Context` 文本成为宿主的附加上下文通道，`Agent.Result` 的 `value` 可以
 携带 `{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`。`continue`——或完全不给

@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withNotices, withTopology } from '../../coordination.js';
-import { carriedChild, deliveryContexts, nativeString } from '../../event-support.js';
+import { carriedChild, deliveryContexts, nonEmpty } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -13,8 +13,7 @@ export const config = {
 
 export default async function AgentStart({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'agent/start'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -25,12 +24,12 @@ export default async function AgentStart({
   }
 
   // The runtime's `request.lineage` names the child and its parent when the
-  // registry resolved this start; the native `agent_id` + root `session_id`
-  // pair is the fallback. Neither present is a refusal, never a guess.
-  const child = await carriedChild(native);
+  // registry resolved this start; the payload's `agentId` + `sessionId` pair
+  // is the fallback. Neither present is a refusal, never a guess.
+  const child = await carriedChild(canonical.payload);
   if (child === undefined) {
-    const sessionId = nativeString(native, 'session_id');
-    const refusal = nativeString(native, 'agent_id') === undefined
+    const sessionId = nonEmpty(canonical.payload.sessionId?.value);
+    const refusal = nonEmpty(canonical.payload.agentId?.value) === undefined
       ? 'agent/start omitted native agent_id; refused to fabricate a topology edge'
       : 'agent/start omitted native session_id; refused to fabricate a topology edge';
     const topologyResult = await withTopology(async (topology) => {
