@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -130,7 +130,153 @@ it('documents native Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('`~/.cursor/plugins/local/<name>`');
   expect(install).toContain('Developer: Reload Window');
   expect(install).toContain('Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT');
+  // The Cursor-only placeholder expansion is documented where the installer is (#426).
+  expect(install).toContain('### Cursor placeholder expansion');
+  expect(install).toContain('`~/.cursor/agent-bundle/plugin-data/<name>`');
+  expect(install).toContain('`AB7326`');
+  expect(install).toContain('The bundle itself');
 });
+
+/** The spec-shaped Agent Plugins pack from the 2026-09-03 Cursor observations (#426), every failing form at once. */
+const agentPluginsMcp = {
+  $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+  mcpServers: {
+    launcher: { args: [], command: './mcp/launch.sh', type: 'stdio' },
+    probe: {
+      args: ['${PLUGIN_ROOT}/mcp/report.mjs', '--cache', '${PLUGIN_DATA}/cache'],
+      command: 'node',
+      cwd: '${PLUGIN_ROOT}',
+      env: { AGENT_BUNDLE_PLUGIN_ROOT: '${PLUGIN_ROOT}', PROBE_DATA: '${PLUGIN_DATA}', PROBE_ROOT: '${PLUGIN_ROOT}' },
+      type: 'stdio',
+    },
+    remote: { type: 'streamable-http', url: 'https://example.com/mcp' },
+  },
+};
+
+it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy only, records them in the receipt, and stays idempotent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-install-mjs-portable-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  const pluginData = join(home, '.cursor', 'agent-bundle', 'plugin-data', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  const mcpText = `${JSON.stringify(agentPluginsMcp, null, 2)}\n`;
+  try {
+    const writes = writesFor('portable');
+    await mkdir(join(bundle, 'mcp'), { recursive: true });
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, 'plugin.json'), JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+        name: 'install-fixture',
+        version: '1.2.3',
+      })),
+      writeFile(join(bundle, 'mcp.json'), mcpText),
+      writeFile(join(bundle, 'mcp', 'report.mjs'), 'process.stdin.resume();\n'),
+      writeFile(join(bundle, 'mcp', 'launch.sh'), '#!/usr/bin/env bash\nexec node "$(dirname "$0")/report.mjs"\n', { mode: 0o755 }),
+    ]);
+
+    const first = await run(installer, [], home);
+    expect(first).toMatchObject({ code: 0, stderr: '' });
+    expect(first.stdout).toContain('Installed install-fixture@1.2.3');
+    expect(first.stdout).toContain(`Expanded Agent Plugins placeholders for Cursor in mcp.json: PLUGIN_ROOT=${destination} PLUGIN_DATA=${pluginData}`);
+    // The bundle is untouched and stays spec-conformant; only the Cursor copy is rewritten.
+    expect(await readFile(join(bundle, 'mcp.json'), 'utf8')).toBe(mcpText);
+    expect(JSON.parse(await readFile(join(destination, 'mcp.json'), 'utf8'))).toEqual({
+      $schema: agentPluginsMcp.$schema,
+      mcpServers: {
+        launcher: {
+          args: [],
+          command: join(destination, 'mcp', 'launch.sh'),
+          cwd: destination,
+          env: { PLUGIN_DATA: pluginData, PLUGIN_ROOT: destination },
+          type: 'stdio',
+        },
+        probe: {
+          args: [join(destination, 'mcp', 'report.mjs'), '--cache', join(pluginData, 'cache')],
+          command: 'node',
+          cwd: destination,
+          env: {
+            AGENT_BUNDLE_PLUGIN_ROOT: destination,
+            PLUGIN_DATA: pluginData,
+            PLUGIN_ROOT: destination,
+            PROBE_DATA: pluginData,
+            PROBE_ROOT: destination,
+          },
+          type: 'stdio',
+        },
+        remote: { type: 'streamable-http', url: 'https://example.com/mcp' },
+      },
+    });
+    expect((await stat(pluginData)).isDirectory()).toBe(true);
+    // The receipt hashes the installed (expanded) form and keeps the bundle's document for Doctor.
+    const receipt = await readInstallReceipt(destination);
+    expect(receipt).toMatchObject({
+      contentHash: (await treeInventory(destination)).hash,
+      cursorExpansion: { documents: { 'mcp.json': mcpText }, pluginData, pluginRoot: destination },
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    });
+    expect(receipt?.contentHash).not.toBe((await treeInventory(bundle)).hash);
+
+    // Idempotent: the rerun compares the bundle's expanded form with the copy and finds nothing to do.
+    const again = await run(installer, [], home);
+    expect(again).toMatchObject({ code: 0, stderr: '' });
+    expect(again.stdout).toContain('Already installed install-fixture@1.2.3');
+    expect(again.stdout).not.toContain('Expanded Agent Plugins');
+    expect(await readInstallReceipt(destination)).toEqual(receipt);
+
+    // A same-version rebuild replaces owned files and re-expands the rebuilt document.
+    await writeFile(join(bundle, 'mcp.json'), mcpText.replace('--cache', '--store'));
+    const replaced = await run(installer, [], home);
+    expect(replaced).toMatchObject({ code: 0, stderr: '' });
+    expect(replaced.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect(replaced.stdout).toContain('Expanded Agent Plugins placeholders for Cursor');
+    const rebuilt = JSON.parse(await readFile(join(destination, 'mcp.json'), 'utf8')) as { mcpServers: { probe: { args: string[] } } };
+    expect(rebuilt.mcpServers.probe.args).toEqual([join(destination, 'mcp', 'report.mjs'), '--store', join(pluginData, 'cache')]);
+    expect((await readInstallReceipt(destination))?.cursorExpansion?.documents['mcp.json']).toBe(mcpText.replace('--cache', '--store'));
+
+    // An unexpanded copy left by an older installer (receipt without the expansion) is same-version content
+    // drift of a receipt-managed copy: replaced automatically, so a plain rerun repairs it.
+    await writeFile(join(destination, 'mcp.json'), mcpText.replace('--cache', '--store'));
+    const staleReceipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+    const { cursorExpansion: _expansion, ...unexpandedReceipt } = staleReceipt;
+    await writeFile(join(destination, installReceiptFile), JSON.stringify({
+      ...unexpandedReceipt,
+      contentHash: (await treeInventory(destination)).hash,
+    }));
+    const repaired = await run(installer, [], home);
+    expect(repaired).toMatchObject({ code: 0, stderr: '' });
+    expect(repaired.stdout).toContain('Replaced install-fixture@1.2.3');
+    expect((await readInstallReceipt(destination))?.cursorExpansion?.pluginRoot).toBe(destination);
+
+    // A skills-only Agent Plugins pack (no stdio server) is copied byte-identically and records no expansion.
+    await rm(destination, { force: true, recursive: true });
+    await writeFile(join(bundle, 'mcp.json'), `${JSON.stringify({
+      $schema: agentPluginsMcp.$schema,
+      mcpServers: { remote: agentPluginsMcp.mcpServers.remote },
+    }, null, 2)}\n`);
+    const remoteOnly = await run(installer, [], home);
+    expect(remoteOnly).toMatchObject({ code: 0, stderr: '' });
+    expect(remoteOnly.stdout).not.toContain('Expanded Agent Plugins');
+    expect((await readInstallReceipt(destination))?.cursorExpansion).toBeUndefined();
+    expect((await readInstallReceipt(destination))?.contentHash).toBe((await treeInventory(bundle)).hash);
+
+    // A Cursor Plugin bundle beside a root plugin.json is never rewritten: the expansion is for Agent Plugins packs only.
+    await rm(destination, { force: true, recursive: true });
+    await writeFile(join(bundle, 'mcp.json'), mcpText);
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' }));
+    const cursorPlugin = await run(installer, [], home);
+    expect(cursorPlugin).toMatchObject({ code: 0, stderr: '' });
+    expect(cursorPlugin.stdout).not.toContain('Expanded Agent Plugins');
+    expect(await readFile(join(destination, 'mcp.json'), 'utf8')).toBe(mcpText);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
 
 it('documents every real host path from the composite profile', () => {
   const install = writesFor('plugin').get('INSTALL.md');

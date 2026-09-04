@@ -195,6 +195,17 @@ Cursor manage the plugin as a marketplace install; `agent-bundle doctor --host
 cursor` reports hook registration (`AB7322`), duplicate user-level delivery
 (`AB7323`), and marketplace import state (`AB7324`).
 
+The `portable` target's `install.mjs` copies the Agent Plugins package to the
+same `~/.cursor/plugins/local/<name>` location and, because Cursor 3.18.25
+expands none of the standard's placeholders (`${PLUGIN_ROOT}` /
+`${PLUGIN_DATA}` in `args`, `env`, `cwd`; no `PLUGIN_ROOT` / `PLUGIN_DATA`
+variables; omitted `cwd` → home directory; `./` commands → workspace folder),
+rewrites `mcp.json` in that copy only with absolute paths
+(`PLUGIN_DATA` = `~/.cursor/agent-bundle/plugin-data/<name>`, created), keeps
+the shipped document in the install receipt (`cursorExpansion`), and
+`agent-bundle doctor --host cursor` proves the expansion (`AB7326`). The bundle
+itself stays spec-conformant for other Agent Plugins clients.
+
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. A source-free artifact root is accepted
 by `--from` when it contains the selected host target directory.

@@ -76,7 +76,8 @@
       "2026-09-02: Cursor 3.18.25 (stable, 280eca2911f1) discovers the emitted plugin, its skill, and its mcp.json from ~/.cursor/plugins/local and spawns the configured stdio server (docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md).",
       "2026-09-02: Cursor 3.18.25 does not expand ${PLUGIN_ROOT} in cwd or args and does not default an omitted cwd to the plugin root (spec 7.2.1/9.2 MUSTs), so spec-conformant stdio servers fail to launch there; its proprietary ${CURSOR_PLUGIN_ROOT} expands and connects.",
       "2026-09-02: With a launchable configuration the Cursor IDE completed the stdio handshake (connect_success with stable heartbeat), so the launch pipeline itself consumes this format.",
-      "2026-09-03: Re-verified on the same Cursor 3.18.25 build (realCommit 280eca2911f1…af3; no newer stable release): the cwd, args, and default-cwd gaps reproduce, and single-variable probes additionally show ${PLUGIN_ROOT}/${PLUGIN_DATA} unexpanded in env values (spec 9.2), the reserved PLUGIN_ROOT/PLUGIN_DATA subprocess variables absent (spec 9.1), and plugin-relative ./ commands resolved against the workspace folder (spec 7.2.1); recorded with log excerpts and captures in docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md; not submitted to Cursor by maintainer decision."
+      "2026-09-03: Re-verified on the same Cursor 3.18.25 build (realCommit 280eca2911f1…af3; no newer stable release): the cwd, args, and default-cwd gaps reproduce, and single-variable probes additionally show ${PLUGIN_ROOT}/${PLUGIN_DATA} unexpanded in env values (spec 9.2), the reserved PLUGIN_ROOT/PLUGIN_DATA subprocess variables absent (spec 9.1), and plugin-relative ./ commands resolved against the workspace folder (spec 7.2.1); recorded with log excerpts and captures in docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md; not submitted to Cursor by maintainer decision.",
+      "2026-09-03: framework-side support for the Cursor gap (#426): the emitted install.mjs detects an Agent Plugins pack (root plugin.json with an agent-plugins.org $schema, no .cursor-plugin/plugin.json) and rewrites mcp.json in the ~/.cursor/plugins/local/<name> copy only — ${PLUGIN_ROOT} → the absolute plugin root, ${PLUGIN_DATA} → ~/.cursor/agent-bundle/plugin-data/<name> (created by the installer), an omitted cwd → the plugin root, ./ commands → absolute paths under it, and PLUGIN_ROOT/PLUGIN_DATA added to every stdio server's env — because Cursor's spawn honours absolute command, args, cwd and env verbatim (the control run that connected). The bundle stays spec-conformant; the pre-expansion mcp.json is kept in the install receipt (cursorExpansion) and Doctor validates it against the Agent Plugins contract while AB7326 proves the expanded paths (expanded / unexpanded / drifted). Provenance: derived — Cursor still expands nothing itself, so the pathTokens rows above describe the bundle, not what Cursor resolves."
     ],
     "legacySse": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 §7.2.1 defines the deprecated HTTP+SSE variant as OPTIONAL for clients; the compiler emits only the required modern transports and rejects a legacy transport with AB4339 (https://agent-plugins.org/specification).",
@@ -151,6 +152,18 @@
   },
   "observedSpecificationVersion": "1.0.0",
   "plugin": {
+    "cursorLocalInstall": {
+      "placeholderExpansion": {
+        "evidence": [
+          "2026-09-02/03: Cursor 3.18.25 (docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md) fails every spec-shaped stdio launch (cwd \"${PLUGIN_ROOT}\" → spawn node ENOENT; args \"${PLUGIN_ROOT}/…\" → MODULE_NOT_FOUND under $HOME; omitted cwd → $HOME; env values and the §9.1 variables unexpanded/absent; \"./…\" commands resolved against the workspace) while the same server with absolute paths connects (connect_success, stable heartbeat).",
+          "2026-09-03: the emitted install.mjs performs that expansion for the Cursor copy at install time and records it in the receipt; tests/install-surface.test.ts (bundle untouched, copy expanded, idempotent rerun, same-version re-expansion, older unexpanded copies repaired, skills-only and Cursor Plugin bundles untouched), tests/doctor.test.ts (AB7326 unexpanded → expanded → drifted → moved) and the portable host-install proof (isolated Cursor home, Doctor AB7326 info) pin it."
+        ],
+        "installer": "install.mjs (emitted with the portable bundle)",
+        "provenance": "derived",
+        "reason": "Cursor 3.18.25 expands no Agent Plugins placeholder, provides no PLUGIN_ROOT/PLUGIN_DATA, defaults an omitted cwd to the home directory and resolves ./ commands against the workspace (spec §7.2.1/§9); the emitted installer rewrites mcp.json in the ~/.cursor/plugins/local/<name> copy with absolute paths (PLUGIN_DATA = ~/.cursor/agent-bundle/plugin-data/<name>, created), keeps the shipped document in the receipt, and Doctor proves the expanded paths (AB7326). Never claimed as Cursor behaviour: the bundle itself still relies on the consuming client.",
+        "state": "supported"
+      }
+    },
     "extensionDirectories": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 §8.2 reserves top-level reverse-domain directories for client-owned files; the compiler emits no client extension directory because no pinned client publishes a file-based namespace contract for this format (https://agent-plugins.org/specification).",
       "state": "unavailable"

@@ -107,7 +107,8 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mod
 `load-failed`（`AB7325`——Claude Code 在 `claude plugin list --json` 中列出了该副本但带有 `errors`，拒绝加载它；
 消息原样携带宿主的文本）或 `not-installed`（`AB7307`）。对 Cursor，它还会根据已安装清单证明插件级 hook 的注册（`AB7322`），在
 `~/.cursor/hooks.json` 会把某个插件 hook 再投递一次时发出警告（`AB7323`），并跟踪暂存的市场从 `unregistered`
-到 Cursor 导入后的 `registered`（`AB7324`）。
+到 Cursor 导入后的 `registered`（`AB7324`）。对 Agent Plugins 安装，它还会证明输出的安装器所做的占位符展开——
+`expanded`、`unexpanded`（Cursor 3.18.25 无法启动的规范形式）或 `drifted`（`AB7326`）。
 
 ## validate
 

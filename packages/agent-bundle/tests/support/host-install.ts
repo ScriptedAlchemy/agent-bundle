@@ -38,6 +38,7 @@ import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
 import { runDoctor } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
+import { readInstallReceipt } from '../../src/install/receipt.ts';
 import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
@@ -323,11 +324,22 @@ export interface PortableHostInstallReport {
     readonly version: '1.0.0';
   };
   readonly manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config';
+  /**
+   * The bundle's `mcp.json` is the spec-conformant document (`locations`,
+   * `reservedEnvKeys` describe it); the Cursor copy is its install-time
+   * expansion, since Cursor 3.18.25 expands no Agent Plugins placeholder (#426).
+   */
   readonly pluginVariables: {
     readonly allowedLocations: 'args/env values/cwd only';
+    readonly cursorExpansion: {
+      readonly doctor: 'AB7326 expanded';
+      readonly installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left';
+      readonly pluginData: string;
+      readonly receipt: 'cursorExpansion records the bundle mcp.json verbatim';
+    };
     readonly locations: readonly string[];
     readonly reservedEnvKeys: 'absent';
-    readonly resolvedAtInstall: false;
+    readonly resolvedAtInstall: true;
     readonly sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface';
   };
   readonly proofLevel: string;
@@ -1445,6 +1457,7 @@ export const runPortableHostInstallProof = async (
 
     await install('Installed');
     const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
+    const pluginData = join(home, '.cursor', 'agent-bundle', 'plugin-data', portablePlugin);
     const pluginDocument = await readJson(
       join(destination, 'plugin.json'),
       'Portable installed plugin manifest',
@@ -1453,14 +1466,56 @@ export const runPortableHostInstallProof = async (
       portablePluginValidator(pluginDocument),
       `Portable plugin manifest failed its pinned schema: ${JSON.stringify(portablePluginValidator.errors)}`,
     );
-    const mcpDocument = await readJson(
-      join(destination, 'mcp.json'),
-      'Portable installed MCP document',
-    );
+    // The bundle's mcp.json is the spec-conformant document; the Cursor copy is its install-time expansion
+    // (Cursor 3.18.25 expands no Agent Plugins placeholder itself), recorded verbatim in the receipt.
+    const bundleMcpText = await readFile(join(fixture.portableBundle, 'mcp.json'), 'utf8');
+    const mcpDocument = JSON.parse(bundleMcpText) as unknown;
     assertProof(
       portableMcpValidator(mcpDocument),
       `Portable MCP document failed its pinned schema: ${JSON.stringify(portableMcpValidator.errors)}`,
     );
+    const receipt = await readInstallReceipt(destination);
+    assertProof(receipt !== undefined, 'Portable emitted installer wrote no receipt.');
+    assertProof(
+      receipt.cursorExpansion !== undefined &&
+        receipt.cursorExpansion.pluginRoot === destination &&
+        receipt.cursorExpansion.pluginData === pluginData &&
+        receipt.cursorExpansion.documents['mcp.json'] === bundleMcpText,
+      `Portable receipt did not record the Cursor expansion of the bundle mcp.json: ${JSON.stringify(receipt.cursorExpansion)}`,
+    );
+    const pluginDataMetadata = await lstat(pluginData).catch(() => fail('Portable installer did not create the PLUGIN_DATA directory.'));
+    assertProof(pluginDataMetadata.isDirectory(), 'Portable PLUGIN_DATA is not a directory.');
+    const installedMcp = record(await readJson(join(destination, 'mcp.json'), 'Portable installed MCP document'));
+    assertProof(installedMcp !== undefined, 'Portable installed MCP document was not a JSON object.');
+    const installedServers = record(installedMcp.mcpServers);
+    assertProof(installedServers !== undefined, 'Portable installed MCP document had no server map.');
+    let expandedStdioServers = 0;
+    for (const [serverName, serverValue] of Object.entries(installedServers)) {
+      const server = record(serverValue);
+      assertProof(server !== undefined, `Portable installed MCP server ${serverName} was not an object.`);
+      if (server.type !== 'stdio') continue;
+      expandedStdioServers += 1;
+      const text = JSON.stringify(server);
+      assertProof(
+        !text.includes(portablePluginRootVariable) && !text.includes(portablePluginDataVariable),
+        `Portable installed MCP server ${serverName} still carries an Agent Plugins placeholder Cursor would not expand.`,
+      );
+      assertProof(server.cwd === destination, `Portable installed MCP server ${serverName} cwd is not the plugin root.`);
+      const environment = record(server.env);
+      assertProof(
+        environment?.PLUGIN_ROOT === destination && environment.PLUGIN_DATA === pluginData,
+        `Portable installed MCP server ${serverName} lacks the expanded PLUGIN_ROOT/PLUGIN_DATA variables.`,
+      );
+      assertProof(
+        environment.AGENT_BUNDLE_PLUGIN_ROOT === destination,
+        `Portable installed MCP server ${serverName} AGENT_BUNDLE_PLUGIN_ROOT was not expanded to the plugin root.`,
+      );
+      for (const argument of Array.isArray(server.args) ? server.args : []) {
+        if (typeof argument !== 'string' || !argument.startsWith(`${destination}${sep}`)) continue;
+        await access(argument).catch(() => fail(`Portable installed MCP server ${serverName} argument ${argument} does not exist.`));
+      }
+    }
+    assertProof(expandedStdioServers > 0, 'Portable fixture emitted no stdio server to expand.');
 
     const pluginManifest = record(pluginDocument);
     const mcpManifest = record(mcpDocument);
@@ -1579,10 +1634,31 @@ export const runPortableHostInstallProof = async (
       );
     }
 
-    const contractDiagnostics = await validatePortablePluginFiles({ pluginDirectory: destination, target: 'portable' });
+    // The byte lane validates the shipped document (the receipt copy), exactly as Doctor does for an expanded install.
+    const contractDiagnostics = await validatePortablePluginFiles({
+      documents: { 'mcp.json': bundleMcpText },
+      pluginDirectory: destination,
+      target: 'portable',
+    });
     assertProof(
       contractDiagnostics.length === 0,
       `Portable installed bytes failed the pinned Agent Plugins byte lane: ${JSON.stringify(contractDiagnostics)}`,
+    );
+    const doctorReport = await runDoctor({ home, hosts: ['cursor'] });
+    const launchFindings = doctorReport.diagnostics.filter((entry) => entry.code === 'AB7326');
+    assertProof(
+      launchFindings.length === 1 && launchFindings[0]?.severity === 'info' && launchFindings[0].message.includes('were expanded for Cursor at install'),
+      `Doctor did not prove the Cursor expansion (AB7326): ${JSON.stringify(launchFindings)}`,
+    );
+    assertProof(
+      !doctorReport.diagnostics.some((entry) => entry.code === 'AB7320' && entry.severity === 'error'),
+      `Doctor reported Agent Plugins contract errors for the expanded install: ${JSON.stringify(doctorReport.diagnostics.filter((entry) => entry.code === 'AB7320'))}`,
+    );
+    const portableFinding = doctorReport.hosts.find((entry) => entry.host === 'cursor')?.inventory.findings
+      .find((entry) => entry.name === portablePlugin);
+    assertProof(
+      portableFinding?.state === 'installed' && portableFinding.launch?.state === 'expanded',
+      `Doctor inventory did not report the portable install as expanded: ${JSON.stringify(portableFinding)}`,
     );
 
     await install('Already installed');
@@ -1619,9 +1695,15 @@ export const runPortableHostInstallProof = async (
       manifestMetadata: 'author/homepage/repository/license/keywords/extensions emitted from portable config',
       pluginVariables: Object.freeze({
         allowedLocations: 'args/env values/cwd only',
+        cursorExpansion: Object.freeze({
+          doctor: 'AB7326 expanded',
+          installedCopy: 'PLUGIN_ROOT/PLUGIN_DATA absolute, cwd = plugin root, PLUGIN_ROOT/PLUGIN_DATA env set, no placeholder left',
+          pluginData: normalizedRelative(home, pluginData),
+          receipt: 'cursorExpansion records the bundle mcp.json verbatim',
+        }),
         locations: Object.freeze(placeholderLocations),
         reservedEnvKeys: 'absent',
-        resolvedAtInstall: false,
+        resolvedAtInstall: true,
         sessionEvidence: 'unavailable: Cursor loads Agent Plugins only at restart or window reload; no non-interactive plugin-loading session surface',
       }),
       proofLevel: portableProofLevel,

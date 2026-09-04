@@ -53,8 +53,24 @@ export const isPreservedRuntimeRoot = (name: string): boolean =>
  */
 export const installSurfaceMarkerFiles: readonly string[] = Object.freeze(['INSTALL.md', 'install.mjs']);
 
+/**
+ * Recorded by the emitted `install.mjs` when it installs an Agent Plugins
+ * pack into `~/.cursor/plugins/local`: Cursor 3.18.25 expands none of the
+ * Agent Plugins placeholders, so the installer rewrites `mcp.json` in the
+ * Cursor copy and keeps the pre-expansion document here for Doctor.
+ */
+export interface InstallReceiptCursorExpansion {
+  /** Pre-expansion document text by plugin-relative path (`mcp.json`). */
+  readonly documents: Readonly<Record<string, string>>;
+  /** Absolute directory substituted for `${PLUGIN_DATA}` and exported as `PLUGIN_DATA`. */
+  readonly pluginData: string;
+  /** Absolute plugin root substituted for `${PLUGIN_ROOT}` and exported as `PLUGIN_ROOT`. */
+  readonly pluginRoot: string;
+}
+
 export interface InstallReceipt {
   readonly contentHash: string;
+  readonly cursorExpansion?: InstallReceiptCursorExpansion;
   /**
    * Directories the installer created (POSIX-relative, sorted). Only these
    * are ever pruned when they empty out; a directory that existed before the
@@ -305,6 +321,26 @@ export const isReceiptPath = (value: unknown): value is string =>
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isReceiptPath);
 
+/** A malformed expansion record reads as absent; the receipt itself stays valid. */
+const readCursorExpansion = (value: unknown): InstallReceiptCursorExpansion | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const documents = record['documents'];
+  if (
+    typeof record['pluginRoot'] !== 'string' || record['pluginRoot'].length === 0 ||
+    typeof record['pluginData'] !== 'string' || record['pluginData'].length === 0 ||
+    documents === null || typeof documents !== 'object' || Array.isArray(documents) ||
+    !Object.entries(documents as Record<string, unknown>).every(([path, text]) => isReceiptPath(path) && typeof text === 'string')
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    documents: Object.freeze({ ...(documents as Record<string, string>) }),
+    pluginData: record['pluginData'],
+    pluginRoot: record['pluginRoot'],
+  });
+};
+
 /**
  * Reads the receipt at a plugin root; malformed or unsafe receipts read as
  * absent. A receipt that is not a regular file (a symbolic link, a FIFO, a
@@ -335,8 +371,10 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
   ) {
     return undefined;
   }
+  const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
   return Object.freeze({
     contentHash: record['contentHash'],
+    ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
     directories: Object.freeze([...record['directories']]),
     files: Object.freeze([...record['files']]),
     format: installReceiptFormat,

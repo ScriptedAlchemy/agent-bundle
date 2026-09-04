@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import { runCli } from '../src/cli.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 import { installBundle } from '../src/install/install.ts';
@@ -309,6 +311,165 @@ it('validates root plugin.json installs that declare an Agent Plugins schema aga
     await fixture.cleanup();
   }
 });
+
+it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the emitted installer\'s expansion is verified, drift is corrupt (AB7326)', async () => {
+  const fixture = await temporaryDoctor();
+  const installRoot = join(fixture.home, '.cursor', 'plugins', 'local');
+  const pluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+  const mcpSchema = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+  const ab7325 = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7326');
+  const ab7320Errors = (report: DoctorReport) => report.diagnostics.filter((entry) => entry.code === 'AB7320' && entry.severity === 'error');
+  const doctor = () => runDoctor({ endpointDirectory: fixture.endpointDirectory, home: fixture.home, hosts: ['cursor'] });
+  try {
+    // 1. The spec-shaped pack from the 2026-09-03 observations, copied in by hand: every form Cursor leaves unresolved.
+    await writeJson(join(installRoot, 'spec-shape', 'plugin.json'), { $schema: pluginSchema, name: 'spec-shape', version: '1.0.0' });
+    await writeJson(join(installRoot, 'spec-shape', 'mcp.json'), {
+      $schema: mcpSchema,
+      mcpServers: {
+        launcher: { args: [], command: './mcp/launch.sh', type: 'stdio' },
+        probe: { args: ['${PLUGIN_ROOT}/mcp/report.mjs'], command: 'node', cwd: '${PLUGIN_ROOT}', env: { PROBE_DATA: '${PLUGIN_DATA}' }, type: 'stdio' },
+        remote: { type: 'streamable-http', url: 'https://example.test/mcp' },
+      },
+    });
+    await mkdir(join(installRoot, 'spec-shape', 'mcp'), { recursive: true });
+    await writeFile(join(installRoot, 'spec-shape', 'mcp', 'report.mjs'), 'process.stdin.resume();\n');
+    await writeFile(join(installRoot, 'spec-shape', 'mcp', 'launch.sh'), '#!/bin/sh\n', { mode: 0o755 });
+    const unexpanded = await doctor();
+    expect(ab7320Errors(unexpanded)).toEqual([]);
+    expect(ab7325(unexpanded)).toEqual([expect.objectContaining({
+      message: expect.stringContaining('"launcher", "probe" depend on client-side Agent Plugins 1.0.0 resolution that Cursor 3.18.25 does not perform'),
+      recovery: expect.stringContaining('emitted `install.mjs`'),
+      severity: 'warning',
+    })]);
+    const [unexpandedMessage] = ab7325(unexpanded).map((entry) => entry.message);
+    expect(unexpandedMessage).toContain('launcher: plugin-relative `./` command resolved against the workspace folder');
+    expect(unexpandedMessage).toContain('omitted `cwd` defaulted to the home directory');
+    expect(unexpandedMessage).toContain('probe: ${PLUGIN_ROOT}/${PLUGIN_DATA} left unexpanded in args, env, cwd (spec §9.2)');
+    expect(unexpandedMessage).toContain('reserved `PLUGIN_ROOT`/`PLUGIN_DATA` variables not provided');
+    expect(hostReport(unexpanded, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: { servers: ['launcher', 'probe'], state: 'unexpanded' }, name: 'spec-shape', state: 'installed' }),
+    ]);
+    await rm(join(installRoot, 'spec-shape'), { recursive: true });
+
+    // 2. The same pack installed by the emitted install.mjs: expanded, recorded, and verified — the Agent Plugins
+    //    contract is checked against the bundle's document, so the absolute paths and §9.1 keys in the copy are no error.
+    const bundle = join(fixture.root, 'portable-bundle');
+    const installerSource = createDefaultRegistry().get('portable').plan({
+      extensions: {},
+      hooks: [],
+      mcpServers: [],
+      metadata: {
+        id: 'plugin:expanded',
+        name: 'expanded',
+        provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+        version: '1.0.0',
+      },
+      runtime: { node: '22.19.0' },
+      scripts: [],
+      skills: [],
+      targets: [{ id: 'target:portable', name: 'portable', provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' } }],
+    }).entries.find((entry): entry is TargetArtifactWrite => entry.kind === 'write' && entry.relativePath === 'install.mjs');
+    if (installerSource === undefined) throw new Error('portable plan emitted no install.mjs');
+    await mkdir(join(bundle, 'mcp'), { recursive: true });
+    await writeFile(join(bundle, 'install.mjs'), installerSource.content);
+    await writeFile(join(bundle, 'INSTALL.md'), '# Install expanded\n');
+    await writeJson(join(bundle, 'plugin.json'), { $schema: pluginSchema, name: 'expanded', version: '1.0.0' });
+    await writeJson(join(bundle, 'mcp.json'), {
+      $schema: mcpSchema,
+      mcpServers: {
+        launcher: { args: [], command: './mcp/launch.sh', type: 'stdio' },
+        probe: { args: ['${PLUGIN_ROOT}/mcp/report.mjs'], command: 'node', cwd: '${PLUGIN_ROOT}', env: { PROBE_DATA: '${PLUGIN_DATA}' }, type: 'stdio' },
+      },
+    });
+    await writeFile(join(bundle, 'mcp', 'report.mjs'), 'process.stdin.resume();\n');
+    await writeFile(join(bundle, 'mcp', 'launch.sh'), '#!/bin/sh\n', { mode: 0o755 });
+    await new Promise<void>((resolveInstall, reject) => {
+      const child = spawn(process.execPath, [join(bundle, 'install.mjs')], { cwd: bundle, env: { ...process.env, HOME: fixture.home }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('error', reject);
+      child.on('exit', (code) => code === 0 ? resolveInstall() : reject(new Error(`install.mjs exited ${String(code)}: ${output}`)));
+    });
+    const destination = join(installRoot, 'expanded');
+    const pluginData = join(fixture.home, '.cursor', 'agent-bundle', 'plugin-data', 'expanded');
+    const expanded = await doctor();
+    expect(ab7320Errors(expanded)).toEqual([]);
+    expect(expanded.diagnostics.filter((entry) => entry.code === 'AB7320' && entry.severity === 'info').map((entry) => entry.message)).toEqual([
+      expect.stringContaining('using the pre-expansion mcp.json its install receipt recorded'),
+    ]);
+    expect(ab7325(expanded)).toEqual([expect.objectContaining({
+      message: expect.stringContaining(`were expanded for Cursor at install (provenance: derived; Cursor 3.18.25 expands no Agent Plugins placeholder itself): PLUGIN_ROOT=${JSON.stringify(destination)}, PLUGIN_DATA=${JSON.stringify(pluginData)}`),
+      severity: 'info',
+    })]);
+    expect(hostReport(expanded, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: { pluginData, pluginRoot: destination, servers: ['launcher', 'probe'], state: 'expanded' }, name: 'expanded', state: 'installed' }),
+    ]);
+
+    // 3. Drift: the data directory disappears and a referenced script is removed — Cursor would spawn paths that do not exist.
+    await rm(pluginData, { recursive: true });
+    await rm(join(destination, 'mcp', 'report.mjs'));
+    const drifted = await doctor();
+    expect(ab7325(drifted)).toEqual([expect.objectContaining({
+      message: expect.stringContaining('no longer describes the installed copy'),
+      recovery: expect.stringContaining('reinstalled at its current location'),
+      severity: 'error',
+    })]);
+    const [driftMessage] = ab7325(drifted).map((entry) => entry.message);
+    expect(driftMessage).toContain(`the PLUGIN_DATA directory ${JSON.stringify(pluginData)} does not exist`);
+    expect(driftMessage).toContain(`mcpServers/probe/args/0 ${JSON.stringify(join(destination, 'mcp', 'report.mjs'))} does not exist under the plugin root`);
+    expect(hostReport(drifted, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: expect.objectContaining({ state: 'drifted' }), name: 'expanded', state: 'corrupt' }),
+    ]);
+
+    // 4. A copy moved to another plugin directory carries a receipt expanded for its old root.
+    await mkdir(pluginData, { recursive: true });
+    await writeFile(join(destination, 'mcp', 'report.mjs'), 'process.stdin.resume();\n');
+    await cp(destination, join(installRoot, 'moved'), { recursive: true });
+    await rm(destination, { recursive: true });
+    const moved = await doctor();
+    expect(ab7325(moved).map((entry) => entry.severity)).toEqual(['error']);
+    expect(ab7325(moved)[0]?.message).toContain(`the receipt expanded PLUGIN_ROOT to ${JSON.stringify(destination)} but the package is installed at ${JSON.stringify(join(installRoot, 'moved'))}`);
+    // The moved copy's on-disk mcp.json is still validated against the recorded bundle document, not its expanded bytes.
+    expect(ab7320Errors(moved)).toEqual([]);
+    await rm(join(installRoot, 'moved'), { recursive: true });
+
+    // 5. An edit to the installed copy that keeps every path valid (a bare command renamed) is still drift:
+    //    the installed bytes must equal the expansion of the recorded document, and the byte lane then
+    //    validates the installed bytes themselves (which are not Agent Plugins-conformant), so the entry is corrupt.
+    await cp(bundle, join(fixture.root, 'bundle-again'), { recursive: true });
+    await new Promise<void>((resolveInstall, reject) => {
+      const child = spawn(process.execPath, [join(fixture.root, 'bundle-again', 'install.mjs')], { cwd: join(fixture.root, 'bundle-again'), env: { ...process.env, HOME: fixture.home }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('error', reject);
+      child.on('exit', (code) => code === 0 ? resolveInstall() : reject(new Error(`install.mjs exited ${String(code)}: ${output}`)));
+    });
+    const installedMcp = await readFile(join(destination, 'mcp.json'), 'utf8');
+    await writeFile(join(destination, 'mcp.json'), installedMcp.replace('"command": "node"', '"command": "bun"'));
+    const edited = await doctor();
+    expect(ab7325(edited)).toEqual([expect.objectContaining({
+      message: expect.stringContaining('the installed mcp.json is not the expansion of the recorded document (edited or replaced after install)'),
+      severity: 'error',
+    })]);
+    expect(ab7320Errors(edited).length).toBeGreaterThan(0);
+    expect(hostReport(edited, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: expect.objectContaining({ state: 'drifted' }), name: 'expanded', state: 'corrupt' }),
+    ]);
+
+    // 6. The expanded document removed altogether while the receipt still records it.
+    await rm(join(destination, 'mcp.json'));
+    const removed = await doctor();
+    expect(ab7325(removed).map((entry) => entry.severity)).toEqual(['error']);
+    expect(ab7325(removed)[0]?.message).toContain('mcp.json is missing or not a regular file although the receipt recorded its expansion');
+    expect(hostReport(removed, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: { pluginData, pluginRoot: destination, servers: [], state: 'drifted' }, state: 'corrupt' }),
+    ]);
+  } finally {
+    await fixture.cleanup();
+  }
+}, 60_000);
 
 it('accepts a versionless Cursor inventory manifest as installed', async () => {
   const fixture = await temporaryDoctor();
