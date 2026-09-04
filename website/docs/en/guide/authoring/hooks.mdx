@@ -89,25 +89,36 @@ rather than emitting a Codex document with an empty matcher that would never fir
 ## The handler contract
 
 A handler module default-exports a function that receives the event payload and returns the
-outcome. Returning nothing is the same as continuing:
+outcome. Returning nothing is the same as continuing. `HookHandler<E>` from `agent-bundle` (also
+re-exported from `agent-bundle/config`, where the hook is declared) types both sides for one
+canonical event, so a `satisfies` clause is the whole contract:
 
 ```ts
 // src/hooks/session-start.ts
-interface SessionStartEvent {
-  readonly cwd?: string;
-  readonly sessionId?: string;
-  readonly source?: string;
-  readonly transcriptPath?: string;
-}
+import type { HookHandler } from 'agent-bundle';
 
-export default (event: SessionStartEvent) => ({
+export default ((event) => ({
   additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
-  outcome: 'continue' as const,
-});
+  outcome: 'continue',
+})) satisfies HookHandler<'sessionStart'>;
 ```
 
-The generated wrapper validates the result before projecting it into host-native output. Exactly
-four keys are accepted, and each one is checked:
+`event` is `HookEvent<'sessionStart'>` — `sessionId` plus the optional `cwd`, `source`,
+`transcriptPath`, and the other session facts a host may attach — and the return type is
+`HookResult<'sessionStart'>`, so a `sessionStart` handler that returns
+`{ outcome: 'deny', reason: '…' }` is a `tsc` error rather than a hook-time failure. The per-event
+payloads (`BeforeToolHookEvent` carries `toolName`, `toolInput`, `toolUseId`; `AfterToolHookEvent`
+adds `toolResponse`; `StopHookEvent` and `AgentStopHookEvent` carry `stopHookActive`;
+`AgentStartHookEvent` carries `agentId` and `agentType`) are exported by name, a field is required
+only when every host delivers it, and the handler's second argument (`HookHandlerContext`) names
+the invoking `target`, its native event, and the validated native input verbatim for a handler
+that needs a host-specific field. The types are the portable contract — what every host wrapper
+accepts — so a Cursor-only denial from `agentStart` or Claude-only `additionalContext` from
+`agentStop` stays outside them.
+
+The generated wrapper still validates the result before projecting it into host-native output —
+the same rules, applied at hook time to JavaScript and prebuilt handlers too. Exactly four keys
+are accepted, and each one is checked:
 
 | Key | Contract |
 | --- | --- |

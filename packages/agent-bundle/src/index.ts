@@ -115,6 +115,30 @@ export type AgentBundleConfig = CoreAgentBundleConfig
 
 export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
 
+// The config hook handler contract (#488): the payload a `hooks.<event>.handler`
+// receives and the result the generated wrapper admits, per canonical event.
+export { hookEventFields, hookResultContract } from './adapters/hook-handler.ts';
+export type {
+  AfterToolHookEvent,
+  AgentStartHookEvent,
+  AgentStopHookEvent,
+  BeforeToolHookEvent,
+  HookContinueResult,
+  HookDenyResult,
+  HookEvent,
+  HookEventBase,
+  HookEventPayloads,
+  HookHandler,
+  HookHandlerContext,
+  HookResult,
+  HookResultContract,
+  HookResultRule,
+  SessionStartHookEvent,
+  StopHookEvent,
+  WorkspaceOpenHookEvent,
+} from './adapters/hook-handler.ts';
+export type { AgentBundleHookEntry, AgentBundleHookInput, CanonicalHookEvent } from './core/types.ts';
+
 export type {
   AgentBundleConfigExtensions,
   AgentBundleDevConfig,

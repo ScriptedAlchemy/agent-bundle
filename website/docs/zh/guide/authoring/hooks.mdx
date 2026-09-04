@@ -82,24 +82,32 @@ export default defineConfig({
 
 ## 处理器契约
 
-处理器模块默认导出一个函数，它接收事件负载并返回结果。不返回任何内容等同于继续：
+处理器模块默认导出一个函数，它接收事件负载并返回结果。不返回任何内容等同于继续。来自 `agent-bundle` 的
+`HookHandler<E>`（也从声明 hook 的 `agent-bundle/config` 再导出）为一个规范事件同时给出两侧的类型，
+因此一个 `satisfies` 子句就是完整的契约：
 
 ```ts
 // src/hooks/session-start.ts
-interface SessionStartEvent {
-  readonly cwd?: string;
-  readonly sessionId?: string;
-  readonly source?: string;
-  readonly transcriptPath?: string;
-}
+import type { HookHandler } from 'agent-bundle';
 
-export default (event: SessionStartEvent) => ({
+export default ((event) => ({
   additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
-  outcome: 'continue' as const,
-});
+  outcome: 'continue',
+})) satisfies HookHandler<'sessionStart'>;
 ```
 
-生成的包装层会在把结果投影为宿主原生输出之前先校验它。只接受四个键，并且每一个都会被检查：
+`event` 是 `HookEvent<'sessionStart'>`——`sessionId` 加上可选的 `cwd`、`source`、`transcriptPath`
+以及宿主可能附带的其他会话事实——返回类型是 `HookResult<'sessionStart'>`，因此一个返回
+`{ outcome: 'deny', reason: '…' }` 的 `sessionStart` 处理器是 `tsc` 错误，而不是 hook 运行时的失败。
+按事件划分的负载类型（`BeforeToolHookEvent` 携带 `toolName`、`toolInput`、`toolUseId`；`AfterToolHookEvent`
+增加 `toolResponse`；`StopHookEvent` 与 `AgentStopHookEvent` 携带 `stopHookActive`；`AgentStartHookEvent`
+携带 `agentId` 与 `agentType`）都按名字导出，只有当每个宿主都会提供某个字段时它才是必填的；处理器的第二个
+参数（`HookHandlerContext`）给出调用它的 `target`、该宿主的原生事件名以及原样的已校验原生输入，供需要
+宿主特定字段的处理器使用。这些类型是可移植契约——每个宿主包装层都接受的部分——因此仅 Cursor 支持的
+`agentStart` 拒绝，或仅 Claude 支持的 `agentStop` `additionalContext`，都不在其中。
+
+生成的包装层仍会在把结果投影为宿主原生输出之前先校验它——同样的规则，在 hook 运行时也施加于 JavaScript
+与预构建的处理器。只接受四个键，并且每一个都会被检查：
 
 | 键 | 契约 |
 | --- | --- |
