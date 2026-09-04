@@ -38,6 +38,7 @@ export type {
   AgentNoticePriority,
   AgentNoticePublishInput,
   AgentNoticePublishOptions,
+  AgentNoticePublisher,
   AgentNoticePublishResult,
   AgentNoticeRecordedPrincipal,
   AgentNoticeRequest,
@@ -114,7 +115,9 @@ export {
   AGENT_NOTICE_STATE_VERSION,
   agentNoticeEventSchemas,
   agentNoticeStateDefinition,
+  noticePublisherOf,
   noticeSettledAt,
+  publisherMatchesPrincipal,
   recipientMatchesPrincipal,
   recordedNoticePrincipal,
 } from './state.js';

@@ -244,7 +244,8 @@ workspace-durable SQLite driver and passes the resulting ledger as
 subpath and ship no state or notice implementation.
 
 Inside an authorized request, `(await agent()).notices` is a request-bound
-handle with `publish()`, `read()`, `inbox()`, and `acknowledge()`. A
+handle with `publish()`, `read()`, `inbox()`, `acknowledge()`, and
+`published()`. A
 recipient is the conjunction of the observed axes it names — `actor`, `host`,
 `session`, `workspace`, plus the two lineage axes read from the admitting
 request's `lineage`: `conversation` (exactly one agent thread,
@@ -259,7 +260,26 @@ just `{ conversation, root }`; both recipient fields and that scope are
 additive optional schema fields (no definition version bump), and an
 admission journaled before them matches exactly what it matched then. Publish
 authorization runs before persistence, and delivery authorization runs again
-when a matching event is admitted. `read()` exposes notices selected for that event
+when a matching event is admitted.
+
+`published()` is the publisher's own view (#460): the notices this request's
+principal published, in every state, with their receipts — the answer to "was
+my notice attempted or acknowledged?" that `read()` (this invocation's
+deliveries) and `inbox()` (this recipient's pending notices) cannot give.
+`publish()` records the publishing principal's observed axes on the notice as
+`publisher` (`actor`, `host`, `session`, `workspace`, and `conversation` from
+`request.lineage`; absent when the request observed none, so such a notice
+belongs to no view). A reader is the publisher when it resolves the same
+lineage conversation — the identity of an agent thread, whichever transport
+observed it, so the hook that published and the MCP tool call that asks agree
+even though host name, session id, and cwd differ — or, for a publisher
+recorded without lineage, when every recorded axis matches. It is a read with
+no route behind it: it records no receipt, is judged per notice under
+authorization `phase: 'published'`, and discloses content under the default
+`internal` ceiling only (`internal` secret-passed, `public` as authored,
+`secret` as the placeholder). It never returns another publisher's notices,
+never a notice deduplicated onto another author's, and is not a recipient
+view — cross-recipient reads stay structurally impossible. `read()` exposes notices selected for that event
 while the ledger records a receipt containing the invocation id and state
 `attempted`. `acknowledge()` is recipient-matched and authorization-gated and
 produces the terminal `acknowledged` state — the strongest evidenced outcome.

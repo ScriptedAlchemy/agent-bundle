@@ -209,6 +209,9 @@ const messages = {
       ['`root`', '`request.lineage.root`', 'The root conversation and every subagent whose lineage root it is — the publisher included when it is under that root.'],
     ],
     recipientAxisHeaders: ['Axis', 'Matched against', 'Reaches'],
+    publisherView: 'Publisher view',
+    publisherViewIntro:
+      'A recipient never sees another recipient\'s notices, and a publisher does not see a recipient view either. What a publisher gets is `notices.published()`: the notices its own principal published, in every state, with their receipts. `publish()` records the publishing request\'s observed axes on the notice (`publisher`: `actor`, `host`, `session`, `workspace`, and `conversation` from `request.lineage`); a reader is the publisher when it resolves the same lineage conversation — so the hook that published and the MCP tool call that asks agree even though host name, session id, and cwd differ — or, for a publisher recorded without lineage, when every recorded axis matches. The view records nothing on the ledger, is judged per notice under authorization phase `published`, and discloses content under the default `internal` ceiling (`internal` secret-passed, `public` as authored, `secret` as the placeholder). A notice published by a request that observed no identity belongs to no view.',
     noticeChannels: 'Delivery channels',
     unavailableChannels: 'Why a channel is unavailable',
     sensitivityCeilings: 'Sensitivity ceilings',
@@ -302,6 +305,9 @@ const messages = {
       ['`root`', '`request.lineage.root`', '根会话以及谱系根为它的每个子代理——发布者若位于该根之下，也包括在内。'],
     ],
     recipientAxisHeaders: ['轴', '匹配对象', '到达范围'],
+    publisherView: '发布者视图',
+    publisherViewIntro:
+      '接收者永远看不到其他接收者的通知，发布者也不会获得接收者视图。发布者得到的是 `notices.published()`：其自身主体发布的通知，涵盖所有状态并附带回执。`publish()` 会把发布请求观测到的身份轴记录在通知上（`publisher`：`actor`、`host`、`session`、`workspace`，以及来自 `request.lineage` 的 `conversation`）；当读取方解析出相同的谱系会话时即为发布者——因此发布通知的钩子与发起查询的 MCP 工具调用即便宿主名、会话 id 与 cwd 各不相同也能对上——若发布者记录时没有谱系，则要求记录的每个轴都匹配。该视图不会在账本上记录任何内容，按通知逐条经授权阶段 `published` 判定，并且只在默认的 `internal` 上限下披露内容（`internal` 经过密钥脱敏，`public` 按原文，`secret` 为占位符）。由未观测到任何身份的请求发布的通知不属于任何视图。',
     noticeChannels: '投递通道',
     unavailableChannels: '通道不可用的原因',
     sensitivityCeilings: '敏感度上限',
@@ -686,6 +692,9 @@ function renderNotices(hosts: readonly HostCapabilityTable[], m: Messages): stri
   sections.push(`## ${m.recipientAxes}\n`);
   sections.push(m.recipientAxesIntro);
   sections.push(table(m.recipientAxisHeaders, m.recipientAxisRows));
+
+  sections.push(`## ${m.publisherView}\n`);
+  sections.push(m.publisherViewIntro);
 
   sections.push(`## ${m.noticeChannels}\n`);
   const channels = unionKeys(hosts, data => asObject(data.noticeDelivery));

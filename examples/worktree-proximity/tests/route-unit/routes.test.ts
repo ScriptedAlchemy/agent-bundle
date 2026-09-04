@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
-import { available, type AgentLineage, type Observed } from '@agent-bundle/runtime';
+import { agent, available, runAgentRequest, type AgentLineage, type Observed } from '@agent-bundle/runtime';
 import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
@@ -485,9 +485,70 @@ describe('worktree proximity journeys', () => {
         expect.objectContaining({ id: 'agent-a', worktreeRoot: worktrees.a }),
         expect.objectContaining({ id: 'agent-b', worktreeRoot: worktrees.b }),
       ]),
+      // A caller with no identity published nothing: the count is honestly
+      // zero, not the ledger's total.
+      notices: expect.objectContaining({ pending: 0, state: 'available', total: 0 }),
       refusals: 0,
       revision: expect.any(Number),
     });
+  });
+
+  it('reports the publishing agent its own notice states through coordinator status (#460)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    // agent-b's intent publishes the proximity notice addressed to agent-a.
+    await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
+
+    // An MCP tool call from the same agent: the client name, MCP session id,
+    // and server cwd all differ from the hook that published — the lineage
+    // conversation is what identifies the publisher.
+    const statusFor = (conversation: string) => renderRoute('tool:coordinator/status', {
+      context: {
+        ...mounted.context(),
+        host: available({ name: 'claude-code' }, 'native'),
+        lineage: childLineage(conversation),
+        providers: providers(worktrees.root),
+        session: available({ sessionId: 'mcp-session' }, 'native'),
+        workspace: available({ root: worktrees.root }, 'derived'),
+      },
+      input: {},
+    });
+    const noticesOf = (conversation: string, worktreeRoot: string) => runAgentRequest({
+      ...mounted.context(),
+      host: available({ name: 'claude' }, 'native'),
+      invocation: { id: `invocation:notices:${conversation}:${String(sequence++)}`, kind: 'tool', startedAt: '2026-09-01T20:05:00.000Z' },
+      lineage: childLineage(conversation),
+      providers: providers(worktreeRoot),
+      session: available({ sessionId: 'root-session' }, 'native'),
+      workspace: available({ root: worktreeRoot }, 'native'),
+    }, async () => {
+      const handle = (await agent()).notices!;
+      return { inbox: await handle.inbox(), published: await handle.published() };
+    });
+
+    // Pending: the publisher sees it; its own inbox does not (it is not the recipient).
+    const pending = await statusFor('agent-b');
+    expectDocument(pending).toContainMarkdown('Published notices: 1 (pending 1, attempted 0, acknowledged 0)');
+    expect(pending.result).toMatchObject({ notices: { pending: 1, state: 'available', total: 1 } });
+    const publisherBefore = await noticesOf('agent-b', worktrees.b);
+    expect(publisherBefore.inbox).toEqual([]);
+    expect(publisherBefore.published).toEqual([expect.objectContaining({ recipient: { conversation: 'agent-a' }, state: 'pending' })]);
+    // The recipient sees it in its inbox and published nothing.
+    const recipientBefore = await noticesOf('agent-a', worktrees.a);
+    expect(recipientBefore.inbox).toHaveLength(1);
+    expect(recipientBefore.published).toEqual([]);
+    expect((await statusFor('agent-a')).result).toMatchObject({ notices: { state: 'available', total: 0 } });
+
+    // Admitted on agent-a's next event: the publisher now reads `attempted`,
+    // and the recipient's inbox is empty again.
+    await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
+    const attempted = await statusFor('agent-b');
+    expectDocument(attempted).toContainMarkdown('Published notices: 1 (pending 0, attempted 1, acknowledged 0)');
+    expect(attempted.result).toMatchObject({ notices: { attempted: 1, pending: 0, total: 1 } });
+    const recipientAfter = await noticesOf('agent-a', worktrees.a);
+    expect(recipientAfter.inbox).toEqual([]);
+    expect(recipientAfter.published).toEqual([]);
+    expect((await noticesOf('agent-b', worktrees.b)).inbox).toEqual([]);
   });
 
   it('renders state unavailability when an event module has no mounted handle', async () => {
