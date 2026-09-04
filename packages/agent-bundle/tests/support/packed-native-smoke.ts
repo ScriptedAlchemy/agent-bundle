@@ -255,6 +255,39 @@ const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {
   return Object.freeze({ host, status: passed ? 'passed' as const : 'failed' as const, trials: summary?.trials ?? 0 });
 };
 
+interface PackedClaudeValidationDocument {
+  readonly diagnostics?: readonly unknown[];
+  readonly hostValidation?: readonly {
+    readonly diagnostics?: readonly unknown[];
+    readonly host?: unknown;
+    readonly load?: { readonly status?: unknown };
+    readonly status?: unknown;
+    readonly target?: unknown;
+    readonly version?: unknown;
+  }[];
+}
+
+/**
+ * The packed `validate --artifact --strict --json` document must carry one Claude
+ * report that passed both the plugin-mode validation runs and the
+ * `--plugin-dir … plugin list --json` load check against the installed `claude`.
+ */
+const packedClaudeValidationPassed = (stdout: string, versionNumber: string): boolean => {
+  let document: PackedClaudeValidationDocument;
+  try {
+    document = JSON.parse(stdout) as PackedClaudeValidationDocument;
+  } catch {
+    return false;
+  }
+  const report = document.hostValidation?.find((entry) => entry.host === 'claude' && entry.target === 'claude');
+  return report !== undefined
+    && report.status === 'passed'
+    && report.version === versionNumber
+    && report.load?.status === 'loaded'
+    && (report.diagnostics?.length ?? 0) === 0
+    && (document.diagnostics?.length ?? 0) === 0;
+};
+
 /**
  * Packed-artifact proof for Claude's developer tools. It requires only the
  * installed binary, never authentication, and retains no plugin-list output.
@@ -300,11 +333,24 @@ export const runPackedClaudePluginProof = async (options: {
     if (version.exitCode !== 0 || versionNumber === undefined) {
       throw new Error('packed-claude-proof:version');
     }
-    const validation = await run('claude', ['plugin', 'validate', pluginDirectory, '--strict'], {
-      cwd: project,
-      environment,
-    });
-    if (validation.exitCode !== 0) throw new Error('packed-claude-proof:validate');
+    // The packed CLI's own host validation: `claude plugin validate --strict` against
+    // `.claude-plugin/plugin.json` (plugin.json, hooks/hooks.json, skills/, agents/, commands/),
+    // then `marketplace.json`, then the `--plugin-dir … plugin list --json` load check. A raw
+    // run against the directory would be a marketplace run that never opens the component
+    // files (#475), and the shared runner is what `build`, `validate --artifact`, and `doctor`
+    // execute in production.
+    const validation = await runNodeEntrypoint(cli, [
+      'validate',
+      '--root',
+      project,
+      '--artifact',
+      artifact,
+      '--strict',
+      '--json',
+    ], { cwd: project, environment });
+    if (validation.exitCode !== 0 || !packedClaudeValidationPassed(validation.stdout, versionNumber)) {
+      throw new Error('packed-claude-proof:validate');
+    }
     const plugins = await run('claude', ['--plugin-dir', pluginDirectory, 'plugin', 'list', '--json'], {
       cwd: project,
       environment,

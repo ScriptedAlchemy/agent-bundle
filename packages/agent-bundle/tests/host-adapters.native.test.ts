@@ -9,12 +9,22 @@ import { claudeAdapter } from '../src/adapters/claude.ts';
 import { codexAdapter } from '../src/adapters/codex.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
+import {
+  validateClaudePlugin,
+  type ClaudePluginValidationReport,
+} from '../src/host-contracts/claude-plugin-validation.ts';
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
 interface ClaudeValidation {
   readonly code: number | null;
   readonly output: string;
+}
+
+interface ClaudePluginValidation {
+  /** Every diagnostic as `CODE: message`, so `toContain` reads like the raw CLI output did. */
+  readonly output: string;
+  readonly report: ClaudePluginValidationReport;
 }
 
 interface CodexValidation {
@@ -49,8 +59,33 @@ const runClaude = async (
     child.once('close', (code) => resolvePromise({ code, output }));
   });
 
+/**
+ * A raw `claude plugin validate --strict <target>` run. Name a manifest, never the emitted
+ * plugin directory: with `.claude-plugin/marketplace.json` beside `plugin.json`, a directory run
+ * is a marketplace run, and "From a marketplace directory, Claude Code doesn't open the plugins'
+ * skill, agent, command, or hook files" (plugin-marketplaces → Troubleshooting › Marketplace
+ * validation errors). Tests about the marketplace manifest use this with `marketplace.json`.
+ */
 const runClaudeValidation = async (cwd: string, target: string): Promise<ClaudeValidation> =>
   runClaude(cwd, ['plugin', 'validate', '--strict', target]);
+
+/**
+ * The plugin-mode proof through the production runner `validate --artifact`, `build`, and
+ * `doctor` share: `plugin.json` first (covers `plugin.json`, `hooks/hooks.json`, `skills/`,
+ * `agents/`, `commands/` — plugin-marketplaces → Validate a plugin or a directory without a
+ * manifest › Pick the directory to name), then `marketplace.json`; `--strict` on both, `--json`
+ * on 2.1.259+. `status: 'passed'` means the strict runs reported nothing (#475).
+ */
+const validateClaudePluginRoot = async (
+  root: string,
+  options: Readonly<{ loadCheck?: boolean; strict?: boolean }> = {},
+): Promise<ClaudePluginValidation> => {
+  const report = await validateClaudePlugin({ pluginDirectory: root, target: 'claude', ...options });
+  return {
+    output: report.diagnostics.map((entry) => `${entry.code}: ${entry.message}`).join('\n'),
+    report,
+  };
+};
 
 const runCodex = async (
   cwd: string,
@@ -614,10 +649,9 @@ nativeIt('records that strict validation accepts package metadata without runnin
         version: '1.0.0',
       })}\n`),
     ]);
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('package.json');
     expect(validation.output).not.toContain('package-lock.json');
     await expect(access(join(root, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -626,7 +660,7 @@ nativeIt('records that strict validation accepts package metadata without runnin
   }
 });
 
-nativeIt('records that strict validation does not catch a path-escaping plugin symlink', async () => {
+nativeIt('records that plugin-mode validation warns about a symlinked skill entry a session would follow', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-symlink-validation-'));
   const externalSkill = `${root}-outside-skill`;
 
@@ -639,11 +673,31 @@ nativeIt('records that strict validation does not catch a path-escaping plugin s
     );
     await mkdir(join(root, 'skills'), { recursive: true });
     await symlink(externalSkill, join(root, 'skills', 'outside-skill'), 'dir');
-    const validation = await runClaudeValidation(root, root);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    // plugin-marketplaces → Validate a plugin or a directory without a manifest › Check files behind
+    // symlinks: "A linked entry inside a skills, agents, or commands directory: Claude Code skips it
+    // and warns, per directory, how many entries it skipped that a session would load." Observed on
+    // Claude Code 2.1.250 (CI pin), 2.1.251, and 2.1.260 as a `skills` directory warning that
+    // --strict promotes to exit 1. The validator never names the link target, so containment stays
+    // an install-copy check; this proof is that the plugin run reports the skipped entry at all.
+    const validation = await validateClaudePluginRoot(root);
+    expect(validation.report.status, validation.output).toBe('warnings');
+    expect(validation.report.diagnostics).toEqual([expect.objectContaining({
+      code: 'AB6020',
+      generatedPath: 'skills',
+      message: expect.stringMatching(/\(skill skills\): directory: 1 entry here is a symlink and was not read/u),
+      severity: 'warning',
+    })]);
     expect(validation.output).not.toContain('outside-skill');
+    expect((await validateClaudePluginRoot(root, { strict: true })).report.status).toBe('failed');
+
+    // The former proof named the directory, which is a marketplace run: the same bundle passes and
+    // the skills directory is never opened (Troubleshooting › Marketplace validation errors).
+    const marketplaceRun = await runClaudeValidation(root, root);
+    expect(marketplaceRun.code, marketplaceRun.output).toBe(0);
+    expect(marketplaceRun.output).toContain('Validating marketplace manifest');
+    expect(marketplaceRun.output).toContain('Validation passed');
+    expect(marketplaceRun.output).not.toMatch(/is a symlink and was not read/u);
   } finally {
     await Promise.all([
       rm(root, { force: true, recursive: true }),
@@ -908,13 +962,13 @@ nativeIt('accepts an emitted Claude artifact whose plugin root carries settings.
     }));
     expect(written).toContain('settings.json');
 
-    // Both documented validation entry points: the marketplace manifest and
-    // the plugin directory itself.
-    for (const target of [join(root, '.claude-plugin', 'marketplace.json'), root]) {
-      const validation = await runClaudeValidation(root, target);
-      expect(validation.code, validation.output).toBe(0);
-      expect(validation.output).toContain('Validation passed');
-    }
+    // Both documented validation entry points: the marketplace manifest alone,
+    // and the plugin-mode run (plugin.json, then marketplace.json).
+    const marketplace = await runClaudeValidation(root, join(root, '.claude-plugin', 'marketplace.json'));
+    expect(marketplace.code, marketplace.output).toBe(0);
+    expect(marketplace.output).toContain('Validation passed');
+    const plugin = await validateClaudePluginRoot(root);
+    expect(plugin.report.status, plugin.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -932,12 +986,12 @@ nativeIt('records that strict native validation never inspects plugin settings.j
       join(root, 'settings.json'),
       '{"agent":"","statusLine":{"type":"command","command":"rows.sh"},"padding":3}\n',
     );
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
-    // The host validator ignores settings.json even under --strict, so the
-    // compiler's own claude.settings.* diagnostics are the only guard an
+    // The host validator ignores settings.json even in a strict plugin run, so
+    // the compiler's own claude.settings.* diagnostics are the only guard an
     // author gets before the plugin is enabled in a session.
-    expect(validation.code, validation.output).toBe(0);
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('settings.json');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -983,26 +1037,18 @@ nativeIt('records strict native validation behavior for documented and security-
   try {
     for (const { fileName, frontmatter, label } of cases) {
       const caseRoot = join(root, fileName.replace('.md', ''));
-      const configRoot = join(caseRoot, 'config');
       const pluginRoot = join(caseRoot, 'plugin');
       await writeClaudeArtifact(pluginRoot, model);
-      await Promise.all([
-        mkdir(join(pluginRoot, 'agents'), { recursive: true }),
-        mkdir(configRoot, { recursive: true }),
-      ]);
+      await mkdir(join(pluginRoot, 'agents'), { recursive: true });
       await writeFile(
         join(pluginRoot, 'agents', fileName),
         `---\n${frontmatter.join('\n')}\n---\n\nInspect the repository and report findings.\n`,
       );
 
-      const validation = await runClaude(
-        pluginRoot,
-        ['plugin', 'validate', '--strict', pluginRoot],
-        configRoot,
-      );
+      // A plugin run is the only mode that opens agents/ at all.
+      const validation = await validateClaudePluginRoot(pluginRoot);
 
-      expect(validation.code, `${label}: ${validation.output}`).toBe(0);
-      expect(validation.output).toContain('Validation passed');
+      expect(validation.report.status, `${label}: ${validation.output}`).toBe('passed');
       if (label === 'security-sensitive fields') {
         expect(validation.output).not.toContain('hooks');
         expect(validation.output).not.toContain('mcpServers');
@@ -1039,10 +1085,9 @@ nativeIt('accepts emitted Claude experimental themes and monitors under strict n
     expect(JSON.parse(
       await readFile(join(root, 'monitors', 'monitors.json'), 'utf8'),
     )[0].command).toBe('node ${CLAUDE_PLUGIN_ROOT}/scripts/watch.mjs');
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1058,11 +1103,24 @@ nativeIt('records whether strict native validation inspects monitors/monitors.js
       join(root, 'monitors', 'monitors.json'),
       '[{"name":"missing-command","description":"Missing its required command."}]\n',
     );
-    const validation = await runClaudeValidation(root, root);
-
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    // Plugin mode, so a monitors finding would be visible if the validator produced one. It is not:
+    // both `plugin validate --strict` runs accept the bundle. Only the load check that follows
+    // (`claude --plugin-dir <root> plugin list --json`) exposes the refusal, as AB7325 (#479 follow-up).
+    const validation = await validateClaudePluginRoot(root, { loadCheck: false });
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('monitors.json');
+
+    const loaded = await validateClaudePluginRoot(root);
+    expect(loaded.report.status, loaded.output).toBe('failed');
+    expect(loaded.report.load).toEqual({
+      errors: [expect.stringMatching(/^monitors load failed from .*monitors\/monitors\.json: /u)],
+      status: 'refused',
+    });
+    expect(loaded.report.diagnostics).toEqual([expect.objectContaining({
+      code: 'AB7325',
+      message: expect.stringContaining('although `plugin validate --strict` accepted it; the host reported: monitors load failed'),
+      severity: 'error',
+    })]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1078,10 +1136,10 @@ nativeIt('records whether strict native validation inspects plugin theme content
       join(root, 'themes', 'invalid.json'),
       '{"name":"Missing base","overrides":{"error":7},"typo":true}\n',
     );
-    const validation = await runClaudeValidation(root, root);
+    // Plugin mode, so a theme finding would be visible if the validator produced one.
+    const validation = await validateClaudePluginRoot(root);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('invalid.json');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1097,9 +1155,9 @@ nativeIt('records that strict native validation rejects the deprecated top-level
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     manifest['monitors'] = './monitors/monitors.json';
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
-    expect(validation.code).not.toBe(0);
+    expect(validation.report.status, validation.output).not.toBe('passed');
     expect(validation.output).toContain('monitors');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1190,10 +1248,9 @@ nativeIt('accepts emitted Claude workflows and output styles under strict native
     await emitPlanEntries({ entries: claudeAdapter.plan(payloadModel).entries, root: outputRoot });
     expect(await readFile(join(outputRoot, 'workflows', 'release-audit.js'), 'utf8')).toBe(workflow);
     expect(await readFile(join(outputRoot, 'output-styles', 'terse.md'), 'utf8')).toBe(outputStyle);
-    const validation = await runClaudeValidation(outputRoot, outputRoot);
+    const validation = await validateClaudePluginRoot(outputRoot);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1207,9 +1264,9 @@ nativeIt('records whether strict native validation inspects output-style frontma
     await writeClaudeArtifact(outputRoot, model);
     await mkdir(join(outputRoot, 'output-styles'), { recursive: true });
     await writeFile(join(outputRoot, 'output-styles', 'missing-frontmatter.md'), 'Be concise.\n');
-    const validation = await runClaudeValidation(outputRoot, outputRoot);
+    const validation = await validateClaudePluginRoot(outputRoot);
 
-    expect(validation.code, validation.output).toBe(0);
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('missing-frontmatter.md');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1287,10 +1344,9 @@ nativeIt('accepts emitted Claude channels bound to a plugin MCP server under str
   try {
     const written = await writeClaudeArtifact(root, channelModel);
     expect(written).toContain('.mcp.json');
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1305,12 +1361,11 @@ nativeIt('records whether strict native validation catches a dangling Claude cha
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     manifest['channels'] = [{ server: 'missing' }];
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root);
 
     // Claude Code 2.1.257 validates the channel declaration shape but does
     // not cross-check `server` against the sibling .mcp.json keys.
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    expect(validation.report.status, validation.output).toBe('passed');
     expect(validation.output).not.toContain('missing');
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1325,10 +1380,22 @@ nativeIt('accepts emitted Claude plugin dependencies under strict native validat
       { marketplace: 'acme-shared', name: 'audit-logger' },
       { marketplace: 'acme-shared', name: 'secrets-vault', version: '~2.1.0' },
     ]));
-    const validation = await runClaudeValidation(root, root);
+    const validation = await validateClaudePluginRoot(root, { loadCheck: false });
+    expect(validation.report.status, validation.output).toBe('passed');
 
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    // The load check is machine-bound: this machine has no `acme-shared` marketplace, so Claude
+    // refuses the load for the missing dependency. That is reported as an AB7325 *warning* (the
+    // artifact is not at fault); `--strict` promotes it like any other host warning.
+    const loaded = await validateClaudePluginRoot(root);
+    expect(loaded.report.status, loaded.output).toBe('warnings');
+    expect(loaded.report.load?.status).toBe('refused');
+    expect(loaded.report.load?.errors).toEqual([expect.stringMatching(/^Dependency "audit-logger@acme-shared" is not installed/u)]);
+    expect(loaded.report.diagnostics).toEqual([expect.objectContaining({
+      code: 'AB7325',
+      message: expect.stringContaining('(a declared dependency is not installed on this machine)'),
+      severity: 'warning',
+    })]);
+    expect((await validateClaudePluginRoot(root, { strict: true })).report.status).toBe('failed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1352,9 +1419,8 @@ nativeIt('accepts emitted Claude manifest metadata fields under strict native va
       metadata: { catalog: 'security', entitlement: { tier: 'team' } },
     });
 
-    const validation = await runClaudeValidation(root, root);
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    const validation = await validateClaudePluginRoot(root);
+    expect(validation.report.status, validation.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1375,9 +1441,9 @@ nativeIt('accepts a custom flat command path without a default commands director
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
     await writeFile(manifestPath, `${JSON.stringify({ ...manifest, commands: './custom/deploy.md' })}\n`);
 
-    const validation = await runClaudeValidation(root, root);
-    expect(validation.code, validation.output).toBe(0);
-    expect(validation.output).toContain('Validation passed');
+    // Plugin mode: the run checks that the custom `commands` path exists (Read the validation results).
+    const validation = await validateClaudePluginRoot(root);
+    expect(validation.report.status, validation.output).toBe('passed');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

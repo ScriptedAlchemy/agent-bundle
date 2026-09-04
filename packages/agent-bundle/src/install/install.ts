@@ -10,6 +10,7 @@ import { errorMessage, isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
+import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import {
   compareInstalledTree,
@@ -260,6 +261,13 @@ export const publicHostCacheRoot = (
 
 export interface PublicHostInstalledEntry {
   /**
+   * Claude only: the row's `enabled` flag. `false` means the copy is installed
+   * but switched off (`claude plugin disable`), so none of it reaches a
+   * session until `claude plugin enable` runs; absent when the row carries no
+   * boolean.
+   */
+  readonly enabled?: boolean;
+  /**
    * Claude only: the host's own load errors for this copy, verbatim from the
    * row's `errors` array (present and nonempty only when Claude Code refused
    * the plugin, e.g. "Hook load failed: Duplicate hooks file detected ...").
@@ -273,17 +281,7 @@ export interface PublicHostInstalledEntry {
   readonly version: string;
 }
 
-/**
- * Reads a Claude `plugin list --json` row's `errors` array. Healthy rows omit
- * the key (Claude Code 2.1.259); a refused row carries nonempty strings.
- * Anything else is treated as "no readable errors" rather than a failure, so
- * an unexpected shape cannot mask the row as uninstalled.
- */
-export const claudePluginRowErrors = (row: Readonly<Record<string, unknown>>): readonly string[] => {
-  const errors = row['errors'];
-  if (!Array.isArray(errors)) return [];
-  return Object.freeze(errors.filter((error): error is string => typeof error === 'string' && error.trim().length > 0));
-};
+export { claudePluginRowErrors };
 
 /**
  * The host's own answer to "is this plugin installed, and where": usable, or
@@ -345,6 +343,7 @@ export const parsePublicHostInventory = (
       if (options.scope !== undefined && row['scope'] !== options.scope) continue;
       const errors = claudePluginRowErrors(row);
       entries.push({
+        ...(typeof row['enabled'] === 'boolean' ? { enabled: row['enabled'] } : {}),
         ...(errors.length === 0 ? {} : { errors }),
         installPath: row['installPath'],
         scope: row['scope'],

@@ -60,6 +60,8 @@ interface CliSignalSource {
 }
 
 export interface CliDependencies {
+  /** Injectable only to verify the build host-validation CLI policy without an installed host. */
+  readonly build?: typeof build;
   readonly installBundle?: typeof installBundle;
   readonly prepack?: typeof prepack;
   readonly runDoctor?: typeof runDoctor;
@@ -274,7 +276,19 @@ const writeMachine = (output: Output, result: unknown): void => {
 };
 
 const writeHumanBuild = (output: Output, result: Awaited<ReturnType<typeof build>>): void => {
+  // Errors abort the command before this writer runs, so any diagnostics
+  // reaching it are informational nudges or host-validation warnings.
+  for (const diagnostic of result.diagnostics) {
+    output.write(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
+  }
   output.write(`Built ${result.model.metadata.name} to ${result.build.outputRoot}\n`);
+  for (const report of result.hostValidation ?? []) {
+    output.write(
+      `Host validation (${report.target}): ${report.status}` +
+        `${report.version === undefined ? '' : ` (Claude Code ${report.version})`}` +
+        `${report.load === undefined ? '' : `, load check ${report.load.status}`}\n`,
+    );
+  }
   if (result.packageBuild !== undefined) {
     output.write(`Package build (${result.packageBuild.files.length} file(s)) at ${result.packageBuild.outputRoot}\n`);
   }
@@ -293,11 +307,12 @@ const writeHumanInstall = (output: Output, result: InstallResult): void => {
 };
 
 const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
-  const installed = comparison.installedContentHash === undefined
+  const installed = (comparison.installedContentHash === undefined
     ? ''
     : `; installed ${comparison.installedVersion ?? 'unknown version'} ` +
       `content ${shortContentHash(comparison.installedContentHash)}, ` +
-      `artifact content ${shortContentHash(comparison.artifactContentHash)}`;
+      `artifact content ${shortContentHash(comparison.artifactContentHash)}`) +
+    (comparison.enabled === false ? '; disabled by the host' : '');
   switch (comparison.status) {
     case 'current':
       return `current${installed}`;
@@ -343,6 +358,12 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
       output.write(`  bundle:${identity} ${host.bundle.state}\n`);
       if (host.bundle.comparison !== undefined) {
         output.write(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
+      }
+      for (const validation of host.bundle.hostValidation ?? []) {
+        output.write(
+          `  host validation (${validation.copy} ${validation.pluginDirectory}` +
+          `${validation.scope === undefined ? '' : `, scope ${validation.scope}`}): ${validation.status}\n`,
+        );
       }
     }
     const reports = [
@@ -605,10 +626,23 @@ export const runCli = async (
 
   const buildCommand = configureSourceOptions(
     program.command('build').description('Build a validated Agent Bundle artifact'),
-  ).option('--output <path>', 'Artifact output path relative to --root (overrides config output.distPath; default artifact, since dist is the npm package build output)');
+  )
+    .option('--output <path>', 'Artifact output path relative to --root (overrides config output.distPath; default artifact, since dist is the npm package build output)')
+    .option('--host-validation', 'Run the installed Claude developer validator over built claude and plugin targets', true)
+    .option('--no-host-validation', 'Skip the installed Claude developer validator')
+    .option('--strict', 'Promote host-tool warnings to errors');
   buildCommand.action(async (options: BuildCommandOptions) => {
     const { build } = await import('./api.ts');
-    const result = await build({ ...projectOptions(options), output: options.output, packageOutputs: true });
+    const result = await (dependencies.build ?? build)({
+      ...projectOptions(options),
+      hostValidation: options.hostValidation,
+      output: options.output,
+      packageOutputs: true,
+      strict: options.strict,
+    });
+    if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
+      throw new DiagnosticError(result.diagnostics);
+    }
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanBuild(stdout, result);
   });

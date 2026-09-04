@@ -18,6 +18,7 @@ import { inspectArtifactFilesystem } from '../src/build/emit.ts';
 import type { CapabilityState } from '../src/core/capabilities.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
+import type { ClaudePluginCommandRunner } from '../src/host-contracts/claude-plugin-validation.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
 import {
   createTargetMcpRuntime,
@@ -405,6 +406,134 @@ it('resolves artifact output with CLI, config, and default precedence', async ()
 
     expect(defaults.build.outputRoot).toBe(join(root, 'dist'));
     expect((await stat(join(root, 'dist'))).isDirectory()).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+const recordedClaudeReport = async (name: string, pluginDirectory: string): Promise<string> =>
+  (await readFile(new URL(`./fixtures/claude-plugin-validate/${name}`, import.meta.url), 'utf8'))
+    .replaceAll('/bundle/claude', pluginDirectory);
+
+it('build runs the Claude developer validator and load check over built claude targets only when asked (#476)', async () => {
+  const root = await createProject();
+  try {
+    const artifact = join(root, 'artifact');
+    const claudeBundle = join(artifact, 'claude');
+    const calls: string[][] = [];
+    const runner: ClaudePluginCommandRunner = async (request) => {
+      calls.push([...request.args]);
+      if (request.args[0] === '--version') return { exitCode: 0, signal: null, stderr: '', stdout: '2.1.259 (Claude Code)\n' };
+      if (request.args[0] === '--plugin-dir') {
+        return {
+          exitCode: 0,
+          signal: null,
+          stderr: '',
+          stdout: JSON.stringify([{ enabled: true, id: 'api-fixture@inline', installPath: request.args[1], scope: 'inline', version: '1.0.0' }]),
+        };
+      }
+      const target = request.args[2] ?? '';
+      const findings = target.endsWith(join('.claude-plugin', 'plugin.json'));
+      return {
+        exitCode: findings ? 1 : 0,
+        signal: null,
+        stderr: '',
+        stdout: await recordedClaudeReport(findings ? '2.1.259-plugin-strict-findings.json' : '2.1.259-plugin-strict-passed.json', claudeBundle),
+      };
+    };
+
+    // Programmatic builds never spawn the host.
+    const silent = await build({ hostValidationRunner: runner, output: artifact, root });
+    expect(silent.hostValidation).toBeUndefined();
+    expect(calls).toEqual([]);
+
+    const validated = await build({ hostValidation: true, hostValidationRunner: runner, output: artifact, root });
+    expect(calls).toEqual([
+      ['--version'],
+      ['plugin', 'validate', join(claudeBundle, '.claude-plugin', 'plugin.json'), '--strict', '--json'],
+      ['plugin', 'validate', join(claudeBundle, '.claude-plugin', 'marketplace.json'), '--strict', '--json'],
+      ['--plugin-dir', claudeBundle, 'plugin', 'list', '--json'],
+    ]);
+    // Codex is built too, but only claude/plugin targets have a Claude validator.
+    expect(validated.build.manifest.targets.map((target) => target.name).sort()).toEqual(['claude', 'codex']);
+    expect(validated.hostValidation).toEqual([
+      expect.objectContaining({ host: 'claude', load: { status: 'loaded' }, status: 'warnings', target: 'claude', version: '2.1.259' }),
+    ]);
+    const findings = validated.diagnostics.filter((entry) => entry.code === 'AB6020');
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((entry) => entry.severity === 'warning' && entry.target === 'claude')).toBe(true);
+    expect(validated.diagnostics.some((entry) => entry.severity === 'error')).toBe(false);
+
+    // `--strict` promotes the same host warnings to build errors.
+    const strict = await build({ hostValidation: true, hostValidationRunner: runner, output: artifact, root, strict: true });
+    expect(strict.hostValidation?.[0]?.status).toBe('failed');
+    expect(strict.diagnostics.filter((entry) => entry.code === 'AB6020').every((entry) => entry.severity === 'error')).toBe(true);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('build surfaces a Claude load refusal as AB7325 even when plugin validate --strict passed (#476)', async () => {
+  const root = await createProject();
+  try {
+    const artifact = join(root, 'artifact');
+    const claudeBundle = join(artifact, 'claude');
+    const errors = ['Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json resolves to already-loaded file.'];
+    const runner: ClaudePluginCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return { exitCode: 0, signal: null, stderr: '', stdout: '2.1.259 (Claude Code)\n' };
+      if (request.args[0] === '--plugin-dir') {
+        return {
+          exitCode: 0,
+          signal: null,
+          stderr: '',
+          stdout: JSON.stringify([{ enabled: true, errors, id: 'api-fixture@inline', installPath: request.args[1], scope: 'inline' }]),
+        };
+      }
+      return { exitCode: 0, signal: null, stderr: '', stdout: await recordedClaudeReport('2.1.259-plugin-strict-passed.json', claudeBundle) };
+    };
+    const result = await build({ hostValidation: true, hostValidationRunner: runner, output: artifact, root, targets: ['claude'] });
+
+    expect(result.hostValidation).toEqual([
+      expect.objectContaining({ load: { errors, status: 'refused' }, status: 'failed', target: 'claude' }),
+    ]);
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB7325')).toEqual([expect.objectContaining({
+      message: expect.stringContaining(`refused to load api-fixture@inline from ${JSON.stringify(claudeBundle)}`),
+      severity: 'error',
+      target: 'claude',
+    })]);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('build reports one informational AB6019 skip for all Claude-validated targets when claude is absent (#476)', async () => {
+  const root = await createProject();
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), [
+      'export default {',
+      "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+      "  targets: ['claude', 'plugin', 'codex'],",
+      '};',
+      '',
+    ].join('\n'));
+    const missing = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
+    let spawns = 0;
+    const runner: ClaudePluginCommandRunner = async () => {
+      spawns += 1;
+      throw missing;
+    };
+    const result = await build({ hostValidation: true, hostValidationRunner: runner, output: join(root, 'artifact'), root });
+
+    // One failed spawn for the whole build, one info diagnostic — build stays fast without the host.
+    expect(spawns).toBe(1);
+    expect(result.hostValidation?.map((report) => [report.target, report.status, report.diagnostics.length])).toEqual([
+      ['claude', 'unavailable', 1],
+      ['plugin', 'unavailable', 0],
+    ]);
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB6019')).toEqual([
+      expect.objectContaining({ severity: 'info', target: 'claude' }),
+    ]);
+    expect(result.diagnostics.some((entry) => entry.severity === 'error')).toBe(false);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }

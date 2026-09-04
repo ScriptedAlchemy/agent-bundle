@@ -19,9 +19,30 @@ type ClaudePluginTermination = 'output-limit' | 'timed-out';
 
 export type ClaudePluginValidationStatus = 'failed' | 'passed' | 'unavailable' | 'warnings';
 
+/**
+ * Verdict of `claude --plugin-dir <bundle-dir> plugin list --json`: `loaded`
+ * (the plugin's `<name>@inline` row has no `errors`), `refused` (the row
+ * carries `errors[]`, reported as `AB7325`), `unregistered` (no row for the
+ * plugin, `AB7311`), or `failed` (the listing itself could not be read, `AB6022`).
+ */
+export type ClaudePluginLoadStatus = 'failed' | 'loaded' | 'refused' | 'unregistered';
+
+export interface ClaudePluginLoadCheck {
+  /** The host's own load errors, verbatim from the row's `errors` array; present only when `refused`. */
+  readonly errors?: readonly string[];
+  readonly status: ClaudePluginLoadStatus;
+}
+
 export interface ClaudePluginValidationReport {
   readonly diagnostics: readonly Diagnostic[];
   readonly host: 'claude';
+  /**
+   * The load check that follows the validation runs. Absent when the CLI was
+   * unavailable, a validation run itself failed (`AB6022`), the caller opted
+   * out, or the bundle has no readable `.claude-plugin/plugin.json` name to
+   * look for in the listing.
+   */
+  readonly load?: ClaudePluginLoadCheck;
   readonly status: ClaudePluginValidationStatus;
   readonly target: string;
   readonly version?: string;
@@ -35,12 +56,26 @@ export type ClaudePluginCommandRunner = (
 
 export interface ValidateClaudePluginOptions {
   readonly executable?: string;
+  /**
+   * Also run `claude --plugin-dir <bundle-dir> plugin list --json` after the
+   * validation runs and read the plugin's row (default `true`). `plugin
+   * validate --strict` accepts manifests Claude Code then refuses to load
+   * (observed 2.1.250–2.1.259); the listing's `errors[]` is the only load
+   * verdict. Doctor passes `false` because it runs its own registration proof.
+   */
+  readonly loadCheck?: boolean;
   readonly pluginDirectory: string;
   /** Injectable proof seam. Production always uses the bounded process runner. */
   readonly run?: ClaudePluginCommandRunner;
   /** Promote host warnings to Agent Bundle errors. Claude itself always runs with `--strict`. */
   readonly strict?: boolean;
   readonly target: string;
+  /**
+   * The `claude --version` number the caller already probed from the same
+   * executable; skips this run's own probe (Doctor validates several
+   * directories per host and probes once).
+   */
+  readonly version?: string;
 }
 
 export interface ValidateClaudePluginFilesOptions {
@@ -58,24 +93,55 @@ const runClaudeCommand: ClaudePluginCommandRunner = (request) => runBoundedChild
 const versionFrom = (output: string): string | undefined =>
   /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(output)?.[1];
 
+type ClaudeHostDiagnosticCode = 'AB6019' | 'AB6020' | 'AB6021' | 'AB6022' | 'AB7311' | 'AB7325';
+
+const recoveryFor = (code: ClaudeHostDiagnosticCode): string => {
+  switch (code) {
+    case 'AB6019':
+      return 'Install Claude Code and ensure `claude` is on PATH, then rerun artifact validation.';
+    case 'AB6020':
+    case 'AB6021':
+      return 'Run `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`, ' +
+        'repair the reported Claude artifact, and rebuild.';
+    case 'AB6022':
+      return 'Verify the Claude CLI starts and responds, then rerun ' +
+        '`claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`.';
+    case 'AB7311':
+      return 'Inspect `claude --plugin-dir <bundle-dir> plugin list --json` and register the intended bundle.';
+    case 'AB7325':
+      return 'Fix the artifact so `claude --plugin-dir <bundle-dir> plugin list --json` reports no `errors` for it, ' +
+        'then rebuild.';
+    default: {
+      const exhaustive: never = code;
+      throw new TypeError(`Unknown Claude host diagnostic ${String(exhaustive)}.`);
+    }
+  }
+};
+
 const diagnostic = (
-  code: 'AB6019' | 'AB6020' | 'AB6021' | 'AB6022',
+  code: ClaudeHostDiagnosticCode,
   message: string,
   severity: DiagnosticSeverity,
   target: string,
 ): Diagnostic => Object.freeze({
   code,
   message,
-  recovery: code === 'AB6019'
-    ? 'Install Claude Code and ensure `claude` is on PATH, then rerun artifact validation.'
-    : code === 'AB6022'
-      ? 'Verify the Claude CLI starts and responds, then rerun ' +
-        '`claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`.'
-      : 'Run `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`, ' +
-        'repair the reported Claude artifact, and rebuild.',
+  recovery: recoveryFor(code),
   severity,
   target,
 });
+
+/**
+ * Reads a Claude `plugin list --json` row's `errors` array. Healthy rows omit
+ * the key (Claude Code 2.1.259); a refused row carries nonempty strings.
+ * Anything else is treated as "no readable errors" rather than a failure, so
+ * an unexpected shape cannot mask the row as uninstalled.
+ */
+export const claudePluginRowErrors = (row: Readonly<Record<string, unknown>>): readonly string[] => {
+  const errors = row['errors'];
+  if (!Array.isArray(errors)) return [];
+  return Object.freeze(errors.filter((error): error is string => typeof error === 'string' && error.trim().length > 0));
+};
 
 const matchingDocumentPaths = async (
   root: string,
@@ -401,6 +467,58 @@ const validationTargets = async (pluginDirectory: string): Promise<readonly Clau
   return Object.freeze(targets);
 };
 
+interface ClaudeCommandContext {
+  readonly cwd: string;
+  readonly executable: string;
+  readonly run: ClaudePluginCommandRunner;
+}
+
+type ClaudeVersionProbe =
+  | { readonly report: ClaudePluginValidationReport }
+  | { readonly version: string | undefined };
+
+/** `claude --version`: the report to return when the CLI is missing or unresponsive, else its version number. */
+const probeClaudeVersion = async (context: ClaudeCommandContext, target: string): Promise<ClaudeVersionProbe> => {
+  try {
+    const probe = await context.run(Object.freeze({
+      args: Object.freeze(['--version']),
+      cwd: context.cwd,
+      executable: context.executable,
+    }));
+    if (probe.exitCode !== 0 || probe.termination !== undefined) {
+      return {
+        report: failedReport(
+          probe.termination === 'timed-out'
+            ? 'Claude CLI version probe timed out.'
+            : probe.termination === 'output-limit'
+              ? 'Claude CLI version probe exceeded its output limit.'
+              : `Claude CLI version probe exited with code ${probe.exitCode ?? 'unknown'}.`,
+          target,
+          undefined,
+        ),
+      };
+    }
+    return { version: versionFrom(`${probe.stdout}\n${probe.stderr}`) };
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) {
+      return { report: failedReport('Claude CLI version probe could not be started.', target, undefined) };
+    }
+    return {
+      report: Object.freeze({
+        diagnostics: freezeDiagnostics([diagnostic(
+          'AB6019',
+          'The Claude CLI is not installed or is not on PATH; host artifact validation was skipped.',
+          'info',
+          target,
+        )]),
+        host: 'claude',
+        status: 'unavailable',
+        target,
+      }),
+    };
+  }
+};
+
 export const validateClaudePlugin = async (
   options: ValidateClaudePluginOptions,
 ): Promise<ClaudePluginValidationReport> => {
@@ -408,37 +526,12 @@ export const validateClaudePlugin = async (
   const executable = options.executable ?? 'claude';
   const run = options.run ?? runClaudeCommand;
   const cwd = dirname(pluginDirectory);
-  let version: string | undefined;
-  try {
-    const probe = await run(Object.freeze({ args: Object.freeze(['--version']), cwd, executable }));
-    if (probe.exitCode !== 0 || probe.termination !== undefined) {
-      return failedReport(
-        probe.termination === 'timed-out'
-          ? 'Claude CLI version probe timed out.'
-          : probe.termination === 'output-limit'
-            ? 'Claude CLI version probe exceeded its output limit.'
-            : `Claude CLI version probe exited with code ${probe.exitCode ?? 'unknown'}.`,
-        options.target,
-        undefined,
-      );
-    }
-    version = versionFrom(`${probe.stdout}\n${probe.stderr}`);
-  } catch (error) {
-    if (!isErrno(error, 'ENOENT')) {
-      return failedReport('Claude CLI version probe could not be started.', options.target, undefined);
-    }
-    return Object.freeze({
-      diagnostics: freezeDiagnostics([diagnostic(
-        'AB6019',
-        'The Claude CLI is not installed or is not on PATH; host artifact validation was skipped.',
-        'info',
-        options.target,
-      )]),
-      host: 'claude',
-      status: 'unavailable',
-      target: options.target,
-    });
-  }
+  const context: ClaudeCommandContext = Object.freeze({ cwd, executable, run });
+  const probed = options.version === undefined
+    ? await probeClaudeVersion(context, options.target)
+    : { version: options.version };
+  if ('report' in probed) return probed.report;
+  const version = probed.version;
 
   const jsonReport = claudeSupportsJsonValidationReport(version);
   const findingsByRun: Partial<Record<ClaudeValidationRun, readonly ClaudeFinding[]>> = {};
@@ -498,17 +591,127 @@ export const validateClaudePlugin = async (
 
   const pluginFindings = findingsByRun.plugin ?? [];
   const marketplaceFindings = withoutDuplicateManifestFindings(pluginFindings, findingsByRun.marketplace ?? []);
-  const diagnostics = freezeDiagnostics(
-    [...pluginFindings, ...marketplaceFindings]
+  const load = options.loadCheck === false
+    ? undefined
+    : await claudeLoadCheck(pluginDirectory, context, options.target, options.strict === true);
+  const diagnostics = freezeDiagnostics([
+    ...[...pluginFindings, ...marketplaceFindings]
       .map((finding) => findingDiagnostic(finding, options.strict === true, options.target)),
-  );
+    ...(load?.diagnostics ?? []),
+  ]);
   const failed = diagnostics.some((entry) => entry.severity === 'error');
   const blocking = diagnostics.some((entry) => entry.severity !== 'info');
   return Object.freeze({
     diagnostics,
     host: 'claude',
+    ...(load === undefined ? {} : { load: load.check }),
     status: failed ? 'failed' : blocking ? 'warnings' : 'passed',
     target: options.target,
     ...(version === undefined ? {} : { version }),
   });
 };
+
+interface ClaudeLoadCheckOutcome {
+  readonly check: ClaudePluginLoadCheck;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** The `name` of `<dir>/.claude-plugin/plugin.json`, or `undefined` when the manifest cannot name a row. */
+const claudePluginManifestName = async (pluginDirectory: string): Promise<string | undefined> => {
+  try {
+    const manifest: unknown = JSON.parse(await readFile(join(pluginDirectory, '.claude-plugin', 'plugin.json'), 'utf8'));
+    const name = isRecord(manifest) ? manifest['name'] : undefined;
+    return typeof name === 'string' && name.trim() !== '' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const claudeLoadFailure = (message: string, target: string): ClaudeLoadCheckOutcome => Object.freeze({
+  check: Object.freeze({ status: 'failed' }),
+  diagnostics: freezeDiagnostics([diagnostic('AB6022', message, 'error', target)]),
+});
+
+/**
+ * The load verdict `plugin validate` cannot give: `claude --plugin-dir <dir>
+ * plugin list --json` registers the directory as `<name>@inline` and reports
+ * in that row's `errors[]` why a session would refuse it (#479: `--strict`
+ * accepts manifests Claude then refuses to load). Read-only — the listing
+ * writes nothing under `~/.claude`. Returns `undefined` when the bundle has no
+ * readable manifest name: the validation runs already reported that manifest.
+ */
+const claudeLoadCheck = async (
+  pluginDirectory: string,
+  context: ClaudeCommandContext,
+  target: string,
+  strict: boolean,
+): Promise<ClaudeLoadCheckOutcome | undefined> => {
+  const name = await claudePluginManifestName(pluginDirectory);
+  if (name === undefined) return undefined;
+  const label = 'Claude plugin load check (`claude --plugin-dir <bundle-dir> plugin list --json`)';
+  let result: ClaudePluginCommandResult;
+  try {
+    result = await context.run(Object.freeze({
+      args: Object.freeze(['--plugin-dir', pluginDirectory, 'plugin', 'list', '--json']),
+      cwd: context.cwd,
+      executable: context.executable,
+    }));
+  } catch {
+    return claudeLoadFailure(`${label} could not be started.`, target);
+  }
+  if (result.termination !== undefined) {
+    return claudeLoadFailure(
+      result.termination === 'timed-out' ? `${label} timed out.` : `${label} exceeded its output limit.`,
+      target,
+    );
+  }
+  if (result.exitCode !== 0) {
+    const reason = result.stderr.trim();
+    return claudeLoadFailure(
+      `${label} exited with code ${result.exitCode ?? 'unknown'}${reason === '' ? '' : `: ${reason}`}.`,
+      target,
+    );
+  }
+  let rows: unknown;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return claudeLoadFailure(`${label} did not return JSON.`, target);
+  }
+  if (!Array.isArray(rows)) return claudeLoadFailure(`${label} did not return a JSON array.`, target);
+  const id = `${name}@inline`;
+  const row = rows.find((entry): entry is Record<string, unknown> => isRecord(entry) && entry['id'] === id);
+  if (row === undefined) {
+    return Object.freeze({
+      check: Object.freeze({ status: 'unregistered' }),
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7311',
+        `Claude Code did not register ${id} from ${JSON.stringify(pluginDirectory)}: ` +
+          '`claude --plugin-dir <bundle-dir> plugin list --json` listed no row for it.',
+        'error',
+        target,
+      )]),
+    });
+  }
+  const errors = claudePluginRowErrors(row);
+  if (errors.length === 0) return Object.freeze({ check: Object.freeze({ status: 'loaded' }), diagnostics: freezeDiagnostics([]) });
+  // A declared `dependencies` entry the validating machine lacks is a property of this machine,
+  // not of the artifact: Claude refuses the load here, and would load it where the dependency is
+  // installed. Report it, but let the build finish unless `--strict` asked otherwise.
+  const environmental = errors.every((error) => claudeMissingDependencyError.test(error));
+  return Object.freeze({
+    check: Object.freeze({ errors, status: 'refused' }),
+    diagnostics: freezeDiagnostics([diagnostic(
+      'AB7325',
+      `Claude Code refused to load ${id} from ${JSON.stringify(pluginDirectory)} although ` +
+        `\`plugin validate --strict\` accepted it` +
+        `${environmental ? ' (a declared dependency is not installed on this machine)' : ''}; ` +
+        `the host reported: ${errors.join(' | ')}`,
+      environmental && !strict ? 'warning' : 'error',
+      target,
+    )]),
+  });
+};
+
+/** Claude Code 2.1.260: `Dependency "audit-logger@acme-shared" is not installed — run \`claude plugin install …\``. */
+const claudeMissingDependencyError = /^Dependency "[^"]+" is not installed\b/u;

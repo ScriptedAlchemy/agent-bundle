@@ -36,7 +36,10 @@ diagnostic involved — see the [CLI exit codes](../../reference/cli.mdx#exit-co
 ## Claude Code strict validation
 
 When Claude Code is on `PATH`, artifact validation runs the installed `claude plugin validate`
-for emitted `claude` and unified `plugin` targets. Claude Code decides what it checks from the
+for emitted `claude` and unified `plugin` targets. `agent-bundle build` runs the same checks over
+the artifact it just wrote (`--no-host-validation` skips them; `--strict` promotes host warnings to
+build errors), and `agent-bundle doctor --host claude --from <bundle-dir>` runs them over the
+bundle and over every installed copy Claude lists. Claude Code decides what it checks from the
 manifest it is pointed at, and a bundle directory that holds both `.claude-plugin/plugin.json` and
 `.claude-plugin/marketplace.json` is treated as a marketplace, whose validation never opens the
 plugin's hook, skill, agent, or command files. Agent Bundle therefore runs two commands:
@@ -56,7 +59,28 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
   report. The marketplace run's `plugins[0] plugin.json →` copies of manifest findings the plugin
   run already reported are dropped.
 - A missing binary is reported as an explicit informational **skip** (`AB6019`), never as
-  fabricated success; a probe or run that cannot complete is `AB6022`.
+  fabricated success; a probe or run that cannot complete is `AB6022`. A `build` without `claude`
+  on `PATH` spawns once and reports the skip once, however many `claude`/`plugin` targets it built.
+
+### The load check
+
+Validation is not a load verdict. Claude Code 2.1.250 through 2.1.260 accept, under `--strict`,
+manifests and component files that a session then refuses to load — an invalid
+`monitors/monitors.json`, or a `hooks` field naming the auto-loaded `hooks/hooks.json`. The only
+place the refusal shows is the plugin's row in `claude --plugin-dir <bundle-dir> plugin list --json`
+("Plugins reference" → "plugin list"): a refused row carries an `errors` array with the host's
+message, a healthy row has no `errors` key. So `build` and `validate --artifact` follow the two
+validation runs with exactly that listing and read the bundle's `<name>@inline` row:
+
+| `load.status` | Meaning | Code |
+| --- | --- | --- |
+| `loaded` | The row has no `errors`. | — |
+| `refused` | The row carries `errors`; they are quoted verbatim. | `AB7325` (error; a warning when every entry is `Dependency "…" is not installed`, since that describes the validating machine rather than the artifact — `--strict` promotes it) |
+| `unregistered` | No row for the bundle: Claude Code did not register the directory. | `AB7311` |
+| `failed` | The listing could not be read (nonzero exit, timeout, not a JSON array). | `AB6022` |
+
+The listing is read-only and needs no login. Doctor does not repeat it: its `--plugin-dir`
+registration proof and the inventory rows' `errors` already carry the same verdicts.
 
 CI should use strict validation:
 
@@ -81,14 +105,18 @@ visible to a bare `claude plugin list`; put the flag before the subcommand to in
 claude --plugin-dir artifact/claude plugin list --json
 ```
 
-That listing is the load verdict, and it is stricter than validation: `claude plugin validate --strict`
-accepts a manifest that Claude Code then refuses at load time (for example a `hooks` field naming the
-auto-loaded `hooks/hooks.json`, "Duplicate hooks file detected"). A refused plugin's row carries an
-`errors` array with the host's message; a healthy row has no `errors` key. `agent-bundle doctor --host
-claude --from <bundle-dir>` reads that array on both the `--plugin-dir` registration proof and the installed
-copy and reports it as `AB7325` (`load-failed`), and `agent-bundle install claude` fails with `AB7006` when
-the installed copy carries it. The pinned Claude `plugin` schema also rejects `hooks: "./hooks/hooks.json"`
-up front (`AB6012`), since the manifest field is for *additional* hook files only.
+That listing is the load verdict described above, and `build` and `validate --artifact` run it for
+you. `agent-bundle doctor --host claude --from <bundle-dir>` reads the same `errors` array on both
+the `--plugin-dir` registration proof and the installed copy and reports it as `AB7325`
+(`load-failed`), and `agent-bundle install claude` fails with `AB7006` when the installed copy
+carries it. The pinned Claude `plugin` schema also rejects `hooks: "./hooks/hooks.json"` up front
+(`AB6012`), since the manifest field is for *additional* hook files only.
+
+Doctor also reads each row's `enabled` flag. A copy that `claude plugin disable` switched off
+("Plugins reference" → "plugin disable") is still installed and may still be byte-identical to the
+bundle, but none of it reaches a session; Doctor lists it as `disabled`, keeps its content verdict,
+and adds an `AB7327` warning whose recovery is the exact `claude plugin enable <name>@<marketplace>
+[--scope <scope>]` command — reinstalling does not enable a disabled plugin.
 
 ## Codex and Cursor: pinned schemas
 

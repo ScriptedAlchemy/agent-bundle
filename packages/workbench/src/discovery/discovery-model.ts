@@ -133,6 +133,8 @@ export const findingPresentationFor = (state: DiscoveryFindingState): DiscoveryP
       return presentation('Conflicted', 'warning');
     case 'corrupt':
       return presentation('Corrupt', 'warning');
+    case 'disabled':
+      return presentation('Disabled', 'warning');
     case 'drifted':
       return presentation('Drifted', 'warning');
     case 'failed':

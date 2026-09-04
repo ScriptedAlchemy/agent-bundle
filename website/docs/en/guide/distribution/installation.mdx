@@ -116,6 +116,17 @@ place of `current`, because a refused copy contributes no hooks, MCP servers, or
 installer reads the same array: `agent-bundle install claude` fails with `AB7006` when the freshly
 installed (or byte-identical existing) copy carries `errors`, instead of reporting `installed`.
 
+For Claude, Doctor also reads each row's `enabled` flag and runs the Claude Code developer
+validator. A copy listed with `enabled: false` (switched off with `claude plugin disable` or the
+`/plugin` menu) is reported as `disabled` in the inventory, keeps its content verdict in the
+`--from` comparison, and adds an `AB7327` warning with the `claude plugin enable` command — a
+disabled plugin loads nothing, and reinstalling does not enable it. The validator
+(`claude plugin validate --strict` against `plugin.json`, then `marketplace.json`, the same runs
+`build` and `validate --artifact` perform) covers the `--from` bundle and every installed copy, and
+its findings keep their `AB6019`–`AB6022` codes prefixed with `Bundle at …` or
+`Installed copy at … (scope …)`. Doctor never runs the `--plugin-dir` load check twice: its
+registration proof and the rows' `errors` already hold that verdict.
+
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
@@ -126,6 +137,7 @@ installed (or byte-identical existing) copy carries `errors`, instead of reporti
 | `AB7323` | warning | `~/.cursor/hooks.json` registers a command that points into an installed plugin directory, so Cursor would deliver that hook twice; manifest registration alone is sufficient. |
 | `AB7324` | info / warning / error | A marketplace staged by `install cursor --mode marketplace` is imported (`registered`), still awaiting the Customize import step (`unregistered`), or incomplete (`corrupt`). |
 | `AB7326` | info / warning / error | An Agent Plugins install under `~/.cursor/plugins/local` had its `mcp.json` placeholders expanded by the emitted `install.mjs` and every expanded path still resolves (`expanded`); still carries the spec forms Cursor 3.18.25 does not resolve, so its stdio servers cannot spawn (`unexpanded`); or was moved, duplicated, or edited after the expansion was recorded (`drifted`, entry `corrupt`). Reinstall with the bundle's `install.mjs` at the current location. |
+| `AB7327` | warning | `doctor --from` compared an installed Claude copy whose `claude plugin list --json` row reports `enabled: false`; the recovery is `claude plugin enable <name>@<marketplace> [--scope <scope>]`. |
 | `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, so the unified `plugin` bundle's Claude-format `hooks/hooks.json` beside `hooks/hooks-cursor.json` is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
 
 ## Next

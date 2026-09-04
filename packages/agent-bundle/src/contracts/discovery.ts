@@ -4,6 +4,7 @@ export type DiscoveryInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DiscoveryFindingState =
   | 'conflicted'
   | 'corrupt'
+  | 'disabled'
   | 'drifted'
   | 'failed'
   | 'installed'

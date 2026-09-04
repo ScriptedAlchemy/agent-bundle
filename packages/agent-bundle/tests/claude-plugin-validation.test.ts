@@ -30,6 +30,16 @@ const emittedClaudeBundle = async (withMarketplace = true): Promise<string> => {
   return root;
 };
 
+/** A healthy `claude --plugin-dir <bundle> plugin list --json` row for the emitted fixture bundle. */
+const loadedFixtureRow = (bundle: string, extra: Readonly<Record<string, unknown>> = {}): string => JSON.stringify([{
+  enabled: true,
+  id: 'fixture@inline',
+  installPath: bundle,
+  scope: 'inline',
+  version: '0.0.0',
+  ...extra,
+}]);
+
 const runByTarget = (
   responses: Readonly<Record<string, Readonly<{ exitCode: number; stderr?: string; stdout: string }>>>,
   version = '2.1.259',
@@ -41,6 +51,13 @@ const runByTarget = (
       calls.push([...request.args]);
       if (request.args[0] === '--version') {
         return { exitCode: 0, signal: null, stderr: '', stdout: `${version} (Claude Code)\n` };
+      }
+      if (request.args[0] === '--plugin-dir') {
+        // Load check (#476): answer with the recorded `load` response when the test provides one, else a loaded row.
+        const load = responses['load'];
+        return load === undefined
+          ? { exitCode: 0, signal: null, stderr: '', stdout: loadedFixtureRow(request.args[1] ?? '') }
+          : { exitCode: load.exitCode, signal: null, stderr: load.stderr ?? '', stdout: load.stdout };
       }
       const target = request.args[2] ?? '';
       const response = responses[target.endsWith('marketplace.json') ? 'marketplace' : 'plugin'];
@@ -452,8 +469,16 @@ it('validates the plugin manifest and the marketplace manifest separately with -
     ['--version'],
     ['plugin', 'validate', join(bundle, '.claude-plugin', 'plugin.json'), '--strict', '--json'],
     ['plugin', 'validate', join(bundle, '.claude-plugin', 'marketplace.json'), '--strict', '--json'],
+    ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
   ]);
-  expect(report).toEqual({ diagnostics: [], host: 'claude', status: 'passed', target: 'claude', version: '2.1.259' });
+  expect(report).toEqual({
+    diagnostics: [],
+    host: 'claude',
+    load: { status: 'loaded' },
+    status: 'passed',
+    target: 'claude',
+    version: '2.1.259',
+  });
 });
 
 it('skips the marketplace run when the bundle emits no marketplace.json', async () => {
@@ -462,7 +487,136 @@ it('skips the marketplace run when the bundle emits no marketplace.json', async 
     plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
   });
   await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
-  expect(fixture.calls.map((call) => call[2])).toEqual([undefined, join(bundle, '.claude-plugin', 'plugin.json')]);
+  expect(fixture.calls.map((call) => call[2])).toEqual([undefined, join(bundle, '.claude-plugin', 'plugin.json'), 'plugin']);
+});
+
+it('skips the load check on request and when the bundle has no manifest name to look up', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const passed = { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) };
+  const optedOut = runByTarget({ plugin: passed });
+  const report = await validateClaudePlugin({ loadCheck: false, pluginDirectory: bundle, run: optedOut.run, target: 'claude' });
+  expect(report.load).toBeUndefined();
+  expect(optedOut.calls.some((call) => call[0] === '--plugin-dir')).toBe(false);
+
+  await writeFile(join(bundle, '.claude-plugin', 'plugin.json'), '{"version":"1.0.0"}\n');
+  const nameless = runByTarget({ plugin: passed });
+  expect((await validateClaudePlugin({ pluginDirectory: bundle, run: nameless.run, target: 'claude' })).load).toBeUndefined();
+  expect(nameless.calls.some((call) => call[0] === '--plugin-dir')).toBe(false);
+});
+
+it('reports AB7325 when Claude accepts the manifest under --strict but refuses to load it (#479 follow-up)', async () => {
+  const bundle = await emittedClaudeBundle();
+  const errors = [
+    'Hook load failed: Duplicate hooks file detected: hooks/hooks.json is loaded automatically; remove it from the manifest.',
+  ];
+  const fixture = runByTarget({
+    load: { exitCode: 0, stdout: loadedFixtureRow(bundle, { errors }) },
+    marketplace: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+    plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(report.status).toBe('failed');
+  expect(report.load).toEqual({ errors, status: 'refused' });
+  expect(report.diagnostics).toEqual([expect.objectContaining({
+    code: 'AB7325',
+    message: `Claude Code refused to load fixture@inline from ${JSON.stringify(bundle)} although ` +
+      `\`plugin validate --strict\` accepted it; the host reported: ${errors[0]}`,
+    recovery: expect.stringContaining('claude --plugin-dir <bundle-dir> plugin list --json'),
+    severity: 'error',
+    target: 'claude',
+  })]);
+});
+
+it('reports a load refusal caused only by an uninstalled declared dependency as an AB7325 warning', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const errors = [
+    'Dependency "audit-logger@acme-shared" is not installed — run `claude plugin install audit-logger@acme-shared`, ' +
+      'or check that its marketplace is added',
+  ];
+  const passed = { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) };
+  const report = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({ load: { exitCode: 0, stdout: loadedFixtureRow(bundle, { errors }) }, plugin: passed }).run,
+    target: 'claude',
+  });
+  expect(report.status).toBe('warnings');
+  expect(report.load).toEqual({ errors, status: 'refused' });
+  expect(report.diagnostics).toEqual([expect.objectContaining({
+    code: 'AB7325',
+    message: expect.stringContaining('(a declared dependency is not installed on this machine)'),
+    severity: 'warning',
+  })]);
+
+  const strict = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({ load: { exitCode: 0, stdout: loadedFixtureRow(bundle, { errors }) }, plugin: passed }).run,
+    strict: true,
+    target: 'claude',
+  });
+  expect(strict.status).toBe('failed');
+  expect(strict.diagnostics[0]?.severity).toBe('error');
+
+  // Mixed with any other refusal the verdict stays an error.
+  const mixed = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({
+      load: { exitCode: 0, stdout: loadedFixtureRow(bundle, { errors: [...errors, 'Hook load failed: Duplicate hooks file detected'] }) },
+      plugin: passed,
+    }).run,
+    target: 'claude',
+  });
+  expect(mixed.status).toBe('failed');
+  expect(mixed.diagnostics[0]?.message).not.toContain('declared dependency');
+});
+
+it('reports AB7311 when the --plugin-dir listing has no row for the bundle', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const fixture = runByTarget({
+    load: { exitCode: 0, stdout: JSON.stringify([{ id: 'other@marketplace', installPath: '/elsewhere', scope: 'user' }]) },
+    plugin: { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) },
+  });
+  const report = await validateClaudePlugin({ pluginDirectory: bundle, run: fixture.run, target: 'claude' });
+
+  expect(report.status).toBe('failed');
+  expect(report.load).toEqual({ status: 'unregistered' });
+  expect(report.diagnostics).toEqual([expect.objectContaining({
+    code: 'AB7311',
+    message: expect.stringContaining('did not register fixture@inline'),
+    severity: 'error',
+  })]);
+});
+
+it('reports AB6022 when the load check itself cannot be read', async () => {
+  const bundle = await emittedClaudeBundle(false);
+  const passed = { exitCode: 0, stdout: await recordedReport('2.1.259-plugin-strict-passed.json', bundle) };
+  const nonzero = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({ load: { exitCode: 1, stderr: 'boom', stdout: '' }, plugin: passed }).run,
+    target: 'claude',
+  });
+  expect(nonzero).toMatchObject({
+    diagnostics: [expect.objectContaining({ code: 'AB6022', message: expect.stringContaining('exited with code 1: boom') })],
+    load: { status: 'failed' },
+    status: 'failed',
+  });
+
+  const notJson = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({ load: { exitCode: 0, stdout: 'Installed plugins:\n' }, plugin: passed }).run,
+    target: 'claude',
+  });
+  expect(notJson).toMatchObject({
+    diagnostics: [expect.objectContaining({ code: 'AB6022', message: expect.stringContaining('did not return JSON') })],
+    load: { status: 'failed' },
+  });
+
+  const notArray = await validateClaudePlugin({
+    pluginDirectory: bundle,
+    run: runByTarget({ load: { exitCode: 0, stdout: '{"plugins":[]}' }, plugin: passed }).run,
+    target: 'claude',
+  });
+  expect(notArray.diagnostics).toEqual([expect.objectContaining({ message: expect.stringContaining('did not return a JSON array') })]);
 });
 
 it('attributes --json findings to their file and de-duplicates marketplace re-reports of manifest findings', async () => {

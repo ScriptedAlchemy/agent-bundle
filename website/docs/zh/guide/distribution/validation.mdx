@@ -31,7 +31,10 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 ## Claude Code 严格校验
 
 当 Claude Code 位于 `PATH` 上时，产物校验会为输出的 `claude` target 以及统一的 `plugin` target 运行
-已安装的 `claude plugin validate`。Claude Code 根据被指向的清单决定检查什么：一个同时包含
+已安装的 `claude plugin validate`。`agent-bundle build` 会对刚写出的产物运行同样的检查
+（`--no-host-validation` 跳过；`--strict` 把宿主 warning 提升为构建 error），而
+`agent-bundle doctor --host claude --from <bundle-dir>` 会对该 bundle 以及 Claude 列出的每一份已安装副本运行
+这些检查。Claude Code 根据被指向的清单决定检查什么：一个同时包含
 `.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json` 的 bundle 目录会被当作 marketplace，
 而 marketplace 校验从不打开插件的 hook、skill、agent 或 command 文件。因此 Agent Bundle 运行两条命令：
 
@@ -49,7 +52,26 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
   及更高版本上，Agent Bundle 读取 CLI 的 `--json` 报告；更早的版本则解析文本报告。marketplace 那次
   运行中对插件运行已报告过的清单发现的 `plugins[0] plugin.json →` 副本会被丢弃。
 - 二进制文件缺失会被报告为一次显式的信息性**跳过**（`AB6019`），绝不会伪造成功；探测或运行无法完成
-  时为 `AB6022`。
+  时为 `AB6022`。`PATH` 上没有 `claude` 时，`build` 只会启动一次进程并只报告一次跳过，无论它构建了多少个
+  `claude`/`plugin` target。
+
+### 加载检查
+
+校验不是加载结论。Claude Code 2.1.250 到 2.1.260 在 `--strict` 下会接受一些随后会被会话拒绝加载的清单与
+组件文件——例如无效的 `monitors/monitors.json`，或指向自动加载的 `hooks/hooks.json` 的 `hooks` 字段。拒绝
+唯一显现的地方是 `claude --plugin-dir <bundle-dir> plugin list --json`（"Plugins reference" → "plugin list"）
+中该插件所在的行：被拒绝的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。因此 `build` 与
+`validate --artifact` 在两次校验运行之后正好执行这条列表命令，并读取 bundle 的 `<name>@inline` 行：
+
+| `load.status` | 含义 | 代码 |
+| --- | --- | --- |
+| `loaded` | 该行没有 `errors`。 | — |
+| `refused` | 该行带有 `errors`；逐字引用。 | `AB7325`（error；当每一项都是 `Dependency "…" is not installed` 时为 warning，因为它描述的是执行校验的机器而非产物——`--strict` 会提升它） |
+| `unregistered` | 没有该 bundle 的行：Claude Code 没有把该目录注册为插件。 | `AB7311` |
+| `failed` | 列表无法读取（非零退出、超时、不是 JSON 数组）。 | `AB6022` |
+
+这条列表命令是只读的，也不需要登录。Doctor 不会重复它：其 `--plugin-dir` 注册证明与清单行中的 `errors`
+已经承载了同样的结论。
 
 CI 应当使用严格校验：
 
@@ -74,12 +96,16 @@ claude --plugin-dir artifact/claude
 claude --plugin-dir artifact/claude plugin list --json
 ```
 
-这份列表才是加载结论，而且比校验更严格：`claude plugin validate --strict` 会接受一份 Claude Code 随后在加载时
-拒绝的清单（例如 `hooks` 字段指向自动加载的 `hooks/hooks.json`——"Duplicate hooks file detected"）。被拒绝插件
-所在的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。`agent-bundle doctor --host claude --from
-<bundle-dir>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取该数组，并报告为 `AB7325`（`load-failed`）；当已安装
-副本带有该数组时，`agent-bundle install claude` 以 `AB7006` 失败。被固定的 Claude `plugin` schema 也会预先拒绝
-`hooks: "./hooks/hooks.json"`（`AB6012`），因为清单中的该字段只用于*额外的* hook 文件。
+这份列表就是上文描述的加载结论，`build` 与 `validate --artifact` 会替你运行它。`agent-bundle doctor --host
+claude --from <bundle-dir>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取同一个 `errors` 数组，并报告为
+`AB7325`（`load-failed`）；当已安装副本带有该数组时，`agent-bundle install claude` 以 `AB7006` 失败。被固定的
+Claude `plugin` schema 也会预先拒绝 `hooks: "./hooks/hooks.json"`（`AB6012`），因为清单中的该字段只用于*额外的*
+hook 文件。
+
+Doctor 还会读取每一行的 `enabled` 标志。被 `claude plugin disable` 关闭的副本（"Plugins reference" →
+"plugin disable"）仍然处于已安装状态，甚至可能与 bundle 字节一致，但它的任何内容都不会进入会话；Doctor 把它列为
+`disabled`，保留其内容结论，并追加一条 `AB7327` warning，其修复建议就是精确的
+`claude plugin enable <name>@<marketplace> [--scope <scope>]` 命令——重新安装不会启用一个被禁用的插件。
 
 ## Codex 与 Cursor：被固定的 schema
 

@@ -107,6 +107,7 @@ const durableStateSchema = z.strictObject({
 const findingStateSchema = z.enum([
   'conflicted',
   'corrupt',
+  'disabled',
   'drifted',
   'failed',
   'installed',

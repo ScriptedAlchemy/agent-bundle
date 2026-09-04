@@ -11,7 +11,11 @@ import {
 import { mapConcurrent } from '../core/async.ts';
 import { isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
-import { validateClaudePluginFiles } from '../host-contracts/claude-plugin-validation.ts';
+import {
+  validateClaudePlugin,
+  validateClaudePluginFiles,
+  type ClaudePluginValidationReport,
+} from '../host-contracts/claude-plugin-validation.ts';
 import { validateCodexPluginFiles } from '../host-contracts/codex-plugin-validation.ts';
 import {
   validateCursorPluginFiles,
@@ -59,6 +63,7 @@ export type DoctorInventoryStatus = 'known' | 'skipped' | 'unknown';
 export type DoctorFindingState =
   | 'conflicted'
   | 'corrupt'
+  | 'disabled'
   | 'drifted'
   | 'failed'
   | 'installed'
@@ -99,6 +104,12 @@ export interface DoctorFinding {
   /** Git commit of a staged Cursor marketplace repository. */
   readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
+  /**
+   * Claude only: the row's `enabled` flag from `claude plugin list --json`.
+   * `false` sets `state: 'disabled'` — the copy is installed but switched off,
+   * so none of it reaches a session until `claude plugin enable` runs.
+   */
+  readonly enabled?: boolean;
   readonly entry?: string;
   /**
    * The host's own load errors, verbatim (`claude plugin list --json` `errors`);
@@ -173,6 +184,8 @@ export type DoctorInstallComparisonStatus =
  */
 export interface DoctorInstallComparison {
   readonly artifactContentHash: string;
+  /** Claude only: `false` when the host lists the compared copy as disabled (`AB7327`). */
+  readonly enabled?: boolean;
   /** Host load errors for a `load-failed` copy, verbatim from `claude plugin list --json`. */
   readonly errors?: readonly string[];
   readonly installedContentHash?: string;
@@ -183,10 +196,25 @@ export interface DoctorInstallComparison {
   readonly status: DoctorInstallComparisonStatus;
 }
 
+/**
+ * One `claude plugin validate` pass (the same runner `validate --artifact`
+ * uses: `plugin.json` then `marketplace.json`, `--strict`, `--json` on
+ * 2.1.259+) over the built bundle or one installed copy of it.
+ */
+export interface DoctorHostValidation extends ClaudePluginValidationReport {
+  /** `bundle`: the `--from` bundle root; `installed`: a copy the host lists for this plugin. */
+  readonly copy: 'bundle' | 'installed';
+  readonly pluginDirectory: string;
+  /** Claude install scope of an `installed` copy. */
+  readonly scope?: string;
+}
+
 export interface DoctorHostReport {
   readonly bundle?: DoctorFinding & {
     readonly bundleRoot?: string;
     readonly comparison?: DoctorInstallComparison;
+    /** Claude only: host validator reports for the bundle and every installed copy, when `claude` is available. */
+    readonly hostValidation?: readonly DoctorHostValidation[];
     readonly marketplace?: string;
   };
   readonly diagnostics: readonly Diagnostic[];
@@ -920,12 +948,16 @@ const publicHostInventory = (
       // A row with `errors` is installed but refused by Claude Code (no hooks, MCP servers, or skills
       // reach the session); the inventory says so instead of listing it as a healthy install.
       const errors = claudePluginRowErrors(row);
+      // `enabled: false` is a copy the user switched off (`claude plugin disable`): installed, but no
+      // hooks, MCP servers, or skills reach a session until it is enabled again (#476).
+      const enabled = typeof row['enabled'] === 'boolean' ? row['enabled'] : undefined;
       findings.push({
+        ...(enabled === undefined ? {} : { enabled }),
         entry: `${row['id']} (${row['scope']})`,
         ...(errors.length === 0 ? {} : { errors }),
         name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
         path: row['installPath'],
-        state: errors.length === 0 ? 'installed' : 'failed',
+        state: errors.length > 0 ? 'failed' : enabled === false ? 'disabled' : 'installed',
         version: row['version'],
       });
     }
@@ -1030,6 +1062,28 @@ const hostLoadFailureDiagnostic = (
 );
 
 /**
+ * `AB7327`: Claude lists this copy with `enabled: false`. The bytes may be
+ * current, but a disabled plugin contributes no hooks, MCP servers, or skills
+ * to a session, and no install or rebuild changes that — only
+ * `claude plugin enable` does (plugins-reference §plugin enable).
+ */
+const disabledInstallDiagnostic = (
+  identity: PluginIdentity,
+  version: string,
+  installPath: string,
+  scope: string | undefined,
+): Diagnostic => diagnostic(
+  'AB7327',
+  `claude lists ${identity.name}@${version} at ${installPath}${scope === undefined ? '' : ` (scope ${scope})`} ` +
+    'as disabled (`enabled: false`): the copy is installed but none of it loads in a session.',
+  `Run \`claude plugin enable ${identity.name}${identity.marketplace === undefined ? '' : `@${identity.marketplace}`}` +
+    `${scope === undefined ? '' : ` --scope ${scope}`}\` (or \`/plugin\` in a session), then rerun Doctor; ` +
+    'reinstalling does not enable a disabled plugin.',
+  'warning',
+  'claude',
+);
+
+/**
  * Compares the copy a public host CLI caches for this plugin against the
  * built artifact. Unusable inventories degrade to `unknown` (Doctor never
  * guesses a cache path without the host confirming the install).
@@ -1065,11 +1119,18 @@ const publicHostInstallComparison = async (
   for (const entry of inventory.entries) {
     const scoped = entry.scope === undefined ? '' : ` (scope ${entry.scope})`;
     const replaceHint = entry.scope === undefined ? '' : ` --scope ${entry.scope}`;
+    const enabledField = entry.enabled === undefined ? {} : { enabled: entry.enabled };
+    if (entry.enabled === false) {
+      // Installed and possibly current, yet switched off: the content comparison still runs (a stale
+      // disabled copy is both), but the report must not read as a healthy install (#476).
+      diagnostics.push(disabledInstallDiagnostic(identity, entry.version, entry.installPath, entry.scope));
+    }
     if (entry.errors !== undefined && entry.errors.length > 0) {
       // The host lists the copy but refused to load it: content comparison is moot because none of the
       // plugin reaches a session. Report the host's own message rather than `current`/`stale` (#464).
       comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,
+        ...enabledField,
         errors: entry.errors,
         installedPath: entry.installPath,
         installedVersion: entry.version,
@@ -1085,6 +1146,7 @@ const publicHostInstallComparison = async (
     } catch (error) {
       comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,
+        ...enabledField,
         installedPath: entry.installPath,
         installedVersion: entry.version,
         ownership: 'host',
@@ -1108,6 +1170,7 @@ const publicHostInstallComparison = async (
           : 'stale';
     comparisons.push(Object.freeze({
       artifactContentHash: artifact.hash,
+      ...enabledField,
       installedContentHash: installed.hash,
       installedPath: entry.installPath,
       installedVersion: entry.version,
@@ -1449,7 +1512,47 @@ interface PublicHostContext {
   readonly run: DoctorCommandRunner;
 }
 
-/** Claude: inline registration proof plus the installed cache copy compared against the artifact. */
+/**
+ * The Claude developer validator over one directory, through the same runner
+ * `validate --artifact` uses (`plugin.json` run, then `marketplace.json`;
+ * `--strict`; `--json` on 2.1.259+). Findings keep their `AB6019`–`AB6022`
+ * codes; the message names which copy they were found in, since Doctor
+ * validates the `--from` bundle and every installed copy the host lists (#476).
+ */
+const claudeHostValidation = async (
+  copy: DoctorHostValidation['copy'],
+  pluginDirectory: string,
+  scope: string | undefined,
+  probe: DoctorHostProbe,
+  run: DoctorCommandRunner,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly validation: DoctorHostValidation }> => {
+  // Doctor already holds the load verdicts (`claudeRegistration` for the bundle, the inventory
+  // rows' `errors[]` → AB7325 for installed copies) and the probed version, so the runner
+  // neither lists nor probes again.
+  const report = await validateClaudePlugin({
+    loadCheck: false,
+    pluginDirectory,
+    run,
+    target: 'claude',
+    ...(probe.version === undefined ? {} : { version: probe.version }),
+  });
+  const location = copy === 'bundle'
+    ? `Bundle at ${JSON.stringify(pluginDirectory)}`
+    : `Installed copy at ${JSON.stringify(pluginDirectory)}${scope === undefined ? '' : ` (scope ${scope})`}`;
+  return {
+    diagnostics: freezeDiagnostics(report.diagnostics.map((entry) => Object.freeze({
+      ...entry,
+      message: `${location}: ${entry.message}`,
+    }))),
+    validation: Object.freeze({ ...report, copy, pluginDirectory, ...(scope === undefined ? {} : { scope }) }),
+  };
+};
+
+/**
+ * Claude: inline registration proof, the installed cache copy compared against
+ * the artifact, and `claude plugin validate` over the bundle and each installed
+ * copy. Doctor stays read-only: the validator only reads the named files.
+ */
 const claudeBundle = async (
   identity: PluginIdentity,
   probe: DoctorHostProbe,
@@ -1460,9 +1563,23 @@ const claudeBundle = async (
   const artifact = await treeInventory(identity.bundleRoot);
   const inventory = readPublicHostInventory('claude', identity, context.listing, context.environment, context.home);
   const compared = await publicHostInstallComparison('claude', identity, artifact, inventory);
+  const validated = [await claudeHostValidation('bundle', identity.bundleRoot, undefined, probe, context.run)];
+  if (inventory.status === 'available') {
+    for (const entry of inventory.entries) {
+      validated.push(await claudeHostValidation('installed', entry.installPath, entry.scope, probe, context.run));
+    }
+  }
   return {
-    diagnostics: freezeDiagnostics([...registration.diagnostics, ...compared.diagnostics]),
-    finding: Object.freeze({ ...registration.finding, comparison: compared.comparison }),
+    diagnostics: freezeDiagnostics([
+      ...registration.diagnostics,
+      ...compared.diagnostics,
+      ...validated.flatMap((entry) => entry.diagnostics),
+    ]),
+    finding: Object.freeze({
+      ...registration.finding,
+      comparison: compared.comparison,
+      hostValidation: Object.freeze(validated.map((entry) => entry.validation)),
+    }),
   };
 };
 

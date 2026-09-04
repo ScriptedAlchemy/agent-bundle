@@ -98,6 +98,14 @@ Claude Code 列出了该副本却拒绝加载它——它在 `claude plugin list
 该数组而不是 `current`，因为被拒绝的副本不会为会话提供任何 hook、MCP 服务器或技能。安装器读取同一数组：当刚安装的
 （或字节完全相同的既有）副本带有 `errors` 时，`agent-bundle install claude` 以 `AB7006` 失败，而不是报告 `installed`。
 
+对 Claude，Doctor 还会读取每一行的 `enabled` 标志并运行 Claude Code 开发者校验器。被列为 `enabled: false`
+的副本（用 `claude plugin disable` 或 `/plugin` 菜单关闭）在清点中报告为 `disabled`，在 `--from` 比对中保留其内容
+结论，并追加一条带 `claude plugin enable` 命令的 `AB7327` warning——被禁用的插件不会加载任何内容，重新安装也不会启用它。
+校验器（对 `plugin.json`、再对 `marketplace.json` 执行 `claude plugin validate --strict`，与 `build` 和
+`validate --artifact` 执行的是同样的运行）覆盖 `--from` 捆绑包以及每一份已安装副本，其发现保留 `AB6019`–`AB6022`
+代码，并带有 `Bundle at …` 或 `Installed copy at … (scope …)` 前缀。Doctor 绝不会重复运行 `--plugin-dir` 加载检查：
+它的注册证明与各行的 `errors` 已经承载了该结论。
+
 | 代码 | 严重级别 | 含义 |
 | --- | --- | --- |
 | `AB7316` | warning | 某个已安装捆绑包的 `state/` 目录，或它的某个 `*.sqlite`、`-wal`、`-shm` 文件无法通过文件系统元数据操作读取。Doctor 只按目录条目与元数据清点状态；它绝不打开数据库。 |
@@ -108,6 +116,7 @@ Claude Code 列出了该副本却拒绝加载它——它在 `claude plugin list
 | `AB7323` | warning | `~/.cursor/hooks.json` 注册了指向某个已安装插件目录的命令，Cursor 会把该 hook 投递两次；仅靠清单注册就已足够。 |
 | `AB7324` | info / warning / error | 由 `install cursor --mode marketplace` 暂存的市场已被导入（`registered`）、仍在等待 Customize 导入步骤（`unregistered`），或不完整（`corrupt`）。 |
 | `AB7326` | info / warning / error | `~/.cursor/plugins/local` 下的某个 Agent Plugins 安装：其 `mcp.json` 占位符已由输出的 `install.mjs` 展开且每个展开后的路径仍可解析（`expanded`）；仍带有 Cursor 3.18.25 不会解析的规范形式，因此其 stdio 服务器无法启动（`unexpanded`）；或在记录展开之后被移动、复制或编辑（`drifted`，条目为 `corrupt`）。请在当前位置用捆绑包的 `install.mjs` 重新安装。 |
+| `AB7327` | warning | `doctor --from` 比对了一份其 `claude plugin list --json` 行报告 `enabled: false` 的已安装 Claude 副本；修复方式是 `claude plugin enable <name>@<marketplace> [--scope <scope>]`。 |
 | `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个，因此统一 `plugin` 捆绑包中与 `hooks/hooks-cursor.json` 并存的 Claude 格式 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
 
 ## 下一步

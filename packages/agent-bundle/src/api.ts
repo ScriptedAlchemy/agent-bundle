@@ -107,6 +107,7 @@ import type { ProjectContext } from './core/project-context.ts';
 import type { NormalizedPlugin } from './core/types.ts';
 import {
   validateClaudePlugin,
+  type ClaudePluginCommandRunner,
   type ClaudePluginValidationReport,
 } from './host-contracts/claude-plugin-validation.ts';
 import {
@@ -430,6 +431,18 @@ export interface InvalidInspectResult {
 export type InspectResult = ReadyInspectResult | InvalidInspectResult;
 
 export interface BuildOptions extends ProjectOptions {
+  /**
+   * After the artifact is written, run the installed Claude developer
+   * validator (`claude plugin validate --strict` against the emitted
+   * `plugin.json` and `marketplace.json`) for every built `claude` and
+   * `plugin` target, exactly as `validate --artifact` does. The CLI `build`
+   * command requests this by default; programmatic artifact operations
+   * (temporary artifacts, dev, evals) never do. Without `claude` on `PATH`
+   * the run costs one failed spawn and reports a single `AB6019` info.
+   */
+  readonly hostValidation?: boolean;
+  /** Injectable only to make the Claude host validator deterministic in tests; production always spawns `claude`. */
+  readonly hostValidationRunner?: ClaudePluginCommandRunner;
   readonly output?: string;
   /**
    * Also produce the framework-owned npm package build (`dist/` bin + lib
@@ -438,11 +451,16 @@ export interface BuildOptions extends ProjectOptions {
    * operations (temporary artifacts, dev, evals) never do.
    */
   readonly packageOutputs?: boolean;
+  /** Promote host-tool warnings to errors (`hostValidation` only). */
+  readonly strict?: boolean;
 }
 
 export interface BuildProjectResult {
   readonly build: BuildResult;
+  /** Project diagnostics followed by the host-validation findings (`AB6019`–`AB6022`) when `hostValidation` ran. */
   readonly diagnostics: readonly Diagnostic[];
+  /** One report per built `claude`/`plugin` target; present only when `hostValidation` was requested. */
+  readonly hostValidation?: readonly ClaudePluginValidationReport[];
   readonly model: NormalizedPlugin;
   readonly packageBuild?: PackageBuildResult;
   readonly projectContext: ProjectContext;
@@ -1070,12 +1088,55 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     });
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
   }
+  const hostValidation = options.hostValidation === true
+    ? await buildHostValidation(result.manifest.targets.map((target) => target.name), output, options)
+    : undefined;
   return Object.freeze({
     build: result,
-    diagnostics: prepared.diagnostics,
+    diagnostics: hostValidation === undefined
+      ? prepared.diagnostics
+      : freezeDiagnostics([...prepared.diagnostics, ...hostValidation.diagnostics]),
+    ...(hostValidation === undefined ? {} : { hostValidation: hostValidation.reports }),
     model,
     ...(packageBuild === undefined ? {} : { packageBuild }),
     projectContext,
+  });
+};
+
+const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude', 'plugin']);
+
+/**
+ * `build --host-validation`: the Claude developer validator (`plugin validate`
+ * over both manifests, then the `--plugin-dir … plugin list --json` load check)
+ * over every built `claude`/`plugin` target (#476). Targets run one after
+ * another: once the CLI proves absent (`AB6019`), the remaining targets are
+ * marked `unavailable` without another spawn, so a build without `claude` on
+ * `PATH` costs one failed spawn and reports the skip once.
+ */
+const buildHostValidation = async (
+  targets: readonly string[],
+  output: string,
+  options: Pick<BuildOptions, 'hostValidationRunner' | 'strict'>,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly reports: readonly ClaudePluginValidationReport[] }> => {
+  const reports: ClaudePluginValidationReport[] = [];
+  let unavailable = false;
+  for (const target of targets.filter((name) => claudeValidatedTargets.has(name))) {
+    if (unavailable) {
+      reports.push(Object.freeze({ diagnostics: freezeDiagnostics([]), host: 'claude', status: 'unavailable', target }));
+      continue;
+    }
+    const report = await validateClaudePlugin({
+      pluginDirectory: join(output, target),
+      ...(options.hostValidationRunner === undefined ? {} : { run: options.hostValidationRunner }),
+      ...(options.strict === undefined ? {} : { strict: options.strict }),
+      target,
+    });
+    reports.push(report);
+    unavailable = report.status === 'unavailable';
+  }
+  return Object.freeze({
+    diagnostics: freezeDiagnostics(reports.flatMap((report) => report.diagnostics)),
+    reports: Object.freeze(reports),
   });
 };
 

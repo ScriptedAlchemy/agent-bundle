@@ -403,6 +403,46 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
   }
 }, 30_000 * timeScale);
 
+it('build requests the Claude host validator by default, opts out under --no-host-validation, and fails under --strict (#476)', async () => {
+  const calls: unknown[] = [];
+  const build = async (options: unknown) => {
+    calls.push(options);
+    const strict = (options as { strict?: boolean }).strict === true;
+    const skipped = (options as { hostValidation?: boolean }).hostValidation === false;
+    const diagnostics = skipped
+      ? []
+      : [{ code: 'AB6020', message: 'Claude plugin validation warning.', severity: strict ? 'error' as const : 'warning' as const }];
+    return {
+      build: { outputRoot: '/artifact' },
+      diagnostics,
+      ...(skipped ? {} : {
+        hostValidation: [{ diagnostics, host: 'claude', load: { status: 'loaded' }, status: strict ? 'failed' : 'warnings', target: 'claude', version: '2.1.259' }],
+      }),
+      model: { metadata: { name: 'fixture' } },
+    };
+  };
+
+  const human = await runSourceCliWithOutput(['build', '--root', '/project'], { build: build as never });
+  expect(human).toEqual({
+    code: 0,
+    stderr: '',
+    stdout: 'AB6020 (warning): Claude plugin validation warning.\nBuilt fixture to /artifact\nHost validation (claude): warnings (Claude Code 2.1.259), load check loaded\n',
+  });
+
+  const skipped = await runSourceCliWithOutput(['build', '--root', '/project', '--no-host-validation'], { build: build as never });
+  expect(skipped).toEqual({ code: 0, stderr: '', stdout: 'Built fixture to /artifact\n' });
+
+  const strict = await runSourceCliWithOutput(['build', '--root', '/project', '--strict', '--json'], { build: build as never });
+  expect(strict.code).toBe(1);
+  expect(strict.stderr).toContain('AB6020');
+
+  expect(calls).toEqual([
+    expect.objectContaining({ hostValidation: true, packageOutputs: true, root: '/project', strict: undefined }),
+    expect.objectContaining({ hostValidation: false, packageOutputs: true, root: '/project' }),
+    expect.objectContaining({ hostValidation: true, strict: true }),
+  ]);
+});
+
 it('enables bounded host validation for built artifacts and promotes warnings only under --strict', async () => {
   const calls: unknown[] = [];
   const validate = async (options: unknown) => {

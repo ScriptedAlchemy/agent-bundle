@@ -881,12 +881,22 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       hosts: ['claude'],
     });
 
-    // Read-only proofs only: version probe, installed inventory, inline registration proof; never `plugin validate`.
+    // Read-only proofs only: one version probe, installed inventory, inline registration proof, then the
+    // developer validator over the bundle's two manifests (#476) — it reads files and writes nothing.
+    // The pinned-bytes document check (AB7319) needs no CLI proof of its own.
     expect(calls).toEqual([
       expect.objectContaining({ args: ['--version'], executable: 'claude' }),
       expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle, executable: 'claude' }),
       expect.objectContaining({
         args: ['--plugin-dir', bundle, 'plugin', 'list', '--json'],
+        executable: 'claude',
+      }),
+      expect.objectContaining({
+        args: ['plugin', 'validate', join(bundle, '.claude-plugin', 'plugin.json'), '--strict'],
+        executable: 'claude',
+      }),
+      expect.objectContaining({
+        args: ['plugin', 'validate', join(bundle, '.claude-plugin', 'marketplace.json'), '--strict'],
         executable: 'claude',
       }),
     ]);
@@ -1009,8 +1019,22 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
     expect(report.diagnostics.some((entry) => entry.code === 'AB7303')).toBe(false);
     expect(hostReport(report, 'claude').inventory).toEqual({
       findings: [
-        { entry: 'alpha@alpha-marketplace (user)', name: 'alpha', path: '/cache/alpha/1.0.0', state: 'installed', version: '1.0.0' },
-        { entry: 'alpha@alpha-marketplace (project)', name: 'alpha', path: '/cache/alpha-project/1.0.0', state: 'installed', version: '1.0.0' },
+        {
+          enabled: true,
+          entry: 'alpha@alpha-marketplace (user)',
+          name: 'alpha',
+          path: '/cache/alpha/1.0.0',
+          state: 'installed',
+          version: '1.0.0',
+        },
+        {
+          enabled: true,
+          entry: 'alpha@alpha-marketplace (project)',
+          name: 'alpha',
+          path: '/cache/alpha-project/1.0.0',
+          state: 'installed',
+          version: '1.0.0',
+        },
       ],
       status: 'known',
     });
@@ -1508,6 +1532,7 @@ it('reports a Claude copy the host refused to load as load-failed (AB7325) inste
     expect(host.bundle?.comparison).not.toHaveProperty('installedContentHash');
     expect(host.inventory).toEqual({
       findings: [{
+        enabled: true,
         entry: 'doctor-fixture@doctor-fixture-marketplace (user)',
         errors: refusedRow.errors,
         name: 'doctor-fixture',
@@ -1524,6 +1549,128 @@ it('reports a Claude copy the host refused to load as load-failed (AB7325) inste
     expect(refused[0]?.message).toContain('(scope user)');
     expect(refused[0]?.recovery).toContain('--scope user --replace');
     expect(host.diagnostics.some((entry) => entry.code === 'AB7308' || entry.code === 'AB7309')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an installed-but-disabled Claude copy as disabled (AB7327) with the enable command (#476)', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const installed = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    const artifactHash = (await treeInventory(bundle)).hash;
+    const disabledRow = {
+      enabled: false,
+      id: 'doctor-fixture@doctor-fixture-marketplace',
+      installPath: installed,
+      scope: 'project',
+      version: '1.2.3',
+    };
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.259' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify([disabledRow]) });
+      if (request.args[0] === '--plugin-dir') return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+      return commandResult({ stdout: JSON.stringify({ contents: [], manifest: { errors: [], notes: [], warnings: [] }, success: true }) });
+    };
+    const host = hostReport(await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+
+    // Byte-identical and current, yet switched off: the comparison still runs, the inventory says so.
+    expect(host.bundle).toMatchObject({
+      comparison: {
+        artifactContentHash: artifactHash,
+        enabled: false,
+        installedContentHash: artifactHash,
+        installedPath: installed,
+        status: 'current',
+      },
+      state: 'registered',
+    });
+    expect(host.inventory).toEqual({
+      findings: [{
+        enabled: false,
+        entry: 'doctor-fixture@doctor-fixture-marketplace (project)',
+        name: 'doctor-fixture',
+        path: installed,
+        state: 'disabled',
+        version: '1.2.3',
+      }],
+      status: 'known',
+    });
+    const disabled = host.diagnostics.filter((entry) => entry.code === 'AB7327');
+    expect(disabled).toEqual([expect.objectContaining({ severity: 'warning', target: 'claude' })]);
+    expect(disabled[0]?.message).toContain('as disabled (`enabled: false`)');
+    expect(disabled[0]?.message).toContain('(scope project)');
+    expect(disabled[0]?.recovery).toContain('claude plugin enable doctor-fixture@doctor-fixture-marketplace --scope project');
+    expect(disabled[0]?.recovery).toContain('reinstalling does not enable');
+    expect(host.diagnostics.some((entry) => entry.code === 'AB7308' || entry.code === 'AB7325')).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('runs the Claude developer validator over the bundle and every installed copy (#476)', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const installed = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    const recorded = (name: string, directory: string): Promise<string> =>
+      readFile(new URL(`./fixtures/claude-plugin-validate/${name}`, import.meta.url), 'utf8')
+        .then((text) => text.replaceAll('/bundle/claude', directory));
+    const calls: string[][] = [];
+    const runner: DoctorCommandRunner = async (request) => {
+      calls.push([...request.args]);
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.259' });
+      if (isInventoryRequest(request)) {
+        return commandResult({ stdout: JSON.stringify([
+          { enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.2.3' },
+        ]) });
+      }
+      if (request.args[0] === '--plugin-dir') return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+      const target = request.args[2] ?? '';
+      // The bundle validates clean; the installed copy's plugin.json run carries the recorded warnings.
+      const findings = target.startsWith(installed) && target.endsWith('plugin.json') && !target.endsWith('marketplace.json');
+      return commandResult({
+        exitCode: findings ? 1 : 0,
+        stdout: await recorded(findings ? '2.1.259-plugin-strict-findings.json' : '2.1.259-plugin-strict-passed.json', dirname(dirname(target))),
+      });
+    };
+    const host = hostReport(await runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+
+    // One probe for the whole host; the validator never lists plugins again (Doctor holds the verdict).
+    expect(calls.filter((call) => call[0] === '--version')).toHaveLength(1);
+    expect(calls.filter((call) => call[0] === '--plugin-dir')).toHaveLength(1);
+    expect(calls.filter((call) => call[0] === 'plugin' && call[1] === 'validate').map((call) => call[2])).toEqual([
+      join(bundle, '.claude-plugin', 'plugin.json'),
+      join(bundle, '.claude-plugin', 'marketplace.json'),
+      join(installed, '.claude-plugin', 'plugin.json'),
+      join(installed, '.claude-plugin', 'marketplace.json'),
+    ]);
+    expect(host.bundle?.hostValidation).toEqual([
+      expect.objectContaining({ copy: 'bundle', diagnostics: [], pluginDirectory: bundle, status: 'passed', version: '2.1.259' }),
+      expect.objectContaining({ copy: 'installed', pluginDirectory: installed, scope: 'user', status: 'warnings' }),
+    ]);
+    expect(host.bundle?.hostValidation?.[1]).not.toHaveProperty('load');
+    const findings = host.diagnostics.filter((entry) => entry.code === 'AB6020');
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((entry) => entry.severity === 'warning' && entry.target === 'claude')).toBe(true);
+    expect(findings[0]?.message).toMatch(new RegExp(`^Installed copy at ${JSON.stringify(installed).replaceAll('\\', '\\\\')} \\(scope user\\): `, 'u'));
+    expect(host.diagnostics.some((entry) => entry.message.startsWith('Bundle at'))).toBe(false);
+    expect(host.bundle?.comparison?.status).toBe('current');
   } finally {
     await fixture.cleanup();
   }
