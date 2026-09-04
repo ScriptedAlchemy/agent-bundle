@@ -76,6 +76,7 @@ it.each([
   // An alias must name a valid package; a known scheme with nothing after it is a source npm cannot fetch.
   ['npm:', false],
   ['npm:bad name@1', false],
+  ['NPM:effect@^4', true],
   ['file:', false],
   ['github:', false],
   ['http:%zz', false],
@@ -108,7 +109,11 @@ it.each([
   ['not a valid spec', false],
   ['npm:', false],
   ['npm:name@', true],
+  ['NPM:name@^1', true],
   ['npm:bad name@1', false],
+  // Aliases only work for registry deps: a non-registry target is a parse error.
+  ['npm:bar@file:../bar', false],
+  ['npm:bar@github:owner/repo', false],
   // Empty fetch sources parse (a local directory, an empty hosted source) and merely fail to fetch.
   ['file:', true],
   ['github:', true],
@@ -117,6 +122,8 @@ it.each([
   ['https://', false],
   // npm's git transports only.
   ['git+ssh://git@github.com/o/r.git', true],
+  ['git+ftp://host/repo', true],
+  ['git+rsync://host/repo', true],
   ['git+foo://host/repo', false],
   ['foo.tgz', true],
   ['vendor/foo/bar', true],

@@ -99,11 +99,12 @@ export const packageNameOf = (specifier: string): string | undefined =>
   nonPackageSpecifier.test(specifier) || isBuiltin(specifier) ? undefined : packageNamePrefix.exec(specifier)?.[0];
 
 /**
- * An `npm:` alias, `npm:name` or `npm:name@<target>`. npm resolves the alias
- * itself, but only to a registry target: the part after the aliased name is
- * classified like any other specifier (an absent target is `latest`).
+ * An `npm:` alias (prefix case-insensitive, as npm reads it), `npm:name` or
+ * `npm:name@<target>`. npm resolves the alias itself, but only to a registry
+ * target: the part after the aliased name is classified like any other
+ * specifier (an absent target is `latest`).
  */
-const registryAlias = /^npm:(?<name>(?:@[^/@]+\/)?[^/@]+)(?:@(?<target>.*))?$/u;
+const registryAlias = /^npm:(?<name>(?:@[^/@]+\/)?[^/@]+)(?:@(?<target>.*))?$/iu;
 
 /**
  * Protocols only a workspace manager understands. pnpm, Yarn, and Bun
@@ -131,8 +132,8 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
  * package (`npm:` alone is "aliases must have a name").
  */
 const hostedShorthand = /^(?:github|gitlab|bitbucket|gist):/iu;
-/** npm's git transports: `git:` and `git+ssh|https|http|file:`; any other `git+x` is unsupported. */
-const urlScheme = /^(?:git(?:\+(?:ssh|https?|file))?|https?|file):/iu;
+/** npm's git transports: `git:` and `git+ssh|https|http|file|ftp|rsync:`; any other `git+x` is unsupported. */
+const urlScheme = /^(?:git(?:\+(?:ssh|https?|file|ftp|rsync))?|https?|file):/iu;
 const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
 
 /**
@@ -209,8 +210,9 @@ export const isNpmParseable = (specifier: string): boolean => {
   const alias = registryAlias.exec(trimmed);
   if (alias !== null) {
     const target = alias.groups?.target;
+    // "aliases only work for registry deps": a non-registry target is a parse error, not a fetch that may fail.
     return isValidPackageName(alias.groups?.name ?? '')
-      && (target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target)));
+      && (target === undefined || target === '' || (!/^npm:/iu.test(target) && isRegistrySpecifier(target)));
   }
   if (/^npm:/iu.test(trimmed)) return false;
   if (anyScheme.test(trimmed)) return parseableScheme(trimmed) || windowsDrivePath.test(trimmed);
@@ -229,7 +231,7 @@ export const isRegistrySpecifier = (specifier: string): boolean => {
   if (alias !== null) {
     const target = alias.groups?.target;
     return isValidPackageName(alias.groups?.name ?? '')
-      && (target === undefined || target === '' || (!target.startsWith('npm:') && isRegistrySpecifier(target)));
+      && (target === undefined || target === '' || (!/^npm:/iu.test(target) && isRegistrySpecifier(target)));
   }
   return isNpmParseable(trimmed) && !nonRegistrySpecifier.test(trimmed);
 };
