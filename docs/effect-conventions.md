@@ -24,6 +24,7 @@ Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 - [`packages/rsc-runtime/src/effect/boundary.ts`](../packages/rsc-runtime/src/effect/boundary.ts) — runtime + state kernel internals.
 - [`packages/agent-bundle/src/effect/boundary.ts`](../packages/agent-bundle/src/effect/boundary.ts) — the dev seam (Stage 3). Maps interruption to `AbortError` and rethrows the dev seam's typed contracts (`CodedError` subclasses, `DiagnosticError`) unchanged.
+- [`packages/create-agent-bundle/src/effect/boundary.ts`](../packages/create-agent-bundle/src/effect/boundary.ts) — the scaffolder (FileSystem phase 1). Rethrows `UsageError` / `Error` unchanged; unwraps `PlatformError` to its Node cause.
 
 The boundary owns:
 
@@ -212,24 +213,92 @@ and result state. Atoms live in `effect/unstable/reactivity`; React bindings com
 
 ## Effect platform services (@effect/platform-node)
 
-Evaluated 2026-09-01 against `effect@4.0.0-rc.112` +
-`@effect/platform-node@4.0.0-rc.112`; **decision = not adopted** this RC
-cycle (missing `lstat`/`O_NOFOLLOW`/inode primitives for hardened fs
-protocols; `runMain` cannot express the 130/143 signal-distinct exit
-contract); revisit at GA.
+Re-evaluated 2026-09-03 against `effect@4.0.0-rc.112` +
+`@effect/platform-node@4.0.0-rc.112`; **decision = adopted for ordinary
+filesystem I/O and path operations** (the 2026-09-01 decline is superseded).
+`FileSystem.FileSystem` and `Path.Path` from the `effect` package are the
+sanctioned way for framework code to touch the filesystem; the Node
+implementations come from `@effect/platform-node` (`NodeServices.layer`, or
+the narrower `NodeFileSystem.layer` / `NodePath.layer`). The API gap that
+motivated the decline is still real and is what the keep-raw list below
+encodes: the pinned `FileSystem` has no `lstat`, `OpenFlag` accepts only
+string flags (no `O_NOFOLLOW`), and there is no directory fsync.
+`NodeRuntime.runMain` stays banned (the 130/143 signal-distinct exit
+contract).
 
-Effect platform services are optional inside Effect-native internals, not a
-blanket replacement for `node:fs` or `node:path`. Use them when portable
-ordinary I/O materially improves service substitution or scoped ownership, and
-provide only the narrow `NodeFileSystem`/`NodePath` layers at an existing
-Effect boundary. Keep raw Node APIs for compiler and generated-entry code,
-synchronous SQLite setup, `lstat`/`O_NOFOLLOW`, inode/link identity,
-directory-fsync and atomic-publication protocols, transferred resource
-ownership, or bespoke process exit contracts. Map `PlatformError` to the
-existing typed contract at one boundary. Use scoped temporary paths only in
-tests already Effect-native; do not convert Promise-contract tests solely for
-fixture cleanup. Treat `layerNoop` as a selective stub, not an in-memory
-filesystem.
+### Adopt
+
+- Ordinary reads, writes, `mkdir`, `readDirectory`, `stat`, `exists`,
+  `remove`, `rename`, `copy` in code that already runs (or is being moved)
+  inside an Effect program: `yield* FileSystem.FileSystem`, then the method.
+  `readDirectory` returns names only — `stat(...).type === 'Directory'`
+  replaces `Dirent.isDirectory()`.
+- `Path.Path` for `join` / `resolve` / `dirname` / `fromFileUrl` in the same
+  modules. `fromFileUrl` fails with `BadArgument`; `Effect.orDie` it when the
+  URL is built from `import.meta.url`.
+- Temporary directories whose lifetime ends with the enclosing operation:
+  `makeTempDirectoryScoped` inside `Effect.scoped`, replacing `mkdtemp` +
+  `try`/`finally` `rm`. **Not** when ownership of the directory is
+  transferred to a longer-lived object (the MCP session plugin-data dir in
+  `dev/mcp-session/mcp-session-service.ts`): a scoped temp is removed when
+  the scope closes, which is too early there.
+- File handles whose use is bounded by one program: scoped `open`.
+- Layer wiring: one composition root per process. The first-party CLI and
+  the scaffolder provide `NodeServices.layer` immediately before their
+  boundary's `runPromise`; the dev server (phase 2) gets one
+  `makeScopedEffectRuntime(NodeServices.layer)` in `startDevServer`, disposed
+  from the session's `close`. Never provide a platform layer deep inside
+  library code.
+- Errors: `PlatformError` flows through the Effect error channel and is
+  mapped once, at the boundary, onto the existing contract. Where a
+  user-facing AB#### diagnostic already exists for the failure, map to it
+  without changing the code or message. Where the contract is "print the
+  Node error" (the scaffolder), unwrap `PlatformError.cause` to the
+  `ErrnoException` so messages stay byte-identical.
+- Tests: `FileSystem.layerNoop({ ...overrides })` for call/result/error
+  protocol tests — its defaults fail with `NotFound` or die, so override
+  every operation the code under test performs. Keep real temp directories
+  (`makeTempDirectoryScoped` under `it.effect` / `it.live`) for anything
+  about symlinks, permissions, atomic rename, SQLite, or packed executables.
+  Do not convert Promise-contract tests solely for fixture cleanup.
+
+### Keep raw (`node:fs` / `node:path`) — explicit carve-outs
+
+- `core/durable-fs.ts` and everything that publishes through it: epoch
+  store, playground stores, eval run-store, dev-lock, receipts. They need
+  `lstat`, `O_NOFOLLOW`, inode identity, directory fsync, `wx` exclusive
+  create, and same-filesystem atomic rename.
+- `install/*` and `doctor`: `lstat` containment walks, symlink refusal,
+  same-fs staging, `wx` receipt creation, atomic rename. Ordinary stage
+  directories there move to `makeTempDirectoryScoped` only once the
+  installer body itself is Effect-native.
+- `events/ipc.ts` inode locks (`open` with `wx` + `stat` identity + Linux
+  start time).
+- Synchronous SQLite setup (`rsc-runtime/src/state/sqlite.ts`).
+- `dev/watcher.ts`: chokidar stays. `FileSystem.watch` is a thin `fs.watch`
+  with create/update/remove only — no `ignored` callbacks, readiness, or the
+  other event kinds — and the watcher's `dev:ino` signatures need `stat`
+  semantics we do not want to change.
+- Synchronous config/discovery on the compiler and cold-start path
+  (`config/validate.ts`, `config/conventional-entry.ts`,
+  `core/project-context.ts`), Rspack/rslib compiler I/O (`build/rslib.ts`),
+  and Rspack loader/plugin hot paths.
+- Every **emitted** artifact: generated hook wrappers
+  (`adapters/hook-contract.ts`), `build/entry-shell.ts` shells, `bin/*.mjs`
+  templates, and the installer surface strings (`install/surface.ts`). They
+  must not depend on an Effect runtime at run time (see the cold-start
+  budget).
+
+### Boundary modules
+
+`packages/create-agent-bundle/src/effect/boundary.ts` is the scaffolder's
+sole run edge (phase 1 pilot): `runPromise` rethrows `UsageError` and plain
+`Error` unchanged and unwraps `PlatformError` to its Node cause. `runCli`
+provides `NodeServices.layer` once. Measured on rc.112 (bundled by Rslib,
+`node` target): `dist/index.js` 73.7 kB → 456.8 kB with `NodeServices.layer`
+(264.7 kB with only `NodeFileSystem` + `NodePath`); packed tarball 33.0 kB →
+110.2 kB; `--help` cold start ≈40 ms → ≈65 ms. `undici` is not pulled into
+the bundle.
 
 ## Effect Schema wire contracts (Schema projections)
 
@@ -307,7 +376,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
-| `@effect/platform-node` (`NodeFileSystem` / `NodePath`) | **declined** (2026-09-01) | revisit at Effect GA; re-pin re-evaluates lstat/O_NOFOLLOW/inode primitives + `runMain` 130/143 exit contract |
+| `@effect/platform-node` (`NodeServices.layer`; `FileSystem` / `Path` services live in `effect`) | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list | re-pin bumps `@effect/platform-node` in lockstep with `effect`; re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
 ## Language service
@@ -335,10 +404,14 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 
 ## Re-pin chore
 
-1. Bump the exact `effect` version in `packages/rsc-runtime/package.json`.
-2. Synchronize `@effect/atom-react` in `packages/workbench/package.json` to
+1. Bump the exact `effect` version in `packages/rsc-runtime/package.json`,
+   `packages/agent-bundle/package.json`, `packages/workbench/package.json`,
+   and `packages/create-agent-bundle/package.json`.
+2. Synchronize `@effect/atom-react` in `packages/workbench/package.json` and
+   `@effect/platform-node` in `packages/create-agent-bundle/package.json` to
    the same RC; re-run the Workbench disposal regression test and production
-   bundle measurement (rsbuild size table).
+   bundle measurement (rsbuild size table), and re-measure the scaffolder
+   bundle (`pnpm --filter create-agent-bundle build` prints the size table).
 3. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git main --squash`.
 4. Re-read `repos/effect/LLMS.md` and refresh `agent-patterns/effect-*.md`.
 5. Re-verify every unstable-module row and the language-service diagnostics.
@@ -358,6 +431,6 @@ soon as the trigger fires and retire the row.
 | Recorded | Pin (where) | Observed registry state | Trigger / action |
 | --- | --- | --- | --- |
 | 2026-09-03 | `@rslib/core` **`0.23.2`** — root, `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies. Stays on `0.23.x` until rslib 1.0 leaves rc. | `npm view @rslib/core dist-tags`: `latest` `0.23.2`, `rc` `1.0.0-rc.2`, `beta` `1.0.0-beta.3`, `canary` `0.20.0-canary-202603101`. | `latest` becomes `1.x`. Bump all four pins in one chore; re-run `pnpm build`, `lint:package`, `check:release`, and the Rslib-driven compile tests. |
-| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`) — `packages/agent-bundle`, `packages/rsc-runtime` devDependencies. Needs a real release pin once published. | `npm view effect-rstest versions`: **E404 — not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace both preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
-| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
+| 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`) — `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | `npm view effect-rstest versions`: **E404 — not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
+| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
 | 2026-09-03 | Agent Plugins specification **`1.0.0`** — `packages/agent-bundle/src/adapters/schemas/portable/{plugin,mcp}.schema.json` + `PROVENANCE.json` (spec repo `agentplugins/agent-plugins-spec` @ `ff8ab5e392cc87bd88d87c060815a87490e51003`, 2026-08-19), portable `adapterRevision` `1.8.0`, pins in `tests/adapter-metadata.test.ts`. Spec watch for #426; not an npm pin, so re-verify with `curl`/`gh api`, not `npm view`. | Live `https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json` rehash to the pinned sha256 (1805 / 3408 bytes). Repo `main` HEAD unchanged at the pinned commit; **no tags, no GitHub releases**. `spec/1.1.0.md` is "Status: Working Draft" (started 2026-08-15, `a2afd7ec`); in-repo `schemas/1.1.0/*.schema.json` differ from 1.0.0 only in the `$id`/`const`/`description` version strings; `https://agent-plugins.org/schemas/1.1.0/*.schema.json` → 404. Observed latest published version: **1.0.0**. | `spec/1.1.0.md` (or later) flips to "Published" **and** `agent-plugins.org/schemas/<version>/` serves both schemas. Re-pin under `schemas/portable/` with a dated `PROVENANCE.json` (sha/bytes/date/commit), bump the portable `adapterRevision`, refresh the metadata pins, run `pnpm test:unit` (portable adapter + plugin-validation suites) and `pnpm test:host-install:build`, and add a capability row per additive field. |

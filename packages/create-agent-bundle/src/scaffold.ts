@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { Effect, FileSystem, Path } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
+import { liftTry } from './effect/lift.ts';
 import { defaultTargets, UsageError, type TargetName } from './options.ts';
 import { assertLocalFrameworkTarball, validatedRuntimeSpecForFramework } from './framework.ts';
 
@@ -40,19 +41,24 @@ export interface ScaffoldRequest {
   readonly templateRoot: string;
 }
 
+/** `ENOENT` on the platform error channel. */
+const isNotFound = (error: PlatformError): boolean => error.reason._tag === 'NotFound';
+
 /** The target directory must be absent, empty, or hold nothing but `.git`. */
-export const assertScaffoldTarget = async (targetDirectory: string, displayName: string): Promise<void> => {
-  let entries: readonly string[];
-  try {
-    entries = await readdir(targetDirectory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
+export const assertScaffoldTarget = Effect.fnUntraced(function* (
+  targetDirectory: string,
+  displayName: string,
+): Effect.fn.Return<void, PlatformError | UsageError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  const entries = yield* fs.readDirectory(targetDirectory).pipe(
+    Effect.catch((error) => (isNotFound(error) ? Effect.succeed([]) : Effect.fail(error))),
+  );
   if (entries.some((entry) => entry !== '.git')) {
-    throw new UsageError(`Target directory "${displayName}" is not empty. Choose a new directory or empty it first.`);
+    return yield* Effect.fail(
+      new UsageError(`Target directory "${displayName}" is not empty. Choose a new directory or empty it first.`),
+    );
   }
-};
+});
 
 interface TemplateManifest {
   bin?: Record<string, string>;
@@ -176,40 +182,50 @@ const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]):
  * list, and the README's install instructions. Returns the emitted
  * project-relative paths, sorted.
  */
-export const scaffold = async (request: ScaffoldRequest): Promise<readonly string[]> => {
-  const templateManifest = JSON.parse(
-    await readFile(join(request.templateRoot, 'package_json'), 'utf8'),
-  ) as TemplateManifest;
+export const scaffold = Effect.fnUntraced(function* (
+  request: ScaffoldRequest,
+): Effect.fn.Return<readonly string[], PlatformError | UsageError | Error, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const manifestSource = yield* fs.readFileString(path.join(request.templateRoot, 'package_json'));
+  const templateManifest = yield* liftTry(() => JSON.parse(manifestSource) as TemplateManifest);
   const usesWorkspaceRuntime = [templateManifest.dependencies, templateManifest.devDependencies]
     .some((section) => section?.['@agent-bundle/runtime'] === 'workspace:*');
   let runtimeSpec: string | undefined;
   if (usesWorkspaceRuntime) {
-    runtimeSpec = await validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
+    runtimeSpec = yield* validatedRuntimeSpecForFramework(request.frameworkSpec, request.targetDirectory);
   } else {
-    await assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
+    yield* assertLocalFrameworkTarball(request.frameworkSpec, request.targetDirectory);
   }
   const emitted: string[] = [];
-  const copyDirectory = async (from: string, to: string, relative: string): Promise<void> => {
-    await mkdir(to, { recursive: true });
-    for (const entry of await readdir(from, { withFileTypes: true })) {
-      const name = renamedEntries[entry.name] ?? entry.name;
-      const source = join(from, entry.name);
-      const destination = join(to, name);
+  const copyDirectory: (
+    from: string,
+    to: string,
+    relative: string,
+  ) => Effect.Effect<void, PlatformError> = Effect.fnUntraced(function* (from, to, relative) {
+    yield* fs.makeDirectory(to, { recursive: true });
+    for (const entryName of yield* fs.readDirectory(from)) {
+      const name = renamedEntries[entryName] ?? entryName;
+      const source = path.join(from, entryName);
+      const destination = path.join(to, name);
       const relativePath = relative === '' ? name : `${relative}/${name}`;
-      if (entry.isDirectory()) {
-        await copyDirectory(source, destination, relativePath);
+      const info = yield* fs.stat(source);
+      if (info.type === 'Directory') {
+        yield* copyDirectory(source, destination, relativePath);
         continue;
       }
-      let contents = (await readFile(source, 'utf8')).replaceAll(placeholderName, request.pluginName);
+      let contents = (yield* fs.readFileString(source)).replaceAll(placeholderName, request.pluginName);
+      // Template drift is a checked-in-template bug: the rewrites throw and
+      // the defect crosses the boundary as the same Error it always was.
       if (relativePath === 'package.json') contents = rewriteManifest(contents, request, runtimeSpec);
       if (relativePath === 'agent-bundle.config.ts') contents = rewriteConfigTargets(contents, request.targets);
       if (relativePath === 'README.md') contents = rewriteReadmeInstall(contents, request.targets);
-      await writeFile(destination, contents);
+      yield* fs.writeFileString(destination, contents);
       emitted.push(relativePath);
     }
-  };
-  await copyDirectory(request.templateRoot, request.targetDirectory, '');
+  });
+  yield* copyDirectory(request.templateRoot, request.targetDirectory, '');
   // Code-unit order, not localeCompare: the emitted inventory must be stable
   // across machines and locales.
   return emitted.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-};
+});

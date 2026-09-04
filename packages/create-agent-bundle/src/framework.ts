@@ -1,8 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip } from 'node:zlib';
 
+import { Effect, FileSystem, Path } from 'effect';
+
+import { describeError } from './effect/boundary.ts';
+import { liftPromise, liftTry } from './effect/lift.ts';
 import { UsageError } from './options.ts';
 
 const previewPattern = /-preview-([0-9a-f]{7,40})$/u;
@@ -86,46 +88,55 @@ const tarHeaderChecksumMatches = (header: Buffer): boolean => {
  * spec is written verbatim into that project's `package.json` and npm resolves
  * it from there — never from this CLI's working directory.
  */
-const localTarballPackageName = async (packageSpec: string, baseDirectory: string): Promise<string> => {
-  const path = resolve(baseDirectory, packageSpec.slice('file:'.length));
-  try {
-    const archive = await unzip(await readFile(path));
-    let packageName: string | undefined;
-    for (let offset = 0; offset + tarBlockSize <= archive.length;) {
-      const header = archive.subarray(offset, offset + tarBlockSize);
-      if (isEndOfArchiveBlock(header)) break;
-      if (!tarHeaderChecksumMatches(header)) {
-        throw new Error(`Invalid tar header checksum at offset ${offset}: the archive is corrupt.`);
-      }
-      const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '');
-      if (name === '') break;
-      const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim();
-      const size = Number.parseInt(sizeText, 8);
-      if (!Number.isSafeInteger(size) || size < 0) {
-        throw new Error(`Invalid tar entry size "${sizeText}".`);
-      }
-      const contentsOffset = offset + tarBlockSize;
-      if (name === 'package/package.json') {
-        const manifest = JSON.parse(archive.subarray(contentsOffset, contentsOffset + size).toString('utf8')) as {
-          readonly name?: unknown;
-        };
-        if (typeof manifest.name !== 'string') {
-          throw new Error('Packed package manifest has no string name.');
-        }
-        packageName = manifest.name;
-      }
-      offset = contentsOffset + Math.ceil(size / tarBlockSize) * tarBlockSize;
+const packedPackageName = Effect.fnUntraced(function* (
+  tarballPath: string,
+): Effect.fn.Return<string, Error, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  const compressed = yield* fs.readFile(tarballPath);
+  const archive = yield* liftPromise(() => unzip(compressed));
+  let packageName: string | undefined;
+  for (let offset = 0; offset + tarBlockSize <= archive.length;) {
+    const header = archive.subarray(offset, offset + tarBlockSize);
+    if (isEndOfArchiveBlock(header)) break;
+    if (!tarHeaderChecksumMatches(header)) {
+      return yield* Effect.fail(new Error(`Invalid tar header checksum at offset ${offset}: the archive is corrupt.`));
     }
-    if (packageName === undefined) {
-      throw new Error('Packed package manifest was not found.');
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '');
+    if (name === '') break;
+    const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim();
+    const size = Number.parseInt(sizeText, 8);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      return yield* Effect.fail(new Error(`Invalid tar entry size "${sizeText}".`));
     }
-    return packageName;
-  } catch (error) {
-    throw new UsageError(
-      `Cannot inspect local package tarball "${packageSpec}": ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const contentsOffset = offset + tarBlockSize;
+    if (name === 'package/package.json') {
+      const manifest = yield* liftTry(() => JSON.parse(
+        archive.subarray(contentsOffset, contentsOffset + size).toString('utf8'),
+      ) as { readonly name?: unknown });
+      if (typeof manifest.name !== 'string') {
+        return yield* Effect.fail(new Error('Packed package manifest has no string name.'));
+      }
+      packageName = manifest.name;
+    }
+    offset = contentsOffset + Math.ceil(size / tarBlockSize) * tarBlockSize;
   }
-};
+  if (packageName === undefined) {
+    return yield* Effect.fail(new Error('Packed package manifest was not found.'));
+  }
+  return packageName;
+});
+
+const localTarballPackageName = Effect.fnUntraced(function* (
+  packageSpec: string,
+  baseDirectory: string,
+): Effect.fn.Return<string, UsageError, FileSystem.FileSystem | Path.Path> {
+  const path = yield* Path.Path;
+  return yield* packedPackageName(path.resolve(baseDirectory, packageSpec.slice('file:'.length))).pipe(
+    Effect.catch((error) => Effect.fail(
+      new UsageError(`Cannot inspect local package tarball "${packageSpec}": ${describeError(error)}`),
+    )),
+  );
+});
 
 /**
  * Verifies a local framework tarball for templates that pin no runtime
@@ -137,39 +148,44 @@ const localTarballPackageName = async (packageSpec: string, baseDirectory: strin
  * `baseDirectory` is the scaffold target directory, so a relative `file:` spec
  * is probed exactly where the emitted `package.json` will point.
  */
-export const assertLocalFrameworkTarball = async (frameworkSpec: string, baseDirectory: string): Promise<void> => {
+export const assertLocalFrameworkTarball = Effect.fnUntraced(function* (
+  frameworkSpec: string,
+  baseDirectory: string,
+): Effect.fn.Return<void, UsageError, FileSystem.FileSystem | Path.Path> {
   if (!frameworkSpec.startsWith('file:')) return;
-  const frameworkName = await localTarballPackageName(frameworkSpec, baseDirectory);
+  const frameworkName = yield* localTarballPackageName(frameworkSpec, baseDirectory);
   if (frameworkName !== 'agent-bundle') {
-    throw new UsageError(
+    return yield* Effect.fail(new UsageError(
       `Local package tarball "${frameworkSpec}" is not the agent-bundle package: expected agent-bundle, `
       + `received ${JSON.stringify(frameworkName)}.`,
-    );
+    ));
   }
-};
+});
 
 /**
  * Derives and verifies a coherent local framework/runtime tarball pair,
  * resolving relative `file:` specs against the scaffold target directory.
  */
-export const validatedRuntimeSpecForFramework = async (
+export const validatedRuntimeSpecForFramework = Effect.fnUntraced(function* (
   frameworkSpec: string,
   baseDirectory: string,
-): Promise<string> => {
-  const runtimeSpec = runtimeSpecForFramework(frameworkSpec);
+): Effect.fn.Return<string, UsageError, FileSystem.FileSystem | Path.Path> {
+  const runtimeSpec = yield* liftTry(() => runtimeSpecForFramework(frameworkSpec)).pipe(
+    Effect.catch((error) => (error instanceof UsageError ? Effect.fail(error) : Effect.die(error))),
+  );
   if (!frameworkSpec.startsWith('file:')) return runtimeSpec;
-  const [frameworkName, runtimeName] = await Promise.all([
+  const [frameworkName, runtimeName] = yield* Effect.all([
     localTarballPackageName(frameworkSpec, baseDirectory),
     localTarballPackageName(runtimeSpec, baseDirectory),
-  ]);
+  ], { concurrency: 'unbounded' });
   if (frameworkName !== 'agent-bundle' || runtimeName !== '@agent-bundle/runtime') {
-    throw new UsageError(
+    return yield* Effect.fail(new UsageError(
       `Local package tarballs are not a valid agent-bundle/runtime pair: expected agent-bundle and `
       + `@agent-bundle/runtime, received ${JSON.stringify(frameworkName)} and ${JSON.stringify(runtimeName)}.`,
-    );
+    ));
   }
   return runtimeSpec;
-};
+});
 
 /**
  * Resolve the dependency spec the scaffolded project pins `agent-bundle` to.
