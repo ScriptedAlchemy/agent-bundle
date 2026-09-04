@@ -197,6 +197,18 @@ it('lets an optionalDependencies entry supersede the same name under dependencie
   ]);
 });
 
+it('drops a peer that dependencies or optionalDependencies also names, whose selector npm never reads', () => {
+  expect(declaredDependencies({
+    dependencies: { concrete: '^1' },
+    optionalDependencies: { optional: '^1' },
+    peerDependencies: { concrete: 'not a valid spec', optional: 'file:../optional', 'peer-only': '^1' },
+  })).toEqual([
+    { bundled: false, field: 'dependencies', installed: true, name: 'concrete', specifier: '^1' },
+    { bundled: false, field: 'optionalDependencies', installed: true, name: 'optional', specifier: '^1' },
+    { bundled: false, field: 'peerDependencies', installed: true, name: 'peer-only', specifier: '^1' },
+  ]);
+});
+
 it('marks bundleDependencies entries, by name list or wholesale, as bundled', () => {
   const dependencies = { embedded: 'file:../embedded', fetched: '^1' };
   expect(declaredDependencies({ bundleDependencies: ['embedded'], dependencies }).map((d) => [d.name, d.bundled])).toEqual([

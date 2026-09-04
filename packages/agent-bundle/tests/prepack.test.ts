@@ -348,38 +348,45 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips these four after the failed fetch too — and then postinstall fails: on the missing command, and on
+      // npm skips these six after the failed fetch too — and then postinstall fails: on the missing command, and on
       // the missing modules packed files it runs require. The files are reached as `node scripts/install` (Node
       // resolves `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
-      // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependency
-      // through an `imports` entry mapped to the package's own file.
+      // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependencies
+      // through a wildcard `imports` entry mapped to the package's own file, and through a directory whose packed
+      // manifest names its `main`. An inline `node -e` program that requires a package needs it too.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'optional-driver': 'github:owner/optional-driver',
       'optional-tester': 'github:owner/optional-tester',
       'optional-hook': 'github:owner/optional-hook',
+      'optional-main': 'github:owner/optional-main',
+      'optional-inline': 'github:owner/optional-inline',
+      // Merely mentioned by the script — an `echo` argument — so npm's skipping it breaks nothing: a warning.
+      'optional-mentioned': 'github:owner/optional-mentioned',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
-    document.imports = { '#hook-setup': './scripts/hook-setup.cjs' };
+    document.imports = { '#hooks/*': './scripts/*-setup.cjs' };
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       postinstall: 'setup-tool --init && node scripts/install && npm test',
-      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo done',
+      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\'optional-inline\')"',
     };
   },
   async () => {
-    await mkdir(join(projectRoot, 'scripts'), { recursive: true });
+    await mkdir(join(projectRoot, 'scripts', 'lib'), { recursive: true });
     await mkdir(join(projectRoot, 'vendor', 'vendored'), { recursive: true });
     await mkdir(join(projectRoot, 'vendor', 'bad-manifest'), { recursive: true });
     await Promise.all([
       writeFile(join(projectRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
       writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
       writeFile(join(projectRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
-      writeFile(join(projectRoot, 'scripts', 'hooks.cjs'), 'require("#hook-setup");\n'),
+      writeFile(join(projectRoot, 'scripts', 'hooks.cjs'), 'require("#hooks/hook");\nrequire("./lib");\n'),
       writeFile(join(projectRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
+      writeFile(join(projectRoot, 'scripts', 'lib', 'package.json'), '{ "main": "setup.cjs" }\n'),
+      writeFile(join(projectRoot, 'scripts', 'lib', 'setup.cjs'), 'require("optional-main");\n'),
       writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
       writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
       writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
@@ -398,19 +405,22 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       { path: 'scripts/my install.cjs' },
       { path: 'scripts/hooks.cjs' },
       { path: 'scripts/hook-setup.cjs' },
+      { path: 'scripts/lib/package.json' },
+      { path: 'scripts/lib/setup.cjs' },
     ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"optional-mentioned" -> "github:owner\/optional-mentioned", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
     // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
     // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
     expect(reported[1]?.message).not.toContain('"scp"');
-    for (const name of ['setup-tool', 'optional-driver', 'optional-tester', 'optional-hook']) {
+    expect(reported[1]?.message).not.toContain('"optional-mentioned"');
+    for (const name of ['setup-tool', 'optional-driver', 'optional-tester', 'optional-hook', 'optional-main', 'optional-inline']) {
       expect(reported[2]?.message).not.toContain(JSON.stringify(name));
     }
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest', 'bad-tarred-manifest']) {

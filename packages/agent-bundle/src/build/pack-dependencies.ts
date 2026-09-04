@@ -70,8 +70,10 @@ const bundledDependencies = (
 /**
  * The entries a consumer's npm reads, one per name and field. A name in both
  * `dependencies` and `optionalDependencies` is the optional entry (npm lets
- * the optional declaration override); an optional peer is kept, not
- * `installed`.
+ * the optional declaration override), and a peer that `dependencies` or
+ * `optionalDependencies` also names is that concrete entry — npm resolves
+ * the concrete declaration and never reads the duplicate peer's selector; an
+ * optional peer is kept, not `installed`.
  */
 export const declaredDependencies = (packageDocument: Readonly<Record<string, unknown>>): readonly DeclaredDependency[] => {
   const skippedPeers = optionalPeers(packageDocument);
@@ -81,8 +83,20 @@ export const declaredDependencies = (packageDocument: Readonly<Record<string, un
     return isRecord(value) ? Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string') : [];
   };
   const optional = new Set(entries('optionalDependencies').map(([name]) => name));
+  const concrete = new Set([...entries('dependencies').map(([name]) => name), ...optional]);
+  const shadowed = (field: InstalledDependencyField, name: string): boolean => {
+    switch (field) {
+      case 'dependencies': return optional.has(name);
+      case 'peerDependencies': return concrete.has(name);
+      case 'optionalDependencies': return false;
+      default: {
+        const exhaustive: never = field;
+        return exhaustive;
+      }
+    }
+  };
   return installedDependencyFields.flatMap((field) => entries(field)
-    .filter(([name]) => !(field === 'dependencies' && optional.has(name)))
+    .filter(([name]) => !shadowed(field, name))
     .map(([name, specifier]) => ({
       field,
       name,
@@ -516,13 +530,33 @@ const importMapTargets = (value: unknown): readonly string[] => {
 };
 
 /**
- * The packages a `#subpath` import may reach: Node resolves `#name` through
- * the manifest's `imports` map, whose targets may be external packages.
- * Which target a given `#name` picks depends on conditions, so a packed
- * `#` import counts for every package the map names.
+ * The targets the manifest's `imports` map gives one `#specifier`, resolved
+ * the way Node does: the exact key, or else the pattern key `#prefix*suffix`
+ * with the longest prefix (then the longest key) the specifier matches, its
+ * `*` in every target replaced by the matched segment (`#setup/foo` through
+ * `"#setup/*": "./scripts/*.js"` is `./scripts/foo.js`). Which conditional
+ * target Node then picks depends on conditions, so every target of the
+ * matched key is a candidate; a specifier no key matches reaches nothing.
  */
-const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>): readonly string[] =>
-  importMapTargets(packageDocument.imports);
+const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>, specifier: string): readonly string[] => {
+  const imports = packageDocument.imports;
+  if (!isRecord(imports)) return [];
+  if (!specifier.includes('*') && Object.hasOwn(imports, specifier)) return importMapTargets(imports[specifier]);
+  let best: { readonly key: string; readonly prefix: string; readonly suffix: string } | undefined;
+  for (const key of Object.keys(imports)) {
+    const star = key.indexOf('*');
+    if (star === -1 || key.includes('*', star + 1)) continue;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (specifier.length < key.length || !specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+    if (best === undefined || prefix.length > best.prefix.length || (prefix.length === best.prefix.length && key.length > best.key.length)) {
+      best = { key, prefix, suffix };
+    }
+  }
+  if (best === undefined) return [];
+  const segment = specifier.slice(best.prefix.length, specifier.length - best.suffix.length);
+  return importMapTargets(imports[best.key]).map((target) => target.replaceAll('*', segment));
+};
 
 /**
  * The lifecycle scripts npm runs when installing a package from a registry
@@ -611,12 +645,14 @@ const executableCommands = async (names: readonly string[], projectRoot: string)
 };
 
 /**
- * Dependencies a consumer's install lifecycle uses: npm puts every
+ * Dependencies a consumer's install lifecycle mentions: npm puts every
  * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`,
- * so a script that names a dependency, or one of its `bin` commands, needs it
- * installed even though no packed JavaScript imports it.
+ * so a script that names a dependency, or one of its `bin` commands, anywhere
+ * may need it installed even though no packed JavaScript imports it. Keep-only
+ * evidence for `AB7014`: a mention in an argument or `echo` string cannot
+ * report a dependency, but neither does it prove the script runs it.
  */
-const installScriptDependencies = (text: string, executables: ExecutableCommands): readonly string[] => {
+const installScriptMentions = (text: string, executables: ExecutableCommands): readonly string[] => {
   if (text === '') return [];
   const runs = (command: string): boolean => new RegExp(String.raw`(?<![\w-])${escapeRegExp(command)}(?![\w-])`, 'u').test(text);
   return [...executables]
@@ -624,16 +660,130 @@ const installScriptDependencies = (text: string, executables: ExecutableCommands
     .map(([name]) => name);
 };
 
+const shellOperators = new Set(['&&', '||', ';', '|', '&']);
+/** Words a shell command may start with before the command proper: environment assignments, options, and wrappers that exec their argument. */
+const commandPrefix = /^(?:[A-Za-z_][A-Za-z0-9_]*=|-|npx$|bunx$|cross-env$|env$|exec$|dotenv$|nice$|time$)/u;
+const packageManagers = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const execSubcommands = new Set(['exec', 'dlx', 'x']);
+
 /**
- * The packed module a path names: exact, or with the `.js` extension or
- * `index.js` file Node's CommonJS loader tries for an extensionless path
- * (`node scripts/install` runs `scripts/install.js`; `require("./lib")` loads
- * `lib/index.js`). Node never tries `.cjs` or `.mjs` there.
+ * The command each simple command of a shell script runs: the first word of
+ * each operator-separated segment after environment assignments and exec
+ * wrappers (`FOO=1 npx tsc`, `pnpm exec -- tsc`, `cross-env CI=1 tsc`), the
+ * directory dropped from a path (`./node_modules/.bin/tsc`).
  */
-const packedModule = (path: string, packed: ReadonlySet<string>): string | undefined => {
+const commandWords = (text: string): readonly string[] => {
+  const commands: string[] = [];
+  let atCommand = true;
+  let skipSubcommand = false;
+  for (const word of shellWords(text)) {
+    if (shellOperators.has(word)) {
+      atCommand = true;
+      continue;
+    }
+    if (!atCommand) continue;
+    if (skipSubcommand) {
+      skipSubcommand = false;
+      if (execSubcommands.has(word)) continue;
+    }
+    if (commandPrefix.test(word)) continue;
+    if (packageManagers.has(word)) {
+      skipSubcommand = true;
+      continue;
+    }
+    commands.push(word.includes('/') ? posix.basename(word) : word);
+    atCommand = false;
+  }
+  return commands;
+};
+
+/** The inline programs a script hands to `node -e`/`--eval`/`-p`/`--print`. */
+const inlinePrograms = (text: string): readonly string[] => {
+  const words = shellWords(text);
+  return words.flatMap((word, index) => (
+    /^(?:-e|-p|--eval|--print)$/u.test(word) && index + 1 < words.length ? [words[index + 1] as string] : []
+  ));
+};
+
+/**
+ * Dependencies a consumer's install lifecycle demonstrably needs: one of
+ * their `bin` commands in command position (`setup-tool --init`, `npx
+ * setup-tool`, `./node_modules/.bin/setup-tool`), a file of theirs run
+ * directly (`node node_modules/setup-tool/install.js`), or a load in an
+ * inline `node -e` program (`node -e "require('setup-tool')"`; a computed
+ * load there may reach any declared package). An optional dependency npm
+ * skipped after a failed fetch then fails the script, so this is what turns
+ * a survivable `AB7015` fatal; `echo setup-tool` never does.
+ */
+const installScriptCommandDependencies = (
+  text: string,
+  executables: ExecutableCommands,
+  declared: readonly string[],
+): readonly string[] => {
+  if (text === '') return [];
+  const commands = new Set(commandWords(text));
+  const words = shellWords(text);
+  const names = new Set<string>();
+  for (const [name, { commands: bins }] of executables) {
+    if (bins.some((command) => commands.has(command))) names.add(name);
+    if (words.some((word) => word.replace(/^\.\//u, '').startsWith(`node_modules/${name}/`))) names.add(name);
+  }
+  for (const program of inlinePrograms(text)) {
+    if (computedLoad(['require'], ['createRequire']).test(program)) for (const name of declared) names.add(name);
+    for (const match of program.matchAll(literalLoad(['require'], ['createRequire']))) {
+      const name = packageNameOf(decodeLiteral(match[2] ?? ''));
+      if (name !== undefined) names.add(name);
+    }
+  }
+  return [...names];
+};
+
+/** The packed files a module resolves through: the module files, and each packed directory manifest's `main`. */
+interface PackedModules {
+  readonly files: ReadonlySet<string>;
+  /** Directory → the path its packed `package.json` `main` names, as Node reads it for `require("./dir")`. */
+  readonly mains: ReadonlyMap<string, string>;
+}
+
+/**
+ * The `main` of every packed directory manifest other than the package's own
+ * (`lib/package.json` with `"main": "setup.cjs"` → `lib` → `lib/setup.cjs`),
+ * which Node consults before the `index.js` fallback when a directory is
+ * required or run. `node_modules` manifests belong to bundled dependencies,
+ * not to the package's own files.
+ */
+const packedMains = async (paths: readonly string[], projectRoot: string): Promise<ReadonlyMap<string, string>> => {
+  const manifests = paths.filter((path) => /^(?!node_modules\/).+\/package\.json$/u.test(path));
+  const entries = await Promise.all(manifests.map(async (path): Promise<readonly [string, string] | undefined> => {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(resolve(projectRoot, path), 'utf8'));
+      if (!isRecord(parsed) || typeof parsed.main !== 'string') return undefined;
+      const directory = posix.dirname(path);
+      return [directory, posix.normalize(posix.join(directory, parsed.main))];
+    } catch {
+      return undefined;
+    }
+  }));
+  return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== undefined));
+};
+
+/**
+ * The packed module a path names, in the order Node's CommonJS loader tries
+ * for `require("./lib")` or `node scripts/install`: the exact file, the `.js`
+ * extension, then the directory — its manifest's `main` as a file, with
+ * `.js`, or as a directory index, and finally `index.js`. Node never tries
+ * `.cjs` or `.mjs` there.
+ */
+const packedModule = (path: string, modules: PackedModules): string | undefined => {
   const base = posix.normalize(path);
-  return [base, `${base}.js`, `${base}/index.js`]
-    .find((candidate) => javaScriptSuffix.test(candidate) && packed.has(candidate));
+  const main = modules.mains.get(base);
+  const candidates = [
+    base,
+    `${base}.js`,
+    ...(main === undefined ? [] : [main, `${main}.js`, `${main}/index.js`]),
+    `${base}/index.js`,
+  ];
+  return candidates.find((candidate) => javaScriptSuffix.test(candidate) && modules.files.has(candidate));
 };
 
 /**
@@ -642,31 +792,32 @@ const packedModule = (path: string, packed: ReadonlySet<string>): string | undef
  * install.cjs"`. Every word is tried; a word that is not a packed module is
  * not one.
  */
-const installScriptFiles = (text: string, packed: ReadonlySet<string>): readonly string[] =>
+const installScriptFiles = (text: string, modules: PackedModules): readonly string[] =>
   shellWords(text).flatMap((word) => {
-    const module = packedModule(word, packed);
+    const module = packedModule(word, modules);
     return module === undefined ? [] : [module];
   });
 
 const relativeSpecifier = /^\.\.?\//u;
 
-const relativeTarget = (from: string, specifier: string, packed: ReadonlySet<string>): string | undefined =>
-  packedModule(posix.join(posix.dirname(from), specifier), packed);
+const relativeTarget = (from: string, specifier: string, modules: PackedModules): string | undefined =>
+  packedModule(posix.join(posix.dirname(from), specifier), modules);
 
 /**
  * The packages a consumer's install lifecycle loads through the packed
  * JavaScript it runs — `"postinstall": "node install.cjs"` with `install.cjs`
- * requiring a driver — following relative imports through the tarball. A
- * computed load in any of those files could reach any declared package, so
- * every declared name then counts as needed at install time.
+ * requiring a driver — following relative imports and the manifest's
+ * `imports` map through the tarball. A computed load in any of those files
+ * could reach any declared package, so every declared name then counts as
+ * needed at install time.
  */
 const installScriptModuleDependencies = (
   roots: readonly string[],
   evidenceByPath: ReadonlyMap<string, FileEvidence>,
+  modules: PackedModules,
   packageDocument: Readonly<Record<string, unknown>>,
   declared: readonly string[],
 ): readonly string[] => {
-  const packed = new Set(evidenceByPath.keys());
   const names = new Set<string>();
   const seen = new Set<string>();
   const queue = [...roots];
@@ -678,15 +829,15 @@ const installScriptModuleDependencies = (
     for (const name of evidence.executed) names.add(name);
     for (const specifier of evidence.specifiers) {
       if (relativeSpecifier.test(specifier)) {
-        const target = relativeTarget(path, specifier, packed);
+        const target = relativeTarget(path, specifier, modules);
         if (target !== undefined) queue.push(target);
         continue;
       }
-      const targets = specifier.startsWith('#') ? packageImportTargets(packageDocument) : [specifier];
+      const targets = specifier.startsWith('#') ? packageImportTargets(packageDocument, specifier) : [specifier];
       for (const target of targets) {
         // An `imports` target of the package's own file (`"#setup": "./setup.js"`) is relative to the package root.
         if (relativeSpecifier.test(target)) {
-          const module = packedModule(target, packed);
+          const module = packedModule(target, modules);
           if (module !== undefined) queue.push(module);
           continue;
         }
@@ -716,31 +867,34 @@ export const importedPackageNames = async (options: {
   const evidenceByPath = new Map(await Promise.all(options.paths
     .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
     .map(async (path) => [path, await fileEvidence(resolve(projectRoot, path), executables)] as const)));
+  const modules: PackedModules = { files: new Set(evidenceByPath.keys()), mains: await packedMains(options.paths, projectRoot) };
   const evidence = [...evidenceByPath.values()];
   const scriptText = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
-  const fromScripts = [
-    ...installScriptDependencies(scriptText, executables),
+  const neededByScripts = [
+    ...installScriptCommandDependencies(scriptText, executables, options.declared),
     ...installScriptModuleDependencies(
-      installScriptFiles(scriptText, new Set(evidenceByPath.keys())),
+      installScriptFiles(scriptText, modules),
       evidenceByPath,
+      modules,
       options.packageDocument,
       options.declared,
     ),
   ];
   const specifiers = evidence.flatMap((file) => file.specifiers);
-  const reachable = specifiers.some((specifier) => specifier.startsWith('#'))
-    ? packageImportTargets(options.packageDocument)
-    : [];
+  const reachable = specifiers
+    .filter((specifier) => specifier.startsWith('#'))
+    .flatMap((specifier) => packageImportTargets(options.packageDocument, specifier));
   return {
     complete: evidence.every((file) => file.complete),
-    installScripts: new Set(fromScripts),
+    installScripts: new Set(neededByScripts),
     names: new Set([
       ...[...specifiers, ...reachable].flatMap((specifier) => {
         const name = packageNameOf(specifier);
         return name === undefined ? [] : [name];
       }),
       ...evidence.flatMap((file) => file.executed),
-      ...fromScripts,
+      ...installScriptMentions(scriptText, executables),
+      ...neededByScripts,
     ]),
   };
 };
