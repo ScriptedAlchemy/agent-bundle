@@ -9,6 +9,7 @@ import {
   eventFlightArtifactEpochToken,
   eventIpcRuntimeSpecifier,
   eventProjectRuntimeSpecifier,
+  hookWrapperAppliesOperatorEnv,
   type TargetHookEntry,
 } from '../adapters/hook-contract.ts';
 import type {
@@ -23,7 +24,7 @@ import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
+import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import {
   cliEntryRuntimePath,
   launchEnvRuntimePath,
@@ -41,6 +42,7 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  stdioPreludeVirtualModule,
 } from './entry-shell.ts';
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
@@ -413,22 +415,17 @@ export const planMcpEntriesSurface = async (
   // for byte. The shell is aliased onto the local runtime module so emitted
   // bundles stay self-contained (no residual `agent-bundle` import).
   const entryShells = await Promise.all(compiled.map(async (entry, index) => {
+    const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
     if (generatedRouteSources[index] !== undefined) {
-      return generatedStdioMcpEntrySource({
-        entrySource: routeModuleSpecifier,
-        serverName: entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name,
-      });
+      return generatedStdioMcpEntrySource({ entrySource: routeModuleSpecifier, serverName });
     }
     return (await scanEntryExports(entry.source)).hasDefaultExport
-      ? generatedStdioMcpEntrySource({
-        entrySource: entry.source,
-        serverName: entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name,
-      })
+      ? generatedStdioMcpEntrySource({ entrySource: entry.source, serverName })
       : undefined;
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
   // The operator `.env` layer (#469) is public API for every stdio entry: the
-  // lifecycle shell applies it before the deferred server import, and a
+  // shell's prelude applies it ahead of the server module, and a
   // self-connecting entry — which has no shell — imports
   // `agent-bundle/launch-env` and calls `applyOperatorEnv` itself. The alias
   // is unconditional so that import resolves to this package's plain-Node
@@ -475,6 +472,13 @@ export const planMcpEntriesSurface = async (
         name: routeModuleSpecifier,
         source: generatedRouteSources[index],
       }]),
+      // The shell's prelude — stdout guard, then the operator `.env` layer
+      // (#469) — carries the server's manifest `env` block, so the layer can
+      // tell a passed-through default from a host export; a self-connecting
+      // entry has no shell and applies the layer itself if it wants it.
+      ...(entryShells[index] === undefined
+        ? []
+        : [stdioPreludeVirtualModule(servers.find((candidate) => candidate.id === id)?.env)]),
     ],
   }));
   const workerEntries = compiled.flatMap((entry, index) => {
@@ -624,6 +628,9 @@ export const planHooksSurface = (
       virtualSource: entries[index]!.virtualSource
         .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
         .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
+      // The layer module the wrapper imports first; a shared-runtime
+      // event-route wrapper runs no plugin code and imports none.
+      ...(hookWrapperAppliesOperatorEnv(entries[index]!) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
       })),
       ...(workerEntry === undefined ? [] : [workerEntry]),
     ],

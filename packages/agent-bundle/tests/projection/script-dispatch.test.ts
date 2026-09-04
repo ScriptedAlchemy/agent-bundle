@@ -638,6 +638,27 @@ describe('the plain-script process contract', () => {
     expect(run.stdout).toBe('checksum execArgv []\n');
   });
 
+  it('asks for the TypeScript loading the source needs on the command line, so an inherited NODE_OPTIONS cannot switch it off', async () => {
+    // The child inherits this environment; a command-line flag outranks it.
+    // Node 22 spells the switch --no-experimental-strip-types, 24 and 26
+    // --no-strip-types.
+    const off = process.allowedNodeEnvironmentFlags.has('--no-strip-types')
+      ? '--no-strip-types'
+      : '--no-experimental-strip-types';
+    const before = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = before === undefined || before === '' ? off : `${before} ${off}`;
+    try {
+      const run = await runScript('checksum', ['--exec-argv']);
+
+      expect(run.stderr).toBe('');
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toBe('checksum execArgv []\n');
+    } finally {
+      if (before === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = before;
+    }
+  });
+
   it('pipes stdin to a plain script when given, and ends it at once otherwise', async () => {
     const fed = await runScript('checksum', ['--stdin'], { stdin: 'piped input\n' });
     expect(fed.exitCode).toBe(0);

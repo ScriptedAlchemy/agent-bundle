@@ -7,8 +7,13 @@
  * `process.env` for the server it spawns. Hosts launch installed packs
  * directly, so the emitted shells apply the same layer themselves: the file
  * fills only variables the host did not set, so an exported variable always
- * wins, and manifest env (already in `process.env` by the time a shell runs)
- * loses to the file exactly as under `mcp run`. Values are never logged.
+ * wins. A host merges the manifest `env` block into the child environment
+ * before launch, so by the time a shell runs a manifest default is
+ * indistinguishable from an exported variable — unless the shell knows the
+ * defaults. The stdio MCP shell therefore carries its server's manifest `env`
+ * (`manifestEnv`); a variable that still holds its manifest default is not
+ * reserved, so the file beats manifest env exactly as under `mcp run`.
+ * Values are never logged.
  */
 import { readFileSync } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
@@ -45,6 +50,17 @@ export interface OperatorEnvResult {
 export interface OperatorEnvOptions {
   /** The environment to fill; `process.env` by default. Mutated in place. */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * The manifest `env` defaults the host merged into `env` before launch (the
+   * stdio server's declared block, as built). A variable whose current value
+   * equals its default is treated as the pass-through it almost always is,
+   * so the file may override it; one that differs was exported by the host or
+   * the operator and stays reserved. The one ambiguity is accepted: an
+   * operator export that equals the manifest default reads as the default.
+   * A default that still carries a path token never matches its expanded
+   * value, so such a variable stays reserved.
+   */
+  readonly manifestEnv?: Readonly<Record<string, string>>;
   /**
    * The platform whose environment-key rules apply; `process.platform` by
    * default. Windows environment names are case-insensitive, so a host `Path`
@@ -170,7 +186,8 @@ const readOptional = (path: string): string | undefined | null => {
 
 /**
  * Applies the operator `.env` layer to `env` in place, filling only variables
- * the host did not set, and reports what happened without ever touching a
+ * the host did not set (a variable still holding its `manifestEnv` default
+ * counts as unset), and reports what happened without ever touching a
  * value. Missing files are the normal case (most packs need none); an
  * unreadable one is reported and skipped, never fatal — a pack must start
  * even when its operator file has the wrong permissions.
@@ -182,7 +199,17 @@ export const applyOperatorEnv = (options: OperatorEnvOptions): OperatorEnvResult
   const reservedKey = (options.platform ?? process.platform) === 'win32'
     ? (key: string): string => key.toUpperCase()
     : (key: string): string => key;
-  const reserved = new Set(Object.keys(env).filter((key) => env[key] !== undefined).map(reservedKey));
+  const manifestDefaults = new Map(
+    Object.entries(options.manifestEnv ?? {}).map(([key, value]) => [reservedKey(key), value] as const),
+  );
+  // A variable the host passed through unchanged from the manifest is the
+  // lowest layer under `mcp run` too, so the file may fill it; anything
+  // else present was exported by the host or the operator and is reserved.
+  const reserved = new Set(
+    Object.keys(env)
+      .filter((key) => env[key] !== undefined && manifestDefaults.get(reservedKey(key)) !== env[key])
+      .map(reservedKey),
+  );
   const files: OperatorEnvFile[] = [];
   const applied = new Set<string>();
   for (const path of operatorEnvFilePaths(options.pluginRoot, env)) {

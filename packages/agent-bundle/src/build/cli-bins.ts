@@ -7,7 +7,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
-import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
+import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import {
   cliEntryRuntimePath,
   cliEntryRuntimeSpecifier,
@@ -116,6 +116,7 @@ export const cliBinRslibEntries = (
     // The artifact-hosted bin applies the pack's operator `.env` layer (#469).
     aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath(), [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
     name: `bin-${entry.name}`,
+    virtualModules: [operatorEnvLayerVirtualModule()],
     outputRelativePath: cliBinArtifactPath(entry.name),
     ...(entry.rendered ? { rscManifest: true as const } : {}),
     source: entry.source,

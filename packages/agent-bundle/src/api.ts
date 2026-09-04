@@ -1498,9 +1498,12 @@ const scopedThrowawayArtifact = (
  * `close()` to tear down the host and the server; `closed` settles when the
  * server connection ends for any reason.
  *
- * This runs in a dev-time or CLI process — a plugin's own routed CLI can
- * call it from a `hauler dashboard`-style route — never inside the MCP
- * server shell.
+ * This is a host-process API: it runs in processes the framework does not
+ * compile — the first-party CLI, the Workbench, tests, a plugin's own
+ * scripts — never inside the MCP server shell, and not from a routed CLI
+ * command inside the artifact, whose self-contained bin cannot import
+ * `agent-bundle/api` (`AB6005`); such a route spawns `agent-bundle
+ * serve-app` instead (issue #558).
  */
 export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
   const registry = registryFor(options);
