@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { posix, relative, resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import npa from 'npm-package-arg';
 
@@ -177,6 +178,66 @@ export const packagedSourcePath = (name: string, specifier: string): string | un
   } catch {
     return undefined;
   }
+};
+
+const nulTerminated = (bytes: Uint8Array): string => {
+  const end = bytes.indexOf(0);
+  return Buffer.from(end === -1 ? bytes : bytes.subarray(0, end)).toString('utf8');
+};
+
+/**
+ * Whether a tar archive holds a package: an entry `<dir>/package.json` one
+ * level down, the layout npm strips one component from on install. Headers
+ * are the 512-byte ustar records; an all-zero record ends the archive.
+ */
+const tarHoldsPackage = (archive: Buffer): boolean => {
+  for (let offset = 0; offset + 512 <= archive.length;) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) return false;
+    const name = nulTerminated(header.subarray(0, 100));
+    const prefix = nulTerminated(header.subarray(345, 500));
+    const size = Number.parseInt(nulTerminated(header.subarray(124, 136)).trim() || '0', 8);
+    if (!Number.isFinite(size) || size < 0) return false;
+    if (/^[^/]+\/package\.json$/u.test(prefix === '' ? name : `${prefix}/${name}`)) return true;
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return false;
+};
+
+/**
+ * Whether the packed copy of a `file:` source is one npm can install from:
+ * a directory whose packed `package.json` parses to an object, or a packed
+ * tarball — gzipped or plain — holding a package. A path that merely exists
+ * under the right name (`foo.tgz` that is not an archive) fails the consumer's
+ * install with `TAR_BAD_ARCHIVE`, so it is not installable.
+ */
+export const packagedSourceInstallable = async (
+  projectRoot: string,
+  source: string,
+  packed: ReadonlySet<string>,
+): Promise<boolean> => {
+  if (packed.has(`${source}/package.json`)) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(resolve(projectRoot, source, 'package.json'), 'utf8'));
+      return isRecord(parsed);
+    } catch {
+      return false;
+    }
+  }
+  if (!packed.has(source)) return false;
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(resolve(projectRoot, source));
+  } catch {
+    return false;
+  }
+  let archive = bytes;
+  try {
+    archive = gunzipSync(bytes);
+  } catch {
+    // Not gzipped: a plain `.tar`, or not an archive at all — the header scan decides.
+  }
+  return tarHoldsPackage(archive);
 };
 
 /** A single- or double-quoted string literal; the group after the opening quote is its body. */
@@ -453,17 +514,24 @@ const installScripts = ['preinstall', 'install', 'postinstall'] as const;
  * names a script is one the command may run.
  */
 const runSubcommand = String.raw`(?:run(?:-script)?|rum|urn)\b`;
+/** npm's direct script commands, each running the script of the same name (`t` and `tst` are `test`). */
+const directScriptCommand = String.raw`(?:test|tst|t|start|stop|restart)\b`;
 const shellQuotes = /^(["'])(.*)\1$/u;
 const delegatedRun = new RegExp(
-  String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand})[^\s&|;]+\s+)*${runSubcommand}([^&|;\n]*)`,
+  String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand}|${directScriptCommand})[^\s&|;]+\s+)*`
+    + String.raw`(?:${runSubcommand}(?<rest>[^&|;\n]*)|(?<direct>${directScriptCommand}))`,
   'gu',
 );
 
+/** A shell command's words, quoted arguments kept whole and unquoted: `node "scripts/my install.cjs"` is two words. */
+const shellWords = (command: string): readonly string[] =>
+  Array.from(command.matchAll(/"[^"\n]*"|'[^'\n]*'|[^\s"']+/gu), (match) => match[0].replace(shellQuotes, '$2'));
+
 /**
  * The text a consumer's install lifecycle executes: the lifecycle scripts,
- * plus every script they reach through `npm run <name>` (with its `pre<name>`
- * and `post<name>` hooks), transitively. Dependency executables are on `PATH`
- * for all of them.
+ * plus every script they reach through `npm run <name>` or a direct `npm
+ * test`/`start`/`stop`/`restart` (with its `pre<name>` and `post<name>`
+ * hooks), transitively. Dependency executables are on `PATH` for all of them.
  */
 const installScriptText = (scripts: Readonly<Record<string, unknown>>): string => {
   const seen = new Set<string>();
@@ -472,9 +540,11 @@ const installScriptText = (scripts: Readonly<Record<string, unknown>>): string =
     if (seen.has(name) || typeof body !== 'string') return;
     seen.add(name);
     for (const match of body.matchAll(delegatedRun)) {
-      for (const token of (match[1] ?? '').trim().split(/\s+/u)) {
-        // The shell strips the quotes of `npm run "setup"` before npm sees the name.
-        const candidate = token.replace(shellQuotes, '$2');
+      const direct = match.groups?.direct;
+      const candidates = direct === undefined
+        ? shellWords(match.groups?.rest ?? '')
+        : [direct === 't' || direct === 'tst' ? 'test' : direct];
+      for (const candidate of candidates) {
         if (candidate === '' || candidate.startsWith('-') || !Object.hasOwn(scripts, candidate)) continue;
         for (const hook of [`pre${candidate}`, candidate, `post${candidate}`]) visit(hook);
       }
@@ -520,23 +590,34 @@ const installScriptDependencies = (text: string, executables: ExecutableCommands
     .map(([name]) => name);
 };
 
-/** The packed JavaScript files an install script runs: `node install.cjs`, `node ./scripts/setup.mjs`. */
+/**
+ * The packed module a path names: exact, or with the `.js` extension or
+ * `index.js` file Node's CommonJS loader tries for an extensionless path
+ * (`node scripts/install` runs `scripts/install.js`; `require("./lib")` loads
+ * `lib/index.js`). Node never tries `.cjs` or `.mjs` there.
+ */
+const packedModule = (path: string, packed: ReadonlySet<string>): string | undefined => {
+  const base = posix.normalize(path);
+  return [base, `${base}.js`, `${base}/index.js`]
+    .find((candidate) => javaScriptSuffix.test(candidate) && packed.has(candidate));
+};
+
+/**
+ * The packed JavaScript files an install script runs: `node install.cjs`,
+ * `node ./scripts/setup.mjs`, `node scripts/install`, `node "scripts/my
+ * install.cjs"`. Every word is tried; a word that is not a packed module is
+ * not one.
+ */
 const installScriptFiles = (text: string, packed: ReadonlySet<string>): readonly string[] =>
-  text.split(/\s+/u)
-    .map((token) => token.replace(shellQuotes, '$2').replace(/^\.\//u, ''))
-    .filter((token) => javaScriptSuffix.test(token) && packed.has(token));
+  shellWords(text).flatMap((word) => {
+    const module = packedModule(word, packed);
+    return module === undefined ? [] : [module];
+  });
 
 const relativeSpecifier = /^\.\.?\//u;
 
-/**
- * The packed module a relative specifier resolves to, exact or with the
- * extension or `index` file Node's CommonJS loader would try.
- */
-const relativeTarget = (from: string, specifier: string, packed: ReadonlySet<string>): string | undefined => {
-  const base = posix.normalize(posix.join(posix.dirname(from), specifier));
-  return [base, `${base}.js`, `${base}.cjs`, `${base}.mjs`, `${base}/index.js`, `${base}/index.cjs`, `${base}/index.mjs`]
-    .find((candidate) => packed.has(candidate));
-};
+const relativeTarget = (from: string, specifier: string, packed: ReadonlySet<string>): string | undefined =>
+  packedModule(posix.join(posix.dirname(from), specifier), packed);
 
 /**
  * The packages a consumer's install lifecycle loads through the packed

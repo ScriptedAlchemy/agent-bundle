@@ -16,6 +16,7 @@ import {
   declaredDependencies,
   importedPackageNames,
   isWorkspaceProtocol,
+  packagedSourceInstallable,
   packagedSourcePath,
   type DeclaredDependency,
   type DependencyKind,
@@ -176,13 +177,17 @@ const dependencyDiagnostics = async (options: {
   // The tarball itself may carry the dependency: `bundleDependencies` exempts an entry only when npm actually
   // packed it (a name absent from node_modules at pack time is silently dropped, and the consumer neither
   // fetches nor finds it), and a `file:` path inside the package is installed from the consumer's own copy
-  // when the source directory's manifest, or the tarball file, is packed.
+  // when the packed source is installable: a directory with a parseable manifest, or a tarball holding a package.
   const packed = new Set(options.packedPaths);
-  const embedded = (dependency: DeclaredDependency): boolean => {
-    if (dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`)) return true;
+  const embeddedSources = new Set<DeclaredDependency>();
+  for (const dependency of declared) {
     const source = packagedSourcePath(dependency.name, dependency.specifier);
-    return source !== undefined && (packed.has(source) || packed.has(`${source}/package.json`));
-  };
+    if (source !== undefined && await packagedSourceInstallable(options.projectRoot, source, packed)) {
+      embeddedSources.add(dependency);
+    }
+  }
+  const embedded = (dependency: DeclaredDependency): boolean =>
+    (dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`)) || embeddedSources.has(dependency);
   // A workspace protocol the packer rewrites reaches the consumer as a registry version; every other entry
   // is read as npm itself reads it.
   const kindOf = (dependency: DeclaredDependency): DependencyKind =>

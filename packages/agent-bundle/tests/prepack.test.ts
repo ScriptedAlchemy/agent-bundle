@@ -3,6 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
+import { gzipSync } from 'node:zlib';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
@@ -18,6 +19,25 @@ import {
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
+
+/** A gzipped ustar archive in npm's layout: one `package/package.json` entry with the given manifest text. */
+const packageTarball = (manifest: string): Buffer => {
+  const data = Buffer.from(manifest);
+  const header = Buffer.alloc(512);
+  header.write('package/package.json', 0);
+  header.write('0000644\0', 100);
+  header.write('0000000\0', 108);
+  header.write('0000000\0', 116);
+  header.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124);
+  header.write('00000000000\0', 136);
+  header.write('        ', 148);
+  header.write('0', 156);
+  header.write('ustar\0', 257);
+  header.write('00', 263);
+  const checksum = header.reduce((sum, byte) => sum + byte, 0);
+  header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148);
+  return gzipSync(Buffer.concat([header, data, Buffer.alloc((512 - (data.length % 512)) % 512), Buffer.alloc(1024)]));
+};
 let cleanupRoot: string;
 let projectRoot: string;
 let result: Awaited<ReturnType<typeof prepack>>;
@@ -305,42 +325,64 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       embedded: 'file:../embedded',
       // Declared bundled but absent from node_modules at pack time: npm silently packs nothing, so the consumer fetches it.
       'not-embedded': 'file:../not-embedded',
-      // Shipped inside the tarball, as a directory and as a tarball file: npm installs them from the consumer's copy.
+      // Shipped inside the tarball, as a directory with a manifest and as a package tarball: npm installs them from
+      // the consumer's copy.
       vendored: 'file:vendor/vendored',
       tarred: 'file:vendor/tarred.tgz',
-      // Declared as if shipped, but the source is not in the pack.
+      // Declared as if shipped, but the source is not in the pack — or is packed and not installable: a `.tgz` that
+      // is no archive (npm: TAR_BAD_ARCHIVE), a directory whose manifest does not parse.
       'not-vendored': 'file:vendor/not-vendored',
+      'not-archive': 'file:vendor/not-archive.tgz',
+      'bad-manifest': 'file:vendor/bad-manifest',
     };
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips these two after the failed fetch too — and then postinstall fails: on the missing command, and
-      // on the missing module a packed file it runs requires through a relative import.
+      // npm skips these three after the failed fetch too — and then postinstall fails: on the missing command, and on
+      // the missing modules packed files it runs require. The files are reached as `node scripts/install` (Node
+      // resolves `scripts/install.js`), and as `npm test` running a script whose quoted path contains a space.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'optional-driver': 'github:owner/optional-driver',
+      'optional-tester': 'github:owner/optional-tester',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
-    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'setup-tool --init && node ./install.cjs' };
+    document.scripts = {
+      ...(document.scripts as Record<string, string> | undefined),
+      postinstall: 'setup-tool --init && node scripts/install && npm test',
+      test: 'node "scripts/my install.cjs"',
+    };
   },
   async () => {
     await mkdir(join(projectRoot, 'scripts'), { recursive: true });
-    await writeFile(join(projectRoot, 'install.cjs'), 'require("./scripts/driver-setup");\n');
-    await writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n');
+    await mkdir(join(projectRoot, 'vendor', 'vendored'), { recursive: true });
+    await mkdir(join(projectRoot, 'vendor', 'bad-manifest'), { recursive: true });
+    await Promise.all([
+      writeFile(join(projectRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
+      writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
+      writeFile(join(projectRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
+      writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
+      writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
+      writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
+      writeFile(join(projectRoot, 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
+    ]);
     const pack = { ...result.pack, files: [...result.pack.files,
       { path: 'node_modules/embedded/package.json' },
       { path: 'vendor/vendored/package.json' },
+      { path: 'vendor/bad-manifest/package.json' },
       { path: 'vendor/tarred.tgz' },
-      { path: 'install.cjs' },
+      { path: 'vendor/not-archive.tgz' },
+      { path: 'scripts/install.js' },
       { path: 'scripts/driver-setup.cjs' },
+      { path: 'scripts/my install.cjs' },
     ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
@@ -348,16 +390,17 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
     expect(reported[1]?.message).not.toContain('"scp"');
-    expect(reported[2]?.message).not.toContain('"setup-tool"');
-    expect(reported[2]?.message).not.toContain('"optional-driver"');
-    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored']) {
+    for (const name of ['setup-tool', 'optional-driver', 'optional-tester']) {
+      expect(reported[2]?.message).not.toContain(JSON.stringify(name));
+    }
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
-    await rm(join(projectRoot, 'install.cjs'), { force: true });
     await rm(join(projectRoot, 'scripts'), { force: true, recursive: true });
+    await rm(join(projectRoot, 'vendor'), { force: true, recursive: true });
     expect(reported[0]?.recovery).toContain('registry');
 
     const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');
@@ -432,6 +475,9 @@ it('accepts a dependency reached through a package imports map or run by a consu
       'prepack-test-wrapper': 'npm:@scope/real@^1.0.0',
       // npm never runs `prepare` for a registry or tarball install; a package only it names is installed for nothing.
       'prepare-only': '^1.0.0',
+      // Reached only through npm's direct script commands: `npm t` is `test` (and its `pretest`), `yarn start` is `start`.
+      'test-runner': '^1.0.0',
+      'server-starter': '^1.0.0',
     };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
@@ -439,13 +485,16 @@ it('accepts a dependency reached through a package imports map or run by a consu
       // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks, behind
       // options with values (`--prefix .`, `-w .`) and without (`--silent`), through npm's `rum` alias, and with
       // the script name quoted for the shell.
-      postinstall: 'named-in-script --init && npm --silent --prefix . run setup',
+      postinstall: 'named-in-script --init && npm --silent --prefix . run setup && npm t',
       setup: 'echo setup',
       presetup: 'npm rum typecheck',
       typecheck: 'tsc --version',
       postsetup: 'pnpm run -w . "finish"',
       finish: 'node-pre-gyp install && real --check',
       prepare: 'prepare-only --generate',
+      pretest: 'yarn start',
+      test: 'test-runner --ci',
+      start: 'server-starter',
     };
   },
   async () => {
@@ -469,6 +518,8 @@ it('accepts a dependency reached through a package imports map or run by a consu
       expect(reported?.message).not.toContain('"typescript"');
       expect(reported?.message).not.toContain('"@mapbox/node-pre-gyp"');
       expect(reported?.message).not.toContain('"prepack-test-wrapper"');
+      expect(reported?.message).not.toContain('"test-runner"');
+      expect(reported?.message).not.toContain('"server-starter"');
     } finally {
       await rm(wrapper, { force: true, recursive: true });
       await rm(consumer, { force: true });
