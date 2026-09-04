@@ -46,13 +46,16 @@ const optionalPeers = (packageDocument: Readonly<Record<string, unknown>>): Read
 /**
  * Which dependencies npm embeds under `node_modules` in the published tarball:
  * `bundleDependencies` (or the `bundledDependencies` spelling) as a name list,
- * or `true` for every entry of `dependencies`.
+ * or `true` for every entry of `dependencies`. Peers are never bundled, whatever
+ * the list says: npm packs no `node_modules` entry for a peer-only name, so a
+ * consumer still resolves the peer's own specifier.
  */
-const bundledDependencies = (packageDocument: Readonly<Record<string, unknown>>): ((name: string) => boolean) => {
+const bundledDependencies = (
+  packageDocument: Readonly<Record<string, unknown>>,
+): ((field: InstalledDependencyField, name: string) => boolean) => {
   const value = packageDocument.bundleDependencies ?? packageDocument.bundledDependencies;
-  if (value === true) return () => true;
   const names = new Set(Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []);
-  return (name) => names.has(name);
+  return (field, name) => field !== 'peerDependencies' && (value === true ? field === 'dependencies' : names.has(name));
 };
 
 /**
@@ -73,7 +76,7 @@ export const declaredDependencies = (packageDocument: Readonly<Record<string, un
     (field === 'dependencies' && optional.has(name)) || (field === 'peerDependencies' && skippedPeers.has(name));
   return installedDependencyFields.flatMap((field) => entries(field)
     .filter(([name]) => !superseded(field, name))
-    .map(([name, specifier]) => ({ field, name, specifier, bundled: bundled(name) })));
+    .map(([name, specifier]) => ({ field, name, specifier, bundled: bundled(field, name) })));
 };
 
 /** Relative, package-imports (`#`), absolute, and URL-scheme specifiers (`node:`, `data:`, `file:`, `C:\`) name no package. */
@@ -85,8 +88,12 @@ const packageNamePrefix = /^(?:@[^/]+\/)?[^@/][^/]*/u;
 export const packageNameOf = (specifier: string): string | undefined =>
   nonPackageSpecifier.test(specifier) || isBuiltin(specifier) ? undefined : packageNamePrefix.exec(specifier)?.[0];
 
-/** npm resolves an `npm:` alias through the registry itself; nothing has to rewrite it. */
-const registryAlias = /^npm:/u;
+/**
+ * An `npm:` alias, `npm:name` or `npm:name@<target>`. npm resolves the alias
+ * itself, but only to a registry target: the part after the aliased name is
+ * classified like any other specifier (an absent target is `latest`).
+ */
+const registryAlias = /^npm:(?:@[^/@]+\/)?[^/@]+(?:@(?<target>.*))?$/u;
 
 /**
  * Protocols only a workspace manager understands. pnpm, Yarn, and Bun
@@ -128,7 +135,12 @@ const nonRegistrySpecifier = new RegExp([
  */
 export const isRegistrySpecifier = (specifier: string): boolean => {
   const trimmed = specifier.trim();
-  return registryAlias.test(trimmed) || !(workspaceProtocol.test(trimmed) || nonRegistrySpecifier.test(trimmed));
+  const alias = registryAlias.exec(trimmed);
+  if (alias !== null) {
+    const target = alias.groups?.target;
+    return target === undefined || target === '' || (!target.startsWith('npm:') && isRegistrySpecifier(target));
+  }
+  return !(workspaceProtocol.test(trimmed) || nonRegistrySpecifier.test(trimmed));
 };
 
 /** A single- or double-quoted string literal; the group after the opening quote is its body. */

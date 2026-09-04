@@ -18,6 +18,13 @@ it.each([
   ['latest', true],
   ['>=1 <2 || 3.x', true],
   ['npm:effect@^4.0.0', true],
+  ['npm:@scope/name@latest', true],
+  ['npm:effect', true],
+  // An alias only ever points at a registry package; its target is classified too.
+  ['npm:bar@file:../bar', false],
+  ['npm:bar@workspace:*', false],
+  ['npm:bar@github:owner/repo', false],
+  ['npm:bar@npm:baz@^1', false],
   // Workspace protocols, as written, are not registry specifiers; whether the packer rewrites them is the caller's policy.
   ['workspace:*', false],
   ['catalog:', false],
@@ -131,4 +138,11 @@ it('marks bundleDependencies entries, by name list or wholesale, as bundled', ()
   ]);
   expect(declaredDependencies({ bundledDependencies: ['embedded'], dependencies }).map((d) => d.bundled)).toEqual([true, false]);
   expect(declaredDependencies({ bundleDependencies: true, dependencies }).map((d) => d.bundled)).toEqual([true, true]);
+  // npm never packs a node_modules entry for a peer, and `true` covers dependencies only.
+  expect(declaredDependencies({
+    bundleDependencies: ['peer', 'optional'],
+    optionalDependencies: { optional: 'file:../optional' },
+    peerDependencies: { peer: 'file:../peer' },
+  }).map((d) => [d.name, d.bundled])).toEqual([['optional', true], ['peer', false]]);
+  expect(declaredDependencies({ bundleDependencies: true, optionalDependencies: { optional: '^1' } })[0]?.bundled).toBe(false);
 });
