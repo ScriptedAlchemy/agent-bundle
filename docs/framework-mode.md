@@ -549,7 +549,9 @@ the `--output` name or the per-build `.<output>.stage-XXXXXX` staging
 directory. The generated wrapper, registry, and identity modules that every
 compiled surface imports are served from memory under the reserved
 `<project root>/.agent-bundle-virtual/` namespace (`src/build/meta.ts`),
-which never exists on disk. That namespace hangs off the project root — the
+which never exists on disk: the virtual paths are predictable, so the build
+refuses to compile while anything occupies that directory
+(`assertGeneratedModulesRootAbsent`). That namespace hangs off the project root — the
 bundler `context` — on purpose: Rspack writes module identifiers relative to
 `context` into emitted bundles (the `// NAMESPACE OBJECT: ./…` comments of
 concatenated modules), so a namespace under the staging root would stamp the

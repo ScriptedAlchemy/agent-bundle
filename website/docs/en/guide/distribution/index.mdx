@@ -62,7 +62,10 @@ the same manifest and the same digests — whatever `--output` names and however
 staging directory is named. The module identifiers the bundler writes into compiled entries
 derive from the project root only, never from the staging or output directory or from any
 absolute path of the building machine, so installed copies, preview packages, and
-[`doctor`](./installation.mdx) comparisons see the same bytes from the same source.
+[`doctor`](./installation.mdx) comparisons see the same bytes from the same source. The
+generated modules those identifiers name are served from memory under the reserved
+`.agent-bundle-virtual/` directory of the project root; the build refuses to compile while anything
+occupies that directory.
 
 ## The npm-facing half
 

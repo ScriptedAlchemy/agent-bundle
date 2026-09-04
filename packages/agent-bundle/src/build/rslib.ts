@@ -14,6 +14,7 @@ import type { AgentBundleMeta } from '../meta.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
 import {
+  assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
   generatedMetaModuleSource,
   generatedModulesRoot,
@@ -679,6 +680,7 @@ export const buildRslibSurfaces = async (
     return Object.freeze(surfaces.map(() => Object.freeze([])));
   }
   assertDistinctLibIds(entries);
+  await assertGeneratedModulesRootAbsent(options.cwd);
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const reservedExternalViolations: string[] = [];

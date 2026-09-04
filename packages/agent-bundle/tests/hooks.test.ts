@@ -339,6 +339,38 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
   }
 });
 
+it('refuses to compile while anything occupies the reserved generated-module namespace', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-project-'));
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-output-'));
+  // The virtual paths are predictable, so an authored file at one of them
+  // (here, where the project-identity module is served) would be shadowed by
+  // the generated module — or compile as an entry from generated source. The
+  // whole directory is reserved; the build fails before any compiler is created.
+  await mkdir(join(projectRoot, '.agent-bundle-virtual'), { recursive: true });
+  await writeFile(join(projectRoot, '.agent-bundle-virtual', 'meta.mjs'), 'export default undefined;\n');
+  const createRslib = rs.fn(async () => { throw new Error('unreachable'); });
+
+  try {
+    await expect(buildWithRslib({
+      cwd: projectRoot,
+      entries: [{
+        name: 'reserved-probe',
+        outputRelativePath: 'hooks/reserved-probe.mjs',
+        source: join(projectRoot, 'hook.ts'),
+        sourceInputs: [join(projectRoot, 'hook.ts')],
+        virtualSource: 'export default undefined;',
+      }],
+      meta: probeMeta,
+      outputRoot,
+    }, { createRslib: createRslib as never })).rejects.toThrow(
+      `".agent-bundle-virtual" under the project root ${JSON.stringify(projectRoot)} is reserved for generated module sources served from memory; remove it before building.`,
+    );
+    expect(createRslib).not.toHaveBeenCalled();
+  } finally {
+    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
+  }
+});
+
 it('fails closed when the resolved environment lost its virtual modules or wrapper entry', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-lost-virtual-'));
   const virtualEntryPath = join('/tmp', '.agent-bundle-virtual', 'lost-probe-entry.mjs');

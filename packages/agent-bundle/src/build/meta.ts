@@ -1,4 +1,7 @@
+import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { isErrno } from '../core/errors.ts';
 
 import type { AgentBundleMeta } from '../meta.ts';
 
@@ -26,6 +29,28 @@ export const generatedModulesDirname = '.agent-bundle-virtual';
 /** The reserved generated-module namespace of one project. */
 export const generatedModulesRoot = (projectRoot: string): string =>
   join(projectRoot, generatedModulesDirname);
+
+/**
+ * Refuses to compile while anything occupies the reserved namespace on disk.
+ * The virtual paths are predictable (`meta.mjs`, `<entry>-entry.mjs`, …), so
+ * an authored file at one of them would be shadowed by the generated module
+ * it names — or serve as an authored entry that compiles from generated
+ * source. Reserving the whole directory keeps both impossible, as the
+ * per-build staging root once did.
+ */
+export const assertGeneratedModulesRootAbsent = async (projectRoot: string): Promise<void> => {
+  const root = generatedModulesRoot(projectRoot);
+  try {
+    await lstat(root);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return;
+    throw error;
+  }
+  throw new Error(
+    `${JSON.stringify(generatedModulesDirname)} under the project root ${JSON.stringify(projectRoot)} is reserved for `
+      + 'generated module sources served from memory; remove it before building.',
+  );
+};
 
 /**
  * The reserved specifier every compiled plugin surface resolves to the

@@ -9,6 +9,7 @@ import type { AgentBundleMeta } from '../meta.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
+  assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
   generatedMetaModuleSource,
   generatedModulesRoot,
@@ -260,6 +261,7 @@ export const compileMcpApps = async (
   if (compiled.length === 0) {
     return compiled;
   }
+  await assertGeneratedModulesRootAbsent(options.cwd);
 
   const sources = compiled.map((app) => {
     const source = apps.find((candidate) => candidate.id === app.id);
