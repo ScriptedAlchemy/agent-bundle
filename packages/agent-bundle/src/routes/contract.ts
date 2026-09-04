@@ -407,6 +407,6 @@ export const validateProviderModuleContract = (
     'AB4940',
     `Provider module ${relativePath} does not satisfy the public provider contract: ${defaultExportDetail(exports, 'a function')}.`,
     sourcePath,
-    'Default-export a provider factory receiving { invocation, signal }.',
+    'Default-export a provider factory receiving { invocation, plugin, signal }.',
   )]);
 };

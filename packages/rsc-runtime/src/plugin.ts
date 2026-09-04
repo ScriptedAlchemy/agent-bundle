@@ -22,6 +22,7 @@ export type {
   AgentLineageResolution,
   AgentLineageSubagent,
   AgentNetworkAuthority,
+  AgentPluginIdentity,
   AgentProcessLifetime,
   AgentProgressReporter,
   AgentProgressUpdate,
@@ -58,6 +59,8 @@ export type {
   Observed,
   ObservedSource,
 } from './agent-request.js';
+export { PLUGIN_ROOT_ENV_ANCHOR, PLUGIN_STATE_DIRECTORY, resolvePluginRoot } from './plugin-root.js';
+export type { ResolvePluginRootOptions, ResolvedPluginRoot } from './plugin-root.js';
 // Type-only: the optional ledger implementation stays behind './notices'.
 export type {
   AgentNoticeLedger,

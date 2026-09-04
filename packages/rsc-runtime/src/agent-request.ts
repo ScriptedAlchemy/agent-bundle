@@ -8,10 +8,10 @@ import type {
 } from './notices/contract.js';
 import type { AgentStateHandle } from './state/contract.js';
 
-// Bumped to 3 when `lineage` joined the handle shape and to 4 when `terminal`
-// did: a realm that already holds an older store must fail closed rather than
-// hand out handles without them.
-export const AGENT_REQUEST_STORE_VERSION = 4;
+// Bumped to 3 when `lineage` joined the handle shape, to 4 when `terminal`
+// did, and to 5 when `plugin` did: a realm that already holds an older store
+// must fail closed rather than hand out handles without them.
+export const AGENT_REQUEST_STORE_VERSION = 5;
 
 const STORE_SYMBOL = Symbol.for('@agent-bundle/runtime/request-store');
 
@@ -83,6 +83,20 @@ export interface AgentActorIdentity {
 
 export interface AgentWorkspaceIdentity {
   readonly root: string;
+}
+
+/**
+ * Where this plugin is installed and where its durable state lives (#468) —
+ * the one anchor every generated shell resolves from `AGENT_BUNDLE_PLUGIN_ROOT`
+ * (source `native`) or, when the host supplies none, from the artifact root or
+ * the caller's `.agent-bundle` directory (source `derived`). `stateRoot` is
+ * `<root>/state`: the directory the SQLite state kernel, the notice ledger, and
+ * the lineage journal all mount, so a route, layout, or provider that keeps
+ * its own files beside them reads this instead of re-deriving the anchor.
+ */
+export interface AgentPluginIdentity {
+  readonly root: string;
+  readonly stateRoot: string;
 }
 
 /** The subagent a lineage describes when the current conversation is not the root. */
@@ -347,6 +361,12 @@ export interface AgentRequestContext {
   readonly actor: Observed<AgentActorIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
   /**
+   * The plugin install root and durable-state anchor the generated shell
+   * resolved (#468); `unavailable('not-provided')` outside a generated scope
+   * that supplied none.
+   */
+  readonly plugin: Observed<AgentPluginIdentity>;
+  /**
    * Conversation lineage resolved by the warm runtime's registry (fed by the
    * subagent start/stop event families and pre-tool hooks) or straight from
    * host fields; `unavailable` carries the per-host reason.
@@ -398,6 +418,7 @@ export interface AgentRequestInitBase {
   readonly lineage?: Observed<AgentLineage>;
   /** Optional durable notice authority; omitted projects load no notice code. */
   readonly noticeLedger?: AgentNoticeLedger;
+  readonly plugin?: Observed<AgentPluginIdentity>;
   readonly progress?: AgentProgressReporter;
   readonly services?: AgentServiceRegistry;
   readonly session?: Observed<AgentSessionIdentity>;
@@ -497,6 +518,7 @@ interface FrozenValues {
   readonly invocation: AgentInvocation;
   readonly lineage: Observed<AgentLineage>;
   readonly notices: AgentNoticesHandle | undefined;
+  readonly plugin: Observed<AgentPluginIdentity>;
   readonly progress: AgentProgressReporter;
   readonly providers: AgentProviderValues;
   readonly services: AgentServiceRegistry;
@@ -567,6 +589,9 @@ const createHandle = (lease: Lease): AgentRequestContext => Object.freeze({
   },
   get workspace() {
     return open(lease).workspace;
+  },
+  get plugin() {
+    return open(lease).plugin;
   },
   get lineage() {
     return open(lease).lineage;
@@ -642,6 +667,7 @@ export const runAgentRequest = async <T>(
   const host = snapshotObserved(init.host ?? unavailable<AgentHostIdentity>());
   const invocation = invocationFrom(init.invocation);
   const lineage = snapshotObserved(init.lineage ?? unavailable<AgentLineage>());
+  const plugin = snapshotObserved(init.plugin ?? unavailable<AgentPluginIdentity>());
   const session = snapshotObserved(init.session ?? unavailable<AgentSessionIdentity>());
   const signal = init.signal ?? new AbortController().signal;
   const terminal = snapshotObserved(init.terminal ?? unavailable<AgentTerminal>());
@@ -660,6 +686,7 @@ export const runAgentRequest = async <T>(
     invocation,
     lineage,
     notices: noticeLease?.handle,
+    plugin,
     progress: init.progress ?? silentProgress,
     providers: Object.freeze({ ...(init.providers ?? {}) }),
     services: Object.freeze({ ...(init.services ?? {}) }),
