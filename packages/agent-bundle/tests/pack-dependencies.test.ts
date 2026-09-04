@@ -68,6 +68,9 @@ it.each([
   ['v1.2.3', true],
   ['1.2.3-beta.1+build.5', true],
   ['next', true],
+  ['1.2.3+..', false], // not a version, and `+` is not URL-safe, so not a tag either
+  // Any other slash-bearing spec is a bare directory npm reads from disk.
+  ['vendor/foo/bar', false],
   ['not a valid spec', false],
   ['npm:name@not a valid spec', false],
   // A known scheme with nothing after it names no package.
@@ -108,6 +111,8 @@ it.each([
   ['https://', false],
   ['github:', false],
   ['foo.tgz', true],
+  ['vendor/foo/bar', true],
+  ['1.2.3+..', false],
 ])('isNpmParseable(%j) is %s', (specifier, parseable) => {
   expect(isNpmParseable(specifier)).toBe(parseable);
 });
@@ -124,6 +129,8 @@ it.each([
   ['@scope/', false],
   ['name/extra', false],
   ['a'.repeat(215), false],
+  ['node_modules', false],
+  ['Favicon.ico', false],
 ])('isValidPackageName(%j) is %s', (name, valid) => {
   expect(isValidPackageName(name)).toBe(valid);
 });

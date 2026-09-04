@@ -153,8 +153,11 @@ const nonRegistrySpecifier = new RegExp([
   windowsDrivePath.source,
   String.raw`^(?:\.|/|~[\\/])`, // relative, absolute, or home path
   String.raw`\.(?:tgz|tar\.gz|tar)$`, // a bare tarball filename, which npm reads from disk
-  String.raw`^[^\s@/]+/[^\s/]+$`, // owner/repo[#ref] GitHub shorthand
+  String.raw`^[^\s]*/`, // owner/repo[#ref] GitHub shorthand, or any other slash-bearing spec: a bare directory
 ].join('|'), 'iu');
+
+/** Names npm refuses outright, whatever their characters. */
+const reservedPackageNames = new Set(['node_modules', 'favicon.ico']);
 
 /**
  * A package name npm accepts in a dependency key: optionally scoped, URL-safe,
@@ -162,17 +165,21 @@ const nonRegistrySpecifier = new RegExp([
  * as the specifier, and rejects the manifest with `EINVALIDPACKAGENAME`.
  */
 export const isValidPackageName = (name: string): boolean =>
-  name.length <= 214 && /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/iu.test(name);
+  name.length <= 214
+  && !reservedPackageNames.has(name.toLowerCase())
+  && /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/iu.test(name);
 
 /**
  * The semver range grammar npm accepts: `||`-separated sets of
  * whitespace-separated comparators (`>=`, `<=`, `>`, `<`, `=`, `~`, `~>`,
  * `^`) or a hyphen range, over partial versions with `x`/`X`/`*` wildcards,
- * an optional `v`, and prerelease/build tails. An empty range is `*`.
+ * an optional `v`, and prerelease/build tails of dot-separated, non-empty
+ * identifiers (`1.2.3+..` is not a version). An empty range is `*`.
  */
 const semverRange = (() => {
   const part = String.raw`(?:\d+|x|X|\*)`;
-  const partial = String.raw`v?${part}(?:\.${part}(?:\.${part})?)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`;
+  const identifiers = String.raw`[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*`;
+  const partial = String.raw`v?${part}(?:\.${part}(?:\.${part})?)?(?:-${identifiers})?(?:\+${identifiers})?`;
   const comparator = String.raw`(?:>=|<=|>|<|=|~>|~|\^)?\s*${partial}`;
   const set = String.raw`(?:${partial}\s+-\s+${partial}|${comparator}(?:\s+${comparator})*)?`;
   return new RegExp(String.raw`^\s*${set}(?:\s*\|\|\s*${set})*\s*$`, 'u');
