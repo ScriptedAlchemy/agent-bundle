@@ -36,7 +36,7 @@ even when no error diagnostic was reported.
 | `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
-| `AB7300`–`AB7326` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7326`; see below), and the Cursor Agent Plugins launch proof (`AB7326`; see below). |
+| `AB7300`–`AB7327` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), and a disabled Claude install (`AB7327`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
@@ -46,11 +46,16 @@ even when no error diagnostic was reported.
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
 
-## Claude Code host validation (`AB6019`–`AB6022`)
+## Claude Code host validation (`AB6019`–`AB6022`, `AB7311`, `AB7325`)
 
-`agent-bundle validate --artifact <dir>` runs the installed Claude Code
-validator for the `claude` and `plugin` targets when `--host-validation` is on.
-Claude Code decides what to check from the manifest it is pointed at: a run
+`agent-bundle validate --artifact <dir>` and `agent-bundle build` run the
+installed Claude Code validator for the `claude` and `plugin` targets when
+`--host-validation` is on (the default for both commands; `--no-host-validation`
+skips it, and programmatic `build()` calls skip it unless `hostValidation: true`
+is passed). `agent-bundle doctor --host claude --from <dir>` runs the same
+validator over the `--from` bundle and over every installed copy Claude lists
+for the plugin, prefixing each finding with `Bundle at …` or `Installed copy at
+… (scope …)`. Claude Code decides what to check from the manifest it is pointed at: a run
 against the bundle directory picks `.claude-plugin/marketplace.json` when it is
 present and never opens the plugin's skill, agent, command, or hook files
 (Claude Code docs, "Create and distribute a plugin marketplace" →
@@ -65,12 +70,31 @@ plugin run already reported. On Claude Code 2.1.259 or later both runs add
 releases fall back to the text report, attributed by its `Validating <type>:
 <file>` headers.
 
+`claude plugin validate --strict` is not a load verdict: Claude Code 2.1.250
+through 2.1.260 accept manifests and component files (for example an invalid
+`monitors/monitors.json`, or a `hooks` field naming the auto-loaded
+`hooks/hooks.json`) that a session then refuses to load. So `build` and
+`validate --artifact` follow the two validation runs with a load check,
+`claude --plugin-dir <dir> plugin list --json`, and read the plugin's
+`<name>@inline` row: no `errors` is `load.status: 'loaded'`; `errors` is
+`refused` and `AB7325`; no row at all is `unregistered` and `AB7311`; a listing
+that cannot be read is `failed` and `AB6022`. The check is read-only (the
+listing writes nothing under `~/.claude`), is skipped with the two validation
+runs when `claude` is absent (`AB6019`), and is skipped when the bundle has no
+readable `.claude-plugin/plugin.json` name (the validation runs already report
+that manifest). Doctor does not repeat it: its registration proof and the
+inventory rows' `errors` already carry the same verdicts. Without `claude` on
+`PATH`, `build` spawns once, reports one `AB6019`, and marks the remaining
+`claude`/`plugin` targets `unavailable` without spawning again.
+
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB6019` | info | The `claude` CLI is not installed or not on `PATH`, so host validation was skipped. Local pinned-schema validation (`AB6011`/`AB6012`) still runs. | Install Claude Code and ensure `claude` is on `PATH`, then rerun artifact validation. |
 | `AB6020` | warning (error in strict mode) / info | One Claude Code validation warning, or (info) one note, from the plugin or marketplace run. The message names the validated file and Claude Code's field path, for example `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`. Claude Code tolerates these at load time; `agent-bundle validate --strict` promotes warnings to errors, mirroring `claude plugin validate --strict`. | Run `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`, repair the reported Claude artifact, and rebuild. |
 | `AB6021` | error | One Claude Code validation error from the plugin or marketplace run, such as invalid JSON in `hooks/hooks.json`, frontmatter that fails to parse, or a duplicate plugin name in `marketplace.json`. Claude Code loads the plugin without the failing component or refuses the marketplace. | Same as `AB6020`. |
-| `AB6022` | error | The bounded `claude --version` probe or a validation run could not start, exited nonzero without a report, timed out, exceeded 1 MiB of output, or (2.1.259+) returned no JSON report; the message carries the CLI's stderr when there is one. | Verify the Claude CLI starts and responds, then rerun `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`. |
+| `AB6022` | error | The bounded `claude --version` probe, a validation run, or the load check could not start, exited nonzero without a report, timed out, exceeded 1 MiB of output, (2.1.259+) returned no JSON report, or (load check) returned something other than a JSON array; the message carries the CLI's stderr when there is one. | Verify the Claude CLI starts and responds, then rerun `claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict`. |
+| `AB7311` | error | The load check's `claude --plugin-dir <dir> plugin list --json` listed no `<name>@inline` row for the bundle (`load.status: 'unregistered'`): Claude Code did not register the directory as a plugin. Doctor emits the same code from its registration proof. | Inspect `claude --plugin-dir <bundle-dir> plugin list --json` and register the intended bundle. |
+| `AB7325` | error; warning when every `errors` entry is `Dependency "<name>@<marketplace>" is not installed …` (error under `--strict`) | The load check's row for the bundle carries `errors` (`load.status: 'refused'` with the strings verbatim): `claude plugin validate --strict` accepted the artifact, but a session would refuse to load it. A missing declared dependency is a property of the validating machine rather than of the artifact, so it is a warning and the build completes. Doctor emits the same code for installed copies and its registration proof (see "Host load refusal for Claude installs"). | Fix the artifact so `claude --plugin-dir <bundle-dir> plugin list --json` reports no `errors` for it, then rebuild; for a missing dependency, install it (`claude plugin install <name>@<marketplace>`) or validate where it is installed. |
 
 ## Cursor built-artifact validation (`AB6026`–`AB6029`)
 
@@ -872,7 +896,29 @@ pinned Claude `plugin` schema now rejects (`AB6012` at `/hooks`).
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB7006` | error | `install claude` found `errors` on the plugin's row: after `claude plugin install` ran (the install itself exited 0, so the result would otherwise have been `installed`/`replaced`), or on a byte-identical existing copy that would otherwise have been reported `already-installed` (reinstalling the same bytes cannot help). The message carries the host's `errors` verbatim, the install path, and the scope. An unusable post-install listing leaves the result unverified rather than failing an install the host accepted. | Fix the artifact until `claude plugin list --json` shows no `errors` for it (the message names the cause), rebuild, and rerun `agent-bundle install claude --from <bundle-dir> --replace`. |
-| `AB7325` | error | Doctor found `errors` on the plugin's row in `claude plugin list --json` (inventory entry `state: 'failed'` with `errors`; `doctor --from` comparison `status: 'load-failed'` with `errors` instead of `current`/`stale`, since the installed bytes never reach a session) or on the `--plugin-dir` registration proof row (`bundle.state: 'failed'` with `errors`, replacing the `registered` verdict). The message carries the host's `errors` verbatim. | Same as `AB7006`: fix the artifact, rebuild, and reinstall with `--replace`. |
+| `AB7325` | error | Doctor found `errors` on the plugin's row in `claude plugin list --json` (inventory entry `state: 'failed'` with `errors`; `doctor --from` comparison `status: 'load-failed'` with `errors` instead of `current`/`stale`, since the installed bytes never reach a session) or on the `--plugin-dir` registration proof row (`bundle.state: 'failed'` with `errors`, replacing the `registered` verdict). The message carries the host's `errors` verbatim. `build` and `validate --artifact` emit the same code from their load check (see "Claude Code host validation"). | Same as `AB7006`: fix the artifact, rebuild, and reinstall with `--replace`. |
+
+## Disabled Claude install (`AB7327`)
+
+`claude plugin disable <plugin>` (or the `/plugin` menu) keeps a plugin
+installed but switched off: its row in `claude plugin list --json` reports
+`enabled: false`, and none of its hooks, MCP servers, or skills reach a session
+until `claude plugin enable` runs (Claude Code docs, "Plugins reference" →
+"plugin enable" / "plugin disable"). Reinstalling, even with `--replace`, does
+not enable it. `agent-bundle doctor --host claude` reads the flag: the
+inventory entry carries `enabled: false` with `state: 'disabled'` (instead of
+`installed`), and a `--from` comparison of that copy carries `enabled: false`
+next to its content verdict — a disabled copy can still be `current` or
+`stale`, and both facts are reported. Rows without a boolean `enabled` carry no
+flag and are `installed`. A row with `errors` is `failed` (`AB7325`) whatever
+its `enabled` value. A plugin that ships `defaultEnabled: false` in
+`plugin.json` installs disabled by design ("Plugins reference" → "Default
+enablement"); Doctor still reports `AB7327` for it, because the recovery is the
+same `claude plugin enable`.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7327` | warning | `doctor --host claude --from <dir>` compared an installed copy whose row reports `enabled: false`. The message names the plugin, version, install path, and scope. | Run `claude plugin enable <name>@<marketplace> [--scope <scope>]` (or use `/plugin` in a session), then rerun Doctor; reinstalling does not enable a disabled plugin. |
 
 The JSON report exposes the same facts: `hosts[].inventory.findings[].errors`,
 `hosts[].bundle.errors`, and `hosts[].bundle.comparison.errors`. The text
