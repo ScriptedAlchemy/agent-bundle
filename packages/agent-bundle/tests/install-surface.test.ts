@@ -285,6 +285,44 @@ it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy o
     expect(await stat(pluginData).catch(() => undefined)).toBeUndefined();
     expect(await stat(join(home, '.cursor', 'agent-bundle')).catch(() => undefined)).toBeUndefined();
     expect(await stat(destination).catch(() => undefined)).toBeUndefined();
+    // A kept PLUGIN_DATA directory later emptied by hand leaves a remnant guarding nothing: the next default run prunes
+    // the empty directory with its agent-bundle parents and consumes the remnant instead of the keep-data no-op.
+    await writeFile(join(bundle, 'mcp.json'), mcpText);
+    expect(await run(installer, [], home)).toMatchObject({ code: 0, stderr: '' });
+    await writeFile(join(pluginData, 'cache.sqlite'), 'durable\n');
+    expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Remnant receipt:');
+    expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
+    await rm(join(pluginData, 'cache.sqlite'));
+    const emptiedByHand = await run(installer, ['--uninstall'], home);
+    expect(emptiedByHand).toMatchObject({ code: 0, stderr: '' });
+    expect(emptiedByHand.stdout).toContain('Uninstalled install-fixture@1.2.3');
+    expect(emptiedByHand.stdout).toContain(`the installer-created PLUGIN_DATA directory ${pluginData} is empty and is pruned`);
+    expect(emptiedByHand.stdout).not.toContain('Remnant receipt:');
+    expect(await stat(pluginData).catch(() => undefined)).toBeUndefined();
+    expect(await stat(join(home, '.cursor', 'agent-bundle')).catch(() => undefined)).toBeUndefined();
+    expect(await stat(destination).catch(() => undefined)).toBeUndefined();
+    // A symlinked agent-bundle or plugin-data ancestor would let a recursive purge of the leaf follow it outside the
+    // Cursor home: refused before anything is read or removed.
+    expect(await run(installer, [], home)).toMatchObject({ code: 0, stderr: '' });
+    const outside = join(root, 'outside-home');
+    await mkdir(join(outside, 'plugin-data', 'install-fixture'), { recursive: true });
+    await writeFile(join(outside, 'plugin-data', 'install-fixture', 'cache.sqlite'), 'elsewhere\n');
+    await rm(join(home, '.cursor', 'agent-bundle'), { force: true, recursive: true });
+    await symlink(outside, join(home, '.cursor', 'agent-bundle'));
+    const linkedParent = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    expect(linkedParent.code).toBe(1);
+    expect(linkedParent.stderr).toContain('Refusing unsupported filesystem entry');
+    expect(await readFile(join(outside, 'plugin-data', 'install-fixture', 'cache.sqlite'), 'utf8')).toBe('elsewhere\n');
+    await rm(join(home, '.cursor', 'agent-bundle'));
+    await mkdir(join(home, '.cursor', 'agent-bundle'));
+    await symlink(join(outside, 'plugin-data'), join(home, '.cursor', 'agent-bundle', 'plugin-data'));
+    const linkedChild = await run(installer, ['--uninstall'], home);
+    expect(linkedChild.code).toBe(1);
+    expect(linkedChild.stderr).toContain('Refusing unsupported filesystem entry');
+    expect(await readFile(join(outside, 'plugin-data', 'install-fixture', 'cache.sqlite'), 'utf8')).toBe('elsewhere\n');
+    await rm(join(home, '.cursor', 'agent-bundle'), { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
+    expect(await run(installer, ['--uninstall'], home)).toMatchObject({ code: 0, stderr: '' });
     // Fresh install, nothing written to PLUGIN_DATA: the default uninstall prunes it (and the empty agent-bundle parents).
     await writeFile(join(bundle, 'mcp.json'), mcpText);
     expect(await run(installer, [], home)).toMatchObject({ code: 0, stderr: '' });
@@ -748,19 +786,31 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(purged.stdout).toContain(join(destination, 'state'));
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 
-    // A remnant whose state/ was removed by hand: a keep-data rerun is still the no-op, an explicit purge consumes
-    // the remnant receipt and prunes the host directories it recorded.
+    // A remnant whose state/ was removed by hand guards nothing: the keep-data no-op applies only while the preserved
+    // data is still there, so a default rerun consumes the remnant receipt and prunes the host directories it recorded.
     await run(installer, [], home);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     await run(installer, ['--uninstall'], home);
-    await rm(join(destination, 'state'), { recursive: true });
     expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
-    const emptyRemnant = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    await rm(join(destination, 'state'), { recursive: true });
+    const emptyRemnant = await run(installer, ['--uninstall'], home);
     expect(emptyRemnant).toMatchObject({ code: 0, stderr: '' });
     expect(emptyRemnant.stdout).toContain('Uninstalled install-fixture@1.2.3');
-    expect(emptyRemnant.stdout).toContain('Data (purge): absent');
+    expect(emptyRemnant.stdout).toContain('Data (keep): absent');
     expect(emptyRemnant.stdout).not.toContain('Remnant receipt:');
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+    // A state/ emptied by hand (directory left behind) is not durable state either: pruned with the exhausted remnant.
+    await run(installer, [], home);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await run(installer, ['--uninstall'], home);
+    await rm(join(destination, 'state', 'plugin.sqlite'));
+    const emptiedState = await run(installer, ['--uninstall'], home);
+    expect(emptiedState).toMatchObject({ code: 0, stderr: '' });
+    expect(emptiedState.stdout).toContain('Uninstalled install-fixture@1.2.3');
+    expect(emptiedState.stdout).toContain('state/ under the installed plugin root is empty and is pruned');
+    expect(emptiedState.stdout).not.toContain('Remnant receipt:');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 
     // Modified owned content: refused with the hash comparison until --force.

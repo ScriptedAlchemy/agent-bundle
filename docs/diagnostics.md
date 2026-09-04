@@ -913,7 +913,11 @@ remnant receipt alone does not make a directory "state-only": when `uninstall`
 also retained unowned entries beside (or instead of) `state/`, both the
 inventory finding and the `--from` bundle finding read the directory and the
 `AB7307` message names those retained entries and points at removing them by
-hand, since `uninstall` never will.
+hand, since `uninstall` never will. Preserved state is only what `uninstall`
+would still keep — a `state/` that holds something, and this home's real,
+non-empty `PLUGIN_DATA` directory — so a remnant whose data has since been
+removed or emptied is reported as exhausted, with the default `uninstall` that
+consumes it as the recovery.
 
 ## Managed uninstall (`AB7007`–`AB7009`)
 
@@ -943,7 +947,11 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   it) or purged; an empty, installer-created one is pruned together with its
   `agent-bundle/plugin-data` and `agent-bundle` parents once they empty out; a
   recorded path outside this home's `plugin-data` is never touched and the
-  `data.detail` says so.
+  `data.detail` says so; a symlinked `agent-bundle` or `plugin-data` ancestor
+  is refused (`AB7007`) before anything is read or removed, since a recursive
+  purge of the leaf would follow it outside the Cursor home. Doctor's `AB7307`
+  names the directory as preserved state only when it is that same real,
+  non-empty directory.
 - **Cursor marketplace** — verifies the staged repository's `HEAD` against the
   commit the store receipt recorded and its working tree against that commit
   (`git --no-optional-locks status --porcelain --untracked-files=all
@@ -1004,12 +1012,18 @@ store receipts the `<host root>/agent-bundle/receipts` and
 directory kept alive by retained state or unowned entries: `removed` in a
 `--plan` result equals `removed` in the completed one. A second run after a
 successful uninstall is a `not-installed` no-op. When `--keep-data` left
-`state/` behind under a Cursor local root, the remnant receipt written there
-stays in place (`receipt.status: 'remnant'`) and a rerun without
-`--purge-data` is the same `not-installed` no-op; `--purge-data
---confirm-purge` removes the preserved state and prunes the root, and consumes
-the remnant (with the host directories it recorded) even when `state/` has
-since been removed by hand.
+`state/` (or a written `PLUGIN_DATA` directory) behind under a Cursor local
+root, the remnant receipt written there stays in place (`receipt.status:
+'remnant'`) and a rerun without `--purge-data` is the same `not-installed`
+no-op for as long as that preserved data — or an unowned entry the uninstall
+retained — is still there; `--purge-data --confirm-purge` removes the
+preserved state and prunes the root. Once the preserved data has been removed
+or emptied by hand (an empty `state/` or `PLUGIN_DATA` directory holds no
+data, so it is pruned like an installer-created directory rather than kept),
+the remnant guards nothing, and the next run — with or without `--purge-data`
+— consumes it: the receipt, the empty plugin root, and the host and
+`plugin-data` directories it recorded. Doctor reports such a remnant as
+exhausted (`AB7307`) instead of claiming preserved state that is gone.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

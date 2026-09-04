@@ -11,7 +11,7 @@ import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import { runCli } from '../src/cli.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 import { installBundle } from '../src/install/install.ts';
-import { emptyContentHash, installReceiptFormat, installReceiptScopeKey, treeInventory } from '../src/install/receipt.ts';
+import { emptyContentHash, installReceiptFile, installReceiptFormat, installReceiptScopeKey, treeInventory } from '../src/install/receipt.ts';
 import { uninstallBundle } from '../src/install/uninstall.ts';
 import {
   doctorEndpointDirectory,
@@ -2193,6 +2193,50 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
       expect(entry.message).toContain('retained the unowned entry "operator-notes.md"');
       expect(entry.message).not.toContain('beside preserved runtime state');
     }
+
+    // A remnant receipt recording a PLUGIN_DATA expansion names that directory as preserved state only while it is
+    // real: this home's `agent-bundle/plugin-data/<plugin>`, reached through real directories, existing and holding
+    // something. Removed by hand, emptied, or recorded for another home, it is not preserved state — `uninstall`
+    // would not touch it either — so AB7307 does not claim it.
+    await rm(join(destination, 'operator-notes.md'));
+    const pluginData = join(fixture.home, '.cursor', 'agent-bundle', 'plugin-data', 'doctor-fixture');
+    const remnantReceipt = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+    const recordExpansion = async (recorded: string) => writeFile(join(destination, installReceiptFile), JSON.stringify({
+      ...remnantReceipt,
+      cursorExpansion: { documents: { 'mcp.json': '{}\n' }, pluginData: recorded, pluginRoot: destination },
+    }));
+    const remnantMessages = async () => hostReport(await doctor(), 'cursor').diagnostics
+      .filter((entry) => entry.code === 'AB7307').map((entry) => entry.message);
+    await recordExpansion(pluginData);
+    await mkdir(pluginData, { recursive: true });
+    await writeFile(join(pluginData, 'cache.sqlite'), 'durable\n');
+    const withData = await remnantMessages();
+    expect(withData.length).toBeGreaterThan(0);
+    expect(withData.every((message) => message.includes(`holds only preserved runtime state (the PLUGIN_DATA directory ${pluginData})`))).toBe(true);
+    // Emptied, removed, or foreign, the directory is not claimed — and with no state/ either, Doctor does not invent
+    // one: the remnant is reported as exhausted, with the default `uninstall` that consumes it as the recovery.
+    await rm(join(pluginData, 'cache.sqlite'));
+    const exhausted = hostReport(await doctor(), 'cursor').diagnostics.filter((entry) => entry.code === 'AB7307');
+    expect(exhausted.length).toBeGreaterThan(0);
+    for (const entry of exhausted) {
+      expect(entry.message).toContain('holds only the remnant receipt of an earlier `uninstall --keep-data` whose preserved runtime state has since been removed');
+      expect(entry.message).not.toContain('state/');
+      expect(entry.message).not.toContain('PLUGIN_DATA');
+      expect(entry.recovery).toContain('to consume the remnant');
+    }
+    await rm(pluginData, { recursive: true });
+    expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA') && !message.includes('state/'))).toBe(true);
+    // An emptied state/ directory left behind is not preserved state either.
+    await mkdir(join(destination, 'state'));
+    expect((await remnantMessages()).every((message) => message.includes('whose preserved runtime state has since been removed'))).toBe(true);
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    expect((await remnantMessages()).every((message) => message.includes('holds only preserved runtime state (state/)'))).toBe(true);
+    await rm(join(destination, 'state'), { recursive: true });
+    const elsewhere = join(fixture.root, 'other-home', '.cursor', 'agent-bundle', 'plugin-data', 'doctor-fixture');
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(elsewhere, 'cache.sqlite'), 'foreign\n');
+    await recordExpansion(elsewhere);
+    expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA'))).toBe(true);
   } finally {
     await fixture.cleanup();
   }
