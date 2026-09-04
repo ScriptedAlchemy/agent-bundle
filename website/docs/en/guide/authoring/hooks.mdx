@@ -350,9 +350,11 @@ socket over through the same claim-and-listen path an unowned start uses (and lo
 one win and the rest keep waiting. Hook wrappers need no change: while an owner is alive they
 are answered as before, and during the takeover gap (at most about a second) they see
 `runtime-unavailable`, which is exactly the case the `fallback: 'standalone'` route above
-covers — a shared-only route exits nonzero for that one event. A startup that fails for any
-other reason (a socket directory it cannot create, a claim that never clears) still fails
-closed, as does a stale socket the owner cannot remove.
+covers — a shared-only route exits nonzero for that one event. A takeover that fails for any
+reason other than the socket still being owned (a socket directory it cannot write, a claim
+that never clears) is reported on the server's stderr — one line per distinct failure, repeated
+at most every 30 seconds — while the server keeps standing by. A startup that fails for any
+other reason still fails closed, as does a stale socket the owner cannot remove.
 
 A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
 canonical identity, the same projection, no shared process state. `AB4817` refuses a route

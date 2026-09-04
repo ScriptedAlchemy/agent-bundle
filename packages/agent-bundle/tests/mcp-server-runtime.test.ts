@@ -11,8 +11,14 @@ import type {
 } from '@agent-bundle/runtime/notices';
 
 import {
+  type createEventRuntimeServer,
+  type EventRuntimeServerRole,
+  EventRuntimeTransportError,
+} from '../src/events/ipc.ts';
+import {
   advertisedOutputSchema,
   createGeneratedRouteMcpServer,
+  createStandbyErrorReporter,
   type GeneratedNoticeDeliveryBinding,
   type GeneratedNoticeInboxSignalOutcome,
   type GeneratedNoticePrincipal,
@@ -338,5 +344,94 @@ describe('generated server teardown', () => {
     }
     expect(clientSawClose).toBe(true);
     await client.close();
+  });
+});
+
+describe('createStandbyErrorReporter', () => {
+  const failure = (message: string): EventRuntimeTransportError => new EventRuntimeTransportError('runtime-failed', message);
+
+  it('reports each distinct takeover failure once, and again only after the repeat interval', () => {
+    let now = 1_000;
+    const lines: string[] = [];
+    const report = createStandbyErrorReporter((line) => { lines.push(line); }, () => now);
+
+    report(failure('Unable to prepare the event runtime endpoint.'));
+    report(failure('Unable to prepare the event runtime endpoint.'));
+    report(failure('Event runtime endpoint claim did not clear after bounded retries.'));
+    report(failure('Unable to prepare the event runtime endpoint.'));
+    expect(lines).toEqual([
+      'takeover failed, still standing by: Unable to prepare the event runtime endpoint.',
+      'takeover failed, still standing by: Event runtime endpoint claim did not clear after bounded retries.',
+    ]);
+
+    now += 29_999;
+    report(failure('Unable to prepare the event runtime endpoint.'));
+    expect(lines).toHaveLength(2);
+    now += 1;
+    report(failure('Unable to prepare the event runtime endpoint.'));
+    expect(lines).toHaveLength(3);
+    // The other message keeps its own clock.
+    report(failure('Event runtime endpoint claim did not clear after bounded retries.'));
+    expect(lines).toHaveLength(4);
+  });
+});
+
+describe('generated server standby diagnostics', () => {
+  it('announces standby, takeover failures, and the takeover on stderr only', async () => {
+    const { host, notices } = stubs();
+    let captured: Parameters<typeof createEventRuntimeServer>[0] | undefined;
+    let roleListener: ((role: EventRuntimeServerRole) => void) | undefined;
+    const stderr: string[] = [];
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const server = await createGeneratedRouteMcpServer({
+        artifactEpoch: 'epoch',
+        events: {
+          allowedTargets: ['claude'],
+          artifactEpoch: 'epoch',
+          createCanonicalEventProps: (() => {
+            throw new Error('not invoked');
+          }) as never,
+          createEventRuntimeServer: (async (options: Parameters<typeof createEventRuntimeServer>[0]) => {
+            captured = options;
+            return {
+              close: async () => undefined,
+              endpoint: '/tmp/agent-bundle-test/event-standby.sock',
+              onRoleChange: (listener: (role: EventRuntimeServerRole) => void) => {
+                roleListener = listener;
+                return () => undefined;
+              },
+              role: () => 'standby',
+            };
+          }) as never,
+          endpointId: 'standby-diagnostics-test',
+          projectEventDocument: (() => {
+            throw new Error('not invoked');
+          }) as never,
+          target: 'claude',
+        },
+        host,
+        notices,
+        plugin: { name: 'standby', version: '0.0.0' },
+        routes: {},
+      });
+      expect(captured?.whenOwned).toBe('standby');
+      const prepareFailure = new EventRuntimeTransportError('runtime-failed', 'Unable to prepare the event runtime endpoint.');
+      captured?.onStandbyError?.(prepareFailure);
+      captured?.onStandbyError?.(prepareFailure);
+      roleListener?.('owner');
+      await server.close();
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(stderr.filter((line) => line.startsWith('agent-bundle event runtime:'))).toEqual([
+      'agent-bundle event runtime: /tmp/agent-bundle-test/event-standby.sock is owned by another process; standing by\n',
+      'agent-bundle event runtime: /tmp/agent-bundle-test/event-standby.sock takeover failed, still standing by: Unable to prepare the event runtime endpoint.\n',
+      'agent-bundle event runtime: /tmp/agent-bundle-test/event-standby.sock was released by its owner; took it over\n',
+    ]);
   });
 });

@@ -151,6 +151,16 @@ export interface CreateEventRuntimeServerOptions {
   readonly artifactEpoch: string;
   readonly endpointId: string;
   readonly handle: (request: EventRuntimeRequest, signal: AbortSignal) => Promise<unknown>;
+  /**
+   * Receives every failure the standby role recovers from by retrying, other
+   * than "still owned": a takeover attempt that failed for any other reason
+   * (a probe, claim, stale-path removal, listen, or release failure) and a
+   * role listener that threw (`Event runtime role listener failed.`). The
+   * standby keeps probing regardless; without this callback those failures
+   * are invisible, and the process looks healthy while shared-only hooks stay
+   * unavailable.
+   */
+  readonly onStandbyError?: (error: EventRuntimeTransportError) => void;
   readonly status?: () => EventRuntimeStatus;
   readonly whenOwned?: EventRuntimeOwnedEndpointPolicy;
 }
@@ -376,7 +386,11 @@ export interface EventRuntimeServerTestHooks {
   readonly beforeEndpointClaimRemoval?: () => Promise<void>;
   /** Runs after the claim handle closed and before its lock file is removed; a rejection stands in for a failing release. */
   readonly beforeEndpointClaimRelease?: () => Promise<void>;
-  /** Runs at the start of the owned-endpoint removal on close; a rejection stands in for a failing removal. */
+  /**
+   * Runs at the start of the owned-endpoint removal on close — the server has
+   * stopped listening and still holds the claim; a rejection stands in for a
+   * failing removal.
+   */
   readonly beforeEndpointRemoval?: () => Promise<void>;
 }
 
@@ -833,13 +847,14 @@ const openServer = Effect.fnUntraced(function*(
     }
     return yield* listenServer(options, endpoint);
   });
-  // The claim is held only across the probe and listen. Its release must
-  // *propagate* a failure, so this is an explicit exit sequence rather than a
-  // scope finalizer: capture the listen `Exit`, release the claim, and let the
-  // release failure win — after shutting down a server that did come up, so a
-  // failed claim release never leaks a listening socket. The mask keeps the
-  // acquire→release pairing intact under interruption, as `acquireUseRelease`
-  // would.
+  // The claim is held only across the probe and listen (and, on close, across
+  // the shutdown and identity-checked removal — `releaseOwnedEndpoint`). Its
+  // release must *propagate* a failure, so this is an explicit exit sequence
+  // rather than a scope finalizer: capture the listen `Exit`, release the
+  // claim, and let the release failure win — after shutting down a server that
+  // did come up, so a failed claim release never leaks a listening socket. The
+  // mask keeps the acquire→release pairing intact under interruption, as
+  // `acquireUseRelease` would.
   return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function*() {
     const claim = yield* claimEndpoint(endpoint, testHooks);
     const listened = yield* Effect.exit(restore(listenUnderClaim));
@@ -851,36 +866,6 @@ const openServer = Effect.fnUntraced(function*(
     return yield* listened;
   }));
 });
-
-/**
- * Removes the socket path only while it is still the inode this server bound
- * (identity-matched `stat` + `rm`, kept raw like the claim lock). A removal
- * failure is a typed transport error so `close()` can surface it instead of
- * leaving a stale endpoint behind silently; a missing path is already gone.
- */
-const removeOwnedEndpoint = (
-  listener: EventSocketListener,
-  testHooks?: EventRuntimeServerTestHooks,
-): Effect.Effect<void, EventRuntimeTransportError> =>
-  liftPromise(async () => {
-    if (listener.endpointIdentity === undefined) return;
-    await testHooks?.beforeEndpointRemoval?.();
-    let current;
-    try {
-      current = await stat(listener.endpoint);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    if (
-      current.dev === listener.endpointIdentity.device
-      && current.ino === listener.endpointIdentity.inode
-    ) {
-      await rm(listener.endpoint, { force: true });
-    }
-  }).pipe(
-    Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the event runtime endpoint.', error)),
-  );
 
 /** Destroys every accepted socket and stops listening. Idempotent and infallible: the scope finalizer. */
 const shutdownServer = (listener: EventSocketListener): Effect.Effect<void> =>
@@ -895,13 +880,71 @@ const shutdownServer = (listener: EventSocketListener): Effect.Effect<void> =>
   });
 
 /**
+ * Stops listening and removes the socket path, holding the endpoint claim
+ * from before the first step until after the last. Closing the server already
+ * unlinks the path (libuv removes a listening pipe's name on close); the
+ * identity-matched `stat` + `rm` that follows, kept raw like the claim lock,
+ * only ever removes a path that still carries the inode this server bound. The
+ * claim is what makes that check trustworthy: a standby's takeover holds the
+ * same claim across its probe → unlink → listen, so no successor can bind a
+ * new socket at this path between the unlink and the identity read — and the
+ * inode the kernel just freed is exactly the one a new socket is likely to be
+ * handed, which would let the check match the successor's live socket and
+ * remove it. Standbys only claim an endpoint that is not live, so the claim is
+ * uncontended while this server listens; a claim that fails anyway is a
+ * foreign lock, and the server is shut down regardless before the failure
+ * propagates. A removal or release failure is a typed transport error so
+ * `close()` can surface it instead of leaving a stale endpoint behind
+ * silently; a missing path is already gone.
+ */
+const releaseOwnedEndpoint = Effect.fnUntraced(function*(
+  listener: EventSocketListener,
+  identity: Readonly<{ readonly device: number; readonly inode: number }>,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.fn.Return<void, EventRuntimeTransportError> {
+  const removeIfStillOurs = liftPromise(async () => {
+    await testHooks?.beforeEndpointRemoval?.();
+    let current;
+    try {
+      current = await stat(listener.endpoint);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (current.dev !== identity.device || current.ino !== identity.inode) return;
+    await rm(listener.endpoint, { force: true });
+  }).pipe(
+    Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the event runtime endpoint.', error)),
+  );
+  // The same claim discipline as `openServer`: an explicit exit sequence so a
+  // release failure propagates (and wins), under a mask that keeps the
+  // acquire→release pairing intact if `close()` is interrupted.
+  return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function*() {
+    const claimed = yield* Effect.exit(claimEndpoint(listener.endpoint, testHooks).pipe(
+      Effect.mapError((error) => isEndpointOwned(error)
+        ? transportError('runtime-failed', 'Event runtime endpoint claim is held by another process during teardown.', error)
+        : error),
+    ));
+    if (Exit.isFailure(claimed)) {
+      yield* shutdownServer(listener);
+      return yield* Effect.failCause(claimed.cause);
+    }
+    yield* shutdownServer(listener);
+    const removed = yield* Effect.exit(restore(removeIfStillOurs));
+    const released = yield* Effect.exit(releaseEndpointClaim(claimed.value, testHooks));
+    if (Exit.isFailure(released)) return yield* Effect.failCause(released.cause);
+    return yield* removed;
+  }));
+});
+
+/**
  * The explicit teardown `EventRuntimeServer.close()` runs: stop the standby
- * loop, then shut the bound server down and remove the owned endpoint. The
- * loop is interrupted — and awaited, so an in-flight takeover finishes its
- * claim→listen→release before this reads the listener — first, or a takeover
- * could bind a socket nobody removes. The removal is fallible on purpose: the
- * scope finalizer only ever repeats the (idempotent) shutdown, so the one
- * teardown step that can fail reports to the caller rather than to a
+ * loop, then shut the bound server down and remove the owned endpoint under
+ * the claim. The loop is interrupted — and awaited, so an in-flight takeover
+ * finishes its claim→listen→release before this reads the listener — first,
+ * or a takeover could bind a socket nobody removes. The removal is fallible on
+ * purpose: the scope finalizer only ever repeats the (idempotent) shutdown, so
+ * the one teardown step that can fail reports to the caller rather than to a
  * finalizer that would have to swallow it.
  */
 const closeServer = Effect.fnUntraced(function*(
@@ -911,36 +954,69 @@ const closeServer = Effect.fnUntraced(function*(
   if (state.standby !== undefined) yield* Fiber.interrupt(state.standby);
   const listener = yield* Ref.get(state.listener);
   if (listener === undefined) return;
-  yield* shutdownServer(listener);
-  if (process.platform !== 'win32') yield* removeOwnedEndpoint(listener, testHooks);
+  // Windows binds a named pipe, not a path: nothing to claim or remove.
+  if (process.platform === 'win32' || listener.endpointIdentity === undefined) {
+    yield* shutdownServer(listener);
+    return;
+  }
+  yield* releaseOwnedEndpoint(listener, listener.endpointIdentity, testHooks);
 });
+
+/**
+ * Delivers the one `standby` → `owner` notification to every listener. Each
+ * runs in its own guard: a listener that throws is reported through
+ * `onStandbyError` and neither stops the listeners after it nor the role
+ * transition, which has already happened.
+ */
+const notifyRoleListeners = (
+  roleListeners: ReadonlySet<(role: EventRuntimeServerRole) => void>,
+  role: EventRuntimeServerRole,
+  onStandbyError: ((error: EventRuntimeTransportError) => void) | undefined,
+): Effect.Effect<void> =>
+  Effect.sync(() => {
+    for (const notify of roleListeners) {
+      try {
+        notify(role);
+      } catch (error) {
+        onStandbyError?.(transportError('runtime-failed', 'Event runtime role listener failed.', error));
+      }
+    }
+  });
 
 /**
  * The standby role's one job: notice the owner leaving and run the same
  * `openServer` path an unowned start runs. Losing that race — another standby
  * claimed first, or the endpoint is live again by the time this probe lands —
- * leaves it standing by for the next tick; so does any other typed failure,
- * because the MCP server this runtime serves is already up and there is no
- * caller left to fail. Bound to the scope: `close()` interrupts it before
- * reading the listener, and the layer scope interrupts it on dispose.
+ * is the expected outcome and leaves it standing by for the next tick in
+ * silence. Every other typed failure also leaves it standing by, because the
+ * MCP server this runtime serves is already up and there is no caller left to
+ * fail, but is reported through `onStandbyError` so a takeover that can never
+ * succeed (an endpoint directory it cannot write, a claim that never clears)
+ * does not look like a healthy wait. Bound to the scope: `close()` interrupts
+ * it before reading the listener, and the layer scope interrupts it on
+ * dispose.
  */
 const standByForEndpoint = Effect.fnUntraced(function*(
   endpoint: string,
   acquire: Effect.Effect<EventSocketListener, EventRuntimeTransportError, Scope.Scope>,
   roleListeners: ReadonlySet<(role: EventRuntimeServerRole) => void>,
+  onStandbyError: ((error: EventRuntimeTransportError) => void) | undefined,
 ): Effect.fn.Return<void, never, Scope.Scope> {
+  const reportAndStandBy = (error: EventRuntimeTransportError): Effect.Effect<undefined> => Effect.sync(() => {
+    onStandbyError?.(error);
+    return undefined;
+  });
   while (true) {
     const jitter = yield* Random.nextIntBetween(0, STANDBY_PROBE_JITTER_MS);
     yield* Effect.sleep(Duration.sum(STANDBY_PROBE_INTERVAL, Duration.millis(jitter)));
-    const endpointState = yield* probeEndpoint(endpoint).pipe(
-      Effect.catch(() => Effect.succeed<EndpointProbe>('live')),
+    const endpointState = yield* probeEndpoint(endpoint).pipe(Effect.catch(reportAndStandBy));
+    if (endpointState === undefined || endpointState === 'live') continue;
+    const listener = yield* acquire.pipe(
+      Effect.catchIf(isEndpointOwned, () => Effect.succeed(undefined)),
+      Effect.catch(reportAndStandBy),
     );
-    if (endpointState === 'live') continue;
-    const listener = yield* acquire.pipe(Effect.catch(() => Effect.succeed(undefined)));
     if (listener === undefined) continue;
-    yield* Effect.sync(() => {
-      for (const notify of roleListeners) notify('owner');
-    });
+    yield* notifyRoleListeners(roleListeners, 'owner', onStandbyError);
     return;
   }
 });
@@ -966,7 +1042,9 @@ const eventSocketLayer = (
     }
     const opened = yield* acquire.pipe(Effect.catchIf(isEndpointOwned, () => Effect.succeed(undefined)));
     if (opened !== undefined) return { endpoint, listener, roleListeners, standby: undefined };
-    const standby = yield* Effect.forkScoped(standByForEndpoint(endpoint, acquire, roleListeners));
+    const standby = yield* Effect.forkScoped(
+      standByForEndpoint(endpoint, acquire, roleListeners, options.onStandbyError),
+    );
     return { endpoint, listener, roleListeners, standby };
   }));
 

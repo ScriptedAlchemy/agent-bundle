@@ -18,7 +18,7 @@ import {
   requestEventRuntime,
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
-import { within } from './support/eventually.ts';
+import { deferred, eventually, within } from './support/eventually.ts';
 
 type ContenderOutcome =
   | Readonly<{ readonly server: EventRuntimeServer; readonly status: 'opened' }>
@@ -445,6 +445,152 @@ it.live('lets exactly one of several standbys take over and keeps the rest stand
   yield* expectMissing(endpoint);
   yield* expectMissing(`${endpoint}.lock`);
 }), 30_000);
+
+it.live('holds the endpoint claim across close() so no standby can bind while the old owner is still tearing down', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-close-takeover-race-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const removalStarted = deferred();
+  const removalMayContinue = deferred();
+  // The owner's close pauses after it has stopped listening — the path is
+  // already unlinked — and before its identity-checked removal: the window in
+  // which an unserialized takeover would bind a new socket at the path, quite
+  // possibly on the inode the kernel just freed, and hand it to the resumed
+  // identity check as this server's own.
+  const owner = yield* Effect.promise(() => createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }, {
+    beforeEndpointRemoval: async () => {
+      removalStarted.resolve();
+      await removalMayContinue.promise;
+    },
+  }));
+  const standbyErrors: EventRuntimeTransportError[] = [];
+  const standby = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      onStandbyError: (error) => { standbyErrors.push(error); },
+      whenOwned: 'standby',
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(standby.role()).toBe('standby');
+
+  const closing = owner.close();
+  yield* Effect.promise(() => removalStarted.promise);
+  // Let the standby probe and spend its whole bounded claim-retry budget
+  // inside that window: the closing owner's claim must hold it off, which it
+  // reports as a claim that did not clear.
+  yield* Effect.promise(() => eventually(() => standbyErrors.length > 0 || standby.role() === 'owner', 10_000));
+  expect(standby.role()).toBe('standby');
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({ endpoint, timeoutMs: 500 })))
+    .toEqual({ status: 'unavailable' });
+  // The attempt it held off was reported, not swallowed.
+  expect(standbyErrors.map((error) => error.message))
+    .toContain('Event runtime endpoint claim did not clear after bounded retries.');
+  removalMayContinue.resolve();
+  yield* Effect.promise(() => closing);
+
+  // Once the old owner has released the claim the standby takes over, and its
+  // socket is the one on the path.
+  yield* Effect.promise(() => eventually(() => standby.role() === 'owner', 5_000));
+  const bound = yield* Effect.promise(() => stat(endpoint));
+  expect(bound.isSocket()).toBe(true);
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+  yield* Effect.promise(() => standby.close());
+  yield* expectMissing(endpoint);
+  yield* expectMissing(`${endpoint}.lock`);
+}), 30_000);
+
+it.live('reports a takeover that fails for a reason other than "still owned" and keeps standing by until one succeeds', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-standby-error-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  const hookFailure = new Error('probe hook failed once');
+  let failedAttempts = 0;
+  const standbyErrors: EventRuntimeTransportError[] = [];
+  const standby = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServerForTest({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      onStandbyError: (error) => { standbyErrors.push(error); },
+      whenOwned: 'standby',
+    }, {
+      // The first takeover attempt — the first open that finds the endpoint
+      // free — fails before it claims anything; the next one is left alone.
+      afterEndpointProbe: async (state) => {
+        if (state === 'live' || failedAttempts > 0) return;
+        failedAttempts += 1;
+        throw hookFailure;
+      },
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  expect(standby.role()).toBe('standby');
+  const takeover = nextRole(standby);
+
+  yield* Effect.promise(() => owner.close());
+  expect(yield* Effect.promise(() => takeover)).toBe('owner');
+  expect(failedAttempts).toBe(1);
+  expect(standbyErrors).toHaveLength(1);
+  expect(standbyErrors[0]).toBeInstanceOf(EventRuntimeTransportError);
+  expect(standbyErrors[0]).toMatchObject({
+    cause: hookFailure,
+    code: 'runtime-failed',
+    message: 'Event runtime endpoint probe hook failed.',
+  });
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+  yield* expectMissing(`${endpoint}.lock`);
+}), 20_000);
+
+it.live('keeps notifying the remaining role listeners when an earlier one throws, and reports the throw', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-role-listener-${crypto.randomUUID()}`;
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  const standbyErrors: EventRuntimeTransportError[] = [];
+  const standby = yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      onStandbyError: (error) => { standbyErrors.push(error); },
+      whenOwned: 'standby',
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  const listenerFailure = new Error('listener exploded');
+  standby.onRoleChange(() => { throw listenerFailure; });
+  const roles: EventRuntimeServerRole[] = [];
+  standby.onRoleChange((role) => { roles.push(role); });
+  const takeover = nextRole(standby);
+
+  yield* Effect.promise(() => owner.close());
+  expect(yield* Effect.promise(() => takeover)).toBe('owner');
+  expect(roles).toEqual(['owner']);
+  expect(standby.role()).toBe('owner');
+  expect(standbyErrors).toHaveLength(1);
+  expect(standbyErrors[0]).toBeInstanceOf(EventRuntimeTransportError);
+  expect(standbyErrors[0]).toMatchObject({
+    cause: listenerFailure,
+    code: 'runtime-failed',
+    message: 'Event runtime role listener failed.',
+  });
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+}), 20_000);
 
 it.live('reports a failed endpoint removal from close() after the server has stopped listening', () => Effect.gen(function*() {
   if (process.platform === 'win32') return;
