@@ -536,10 +536,13 @@ const publishedProgram = Effect.fnUntraced(function*(
       principal: request.principal,
       recipient: notice.recipient,
     }).pipe(Effect.map((decision) => ({ decision, notice }))));
+  // Chronological by instant, not by string: `createdAt` is whatever valid
+  // ISO-8601 the publishing invocation started with, offsets included.
   return Object.freeze(decisions
     .filter(({ decision }) => decision.state === 'authorized')
     .map(({ notice }) => notice)
-    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .toSorted((left, right) =>
+      Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))
     .map((notice) => currentlyDisclosedNotice(notice, 'mcp-inbox', undefined).notice));
 });
 

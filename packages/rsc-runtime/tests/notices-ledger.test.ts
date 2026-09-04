@@ -1951,6 +1951,27 @@ describe('publisher-scoped visibility (#460)', () => {
     await driver.close();
   });
 
+  it('orders published notices by the instant they were created, whatever offset the invocation spelled', async () => {
+    const { driver, ledger } = await openLedger();
+    const publishAt = (id: string, startedAt: string) => run(ledger, { actorId: 'author', id, kind: 'tool', startedAt },
+      async () => (await agent()).notices!.publish({
+        content: document(id),
+        priority: 'normal',
+        recipient: { actor: { id: 'recipient' } },
+      }, { idempotencyKey: `publish:${id}` }));
+    // Lexically the +02:00 stamp sorts after the Z stamp; chronologically it is 90 minutes earlier.
+    const later = await publishAt('later', '2026-01-01T00:30:00.000Z');
+    const earlier = await publishAt('earlier', '2026-01-01T01:00:00.000+02:00');
+    const own = await run(ledger, {
+      actorId: 'author',
+      id: 'published-order',
+      kind: 'tool',
+      startedAt: '2026-01-01T03:00:00.000Z',
+    }, async () => (await agent()).notices!.published());
+    expect(own.map((notice) => notice.id)).toEqual([earlier.notice.id, later.notice.id]);
+    await driver.close();
+  });
+
   it('discloses published content under the default internal ceiling and never another author\'s deduped content', async () => {
     const { driver, ledger } = await openLedger();
     const publishAs = (actorId: string, id: string, input: AgentNoticePublishInput) =>
