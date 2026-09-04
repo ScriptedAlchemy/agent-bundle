@@ -266,22 +266,24 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(purged.removed.directories).toEqual(expect.arrayContaining([join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')]));
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
-    // A remnant whose state/ was later removed by hand is still receipt-owned: an explicit purge consumes it and
-    // prunes the recorded host directories instead of taking the keep-data no-op path.
+    // A remnant whose state/ was later removed by hand guards nothing: the keep-data no-op applies only while the
+    // preserved data is still there, so a default rerun consumes the remnant (receipt, empty root, recorded host
+    // directories) exactly as an explicit purge would, and `--plan` says so first.
     await installBundle(options);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
     expect((await uninstallBundle(options)).remnantReceipt).toBe(join(destination, installReceiptFile));
     await rm(join(destination, 'state'), { force: true, recursive: true });
-    expect(await uninstallBundle(options)).toMatchObject({ receipt: { status: 'remnant' }, state: 'not-installed' });
-    const emptyPlan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
+    const emptyPlan = await uninstallBundle({ ...options, plan: true });
     expect(emptyPlan).toMatchObject({
-      data: { outcome: 'absent', policy: 'purge' },
+      data: { outcome: 'absent', policy: 'keep' },
+      receipt: { status: 'consumed' },
+      registrations: [{ action: 'already-absent', kind: 'cursor-local-plugin' }],
       removed: { directories: [destination, join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')], files: [join(destination, installReceiptFile)] },
       state: 'planned',
     });
     expect(emptyPlan.remnantReceipt).toBeUndefined();
-    const consumed = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
+    const consumed = await uninstallBundle(options);
     expect(consumed).toMatchObject({ data: { outcome: 'absent' }, removed: emptyPlan.removed, state: 'uninstalled' });
     expect(consumed.remnantReceipt).toBeUndefined();
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
@@ -315,6 +317,40 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(purgedData).toMatchObject({ data: { outcome: 'purged', paths: [pluginData] }, state: 'uninstalled' });
     expect(purgedData.removed.directories).toEqual(expect.arrayContaining([pluginData, join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle'), destination]));
     expect(purgedData.remnantReceipt).toBeUndefined();
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // The same for a kept PLUGIN_DATA directory later emptied by hand: the remnant no longer guards data, so the next
+    // default run prunes the empty directory with its agent-bundle parents and consumes the remnant.
+    await withExpansion(pluginData);
+    await mkdir(join(pluginData, 'cache'), { recursive: true });
+    await writeFile(join(pluginData, 'cache', 'index.json'), '{}\n');
+    expect(await uninstallBundle(options)).toMatchObject({ data: { outcome: 'kept' }, remnantReceipt: join(destination, installReceiptFile) });
+    await rm(join(pluginData, 'cache'), { force: true, recursive: true });
+    const emptiedByHand = await uninstallBundle(options);
+    expect(emptiedByHand).toMatchObject({ data: { detail: expect.stringContaining('is empty and is pruned'), outcome: 'absent' }, receipt: { status: 'consumed' }, state: 'uninstalled' });
+    expect(emptiedByHand.removed.directories).toEqual(expect.arrayContaining([pluginData, join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle'), destination]));
+    expect(emptiedByHand.remnantReceipt).toBeUndefined();
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // A symlinked ancestor on the way to PLUGIN_DATA (agent-bundle or plugin-data) would let a recursive purge of the
+    // leaf follow it outside the Cursor home: refused before anything is read or removed, whichever link it is.
+    const outside = join(fixture.cleanupRoot, 'outside-home');
+    await mkdir(join(outside, 'plugin-data', 'uninstall-fixture'), { recursive: true });
+    await writeFile(join(outside, 'plugin-data', 'uninstall-fixture', 'cache.sqlite'), 'elsewhere\n');
+    await withExpansion(pluginData);
+    await symlink(outside, join(cursorRoot, 'agent-bundle'));
+    const linkedParent = await failureOf(uninstallBundle({ ...options, confirmPurge: true, purgeData: true }));
+    expect(linkedParent.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
+    expect(await readFile(join(outside, 'plugin-data', 'uninstall-fixture', 'cache.sqlite'), 'utf8')).toBe('elsewhere\n');
+    await rm(join(cursorRoot, 'agent-bundle'));
+    await mkdir(join(cursorRoot, 'agent-bundle'));
+    await symlink(join(outside, 'plugin-data'), join(cursorRoot, 'agent-bundle', 'plugin-data'));
+    const linkedChild = await failureOf(uninstallBundle(options));
+    expect(linkedChild.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
+    expect(await readFile(join(outside, 'plugin-data', 'uninstall-fixture', 'cache.sqlite'), 'utf8')).toBe('elsewhere\n');
+    await rm(join(cursorRoot, 'agent-bundle'), { force: true, recursive: true });
+    await rm(outside, { force: true, recursive: true });
+    expect(await uninstallBundle(options)).toMatchObject({ state: 'uninstalled' });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
     await withExpansion(pluginData);

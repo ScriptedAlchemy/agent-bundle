@@ -421,6 +421,18 @@ const cursorLocalOwnership = async (
 export const cursorPluginDataDirectory = (cursorRoot: string, plugin: string): string =>
   join(cursorRoot, 'agent-bundle', 'plugin-data', plugin);
 
+/**
+ * Whether this home's `PLUGIN_DATA` directory exists as a real directory reached only through real directories:
+ * a symlinked `agent-bundle` or `plugin-data` ancestor would let a recursive purge of the leaf follow it outside
+ * the Cursor home, so any link on the way is refused (AB7007) before anything is read or removed.
+ */
+const realPluginDataDirectory = async (cursorRoot: string, pluginData: string): Promise<boolean> => {
+  for (const directory of [join(cursorRoot, 'agent-bundle'), join(cursorRoot, 'agent-bundle', 'plugin-data'), pluginData]) {
+    if (await realDirectory(directory, 'cursor') === undefined) return false;
+  }
+  return true;
+};
+
 interface CursorLocalData {
   /** Installer-created `PLUGIN_DATA` directory that nothing wrote to: pruned like a created host directory, never "data". */
   readonly emptyPluginData?: string;
@@ -454,7 +466,7 @@ const cursorLocalData = async (
   if (recorded !== undefined) {
     if (recorded !== expected) {
       foreignPluginData = recorded;
-    } else if (await realDirectory(recorded, 'cursor') !== undefined) {
+    } else if (await realPluginDataDirectory(cursorRoot, recorded)) {
       if ((await readdir(recorded)).length === 0) {
         emptyPluginData = recorded;
       } else {
@@ -567,11 +579,12 @@ const uninstallCursorLocal = async (
   const retained = await listRetained(destination, owned, ownedDirectories);
   const remnantOnly = ownership.receipt !== undefined && isRemnantReceipt(ownership.receipt);
   const purging = data.present && policy === 'purge';
-  if (remnantOnly && policy !== 'purge' && files.length === 1 && files[0] === receiptPath) {
-    // A rerun over what an earlier `--keep-data` uninstall left behind, still keeping the data: there is
-    // nothing to remove, so the remnant receipt stays in place and the run is the documented no-op. An explicit
-    // `--purge-data --confirm-purge` never takes this path: it consumes the remnant (and its recorded host
-    // directories) even when state/ has since been removed by hand.
+  if (remnantOnly && policy !== 'purge' && (data.present || retained.length > 0) && files.length === 1 && files[0] === receiptPath) {
+    // A rerun over what an earlier `--keep-data` uninstall left behind, still keeping data that is still there
+    // (or unowned entries that keep the root alive): nothing to remove, so the remnant receipt stays in place and
+    // the run is the documented no-op. Once the preserved state is gone — state/ or the PLUGIN_DATA directory
+    // removed or emptied by hand — the remnant guards nothing, and the rerun below consumes it (receipt, empty
+    // plugin root, the host and plugin-data directories it recorded) like an explicit purge would.
     return Object.freeze({
       ...base,
       data: data.report,

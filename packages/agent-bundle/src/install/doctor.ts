@@ -524,14 +524,43 @@ const durableStateReport = (
 };
 
 /**
+ * The `PLUGIN_DATA` directory a remnant receipt still guards, reported only when it is real: the path
+ * `uninstall` itself would treat as this home's (`<cursor root>/agent-bundle/plugin-data/<plugin>` for a
+ * plugin root at `<cursor root>/plugins/local/<plugin>`) and an existing real directory holding something.
+ * A recorded path elsewhere (a remnant moved between homes) or one since removed by hand is not preserved
+ * state, and `uninstall` would not touch it either.
+ */
+const preservedPluginData = async (pluginRoot: string, receipt: InstallReceipt | undefined): Promise<string | undefined> => {
+  const recorded = receipt?.cursorExpansion?.pluginData;
+  if (receipt === undefined || recorded === undefined) return undefined;
+  const cursorRoot = resolve(pluginRoot, '..', '..', '..');
+  if (recorded !== join(cursorRoot, 'agent-bundle', 'plugin-data', receipt.plugin)) return undefined;
+  for (const directory of [join(cursorRoot, 'agent-bundle'), join(cursorRoot, 'agent-bundle', 'plugin-data'), recorded]) {
+    let metadata: Awaited<ReturnType<typeof lstat>>;
+    try {
+      metadata = await lstat(directory);
+    } catch {
+      return undefined;
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) return undefined;
+  }
+  try {
+    return (await readdir(recorded)).length === 0 ? undefined : recorded;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * AB7307 for a Cursor directory that holds no plugin but was left by `uninstall --keep-data`.
  * A remnant receipt (owning no files) may also guard unowned entries the uninstall retained, so
  * the message reports those extras instead of calling the directory state-only; `stateOnly`
  * short-circuits the readdir when the caller already proved the directory holds only `state/`.
  */
-const remnantDiagnostic = async (subject: string, path: string, stateOnly: boolean, pluginData?: string): Promise<Diagnostic> => {
+const remnantDiagnostic = async (subject: string, path: string, stateOnly: boolean, receipt: InstallReceipt | undefined): Promise<Diagnostic> => {
   const entries = stateOnly ? [] : (await readdir(path)).filter((name) => name !== installReceiptFile);
   const extras = entries.filter((name) => !isPreservedRuntimeRoot(name)).sort((left, right) => left.localeCompare(right));
+  const pluginData = await preservedPluginData(path, receipt);
   const preserved = [
     ...(stateOnly || entries.some(isPreservedRuntimeRoot) ? ['state/'] : []),
     ...(pluginData === undefined ? [] : [`the PLUGIN_DATA directory ${pluginData}`]),
@@ -915,7 +944,7 @@ const cursorInventory = async (
       if (remnant) {
         const durableState = await inspectDurableState(path, 'cursor');
         if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
-        diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, stateOnly, remnantReceipt?.cursorExpansion?.pluginData));
+        diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, stateOnly, remnantReceipt));
         findings.push({
           ...(durableState === undefined ? {} : { durableState }),
           entry,
@@ -1813,7 +1842,7 @@ const cursorBundle = async (
           `Cursor destination ${destination} (${identity.name}@${identity.version})`,
           destination,
           stateOnly,
-          comparison.receipt?.cursorExpansion?.pluginData,
+          comparison.receipt,
         )]),
         finding: Object.freeze({
           ...base,
