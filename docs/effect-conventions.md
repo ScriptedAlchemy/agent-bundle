@@ -98,10 +98,10 @@ on the Promise edge. Do not widen public error types to satisfy Effect.
   `dev/mcp-session/mcp-session.ts` `#admitRequest`). That is the same
   shape as `Effect.abortSignal`, not a bare `new AbortController()` inside
   `Effect.gen`.
-- Caveat on `agent-patterns/effect-scope.md` § AbortSignal (vendored under
-  `repos/`, so not editable here): the language-service rule it names,
-  `abortControllerInEffect`, does not exist in `@effect/language-service@0.87.2`.
-  The `*InEffect*` rules that ship are `cryptoRandomUUIDInEffect`,
+- `agent-patterns/effect-scope.md` § AbortSignal once cited a
+  language-service rule, `abortControllerInEffect`, that does not exist in
+  `@effect/language-service@0.87.2` (corrected in the pattern; kept here so a
+  re-pin re-checks it). The `*InEffect*` rules that ship are `cryptoRandomUUIDInEffect`,
   `globalConsoleInEffect`, `globalDateInEffect`, `globalErrorInEffectCatch`,
   `globalErrorInEffectFailure`, `globalFetchInEffect`, `globalRandomInEffect`,
   `globalTimersInEffect`, `lazyPromiseInEffectSync`, `processEnvInEffect`,
@@ -550,23 +550,39 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
 
 ## Open decisions (maintainer)
 
-Divergences between the vendored guidance (`repos/effect/LLMS.md`,
-`agent-patterns/*`) and what the repo does today. Recorded, not decided; each
+Divergences between the vendored guidance (`repos/effect/LLMS.md`, read-only)
+and what the repo does today. Recorded, not decided; each
 row names the two positions and what a decision would touch. Until a row is
 resolved the current repo practice stands, and new code follows it.
 
 - **`isRecord` vs `Predicate`.** `LLMS.md` § Predicate says never to write
-  helpers like `isRecord` and to use the `Predicate` module. The repo has two
-  hand-written guards — `core/strict-json.ts` `isRecord` (non-null,
-  non-array object) and `workbench/src/client-helpers.ts` `isRecord` — with
-  roughly 400 call sites across the three packages, against about a dozen
+  helpers like `isRecord` and to use the `Predicate` module. The repo's
+  shared guards are `core/strict-json.ts` `isRecord` / `isJsonRecord` /
+  `isPlainRecord` and `workbench/src/client-helpers.ts` `isRecord`, but the
+  divergence is wider than two helpers: fifteen modules define their own
+  private `isRecord` with the same `typeof === 'object' && !== null &&
+  !Array.isArray` body (`mcp-server-runtime.ts`, `build/pack-inventory.ts`,
+  `install/{install,doctor,cursor-agent-plugins-launch}.ts`,
+  `host-contracts/{claude,cursor,portable}-plugin-validation.ts`,
+  `adapters/portable-mcp-rules.ts`, `dev/host-install-manager.ts`,
+  `dev/mcp-app-runtime-binding-service.ts`,
+  `dev/mcp-apps/{mcp-app-bridge,mcp-app-host-profiles,mcp-app-routes}.ts`,
+  `workbench/src/mcp/mcp-app-preview.tsx`), seven more alias a shared guard
+  under the local name, and five emit the same one-liner as a string into
+  generated hook / proxy / sandbox source that intentionally imports nothing
+  (`adapters/hook-contract.ts`, `install/surface.ts`,
+  `dev/runtime-client-surface-proxy.ts`, `dev/mcp-apps/mcp-app-sandbox.ts`).
+  Roughly 400 call sites in total, against about a dozen
   `Predicate.isObject` uses (the install lane). rc.112 `Predicate` has no
   `isRecord`; `Predicate.isObject` is the closest match (`{}`-typed, excludes
-  arrays), and `Predicate.isObjectOrArray` includes arrays. Options: keep the
-  local guard as the sanctioned spelling and say so here (its `Readonly<Record<string, unknown>>`
-  narrowing is what the decoders index into), or migrate to
-  `Predicate.isObject` in a single mechanical chore and re-verify the
-  cold-start budget for hooks that would newly import `effect/Predicate`.
+  arrays), and `Predicate.isObjectOrArray` includes arrays. Options: declare
+  the `core/strict-json.ts` guards the sanctioned spelling, fold the private
+  copies into them, and say so here (their `Readonly<Record<string, unknown>>`
+  narrowing is what the decoders index into); or migrate the lot to
+  `Predicate.isObject` in one mechanical chore and re-verify the cold-start
+  budget for hooks that would newly import `effect/Predicate`. Either way
+  the emitted-string copies stay: generated host-side JS has no `effect`
+  import by design.
 - **`Data.Error` for internal class errors.** Every typed error is a plain
   `Error` subclass (82 `export class … extends CodedError | Error`), so they
   enter the channel through `Effect.fail(...)`; `Effect.gen` cannot

@@ -69,11 +69,17 @@ the Effect and let `runPromise` observe the result.
 - Host → Effect: `runPromise(program, { signal })` or
   `interruptWhenAborted(program, signal)`.
 - Effect → host: `yield* scopedAbortSignal` (`Effect.abortSignal`). The
-  signal aborts when the owning scope closes. Do not keep it longer than
-  that scope.
+  signal aborts when the owning scope closes — with no reason, and the
+  controller is never exposed. Do not keep it longer than that scope.
+- A contract that must abort with a caller-supplied reason (MCP session
+  `cancel()`) owns its `AbortController` as the scoped resource instead:
+  `acquireRelease` returns the controller, release aborts it; join a host
+  signal with `AbortSignal.any`. See `docs/effect-conventions.md`
+  § Scope rules.
 
-Do not allocate a raw `AbortController` inside `Effect.gen` when
-`Effect.abortSignal` is the owner (language-service `abortControllerInEffect`).
+Do not allocate a bare `AbortController` inside `Effect.gen`; it must be the
+`acquireRelease` resource or come from `Effect.abortSignal`. No
+`@effect/language-service@0.87.2` rule flags this — review does.
 
 ## What to avoid
 
