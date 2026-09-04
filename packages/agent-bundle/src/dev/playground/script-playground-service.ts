@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import { validateArtifactWithSnapshot } from '../../build/validate-artifact.ts';
-import { CodedError, isErrno } from '../../core/errors.ts';
+import { isErrno } from '../../core/errors.ts';
 import { isInside } from '../../core/paths.ts';
 import {
   taskkill,
@@ -15,6 +15,7 @@ import {
 } from '../../services/process-tree.ts';
 import { artifactScriptCatalog } from '../artifacts/artifact-script-catalog.ts';
 import { EpochStore, type EpochReference } from '../epoch-store.ts';
+import { YieldableCodedError, YieldableFrameworkError } from '../../effect/errors.ts';
 
 const defaultOutputLimit = 64 * 1024;
 const defaultTimeoutMs = 5_000;
@@ -65,7 +66,7 @@ export type ScriptPlaygroundFailureCode =
   | 'timeout';
 
 /** Stable script infrastructure failure with bounded captured output safe for durable evidence. */
-export class ScriptPlaygroundFailure extends CodedError<ScriptPlaygroundFailureCode> {
+export class ScriptPlaygroundFailure extends YieldableCodedError<ScriptPlaygroundFailureCode> {
   readonly cleanupFailures: readonly ScriptPlaygroundCleanupFailure[];
   readonly stderr: string;
   readonly stdout: string;
@@ -83,7 +84,7 @@ export class ScriptPlaygroundFailure extends CodedError<ScriptPlaygroundFailureC
   }
 }
 
-export class ScriptPlaygroundAbortError extends Error {
+export class ScriptPlaygroundAbortError extends YieldableFrameworkError {
   readonly cleanupFailures: readonly ScriptPlaygroundCleanupFailure[];
 
   constructor(cleanupFailures: readonly ScriptPlaygroundCleanupFailure[] = []) {

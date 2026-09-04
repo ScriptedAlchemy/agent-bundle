@@ -13,6 +13,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { digest, stableJson } from '../core/digest.ts';
 import { freezeJsonValue, type JsonObject, type JsonValue } from './types.ts';
+import { YieldableFrameworkError } from '../effect/errors.ts';
 
 const manifestFileName = 'generation.manifest.json';
 const defaultRetainInactive = 5;
@@ -101,7 +102,7 @@ export interface RuntimeGenerationCloseFailure {
   readonly path: string;
 }
 
-export class RuntimeGenerationStoreCloseError extends Error {
+export class RuntimeGenerationStoreCloseError extends YieldableFrameworkError {
   readonly failures: readonly RuntimeGenerationCloseFailure[];
 
   constructor(failures: readonly RuntimeGenerationCloseFailure[]) {
@@ -118,7 +119,7 @@ export type RuntimeGenerationStoreErrorCode =
   | 'RUNTIME_GENERATION_NOT_FOUND'
   | 'RUNTIME_GENERATION_SUPERSEDED';
 
-export class RuntimeGenerationStoreError extends Error {
+export class RuntimeGenerationStoreError extends YieldableFrameworkError {
   readonly code: RuntimeGenerationStoreErrorCode;
 
   constructor(code: RuntimeGenerationStoreErrorCode, message: string) {
