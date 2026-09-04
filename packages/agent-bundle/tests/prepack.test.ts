@@ -211,13 +211,58 @@ it('reports installed dependencies no packed JavaScript imports as AB7014, per f
   },
   async () => {
     const reported = withCode(await diagnostics(), 'AB7014');
-    // One diagnostic per field; devDependencies never reach a consumer and optional peers are never installed.
+    // One diagnostic per field; devDependencies never reach a consumer and optional peers are never installed, so
+    // nothing has to use optional-host.
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*"effect", "zod"/u),
       expect.stringMatching(/^package\.json peerDependencies .*"react"/u),
     ]);
     expect(reported.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
     expect(reported[0]?.recovery).toContain('devDependencies');
+  },
+));
+
+it('reports an optional peer only for a protocol npm cannot parse, which fails the install before any fetch', () => withPackageDocument(
+  (document) => {
+    document.peerDependencies = { 'git-peer': 'github:owner/git-peer', 'workspace-peer': 'workspace:*', 'typo-peer': 'foo:bar' };
+    document.peerDependenciesMeta = {
+      'git-peer': { optional: true },
+      'typo-peer': { optional: true },
+      'workspace-peer': { optional: true },
+    };
+  },
+  async () => {
+    const [reported] = withCode(await diagnostics(), 'AB7015');
+    // npm never fetches an optional peer, so its git source is harmless; it still parses the specifier.
+    expect(reported?.message).toMatch(/^package\.json peerDependencies .*"typo-peer" -> "foo:bar", "workspace-peer" -> "workspace:\*"/u);
+    expect(reported?.message).not.toContain('"git-peer"');
+    expect(reported?.severity).toBe('error');
+    expect(withCode(await diagnostics(), 'AB7014')).toHaveLength(0);
+    // A packer that rewrites workspace protocols leaves only the typo.
+    expect(withCode(await diagnostics(result.pack, true), 'AB7015')[0]?.message).not.toContain('"workspace-peer"');
+  },
+));
+
+it('accepts a package loaded through a createRequire() binding, literal or computed', () => withPackageDocument(
+  (document) => { document.dependencies = { 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'aliased.mjs');
+    await writeFile(consumer, [
+      'import { createRequire } from "node:module";',
+      'const load = createRequire(import.meta.url);',
+      'export const driver = load("driver-package");',
+      '',
+    ].join('\n'));
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/aliased.mjs' }] };
+      const [reported] = withCode(await diagnostics(pack), 'AB7014');
+      expect(reported?.message).toContain('"never-loaded"');
+      expect(reported?.message).not.toContain('"driver-package"');
+      await writeFile(consumer, 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const any = (name) => load(name);\n');
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
   },
 ));
 

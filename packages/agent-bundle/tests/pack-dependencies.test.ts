@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import {
   declaredDependencies,
+  isNpmParseable,
   isRegistrySpecifier,
   isWorkspaceProtocol,
   declarationSpecifiers,
@@ -52,8 +53,30 @@ it.each([
   ['~/vendor/dep', false],
   ['C:\\vendor\\dep', false],
   ['c:/vendor/dep', false],
+  // Schemes npm cannot parse at all (EUNSUPPORTEDPROTOCOL), including a typo.
+  ['foo:bar', false],
+  ['jsr:@scope/name', false],
+  ['npm:name@foo:bar', false],
 ])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
   expect(isRegistrySpecifier(specifier)).toBe(registry);
+});
+
+it.each([
+  ['^1.2.3', true],
+  ['latest', true],
+  ['npm:name@^1', true],
+  ['github:owner/repo', true],
+  ['git+ssh://git@github.com/owner/repo.git', true],
+  ['https://example.test/name.tgz', true],
+  ['file:../local', true],
+  ['C:\\vendor\\dep', true],
+  ['workspace:*', false],
+  ['catalog:', false],
+  ['link:../local', false],
+  ['portal:../local', false],
+  ['foo:bar', false],
+])('isNpmParseable(%j) is %s', (specifier, parseable) => {
+  expect(isNpmParseable(specifier)).toBe(parseable);
 });
 
 it('tells workspace protocols apart and knows which packers rewrite them', () => {
@@ -108,7 +131,7 @@ it.each([
   expect(declarationSpecifiers(source)).toEqual(specifiers);
 });
 
-it('lists installed-dependency fields only, skipping non-string specifiers and optional peers', () => {
+it('lists installed-dependency fields only, skipping non-string specifiers; optional peers are kept but not installed', () => {
   expect(declaredDependencies({
     dependencies: { a: '^1', broken: 1 },
     devDependencies: { ignored: '^1' },
@@ -116,8 +139,9 @@ it('lists installed-dependency fields only, skipping non-string specifiers and o
     peerDependencies: { b: 'workspace:*', optional: '^2' },
     peerDependenciesMeta: { optional: { optional: true } },
   })).toEqual([
-    { bundled: false, field: 'dependencies', name: 'a', specifier: '^1' },
-    { bundled: false, field: 'peerDependencies', name: 'b', specifier: 'workspace:*' },
+    { bundled: false, field: 'dependencies', installed: true, name: 'a', specifier: '^1' },
+    { bundled: false, field: 'peerDependencies', installed: true, name: 'b', specifier: 'workspace:*' },
+    { bundled: false, field: 'peerDependencies', installed: false, name: 'optional', specifier: '^2' },
   ]);
 });
 
@@ -126,8 +150,8 @@ it('lets an optionalDependencies entry supersede the same name under dependencie
     dependencies: { both: 'file:../both', only: '^1' },
     optionalDependencies: { both: '^2' },
   })).toEqual([
-    { bundled: false, field: 'dependencies', name: 'only', specifier: '^1' },
-    { bundled: false, field: 'optionalDependencies', name: 'both', specifier: '^2' },
+    { bundled: false, field: 'dependencies', installed: true, name: 'only', specifier: '^1' },
+    { bundled: false, field: 'optionalDependencies', installed: true, name: 'both', specifier: '^2' },
   ]);
 });
 

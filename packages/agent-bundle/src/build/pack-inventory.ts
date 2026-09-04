@@ -13,6 +13,7 @@ import { parseArtifactManifest } from './manifest.ts';
 import {
   declaredDependencies,
   importedPackageNames,
+  isNpmParseable,
   isRegistrySpecifier,
   isWorkspaceProtocol,
   type DeclaredDependency,
@@ -156,16 +157,20 @@ const dependencyDiagnostics = async (options: {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
   const imported = await importedPackageNames({
-    declared: declared.map((dependency) => dependency.name),
+    declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
     packageDocument: options.packageDocument,
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
   });
+  // A consumer's install fails on a workspace protocol the packer leaves in place, on a fetch npm refuses
+  // (installed entries only), or on a scheme npm cannot parse — which it reads even for a peer it never installs.
   const unresolvable = declared.filter((dependency) => !dependency.bundled && (isWorkspaceProtocol(dependency.specifier)
     ? !options.packerRewritesWorkspaceProtocols
-    : !isRegistrySpecifier(dependency.specifier)));
+    : dependency.installed ? !isRegistrySpecifier(dependency.specifier) : !isNpmParseable(dependency.specifier)));
   // A computed import() may load any declared package; nothing can then be called unused.
-  const unused = imported.complete ? declared.filter((dependency) => !imported.names.has(dependency.name)) : [];
+  const unused = imported.complete
+    ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))
+    : [];
   return [
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',

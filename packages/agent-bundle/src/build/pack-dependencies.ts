@@ -33,9 +33,15 @@ export interface DeclaredDependency {
   readonly specifier: string;
   /** Embedded in the tarball by npm (`bundleDependencies`), so a consumer never fetches its specifier. */
   readonly bundled: boolean;
+  /**
+   * Fetched for a consumer. `false` for a peer `peerDependenciesMeta` marks
+   * optional: npm parses its specifier — an unsupported protocol still fails
+   * the install — but never installs it, so no packed file has to use it.
+   */
+  readonly installed: boolean;
 }
 
-/** Peers `peerDependenciesMeta` marks optional: npm never installs them, so they are not installed dependencies. */
+/** Peers `peerDependenciesMeta` marks optional: npm parses but never installs them. */
 const optionalPeers = (packageDocument: Readonly<Record<string, unknown>>): ReadonlySet<string> => {
   const meta = packageDocument.peerDependenciesMeta;
   return new Set(isRecord(meta)
@@ -59,10 +65,10 @@ const bundledDependencies = (
 };
 
 /**
- * The entries npm installs for a consumer, one per name and field. A name in
- * both `dependencies` and `optionalDependencies` is the optional entry (npm
- * lets the optional declaration override); optional peers are never
- * installed and are dropped.
+ * The entries a consumer's npm reads, one per name and field. A name in both
+ * `dependencies` and `optionalDependencies` is the optional entry (npm lets
+ * the optional declaration override); an optional peer is kept, not
+ * `installed`.
  */
 export const declaredDependencies = (packageDocument: Readonly<Record<string, unknown>>): readonly DeclaredDependency[] => {
   const skippedPeers = optionalPeers(packageDocument);
@@ -72,11 +78,15 @@ export const declaredDependencies = (packageDocument: Readonly<Record<string, un
     return isRecord(value) ? Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string') : [];
   };
   const optional = new Set(entries('optionalDependencies').map(([name]) => name));
-  const superseded = (field: InstalledDependencyField, name: string): boolean =>
-    (field === 'dependencies' && optional.has(name)) || (field === 'peerDependencies' && skippedPeers.has(name));
   return installedDependencyFields.flatMap((field) => entries(field)
-    .filter(([name]) => !superseded(field, name))
-    .map(([name, specifier]) => ({ field, name, specifier, bundled: bundled(field, name) })));
+    .filter(([name]) => !(field === 'dependencies' && optional.has(name)))
+    .map(([name, specifier]) => ({
+      field,
+      name,
+      specifier,
+      bundled: bundled(field, name),
+      installed: !(field === 'peerDependencies' && skippedPeers.has(name)),
+    })));
 };
 
 /** Relative, package-imports (`#`), absolute, and URL-scheme specifiers (`node:`, `data:`, `file:`, `C:\`) name no package. */
@@ -114,6 +124,23 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
   /^(?:pnpm|yarn|bun)\//u.test(packerUserAgent ?? '');
 
 /**
+ * The specifier schemes npm can parse at all. Anything else with a scheme —
+ * `workspace:`, `catalog:`, `link:`, `portal:`, or a typo — fails every
+ * consumer with `EUNSUPPORTEDPROTOCOL` before npm fetches anything, even for
+ * a peer it would never install.
+ */
+const npmScheme = /^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file|npm):/iu;
+const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
+
+/** Whether npm parses this specifier; a Windows drive path (`c:\…`) is a path, not a scheme. */
+export const isNpmParseable = (specifier: string): boolean => {
+  const trimmed = specifier.trim();
+  return !anyScheme.test(trimmed) || npmScheme.test(trimmed) || windowsDrivePath.test(trimmed);
+};
+
+const windowsDrivePath = /^[a-z]:[\\/]/iu;
+
+/**
  * Everything npm fetches as `git` or `remote`, or reads from disk: the forms
  * npm 12 refuses by default (`allow-git=none`, `allow-remote=none`) so a
  * consumer's `npm install` of the published package fails before any code
@@ -121,17 +148,18 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
  * `/`, and a tilde range (`~1.2.3`) is followed by a digit, never a slash.
  */
 const nonRegistrySpecifier = new RegExp([
-  String.raw`^(?:git\+[a-z]+|git|github|gitlab|bitbucket|gist|https?|file|link|portal):`,
+  String.raw`^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file):`,
   String.raw`^[^\s@]+@[^\s:]+:`, // scp-style git@host:path
-  String.raw`^[a-z]:[\\/]`, // Windows drive path
+  windowsDrivePath.source,
   String.raw`^(?:\.|/|~[\\/])`, // relative, absolute, or home path
   String.raw`^[^\s@/]+/[^\s/]+$`, // owner/repo[#ref] GitHub shorthand
 ].join('|'), 'iu');
 
 /**
  * Whether a consumer's npm resolves this dependency specifier, as written,
- * through a package registry. A workspace protocol is not one; whether the
- * packer rewrites it first is the caller's policy (`isWorkspaceProtocol`).
+ * through a package registry: parseable, and neither a fetch npm refuses nor
+ * a path. A workspace protocol is not one; whether the packer rewrites it
+ * first is the caller's policy (`isWorkspaceProtocol`).
  */
 export const isRegistrySpecifier = (specifier: string): boolean => {
   const trimmed = specifier.trim();
@@ -140,7 +168,7 @@ export const isRegistrySpecifier = (specifier: string): boolean => {
     const target = alias.groups?.target;
     return target === undefined || target === '' || (!target.startsWith('npm:') && isRegistrySpecifier(target));
   }
-  return !(workspaceProtocol.test(trimmed) || nonRegistrySpecifier.test(trimmed));
+  return isNpmParseable(trimmed) && !nonRegistrySpecifier.test(trimmed);
 };
 
 /** A single- or double-quoted string literal; the group after the opening quote is its body. */
@@ -156,7 +184,8 @@ const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
  * as imported, never as unused, so the pattern errs toward keeping a
  * declaration.
  */
-const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
+const literalLoad = (loaders: readonly string[]): RegExp =>
+  new RegExp(String.raw`(?:\b(?:${loaders.join('|')})|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
 
 /**
  * A CommonJS load or resolution whose argument is not a string literal —
@@ -167,11 +196,24 @@ const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quot
  * no word boundary before `require` and never match; `path.resolve(x)` and
  * `Promise.resolve(x)` are not resolution and never match.
  */
-const computedLoad = new RegExp(
-  String.raw`(?:\brequire(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*`
+const computedLoad = (loaders: readonly string[]): RegExp => new RegExp(
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*`
     + String.raw`(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
   'u',
 );
+
+/** `const load = createRequire(…)`: the binding is a loader, called like `require` from then on. */
+const createRequireBinding = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*createRequire\s*[(]/gu;
+
+/**
+ * The identifiers a file loads packages through: `require` itself plus every
+ * name bound to a `createRequire(…)` result, so `const load =
+ * createRequire(import.meta.url); load("driver")` counts like `require("driver")`.
+ */
+const loaderNames = (source: string): readonly string[] => [
+  'require',
+  ...Array.from(source.matchAll(createRequireBinding), (match) => (match[1] ?? '').replace(/\$/gu, String.raw`\$`)),
+];
 
 /**
  * Every module specifier a declaration file resolves: `from "…"`,
@@ -222,12 +264,13 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
     // Syntax is another gate's concern; skipping can only keep a declaration.
     imports = [];
   }
+  const loaders = loaderNames(source);
   return {
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad.test(source),
+      && !computedLoad(loaders).test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-      ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),
+      ...Array.from(source.matchAll(literalLoad(loaders)), (match) => match[2] ?? ''),
     ],
   };
 };

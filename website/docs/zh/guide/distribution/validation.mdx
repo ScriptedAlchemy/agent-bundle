@@ -170,13 +170,13 @@ npx agent-bundle prepack --root . --output artifact --json
 | `AB7011` | 磁盘上的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成的宿主包。 |
 | `AB7012` | 某个 `package.json` bin 指向了打包后的 `dist` 输出之外（包括 `src/`），或指名了一个被 npm 忽略的文件。请把它指向生成的 `dist/bin` 文件。 |
 | `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
-| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段里列出的包，没有任何打包后的 JavaScript 导入或 require，也没有任何打包后的声明文件引用（每个字段一条诊断；可选 peer 会被跳过，`optionalDependencies` 中的同名项优先于 `dependencies`）。每位消费者都会白白安装它们。请把仅构建期需要的包移到 `devDependencies`。 |
-| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项不经由注册表解析：git 或 GitHub 简写来源、`http(s):` tarball，或 `file:`/`link:`/相对路径。npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），因此消费者无法安装该包；`optionalDependencies` 中的项只发出警告而不会失败，因为 npm 在无法抓取可选依赖时会继续安装。`workspace:`/`catalog:` 同样会被报告，除非是 pnpm、Yarn 或 Bun 在执行打包并会重写它们；`bundleDependencies` 中的项（peer 除外）不会被报告，`npm:` 别名按其目标判断。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
+| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段里列出的包，没有任何打包后的 JavaScript 导入或 require，也没有任何打包后的声明文件引用（每个字段一条诊断；可选 peer 在此被跳过，但其说明符仍由 `AB7015` 检查，`optionalDependencies` 中的同名项优先于 `dependencies`）。每位消费者都会白白安装它们。请把仅构建期需要的包移到 `devDependencies`。 |
+| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项不经由注册表解析：git 或 GitHub 简写来源、`http(s):` tarball，`file:`/相对路径，或 npm 根本无法解析的协议（`link:`、`portal:`、拼写错误），后者会让每位消费者以 `EUNSUPPORTEDPROTOCOL` 失败，因此即使出现在可选 peer 上也会被报告。npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），因此消费者无法安装该包；`optionalDependencies` 中的项只发出警告而不会失败，因为 npm 在无法抓取可选依赖时会继续安装。`workspace:`/`catalog:` 同样会被报告，除非是 pnpm、Yarn 或 Bun 在执行打包并会重写它们；`bundleDependencies` 中的项（peer 除外）不会被报告，`npm:` 别名按其目标判断。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
 
 依赖证据直接读取自打包后的字节：npm 将发布的每个 `.js`/`.mjs`/`.cjs` 文件都会被词法分析出 `import`
-说明符，并扫描字面量 `require("…")` 与 `.resolve("…")` 调用；每个打包后的 `.d.ts` 会被扫描其类型所引用的模块（`/// <reference types>` 指令同时计入该包及其
+说明符，并扫描字面量 `require("…")` 与 `.resolve("…")` 调用（`createRequire(…)` 的绑定视同 `require`）；每个打包后的 `.d.ts` 会被扫描其类型所引用的模块（`/// <reference types>` 指令同时计入该包及其
 `@types/*` 对应包）。说明符归约为包名，忽略 Node 内建模块。`#子路径` 导入计入 `imports` 映射所指向的每个包；消费者侧安装脚本点名（或运行其 `bin` 命令）的依赖
-视为已使用。打包代码中的计算型 `import(表达式)` 或 `require(表达式)`（同样包括 `require.resolve`、`import.meta.resolve` 或直接的 `createRequire(…)(…)`）可能加载任何已声明的包，因此会整体撤回 `AB7014`。注释中的提及只会保留某个依赖，绝不会报告它；`devDependencies` 永不检查，
+视为已使用。打包代码中的计算型 `import(表达式)` 或 `require(表达式)`（同样包括 `require.resolve`、`import.meta.resolve`、直接的 `createRequire(…)(…)` 或 `createRequire` 绑定）可能加载任何已声明的包，因此会整体撤回 `AB7014`。注释中的提及只会保留某个依赖，绝不会报告它；`devDependencies` 永不检查，
 `npm:` 别名在其目标是注册表说明符时才视为注册表说明符。
 
 发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带
