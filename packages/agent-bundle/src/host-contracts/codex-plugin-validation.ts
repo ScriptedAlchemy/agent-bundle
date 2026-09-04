@@ -26,7 +26,7 @@ import {
 // Imported last on purpose: see the matching note in `src/api.ts` — the
 // position of `effect/lift.ts` in the module graph keeps the emitted hook
 // bundles byte-identical.
-import { runWithPlatform } from '../effect/platform.ts';
+import { runWithPlatform, scopedTempDirectory } from '../effect/platform.ts';
 import { liftPromise } from '../effect/lift.ts';
 
 const maximumOutputBytes = 1024 * 1024;
@@ -276,8 +276,7 @@ const schemaGenerationDiagnostics = (
     readonly version: string | undefined;
   }>,
 ): Effect.Effect<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> => Effect.scoped(Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const outputDirectory = yield* fs.makeTempDirectoryScoped({ prefix: 'agent-bundle-codex-schema-' });
+  const outputDirectory = yield* scopedTempDirectory({ prefix: 'agent-bundle-codex-schema-' });
   const started = yield* liftPromise(() => options.run(Object.freeze({
     args: Object.freeze(['app-server', 'generate-json-schema', '--out', outputDirectory]),
     cwd: options.cwd,

@@ -7,7 +7,7 @@ import { describe, expect, it } from '@rstest/core';
 
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { liftPromise } from '../src/effect/lift.ts';
-import { platformLayer, runWithPlatform, unwrapPlatformError } from '../src/effect/platform.ts';
+import { platformLayer, runWithPlatform, scopedTempDirectory, unwrapPlatformError } from '../src/effect/platform.ts';
 import * as devApi from '../src/dev/index.ts';
 import * as rootApi from '../src/index.ts';
 
@@ -64,7 +64,7 @@ describe('effect platform layer (agent-bundle)', () => {
     try {
       const directory = await runWithPlatform(Effect.scoped(Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const created = yield* fs.makeTempDirectoryScoped({ directory: parent, prefix: '.staging-' });
+        const created = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
         expect(created.startsWith(join(parent, '.staging-'))).toBe(true);
         yield* fs.writeFileString(join(created, 'manifest.json'), '{}');
         yield* Effect.promise(() => access(created));
@@ -82,8 +82,7 @@ describe('effect platform layer (agent-bundle)', () => {
     const failure = new DiagnosticError([{ code: 'AB7200', message: 'rebuild failed', severity: 'error' }]);
     try {
       await expect(runWithPlatform(Effect.scoped(Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        directory = yield* fs.makeTempDirectoryScoped({ directory: parent, prefix: '.staging-' });
+        directory = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
         yield* liftPromise(() => Promise.reject(failure));
       })))).rejects.toBe(failure);
       expect(directory).toBeDefined();
@@ -93,11 +92,25 @@ describe('effect platform layer (agent-bundle)', () => {
     }
   });
 
+  it('keeps the result when the operation already removed its scoped temp directory', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
+    try {
+      const result = await runWithPlatform(Effect.scoped(Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const created = yield* scopedTempDirectory({ directory: parent, prefix: '.staging-' });
+        yield* fs.remove(created, { recursive: true });
+        return 'settled';
+      })));
+      expect(result).toBe('settled');
+    } finally {
+      await rm(parent, { force: true, recursive: true });
+    }
+  });
+
   it('throws the Node error when the temp directory cannot be created', async () => {
     const missingParent = join(tmpdir(), 'agent-bundle-platform-missing', String(process.pid));
     await expect(runWithPlatform(Effect.scoped(Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return yield* fs.makeTempDirectoryScoped({ directory: missingParent, prefix: '.staging-' });
+      return yield* scopedTempDirectory({ directory: missingParent, prefix: '.staging-' });
     })))).rejects.toMatchObject({ code: 'ENOENT', syscall: 'mkdtemp' });
   });
 });

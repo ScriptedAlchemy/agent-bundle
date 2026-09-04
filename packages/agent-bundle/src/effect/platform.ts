@@ -1,5 +1,5 @@
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, type Layer } from 'effect';
+import { Effect, FileSystem, type Layer, type Scope } from 'effect';
 import { PlatformError } from 'effect/PlatformError';
 
 import { runPromise, type RunPromiseOptions } from './boundary.ts';
@@ -35,6 +35,27 @@ export const unwrapPlatformError = <E>(error: E): Exclude<E, PlatformError> | Er
   error instanceof PlatformError
     ? (error.cause instanceof Error ? error.cause : error)
     : (error as Exclude<E, PlatformError>);
+
+/**
+ * A temporary directory that lives exactly as long as the enclosing scope,
+ * with the `rm(dir, { recursive: true, force: true })` finalizer the
+ * `try`/`finally` sites had before they moved onto Effect. rc.112's own
+ * `makeTempDirectoryScoped` finalizes without `force`, so an operation that
+ * removes (or renames away) its own staging directory would die with ENOENT
+ * at scope close and reject a call that had already succeeded. A finalizer
+ * failure other than "already gone" is still a defect, as the `finally`
+ * throw was.
+ */
+export const scopedTempDirectory = (
+  options?: { readonly directory?: string; readonly prefix?: string },
+): Effect.Effect<string, PlatformError, FileSystem.FileSystem | Scope.Scope> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* Effect.acquireRelease(
+      fs.makeTempDirectory(options),
+      (directory) => Effect.orDie(fs.remove(directory, { force: true, recursive: true })),
+    );
+  });
 
 /**
  * Run a platform-dependent Effect program at a Promise edge. Same failure

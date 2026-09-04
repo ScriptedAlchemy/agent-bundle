@@ -2,7 +2,7 @@ import { execFile as executeFile } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { Effect, FileSystem } from 'effect';
+import { Effect } from 'effect';
 
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
@@ -166,7 +166,7 @@ import {
 // Imported after the service modules on purpose: the position of
 // `effect/lift.ts` in the module graph fixes its position in the emitted
 // hook bundles, and this order keeps those bundles byte-identical.
-import { runWithPlatform } from './effect/platform.ts';
+import { runWithPlatform, scopedTempDirectory } from './effect/platform.ts';
 import { liftPromise } from './effect/lift.ts';
 
 export {
@@ -579,8 +579,7 @@ const temporaryArtifact = async <Result>(
   // to the project (same filesystem as a real `artifact/`), removed when the
   // build or the operation settles, success or failure.
   return runWithPlatform(Effect.scoped(Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const artifact = yield* fs.makeTempDirectoryScoped({
+    const artifact = yield* scopedTempDirectory({
       directory: resolve(options.root),
       prefix: '.agent-bundle-artifact-',
     });
