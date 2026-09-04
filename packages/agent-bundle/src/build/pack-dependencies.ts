@@ -390,6 +390,31 @@ const loaderNames = (source: string): readonly string[] => [
 ];
 
 /**
+ * JavaScript comments and string literals, each replaced by a space: the
+ * text that is not code. Bundled docblocks are prose ("may fail, require
+ * Effect services"), and a scan for a bare identifier has to skip them.
+ * Regular-expression literals are not recognised; one containing a quote
+ * can misalign the strings after it on the same line, which at worst hides
+ * or invents a bare reference there.
+ */
+const codeOnly = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\[\s\S])*`/gu, ' ');
+
+/**
+ * A loader passed on as a value rather than called — `const load = require`,
+ * `fn(require)`, `[require]`, `{ require }`, `module.exports = require`,
+ * `return require`, `x ? require : y` — after which packages may be loaded
+ * under a name this scan never sees, so the file's evidence is incomplete
+ * like a computed load's. A call (`require("x")`), a property access
+ * (`require.resolve`), and `typeof require` pass nothing on and never match.
+ * Run on `codeOnly` text, so a mention in a comment or string is not one.
+ */
+const loaderReference = (loaders: readonly string[]): RegExp => new RegExp(
+  String.raw`(?:=>|\breturn|[=(,[{:?|&])\s*\b(?:${loaders.join('|')})\b\s*(?=[;,)\]}:]|$)`,
+  'mu',
+);
+
+/**
  * Every module specifier a declaration file resolves: `from "…"`,
  * `import("…")`, `import x = require("…")`, `declare module "…"` (an
  * augmentation of that package's types, in an external-module declaration),
@@ -441,7 +466,7 @@ interface FileEvidence {
   readonly specifiers: readonly string[];
   /** Dependencies the file runs as executables rather than loading as modules. */
   readonly executed: readonly string[];
-  /** `false` when a computed `import(expression)` means the file may load a package no literal names. */
+  /** `false` when a computed `import(expression)` or `require(expression)`, or a `require` passed on as a value, means the file may load a package no literal names. */
   readonly complete: boolean;
 }
 
@@ -476,7 +501,8 @@ const javaScriptEvidence = async (bytes: Buffer, executables: ExecutableCommands
   const factories = factoryNames(source);
   return {
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad(loaders, factories).test(source),
+      && !computedLoad(loaders, factories).test(source)
+      && !loaderReference(loaders).test(codeOnly(source)),
     executed: [...executables]
       .filter(([, { commands, known }]) => known && commands.some((command) => commandLiteral(command).test(source)))
       .map(([name]) => name),
@@ -642,8 +668,10 @@ const installScriptMentions = (text: string, executables: ExecutableCommands): r
 };
 
 const shellOperators = new Set(['&&', '||', ';', '|', '&', '\n']);
-/** Words a shell command may start with before the command proper: environment assignments, options, and wrappers that exec their argument. */
-const commandPrefix = /^(?:[A-Za-z_][A-Za-z0-9_]*=|-|npx$|bunx$|cross-env$|env$|exec$|dotenv$|nice$|time$)/u;
+/** An environment assignment before the command proper (`FOO=1 node x`), also the form `cross-env` and `env` take: name, then value. */
+const environmentAssignment = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/u;
+/** Words a shell command may start with before the command proper, besides environment assignments: options, and wrappers that exec their argument. */
+const commandPrefix = /^(?:-|npx$|bunx$|cross-env$|env$|exec$|dotenv$|nice$|time$)/u;
 const packageManagers = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const execSubcommands = new Set(['exec', 'dlx', 'x']);
 /** npm's `run` and its aliases; each runs the script the first positional names. */
@@ -696,11 +724,13 @@ const leadingOptions = (
   return { options, positional: words.length };
 };
 
-/** One simple command of a shell script: what it runs, and the words after it. */
+/** One simple command of a shell script: what it runs, the words after it, and the environment set for it alone. */
 interface SimpleCommand {
   /** The command proper, the directory dropped from a path (`./node_modules/.bin/tsc` is `tsc`). */
   readonly command: string;
   readonly operands: readonly string[];
+  /** The assignments before the command (`NODE_OPTIONS=-r x node install.js`, `cross-env CI=1 tsc`), by variable name. */
+  readonly environment: ReadonlyMap<string, string>;
   /** The manifest script a package-manager command delegates to: `npm run setup`, `pnpm --filter pkg run setup`, `npm test`, `yarn start`. */
   readonly script: string | undefined;
 }
@@ -716,39 +746,44 @@ interface SimpleCommand {
  * positional as a command, the rest its operands. Any other subcommand is
  * the manager's own.
  */
-const managerCommand = (manager: string, args: readonly string[]): SimpleCommand => {
+const managerCommand = (manager: string, args: readonly string[], environment: ReadonlyMap<string, string>): SimpleCommand => {
   const sub = leadingOptions(args, valuedManagerOptions).positional;
   const subcommand = args[sub];
   const next = leadingOptions(args, valuedManagerOptions, sub + 1).positional;
   if (subcommand !== undefined && execSubcommands.has(subcommand) && next < args.length) {
-    return { command: posix.basename(args[next] as string), operands: args.slice(next + 1), script: undefined };
+    return { command: posix.basename(args[next] as string), environment, operands: args.slice(next + 1), script: undefined };
   }
   const script = subcommand === undefined
     ? undefined
     : runSubcommands.has(subcommand) ? args[next] : directScriptCommands.get(subcommand);
-  return { command: manager, operands: args.slice(sub + 1), script };
+  return { command: manager, environment, operands: args.slice(sub + 1), script };
 };
 
 /**
  * The simple commands of a shell script, one per operator-separated segment:
  * the first word after environment assignments and exec wrappers (`FOO=1 npx
  * tsc`, `pnpm exec -- tsc`, `cross-env CI=1 tsc`) is the command, the rest of
- * the segment its operands; a package manager's command is read by its own
- * grammar (`managerCommand`).
+ * the segment its operands, the assignments its environment; a package
+ * manager's command is read by its own grammar (`managerCommand`).
  */
 const simpleCommands = (text: string): readonly SimpleCommand[] => {
   const words = shellWords(text);
   const commands: SimpleCommand[] = [];
   let start = 0;
   const segment = (end: number): void => {
+    const environment = new Map<string, string>();
     let index = start;
-    while (index < end && commandPrefix.test(words[index] as string)) index += 1;
+    for (; index < end; index += 1) {
+      const assignment = environmentAssignment.exec(words[index] as string);
+      if (assignment !== null) environment.set(assignment[1] as string, assignment[2] as string);
+      else if (!commandPrefix.test(words[index] as string)) break;
+    }
     if (index >= end) return;
     const word = words[index] as string;
     const rest = words.slice(index + 1, end);
     commands.push(packageManagers.has(word)
-      ? managerCommand(word, rest)
-      : { command: posix.basename(word), operands: rest, script: undefined });
+      ? managerCommand(word, rest, environment)
+      : { command: posix.basename(word), environment, operands: rest, script: undefined });
   };
   words.forEach((word, index) => {
     if (!shellOperators.has(word)) return;
@@ -767,13 +802,22 @@ const simpleCommands = (text: string): readonly SimpleCommand[] => {
  */
 const installScriptText = (scripts: Readonly<Record<string, unknown>>): string => {
   const seen = new Set<string>();
+  /**
+   * The scripts npm runs for a delegated name: the script with its hooks, or
+   * nothing when there is no such script — except `restart`, which without a
+   * `restart` script runs `stop` then `start`, each with its hooks, inside
+   * `prerestart`/`postrestart`.
+   */
+  const lifecycle = (name: string): readonly string[] => {
+    if (Object.hasOwn(scripts, name)) return [`pre${name}`, name, `post${name}`];
+    return name === 'restart' ? ['prerestart', ...lifecycle('stop'), ...lifecycle('start'), 'postrestart'] : [];
+  };
   const visit = (name: string): void => {
     const body = scripts[name];
     if (seen.has(name) || typeof body !== 'string') return;
     seen.add(name);
     for (const { script } of simpleCommands(body)) {
-      if (script === undefined || !Object.hasOwn(scripts, script)) continue;
-      for (const hook of [`pre${script}`, script, `post${script}`]) visit(hook);
+      if (script !== undefined) for (const hook of lifecycle(script)) visit(hook);
     }
   };
   for (const script of installScripts) visit(script);
@@ -813,22 +857,27 @@ interface NodeCommand {
  * [arguments]`: options up to the first positional or a `--`, that positional
  * the program (an argument instead when `-e`/`-p` supply the program), and
  * nothing after it Node's (`node install.js --require x` passes `--require
- * x` to `install.js`).
+ * x` to `install.js`). A `NODE_OPTIONS` assignment on the same command
+ * (`NODE_OPTIONS=--require=x node install.js`, `cross-env NODE_OPTIONS="-r x"
+ * node .`) supplies options Node applies before the command line's; one
+ * exported by an earlier command is not read.
  */
-const nodeCommand = (operands: readonly string[]): NodeCommand => {
+const nodeCommand = ({ environment, operands }: SimpleCommand): NodeCommand => {
+  const inherited = leadingOptions(shellWords(environment.get('NODE_OPTIONS') ?? ''), valuedNodeOptions).options;
   const { options, positional } = leadingOptions(operands, valuedNodeOptions);
   const inline = options.some((option) => inlineOptions.test(option.name));
-  return { options, program: inline ? undefined : operands[positional] };
+  return { options: [...inherited, ...options], program: inline ? undefined : operands[positional] };
 };
 
 /**
  * The values a script gives one of `node`'s options, across every `node`
  * command in command position: `-r dotenv/config` or `--require=dotenv/config`
- * before the program; the same flag after it (`node install.js -r x`) or on
- * another command (`rm -r dist`) is never Node's.
+ * before the program, or in the command's `NODE_OPTIONS`; the same flag after
+ * the program (`node install.js -r x`) or on another command (`rm -r dist`)
+ * is never Node's.
  */
 const nodeOptionValues = (commands: readonly SimpleCommand[], options: RegExp): readonly string[] =>
-  commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => nodeCommand(operands).options
+  commands.filter(({ command }) => command === 'node').flatMap((command) => nodeCommand(command).options
     .flatMap(({ name, value }) => (options.test(name) && value !== undefined ? [value] : [])));
 
 /**
@@ -939,8 +988,8 @@ const packageDirectory = /^\.\/*$/u;
  */
 const installScriptFiles = (text: string, commands: readonly SimpleCommand[], modules: PackedModules): readonly string[] => [
   ...shellWords(text).filter((word) => word !== '' && !packageDirectory.test(word)),
-  ...commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => {
-    const { program } = nodeCommand(operands);
+  ...commands.filter(({ command }) => command === 'node').flatMap((command) => {
+    const { program } = nodeCommand(command);
     return program !== undefined && packageDirectory.test(program) ? [program] : [];
   }),
 ].flatMap((word) => {

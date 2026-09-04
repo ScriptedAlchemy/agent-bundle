@@ -356,7 +356,8 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       // through a wildcard `imports` entry mapped to the package's own file, and through a directory whose packed
       // manifest names its `main`. An inline `node -e` program that requires a package needs it too — its quotes
       // escaped for the shell — as do the modules `node` preloads — a bare `-r` package and a packed `--import=`
-      // file, behind the valued `--conditions` option — before running `.`, the root `main`.
+      // file, behind the valued `--conditions` option — before running `.`, the root `main`, and the one a
+      // `NODE_OPTIONS=--require=…` assignment on the `node` command preloads.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'newline-tool': 'github:owner/newline-tool',
       'optional-driver': 'github:owner/optional-driver',
@@ -367,6 +368,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       'optional-preload': 'github:owner/optional-preload',
       'optional-imported': 'github:owner/optional-imported',
       'optional-root': 'github:owner/optional-root',
+      'optional-env-preload': 'github:owner/optional-env-preload',
       // Merely mentioned by the script — an `echo` argument; the operand of `rm -r`, whose `-r` is not Node's
       // preload option; and the value of a `--require` after the program, which Node hands to the program as an
       // argument — so npm's skipping them breaks nothing: a warning.
@@ -383,8 +385,11 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.main = './scripts/root-setup.cjs';
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
-      postinstall: 'echo start\nnewline-tool --init && setup-tool --init && node scripts/install --require optional-argument && npm test',
-      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\\"optional-inline\\")"'
+      postinstall: 'echo start\nnewline-tool --init && setup-tool --init'
+        + ' && NODE_OPTIONS=--require=optional-env-preload node scripts/install --require optional-argument && npm test',
+      // A `NODE_OPTIONS` that preloads nothing, set through `cross-env`, changes nothing about the command it precedes.
+      test: 'cross-env NODE_OPTIONS="--max-old-space-size=4096" node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned'
+        + ' && node -e "require(\\"optional-inline\\")"'
         + ' && rm -r optional-removed && node --conditions react-server -r optional-preload/register --import="./scripts/preload.mjs" .',
     };
   },
@@ -428,7 +433,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-imported" -> "github:owner\/optional-imported", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-preload" -> "github:owner\/optional-preload", "optional-root" -> "github:owner\/optional-root", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-env-preload" -> "github:owner\/optional-env-preload", "optional-hook" -> "github:owner\/optional-hook", "optional-imported" -> "github:owner\/optional-imported", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-preload" -> "github:owner\/optional-preload", "optional-root" -> "github:owner\/optional-root", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"optional-argument" -> "github:owner\/optional-argument", "optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
@@ -440,7 +445,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     }
     for (const name of [
       'setup-tool', 'newline-tool', 'optional-driver', 'optional-tester', 'optional-hook', 'optional-main', 'optional-inline',
-      'optional-preload', 'optional-imported', 'optional-root',
+      'optional-preload', 'optional-imported', 'optional-root', 'optional-env-preload',
     ]) {
       expect(reported[2]?.message).not.toContain(JSON.stringify(name));
     }
@@ -506,6 +511,49 @@ it.each([
   },
 ));
 
+it.each([
+  ['const load = require;', 'const load = require;\nmodule.exports = load("chosen-at-runtime");'],
+  ['fn(require)', 'module.exports = (fn) => fn(require);'],
+  ['module.exports = require', 'module.exports = require'],
+  ['[require]', 'module.exports = [require];'],
+  ['a ? require : b', 'module.exports = typeof require === "function" ? require : null;'],
+  ['a createRequire() binding passed on', 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const use = (fn) => fn(load);'],
+])('withholds AB7014 when a loader is passed on as a value (%s), since it may load anything under another name', (_form, source) => withPackageDocument(
+  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'alias.mjs' : 'alias.cjs');
+    await writeFile(consumer, `${source}\n`);
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
+it.each([
+  ['require("…")', 'module.exports = require("node:path");'],
+  ['require.resolve("…")', 'module.exports = require.resolve("node:path");'],
+  ['typeof require', 'module.exports = typeof require;'],
+  ['the string "require"', 'module.exports = "require";'],
+  ['prose in comments', '/**\n * Use when a getter may fail, require\n * services, or run asynchronously.\n */\n// factory(module, require)\nmodule.exports = 1;'],
+  ['a bundler runtime named like require', 'const load = __webpack_require__;\nmodule.exports = load;'],
+])('still reports AB7014 when require is only called, resolved through, type-tested, or named in a string or comment (%s)', (_form, source) => withPackageDocument(
+  (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'not-alias.cjs');
+    await writeFile(consumer, `${source}\n`);
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/not-alias.cjs' }] };
+      const [reported] = withCode(await diagnostics(pack), 'AB7014');
+      expect(reported?.message).toContain('"never-loaded"');
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
 it('still reports AB7014 when the only resolve() calls are path or Promise resolution, literal or not', () => withPackageDocument(
   (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
   async () => {
@@ -541,6 +589,8 @@ it('accepts a dependency reached through a package imports map or run by a consu
       // Reached only through npm's direct script commands: `npm t` is `test` (and its `pretest`), `yarn start` is `start`.
       'test-runner': '^1.0.0',
       'server-starter': '^1.0.0',
+      // Reached only because `npm restart` without a `restart` script runs `stop` and `start`.
+      'server-stopper': '^1.0.0',
     };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
@@ -549,7 +599,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
       // options with values (`--prefix .`, `-w pkg`, pnpm's `--filter pkg`) and without (`--silent`), through npm's
       // `rum` alias, after a `--`, and with the script name quoted for the shell. Only the first positional after
       // `run` (or the direct command) is the script: `dormant`, with or without a `--` before it, is an argument.
-      postinstall: 'named-in-script --init && npm --silent --prefix . run setup dormant && npm t dormant',
+      postinstall: 'named-in-script --init && npm --silent --prefix . run setup dormant && npm t dormant && npm restart',
       setup: 'echo setup',
       presetup: 'pnpm --filter pkg rum typecheck',
       typecheck: 'tsc --version',
@@ -560,6 +610,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
       pretest: 'yarn start',
       test: 'test-runner --ci',
       start: 'server-starter',
+      stop: 'server-stopper',
     };
   },
   async () => {
@@ -587,6 +638,17 @@ it('accepts a dependency reached through a package imports map or run by a consu
       expect(reported?.message).not.toContain('"prepack-test-wrapper"');
       expect(reported?.message).not.toContain('"test-runner"');
       expect(reported?.message).not.toContain('"server-starter"');
+      expect(reported?.message).not.toContain('"server-stopper"');
+      // With a `restart` script present, `npm restart` runs it alone: `stop` is no longer reached (`start` still is,
+      // through `yarn start`).
+      await withPackageDocument(
+        (document) => { (document.scripts as Record<string, string>).restart = 'echo restart'; },
+        async () => {
+          const [withRestart] = withCode(await diagnostics(), 'AB7014');
+          expect(withRestart?.message).toContain('"server-stopper"');
+          expect(withRestart?.message).not.toContain('"server-starter"');
+        },
+      );
     } finally {
       await rm(wrapper, { force: true, recursive: true });
       await rm(consumer, { force: true });
