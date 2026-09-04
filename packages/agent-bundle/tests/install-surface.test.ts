@@ -103,15 +103,15 @@ it.each(['claude', 'codex', 'cursor', 'portable'])(
   },
 );
 
-it('emits the exact host uninstall commands the framework CLI itself runs', () => {
-  expect(writesFor('claude').get('INSTALL.md')).toContain(
-    'claude plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data\n'
-    + 'claude plugin marketplace remove install-fixture-marketplace',
-  );
-  expect(writesFor('codex').get('INSTALL.md')).toContain(
-    'codex plugin remove install-fixture@install-fixture-marketplace\n'
-    + 'codex plugin marketplace remove install-fixture-marketplace',
-  );
+it('emits the exact host uninstall commands the framework CLI itself runs, with marketplace removal gated on an inventory check', () => {
+  const claude = writesFor('claude').get('INSTALL.md')!;
+  expect(claude).toContain('```sh\nclaude plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data\n```');
+  // `plugin marketplace remove` applies to every scope, so it never sits in the same executable block.
+  expect(claude).not.toMatch(/--keep-data\nclaude plugin marketplace remove/u);
+  expect(claude).toMatch(/`claude plugin list` shows no other\nplugin from it in any scope or project[^\n]*:\n\n```sh\nclaude plugin marketplace remove install-fixture-marketplace\n```/u);
+  const codex = writesFor('codex').get('INSTALL.md')!;
+  expect(codex).toContain('```sh\ncodex plugin remove install-fixture@install-fixture-marketplace\n```');
+  expect(codex).toMatch(/`codex plugin list` shows no other\nplugin from it:\n\n```sh\ncodex plugin marketplace remove install-fixture-marketplace\n```/u);
 });
 
 it('emits a standalone safe-copy installer only for Cursor-compatible fallback profiles', () => {

@@ -233,7 +233,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       versioned: '^1.2.3',
       // npm publishes a workspace protocol verbatim; only pnpm, Yarn, and Bun rewrite it while packing.
       sibling: 'workspace:*',
+      // npm embeds bundled dependencies in the tarball; a consumer never fetches their specifier.
+      embedded: 'file:../embedded',
     };
+    document.bundleDependencies = ['embedded'];
     document.optionalDependencies = { scp: 'git@github.com:owner/repo.git' };
   },
   async () => {
@@ -245,7 +248,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
-    for (const name of ['alias', 'tilde', 'versioned']) {
+    for (const name of ['alias', 'tilde', 'versioned', 'embedded']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
     expect(reported[0]?.recovery).toContain('registry');
@@ -273,8 +276,10 @@ it('accepts a dependency that only packed declaration files reference', () => wi
   },
 ));
 
-it('accepts a dependency that packed JavaScript imports or requires', () => withPackageDocument(
-  (document) => { document.dependencies = { 'left-pad': '^1.3.0', '@scope/required': '^2.0.0' }; },
+it('accepts a dependency that packed JavaScript imports, requires, or only resolves', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { 'left-pad': '^1.3.0', '@scope/required': '^2.0.0', 'asset-pkg': '^1.0.0', 'tool-pkg': '^1.0.0' };
+  },
   async () => {
     const consumer = join(projectRoot, 'dist', 'consumer.mjs');
     await writeFile(consumer, [
@@ -282,8 +287,10 @@ it('accepts a dependency that packed JavaScript imports or requires', () => with
       'const { createRequire } = await import("node:module");',
       'const require = createRequire(import.meta.url);',
       'const required = require("@scope/required/subpath");',
+      'const asset = require.resolve("asset-pkg/package.json");',
+      'const tool = import.meta.resolve("tool-pkg/bin/tool");',
       '// import { Function } from "effect" -- a comment never counts.',
-      'export { leftPad, required };',
+      'export { leftPad, required, asset, tool };',
       '',
     ].join('\n'));
     try {

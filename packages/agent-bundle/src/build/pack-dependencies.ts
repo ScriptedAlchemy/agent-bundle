@@ -31,6 +31,8 @@ export interface DeclaredDependency {
   readonly field: InstalledDependencyField;
   readonly name: string;
   readonly specifier: string;
+  /** Embedded in the tarball by npm (`bundleDependencies`), so a consumer never fetches its specifier. */
+  readonly bundled: boolean;
 }
 
 /** Peers `peerDependenciesMeta` marks optional: npm never installs them, so they are not installed dependencies. */
@@ -41,16 +43,37 @@ const optionalPeers = (packageDocument: Readonly<Record<string, unknown>>): Read
     : []);
 };
 
+/**
+ * Which dependencies npm embeds under `node_modules` in the published tarball:
+ * `bundleDependencies` (or the `bundledDependencies` spelling) as a name list,
+ * or `true` for every entry of `dependencies`.
+ */
+const bundledDependencies = (packageDocument: Readonly<Record<string, unknown>>): ((name: string) => boolean) => {
+  const value = packageDocument.bundleDependencies ?? packageDocument.bundledDependencies;
+  if (value === true) return () => true;
+  const names = new Set(Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []);
+  return (name) => names.has(name);
+};
+
+/**
+ * The entries npm installs for a consumer, one per name and field. A name in
+ * both `dependencies` and `optionalDependencies` is the optional entry (npm
+ * lets the optional declaration override); optional peers are never
+ * installed and are dropped.
+ */
 export const declaredDependencies = (packageDocument: Readonly<Record<string, unknown>>): readonly DeclaredDependency[] => {
-  const skipped = optionalPeers(packageDocument);
-  return installedDependencyFields.flatMap((field) => {
+  const skippedPeers = optionalPeers(packageDocument);
+  const bundled = bundledDependencies(packageDocument);
+  const entries = (field: InstalledDependencyField): readonly (readonly [string, string])[] => {
     const value = packageDocument[field];
-    if (!isRecord(value)) return [];
-    return Object.entries(value)
-      .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-      .filter(([name]) => field !== 'peerDependencies' || !skipped.has(name))
-      .map(([name, specifier]) => ({ field, name, specifier }));
-  });
+    return isRecord(value) ? Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string') : [];
+  };
+  const optional = new Set(entries('optionalDependencies').map(([name]) => name));
+  const superseded = (field: InstalledDependencyField, name: string): boolean =>
+    (field === 'dependencies' && optional.has(name)) || (field === 'peerDependencies' && skippedPeers.has(name));
+  return installedDependencyFields.flatMap((field) => entries(field)
+    .filter(([name]) => !superseded(field, name))
+    .map(([name, specifier]) => ({ field, name, specifier, bundled: bundled(name) })));
 };
 
 /** Relative, package-imports (`#`), absolute, and URL-scheme specifiers (`node:`, `data:`, `file:`, `C:\`) name no package. */
@@ -112,13 +135,16 @@ export const isRegistrySpecifier = (specifier: string): boolean => {
 const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
 
 /**
- * A `require("…")` call with a literal argument. The ESM lexer reports
- * `import` forms only; CommonJS payloads a consumer prebuilt reach the
- * package through `require`. A match inside a comment or string can only
- * mark a dependency as imported, never as unused, so the pattern errs
- * toward keeping a declaration.
+ * A `require("…")` call, or a resolution-only use — `require.resolve("…")`,
+ * `createRequire(…).resolve("…")`, `import.meta.resolve("…")` — with a
+ * literal argument. The ESM lexer reports `import` forms only; CommonJS
+ * payloads a consumer prebuilt reach the package through `require`, and a
+ * package located only to find an asset or executable is still a runtime
+ * dependency. A match inside a comment or string can only mark a dependency
+ * as imported, never as unused, so the pattern errs toward keeping a
+ * declaration.
  */
-const requireCall = new RegExp(String.raw`\brequire\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
+const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
 
 /**
  * Every module specifier a declaration file resolves: `from "…"`,

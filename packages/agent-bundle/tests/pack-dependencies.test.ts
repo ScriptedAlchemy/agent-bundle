@@ -108,7 +108,27 @@ it('lists installed-dependency fields only, skipping non-string specifiers and o
     peerDependencies: { b: 'workspace:*', optional: '^2' },
     peerDependenciesMeta: { optional: { optional: true } },
   })).toEqual([
-    { field: 'dependencies', name: 'a', specifier: '^1' },
-    { field: 'peerDependencies', name: 'b', specifier: 'workspace:*' },
+    { bundled: false, field: 'dependencies', name: 'a', specifier: '^1' },
+    { bundled: false, field: 'peerDependencies', name: 'b', specifier: 'workspace:*' },
   ]);
+});
+
+it('lets an optionalDependencies entry supersede the same name under dependencies', () => {
+  expect(declaredDependencies({
+    dependencies: { both: 'file:../both', only: '^1' },
+    optionalDependencies: { both: '^2' },
+  })).toEqual([
+    { bundled: false, field: 'dependencies', name: 'only', specifier: '^1' },
+    { bundled: false, field: 'optionalDependencies', name: 'both', specifier: '^2' },
+  ]);
+});
+
+it('marks bundleDependencies entries, by name list or wholesale, as bundled', () => {
+  const dependencies = { embedded: 'file:../embedded', fetched: '^1' };
+  expect(declaredDependencies({ bundleDependencies: ['embedded'], dependencies }).map((d) => [d.name, d.bundled])).toEqual([
+    ['embedded', true],
+    ['fetched', false],
+  ]);
+  expect(declaredDependencies({ bundledDependencies: ['embedded'], dependencies }).map((d) => d.bundled)).toEqual([true, false]);
+  expect(declaredDependencies({ bundleDependencies: true, dependencies }).map((d) => d.bundled)).toEqual([true, true]);
 });

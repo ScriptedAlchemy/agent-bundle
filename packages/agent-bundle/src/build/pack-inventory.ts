@@ -160,9 +160,9 @@ const dependencyDiagnostics = async (options: {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
   const imported = await importedPackageNames({ paths: options.packedPaths, projectRoot: options.projectRoot });
-  const unresolvable = declared.filter((dependency) => isWorkspaceProtocol(dependency.specifier)
+  const unresolvable = declared.filter((dependency) => !dependency.bundled && (isWorkspaceProtocol(dependency.specifier)
     ? !options.packerRewritesWorkspaceProtocols
-    : !isRegistrySpecifier(dependency.specifier));
+    : !isRegistrySpecifier(dependency.specifier)));
   return [
     ...perField(declared.filter((dependency) => !imported.has(dependency.name)), (field, own) => diagnostic(
       'AB7014',

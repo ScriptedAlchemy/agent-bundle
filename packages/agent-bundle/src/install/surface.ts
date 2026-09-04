@@ -40,6 +40,22 @@ const optionalCliReinstall = (host: 'claude' | 'codex'): string[] => [
   '(alias `--force`) forces it.',
 ];
 
+/**
+ * `plugin marketplace remove` applies to every scope and every project at
+ * once, so it is never part of the executable uninstall block: the reader
+ * must first prove nothing else still installs from the marketplace, which is
+ * the inventory the framework's own uninstaller performs before it removes one.
+ */
+const marketplaceRemoval = (host: 'claude' | 'codex', model: NormalizedPlugin): string[] => [
+  `The marketplace \`${marketplaceName(model)}\` stays registered. Remove it only when \`${host} plugin list\` shows no other`,
+  `plugin from it${host === 'claude' ? ' in any scope or project (`plugin marketplace remove` applies to all of them)' : ''}:`,
+  '',
+  '```sh',
+  `${host} plugin marketplace remove ${marketplaceName(model)}`,
+  '```',
+  '',
+];
+
 /** Its uninstall twin: the CLI replays the recorded host-native removal. */
 const optionalCliUninstall = (host: 'claude' | 'codex'): string[] => [
   `With the optional \`agent-bundle\` CLI, \`agent-bundle uninstall ${host} --from ./ --plan\` prints exactly what`,
@@ -76,17 +92,18 @@ const claudeInstructions = (model: NormalizedPlugin): string[] => [
   '',
   '```sh',
   `claude plugin uninstall ${pluginId(model)} --scope user --keep-data`,
-  `claude plugin marketplace remove ${marketplaceName(model)}   # unless another installed plugin still uses it`,
   '```',
   '',
   'Match the scope the plugin was installed with (`user`, `project`, or `local`). `--keep-data` keeps durable',
   'runtime state (Claude orphans the cached copy, `state/` included, for its ~14-day grace period); omit it to',
   'remove `~/.claude/plugins/data/<id>/` immediately.',
   '',
+  ...marketplaceRemoval('claude', model),
   ...optionalCliUninstall('claude'),
   `\`agent-bundle install claude\` records a receipt at \`~/.claude/agent-bundle/receipts/${model.metadata.name}.${marketplaceName(model)}.user.json\``,
   '(or under `$CLAUDE_CONFIG_DIR`; `user` is the install scope, pass `--scope project` or `--scope local` to match',
-  'a scoped install), and `uninstall` consumes it, running the two commands above in order. Durable runtime state',
+  'a scoped install), and `uninstall` consumes it, running the two commands above in order and retaining the',
+  'marketplace while any other plugin, scope, or project still installs from it. Durable runtime state',
   'is kept by default; `--purge-data --confirm-purge` removes `state/` and `~/.claude/plugins/data/<id>/`',
   'immediately. A missing receipt or a cached copy that no longer matches it is refused unless `--force`; a',
   'second run is a `not-installed` no-op.',
@@ -120,12 +137,12 @@ const codexInstructions = (model: NormalizedPlugin): string[] => [
   '',
   '```sh',
   `codex plugin remove ${pluginId(model)}`,
-  `codex plugin marketplace remove ${marketplaceName(model)}   # unless another installed plugin still uses it`,
   '```',
   '',
   'Codex 0.147.0 deletes the cached plugin tree, `state/` included, on `plugin remove` and has no keep-data',
   'option.',
   '',
+  ...marketplaceRemoval('codex', model),
   ...optionalCliUninstall('codex'),
   `\`agent-bundle install codex\` records a receipt at \`~/.codex/agent-bundle/receipts/${model.metadata.name}.${marketplaceName(model)}.user.json\` (or`,
   'under `$CODEX_HOME`), and `uninstall` consumes it, running the two commands above in order. `--keep-data`',
