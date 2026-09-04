@@ -105,7 +105,7 @@ it('records exact immutable metadata for every built-in target', () => {
       {
         name: 'hooks',
         revision: '2.1.250',
-        sha256: '70cd71b42bf9f9e03e86dcffb82b50038f92605baadd2fbc12dda488502d5cd7',
+        sha256: '7535806f86481b89b628a0ccf8e34261e6f93163f562c2146ca8dbfe4d95766e',
       },
       {
         name: 'lsp',

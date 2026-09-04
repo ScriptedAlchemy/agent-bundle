@@ -84,7 +84,8 @@ Every host key is optional and every field inside it is optional. `claude` and `
 the shared `AgentBundleHostConfig`, whose single field `nativeHooks` names a project-authored,
 target-native hook document (`hooks.json`) the adapter validates and merges beside the compiled
 hooks. For Claude Code the pinned schema admits the documented handler contract: every hook event
-the hooks reference lists, the five handler types (`command`, `http`, `mcp_tool`, `prompt`,
+the pinned 2.1.250 host knows (the reference's list minus `PreModelSwitch` and `PostModelSwitch`,
+which require 2.1.251), the five handler types (`command`, `http`, `mcp_tool`, `prompt`,
 `agent`), their per-type fields (`args`, `async`, `shell`, `url`, `headers`, `server`, `tool`,
 `input`, `prompt`, `model`, …), and the common `if`, `once`, `statusMessage`, and `timeout`
 fields; unknown keys, a field of another handler type, and a prompt/agent/http handler on an event

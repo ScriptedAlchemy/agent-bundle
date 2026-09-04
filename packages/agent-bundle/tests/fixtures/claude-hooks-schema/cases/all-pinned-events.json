@@ -280,26 +280,6 @@
         ]
       }
     ],
-    "PreModelSwitch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo PreModelSwitch"
-          }
-        ]
-      }
-    ],
-    "PostModelSwitch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo PostModelSwitch"
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "hooks": [

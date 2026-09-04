@@ -14,11 +14,19 @@ import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 
 const fixtureRoot = new URL('./fixtures/claude-hooks-schema/', import.meta.url);
-/** The Claude CLI whose `plugin validate --strict --json` verdicts are recorded beside the cases. */
-const recordedCliVersion = '2.1.260';
+/**
+ * The Claude CLI the schema is pinned to (PROVENANCE.json observedCliVersion, the
+ * exact version CI installs); its `plugin validate --strict` verdicts must be
+ * recorded beside the cases. Reports from later releases may sit beside them.
+ */
+const pinnedCliVersion = schemaProvenance.observedCliVersion;
+/** The newest release recorded; the reference the schema is drawn from describes it. */
+const latestRecordedCliVersion = '2.1.260';
 const validate = createAdapterValidator().compile(hooksSchema);
 
 interface RecordedReport {
+  /** Present when the report was parsed from the text reporter (a CLI without `--json`). */
+  readonly reporter?: 'text';
   readonly contents: readonly {
     readonly errors: readonly { readonly message: string }[];
     readonly file: string;
@@ -61,10 +69,20 @@ const deliberateTightenings: Readonly<Record<string, string>> = {
   'url-on-command': 'closed per-type handler shape: `url` is an http-hook field.',
 };
 
+/**
+ * Cases the reference documents but the pinned host predates: the schema and the
+ * pinned CLI reject them, a later CLI accepts them, and admitting them waits for
+ * the re-pin that moves observedCliVersion past the gate.
+ */
+const newerThanPin: Readonly<Record<string, string>> = {
+  'model-switch-events': 'hooks reference "PreModelSwitch" / "PostModelSwitch": both require Claude Code v2.1.251 or later; 2.1.250 rejects the keys.',
+};
+
+/** The reference's "Hook events" minus PreModelSwitch and PostModelSwitch, which require v2.1.251 (newerThanPin). */
 const documentedEvents = [
   'ConfigChange', 'CwdChanged', 'DirectoryAdded', 'Elicitation', 'ElicitationResult', 'FileChanged', 'InstructionsLoaded',
-  'MessageDisplay', 'Notification', 'PermissionDenied', 'PermissionRequest', 'PostCompact', 'PostModelSwitch', 'PostToolBatch',
-  'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreModelSwitch', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Setup', 'Stop',
+  'MessageDisplay', 'Notification', 'PermissionDenied', 'PermissionRequest', 'PostCompact', 'PostToolBatch',
+  'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Setup', 'Stop',
   'StopFailure', 'SubagentStart', 'SubagentStop', 'TaskCompleted', 'TaskCreated', 'TeammateIdle', 'UserPromptExpansion',
   'UserPromptSubmit', 'WorktreeCreate', 'WorktreeRemove',
 ] as const;
@@ -77,24 +95,38 @@ const startupEvents = ['SessionStart', 'Setup'] as const;
 
 const handlerGroup = (handler: Readonly<Record<string, unknown>>): unknown => [{ hooks: [handler] }];
 
-it('agrees with the recorded Claude CLI verdict on every fixture except the recorded tightenings', async () => {
+it('agrees with the recorded verdict of the pinned Claude CLI and every later one on each fixture, except the recorded tightenings', async () => {
   const names = await caseNames();
   expect(names.length).toBeGreaterThan(40);
-  expect(await readdir(new URL('./reports/', fixtureRoot))).toEqual([recordedCliVersion]);
-  for (const tightening of Object.keys(deliberateTightenings)) expect(names).toContain(tightening);
+  const recordedVersions = (await readdir(new URL('./reports/', fixtureRoot))).sort();
+  expect(pinnedCliVersion).toBe('2.1.250');
+  expect(recordedVersions).toEqual([pinnedCliVersion, latestRecordedCliVersion]);
+  for (const tightening of [...Object.keys(deliberateTightenings), ...Object.keys(newerThanPin)]) expect(names).toContain(tightening);
 
-  for (const name of names) {
-    const document = await readJson<unknown>(`./cases/${name}.json`);
-    const report = await readJson<RecordedReport>(`./reports/${recordedCliVersion}/${name}.json`);
-    expect(report.strict, name).toBe(true);
-    const accepted = validate(document);
-    if (Object.hasOwn(deliberateTightenings, name)) {
-      expect(report.success, `${name}: a tightening must be a case Claude accepts`).toBe(true);
-      expect(accepted, `${name}: the schema must reject what the tightening describes`).toBe(false);
-      continue;
+  for (const version of recordedVersions) {
+    const pinned = version === pinnedCliVersion;
+    expect(await readdir(new URL(`./reports/${version}/`, fixtureRoot)), version).toEqual(names.map((name) => `${name}.json`));
+    for (const name of names) {
+      const document = await readJson<unknown>(`./cases/${name}.json`);
+      const report = await readJson<RecordedReport>(`./reports/${version}/${name}.json`);
+      const label = `${name} @ ${version}`;
+      expect(report.strict, label).toBe(true);
+      // 2.1.250 has no `--json`; its verdicts come from the text reporter.
+      expect(report.reporter, label).toBe(pinned ? 'text' : undefined);
+      const accepted = validate(document);
+      if (Object.hasOwn(deliberateTightenings, name)) {
+        expect(report.success, `${label}: a tightening must be a case Claude accepts`).toBe(true);
+        expect(accepted, `${label}: the schema must reject what the tightening describes`).toBe(false);
+        continue;
+      }
+      if (Object.hasOwn(newerThanPin, name)) {
+        expect(accepted, `${label}: the schema must not admit what the pinned host rejects`).toBe(false);
+        expect(report.success, `${label}: newer-than-pin cases are rejected by the pin and accepted after it`).toBe(!pinned);
+        continue;
+      }
+      expect(accepted, `${label}: schema=${accepted} claude=${report.success} ${JSON.stringify(validate.errors ?? report.contents)}`)
+        .toBe(report.success);
     }
-    expect(accepted, `${name}: schema=${accepted} claude=${report.success} ${JSON.stringify(validate.errors ?? report.contents)}`)
-      .toBe(report.success);
   }
 });
 
@@ -112,7 +144,7 @@ it('accepts every documented handler type and field, and every documented event,
     expect(fields.has(field), field).toBe(true);
   }
 
-  const allEvents = await readJson<{ readonly hooks: Record<string, unknown> }>('./cases/all-documented-events.json');
+  const allEvents = await readJson<{ readonly hooks: Record<string, unknown> }>('./cases/all-pinned-events.json');
   expect(validate(allEvents), JSON.stringify(validate.errors)).toBe(true);
   expect(Object.keys(allEvents.hooks).sort()).toEqual([...documentedEvents]);
   expect(Object.keys(hooksSchema.properties.hooks.properties).sort()).toEqual([...documentedEvents]);
@@ -169,13 +201,15 @@ it('keeps the pinned schema descriptor and the capability evidence in step with 
   const descriptor = claude.metadata.schemas.find((schema) => schema.name === 'hooks');
   expect(descriptor?.sha256).toBe(schemaProvenance.schemas['hooks.schema.json'].sha256);
   expect(schemaProvenance.hooksSchemaNotes).toContain('hooks.schema.json was re-pinned (uploaded 2026-09-03');
-  expect(schemaProvenance.hooksSchemaNotes).toContain('Claude Code 2.1.260');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('Claude Code 2.1.250');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('2.1.260');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('PreModelSwitch');
 
   const handlerContract = claudeCapabilityTable.hooks.handlerContract;
   expect(handlerContract.types).toEqual(['agent', 'command', 'http', 'mcp_tool', 'prompt']);
   expect(handlerContract.emitted).toEqual({ command: ['command', 'timeout', 'type'] });
   expect(handlerContract.evidence.some((line) => line.startsWith('uploaded 2026-09-03:') && line.includes('hooks-2.md'))).toBe(true);
-  expect(handlerContract.evidence.some((line) => line.includes('Claude Code 2.1.260'))).toBe(true);
+  expect(handlerContract.evidence.some((line) => line.includes('Claude Code 2.1.250') && line.includes('2.1.260'))).toBe(true);
   for (const feature of ['timeout', 'toolMatchers'] as const) {
     expect(claudeCapabilityTable.hooks.features[feature].evidence.some((line) => line.includes('every handler'))).toBe(true);
   }
