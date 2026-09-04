@@ -84,10 +84,11 @@ After the repository-level `pnpm build`:
 cd examples/mcp-app
 pnpm validate
 pnpm build
+pnpm typecheck
 pnpm exec agent-bundle eval --case status-is-healthy --trials 1
 ```
 
-`pnpm check` is the validation-and-build pair without the Workbench.
+`pnpm check` runs validation, build, and typecheck without the Workbench.
 
 ## Running the server on stdio
 
