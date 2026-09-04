@@ -95,8 +95,9 @@
 ## Changesets
 
 - Every PR that changes a publishable package (`packages/agent-bundle`,
-  `packages/rsc-runtime`, `packages/create-agent-bundle` — anything except
-  `tests/**`) must include exactly one changeset: `pnpm changeset` or a
+  `packages/rsc-runtime`, `packages/rsc-markdown-stream`,
+  `packages/create-agent-bundle` — anything except `tests/**`) must include
+  exactly one changeset: `pnpm changeset` or a
   hand-written `.changeset/<slug>.md`. Private packages (`packages/workbench`,
   `examples/*`, `website`) are ignored and never named in a changeset.
 - Pre-1.0 semver: `minor` = breaking, `patch` = everything else (features

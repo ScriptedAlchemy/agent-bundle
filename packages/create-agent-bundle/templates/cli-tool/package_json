@@ -35,9 +35,7 @@
     "@rstest/core": "0.11.10",
     "@types/node": "26.4.0",
     "agent-bundle": "workspace:*",
-    "typescript": "7.0.2"
-  },
-  "dependencies": {
+    "typescript": "7.0.2",
     "@agent-bundle/runtime": "workspace:*",
     "react": "19.2.8",
     "zod": "4.4.3"

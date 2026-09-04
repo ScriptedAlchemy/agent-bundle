@@ -1,3 +1,4 @@
+import { hookWrapperAppliesOperatorEnv } from '../adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import type { TargetHookEntry } from '../adapters/types.ts';
 import { isPlainRecord } from '../core/strict-json.ts';
@@ -14,10 +15,11 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  stdioPreludeVirtualModule,
   terminalCapabilityRuntimePath,
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
-import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
+import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
@@ -255,6 +257,7 @@ const mcpEntryEntries = async (
             source: '/* The MCP App registry virtual module is generated from built app HTML at build time. */',
           },
           ...(routeSource === undefined ? [] : [{ name: 'agent-bundle/generated-route-server', source: routeSource }]),
+          ...(wrapped ? [stdioPreludeVirtualModule(server?.env)] : []),
         ],
       },
       kind: 'mcp-entry',
@@ -318,6 +321,7 @@ const hookEntries = (
       source: entry.hook.source,
       sourceInputs: [],
       virtualSource: entry.virtualSource,
+      ...(hookWrapperAppliesOperatorEnv(entry) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
     },
     kind: 'hook',
     meta,

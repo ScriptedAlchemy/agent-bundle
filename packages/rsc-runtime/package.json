@@ -85,6 +85,7 @@
     "effect": "4.0.0-rc.112",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
+    "rsc-markdown-stream": "^0.1.0",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -94,6 +95,8 @@
     "@rstest/core": "0.11.10",
     "@types/react": "19.2.18",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
+    "micromark": "4.0.2",
+    "micromark-extension-gfm": "3.0.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   }

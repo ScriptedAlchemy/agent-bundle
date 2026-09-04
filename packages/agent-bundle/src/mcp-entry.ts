@@ -19,9 +19,19 @@ const defaultHeartbeatName = 'agent-bundle';
 type StdoutWrite = typeof process.stdout.write;
 
 export interface StdoutProtocolGuard {
-  /** Hands stdout back to the protocol transport; console.* keeps writing to stderr. */
+  /** Hands stdout back to the protocol transport; console.* keeps writing to stderr. Once only: later calls are no-ops. */
   readonly restoreProtocolStdout: () => void;
 }
+
+/**
+ * The guard this process currently has installed: set by an install, cleared
+ * by its `restoreProtocolStdout`. It owns the real stdout write. The
+ * generated stdio prelude installs the guard as the entry's first import and
+ * the lifecycle adopts that same guard instead of stacking a second one — a
+ * second install would record whatever `process.stdout.write` had become as
+ * the "original" and restore that, not the protocol stream.
+ */
+let installedGuard: { readonly guard: StdoutProtocolGuard; readonly redirectedWrite: StdoutWrite } | undefined;
 
 /**
  * stdout carries JSON-RPC framing on a stdio server: a stray `console.log`
@@ -30,21 +40,45 @@ export interface StdoutProtocolGuard {
  * then call `restoreProtocolStdout()` right before serving. Console methods
  * stay on stderr forever; only the raw `process.stdout.write` is restored
  * for protocol frames.
+ *
+ * While a guard is installed, calling this returns it — whatever
+ * `process.stdout.write` has become since. A consumer module that wraps
+ * `process.stdout.write` at module scope wraps the redirect, not the
+ * protocol stream; stdout is the protocol channel, so such a wrapper is
+ * unsupported, and `restoreProtocolStdout()` discards it in favour of the
+ * real stdout, saying so once on stderr.
  */
 export const redirectConsoleToStderr = (): StdoutProtocolGuard => {
+  if (installedGuard !== undefined) return installedGuard.guard;
   const originalStdoutWrite: StdoutWrite = process.stdout.write.bind(process.stdout) as StdoutWrite;
   const stderrConsole = new console.Console({ stderr: process.stderr, stdout: process.stderr });
   const methods = ['debug', 'dir', 'error', 'info', 'log', 'trace', 'warn'] as const;
   for (const method of methods) {
     console[method] = stderrConsole[method].bind(stderrConsole) as never;
   }
-  process.stdout.write = ((chunk: never, encoding?: never, callback?: never) =>
+  const redirectedWrite = ((chunk: never, encoding?: never, callback?: never) =>
     process.stderr.write(chunk, encoding, callback)) as StdoutWrite;
-  return Object.freeze({
+  process.stdout.write = redirectedWrite;
+  // Restoring is once-only: a second call, or a stale holder's call after a
+  // fresh guard replaced this one, would otherwise overwrite that guard's
+  // redirect with this original while `installedGuard` still names it.
+  let restored = false;
+  const guard: StdoutProtocolGuard = Object.freeze({
     restoreProtocolStdout: (): void => {
+      if (restored) return;
+      restored = true;
+      if (process.stdout.write !== redirectedWrite) {
+        process.stderr.write(
+          '[agent-bundle] a module replaced process.stdout.write while console output was redirected to stderr; '
+          + 'the replacement is discarded because stdout carries the MCP protocol stream.\n',
+        );
+      }
       process.stdout.write = originalStdoutWrite;
+      if (installedGuard?.guard === guard) installedGuard = undefined;
     },
   });
+  installedGuard = { guard, redirectedWrite };
+  return guard;
 };
 
 export interface HeartbeatOptions {
@@ -231,8 +265,12 @@ export interface GeneratedStdioMcpEntryModule {
 
 export interface RunGeneratedStdioMcpEntryOptions {
   /**
-   * Loads the consumer entry module. Deferred so the console guard is active
-   * before any consumer module side effect can print to the protocol channel.
+   * Loads the consumer entry module. The generated shell imports the module
+   * statically, after its stdio prelude — the console guard plus the operator
+   * `.env` layer (#469) — and resolves it here: under bundling every module
+   * of the single-chunk entry evaluates before the shell body whichever way
+   * it is imported, so import order, not this call, is what puts the guard
+   * and the layer ahead of the module's own top level.
    */
   readonly loadEntry: () => Promise<GeneratedStdioMcpEntryModule>;
   /** Test seam mirroring {@link RunStdioServerOptions}. */
@@ -241,10 +279,11 @@ export interface RunGeneratedStdioMcpEntryOptions {
 }
 
 /**
- * The body of every generated stdio MCP entry: install the stdout guard,
- * evaluate the consumer module, build the server from its default-exported
- * factory, hand raw stdout back for protocol frames, and serve under the
- * managed lifecycle.
+ * The body of every generated stdio MCP entry: adopt the stdout guard the
+ * shell's prelude installed as its first import (installing it here only for
+ * a hand-rolled caller that has none), take the consumer module, build the
+ * server from its default-exported factory, hand raw stdout back for
+ * protocol frames, and serve under the managed lifecycle.
  */
 export const runGeneratedStdioMcpEntry = async (
   options: RunGeneratedStdioMcpEntryOptions,

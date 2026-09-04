@@ -95,7 +95,8 @@ Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好
 
 宿主只绑定 `127.0.0.1`，只提供一份文档与经过认证的 `/api/mcp/...` 路由（每次启动一个令牌，加同源检查；
 拒绝时为 `AB8003` / `AB8004`），并且只通过桥接暴露所选的那个服务器。App 文档本身运行在框架沙箱内的第二个
-loopback origin 上。它是本地预览宿主，不是部署目标。编程形式是 `agent-bundle/api` 中的 `serveApp`；见
+loopback origin 上。它是本地预览宿主，不是部署目标。面向脚本与测试的编程形式是 `agent-bundle/api` 中的
+`serveApp`；插件自己的路由式 CLI 命令则改为启动这条命令，因为自包含的 bin 无法导入 `agent-bundle/api`——见
 [独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)。
 
 ## build 与 prepack

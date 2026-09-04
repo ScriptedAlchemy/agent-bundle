@@ -7,8 +7,14 @@ import { promisify } from 'node:util';
 
 import { afterAll, expect, it } from '@rstest/core';
 
-import { installedEnvironment, npmInstallArguments, packOutputFromJson } from '../../agent-bundle/tests/support/shared-pack.ts';
-import { cleanupScaffoldFixture, expectCleanValidate, npmRun, scaffoldProject } from './support/scaffold-fixture.ts';
+import { installedEnvironment, packOutputFromJson } from '../../agent-bundle/tests/support/shared-pack.ts';
+import {
+  cleanupScaffoldFixture,
+  expectCleanValidate,
+  installScaffoldedProject,
+  npmRun,
+  scaffoldProject,
+} from './support/scaffold-fixture.ts';
 
 const execFile = promisify(executeFile);
 
@@ -26,10 +32,7 @@ afterAll(cleanupScaffoldFixture);
  */
 it.concurrent('scaffolds the mcp-server template and serves the conventional entry from the artifact', async () => {
   const projectRoot = await scaffoldProject('mcp-server', 'status-plugin', ['--no-install']);
-  await execFile('npm', ['install', ...npmInstallArguments], {
-    cwd: projectRoot,
-    env: installedEnvironment(),
-  });
+  await installScaffoldedProject(projectRoot);
 
   const checked = await npmRun(projectRoot, 'check');
   await expectCleanValidate(projectRoot);
@@ -76,10 +79,7 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
 
 it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artifact script', async () => {
   const projectRoot = await scaffoldProject('cli-tool', 'greeter', ['--no-install']);
-  await execFile('npm', ['install', ...npmInstallArguments], {
-    cwd: projectRoot,
-    env: installedEnvironment(),
-  });
+  await installScaffoldedProject(projectRoot);
 
   // The template's own harness pool ran inside `check`, and it is asserted
   // positively — a silent `check` would also pass if the pool were dropped or

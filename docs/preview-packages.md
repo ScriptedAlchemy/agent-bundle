@@ -11,7 +11,9 @@ release owner must resolve the repository-wide `"access": "restricted"`
 policy for `agent-bundle`, which does not currently override it with
 `publishConfig.access`. Until then
 pkg.pr.new is the release channel. Every CI package-preview run publishes real,
-installable tarballs of all three publishable workspace packages to [pkg.pr.new](https://pkg.pr.new)
+installable tarballs of all four publishable workspace packages (`agent-bundle`,
+`@agent-bundle/runtime`, `rsc-markdown-stream`, `create-agent-bundle`) to
+[pkg.pr.new](https://pkg.pr.new)
 — a free continuous-release registry keyed by commit SHA and pull request.
 These are the packages to install until a first npm release is cut.
 
@@ -22,6 +24,15 @@ Reference a pull request number to track its most recent build:
 ```sh
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@1
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@1
+```
+
+`@agent-bundle/runtime` depends on `rsc-markdown-stream`, the Markdown
+renderer behind `MarkdownContent`; its preview tarball points that dependency
+at the renderer's own preview of the same commit, so npm fetches it without a
+separate install. Install the renderer directly only to use it on its own:
+
+```sh
+npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/rsc-markdown-stream@1
 ```
 
 The `create-agent-bundle` scaffolder is published to the same channel and is
@@ -46,6 +57,7 @@ work), which is the right form for lockfiles and reproducible setups:
 ```sh
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@5685521
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685521
+npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/rsc-markdown-stream@5685521
 ```
 
 pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
@@ -55,8 +67,11 @@ Previews carry the version string `0.0.0-preview-<sha>`, and the publish
 package to that exact preview version inside the preview tarballs. Today that
 is the optional `@agent-bundle/runtime` peer declared by `agent-bundle`
 (`@agent-bundle/runtime` itself no longer declares an `agent-bundle` peer;
-its peers are `react`, `react-dom`, and `@rspack/core`). Installing both
-packages from the same sha therefore works with stock npm — no
+its peers are `react`, `react-dom`, and `@rspack/core`). A regular
+`dependencies` entry that names a sibling workspace package is rewritten to
+that sibling's same-sha tarball URL: `@agent-bundle/runtime`'s
+`rsc-markdown-stream` dependency resolves to the renderer preview of the same
+commit. Installing both packages from the same sha therefore works with stock npm — no
 `--legacy-peer-deps` needed. Mixing two different shas fails with `ERESOLVE`
 by design; use one sha (or one PR number) for both URLs. Previews published
 before the peer rewrite landed (PR #46, fixing #45) still carry the original
@@ -83,7 +98,7 @@ installable artifacts.
 `.github/workflows/package-preview.yml` runs
 `pnpm preview:publish` (`pkg-pr-new publish --previewVersion --peerDeps
 --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'
-'./packages/create-agent-bundle'`)
+'./packages/rsc-markdown-stream' './packages/create-agent-bundle'`)
 after a full build, on every pull request and on every push to `main`. Runs for
 `main` pushes use a per-commit concurrency group, so overlapping pushes
 cannot cancel one another and every `main` commit has an installable

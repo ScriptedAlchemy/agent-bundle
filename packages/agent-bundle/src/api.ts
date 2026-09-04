@@ -11,6 +11,7 @@ import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
+import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -582,6 +583,8 @@ export interface BuildProjectResult {
 
 export interface PrepackResult {
   readonly build: BuildProjectResult;
+  /** Non-error pack-inventory diagnostics; errors throw `DiagnosticError` instead. */
+  readonly diagnostics: readonly Diagnostic[];
   readonly pack: PackOutput;
 }
 
@@ -1292,10 +1295,11 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
+    packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
     projectRoot: options.root,
   });
-  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
-  return deepFreeze({ build: result, pack });
+  if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
+  return deepFreeze({ build: result, diagnostics, pack });
 };
 
 /** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */
@@ -1494,9 +1498,12 @@ const scopedThrowawayArtifact = (
  * `close()` to tear down the host and the server; `closed` settles when the
  * server connection ends for any reason.
  *
- * This runs in a dev-time or CLI process — a plugin's own routed CLI can
- * call it from a `hauler dashboard`-style route — never inside the MCP
- * server shell.
+ * This is a host-process API: it runs in processes the framework does not
+ * compile — the first-party CLI, the Workbench, tests, a plugin's own
+ * scripts — never inside the MCP server shell, and not from a routed CLI
+ * command inside the artifact, whose self-contained bin cannot import
+ * `agent-bundle/api` (`AB6005`); such a route spawns `agent-bundle
+ * serve-app` instead (issue #558).
  */
 export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
   const registry = registryFor(options);

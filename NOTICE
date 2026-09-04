@@ -12,6 +12,12 @@ license and notices, which are preserved unmodified alongside that material:
     src/mcp/APP-RENDERER-LICENSE, which the agent-bundle package ships under
     dist/workbench/.
 
+  - The rsc-markdown-stream package (packages/rsc-markdown-stream) was
+    imported from https://github.com/ScriptedAlchemy/rsc-markdown-stream at
+    commit eba2ea0b930493b80b9f4f9bb2c582041b0a3f47, where it was
+    distributed under the MIT License. That notice is preserved as
+    UPSTREAM-LICENSE in the package and its published tarball.
+
 The repository's vendored reference checkouts under repos/ are read-only
 reference material, retain their own upstream licenses, and are not part of
 any published package.

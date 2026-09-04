@@ -373,8 +373,11 @@ const humanBuild = (result: Awaited<ReturnType<typeof build>>): string => {
   return out.join('');
 };
 
-const humanPrepack = (result: Awaited<ReturnType<typeof prepack>>): string =>
-  `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`;
+const humanPrepack = (result: Awaited<ReturnType<typeof prepack>>): string => [
+  // Errors abort the command before this formatter runs; what reaches it are warnings the pack survives.
+  ...result.diagnostics.map((diagnostic) => `${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`),
+  `Prepack validated ${result.pack.files.length} file(s) for ${result.build.model.metadata.name}\n`,
+].join('');
 
 const shortContentHash = (hash: string): string => hash.slice(0, 12);
 
