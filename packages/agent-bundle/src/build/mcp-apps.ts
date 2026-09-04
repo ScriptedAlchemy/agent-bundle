@@ -6,6 +6,7 @@ import { extname, resolve } from 'node:path';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
   generatedMetaModulePath,
@@ -171,10 +172,10 @@ export const planCompiledMcpApps = (
 /**
  * One Rsbuild instance with one environment per app compiles every view in
  * a single parallel run instead of a sequential per-app build loop. The
- * consumer escape hatch merges over this synthesized profile with the
- * framework invariant hook appended last; the resolved-config assertions in
- * `compileMcpApps` bound what the hatch may change. `inspect --bundler`
- * surfaces exactly this composition.
+ * consumer escape hatch merges over this synthesized profile in the shared
+ * `composeToolsLayers` order, framework invariant hook last; the
+ * resolved-config assertions in `compileMcpApps` bound what the hatch may
+ * change. `inspect --bundler` surfaces exactly this composition.
  */
 export const composeMcpAppsRsbuildConfig = (
   sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
@@ -228,15 +229,16 @@ export const composeMcpAppsRsbuildConfig = (
     ];
     return config;
   };
-  return mergeRsbuildConfig<RsbuildConfig>(
+  // The hatch types are this engine's own, so the layers lift unchanged.
+  return mergeRsbuildConfig<RsbuildConfig>(...composeToolsLayers<RsbuildConfig>({
+    invariants: frameworkInvariantLayer(enforceInvariants),
+    lift: {
+      rsbuild: (fragment) => fragment,
+      rspack: (hatch) => ({ tools: { rspack: hatch } }),
+    },
     profile,
-    ...(options.tools?.rsbuild === undefined ? [] : [options.tools.rsbuild]),
-    ...(options.tools?.rspack === undefined ? [] : [{ tools: { rspack: options.tools.rspack } }]),
-    // Merged last so the hatch cannot reach either invariant: dist cleaning
-    // would delete sibling outputs already emitted into the shared staged
-    // target root, so it stays off no matter what the consumer asks for.
-    { output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } },
-  );
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
+  }));
 };
 
 export const compileMcpApps = async (
