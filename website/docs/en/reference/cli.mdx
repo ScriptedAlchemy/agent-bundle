@@ -18,6 +18,7 @@ npx agent-bundle --version
 | `agent-bundle build` | Build a validated Agent Bundle artifact. |
 | `agent-bundle prepack` | Build and validate the npm pack inventory. |
 | `agent-bundle install <host>` | Install a built bundle into a supported host. |
+| `agent-bundle uninstall <host>` | Remove a receipt-owned host install of a built bundle, and nothing else. |
 | `agent-bundle doctor` | Inspect host installs and runtime endpoints without changing them. |
 | `agent-bundle validate` | Validate project source or one artifact. |
 | `agent-bundle eval` | Run deterministic or native eval suites against a built artifact. |
@@ -105,7 +106,43 @@ The emitted standalone `install.mjs` and the package-relative installer bin acce
 `--replace`. Cursor copies carry an install receipt (`.agent-bundle-install.json`), replacement
 touches owned files only, and `--replace` adopts a pre-receipt copy; Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling and Codex runs `codex plugin remove`
-before `add`.
+before `add`. Every install writes a lifecycle receipt (format `agent-bundle-install-receipt/2`:
+version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
+Cursor local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
+marketplace mode — that `uninstall` and `doctor` consume.
+
+## uninstall
+
+```sh
+agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `<host>` | **required** | `claude`, `codex`, or `cursor`. |
+| `--from <bundle-dir>` | `process.cwd()` | Bundle directory or artifact root that identifies the plugin (name, version, marketplace). |
+| `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
+| `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
+| `--keep-data` | on | Keep durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. |
+| `--purge-data` | off | Also remove durable runtime state. Refused (`AB7008`) without `--confirm-purge`. |
+| `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
+| `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
+
+Uninstall removes exactly what the receipt owns: the recorded files and installer-created
+directories (Cursor local, including the `~/.cursor/plugins[/local]` directories the install
+created), the staged repository (Cursor marketplace, after its `HEAD` matches the recorded
+commit), or the host registrations (`claude plugin uninstall <id> --scope <scope> --keep-data` +
+`claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove` —
+the marketplace is retained while another installed plugin still uses it, including a Claude
+install at another scope or in another project known only to Claude's `plugins/installed_plugins.json`
+registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
+second run is a `not-installed` no-op. The typed `data.outcome` says what happened to durable
+state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
+orphaned for Claude's ~14-day grace period; a purge also removes `state/` and
+`plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (`codex plugin remove` deletes the
+cached tree and has no keep-data option). The package-relative installer bin accepts
+`uninstall <host>` with the same flags; the emitted `install.mjs` accepts `--uninstall` with
+`--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.
 
 ## doctor
 
@@ -129,7 +166,14 @@ Cursor it also proves plugin-scoped hook registration from the installed manifes
 when `~/.cursor/hooks.json` would deliver a plugin hook a second time (`AB7323`), and tracks a
 staged marketplace from `unregistered` to `registered` once Cursor imports it (`AB7324`). For an
 Agent Plugins install it proves the emitted installer's placeholder expansion — `expanded`,
-`unexpanded` (spec forms Cursor 3.18.25 cannot launch), or `drifted` (`AB7326`).
+`unexpanded` (spec forms Cursor 3.18.25 cannot launch), or `drifted` (`AB7326`). With
+`--from` it also reports the lifecycle stage per host — placed → registered → enabled → active,
+each observed (Claude and Codex `plugin list --json` rows and `enabled` flags, the Cursor local
+directory, the Cursor marketplace import cache) or typed `unavailable` with the reason no read-only
+surface exposes it (`AB7330`). It inventories the Agent Bundle receipt store under each host root
+and warns about receipts the host no longer honours (`AB7328`), and reports receipts written
+before format 2 as migrated (`AB7329`). A Cursor directory holding only preserved runtime state
+from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not corrupt or foreign.
 
 ## validate
 

@@ -15,6 +15,36 @@
     "source": "https://cursor.com/docs/plugins",
     "state": "supported"
   },
+  "lifecycle": {
+    "uninstall": {
+      "evidence": [
+        "2026-09-03: Cursor exposes no non-interactive plugin uninstall verb; a local plugin is a directory under ~/.cursor/plugins/local that Cursor loads at window reload, so removing the receipt-owned files, the installer-created directories, and the plugins[/local] directories the install itself created unregisters it (`agent-bundle uninstall cursor`, `install.mjs --uninstall`; #101). A staged marketplace repository under ~/.cursor/agent-bundle/marketplaces is removed wholesale after its HEAD matches the receipt's commit; a copy Cursor imported into plugins/cache is Cursor-owned (server-assigned installed ids, 2026-09-03 audit) and is reported `manual` with the Customize step."
+      ],
+      "state": "degraded",
+      "reason": "Local-mode removal is complete and byte-identical; marketplace-mode imports can only be reversed in Cursor's Customize UI."
+    },
+    "keepData": {
+      "evidence": [
+        "2026-09-03: the uninstaller keeps `state/` under the plugin root by default (data outcome `kept`), writes a remnant receipt owning no files so the created host directories stay accountable, and removes `state/` only under --purge-data --confirm-purge (`purged`); a staged marketplace repository holds no runtime state (`unavailable`)."
+      ],
+      "state": "supported"
+    },
+    "activationState": {
+      "evidence": [
+        "2026-09-03: placement (the plugins/local directory or the staged repository) and registration (the directory itself; a completed `.cache-complete` copy under plugins/cache for marketplace mode) are observable read-only. Enabled state lives in state.vscdb as server-assigned ids and plugin import/hooks are gated by thirdPartyExtensibilityEnabled / enable_cc_plugin_import (observed 3.18.25, docs/audits/2026-09-03-cursor-plugin-hooks-registration.md); Cursor exposes no non-interactive plugin-loading surface. Doctor types `enabled` and `active` unavailable."
+      ],
+      "observable": [
+        "placed",
+        "registered"
+      ],
+      "reason": "Enabled and live-activation state are not exposed read-only by Cursor.",
+      "state": "degraded",
+      "unavailable": [
+        "enabled",
+        "active"
+      ]
+    }
+  },
   "deferredNativeEvents": {
     "afterAgentResponse": {
       "reason": "retrieved 2026-09-02 from https://cursor.com/docs/hooks: native/deferred until a canonical consumer is accepted (#258 defer list). Input is { text } with no output fields; matcher value AgentResponse; runs in cloud agents.",

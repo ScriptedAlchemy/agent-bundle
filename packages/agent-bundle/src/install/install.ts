@@ -16,12 +16,21 @@ import {
   compareInstalledTree,
   createInstallReceipt,
   describeContentComparison,
+  installReceiptFile,
+  installReceiptScopeKey,
+  installReceiptStorePath,
+  isRemnantReceipt,
+  isRuntimeStateRemnant,
+  readInstallReceiptFile,
   replaceInstalledTree,
   stageArtifact,
   treeInventory,
   writeInstallReceipt,
+  writeStoredInstallReceipt,
   type InstalledManifestIdentity,
   type InstalledTreeComparison,
+  type InstallReceiptIdentity,
+  type InstallRegistration,
   type TreeInventory,
 } from './receipt.ts';
 
@@ -89,6 +98,11 @@ export interface InstallResult {
   /** Content hash of the copy a `replaced` install superseded. */
   readonly previousContentHash?: string;
   /**
+   * The install receipt this run wrote or confirmed: inside the plugin root for Cursor local copies,
+   * in the host root's `agent-bundle/receipts` store for host-CLI and marketplace deliveries (#101).
+   */
+  readonly receipt?: string;
+  /**
    * `staged` means the marketplace repository is ready and Cursor's import step is still pending
    * (`mode: 'marketplace'`).
    */
@@ -96,7 +110,7 @@ export interface InstallResult {
   readonly version: string;
 }
 
-interface PluginIdentity {
+export interface PluginIdentity {
   readonly bundleRoot: string;
   readonly marketplace?: string;
   readonly plugin: string;
@@ -179,7 +193,8 @@ const resolveBundleRoot = async (from: string, host: InstallHost): Promise<strin
   );
 };
 
-const readIdentity = async (from: string, host: InstallHost): Promise<PluginIdentity> => {
+/** The plugin identity an install or uninstall acts on, read from the bundle's host manifests. */
+export const readIdentity = async (from: string, host: InstallHost): Promise<PluginIdentity> => {
   const bundleRoot = await resolveBundleRoot(from, host);
   const pluginDocument = await readRecord(join(bundleRoot, hostManifestPath(host)), host, `${host} plugin manifest`);
   const plugin = readString(pluginDocument, 'name', host, `${host} plugin manifest`);
@@ -204,7 +219,7 @@ const readIdentity = async (from: string, host: InstallHost): Promise<PluginIden
   };
 };
 
-const defaultCommandRunner: InstallCommandRunner = Object.freeze({
+export const defaultCommandRunner: InstallCommandRunner = Object.freeze({
   run: (
     command: string,
     args: readonly string[],
@@ -224,7 +239,7 @@ const defaultCommandRunner: InstallCommandRunner = Object.freeze({
   }),
 });
 
-const runHostCommand = async (
+export const runHostCommand = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
   host: Exclude<InstallHost, 'cursor'>,
@@ -248,6 +263,19 @@ const runHostCommand = async (
 };
 
 /**
+ * A public host CLI's configuration root (`CLAUDE_CONFIG_DIR` or `~/.claude`;
+ * `CODEX_HOME` or `~/.codex`): where the host caches installed plugins and
+ * where Agent Bundle keeps its own `agent-bundle/receipts` store for them.
+ */
+export const publicHostRoot = (
+  host: Exclude<InstallHost, 'cursor'>,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): string => host === 'claude'
+  ? environment['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude')
+  : environment['CODEX_HOME'] ?? join(home, '.codex');
+
+/**
  * Where a public host CLI caches an installed marketplace plugin; pinned by
  * the real-host install proofs and shared with the development install sync.
  */
@@ -255,16 +283,14 @@ export const publicHostCacheRoot = (
   host: Exclude<InstallHost, 'cursor'>,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
-): string => host === 'claude'
-  ? join(environment['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude'), 'plugins', 'cache')
-  : join(environment['CODEX_HOME'] ?? join(home, '.codex'), 'plugins', 'cache');
+): string => join(publicHostRoot(host, environment, home), 'plugins', 'cache');
 
 export interface PublicHostInstalledEntry {
   /**
-   * Claude only: the row's `enabled` flag. `false` means the copy is installed
-   * but switched off (`claude plugin disable`), so none of it reaches a
-   * session until `claude plugin enable` runs; absent when the row carries no
-   * boolean.
+   * The row's `enabled` flag (Claude and Codex both carry one). `false` means
+   * the copy is installed but switched off (`claude plugin disable`), so none
+   * of it reaches a session until `claude plugin enable` runs; absent when the
+   * row carries no boolean.
    */
   readonly enabled?: boolean;
   /**
@@ -363,6 +389,7 @@ export const parsePublicHostInventory = (
   }
   return {
     entries: [{
+      ...(typeof row['enabled'] === 'boolean' ? { enabled: row['enabled'] } : {}),
       installPath: join(options.cacheRoot, options.marketplace, options.plugin, row['version']),
       version: row['version'],
     }],
@@ -371,7 +398,7 @@ export const parsePublicHostInventory = (
 };
 
 /** Runs the host's inventory verb so replacement only uninstalls what the host reports as installed. */
-const readPublicHostInventory = async (
+export const readPublicHostInventory = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
   host: Exclude<InstallHost, 'cursor'>,
@@ -419,13 +446,101 @@ const refusedInstallFailure = (
   host,
 );
 
-const publicHostUninstallArguments = (
+/**
+ * The host verb that removes an installed plugin. Claude's `--keep-data`
+ * always rides along: the installer and `uninstall` manage the plugin's
+ * durable data explicitly (`--purge-data`) instead of letting the host decide.
+ */
+export const publicHostUninstallArguments = (
   host: Exclude<InstallHost, 'cursor'>,
   id: string,
   scope: InstallScope,
 ): readonly string[] => host === 'claude'
   ? ['plugin', 'uninstall', id, '--scope', scope, '--keep-data']
   : ['plugin', 'remove', id];
+
+/** The host verb that removes a configured marketplace (identical spelling on Claude 2.1.257 and Codex 0.147.0). */
+export const publicHostMarketplaceRemoveArguments = (marketplace: string): readonly string[] =>
+  ['plugin', 'marketplace', 'remove', marketplace];
+
+/** The registrations `install <host>` performs for a public host CLI, in order. */
+export const publicHostRegistrations = (
+  host: Exclude<InstallHost, 'cursor'>,
+  id: string,
+  marketplace: string,
+  scope: InstallScope,
+): readonly InstallRegistration[] => host === 'claude'
+  ? Object.freeze([
+    Object.freeze({ kind: 'claude-marketplace' as const, name: marketplace, scope }),
+    Object.freeze({ id, kind: 'claude-plugin' as const, scope }),
+  ])
+  : Object.freeze([
+    Object.freeze({ kind: 'codex-marketplace' as const, name: marketplace }),
+    Object.freeze({ id, kind: 'codex-plugin' as const }),
+  ]);
+
+/**
+ * Where the store receipt for a host-CLI install lives:
+ * `<host root>/agent-bundle/receipts/<plugin>.<marketplace>.<scope>[.<project digest>].json`.
+ * The host identifies a registration as `<plugin>@<marketplace>`, so the same
+ * plugin installed from two marketplaces is two installs with two receipts.
+ * Claude `project` / `local` registrations belong to the working directory the
+ * host verbs ran in (the bundle root), so each project keeps its own receipt.
+ */
+export const publicHostReceiptPath = (
+  host: Exclude<InstallHost, 'cursor'>,
+  plugin: string,
+  marketplace: string,
+  scope: InstallScope,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+  projectRoot?: string,
+): string => installReceiptStorePath(
+  publicHostRoot(host, environment, home),
+  plugin,
+  `${marketplace}.${installReceiptScopeKey(scope, projectRoot)}`,
+);
+
+/** The project root a Claude `project` / `local` registration belongs to: the cwd the host verbs run in. */
+export const publicHostProjectRoot = (
+  host: Exclude<InstallHost, 'cursor'>,
+  scope: InstallScope,
+  identity: PluginIdentity,
+): string | undefined => host === 'claude' && scope !== 'user' ? identity.bundleRoot : undefined;
+
+/** `<host> plugin marketplace list --json`: whether a marketplace of this name is configured; `unknown` when unusable. */
+export const readPublicHostMarketplaceState = async (
+  runner: InstallCommandRunner,
+  identity: PluginIdentity,
+  host: Exclude<InstallHost, 'cursor'>,
+  marketplace: string,
+): Promise<'absent' | 'present' | 'unknown'> => {
+  let stdout: string;
+  try {
+    const result = await runner.run(host, ['plugin', 'marketplace', 'list', '--json'], { cwd: identity.bundleRoot });
+    if (result.code !== 0) return 'unknown';
+    stdout = result.stdout;
+  } catch {
+    return 'unknown';
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(stdout) as unknown;
+  } catch {
+    return 'unknown';
+  }
+  const rows = host === 'claude'
+    ? document
+    : typeof document === 'object' && document !== null ? (document as { readonly marketplaces?: unknown }).marketplaces : undefined;
+  if (!Array.isArray(rows)) return 'unknown';
+  return rows.some((row) => typeof row === 'object' && row !== null && (row as { readonly name?: unknown }).name === marketplace)
+    ? 'present'
+    : 'absent';
+};
+
+/** Where the store receipt for a Cursor marketplace-mode install lives. */
+export const cursorMarketplaceReceiptPath = (cursorRoot: string, plugin: string): string =>
+  installReceiptStorePath(cursorRoot, plugin, 'marketplace');
 
 const installPublicCli = async (
   options: InstallBundleOptions,
@@ -453,12 +568,16 @@ const installPublicCli = async (
       host,
     );
   }
+  const projectRoot = publicHostProjectRoot(host, scope, identity);
+  const receiptPath = publicHostReceiptPath(host, identity.plugin, marketplace, scope, environment, home, projectRoot);
+  const previousReceipt = await readInstallReceiptFile(receiptPath);
   const base = {
     bundleRoot: identity.bundleRoot,
     contentHash: artifact.hash,
     host,
     marketplace,
     plugin: identity.plugin,
+    receipt: receiptPath,
     version: identity.version,
   } as const;
   let replaced = false;
@@ -467,6 +586,30 @@ const installPublicCli = async (
   // reported copy locates where the reinstalled version lands.
   let destination: string | undefined;
   const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
+  // The store receipt is the lifecycle record for this host-owned copy: written on every install and
+  // replacement, and refreshed when an identical copy is found without one (pre-#101 installs). It owns
+  // no files — the host owns its cache copy — so only the content hash rides along, never an inventory.
+  const storeInventory: TreeInventory = Object.freeze({ files: Object.freeze([]), hash: artifact.hash });
+  // The marketplace registration is recorded — and therefore reversed by `uninstall` — only when this
+  // install (or the receipted install it replaces) created it. A marketplace that was already configured
+  // belongs to whoever configured it; when `plugin marketplace list --json` cannot say, the registration
+  // is not claimed either (fail-closed: `uninstall` then retains it and says why).
+  const receiptIdentity = async (): Promise<InstallReceiptIdentity> => {
+    const ownsMarketplace = previousReceipt !== undefined
+      ? previousReceipt.registrations.some((registration) => registration.kind === `${host}-marketplace`)
+      : await readPublicHostMarketplaceState(runner, identity, host, marketplace) === 'absent';
+    return {
+      host,
+      ...(previousReceipt === undefined ? {} : { installedAt: previousReceipt.installedAt }),
+      mode: 'host-cli',
+      plugin: identity.plugin,
+      ...(projectRoot === undefined ? {} : { projectRoot }),
+      registrations: publicHostRegistrations(host, id, marketplace, scope)
+        .filter((registration) => ownsMarketplace || registration.kind !== `${host}-marketplace`),
+      scope,
+      version: identity.version,
+    };
+  };
   if (entry !== undefined) {
     destination = join(dirname(entry.installPath), identity.version);
     let installed: TreeInventory | undefined;
@@ -488,6 +631,9 @@ const installPublicCli = async (
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
       // Byte-identical, so reinstalling cannot help: the host's refusal is the artifact's own defect.
       if (entry.errors !== undefined && entry.errors.length > 0) throw refusedInstallFailure(host, id, entry, 'existing');
+      if (previousReceipt === undefined || previousReceipt.contentHash !== artifact.hash) {
+        await writeStoredInstallReceipt(receiptPath, createInstallReceipt({ ...(await receiptIdentity()), inventory: storeInventory }));
+      }
       return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
     if (!sameVersion && options.replace !== true) {
@@ -507,10 +653,15 @@ const installPublicCli = async (
     }
     const contentDrift = installed !== undefined && sameVersion && installed.hash !== artifact.hash;
     if (options.replace === true || contentDrift) {
-      await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
       replaced = true;
-      previousContentHash = installed?.hash;
+      // The receipt remembers what the superseded copy hashed when the copy itself cannot be read.
+      previousContentHash = installed?.hash ?? previousReceipt?.contentHash;
     }
+  }
+  // Decided before any host verb runs, so the marketplace ownership check sees the pre-install state.
+  const recorded = await receiptIdentity();
+  if (replaced) {
+    await runHostCommand(runner, identity, host, publicHostUninstallArguments(host, id, scope), 'removal');
   }
   await runHostCommand(runner, identity, host, [
     'plugin',
@@ -518,9 +669,47 @@ const installPublicCli = async (
     'add',
     identity.bundleRoot,
   ]);
-  await runHostCommand(runner, identity, host, host === 'claude'
-    ? ['plugin', 'install', id, '--scope', scope]
-    : ['plugin', 'add', id]);
+  // Between `marketplace add` and the receipt write, everything this run registered is claimed only in memory.
+  // If the plugin install or the receipt write fails there, reverse what did complete rather than leave
+  // registrations nothing records: a plugin without a receipt would pass the byte-identical fast path on retry
+  // as `already-installed`, and a marketplace without one would be sampled as pre-existing and retained as
+  // user-owned by every later `uninstall`. Plugin first, then the marketplace — the order the host verbs
+  // themselves require.
+  const createdMarketplace = previousReceipt === undefined &&
+    recorded.registrations.some((registration) => registration.kind === `${host}-marketplace`);
+  let pluginInstalled = false;
+  try {
+    await runHostCommand(runner, identity, host, host === 'claude'
+      ? ['plugin', 'install', id, '--scope', scope]
+      : ['plugin', 'add', id]);
+    pluginInstalled = true;
+    await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+      ...recorded,
+      inventory: storeInventory,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    const rollbacks: (readonly string[])[] = [
+      ...(pluginInstalled ? [publicHostUninstallArguments(host, id, scope)] : []),
+      ...(createdMarketplace ? [publicHostMarketplaceRemoveArguments(marketplace)] : []),
+    ];
+    for (const args of rollbacks) {
+      try {
+        await runHostCommand(runner, identity, host, args, 'removal');
+      } catch (rollbackError) {
+        throw failure(
+          'AB7004',
+          `${errorMessage(error)} Rolling back what this install had registered also failed: ` +
+            `${errorMessage(rollbackError)}. ${host} still holds registrations no receipt records; run ` +
+            `${rollbacks.map((remaining) => `\`${host} ${remaining.join(' ')}\``).join(' then ')} before retrying.`,
+          host,
+        );
+      }
+    }
+    throw error;
+  }
+  // The receipt lands before the load verdict: the host did install the copy, so a refused one stays
+  // receipt-owned and `uninstall` removes it without --force.
   if (host === 'claude') {
     // `claude plugin install` exits 0 for a plugin Claude then refuses to load (#464): the load verdict
     // is only in `plugin list --json` `errors`, so verify the fresh row before reporting success. An
@@ -545,7 +734,8 @@ export const treeHash = async (root: string): Promise<string> => (await treeInve
 
 const cursorManifestCandidates = Object.freeze(['.cursor-plugin/plugin.json', 'plugin.json']);
 
-const readInstalledManifest = async (destination: string): Promise<InstalledManifestIdentity | undefined> => {
+/** The loader manifest identity of an installed Cursor copy (`.cursor-plugin/plugin.json`, then root `plugin.json`). */
+export const readInstalledManifest = async (destination: string): Promise<InstalledManifestIdentity | undefined> => {
   for (const manifest of cursorManifestCandidates) {
     try {
       const document = JSON.parse(await readFile(join(destination, manifest), 'utf8')) as unknown;
@@ -586,7 +776,8 @@ const collisionMessage = (
   }
 };
 
-const resolveCursorRoot = async (options: InstallBundleOptions): Promise<string> => {
+/** `~/.cursor`, which must already exist as a directory: installers never create a Cursor home. */
+export const resolveCursorRoot = async (options: { readonly home?: string }): Promise<string> => {
   const cursorRoot = join(options.home ?? homedir(), '.cursor');
   let cursorMetadata: Awaited<ReturnType<typeof lstat>>;
   try {
@@ -615,15 +806,45 @@ const installCursorMarketplace = async (
       runner: options.commandRunner ?? defaultCommandRunner,
       treeHash,
     });
+    // The staged repository is a committed Git tree, so its receipt lives in the store beside it; the
+    // registration records the commit Cursor imports so uninstall can prove the repository is still ours.
+    const receiptPath = cursorMarketplaceReceiptPath(cursorRoot, identity.plugin);
+    const previousReceipt = await readInstallReceiptFile(receiptPath);
+    const artifact = await treeInventory(identity.bundleRoot);
+    if (
+      staged.state === 'staged' ||
+      previousReceipt === undefined ||
+      previousReceipt.contentHash !== artifact.hash ||
+      previousReceipt.registrations[0]?.commit !== staged.commit
+    ) {
+      await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+        host: 'cursor',
+        ...(previousReceipt === undefined ? {} : { installedAt: previousReceipt.installedAt }),
+        // The committed repository is removed wholesale after a HEAD check; the receipt owns no individual files.
+        inventory: { files: [], hash: artifact.hash },
+        mode: 'marketplace',
+        plugin: identity.plugin,
+        registrations: [{
+          ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+          kind: 'cursor-marketplace-staging',
+          name: staged.marketplace,
+        }],
+        scope: 'user',
+        updatedAt: new Date().toISOString(),
+        version: identity.version,
+      }));
+    }
     return {
       bundleRoot: identity.bundleRoot,
       ...(staged.commit === undefined ? {} : { commit: staged.commit }),
+      contentHash: artifact.hash,
       destination: staged.destination,
       host: 'cursor',
       marketplace: staged.marketplace,
       mode: 'marketplace',
       nextSteps: staged.nextSteps,
       plugin: identity.plugin,
+      receipt: receiptPath,
       state: staged.state,
       version: identity.version,
     };
@@ -651,12 +872,27 @@ const installCursor = async (
     host: 'cursor',
     mode: 'local',
     plugin: identity.plugin,
+    receipt: join(destination, installReceiptFile),
     version: identity.version,
   } as const;
   try {
     const artifact = await treeInventory(identity.bundleRoot);
+    // The receipt records which host directories this installer created on the way to the plugin root
+    // (a fresh Cursor home has no `plugins/local`), so uninstall can prune exactly those and no more.
+    const hostDirectories: string[] = [];
+    for (const relativePath of ['plugins', 'plugins/local']) {
+      if (!await exists(join(cursorRoot, relativePath))) hostDirectories.push(relativePath);
+    }
     await mkdir(installRoot, { recursive: true });
-    const receipt = { host: 'cursor', plugin: identity.plugin, version: identity.version } as const;
+    const receipt: InstallReceiptIdentity = {
+      host: 'cursor',
+      hostDirectories,
+      mode: 'local',
+      plugin: identity.plugin,
+      registrations: [{ kind: 'cursor-local-plugin' }],
+      scope: 'user',
+      version: identity.version,
+    };
     if (!await exists(destination)) {
       const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
       try {
@@ -669,39 +905,63 @@ const installCursor = async (
     if (resolve(identity.bundleRoot) === destination) {
       return { ...base, contentHash: artifact.hash, state: 'already-installed' };
     }
-    const comparison = await compareInstalledTree({
+    const compared = await compareInstalledTree({
       artifact,
       destination,
       installedManifest: await readInstalledManifest(destination),
       plugin: identity.plugin,
       version: identity.version,
     });
+    // `uninstall --keep-data` leaves a shell holding only state/ (plus, normally, a remnant receipt that owns no
+    // files): a reinstall fills it back in around the preserved durable state instead of refusing it as foreign
+    // (nothing in it is anyone's plugin content) and reports an install, not a replacement.
+    const remnant = compared.ownership === 'receipt' && compared.receipt !== undefined
+      ? isRemnantReceipt(compared.receipt)
+      : compared.ownership === 'foreign' && await isRuntimeStateRemnant(destination);
+    const comparison: InstalledTreeComparison = remnant && compared.ownership === 'foreign'
+      ? { ...compared, ownership: 'legacy', status: 'stale' }
+      : compared;
     if (comparison.status === 'current') {
       if (comparison.ownership === 'legacy' && options.replace === true) {
         // Adoption created nothing: the legacy copy's directories are not the installer's to prune.
         await writeInstallReceipt(destination, createInstallReceipt({
+          ...receipt,
           directories: [],
-          host: 'cursor',
+          hostDirectories: [],
           inventory: artifact,
-          plugin: identity.plugin,
-          version: identity.version,
         }));
         return { ...base, contentHash: artifact.hash, state: 'adopted' };
       }
+      // A receipt-managed identical copy whose receipt predates format/2 is upgraded in place: the
+      // lifecycle fields are synthesized exactly as the reader migrates them, and nothing else changes.
+      if (comparison.ownership === 'receipt' && comparison.receipt?.migratedFrom !== undefined) {
+        await writeInstallReceipt(destination, createInstallReceipt({
+          ...receipt,
+          directories: comparison.receipt.directories,
+          hostDirectories: comparison.receipt.hostDirectories,
+          installedAt: comparison.receipt.installedAt,
+          inventory: artifact,
+          updatedAt: new Date().toISOString(),
+        }));
+      }
       return { ...base, contentHash: artifact.hash, state: 'already-installed' };
     }
-    const replaceable = comparison.status === 'stale' && comparison.ownership === 'receipt'
+    const replaceable = (comparison.status === 'stale' && comparison.ownership === 'receipt') || remnant
       ? true
       : comparison.status !== 'foreign' && options.replace === true;
     if (!replaceable) {
       throw failure('AB7005', collisionMessage(destination, identity, comparison), 'cursor');
     }
-    const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
+    // Replacing an existing copy created no host directories; the previous receipt's carry over.
+    const replacement: InstallReceiptIdentity = { ...receipt, hostDirectories: comparison.receipt?.hostDirectories ?? [] };
+    const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot });
     try {
-      await replaceInstalledTree({ comparison, destination, receipt, staged });
+      await replaceInstalledTree({ comparison, destination, receipt: replacement, staged });
     } finally {
       await rm(staged.parent, { force: true, recursive: true });
     }
+    // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.
+    if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' };
     return {
       ...base,
       contentHash: artifact.hash,

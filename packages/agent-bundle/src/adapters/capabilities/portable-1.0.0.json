@@ -9,6 +9,36 @@
     "source": "https://agent-plugins.org/",
     "state": "unavailable"
   },
+  "lifecycle": {
+    "uninstall": {
+      "evidence": [
+        "2026-09-03: the emitted install.mjs --uninstall removes the receipt-owned files and installer-created directories from ~/.cursor/plugins/local/<name>, leaving an isolated Cursor home byte-identical to its pre-install snapshot (tests/host-install-proof.test.ts); other Agent Plugins clients own their own install locations and are uninstalled through the client (#101)."
+      ],
+      "state": "degraded",
+      "reason": "Only the Cursor local copy the bundled installer places is receipt-owned; native clients other than Cursor manage their own copies."
+    },
+    "keepData": {
+      "evidence": [
+        "2026-09-03: `state/` under the Cursor local copy is kept by default and removed only under --purge-data --confirm-purge, exactly as for the Cursor target."
+      ],
+      "state": "supported"
+    },
+    "activationState": {
+      "evidence": [
+        "2026-09-03: placement and directory registration are observable for the Cursor local copy; Cursor exposes no read-only enabled or live-activation surface, and the Agent Plugins 1.0.0 standard defines no activation registry."
+      ],
+      "observable": [
+        "placed",
+        "registered"
+      ],
+      "reason": "The standard defines no activation state; Cursor exposes none read-only.",
+      "state": "degraded",
+      "unavailable": [
+        "enabled",
+        "active"
+      ]
+    }
+  },
   "eventRoutes": {
     "agent/idle": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native TeammateIdle equivalent (https://agent-plugins.org/).",

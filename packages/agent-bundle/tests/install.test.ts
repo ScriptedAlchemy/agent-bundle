@@ -15,7 +15,9 @@ import { formatInstallResult } from '../src/install/format.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
   installReceiptFile,
+  installReceiptFormat,
   readInstallReceipt,
+  readInstallReceiptFile,
   treeInventory,
 } from '../src/install/receipt.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -45,8 +47,20 @@ const fakeTreeListing = async (root: string, relative = ''): Promise<string> => 
   return listing;
 };
 
-/** Default fake git: answers `ls-tree` faithfully for the staged tree so byte proofs pass; everything else is silent. */
-const gitLike = async (call: CommandCall): Promise<string> => (call.args[0] === 'ls-tree' ? fakeTreeListing(call.cwd) : '');
+const isMarketplaceListCall = (call: CommandCall): boolean =>
+  call.args.join(' ') === 'plugin marketplace list --json';
+
+/** A host with no marketplaces configured: the install then registers (and records owning) the bundle's marketplace. */
+const noMarketplaces = (call: CommandCall): string =>
+  call.command === 'claude' ? JSON.stringify([]) : JSON.stringify({ marketplaces: [] });
+
+/**
+ * Default fake host: answers `ls-tree` faithfully for the staged tree so byte proofs pass, reports no configured
+ * marketplaces, and is silent otherwise.
+ */
+const gitLike = async (call: CommandCall): Promise<string> => call.args[0] === 'ls-tree'
+  ? fakeTreeListing(call.cwd)
+  : isMarketplaceListCall(call) ? noMarketplaces(call) : '';
 
 const recordingRunner = (
   respond: (call: CommandCall) => string | Promise<string> = gitLike,
@@ -134,10 +148,26 @@ const createHostBundle = async (
   return { bundleRoot, cleanupRoot, from };
 };
 
+/**
+ * Host-CLI installs now write a store receipt under the host root (#101), so every Claude/Codex
+ * scenario pins its host roots inside the fixture's cleanup root instead of the developer's home.
+ */
+const isolated = (fixture: { readonly cleanupRoot: string }): {
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly home: string;
+} => ({
+  environment: {
+    CLAUDE_CONFIG_DIR: join(fixture.cleanupRoot, 'claude-config'),
+    CODEX_HOME: join(fixture.cleanupRoot, 'codex-home'),
+  },
+  home: join(fixture.cleanupRoot, 'home'),
+});
+
 it.each([
   {
     expected: [
       { args: ['plugin', 'list', '--json'], command: 'claude' },
+      { args: ['plugin', 'marketplace', 'list', '--json'], command: 'claude' },
       { args: ['plugin', 'marketplace', 'add', resolve('/bundle')], command: 'claude' },
       {
         args: ['plugin', 'install', 'install-fixture@install-fixture-marketplace', '--scope', 'project'],
@@ -152,6 +182,7 @@ it.each([
   {
     expected: [
       { args: ['plugin', 'list', '--json'], command: 'codex' },
+      { args: ['plugin', 'marketplace', 'list', '--json'], command: 'codex' },
       { args: ['plugin', 'marketplace', 'add', resolve('/bundle')], command: 'codex' },
       { args: ['plugin', 'add', 'install-fixture@install-fixture-marketplace'], command: 'codex' },
     ],
@@ -162,16 +193,149 @@ it.each([
   const fixture = await createHostBundle(host);
   const { calls, runner } = recordingRunner();
   try {
-    const result = await installBundle({ commandRunner: runner, from: fixture.from, host, scope });
+    const result = await installBundle({ ...isolated(fixture), commandRunner: runner, from: fixture.from, host, scope });
 
+    const hostRoot = join(fixture.cleanupRoot, host === 'claude' ? 'claude-config' : 'codex-home');
+    // A Claude project-scope registration belongs to the working directory the host verbs ran in (the bundle
+    // root), so its receipt is keyed by a digest of that root: two projects never share one receipt.
+    // The key also carries the marketplace: the host identifies the install as `<plugin>@<marketplace>`.
+    const receiptPath = join(hostRoot, 'agent-bundle', 'receipts', scope === 'user'
+      ? `install-fixture.install-fixture-marketplace.${scope}.json`
+      : `install-fixture.install-fixture-marketplace.${scope}.${createHash('sha256').update(fixture.bundleRoot).digest('hex').slice(0, 12)}.json`);
     expect(result).toMatchObject({
       contentHash: (await treeInventory(fixture.bundleRoot)).hash,
       host,
       plugin: 'install-fixture',
+      receipt: receiptPath,
       state: 'installed',
     });
+    // The marketplace ownership read happens before any host verb: the receipt records the pre-install state.
     expect(calls).toEqual(expected.map((call) => ({ ...call, args: call.args.map((arg) =>
       arg === resolve('/bundle') ? fixture.bundleRoot : arg), cwd: fixture.bundleRoot })));
+    // The store receipt records the delivery and the exact host registrations, in order, for uninstall.
+    expect(await readInstallReceiptFile(receiptPath)).toMatchObject({
+      contentHash: (await treeInventory(fixture.bundleRoot)).hash,
+      directories: [],
+      files: [],
+      format: installReceiptFormat,
+      host,
+      hostDirectories: [],
+      mode: 'host-cli',
+      plugin: 'install-fixture',
+      ...(scope === 'user' ? {} : { projectRoot: fixture.bundleRoot }),
+      registrations: host === 'claude'
+        ? [
+          { kind: 'claude-marketplace', name: 'install-fixture-marketplace', scope },
+          { id: 'install-fixture@install-fixture-marketplace', kind: 'claude-plugin', scope },
+        ]
+        : [
+          { kind: 'codex-marketplace', name: 'install-fixture-marketplace' },
+          { id: 'install-fixture@install-fixture-marketplace', kind: 'codex-plugin' },
+        ],
+      scope,
+      version: '1.2.3',
+    });
+    if (scope === 'user') expect((await readInstallReceiptFile(receiptPath))?.projectRoot).toBeUndefined();
+
+    // A marketplace that was already configured before the install is not claimed: the receipt records the
+    // plugin registration only, so a later uninstall retains the marketplace instead of removing someone else's.
+    const preRegistered = recordingRunner((call) => isMarketplaceListCall(call)
+      ? (host === 'claude'
+        ? JSON.stringify([{ name: 'install-fixture-marketplace' }])
+        : JSON.stringify({ marketplaces: [{ name: 'install-fixture-marketplace', root: '/elsewhere' }] }))
+      : '');
+    await rm(receiptPath);
+    await installBundle({ ...isolated(fixture), commandRunner: preRegistered.runner, from: fixture.from, host, scope });
+    expect((await readInstallReceiptFile(receiptPath))?.registrations).toEqual([
+      host === 'claude'
+        ? { id: 'install-fixture@install-fixture-marketplace', kind: 'claude-plugin', scope }
+        : { id: 'install-fixture@install-fixture-marketplace', kind: 'codex-plugin' },
+    ]);
+    // An unreadable marketplace list is not proof of ownership either (fail-closed).
+    const unreadable = recordingRunner(() => '');
+    await rm(receiptPath);
+    await installBundle({ ...isolated(fixture), commandRunner: unreadable.runner, from: fixture.from, host, scope });
+    expect((await readInstallReceiptFile(receiptPath))?.registrations.map((registration) => registration.kind)).toEqual([`${host}-plugin`]);
+
+    // `marketplace add` succeeded but the plugin install failed: the marketplace this run created is claimed only
+    // in memory, so it is rolled back rather than left registered with no receipt (a retry would otherwise sample it
+    // as pre-existing, record only the plugin, and `uninstall` would retain it as user-owned forever).
+    await rm(receiptPath);
+    const installVerb = host === 'claude' ? 'plugin install' : 'plugin add';
+    const failing: CommandCall[] = [];
+    const rolledBack = await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        failing.push(call);
+        if (isMarketplaceListCall(call)) return { code: 0, stderr: '', stdout: noMarketplaces(call) };
+        return args.join(' ').startsWith(installVerb)
+          ? { code: 1, stderr: 'install exploded', stdout: '' }
+          : { code: 0, stderr: '', stdout: '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch((failure: unknown) => failure);
+    expect(rolledBack).toBeInstanceOf(DiagnosticError);
+    expect((rolledBack as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: host });
+    expect((rolledBack as DiagnosticError).diagnostics[0]?.message).toContain('install exploded');
+    expect(failing.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+      `${installVerb} install-fixture@install-fixture-marketplace${host === 'claude' ? ` --scope ${scope}` : ''}`,
+      'plugin marketplace remove install-fixture-marketplace',
+    ]);
+    expect(await readInstallReceiptFile(receiptPath)).toBeUndefined();
+
+    // A marketplace that pre-existed the install is not this run's to roll back.
+    const preExisting: CommandCall[] = [];
+    await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        preExisting.push(call);
+        if (isMarketplaceListCall(call)) {
+          return { code: 0, stderr: '', stdout: host === 'claude'
+            ? JSON.stringify([{ name: 'install-fixture-marketplace' }])
+            : JSON.stringify({ marketplaces: [{ name: 'install-fixture-marketplace', root: '/elsewhere' }] }) };
+        }
+        return args.join(' ').startsWith(installVerb)
+          ? { code: 1, stderr: 'install exploded', stdout: '' }
+          : { code: 0, stderr: '', stdout: '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch(() => undefined);
+    expect(preExisting.map((call) => call.args.join(' '))).not.toContain('plugin marketplace remove install-fixture-marketplace');
+
+    // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
+    // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
+    const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
+    await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
+    await mkdir(receiptStore, { recursive: true });
+    if (process.getuid?.() === 0) return; // root ignores directory modes; the receipt write cannot be made to fail here.
+    await chmod(receiptStore, 0o555);
+    const unwritable: CommandCall[] = [];
+    const receiptFailed = await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        unwritable.push(call);
+        return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch((failure: unknown) => failure);
+    expect(receiptFailed).toBeInstanceOf(Error);
+    expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
+    expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+      host === 'claude'
+        ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
+        : 'plugin remove install-fixture@install-fixture-marketplace',
+      'plugin marketplace remove install-fixture-marketplace',
+    ]);
+    await chmod(receiptStore, 0o755);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
@@ -201,21 +365,34 @@ it('replaces a stale same-version Claude install through uninstall + install and
   const fixture = await createHostBundle('claude');
   const installed = join(fixture.cleanupRoot, 'claude-cache', '1.2.3');
   await cp(fixture.bundleRoot, installed, { recursive: true });
-  const { calls, runner } = recordingRunner((call) => isInventoryCall(call) ? claudeInventory(installed) : '');
+  const { calls, runner } = recordingRunner((call) => isInventoryCall(call)
+    ? claudeInventory(installed)
+    : isMarketplaceListCall(call) ? JSON.stringify([{ name: 'install-fixture-marketplace' }]) : '');
+  const options = { ...isolated(fixture), commandRunner: runner, from: fixture.from, host: 'claude' as const, scope: 'user' as const };
+  const receiptPath = join(fixture.cleanupRoot, 'claude-config', 'agent-bundle', 'receipts', 'install-fixture.install-fixture-marketplace.user.json');
   try {
-    const identical = await installBundle({ commandRunner: runner, from: fixture.from, host: 'claude', scope: 'user' });
+    const identical = await installBundle(options);
     expect(identical).toMatchObject({ destination: installed, host: 'claude', state: 'already-installed' });
-    expect(calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json']);
+    // Only reads: the inventory, then the marketplace list that decides whether the receipt may claim the marketplace.
+    expect(calls.map((call) => call.args.join(' '))).toEqual(['plugin list --json', 'plugin marketplace list --json']);
+    // An identical pre-#101 install gains its store receipt without any host command; the marketplace it came
+    // from already existed, so the receipt does not claim it.
+    expect(await readInstallReceiptFile(receiptPath)).toMatchObject({
+      mode: 'host-cli',
+      plugin: 'install-fixture',
+      registrations: [{ id: 'install-fixture@install-fixture-marketplace', kind: 'claude-plugin', scope: 'user' }],
+    });
 
     calls.length = 0;
     await writeFile(join(installed, 'payload.txt'), 'stale\n');
-    const replaced = await installBundle({ commandRunner: runner, from: fixture.from, host: 'claude', scope: 'user' });
+    const replaced = await installBundle(options);
     expect(replaced).toMatchObject({
       contentHash: (await treeInventory(fixture.bundleRoot)).hash,
       destination: installed,
       previousContentHash: (await treeInventory(installed)).hash,
       state: 'replaced',
     });
+    // A receipted replacement keeps the previous receipt's ownership answer instead of re-reading the marketplace list.
     expect(calls.map((call) => call.args.join(' '))).toEqual([
       'plugin list --json',
       'plugin uninstall install-fixture@install-fixture-marketplace --scope user --keep-data',
@@ -228,15 +405,21 @@ it('replaces a stale same-version Claude install through uninstall + install and
     const missingCache = recordingRunner((call) => isInventoryCall(call)
       ? claudeInventory(join(fixture.cleanupRoot, 'claude-cache', 'missing'))
       : '');
-    const uncomparable = await installBundle({ commandRunner: missingCache.runner, from: fixture.from, host: 'claude', scope: 'user' })
+    const uncomparable = await installBundle({ ...options, commandRunner: missingCache.runner })
       .catch((failure: unknown) => failure);
     expect(uncomparable).toBeInstanceOf(DiagnosticError);
     expect((uncomparable as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'claude' });
     expect((uncomparable as DiagnosticError).diagnostics[0]?.message).toContain('could not be compared');
     expect(missingCache.calls).toHaveLength(1);
-    const reinstalled = await installBundle({ commandRunner: missingCache.runner, from: fixture.from, host: 'claude', replace: true, scope: 'user' });
+    const reinstalled = await installBundle({ ...options, commandRunner: missingCache.runner, replace: true });
     expect(reinstalled).toMatchObject({ state: 'replaced' });
-    expect(reinstalled.previousContentHash).toBeUndefined();
+    // The cache copy could not be read, so the superseded hash comes from the store receipt the last install wrote.
+    expect(reinstalled.previousContentHash).toBe((await treeInventory(fixture.bundleRoot)).hash);
+    // Without a receipt there is nothing to remember: the superseded hash is honestly absent.
+    await rm(receiptPath);
+    const reinstalledWithoutReceipt = await installBundle({ ...options, commandRunner: missingCache.runner, replace: true });
+    expect(reinstalledWithoutReceipt).toMatchObject({ state: 'replaced' });
+    expect(reinstalledWithoutReceipt.previousContentHash).toBeUndefined();
 
     // A matching row without a readable scope or version is an unusable inventory, not "not installed".
     for (const row of [
@@ -244,13 +427,8 @@ it('replaces a stale same-version Claude install through uninstall + install and
       { id: 'install-fixture@install-fixture-marketplace', installPath: installed, scope: 'user' },
     ]) {
       const malformed = recordingRunner((call) => isInventoryCall(call) ? JSON.stringify([row]) : '');
-      const error = await installBundle({
-        commandRunner: malformed.runner,
-        from: fixture.from,
-        host: 'claude',
-        replace: true,
-        scope: 'user',
-      }).catch((failure: unknown) => failure);
+      const error = await installBundle({ ...options, commandRunner: malformed.runner, replace: true })
+        .catch((failure: unknown) => failure);
       expect(error, JSON.stringify(row)).toBeInstanceOf(DiagnosticError);
       expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
       expect(malformed.calls).toHaveLength(1);
@@ -288,7 +466,7 @@ it('fails a Claude install (AB7006) when plugin list --json reports load errors 
       listings += 1;
       return listings === 1 ? '[]' : claudeRefusedInventory(installed);
     });
-    const error = await installBundle({ commandRunner: fresh.runner, from: fixture.from, host: 'claude', scope: 'user' })
+    const error = await installBundle({ ...isolated(fixture), commandRunner: fresh.runner, from: fixture.from, host: 'claude', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(DiagnosticError);
     const [diagnostic] = (error as DiagnosticError).diagnostics;
@@ -296,18 +474,22 @@ it('fails a Claude install (AB7006) when plugin list --json reports load errors 
     expect(diagnostic?.message).toContain(`claude refused to load install-fixture@install-fixture-marketplace (version 1.2.3) at ${JSON.stringify(installed)} (scope user) after installation`);
     expect(diagnostic?.message).toContain('Duplicate hooks file detected');
     expect(diagnostic?.message).toContain('--replace');
+    // The receipt lands before the load verdict, so the refused copy stays receipt-owned for `uninstall`.
     expect(fresh.calls.map((call) => call.args.join(' '))).toEqual([
       'plugin list --json',
+      'plugin marketplace list --json',
       `plugin marketplace add ${fixture.bundleRoot}`,
       'plugin install install-fixture@install-fixture-marketplace --scope user',
       'plugin list --json',
     ]);
+    expect(await readInstallReceiptFile(join(fixture.cleanupRoot, 'claude-config', 'agent-bundle', 'receipts', 'install-fixture.install-fixture-marketplace.user.json')))
+      .toMatchObject({ plugin: 'install-fixture', scope: 'user' });
 
     // A byte-identical copy the host already refuses is never "already installed": reinstalling the same
     // bytes cannot help, so the defect is reported instead of a success.
     await cp(fixture.bundleRoot, installed, { recursive: true });
     const identical = recordingRunner((call) => isInventoryCall(call) ? claudeRefusedInventory(installed) : '');
-    const existing = await installBundle({ commandRunner: identical.runner, from: fixture.from, host: 'claude', scope: 'user' })
+    const existing = await installBundle({ ...isolated(fixture), commandRunner: identical.runner, from: fixture.from, host: 'claude', scope: 'user' })
       .catch((failure: unknown) => failure);
     expect(existing).toBeInstanceOf(DiagnosticError);
     expect((existing as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7006', target: 'claude' });
@@ -316,7 +498,7 @@ it('fails a Claude install (AB7006) when plugin list --json reports load errors 
 
     // Healthy rows (no `errors` key) keep the install result unchanged.
     const healthy = recordingRunner((call) => isInventoryCall(call) ? claudeInventory(installed) : '');
-    await expect(installBundle({ commandRunner: healthy.runner, from: fixture.from, host: 'claude', scope: 'user' }))
+    await expect(installBundle({ ...isolated(fixture), commandRunner: healthy.runner, from: fixture.from, host: 'claude', scope: 'user' }))
       .resolves.toMatchObject({ state: 'already-installed' });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
@@ -357,8 +539,10 @@ it('honours --replace for Codex through remove + add and fails closed without a 
       previousContentHash: (await treeInventory(installed)).hash,
       state: 'replaced',
     });
+    // No receipt yet, so the marketplace ownership read precedes every host verb.
     expect(calls.map((call) => call.args.join(' '))).toEqual([
       'plugin list --json',
+      'plugin marketplace list --json',
       'plugin remove install-fixture@install-fixture-marketplace',
       `plugin marketplace add ${fixture.bundleRoot}`,
       'plugin add install-fixture@install-fixture-marketplace',
@@ -370,13 +554,8 @@ it('honours --replace for Codex through remove + add and fails closed without a 
     });
     for (const stdout of ['not json', malformedRow]) {
       const unusable = recordingRunner(() => stdout);
-      const error = await installBundle({
-        commandRunner: unusable.runner,
-        from: fixture.from,
-        host: 'codex',
-        replace: true,
-        scope: 'user',
-      }).catch((failure: unknown) => failure);
+      const error = await installBundle({ ...options, commandRunner: unusable.runner, replace: true })
+        .catch((failure: unknown) => failure);
       expect(error, stdout).toBeInstanceOf(DiagnosticError);
       expect((error as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: 'codex' });
       expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
@@ -392,6 +571,7 @@ it('accepts an artifact root containing the requested host target', async () => 
   const { calls, runner } = recordingRunner();
   try {
     const result = await installBundle({
+      ...isolated(fixture),
       commandRunner: runner,
       from: fixture.from,
       host: 'claude',
@@ -416,6 +596,7 @@ it('fails with a typed diagnostic when the public host CLI is missing', async ()
   };
   try {
     const error = await installBundle({
+      ...isolated(fixture),
       commandRunner: missingRunner,
       from: fixture.from,
       host: 'codex',
@@ -437,6 +618,7 @@ it('rejects scopes the selected host does not support', async () => {
   const fixture = await createHostBundle('codex');
   try {
     const error = await installBundle({
+      ...isolated(fixture),
       commandRunner: recordingRunner().runner,
       from: fixture.from,
       host: 'codex',
@@ -472,9 +654,14 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
       // A fresh install created every directory, so it owns them all.
       directories: ['.cursor-plugin'],
       files: ['.cursor-plugin/plugin.json', 'payload.txt'],
-      format: 'agent-bundle-install-receipt/1',
+      format: installReceiptFormat,
       host: 'cursor',
+      // A fresh install into a home without plugins/local created both host directories (#101).
+      hostDirectories: ['plugins', 'plugins/local'],
+      mode: 'local',
       plugin: 'install-fixture',
+      registrations: [{ kind: 'cursor-local-plugin' }],
+      scope: 'user',
       version: '1.2.3',
     });
     expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
@@ -881,10 +1068,54 @@ it('ignores receipts whose file list could escape the plugin root', async () => 
       expect(await readInstallReceipt(root), missing).toBeUndefined();
     }
     await writeJson(join(root, installReceiptFile), complete);
-    expect(await readInstallReceipt(root)).toMatchObject({
+    // A format/1 receipt (#420) reads with its lifecycle fields synthesized and the downgrade recorded (#101).
+    expect(await readInstallReceipt(root)).toEqual({
+      contentHash: 'abc',
       directories: ['skills', 'skills/probe'],
       files: ['skills/probe/SKILL.md', 'plugin.json'],
+      format: installReceiptFormat,
+      host: 'cursor',
+      hostDirectories: [],
+      installedAt: '2026-09-03T00:00:00.000Z',
+      migratedFrom: 'agent-bundle-install-receipt/1',
+      mode: 'local',
+      plugin: 'install-fixture',
+      registrations: [{ kind: 'cursor-local-plugin' }],
+      scope: 'user',
+      updatedAt: '2026-09-03T00:00:00.000Z',
+      version: '1.2.3',
     });
+    // A current-format receipt must carry every lifecycle field with a valid shape, or it reads as absent.
+    const current = {
+      ...complete,
+      format: installReceiptFormat,
+      hostDirectories: ['plugins', 'plugins/local'],
+      mode: 'local',
+      registrations: [{ kind: 'cursor-local-plugin' }],
+      scope: 'user',
+      updatedAt: '2026-09-03T01:00:00.000Z',
+    };
+    for (const broken of [
+      { mode: 'remote' },
+      { scope: 'team' },
+      { updatedAt: 42 },
+      { hostDirectories: ['../outside'] },
+      { registrations: [{ kind: 'unknown-kind' }] },
+      { registrations: [{ kind: 'claude-plugin', scope: 'team' }] },
+      { registrations: 'cursor-local-plugin' },
+    ]) {
+      await writeJson(join(root, installReceiptFile), { ...current, ...broken });
+      expect(await readInstallReceipt(root), JSON.stringify(broken)).toBeUndefined();
+    }
+    for (const missing of ['mode', 'scope', 'updatedAt', 'hostDirectories', 'registrations'] as const) {
+      const { [missing]: _omitted, ...partial } = current;
+      await writeJson(join(root, installReceiptFile), partial);
+      expect(await readInstallReceipt(root), missing).toBeUndefined();
+    }
+    await writeJson(join(root, installReceiptFile), { ...current, format: 'agent-bundle-install-receipt/3' });
+    expect(await readInstallReceipt(root)).toBeUndefined();
+    await writeJson(join(root, installReceiptFile), current);
+    expect(await readInstallReceipt(root)).toEqual(current);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

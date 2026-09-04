@@ -32,16 +32,30 @@ import {
   claudePluginRowErrors,
   parsePublicHostInventory,
   publicHostCacheRoot,
+  publicHostRoot,
   treeHash,
   type InstallHost,
+  type PublicHostInstalledEntry,
   type PublicHostInventory,
 } from './install.ts';
 import {
   compareInstalledTree,
   describeContentComparison,
+  installReceiptFile,
+  installReceiptFormat,
+  installReceiptStoreDirectory,
+  isPreservedRuntimeRoot,
+  isRemnantReceipt,
+  isRuntimeStateRemnant,
+  readInstallReceipt,
+  readInstallReceiptFile,
   treeInventory,
   type InstalledTreeComparison,
   type InstalledTreeOwnership,
+  type InstallReceipt,
+  type InstallReceiptMode,
+  type InstallReceiptScope,
+  type InstallRegistration,
   type TreeInventory,
 } from './receipt.ts';
 import {
@@ -100,6 +114,17 @@ export interface DoctorHostProbe {
   readonly version?: string;
 }
 
+/** The install receipt an inventoried Cursor local copy carries, as read (a format/1 receipt is reported as migrated). */
+export interface DoctorReceiptSummary {
+  readonly contentHash: string;
+  readonly format: string;
+  readonly installedAt: string;
+  readonly migratedFrom?: string;
+  readonly mode: InstallReceiptMode;
+  readonly scope: InstallReceiptScope;
+  readonly updatedAt: string;
+}
+
 export interface DoctorFinding {
   /** Git commit of a staged Cursor marketplace repository. */
   readonly commit?: string;
@@ -125,9 +150,58 @@ export interface DoctorFinding {
   readonly manifest?: string;
   readonly name?: string;
   readonly path?: string;
+  /** The in-tree install receipt of a Cursor local copy, when it carries one. */
+  readonly receipt?: DoctorReceiptSummary;
   readonly runtime?: DoctorRuntimeStatus;
   readonly state: DoctorFindingState;
   readonly version?: string;
+}
+
+/**
+ * One lifecycle observation. `observed` carries the host evidence that made it
+ * true or false; `unavailable` names why no pinned read-only surface exposes it
+ * — Doctor never guesses an activation state.
+ */
+export type DoctorLifecycleObservation =
+  | Readonly<{ readonly evidence: string; readonly status: 'observed'; readonly value: boolean }>
+  | Readonly<{ readonly reason: string; readonly status: 'unavailable' }>;
+
+/** The furthest lifecycle stage observed true (`unknown` when placement itself is unobservable). */
+export type DoctorLifecycleStage = 'absent' | 'active' | 'enabled' | 'placed' | 'registered' | 'unknown';
+
+/**
+ * placed (bytes at the host's install location) → registered (the host's
+ * registry names the plugin) → enabled (the host reports it enabled/trusted) →
+ * active (loaded by a live host process), each observed or typed unavailable
+ * per host (#101).
+ */
+export interface DoctorLifecycle {
+  readonly active: DoctorLifecycleObservation;
+  readonly enabled: DoctorLifecycleObservation;
+  readonly placed: DoctorLifecycleObservation;
+  readonly registered: DoctorLifecycleObservation;
+  readonly stage: DoctorLifecycleStage;
+}
+
+/**
+ * A store receipt (`<host root>/agent-bundle/receipts/*.json`) and whether the
+ * host still holds the registration it records: `consistent`, `orphaned` (the
+ * host no longer lists the plugin or the staged repository is gone), or
+ * `unknown` (the host inventory was unusable).
+ */
+export interface DoctorReceiptFinding {
+  readonly contentHash: string;
+  readonly format: string;
+  readonly installedAt: string;
+  readonly migratedFrom?: string;
+  readonly mode: InstallReceiptMode;
+  readonly path: string;
+  readonly plugin: string;
+  readonly registrations: readonly InstallRegistration[];
+  readonly scope: InstallReceiptScope;
+  readonly state: 'consistent' | 'orphaned' | 'unknown';
+  readonly updatedAt: string;
+  readonly version: string;
 }
 
 export type DoctorRuntimeStatus =
@@ -215,12 +289,15 @@ export interface DoctorHostReport {
     readonly comparison?: DoctorInstallComparison;
     /** Claude only: host validator reports for the bundle and every installed copy, when `claude` is available. */
     readonly hostValidation?: readonly DoctorHostValidation[];
+    readonly lifecycle?: DoctorLifecycle;
     readonly marketplace?: string;
   };
   readonly diagnostics: readonly Diagnostic[];
   readonly host: DoctorHost;
   readonly inventory: DoctorInventory;
   readonly probe: DoctorHostProbe;
+  /** Agent Bundle store receipts under the host root, cross-checked against the host's inventory. */
+  readonly receipts: readonly DoctorReceiptFinding[];
 }
 
 export interface DoctorEndpointReport {
@@ -384,6 +461,16 @@ export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise
   );
 };
 
+/** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */
+const listingDirectory = async (from: string | undefined, host: DoctorHost, home: string): Promise<string> => {
+  if (from === undefined) return home;
+  try {
+    return await resolveBundleRoot(from, host);
+  } catch {
+    return resolve(from);
+  }
+};
+
 const readIdentity = async (from: string, host: DoctorHost): Promise<PluginIdentity> => {
   const bundleRoot = await resolveBundleRoot(from, host);
   const kind = `${host} plugin manifest`;
@@ -434,6 +521,36 @@ const durableStateReport = (
       stores: findings.length,
     }),
   });
+};
+
+/**
+ * AB7307 for a Cursor directory that holds no plugin but was left by `uninstall --keep-data`.
+ * A remnant receipt (owning no files) may also guard unowned entries the uninstall retained, so
+ * the message reports those extras instead of calling the directory state-only; `stateOnly`
+ * short-circuits the readdir when the caller already proved the directory holds only `state/`.
+ */
+const remnantDiagnostic = async (subject: string, path: string, stateOnly: boolean, pluginData?: string): Promise<Diagnostic> => {
+  const entries = stateOnly ? [] : (await readdir(path)).filter((name) => name !== installReceiptFile);
+  const extras = entries.filter((name) => !isPreservedRuntimeRoot(name)).sort((left, right) => left.localeCompare(right));
+  const preserved = [
+    ...(stateOnly || entries.some(isPreservedRuntimeRoot) ? ['state/'] : []),
+    ...(pluginData === undefined ? [] : [`the PLUGIN_DATA directory ${pluginData}`]),
+  ];
+  const preservedText = preserved.length === 0 ? 'state/' : preserved.join(' and ');
+  return diagnostic(
+    'AB7307',
+    extras.length === 0
+      ? `${subject} holds only preserved runtime state (${preservedText}) from an earlier \`uninstall --keep-data\`; ` +
+        'no plugin is installed there.'
+      : `${subject} holds no plugin: an earlier \`uninstall\` retained the unowned ` +
+        `${extras.length === 1 ? 'entry' : 'entries'} ${extras.map((name) => JSON.stringify(name)).join(', ')}` +
+        `${preserved.length === 0 ? '' : ` beside preserved runtime state (${preservedText})`}.`,
+    extras.length === 0
+      ? 'Reinstall the plugin to use the preserved state, or run `agent-bundle uninstall cursor --purge-data --confirm-purge` to remove it.'
+      : 'Reinstall the plugin, or move the retained entries out and remove the directory by hand; `uninstall` never removes unowned entries.',
+    'info',
+    'cursor',
+  );
 };
 
 const inspectDurableState = async (
@@ -785,6 +902,29 @@ const cursorInventory = async (
       manifest = undefined;
     }
     if (manifest === undefined) {
+      // `uninstall --keep-data` leaves preserved runtime state (and a remnant receipt owning no files) behind:
+      // not a corrupt plugin, an uninstalled one whose durable state was kept on purpose.
+      let remnantReceipt: InstallReceipt | undefined;
+      try {
+        remnantReceipt = await readInstallReceipt(path);
+      } catch {
+        remnantReceipt = undefined;
+      }
+      const stateOnly = await isRuntimeStateRemnant(path);
+      const remnant = stateOnly || (remnantReceipt !== undefined && isRemnantReceipt(remnantReceipt));
+      if (remnant) {
+        const durableState = await inspectDurableState(path, 'cursor');
+        if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+        diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, stateOnly, remnantReceipt?.cursorExpansion?.pluginData));
+        findings.push({
+          ...(durableState === undefined ? {} : { durableState }),
+          entry,
+          ...(remnantReceipt === undefined ? {} : { name: remnantReceipt.plugin, receipt: receiptSummary(remnantReceipt), version: remnantReceipt.version }),
+          path,
+          state: 'missing',
+        });
+        continue;
+      }
       findings.push({ entry, path, state: 'corrupt' });
       diagnostics.push(diagnostic(
         'AB7304',
@@ -834,6 +974,16 @@ const cursorInventory = async (
       ? await inspectCursorPluginHooks(path, home, { caseInsensitivePaths: platform === 'win32' })
       : undefined;
     if (hooks !== undefined) diagnostics.push(...hooks.diagnostics);
+    // The in-tree receipt is read-only evidence here: a pre-lifecycle receipt is diagnosed, never rewritten.
+    let receipt: InstallReceipt | undefined;
+    try {
+      receipt = await readInstallReceipt(path);
+    } catch {
+      receipt = undefined;
+    }
+    if (receipt?.migratedFrom !== undefined) {
+      diagnostics.push(migratedReceiptDiagnostic('cursor', join(path, installReceiptFile), receipt));
+    }
     findings.push({
       ...(durableState === undefined ? {} : { durableState }),
       entry,
@@ -842,6 +992,7 @@ const cursorInventory = async (
       manifest: manifest.manifest,
       name: manifest.name,
       path,
+      ...(receipt === undefined ? {} : { receipt: receiptSummary(receipt) }),
       // A drifted expansion means Cursor spawns paths that no longer exist: the install is corrupt, not merely stale.
       state: staticDiagnostics.some((entry) => entry.severity === 'error') || launch?.launch?.state === 'drifted'
         ? 'corrupt'
@@ -1014,6 +1165,299 @@ const installComparison = (
   ownership: comparison.ownership,
   status: comparison.status,
 });
+
+const observed = (value: boolean, evidence: string): DoctorLifecycleObservation =>
+  Object.freeze({ evidence, status: 'observed', value });
+
+const unavailable = (reason: string): DoctorLifecycleObservation => Object.freeze({ reason, status: 'unavailable' });
+
+const lifecycleStages = Object.freeze(['placed', 'registered', 'enabled', 'active'] as const);
+
+/** The furthest stage observed true; an observed-false placement is `absent`, an unobservable one `unknown`. */
+const lifecycleOf = (observations: Omit<DoctorLifecycle, 'stage'>): DoctorLifecycle => {
+  let stage: DoctorLifecycleStage = observations.placed.status === 'unavailable' ? 'unknown' : 'absent';
+  for (const name of lifecycleStages) {
+    const observation = observations[name];
+    if (observation.status !== 'observed' || !observation.value) break;
+    stage = name;
+  }
+  return Object.freeze({ ...observations, stage });
+};
+
+const noLiveHostSurface = (host: DoctorHost): string => {
+  switch (host) {
+    case 'claude':
+      return 'Claude Code 2.1.257 exposes no read-only verb that reports which plugins a live session has loaded; `claude plugin list --json` reports registration and enablement only.';
+    case 'codex':
+      return 'Codex 0.147.0 exposes no read-only verb that reports which plugins a live session has loaded, and skips plugin hooks until the user trusts them in the hook browser (no read-only trust verb).';
+    case 'cursor':
+      return 'Cursor exposes no non-interactive plugin-loading surface; whether a live window loaded the plugin is not observable read-only.';
+    default: {
+      const exhaustive: never = host;
+      throw new TypeError(`Unknown Doctor host ${String(exhaustive)}.`);
+    }
+  }
+};
+
+const cursorEnabledUnavailable =
+  'Cursor keeps enabled-plugin state as server-assigned ids in state.vscdb (2026-09-03 audit, #407) and gates plugin import and ' +
+  'plugin hooks on its thirdPartyExtensibilityEnabled / enable_cc_plugin_import flags (observed 3.18.25); no pinned read-only surface exposes either.';
+
+/**
+ * Lifecycle for a public host CLI copy: placement is the cache path the host
+ * reported, registration and enablement come from `plugin list --json`, and
+ * live activation has no read-only surface on either host.
+ */
+const publicHostLifecycle = async (
+  host: Exclude<DoctorHost, 'cursor'>,
+  inventory: PublicHostInventory,
+): Promise<DoctorLifecycle> => {
+  if (inventory.status === 'unavailable') {
+    const reason = `\`${host} plugin list --json\` was unusable (${inventory.detail}).`;
+    return lifecycleOf({
+      active: unavailable(noLiveHostSurface(host)),
+      enabled: unavailable(reason),
+      placed: unavailable(reason),
+      registered: unavailable(reason),
+    });
+  }
+  if (inventory.entries.length === 0) {
+    const evidence = `\`${host} plugin list --json\` lists no copy of the plugin.`;
+    return lifecycleOf({
+      active: unavailable(noLiveHostSurface(host)),
+      enabled: observed(false, evidence),
+      placed: observed(false, evidence),
+      registered: observed(false, evidence),
+    });
+  }
+  // Claude may list the plugin at several scopes (user, project, local) and Codex reports one row; the lifecycle
+  // aggregates every row, and a stage holds only when it holds for every listed copy — a disabled or unplaced
+  // copy at any scope is reported, never hidden behind the row Claude happened to list first.
+  const label = (entry: PublicHostInstalledEntry): string => entry.scope === undefined ? 'the row' : `scope ${entry.scope}`;
+  const placements: { readonly entry: PublicHostInstalledEntry; readonly placed: boolean }[] = [];
+  for (const entry of inventory.entries) {
+    let placed = false;
+    try {
+      placed = (await lstat(entry.installPath)).isDirectory();
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTDIR')) throw error;
+    }
+    placements.push({ entry, placed });
+  }
+  const unplaced = placements.filter((placement) => !placement.placed);
+  const flagless = inventory.entries.filter((entry) => entry.enabled === undefined);
+  const disabled = inventory.entries.filter((entry) => entry.enabled === false);
+  const scopes = inventory.entries.map(label).join(', ');
+  return lifecycleOf({
+    active: unavailable(noLiveHostSurface(host)),
+    enabled: flagless.length > 0
+      ? unavailable(`the \`${host} plugin list --json\` row for ${flagless.map(label).join(', ')} carries no enabled flag.`)
+      : observed(
+        disabled.length === 0,
+        disabled.length === 0
+          ? `\`${host} plugin list --json\` reports enabled: true for ${scopes}.`
+          : `\`${host} plugin list --json\` reports enabled: false for ${disabled.map(label).join(', ')}` +
+            `${disabled.length === inventory.entries.length ? '' : ` (enabled: true for the other listed ${inventory.entries.length - disabled.length === 1 ? 'scope' : 'scopes'})`}.`,
+      ),
+    placed: observed(
+      unplaced.length === 0,
+      unplaced.length === 0
+        ? `${host} reports the ${placements.length === 1 ? 'copy' : 'copies'} at ${[...new Set(placements.map((placement) => placement.entry.installPath))].join(', ')}.`
+        : `${host} reports ${unplaced.map((placement) => `${placement.entry.installPath} (${label(placement.entry)})`).join(', ')}, which ${unplaced.length === 1 ? 'is' : 'are'} not ${unplaced.length === 1 ? 'a directory' : 'directories'}.`,
+    ),
+    registered: observed(true, `\`${host} plugin list --json\` lists the plugin${inventory.entries.some((entry) => entry.scope !== undefined) ? ` at ${scopes}` : ''}.`),
+  });
+};
+
+const cursorLocalLifecycle = (destination: string, placed: boolean): DoctorLifecycle => lifecycleOf({
+  active: unavailable(noLiveHostSurface('cursor')),
+  enabled: unavailable(cursorEnabledUnavailable),
+  placed: observed(placed, placed ? `${destination} exists.` : `${destination} does not exist.`),
+  registered: observed(
+    placed,
+    'Cursor loads every directory under ~/.cursor/plugins/local at window reload; the directory is the registration.',
+  ),
+});
+
+const cursorStagedLifecycle = (repoRoot: string, imported: boolean): DoctorLifecycle => lifecycleOf({
+  active: unavailable(noLiveHostSurface('cursor')),
+  enabled: unavailable(cursorEnabledUnavailable),
+  placed: observed(true, `Staged marketplace repository ${repoRoot} exists.`),
+  registered: observed(
+    imported,
+    imported
+      ? 'Cursor holds a completed (.cache-complete) copy from this staging under ~/.cursor/plugins/cache.'
+      : 'No completed copy from this staging exists under ~/.cursor/plugins/cache; the Customize import step is pending.',
+  ),
+});
+
+const describeObservation = (observation: DoctorLifecycleObservation): string =>
+  observation.status === 'observed' ? (observation.value ? 'yes' : 'no') : 'unavailable';
+
+const lifecycleDiagnostic = (host: DoctorHost, name: string, version: string, lifecycle: DoctorLifecycle): Diagnostic => {
+  const unavailableStages = lifecycleStages.filter((stage) => lifecycle[stage].status === 'unavailable');
+  const detail = unavailableStages.length === 0
+    ? ''
+    : ` Unavailable: ${unavailableStages.map((stage) => {
+      const observation = lifecycle[stage];
+      return `${stage} (${observation.status === 'unavailable' ? observation.reason : ''})`;
+    }).join('; ')}`;
+  const recovery = lifecycle.stage === 'placed' && lifecycle.registered.status === 'observed'
+    ? host === 'cursor'
+      ? 'Complete the Cursor Customize import (marketplace mode), or reload the window (local mode).'
+      : `Register the plugin with \`agent-bundle install ${host} --from <bundle-dir>\`.`
+    : lifecycle.stage === 'registered' && lifecycle.enabled.status === 'observed'
+      ? host === 'claude'
+        ? 'Enable the plugin with `claude plugin enable <plugin>@<marketplace>`.'
+        : host === 'codex'
+          ? 'Enable the plugin with `/plugins` in Codex or by editing `[plugins."<plugin>@<marketplace>"] enabled` in config.toml.'
+          : 'Enable the plugin in Cursor Customize -> Plugins.'
+      : 'No action needed; stages marked unavailable have no pinned read-only host surface and are never guessed.';
+  return diagnostic(
+    'AB7330',
+    `${name}@${version} lifecycle on ${host}: stage ${lifecycle.stage}` +
+      ` (placed ${describeObservation(lifecycle.placed)}, registered ${describeObservation(lifecycle.registered)}, ` +
+      `enabled ${describeObservation(lifecycle.enabled)}, active ${describeObservation(lifecycle.active)}).${detail}`,
+    recovery,
+    'info',
+    host,
+  );
+};
+
+const receiptSummary = (receipt: InstallReceipt): DoctorReceiptSummary => Object.freeze({
+  contentHash: receipt.contentHash,
+  format: receipt.migratedFrom ?? installReceiptFormat,
+  installedAt: receipt.installedAt,
+  ...(receipt.migratedFrom === undefined ? {} : { migratedFrom: receipt.migratedFrom }),
+  mode: receipt.mode,
+  scope: receipt.scope,
+  updatedAt: receipt.updatedAt,
+});
+
+const migratedReceiptDiagnostic = (host: DoctorHost, path: string, receipt: InstallReceipt): Diagnostic => diagnostic(
+  'AB7329',
+  `Install receipt ${JSON.stringify(path)} predates lifecycle receipts (read as ${receipt.migratedFrom ?? 'an older format'}): ` +
+    `mode, scope, registrations, and host directories were synthesized (${receipt.mode}, ${receipt.scope}, ` +
+    `${receipt.registrations.map((registration) => registration.kind).join(', ')}, none).`,
+  'Rerun `agent-bundle install` (or the bundle\'s `install.mjs`) once; an identical copy rewrites the receipt as ' +
+    `${installReceiptFormat} without changing plugin files. \`uninstall\` accepts the migrated receipt as is.`,
+  'info',
+  host,
+);
+
+/** Whether the host's listing still names the plugin registration a store receipt records. */
+const receiptRegistrationState = (
+  host: Exclude<DoctorHost, 'cursor'>,
+  receipt: InstallReceipt,
+  listing: PublicHostListing,
+): DoctorReceiptFinding['state'] => {
+  if (listing.status === 'unavailable') return 'unknown';
+  const registration = receipt.registrations.find((candidate) => candidate.kind === `${host}-plugin`);
+  if (registration?.id === undefined) return 'unknown';
+  let document: unknown;
+  try {
+    document = JSON.parse(listing.stdout) as unknown;
+  } catch {
+    return 'unknown';
+  }
+  const rows = host === 'claude'
+    ? document
+    : isRecord(document) ? document['installed'] : undefined;
+  if (!Array.isArray(rows)) return 'unknown';
+  const present = rows.some((row) => isRecord(row) && (host === 'claude'
+    ? row['id'] === registration.id && (registration.scope === undefined || row['scope'] === registration.scope)
+    : row['pluginId'] === registration.id && row['installed'] !== false));
+  return present ? 'consistent' : 'orphaned';
+};
+
+const receiptFinding = (path: string, receipt: InstallReceipt, state: DoctorReceiptFinding['state']): DoctorReceiptFinding =>
+  Object.freeze({
+    contentHash: receipt.contentHash,
+    format: receipt.migratedFrom ?? installReceiptFormat,
+    installedAt: receipt.installedAt,
+    ...(receipt.migratedFrom === undefined ? {} : { migratedFrom: receipt.migratedFrom }),
+    mode: receipt.mode,
+    path,
+    plugin: receipt.plugin,
+    registrations: receipt.registrations,
+    scope: receipt.scope,
+    state,
+    updatedAt: receipt.updatedAt,
+    version: receipt.version,
+  });
+
+/**
+ * Inventories the Agent Bundle store receipts under a host root and
+ * cross-checks each against the host: an orphaned receipt (the registration it
+ * records is gone) is `AB7328`, a pre-lifecycle receipt is `AB7329`. Unreadable
+ * receipt files are reported, never thrown.
+ */
+const inspectStoreReceipts = async (
+  host: DoctorHost,
+  hostRoot: string,
+  stateOf: (receipt: InstallReceipt) => Promise<DoctorReceiptFinding['state']>,
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly receipts: readonly DoctorReceiptFinding[] }> => {
+  const directory = installReceiptStoreDirectory(hostRoot);
+  let entries: readonly string[];
+  try {
+    entries = (await readdir(directory)).sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR')) return { diagnostics: Object.freeze([]), receipts: Object.freeze([]) };
+    return {
+      diagnostics: freezeDiagnostics([diagnostic(
+        'AB7328',
+        `Agent Bundle receipt store ${JSON.stringify(directory)} could not be read.`,
+        'Repair permissions for the receipt store, then rerun `agent-bundle doctor`.',
+        'warning',
+        host,
+      )]),
+      receipts: Object.freeze([]),
+    };
+  }
+  const diagnostics: Diagnostic[] = [];
+  const receipts: DoctorReceiptFinding[] = [];
+  for (const entry of entries.filter((name) => name.endsWith('.json'))) {
+    const path = join(directory, entry);
+    let receipt: InstallReceipt | undefined;
+    try {
+      receipt = await readInstallReceiptFile(path);
+    } catch (error) {
+      diagnostics.push(diagnostic(
+        'AB7328',
+        `Agent Bundle receipt ${JSON.stringify(path)} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        'Remove or repair the receipt file; `agent-bundle uninstall <host> --force` removes the install it described.',
+        'warning',
+        host,
+      ));
+      continue;
+    }
+    if (receipt === undefined) {
+      diagnostics.push(diagnostic(
+        'AB7328',
+        `Agent Bundle receipt ${JSON.stringify(path)} is not a valid install receipt (unknown format or missing fields).`,
+        'Reinstall the plugin to rewrite its receipt, or remove the file if the install is gone.',
+        'warning',
+        host,
+      ));
+      continue;
+    }
+    const state = await stateOf(receipt);
+    receipts.push(receiptFinding(path, receipt, state));
+    if (receipt.migratedFrom !== undefined) diagnostics.push(migratedReceiptDiagnostic(host, path, receipt));
+    if (state === 'orphaned') {
+      diagnostics.push(diagnostic(
+        'AB7328',
+        `Agent Bundle receipt ${JSON.stringify(path)} records ${receipt.plugin}@${receipt.version} (${receipt.mode}, scope ${receipt.scope}) ` +
+          `but ${host} no longer holds the registration it describes.`,
+        `Run \`agent-bundle uninstall ${host} --from <bundle-dir>${receipt.mode === 'marketplace' ? ' --mode marketplace' : ''}\` to consume the ` +
+          'orphaned receipt, or reinstall the plugin.',
+        'warning',
+        host,
+      ));
+    }
+  }
+  return { diagnostics: freezeDiagnostics(diagnostics), receipts: Object.freeze(receipts) };
+};
 
 /**
  * This plugin's copies in the host's inventory, read through the same parser
@@ -1249,6 +1693,7 @@ const cursorStagedBundle = async (
       diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot))),
       finding: Object.freeze({
         ...base,
+        lifecycle: cursorStagedLifecycle(repoRoot, false),
         ...(entry?.marketplace === undefined ? {} : { marketplace: entry.marketplace }),
         path: repoRoot,
         state: 'corrupt',
@@ -1256,27 +1701,41 @@ const cursorStagedBundle = async (
     };
   }
   const [sourceHash, stagedHash] = await Promise.all([treeHash(identity.bundleRoot), treeHash(pluginDirectory)]);
+  // The staging inspection also proves the working tree equals committed HEAD, so a source-matching but
+  // uncommitted tree cannot be reported as imported. It is read for a drifted staging too: a bundle rebuilt
+  // after Cursor imported the staged commit is still imported, and the lifecycle must say so.
+  const staging = await inspectCursorMarketplaceStaging(home, git);
+  const entry = staging.findings.find((candidate) => candidate.name === identity.name);
   if (sourceHash !== stagedHash) {
+    const imported = entry?.state === 'registered';
     return {
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7308',
-        `Staged Cursor marketplace copy of ${identity.name}@${identity.version} at ${repoRoot} differs from the current bundle.`,
-        'Remove the staged marketplace directory and rerun `agent-bundle install cursor --mode marketplace`.',
+        `Staged Cursor marketplace copy of ${identity.name}@${identity.version} at ${repoRoot} differs from the current bundle` +
+          `${imported ? '; Cursor has imported the staged copy, so the imported plugin is the older content' : ''}.`,
+        imported
+          ? 'Run `agent-bundle uninstall cursor --mode marketplace` (the imported copy is Cursor-owned; it lists the Customize step), ' +
+            'rerun `agent-bundle install cursor --mode marketplace`, then re-import the plugin in Cursor.'
+          : 'Remove the staged marketplace directory and rerun `agent-bundle install cursor --mode marketplace`.',
         'warning',
         'cursor',
       )]),
-      finding: Object.freeze({ ...base, path: repoRoot, state: 'drifted' }),
+      finding: Object.freeze({
+        ...base,
+        ...(entry?.commit === undefined ? {} : { commit: entry.commit }),
+        lifecycle: cursorStagedLifecycle(repoRoot, imported),
+        ...(entry?.marketplace === undefined ? {} : { marketplace: entry.marketplace }),
+        path: repoRoot,
+        state: 'drifted',
+      }),
     };
   }
-  // The staging inspection also proves the working tree equals committed HEAD, so a source-matching but
-  // uncommitted tree cannot be reported as imported.
-  const staging = await inspectCursorMarketplaceStaging(home, git);
-  const entry = staging.findings.find((candidate) => candidate.name === identity.name);
   return {
     diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot) || candidate.message.includes(`${identity.name}@`))),
     finding: Object.freeze({
       ...base,
       ...(entry?.commit === undefined ? {} : { commit: entry.commit }),
+      lifecycle: cursorStagedLifecycle(repoRoot, entry?.state === 'registered'),
       ...(entry?.marketplace === undefined ? {} : { marketplace: entry.marketplace }),
       path: repoRoot,
       state: entry === undefined ? 'unregistered' : entry.state,
@@ -1312,6 +1771,7 @@ const cursorBundle = async (
         finding: Object.freeze({
           ...base,
           comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' as const }),
+          lifecycle: cursorLocalLifecycle(destination, false),
           state: 'missing',
         }),
       };
@@ -1337,8 +1797,33 @@ const cursorBundle = async (
     const withComparison = (state: DoctorFindingState): DoctorHostReport['bundle'] => Object.freeze({
       ...base,
       comparison: installComparison(comparison, destination),
+      lifecycle: cursorLocalLifecycle(destination, true),
+      ...(comparison.receipt === undefined ? {} : { receipt: receiptSummary(comparison.receipt) }),
       state,
     });
+    // `uninstall --keep-data` left state/ (with a remnant receipt owning no files) and possibly unowned entries it
+    // retained: not installed, state kept. The remnant receipt alone does not prove the directory is state-only.
+    const stateOnly = (comparison.ownership === 'receipt' || comparison.ownership === 'foreign') &&
+      await isRuntimeStateRemnant(destination);
+    const remnant = stateOnly ||
+      (comparison.ownership === 'receipt' && comparison.receipt !== undefined && isRemnantReceipt(comparison.receipt));
+    if (remnant) {
+      return {
+        diagnostics: freezeDiagnostics([await remnantDiagnostic(
+          `Cursor destination ${destination} (${identity.name}@${identity.version})`,
+          destination,
+          stateOnly,
+          comparison.receipt?.cursorExpansion?.pluginData,
+        )]),
+        finding: Object.freeze({
+          ...base,
+          comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' as const }),
+          lifecycle: cursorLocalLifecycle(destination, false),
+          ...(comparison.receipt === undefined ? {} : { receipt: receiptSummary(comparison.receipt) }),
+          state: 'missing',
+        }),
+      };
+    }
     switch (comparison.status) {
       case 'current':
         return { diagnostics: Object.freeze([]), finding: withComparison('installed') };
@@ -1579,6 +2064,7 @@ const claudeBundle = async (
       ...registration.finding,
       comparison: compared.comparison,
       hostValidation: Object.freeze(validated.map((entry) => entry.validation)),
+      lifecycle: await publicHostLifecycle('claude', inventory),
     }),
   };
 };
@@ -1616,6 +2102,7 @@ const codexBundle = async (
       finding: Object.freeze({
         ...base,
         comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'unknown' as const }),
+        lifecycle: await publicHostLifecycle('codex', inventory),
         state: 'unknown',
       }),
     };
@@ -1626,6 +2113,7 @@ const codexBundle = async (
     finding: Object.freeze({
       ...base,
       comparison: compared.comparison,
+      lifecycle: await publicHostLifecycle('codex', inventory),
       state: inventory.entries.length === 0 ? 'missing' : 'installed',
     }),
   };
@@ -1984,15 +2472,55 @@ const doctorHost = async (
     : await probeBinary(host, home, run);
   const environment = options.environment ?? process.env;
   const git = stagingGit(run);
+  // Claude `project` / `local` registrations are keyed by the cwd the host verbs ran in, and install runs them
+  // from the resolved host bundle root (`<from>/claude` for a multi-target artifact root), so the listing the
+  // bundle comparison and lifecycle use is taken from that same root; `--from` without a manifest for this host
+  // falls back to the given directory and the bundle step reports the missing manifest.
+  const listingCwd = await listingDirectory(options.from, host, home);
   const listing: PublicHostListing = host === 'cursor' || probed.probe.status !== 'available'
     ? { detail: `${host} is not available`, status: 'unavailable' }
-    : await readPublicHostListing(host, run, options.from === undefined ? home : resolve(options.from));
+    : await readPublicHostListing(host, run, listingCwd);
+  // Claude `project` / `local` registrations live in the project's own `.claude/settings*.json`, so a
+  // receipt that records a project root is cross-checked against `plugin list --json` run from that root
+  // (once per root), never against the listing taken here: a valid install elsewhere is not an orphan.
+  // A root that cannot be listed (gone, or the host failed there) leaves the state unknown.
+  const projectListings = new Map<string, Promise<PublicHostListing>>();
+  const listingFor = (receipt: InstallReceipt): Promise<PublicHostListing> => {
+    if (host === 'cursor' || listing.status === 'unavailable' || (receipt.scope !== 'project' && receipt.scope !== 'local')) {
+      return Promise.resolve(listing);
+    }
+    if (receipt.projectRoot === undefined) {
+      return Promise.resolve({ detail: `the ${receipt.scope}-scope receipt records no project root`, status: 'unavailable' });
+    }
+    const projectRoot = resolve(receipt.projectRoot);
+    if (projectRoot === listingCwd) return Promise.resolve(listing);
+    let pending = projectListings.get(projectRoot);
+    if (pending === undefined) {
+      pending = readPublicHostListing(host, run, projectRoot);
+      projectListings.set(projectRoot, pending);
+    }
+    return pending;
+  };
   const inventoried = host === 'cursor'
     ? await cursorInventory(home, probed.probe.status === 'available', git, options.platform ?? process.platform)
     : probed.probe.status !== 'available'
       ? { diagnostics: Object.freeze([]), inventory: freezeInventory('skipped') }
       : publicHostInventory(host, listing, environment, home);
   const diagnostics = [...probed.diagnostics, ...inventoried.diagnostics];
+  // Store receipts are lifecycle evidence Agent Bundle itself wrote, so the store is inventoried from
+  // the filesystem whether or not the host can be probed: malformed and migrated receipts are always
+  // reported. The host cross-check that separates `consistent` from `orphaned` needs the host's
+  // inventory; without it the registration state is `unknown`, never guessed.
+  const receipts = host === 'cursor'
+    ? await inspectStoreReceipts(host, join(home, '.cursor'), async (receipt) => receipt.mode === 'marketplace'
+      ? (await exists(join(cursorMarketplaceRoot(join(home, '.cursor')), receipt.plugin)) ? 'consistent' : 'orphaned')
+      : 'unknown')
+    : await inspectStoreReceipts(
+      host,
+      publicHostRoot(host, environment, home),
+      async (receipt) => receiptRegistrationState(host, receipt, await listingFor(receipt)),
+    );
+  diagnostics.push(...receipts.diagnostics);
   let bundle: DoctorHostReport['bundle'];
   if (options.from !== undefined) {
     try {
@@ -2014,6 +2542,9 @@ const doctorHost = async (
       if (checked.finding === undefined) {
         throw new TypeError(`The ${host} bundle check returned no finding.`);
       }
+      if (checked.finding.lifecycle !== undefined) {
+        diagnostics.push(lifecycleDiagnostic(host, identity.name, identity.version, checked.finding.lifecycle));
+      }
       const durableState = await inspectDurableState(identity.bundleRoot, host);
       if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
       bundle = Object.freeze({
@@ -2034,6 +2565,7 @@ const doctorHost = async (
     host,
     inventory: inventoried.inventory,
     probe: probed.probe,
+    receipts: receipts.receipts,
     ...(bundle === undefined ? {} : { bundle }),
   });
 };

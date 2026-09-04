@@ -18,6 +18,7 @@ npx agent-bundle --version
 | `agent-bundle build` | 构建一份已校验的 Agent Bundle 产物。 |
 | `agent-bundle prepack` | 构建并校验 npm pack 清单。 |
 | `agent-bundle install <host>` | 把已构建的捆绑包安装进受支持的宿主。 |
+| `agent-bundle uninstall <host>` | 移除一份由回执归属的已构建捆绑包宿主安装，且不多删任何东西。 |
 | `agent-bundle doctor` | 在不做任何改动的前提下检查宿主安装与运行时端点。 |
 | `agent-bundle validate` | 校验项目源码或某一份产物。 |
 | `agent-bundle eval` | 针对已构建产物运行确定性或原生 eval 套件。 |
@@ -104,6 +105,38 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mod
 输出的独立 `install.mjs` 与相对包的安装器 bin 接受同样的 `--replace`。Cursor 副本携带安装回执
 （`.agent-bundle-install.json`），替换只触碰归属文件，`--replace` 会接管回执出现之前的副本；Claude 的替换
 先运行 `claude plugin uninstall --keep-data` 再重新安装，Codex 则先 `codex plugin remove` 再 `add`。
+每次安装都会写入生命周期回执（格式 `agent-bundle-install-receipt/2`：版本、内容哈希、模式、作用域、归属路径、
+宿主注册、时间戳）——Cursor 本地副本写在树内，Claude、Codex 与 Cursor 市场模式写在
+`<宿主根目录>/agent-bundle/receipts/` 下——`uninstall` 与 `doctor` 都消费它。
+
+## uninstall
+
+```sh
+agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
+```
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
+| `--from <bundle-dir>` | `process.cwd()` | 用于识别插件（名称、版本、市场）的捆绑包目录或产物根目录。 |
+| `--scope <scope>` | `user` | 安装时使用的作用域（Claude）。 |
+| `--mode <mode>` | `local` | 仅限 Cursor：卸载 `local` 副本或已暂存的 `marketplace` 仓库。 |
+| `--keep-data` | 开启 | 保留持久运行时状态（`state/`：状态内核、通知日志；对 Agent Plugins 包的 Cursor 副本，还包括回执记录的 `PLUGIN_DATA` 目录）。这是默认行为；该标志只是显式声明。 |
+| `--purge-data` | 关闭 | 同时删除持久运行时状态。没有 `--confirm-purge` 时被拒绝（`AB7008`）。 |
+| `--force` | 关闭 | 在没有回执（旧版 Cursor 副本、仅宿主侧的安装）或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。回执或清单指向另一个插件时无论如何都会被拒绝。 |
+| `--plan` | 关闭 | 打印将被删除的确切路径与宿主注册，不做任何改动。 |
+
+uninstall 只删除回执归属的内容：记录的文件与安装器创建的目录（Cursor 本地，包括安装本身创建的
+`~/.cursor/plugins[/local]` 目录）、暂存仓库（Cursor 市场模式，在其 `HEAD` 与记录的提交匹配之后），或宿主注册
+（`claude plugin uninstall <id> --scope <scope> --keep-data` + `claude plugin marketplace remove`，
+`codex plugin remove` + `codex plugin marketplace remove`——若另一个已安装插件仍在使用该市场，则保留市场，
+包括仅记录在 Claude 的 `plugins/installed_plugins.json` 注册表中、位于另一作用域或另一项目的 Claude 安装）。
+非归属条目被保留并列出；缺少回执为 `AB7009`，不匹配为 `AB7007`，除非 `--force`；再次运行是 `not-installed`
+空操作。类型化的 `data.outcome` 按宿主如实说明持久状态的去向：Cursor 为 `kept` / `purged` / `absent`；
+Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 还会删除 `state/` 与
+`plugins/data/<id>/`）；Codex 为 `removed-by-host` / `unavailable`（`codex plugin remove` 删除缓存树且没有
+keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninstall <host>`；输出的 `install.mjs` 接受
+`--uninstall`，并支持 `--mode`、`--keep-data`、`--purge-data --confirm-purge`、`--force` 与 `--plan`。
 
 ## doctor
 
@@ -123,7 +156,12 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mod
 `Bundle at …` 或 `Installed copy at …` 前缀的 `AB6020`–`AB6022`。对 Cursor，它还会根据已安装清单证明插件级 hook 的注册（`AB7322`），在
 `~/.cursor/hooks.json` 会把某个插件 hook 再投递一次时发出警告（`AB7323`），并跟踪暂存的市场从 `unregistered`
 到 Cursor 导入后的 `registered`（`AB7324`）。对 Agent Plugins 安装，它还会证明输出的安装器所做的占位符展开——
-`expanded`、`unexpanded`（Cursor 3.18.25 无法启动的规范形式）或 `drifted`（`AB7326`）。
+`expanded`、`unexpanded`（Cursor 3.18.25 无法启动的规范形式）或 `drifted`（`AB7326`）。带 `--from` 时，它还按宿主报告
+生命周期阶段——placed → registered → enabled → active——每一阶段要么被观察到（Claude 与 Codex 的 `plugin list --json`
+行及其 `enabled` 标志、Cursor 本地目录、Cursor 市场导入缓存），要么被类型化为 `unavailable` 并给出没有只读表面能暴露它
+的原因（`AB7330`）。它还清点每个宿主根目录下的 Agent Bundle 回执仓库，对宿主已不再认可的回执发出警告（`AB7328`），并把
+格式 2 之前写入的回执报告为已迁移（`AB7329`）。仅包含 `uninstall --keep-data` 所保留运行时状态的 Cursor 目录会以
+`AB7307` info 报告为 `missing`，而不是 corrupt 或 foreign。
 
 ## validate
 

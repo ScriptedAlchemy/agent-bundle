@@ -32,7 +32,59 @@ import { exists } from '../core/paths.ts';
 /** Sidecar written at an installed plugin root by every agent-bundle installer. */
 export const installReceiptFile = '.agent-bundle-install.json';
 
-export const installReceiptFormat = 'agent-bundle-install-receipt/1';
+/**
+ * Current receipt format. Format 2 (#101) adds the lifecycle fields —
+ * `mode`, `scope`, `registrations`, `hostDirectories`, `updatedAt` — that
+ * `agent-bundle uninstall` consumes; format 1 receipts (#420) are read with
+ * those fields synthesized (`migratedFrom` names the downgrade) and are
+ * rewritten as format 2 by the next replacement.
+ */
+export const installReceiptFormat = 'agent-bundle-install-receipt/2';
+
+export const legacyInstallReceiptFormat = 'agent-bundle-install-receipt/1';
+
+/**
+ * How the install was delivered: `local` copies into a host-loaded directory
+ * (Cursor `plugins/local`), `marketplace` stages a local marketplace repository
+ * (Cursor Customize import), `host-cli` registered through the host's own
+ * plugin CLI (Claude, Codex).
+ */
+export type InstallReceiptMode = 'host-cli' | 'local' | 'marketplace';
+
+export type InstallReceiptScope = 'local' | 'project' | 'user';
+
+/**
+ * One host registration the installer performed, recorded so uninstall
+ * reverses exactly that and nothing else.
+ */
+export type InstallRegistrationKind =
+  | 'claude-marketplace'
+  | 'claude-plugin'
+  | 'codex-marketplace'
+  | 'codex-plugin'
+  | 'cursor-local-plugin'
+  | 'cursor-marketplace-staging';
+
+export const installRegistrationKinds: readonly InstallRegistrationKind[] = Object.freeze([
+  'claude-marketplace',
+  'claude-plugin',
+  'codex-marketplace',
+  'codex-plugin',
+  'cursor-local-plugin',
+  'cursor-marketplace-staging',
+]);
+
+export interface InstallRegistration {
+  /** Staged marketplace HEAD commit (`cursor-marketplace-staging`). */
+  readonly commit?: string;
+  /** `<plugin>@<marketplace>` for plugin registrations. */
+  readonly id?: string;
+  readonly kind: InstallRegistrationKind;
+  /** Marketplace name for marketplace registrations. */
+  readonly name?: string;
+  /** Claude only: the scope the registration was made at. */
+  readonly scope?: InstallReceiptScope;
+}
 
 /** Root entries owned by generated runtime code; installers never remove or rewrite them. */
 export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
@@ -80,8 +132,48 @@ export interface InstallReceipt {
   readonly files: readonly string[];
   readonly format: typeof installReceiptFormat;
   readonly host: string;
+  /**
+   * Directories the installer created under the host root (`~/.cursor`) on the
+   * way to the plugin root (POSIX-relative to the host root, sorted), such as
+   * `plugins` and `plugins/local` in a fresh Cursor home. Uninstall prunes
+   * exactly these once they are empty and never a directory the host made.
+   */
+  readonly hostDirectories: readonly string[];
   readonly installedAt: string;
+  /**
+   * Present only on a receipt read from disk that predates the current
+   * format: names the format it was read as, and every lifecycle field was
+   * synthesized (best-effort defaults). Never written.
+   */
+  readonly migratedFrom?: string;
+  readonly mode: InstallReceiptMode;
   readonly plugin: string;
+  /**
+   * Claude `project` / `local` scope only: the working directory whose
+   * `.claude/settings*.json` holds the registration (the cwd the host verbs ran
+   * in). Two projects installing the same plugin at the same scope are two
+   * installs with two receipts, keyed by this root.
+   */
+  readonly projectRoot?: string;
+  /** Host registrations the installer performed, in the order it performed them. */
+  readonly registrations: readonly InstallRegistration[];
+  readonly scope: InstallReceiptScope;
+  /** When this receipt was last written (install or replacement); `installedAt` is the first install. */
+  readonly updatedAt: string;
+  readonly version: string;
+}
+
+/** The lifecycle identity every receipt writer supplies; inventory and timestamps come from the write. */
+export interface InstallReceiptIdentity {
+  readonly host: string;
+  readonly hostDirectories?: readonly string[];
+  readonly installedAt?: string;
+  readonly mode: InstallReceiptMode;
+  readonly plugin: string;
+  readonly projectRoot?: string;
+  readonly registrations: readonly InstallRegistration[];
+  readonly scope: InstallReceiptScope;
+  readonly updatedAt?: string;
   readonly version: string;
 }
 
@@ -235,7 +327,7 @@ const isOwnedEntry = async (
  * an owned regular file that a rebuild turns into a directory: it leaves as
  * stale before anything is written beneath it.
  */
-const assertRealAncestors = async (
+export const assertRealAncestors = async (
   root: string,
   files: readonly string[],
   ownedFiles: ReadonlySet<string> = new Set(),
@@ -341,26 +433,53 @@ const readCursorExpansion = (value: unknown): InstallReceiptCursorExpansion | un
   });
 };
 
-/**
- * Reads the receipt at a plugin root; malformed or unsafe receipts read as
- * absent. A receipt that is not a regular file (a symbolic link, a FIFO, a
- * device) is refused outright before it is read: it would let another file
- * supply the owned-file list that drives deletions, or block the read.
- */
-export const readInstallReceipt = async (destination: string): Promise<InstallReceipt | undefined> => {
-  const path = join(destination, installReceiptFile);
-  let value: unknown;
-  try {
-    if (!(await lstat(path)).isFile()) throw unsupportedEntry(installReceiptFile);
-    value = JSON.parse(await readFile(path, 'utf8')) as unknown;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
-    throw error;
-  }
+const isReceiptScope = (value: unknown): value is InstallReceiptScope =>
+  value === 'local' || value === 'project' || value === 'user';
+
+const isReceiptMode = (value: unknown): value is InstallReceiptMode =>
+  value === 'host-cli' || value === 'local' || value === 'marketplace';
+
+const isRegistrationKind = (value: unknown): value is InstallRegistrationKind =>
+  typeof value === 'string' && (installRegistrationKinds as readonly string[]).includes(value);
+
+const optionalString = (value: unknown): value is string | undefined =>
+  value === undefined || typeof value === 'string';
+
+const readRegistration = (value: unknown): InstallRegistration | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (
-    record['format'] !== installReceiptFormat ||
+    !isRegistrationKind(record['kind']) ||
+    !optionalString(record['commit']) ||
+    !optionalString(record['id']) ||
+    !optionalString(record['name']) ||
+    (record['scope'] !== undefined && !isReceiptScope(record['scope']))
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...(record['commit'] === undefined ? {} : { commit: record['commit'] }),
+    ...(record['id'] === undefined ? {} : { id: record['id'] }),
+    kind: record['kind'],
+    ...(record['name'] === undefined ? {} : { name: record['name'] }),
+    ...(record['scope'] === undefined ? {} : { scope: record['scope'] }),
+  });
+};
+
+/**
+ * Validates a parsed receipt document. Format 1 receipts (written by #420
+ * for Cursor local copies) are upgraded in memory: `mode: 'local'`,
+ * `scope: 'user'`, a single `cursor-local-plugin` registration, no host
+ * directories, and `updatedAt = installedAt`; `migratedFrom` records the
+ * downgrade so Doctor can diagnose it. Any other format, or a current-format
+ * receipt missing a field, reads as absent.
+ */
+const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const format = record['format'];
+  if (format !== installReceiptFormat && format !== legacyInstallReceiptFormat) return undefined;
+  if (
     typeof record['plugin'] !== 'string' ||
     typeof record['version'] !== 'string' ||
     typeof record['host'] !== 'string' ||
@@ -372,7 +491,7 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
     return undefined;
   }
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
-  return Object.freeze({
+  const base = {
     contentHash: record['contentHash'],
     ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
     directories: Object.freeze([...record['directories']]),
@@ -382,8 +501,65 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
     installedAt: record['installedAt'],
     plugin: record['plugin'],
     version: record['version'],
+  } as const;
+  if (format === legacyInstallReceiptFormat) {
+    return Object.freeze({
+      ...base,
+      hostDirectories: Object.freeze([]),
+      migratedFrom: legacyInstallReceiptFormat,
+      mode: 'local',
+      registrations: Object.freeze([Object.freeze({ kind: 'cursor-local-plugin' as const })]),
+      scope: 'user',
+      updatedAt: record['installedAt'],
+    });
+  }
+  if (
+    !isReceiptMode(record['mode']) ||
+    !isReceiptScope(record['scope']) ||
+    typeof record['updatedAt'] !== 'string' ||
+    !isReceiptFileList(record['hostDirectories']) ||
+    !Array.isArray(record['registrations'])
+  ) {
+    return undefined;
+  }
+  const registrations: InstallRegistration[] = [];
+  for (const entry of record['registrations']) {
+    const registration = readRegistration(entry);
+    if (registration === undefined) return undefined;
+    registrations.push(registration);
+  }
+  return Object.freeze({
+    ...base,
+    hostDirectories: Object.freeze([...record['hostDirectories']]),
+    mode: record['mode'],
+    ...(typeof record['projectRoot'] === 'string' ? { projectRoot: record['projectRoot'] } : {}),
+    registrations: Object.freeze(registrations),
+    scope: record['scope'],
+    updatedAt: record['updatedAt'],
   });
 };
+
+/**
+ * Reads a receipt file; malformed or unsafe receipts read as absent. A receipt
+ * that is not a regular file (a symbolic link, a FIFO, a device) is refused
+ * outright before it is read: it would let another file supply the owned-file
+ * list that drives deletions, or block the read.
+ */
+export const readInstallReceiptFile = async (path: string): Promise<InstallReceipt | undefined> => {
+  let value: unknown;
+  try {
+    if (!(await lstat(path)).isFile()) throw unsupportedEntry(basename(path));
+    value = JSON.parse(await readFile(path, 'utf8')) as unknown;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  return receiptFromDocument(value);
+};
+
+/** Reads the receipt at a plugin root (`.agent-bundle-install.json`). */
+export const readInstallReceipt = (destination: string): Promise<InstallReceipt | undefined> =>
+  readInstallReceiptFile(join(destination, installReceiptFile));
 
 /**
  * Builds a receipt for an inventory. `directories` defaults to every ancestor
@@ -391,44 +567,228 @@ export const readInstallReceipt = async (destination: string): Promise<InstallRe
  * created all of them; callers that adopt or replace an existing tree pass
  * exactly the directories they created.
  */
-export const createInstallReceipt = (options: {
+export const createInstallReceipt = (options: InstallReceiptIdentity & {
+  readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
-  readonly host: string;
-  readonly installedAt?: string;
   readonly inventory: TreeInventory;
-  readonly plugin: string;
-  readonly version: string;
-}): InstallReceipt => Object.freeze({
-  contentHash: options.inventory.hash,
-  directories: options.directories ?? directoriesOf(options.inventory.files),
-  files: options.inventory.files,
-  format: installReceiptFormat,
-  host: options.host,
-  installedAt: options.installedAt ?? new Date().toISOString(),
-  plugin: options.plugin,
-  version: options.version,
-});
+}): InstallReceipt => {
+  const installedAt = options.installedAt ?? new Date().toISOString();
+  return Object.freeze({
+    contentHash: options.inventory.hash,
+    ...(options.cursorExpansion === undefined ? {} : { cursorExpansion: options.cursorExpansion }),
+    directories: options.directories ?? directoriesOf(options.inventory.files),
+    files: options.inventory.files,
+    format: installReceiptFormat,
+    host: options.host,
+    hostDirectories: Object.freeze(sortNames(options.hostDirectories ?? [])),
+    installedAt,
+    mode: options.mode,
+    plugin: options.plugin,
+    ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
+    registrations: Object.freeze(options.registrations.map((registration) => Object.freeze({ ...registration }))),
+    scope: options.scope,
+    updatedAt: options.updatedAt ?? installedAt,
+    version: options.version,
+  });
+};
 
-const receiptDocument = (receipt: InstallReceipt): string => `${stableJson(receipt)}\n`;
+/** The on-disk document: `migratedFrom` is a read-time annotation and is never persisted. */
+const receiptDocument = (receipt: InstallReceipt): string => {
+  const { migratedFrom: _migratedFrom, ...persisted } = receipt;
+  return `${stableJson({ ...persisted, format: installReceiptFormat })}\n`;
+};
 
 /**
- * Lands a receipt at a plugin root atomically: an exclusively created,
+ * Writes a receipt document atomically at `path`: an exclusively created,
  * randomly named sibling (`wx` never follows an existing link or overwrites
  * a file) renamed into place.
  */
-export const writeInstallReceipt = async (destination: string, receipt: InstallReceipt): Promise<void> => {
-  const temporary = join(destination, `${installReceiptFile}.${randomUUID()}.tmp`);
+export const writeInstallReceiptFile = async (path: string, receipt: InstallReceipt): Promise<void> => {
+  const temporary = `${path}.${randomUUID()}.tmp`;
   const handle = await open(temporary, 'wx');
   try {
     await handle.writeFile(receiptDocument(receipt), 'utf8');
     await handle.close();
-    await rename(temporary, join(destination, installReceiptFile));
+    await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
   }
 };
 
-const hasInstallSurfaceMarkers = async (destination: string): Promise<boolean> => {
+/** Lands a receipt at a plugin root atomically. */
+export const writeInstallReceipt = (destination: string, receipt: InstallReceipt): Promise<void> =>
+  writeInstallReceiptFile(join(destination, installReceiptFile), receipt);
+
+/**
+ * Agent Bundle-owned receipt store under a host root (`~/.claude`,
+ * `~/.codex`, `~/.cursor`) for installs whose plugin tree is host-owned
+ * (Claude and Codex cache copies) or is a staged marketplace repository
+ * (Cursor `--mode marketplace`), where a receipt cannot live inside the tree.
+ * Never inside the host's own `plugins/` directories.
+ */
+export const installReceiptStoreDirectory = (hostRoot: string): string => join(hostRoot, 'agent-bundle', 'receipts');
+
+/** One receipt per plugin and delivery key (`<scope>` for host CLIs, `marketplace` for Cursor staging). */
+export const installReceiptStorePath = (hostRoot: string, plugin: string, key: string): string =>
+  join(installReceiptStoreDirectory(hostRoot), `${plugin}.${key}.json`);
+
+/**
+ * The delivery key for a host-CLI receipt: the scope alone for `user`, and
+ * the scope plus a digest of the project root for `project` / `local`, whose
+ * registrations live in that project's own `.claude/settings*.json`.
+ */
+export const installReceiptScopeKey = (scope: string, projectRoot: string | undefined): string =>
+  scope === 'user' || projectRoot === undefined
+    ? scope
+    : `${scope}.${createHash('sha256').update(projectRoot).digest('hex').slice(0, 12)}`;
+
+/** Writes a store receipt, creating the store directories as needed. */
+export const writeStoredInstallReceipt = async (path: string, receipt: InstallReceipt): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeInstallReceiptFile(path, receipt);
+};
+
+export interface StoredInstallReceipt {
+  readonly path: string;
+  readonly receipt: InstallReceipt;
+}
+
+export interface StoredInstallReceiptListing {
+  /** Every readable receipt in the store, sorted by path. */
+  readonly receipts: readonly StoredInstallReceipt[];
+  /**
+   * Store entries that exist but could not be read or parsed as receipts (and
+   * the store directory itself when it exists but cannot be listed). A caller
+   * deciding whether another install still depends on something must treat a
+   * non-empty list as "unknown", never as "no dependents".
+   */
+  readonly unreadable: readonly string[];
+}
+
+/** Lists a host root's receipt store. A missing store is an empty listing; unreadable entries are reported, not thrown. */
+export const listStoredInstallReceipts = async (hostRoot: string): Promise<StoredInstallReceiptListing> => {
+  const directory = installReceiptStoreDirectory(hostRoot);
+  let entries: readonly string[];
+  try {
+    entries = (await readdir(directory)).sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR')) {
+      return Object.freeze({ receipts: Object.freeze([]), unreadable: Object.freeze([]) });
+    }
+    return Object.freeze({ receipts: Object.freeze([]), unreadable: Object.freeze([directory]) });
+  }
+  const receipts: StoredInstallReceipt[] = [];
+  const unreadable: string[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const path = join(directory, entry);
+    let receipt: InstallReceipt | undefined;
+    try {
+      receipt = await readInstallReceiptFile(path);
+    } catch {
+      unreadable.push(path);
+      continue;
+    }
+    if (receipt === undefined) unreadable.push(path);
+    else receipts.push(Object.freeze({ path, receipt }));
+  }
+  return Object.freeze({ receipts: Object.freeze(receipts), unreadable: Object.freeze(unreadable) });
+};
+
+const rmdirIfEmpty = async (path: string): Promise<boolean> => {
+  try {
+    await rmdir(path);
+    return true;
+  } catch (error) {
+    if (isErrno(error, 'ENOTEMPTY') || isErrno(error, 'ENOENT') || isErrno(error, 'EEXIST') || isErrno(error, 'ENOTDIR')) {
+      return false;
+    }
+    throw error;
+  }
+};
+
+/**
+ * Removes a store receipt and prunes the Agent Bundle-owned store directories
+ * (`agent-bundle/receipts`, then `agent-bundle`) once they are empty. Returns
+ * the paths actually removed.
+ */
+export const removeStoredInstallReceipt = async (path: string, hostRoot: string): Promise<readonly string[]> => {
+  const removed: string[] = [];
+  try {
+    const metadata = await lstat(path);
+    if (!metadata.isFile()) throw unsupportedEntry(basename(path));
+    await rm(path);
+    removed.push(path);
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  for (const directory of [installReceiptStoreDirectory(hostRoot), join(hostRoot, 'agent-bundle')]) {
+    if (await rmdirIfEmpty(directory)) removed.push(directory);
+  }
+  return Object.freeze(removed);
+};
+
+/**
+ * What `removeStoredInstallReceipt` would remove, without touching anything:
+ * the receipt file when it exists, then each store directory whose every
+ * remaining entry is itself gone. `--plan` reports exactly this set so the
+ * plan and the completed result name the same paths.
+ */
+export const simulateRemoveStoredInstallReceipt = async (path: string, hostRoot: string): Promise<readonly string[]> => {
+  const gone = new Set<string>();
+  const removed: string[] = [];
+  try {
+    if ((await lstat(path)).isFile()) {
+      gone.add(path);
+      removed.push(path);
+    }
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  for (const directory of [installReceiptStoreDirectory(hostRoot), join(hostRoot, 'agent-bundle')]) {
+    let entries: readonly string[];
+    try {
+      entries = await readdir(directory);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR')) continue;
+      throw error;
+    }
+    if (entries.every((entry) => gone.has(join(directory, entry)))) {
+      gone.add(directory);
+      removed.push(directory);
+    }
+  }
+  return Object.freeze(removed);
+};
+
+/** Removes an empty directory; reports whether it was removed (non-empty or absent directories are left alone). */
+export const pruneEmptyDirectory = rmdirIfEmpty;
+
+/**
+ * A destination that holds nothing but runtime roots (`state/`) — and at most
+ * a remnant receipt — is what `uninstall --keep-data` leaves behind: not a
+ * foreign directory, but an empty shell around preserved durable state that a
+ * reinstall fills back in.
+ */
+export const isRuntimeStateRemnant = async (destination: string): Promise<boolean> => {
+  const entries = (await readdir(destination)).filter((name) => name !== installReceiptFile);
+  return entries.length > 0 && entries.every(isPreservedRuntimeRoot);
+};
+
+/**
+ * A remnant receipt owns no files and records no registrations: `uninstall`
+ * writes it when the plugin root survives (retained runtime state or unowned
+ * entries) so the host directories the install created stay receipt-owned for
+ * a later purge and Doctor can explain the directory instead of calling it
+ * corrupt.
+ */
+export const isRemnantReceipt = (receipt: InstallReceipt): boolean =>
+  receipt.files.length === 0 && receipt.registrations.length === 0;
+
+/** `sha256` of an empty owned set: what `hashOwnedFiles(root, [])` yields, and what a remnant receipt records. */
+export const emptyContentHash = createHash('sha256').digest('hex');
+
+export const hasInstallSurfaceMarkers = async (destination: string): Promise<boolean> => {
   for (const marker of installSurfaceMarkerFiles) {
     if (!await exists(join(destination, marker))) return false;
   }
@@ -529,7 +889,7 @@ export interface StagedArtifact {
 export const stageArtifact = async (options: {
   readonly artifactRoot: string;
   readonly destination: string;
-  readonly receipt: { readonly host: string; readonly installedAt?: string; readonly plugin: string; readonly version: string };
+  readonly receipt: InstallReceiptIdentity;
   readonly stageRoot: string;
 }): Promise<StagedArtifact> => {
   const parent = await mkdtemp(join(options.stageRoot, `.${basename(options.destination)}.stage-`));
@@ -689,7 +1049,7 @@ const previouslyOwnedDirectories = (comparison: InstalledTreeComparison): readon
 export const replaceInstalledTree = async (options: {
   readonly comparison: InstalledTreeComparison;
   readonly destination: string;
-  readonly receipt: { readonly host: string; readonly installedAt?: string; readonly plugin: string; readonly version: string };
+  readonly receipt: InstallReceiptIdentity;
   readonly staged: StagedArtifact;
 }): Promise<void> => {
   if (options.comparison.ownership === 'foreign') {
@@ -739,13 +1099,24 @@ export const replaceInstalledTree = async (options: {
   }
   // The receipt owns what the installer owns now: the surviving directories it created before plus
   // the ones this replacement created. It is finalised in the private staging copy, then committed.
+  // The first install time and the host directories the first install created carry over from the
+  // previous receipt; `updatedAt` is this replacement.
   const directories = sortNames([...new Set([
     ...[...ownedDirectories].filter((directory) => !pruned.has(directory)),
     ...created,
   ])]);
+  const previous = options.comparison.receipt;
+  const now = new Date().toISOString();
   await writeFile(
     join(options.staged.root, installReceiptFile),
-    receiptDocument(createInstallReceipt({ ...options.receipt, directories, inventory: options.staged.inventory })),
+    receiptDocument(createInstallReceipt({
+      ...options.receipt,
+      directories,
+      hostDirectories: options.receipt.hostDirectories ?? previous?.hostDirectories ?? [],
+      installedAt: options.receipt.installedAt ?? previous?.installedAt ?? now,
+      inventory: options.staged.inventory,
+      updatedAt: options.receipt.updatedAt ?? now,
+    })),
     'utf8',
   );
   await rename(join(options.staged.root, installReceiptFile), join(options.destination, installReceiptFile));

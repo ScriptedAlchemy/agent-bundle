@@ -87,6 +87,7 @@ it('builds a package-relative installer with fallback naming and built-host argv
   const help = await run(installer, [], { cwd: tmpdir() });
   expect(help).toMatchObject({ code: 0, stderr: '' });
   expect(help.stdout).toContain('install <host> [--scope <scope>] [--mode local|marketplace] [--replace|--force] [--json]');
+  expect(help.stdout).toContain('uninstall <host> [--scope <scope>] [--mode local|marketplace] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]');
   expect(help.stdout).toContain('cursor');
   expect(help.stdout).not.toContain('claude');
 
@@ -162,6 +163,37 @@ it('builds a package-relative installer with fallback naming and built-host argv
   const badMode = await run(installer, ['install', 'cursor', '--mode', 'remote'], { cwd: tmpdir() });
   expect(badMode.code).toBe(1);
   expect(badMode.stderr).toContain('Install mode must be local or marketplace.');
+
+  // The same bin uninstalls: --plan is a no-op that names every path, the real run consumes the receipt and
+  // leaves nothing of the local copy behind, and --purge-data is refused without --confirm-purge.
+  const env = { ...process.env, HOME: home };
+  const plan = await run(installer, ['uninstall', 'cursor', '--plan', '--json'], { cwd: tmpdir(), env });
+  expect(plan).toMatchObject({ code: 0, stderr: '' });
+  expect(JSON.parse(plan.stdout)).toMatchObject({
+    destination,
+    mode: 'local',
+    receipt: { status: 'consumed' },
+    state: 'planned',
+  });
+  await expect(stat(join(destination, installReceiptFile))).resolves.toBeDefined();
+  const unconfirmed = await run(installer, ['uninstall', 'cursor', '--purge-data'], { cwd: tmpdir(), env });
+  expect(unconfirmed.code).toBe(1);
+  expect(unconfirmed.stderr).toContain('AB7008');
+  const uninstalled = await run(installer, ['uninstall', 'cursor'], { cwd: tmpdir(), env });
+  expect(uninstalled).toMatchObject({ code: 0, stderr: '' });
+  expect(uninstalled.stdout).toMatch(/^Uninstalled installer-fixture@1\.2\.3 for cursor \(local mode\) at /u);
+  await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  const again = await run(installer, ['uninstall', 'cursor', '--json'], { cwd: tmpdir(), env });
+  expect(JSON.parse(again.stdout)).toMatchObject({ state: 'not-installed' });
+  // Marketplace-mode staging from earlier in this test is removed the same way.
+  const marketplaceGone = await run(installer, ['uninstall', 'cursor', '--mode', 'marketplace', '--json'], { cwd: tmpdir(), env });
+  expect(marketplaceGone).toMatchObject({ code: 0, stderr: '' });
+  expect(JSON.parse(marketplaceGone.stdout)).toMatchObject({ mode: 'marketplace', state: 'uninstalled' });
+  await expect(stat(repository)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const unknownVerbFlag = await run(installer, ['install', 'cursor', '--plan'], { cwd: tmpdir(), env });
+  expect(unknownVerbFlag.code).toBe(1);
+  expect(unknownVerbFlag.stderr).toContain('Unknown installer argument "--plan"');
 }, 120_000);
 
 it('chooses an unused installer name when both primary candidates are bins', async () => {

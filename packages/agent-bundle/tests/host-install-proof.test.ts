@@ -14,7 +14,9 @@ import {
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
+  runHostUninstallProof,
   runPortableHostInstallProof,
+  runPortableUninstallProof,
   type BuiltHostInstallFixture,
   type BuiltPortableHostInstallFixture,
 } from './support/host-install.ts';
@@ -514,3 +516,101 @@ it(
   },
   180_000,
 );
+
+claudePluginIt(
+  claudeAvailable
+    ? 'uninstalls through Claude by its receipt, leaving only classified host-owned bookkeeping behind'
+    : `uninstalls through Claude by its receipt, leaving only classified host-owned bookkeeping behind [${claudeMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'claude', { environment: process.env });
+
+    expect(report, proofLabel).toEqual({
+      agentBundleResidue: [],
+      // Claude 2.1.257 orphans the cached copy (.orphaned_at, ~14-day grace), keeps its empty registries and
+      // settings, and writes session bookkeeping; none of it is Agent Bundle's, all of it is enumerated.
+      homeByteIdentical: false,
+      host: 'claude',
+      hostResidue: [
+        'claude-orphaned-cache-copy',
+        'claude-plugin-registry-files',
+        'claude-session-bookkeeping',
+        'claude-settings',
+      ],
+      keepData: 'retained-by-host',
+      plan: 'no-op',
+      proofLevel: proofLabel,
+      purgeData: 'purged',
+      refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+      registrations: { 'claude-marketplace': 'removed', 'claude-plugin': 'removed' },
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+codexPluginIt(
+  codexAvailable
+    ? 'uninstalls through Codex by its receipt, leaving only empty host directories and an empty config.toml behind'
+    : `uninstalls through Codex by its receipt, leaving only empty host directories and an empty config.toml behind [${codexMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'codex', { environment: process.env });
+
+    expect(report, proofLabel).toEqual({
+      agentBundleResidue: [],
+      homeByteIdentical: false,
+      host: 'codex',
+      hostResidue: ['codex-empty-config', 'codex-empty-directories'],
+      // codex-cli 0.147.0 deletes the cached tree (state/ included) on `plugin remove` and has no keep-data option.
+      keepData: 'unavailable',
+      plan: 'no-op',
+      proofLevel: proofLabel,
+      purgeData: 'removed-by-host',
+      refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+      registrations: { 'codex-marketplace': 'removed', 'codex-plugin': 'removed' },
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+it('uninstalls the Cursor local copy by its receipt and leaves the isolated home byte-identical', async () => {
+  const report = await runHostUninstallProof(builtFixture(), 'cursor', { environment: process.env });
+
+  expect(report, proofLabel).toEqual({
+    agentBundleResidue: [],
+    homeByteIdentical: true,
+    host: 'cursor',
+    hostResidue: [],
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: proofLabel,
+    purgeData: 'purged',
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    registrations: { 'cursor-local-plugin': 'removed' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
+  expectHygienicReport(report);
+}, 180_000);
+
+it('uninstalls the emitted Agent Plugins package through install.mjs --uninstall and leaves the isolated home byte-identical', async () => {
+  const report = await runPortableUninstallProof(builtPortableFixture(), { environment: process.env });
+
+  expect(report, proofLabel).toEqual({
+    homeByteIdentical: true,
+    host: 'cursor',
+    installer: 'emitted install.mjs --uninstall',
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: 'host-install (emitted install.mjs + isolated Cursor home filesystem + pinned Agent Plugins 1.0.0 schemas; NOT IDE plugin-loader evidence)',
+    purgeData: 'purged',
+    refusals: { foreign: 'refused', missingReceipt: 'refused', unconfirmedPurge: 'refused' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
+  expectHygienicReport(report);
+}, 180_000);

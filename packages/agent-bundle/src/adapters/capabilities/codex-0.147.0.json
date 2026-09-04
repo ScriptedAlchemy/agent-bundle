@@ -12,6 +12,40 @@
     "source": "https://developers.openai.com/codex/cli/reference",
     "state": "supported"
   },
+  "lifecycle": {
+    "uninstall": {
+      "commands": [
+        "codex plugin remove <plugin>@<marketplace>",
+        "codex plugin marketplace remove <marketplace>"
+      ],
+      "evidence": [
+        "2026-09-03: live codex-cli 0.147.0 in an isolated CODEX_HOME: `codex plugin remove <id> --json` printed pluginId/name/marketplaceName and deleted the cached tree under plugins/cache; `codex plugin marketplace remove <name> --json` printed marketplaceName and installedRoot null; config.toml was left empty (0 bytes) with empty `.tmp/marketplaces` and `plugins/cache/<marketplace>` directories. `codex plugin remove` of an unknown plugin exits 0, `marketplace remove` of an unknown marketplace exits 1, so the uninstaller consults `codex plugin list --json` and `codex plugin marketplace list --json` first (#101)."
+      ],
+      "state": "supported"
+    },
+    "keepData": {
+      "evidence": [
+        "2026-09-03: `codex plugin remove` deletes the cached plugin tree, `state/` included, and codex-cli 0.147.0 documents no keep-data option; the uninstaller reports data outcome `unavailable` for --keep-data and `removed-by-host` for --purge-data instead of pretending to preserve state."
+      ],
+      "reason": "Codex owns the cached tree and removes it wholesale; durable state cannot be preserved through a Codex uninstall.",
+      "state": "unavailable"
+    },
+    "activationState": {
+      "evidence": [
+        "2026-09-03: `codex plugin list --json` installed rows carry `installed`, `enabled`, `version`, and the pinned cache layout supplies the path; Doctor reads placed, registered, and enabled from them. No read-only verb reports what a live session loaded, and plugin hooks stay untrusted until the user reviews them in the hook browser with no read-only trust verb, so `active` is typed unavailable."
+      ],
+      "observable": [
+        "placed",
+        "registered",
+        "enabled"
+      ],
+      "reason": "Live activation and hook trust have no pinned read-only surface on codex-cli 0.147.0.",
+      "state": "degraded",
+      "unavailable": [
+        "active"
+      ]
+    }
+  },
   "marketplace": {
     "policy": {
       "authentication": ["ON_INSTALL", "ON_USE"],
