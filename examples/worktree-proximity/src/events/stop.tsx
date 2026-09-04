@@ -3,7 +3,7 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../api.js';
-import { withNotices, withTopology } from '../coordination.js';
+import { withIntent, withNotices } from '../coordination.js';
 import {
   actorForWorktree,
   carriedChild,
@@ -29,23 +29,25 @@ export default async function Stop({
   }
   // A stop names its own actor through the runtime lineage or the payload's
   // `agentId`; only an anonymous stop falls back to the worktree binding.
+  // Releasing the actor drops its binding and any intent it still held; the
+  // runtime's lineage registry records the stop itself.
   const carried = await carriedChild(canonical.payload);
-  const topologyResult = await withTopology(async (topology): Promise<ResolvedActor> => {
+  const intentResult = await withIntent(async (intent): Promise<ResolvedActor> => {
     const resolved: ResolvedActor = carried === undefined
-      ? (await actorForWorktree(topology, currentWorktree, canonical)).actor
+      ? (await actorForWorktree(intent, currentWorktree, canonical)).actor
       : { id: carried.id, source: carried.source };
-    await topology.dispatch('actorStopped', {
+    await intent.dispatch('actorReleased', {
       actorId: resolved.id,
       observedAt: canonical.observedAt,
     }, {
-      idempotencyKey: `${canonical.idempotencyKey}:stopped`,
+      idempotencyKey: `${canonical.idempotencyKey}:released`,
     });
     return resolved;
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }

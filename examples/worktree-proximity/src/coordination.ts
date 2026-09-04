@@ -5,12 +5,12 @@ import {
 import type { AgentNoticesHandle } from '@agent-bundle/runtime/notices';
 
 import {
-  type TopologyEvents,
-  type TopologyState,
+  type IntentEvents,
+  type IntentState,
 } from './state.js';
 
-export type TopologyAccess =
-  Pick<AgentStateHandle<TopologyState, TopologyEvents>, 'dispatch' | 'read'>;
+export type IntentAccess =
+  Pick<AgentStateHandle<IntentState, IntentEvents>, 'dispatch' | 'read'>;
 
 export type CapabilityResult<T> =
   | {
@@ -22,13 +22,13 @@ export type CapabilityResult<T> =
       readonly state: 'unavailable';
     };
 
-export const withTopology = async <T>(
-  operation: (topology: TopologyAccess) => Promise<T>,
+export const withIntent = async <T>(
+  operation: (intent: IntentAccess) => Promise<T>,
 ): Promise<CapabilityResult<T>> => {
   const context = await agent();
   if (context.state === undefined) {
     return {
-      reason: 'Topology state unavailable: this request has no mounted state handle.',
+      reason: 'Intent state unavailable: this request has no mounted state handle.',
       state: 'unavailable',
     };
   }
@@ -36,13 +36,13 @@ export const withTopology = async <T>(
     return {
       state: 'available',
       value: await operation(
-        context.state as AgentStateHandle<TopologyState, TopologyEvents>,
+        context.state as AgentStateHandle<IntentState, IntentEvents>,
       ),
     };
   } catch (error) {
     return {
       reason:
-        `Topology state unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        `Intent state unavailable: ${error instanceof Error ? error.message : String(error)}`,
       state: 'unavailable',
     };
   }
