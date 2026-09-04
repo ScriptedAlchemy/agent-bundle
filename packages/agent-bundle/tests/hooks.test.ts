@@ -34,11 +34,12 @@ const probeMeta: AgentBundleMeta = Object.freeze({
 /**
  * Every generated executable resolves the framework identity module, so a
  * stubbed Rslib resolution has to carry what a real one would: the
- * virtual-module plugin instance and the exact-match alias.
+ * virtual-module plugin instance and the exact-match alias onto the
+ * project-rooted generated-module namespace.
  */
-const resolvedVirtualModules = (outputRoot: string) => ({
+const resolvedVirtualModules = (projectRoot: string) => ({
   plugins: [new rspack.experiments.VirtualModulesPlugin({})],
-  resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(outputRoot) } },
+  resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(projectRoot) } },
 });
 
 const registry: NormalizationTargetRegistry = {
@@ -203,7 +204,7 @@ it('does not share a persistent Rslib cache between generated executables', asyn
           output: { asyncChunks: false, path: outputRoot },
           performance: { buildCache: false },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
         environmentConfigs: { 'agent-bundle-hooks-cache-probe': { output: { cleanDistPath: false } } },
       },
@@ -242,8 +243,12 @@ it('does not share a persistent Rslib cache between generated executables', asyn
 });
 
 it('closes the Rslib build result and serves the generated wrapper entry virtually without touching disk', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-project-'));
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-output-'));
-  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs');
+  // The generated-module namespace hangs off the project root (the bundler
+  // context), never off the per-build output root, so the module identifiers
+  // Rspack writes into emitted bundles do not carry the staged directory.
+  const virtualEntryPath = join(projectRoot, '.agent-bundle-virtual', 'close-probe-entry.mjs');
   const close = rs.fn(async () => undefined);
   const buildResult = {
     close,
@@ -260,7 +265,7 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
     build: async () => {
       // The generated wrapper entry is served from memory: its reserved
       // namespace must not exist on disk even while the build is running.
-      reservedNamespaceDuringBuild = await readdir(join(outputRoot, '.agent-bundle-virtual'))
+      reservedNamespaceDuringBuild = await readdir(join(projectRoot, '.agent-bundle-virtual'))
         .then(() => undefined, (error: unknown) => error);
       return buildResult;
     },
@@ -271,7 +276,7 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
           name: 'agent-bundle-hooks-close-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules(projectRoot),
         }],
         environmentConfigs: { 'agent-bundle-hooks-close-probe': { output: { cleanDistPath: false } } },
       },
@@ -282,12 +287,12 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
     await mkdir(join(outputRoot, 'hooks'), { recursive: true });
     await writeFile(join(outputRoot, 'hooks', 'close-probe.mjs'), 'export default undefined;\n');
     await buildWithRslib({
-      cwd: '/tmp',
+      cwd: projectRoot,
       entries: [{
         name: 'close-probe',
         outputRelativePath: 'hooks/close-probe.mjs',
-        source: '/tmp/hook.ts',
-        sourceInputs: ['/tmp/hook.ts'],
+        source: join(projectRoot, 'hook.ts'),
+        sourceInputs: [join(projectRoot, 'hook.ts')],
         virtualSource: 'export default undefined;',
       }],
       meta: probeMeta,
@@ -301,12 +306,13 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
 
     expect(close).toHaveBeenCalledOnce();
     expect(reservedNamespaceDuringBuild).toMatchObject({ code: 'ENOENT' });
+    await expect(readdir(join(projectRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(join(outputRoot, '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
 
     // The composed profile keys the entry on the authored program (Rslib
     // checks entry existence on the real filesystem), and the invariant hook
-    // redirects the lowered Rspack entry to the guaranteed-nonexistent
-    // virtual path it registers with VirtualModulesPlugin.
+    // redirects the lowered Rspack entry to the reserved virtual path it
+    // registers with VirtualModulesPlugin.
     const [{ config }] = createOptions as [{
       readonly config: {
         readonly lib: readonly [{
@@ -315,13 +321,13 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
         }];
       };
     }];
-    expect(config.lib[0].source.entry).toEqual({ 'close-probe': '/tmp/hook.ts' });
+    expect(config.lib[0].source.entry).toEqual({ 'close-probe': join(projectRoot, 'hook.ts') });
     const hooksChain = config.lib[0].tools?.rspack;
     const mutators = (Array.isArray(hooksChain) ? hooksChain : [hooksChain])
       .filter((mutator): mutator is (value: object) => object => typeof mutator === 'function');
     expect(mutators.length).toBeGreaterThan(0);
     const resolved: { entry?: unknown; plugins?: readonly unknown[] } = {
-      entry: { 'close-probe': ['/tmp/hook.ts'] },
+      entry: { 'close-probe': [join(projectRoot, 'hook.ts')] },
     };
     for (const mutator of mutators) mutator(resolved);
     expect(resolved.entry).toEqual({ 'close-probe': [virtualEntryPath] });
@@ -329,13 +335,45 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       .filter((plugin) => plugin instanceof rspack.experiments.VirtualModulesPlugin);
     expect(virtualPlugins).toHaveLength(1);
   } finally {
-    await rm(outputRoot, { force: true, recursive: true });
+    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
+  }
+});
+
+it('refuses to compile while anything occupies the reserved generated-module namespace', async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-project-'));
+  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-reserved-output-'));
+  // The virtual paths are predictable, so an authored file at one of them
+  // (here, where the project-identity module is served) would be shadowed by
+  // the generated module — or compile as an entry from generated source. The
+  // whole directory is reserved; the build fails before any compiler is created.
+  await mkdir(join(projectRoot, '.agent-bundle-virtual'), { recursive: true });
+  await writeFile(join(projectRoot, '.agent-bundle-virtual', 'meta.mjs'), 'export default undefined;\n');
+  const createRslib = rs.fn(async () => { throw new Error('unreachable'); });
+
+  try {
+    await expect(buildWithRslib({
+      cwd: projectRoot,
+      entries: [{
+        name: 'reserved-probe',
+        outputRelativePath: 'hooks/reserved-probe.mjs',
+        source: join(projectRoot, 'hook.ts'),
+        sourceInputs: [join(projectRoot, 'hook.ts')],
+        virtualSource: 'export default undefined;',
+      }],
+      meta: probeMeta,
+      outputRoot,
+    }, { createRslib: createRslib as never })).rejects.toThrow(
+      `".agent-bundle-virtual" under the project root ${JSON.stringify(projectRoot)} is reserved for generated module sources served from memory; remove it before building.`,
+    );
+    expect(createRslib).not.toHaveBeenCalled();
+  } finally {
+    await Promise.all([outputRoot, projectRoot].map((root) => rm(root, { force: true, recursive: true })));
   }
 });
 
 it('fails closed when the resolved environment lost its virtual modules or wrapper entry', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-lost-virtual-'));
-  const virtualEntryPath = join(outputRoot, '.agent-bundle-virtual', 'lost-probe-entry.mjs');
+  const virtualEntryPath = join('/tmp', '.agent-bundle-virtual', 'lost-probe-entry.mjs');
   const rslibFor = (bundlerConfig: Record<string, unknown>) => ({
     build: async () => {
       throw new Error('inspection must fail before the build starts');
@@ -366,15 +404,15 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
   }, { createRslib: async () => rslibFor(bundlerConfig) as never });
 
   try {
-    // A resolved config without the plugin would resolve the
-    // guaranteed-nonexistent generated paths against the real filesystem.
+    // A resolved config without the plugin would resolve the reserved
+    // generated paths against the real filesystem.
     await expect(buildLostProbe({ entry: { 'lost-probe': [virtualEntryPath] } }))
       .rejects.toThrow(/without its virtual modules/u);
     // A resolved config still keyed on the authored program would compile
     // without the generated wrapper.
     await expect(buildLostProbe({
       entry: { 'lost-probe': ['/tmp/hook.ts'] },
-      ...resolvedVirtualModules(outputRoot),
+      ...resolvedVirtualModules('/tmp'),
     })).rejects.toThrow(/without its generated wrapper entry/u);
     // A resolved config that lost the framework identity alias would resolve
     // agent-bundle/meta to the published throwing stub instead.
@@ -405,7 +443,7 @@ it('fails closed when an emitted bundle retains a residual reserved import', asy
           name: 'agent-bundle-hooks-residual-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
         environmentConfigs: { 'agent-bundle-hooks-residual-probe': { output: { cleanDistPath: false } } },
       },
@@ -445,7 +483,7 @@ it('closes the Rslib build result when provenance stats are unavailable', async 
           name: 'agent-bundle-hooks-close-error-probe',
           output: { asyncChunks: false, path: outputRoot },
           target: 'node',
-          ...resolvedVirtualModules(outputRoot),
+          ...resolvedVirtualModules('/tmp'),
         }],
         environmentConfigs: { 'agent-bundle-hooks-close-error-probe': { output: { cleanDistPath: false } } },
       },

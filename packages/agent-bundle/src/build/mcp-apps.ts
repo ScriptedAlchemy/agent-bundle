@@ -9,9 +9,10 @@ import type { AgentBundleMeta } from '../meta.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
+  assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
   generatedMetaModuleSource,
-  generatedModulesDirname,
+  generatedModulesRoot,
   metaModuleSpecifier,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
@@ -180,13 +181,15 @@ export const planCompiledMcpApps = (
 export const composeMcpAppsRsbuildConfig = (
   sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
   options: {
+    /** The project root: the bundler `context` and the root of the generated-module namespace. */
+    readonly cwd: string;
     /** The project identity served to widget source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   },
 ): RsbuildConfig => {
-  const metaModulePath = generatedMetaModulePath(options.outDir);
+  const metaModulePath = generatedMetaModulePath(options.cwd);
   const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
@@ -258,6 +261,7 @@ export const compileMcpApps = async (
   if (compiled.length === 0) {
     return compiled;
   }
+  await assertGeneratedModulesRootAbsent(options.cwd);
 
   const sources = compiled.map((app) => {
     const source = apps.find((candidate) => candidate.id === app.id);
@@ -270,6 +274,7 @@ export const compileMcpApps = async (
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
     config: composeMcpAppsRsbuildConfig(sources, {
+      cwd: options.cwd,
       meta: options.meta,
       outDir: options.outDir,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
@@ -289,7 +294,7 @@ export const compileMcpApps = async (
       })),
       // The generated identity module is virtual, but it still surfaces in
       // stats as a module under this reserved namespace.
-      ignoredSourcePaths: [resolve(options.outDir, generatedModulesDirname)],
+      ignoredSourcePaths: [resolve(generatedModulesRoot(options.cwd))],
       projectRoot: options.cwd,
       stats: result.stats,
     });

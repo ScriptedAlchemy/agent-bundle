@@ -982,6 +982,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
     try {
       bundler = await composeBundlerInspection({
         model,
+        projectRoot: prepared.root,
         targets: plans.map((plan) => {
           const noticeDelivery = prepared.registry.noticeDelivery(plan.target);
           return {

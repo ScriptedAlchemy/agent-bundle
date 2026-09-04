@@ -61,8 +61,8 @@ describe('composeToolsLayers', () => {
 });
 
 describe('the shared layering reaches every synthesized config the same way', () => {
-  const lib = composeEntryLibConfig(entry, { meta, outputRoot: '/staged/portable', tools });
-  const apps = composeMcpAppsRsbuildConfig([app], { meta, outDir: '/staged/portable', tools });
+  const lib = composeEntryLibConfig(entry, { cwd: '/project', meta, outputRoot: '/staged/portable', tools });
+  const apps = composeMcpAppsRsbuildConfig([app], { cwd: '/project', meta, outDir: '/staged/portable', tools });
 
   it('lets a tools.rsbuild fragment reach the MCP Apps config exactly as it reaches an entry lib', () => {
     expect(lib.output?.legalComments).toBe('linked');
@@ -89,8 +89,8 @@ describe('the shared layering reaches every synthesized config the same way', ()
   });
 
   it('composes only the profile and the invariants without a hatch', () => {
-    const bareLib = composeEntryLibConfig(entry, { meta, outputRoot: '/staged/portable' });
-    const bareApps = composeMcpAppsRsbuildConfig([app], { meta, outDir: '/staged/portable' });
+    const bareLib = composeEntryLibConfig(entry, { cwd: '/project', meta, outputRoot: '/staged/portable' });
+    const bareApps = composeMcpAppsRsbuildConfig([app], { cwd: '/project', meta, outDir: '/staged/portable' });
     for (const config of [bareLib, bareApps]) {
       const mutators = invariantMutatorOf(config);
       expect(mutators).toHaveLength(1);

@@ -1,0 +1,5 @@
+---
+"agent-bundle": patch
+---
+
+Make emitted artifacts byte-reproducible across builds: `agent-bundle build` now emits identical bytes — the same `agent-bundle.manifest.json`, the same per-file `sha256` — from two builds of one unchanged source tree, whatever `--output` names and however the per-build staging directory (`.<output>.stage-XXXXXX`) is named. The generated wrapper, route registry, and `agent-bundle/meta` modules every compiled surface imports are now served under the project-rooted `.agent-bundle-virtual/` namespace instead of under the staging root, so the module identifiers Rspack writes into MCP entries (`// NAMESPACE OBJECT: ./.agent-bundle-virtual/…`) no longer carry the staging token that made consecutive builds differ. This keeps install receipts, preview packages, and `doctor`'s bytes-at-rest comparison (`AB7326`) stable for one source revision. `agent-bundle inspect --bundler` shows the same project-rooted paths in each entry's virtual-module aliases and generated entry. Because those paths are predictable, `.agent-bundle-virtual/` under the project root is reserved: the build refuses to compile while anything occupies it. (#518)
