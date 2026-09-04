@@ -16,6 +16,8 @@ const summaryValue = (...argv: string[]) => ({
   invocation: 'script',
   stateMounted: true,
   surface: 'summary',
+  // The harness renders as a piped executable unless `tty` says otherwise (#511).
+  terminal: 'script/pipe/pipe',
 });
 
 describe('the compiled script inventory', () => {
@@ -126,6 +128,8 @@ describe('rendered scripts at the script dispatch level', () => {
     expect(run.stdout).toContain('\r\u001B[2Kcollecting arguments (1/2)');
     expect(run.stdout).toContain('\r\u001B[2Ksummary ready (2/2)');
     expect(run.stdout.endsWith('# Summary\n\n1 argument(s).\n\nsurface: summary\n')).toBe(true);
+    // The same knob that picked the interactive mode is what the script observes (#511).
+    expect(run.value).toEqual({ ...summaryValue('alpha'), terminal: 'script/tty/tty' });
   });
 
   it('reserves --json for the canonical value and passes every other argument through', async () => {
@@ -306,6 +310,27 @@ describe('plain scripts at the script dispatch level', () => {
     expect(run.exitCode).toBe(2);
     expect(run.stdout).toBe('Fixture checksum: 0\n');
     expect(run.stderr).toBe('No arguments to checksum.\n');
+  });
+
+  it('hands main the terminal capability the envelope probed from its own process (#511)', async () => {
+    const run = await runScript('checksum', ['--terminal']);
+
+    expect(run.exitCode).toBe(0);
+    // The harness captures both streams through pipes, and the child's stdout
+    // and stderr are two different pipes, so neither is a terminal and they
+    // do not share a target. The child inherits this runner's environment, so
+    // color is whatever FORCE_COLOR/NO_COLOR say here (CI runners force it
+    // on); the env-controlled color proof is the packed level's.
+    const probed = JSON.parse(run.stdout) as { readonly stderr: { readonly color: string }; readonly stdout: { readonly color: string } };
+    expect(probed).toMatchObject({
+      hostSurface: 'script',
+      sharesTarget: false,
+      stderr: { kind: 'pipe' },
+      stdout: { kind: 'pipe' },
+    });
+    expect(probed.stdout).not.toHaveProperty('columns');
+    expect(['none', 'basic', '256', 'truecolor']).toContain(probed.stdout.color);
+    expect(probed.stderr.color).toBe(probed.stdout.color);
   });
 
   it('adopts an assigned process.exitCode when main returns nothing', async () => {

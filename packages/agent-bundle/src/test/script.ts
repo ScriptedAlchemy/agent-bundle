@@ -25,9 +25,11 @@ import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { constants as osConstants } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { format } from 'node:util';
 
 import { scanEntryExports } from '../build/entry-exports.ts';
+import { terminalCapabilityRuntimePath } from '../build/entry-shell.ts';
 import { metaModuleSpecifier } from '../build/meta.ts';
 import { runGeneratedRenderedScript } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
@@ -46,6 +48,7 @@ import {
   type HarnessOptionsArguments,
   type RenderRouteContextInit,
 } from './render.ts';
+import { harnessTerminal } from './terminal.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
 export interface RunScriptOptionsBase {
@@ -59,9 +62,12 @@ export interface RunScriptOptionsBase {
    */
   readonly stdin?: string;
   /**
-   * Selects interactive rendered output explicitly. Generated executables use
-   * `process.stdout.isTTY`; the in-process harness defaults to piped output.
-   * Rendered scripts only.
+   * Selects interactive rendered output explicitly. Generated executables
+   * probe `process.stdout`; the in-process harness defaults to piped output.
+   * The same knob shapes the `request.terminal` the script observes (#511):
+   * a synthetic 80×24 basic-color terminal on both streams, or two
+   * color-free pipes. Rendered scripts only; a plain script's `main` receives
+   * the real child process's probe.
    */
   readonly tty?: boolean;
 }
@@ -301,6 +307,11 @@ registerHooks({
  */
 const envelopeSource = (execution: ScriptExecution): string => [
   "import { pathToFileURL } from 'node:url';",
+  // The generated executable inlines the terminal probe through a bundler
+  // alias; the child imports the same module from the package instead.
+  ...(execution === 'main-envelope'
+    ? [`import { detectProcessTerminal } from ${JSON.stringify(pathToFileURL(terminalCapabilityRuntimePath()).href)};`]
+    : []),
   '',
   // A generated `scripts/<name>.mjs` runs under plain `node <file>`: the
   // loader flags this launch needs are the harness's, not the script's.
@@ -313,7 +324,7 @@ const envelopeSource = (execution: ScriptExecution): string => [
       "if (typeof main !== 'function') {",
       "  throw new TypeError('Executable entry must export a main function: ' + source);",
       '}',
-      'const code = await main(process.argv.slice(2));',
+      "const code = await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal('script') }));",
       "if (typeof code === 'number') process.exitCode = code;",
     ]
     : []),
@@ -616,9 +627,9 @@ export const runScript = async (
     }, () => runGeneratedRenderedScript({
       argv: frozenArgv,
       createSession: host.createSession,
-      isTty: () => options.tty === true,
       name: script.name,
       signal,
+      terminal: harnessTerminal('script', options.tty === true),
       writeErr: (text) => { err += text; },
       writeOut: (text) => { out += text; },
     }));
