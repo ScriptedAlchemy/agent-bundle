@@ -280,6 +280,51 @@ describe('lineage registry places Codex threads from their own rollout (#423)', 
     expect(registry.snapshot().nodes[NESTED]).toMatchObject({ placement: 'transcript', stoppedAt: '2026-09-03T08:27:40.000Z' });
   });
 
+  it('places a start held unplaced (rollout unreadable, no claimable spawn) once a later hook finds the rollout readable', async () => {
+    // The rollout is not flushed yet when SubagentStart fires and no spawn
+    // hook was observed: the start is held unplaced, as for Claude. The
+    // thread's first tool hook then finds the rollout readable.
+    let readable = false;
+    const lateRollouts: CodexRolloutReader = (path) => readable ? capturedRollouts(path) : noRollouts(path);
+    const registry = createAgentLineageRegistry({ readTranscript: lateRollouts });
+    const observe = (event: string, key: string, native: Record<string, unknown>, observedAt: string) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt });
+    await observe('session/start', 's', codexHook('SessionStart', undefined), '2026-09-03T08:26:00.000Z');
+    const start = await observe('agent/start', 'sub', codexHook('SubagentStart', SUBAGENT, { agent_type: 'default', transcript_path: SUBAGENT_ROLLOUT }), '2026-09-03T08:26:39.000Z');
+    expect(start).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().unplacedStarts).toEqual([expect.objectContaining({ id: SUBAGENT, root: ROOT, startedAt: '2026-09-03T08:26:39.000Z', type: 'default' })]);
+
+    readable = true;
+    const tool = await observe('tool/before', 't', codexHook('PreToolUse', SUBAGENT, { tool_input: {}, tool_name: 'Bash', tool_use_id: 'b', transcript_path: SUBAGENT_ROLLOUT }), '2026-09-03T08:26:45.000Z');
+    expect(value(tool)).toMatchObject({ conversation: SUBAGENT, depth: 1, parent: ROOT, resolution: 'transcript' });
+    // Placed as it started, and no longer waiting on its edge.
+    expect(registry.snapshot().nodes[SUBAGENT]).toMatchObject({ placement: 'transcript', startedAt: '2026-09-03T08:26:39.000Z', type: 'default' });
+    expect(registry.snapshot().unplacedStarts ?? []).toEqual([]);
+  });
+
+  it('materializes an unplaced start as already stopped when its stop came before the rollout was readable', async () => {
+    let readable = false;
+    const lateRollouts: CodexRolloutReader = (path) => readable ? capturedRollouts(path) : noRollouts(path);
+    const registry = createAgentLineageRegistry({ readTranscript: lateRollouts });
+    const observe = (event: string, key: string, native: Record<string, unknown>, observedAt: string) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt });
+    await observe('session/start', 's', codexHook('SessionStart', undefined), '2026-09-03T08:26:00.000Z');
+    await observe('agent/start', 'sub', codexHook('SubagentStart', SUBAGENT, { transcript_path: SUBAGENT_ROLLOUT }), '2026-09-03T08:26:39.000Z');
+    // The stop's own rollout is unreadable too; the stop stays with the unplaced start.
+    const stop = await observe('agent/stop', 'stop', codexHook('SubagentStop', SUBAGENT, { agent_transcript_path: SUBAGENT_ROLLOUT, stop_hook_active: false, transcript_path: ROOT_ROLLOUT }), '2026-09-03T08:27:40.000Z');
+    expect(stop).toEqual(unavailable('id-not-resolvable'));
+    expect(registry.snapshot().nodes[SUBAGENT]).toBeUndefined();
+    expect(registry.snapshot().unplacedStarts).toEqual([expect.objectContaining({ id: SUBAGENT, stoppedAt: '2026-09-03T08:27:40.000Z' })]);
+
+    // A late-delivered hook from the thread finds the rollout: the node is
+    // placed as it started and retired at the stop it already had.
+    readable = true;
+    const late = await observe('tool/after', 'late', codexHook('PostToolUse', SUBAGENT, { tool_input: {}, tool_name: 'Bash', tool_response: '', tool_use_id: 'b', transcript_path: SUBAGENT_ROLLOUT }), '2026-09-03T08:27:41.000Z');
+    expect(value(late)).toMatchObject({ conversation: SUBAGENT, depth: 1, parent: ROOT, resolution: 'transcript' });
+    expect(registry.snapshot().nodes[SUBAGENT]).toMatchObject({ placement: 'transcript', startedAt: '2026-09-03T08:26:39.000Z', stoppedAt: '2026-09-03T08:27:40.000Z' });
+    expect(registry.snapshot().unplacedStarts ?? []).toEqual([]);
+  });
+
   it('corrects an inferred parent at SubagentStop from the parent rollout the payload names, shifting descendants', async () => {
     // Rollouts are unreadable at start (the pre-#423 inference path), so the
     // nested thread is filed under the only parent with an unclaimed spawn.
