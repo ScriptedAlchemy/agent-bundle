@@ -976,6 +976,13 @@ describe('MCP page', () => {
       const failing = mcpPageTasksFor([history[0]!, { ...history[5]!, request: { taskId } }]);
       expect(failing[0]).toMatchObject({ error: { code: -32_602 }, task: { status: 'working' } });
       expect(mcpPageTasksFor([history[5]!])).toEqual([]);
+      // A later successful answer — a poll or the result — clears the error, so polling resumes.
+      const recovered = mcpPageTasksFor([history[0]!, { ...history[5]!, request: { taskId } }, history[1]!]);
+      expect(recovered[0]).not.toHaveProperty('error');
+      expect(recovered[0]).toMatchObject({ task: { status: 'working', statusMessage: 'waiting' } });
+      const resultAfterTimeout = mcpPageTasksFor([history[0]!, { ...history[2]!, error: { message: 'timed out' }, result: undefined }, history[2]!]);
+      expect(resultAfterTimeout[0]).not.toHaveProperty('error');
+      expect(resultAfterTimeout[0]).toMatchObject({ result: { structuredContent: { waitedMs: 400 } } });
     });
 
     it('renders the task panel, the run-as-task toggle for opted-in tools, and the list control when the server declares tasks', () => {

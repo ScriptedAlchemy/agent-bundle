@@ -303,11 +303,19 @@ export class TaskAugmentedServer extends Server {
     const wrapped = super._wrapHandler(method, handler);
     if (method !== 'tools/call') return wrapped;
     return async (request, ctx) => {
+      // The lifecycle exists only where it was declared: a session on the one
+      // revision whose core defines the utility, on a server that advertised
+      // the capability. Anywhere else — no tool opted in, or a revision whose
+      // wire strips `execution.taskSupport` and `capabilities.tasks` — every
+      // call is the ordinary request, `required` tools included, and any
+      // task metadata is ignored as the utility requires of a receiver
+      // without the capability.
+      if (!this.#installed || !this.#taskSession()) return wrapped(request, ctx);
       const params = request.params;
       const toolName = isRecord(params) && typeof params['name'] === 'string' ? params['name'] : undefined;
       // 2025-11-25 Tasks: a request is task-augmented when its params carry a
       // `task` object (the SDK's own guard accepts params without one).
-      const augmented = this.#taskSession() && isRecord(params) && isRecord(params['task']);
+      const augmented = isRecord(params) && isRecord(params['task']);
       const support = toolName === undefined ? 'forbidden' : this.taskSupport(toolName);
       if (!augmented) {
         if (support === 'required') {
@@ -317,11 +325,6 @@ export class TaskAugmentedServer extends Server {
             `Tool ${String(toolName)} requires task-augmented execution (execution.taskSupport: "required"); call it with params.task.`,
           );
         }
-        return wrapped(request, ctx);
-      }
-      if (!this.#installed) {
-        // No tool opted in: the server declared no task capability, so the
-        // request is processed normally and its task metadata ignored.
         return wrapped(request, ctx);
       }
       if (support === 'forbidden') {

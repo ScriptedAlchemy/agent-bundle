@@ -259,11 +259,18 @@ const taskProgress = (task: Readonly<Record<string, unknown>>): McpPageTask['pro
  */
 export const mcpPageTasksFor = (history: readonly McpBrowserSessionInvocation[]): readonly McpPageTask[] => {
   const tasks = new Map<string, McpPageTask>();
+  // A successful answer supersedes an earlier error (a tasks/result that
+  // timed out while the task was still working, say), so polling resumes.
+  const settled = (current: McpPageTask | undefined): Omit<McpPageTask, 'error' | 'task'> & { readonly task?: McpPageTask['task'] } => {
+    if (current === undefined) return {};
+    const { error: _cleared, ...rest } = current;
+    return rest;
+  };
   const refresh = (task: McpPageTask['task'], extra: Partial<McpPageTask> = {}): void => {
     const current = tasks.get(task.taskId);
     const { _meta: _dropped, ...bare } = task;
     tasks.set(task.taskId, Object.freeze({
-      ...current,
+      ...settled(current),
       ...extra,
       progress: taskProgress(task) ?? current?.progress,
       task: bare as McpPageTask['task'],
@@ -300,10 +307,9 @@ export const mcpPageTasksFor = (history: readonly McpBrowserSessionInvocation[])
         if (typeof request.taskId !== 'string') break;
         const current = tasks.get(request.taskId);
         if (current === undefined) break;
-        tasks.set(request.taskId, Object.freeze({
-          ...current,
-          ...(invocation.error === undefined ? { result: invocation.result } : { error: invocation.error }),
-        }));
+        tasks.set(request.taskId, Object.freeze(invocation.error === undefined
+          ? { ...settled(current), result: invocation.result, task: current.task }
+          : { ...current, error: invocation.error }));
         break;
       }
       case 'callTool':

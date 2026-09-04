@@ -325,6 +325,34 @@ describe('task-augmented tools/call (#369)', () => {
     }
   });
 
+  it('serves every tool as an ordinary request on a revision without the core Tasks utility, required ones included', async () => {
+    // The SDK client negotiates 2025-11-25 by default; the server's own view
+    // of the session is what gates the lifecycle, so it is narrowed here to
+    // what a 2026-07-28 session reports (where the wire has no task vocabulary).
+    const { declareTool, install, server, tasks } = createTaskAugmentedMcpServer({ name: 'tasks-unit', version: '0.0.0' });
+    const required = server.registerTool('background-only', { inputSchema: z.object({}) }, async () => ({ content: [{ text: 'ran', type: 'text' }] }));
+    declareTool(required, 'background-only', 'required');
+    install();
+    Object.defineProperty(tasks, 'getNegotiatedProtocolVersion', { configurable: true, value: () => '2026-07-28' });
+    const client = new Client({ name: 'tasks-unit-client', version: '0.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      // An ordinary call to the required tool is served, not refused.
+      expect(await client.callTool({ arguments: {}, name: 'background-only' })).toEqual({ content: [{ text: 'ran', type: 'text' }] });
+      // Task metadata is ignored: the ordinary result comes back, no task handle.
+      const result = await client.request({
+        method: 'tools/call',
+        params: { arguments: {}, name: 'background-only', task: { ttl: 1000 } },
+      }, clientSchemas.CallToolResult);
+      expect(result).toEqual({ content: [{ text: 'ran', type: 'text' }] });
+      expect(tasks.tasks()).toEqual([]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('keeps ordinary calls untouched: no task shape, no progress without a token, tool errors as before', async () => {
     const harness = await open();
     try {
