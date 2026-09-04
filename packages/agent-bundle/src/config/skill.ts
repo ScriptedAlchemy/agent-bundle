@@ -14,9 +14,13 @@ import {
 import {
   compileRenderedSkill,
   isRenderedSkillSourceName,
+  type RenderedSkillLoaderOptions,
   renderedSkillSourceAt,
 } from './rendered-skill.ts';
 import { parseSkillMarkdown } from './skill-references.ts';
+
+/** What a rendered skill module observes while it evaluates; see {@link RenderedSkillLoaderOptions}. */
+export type ParseSkillOptions = RenderedSkillLoaderOptions;
 
 export interface SkillResource {
   bytes: number;
@@ -124,8 +128,9 @@ const parseRenderedSkill = async (
   dir: string,
   renderedSource: string,
   resources: SkillResource[],
+  options: ParseSkillOptions,
 ): Promise<SkillDocument> => {
-  const compiled = await compileRenderedSkill(renderedSource);
+  const compiled = await compileRenderedSkill(renderedSource, options);
   if (compiled.status === 'failed') {
     return {
       body: '',
@@ -158,6 +163,7 @@ export const parseSkill = async (
   projectRoot?: string,
   /** Reuses the caller's compiled ignore rules; discovery parses many skills under one root. */
   projectIgnoreRules?: Ignore,
+  options: ParseSkillOptions = {},
 ): Promise<SkillDocument> => {
   const dir = resolve(skillDir);
   const source = join(dir, 'SKILL.md');
@@ -171,7 +177,7 @@ export const parseSkill = async (
     markdown = await readFile(source, 'utf8');
   } catch (error: unknown) {
     if (renderedSource !== undefined && isErrno(error, 'ENOENT')) {
-      return parseRenderedSkill(dir, renderedSource, resources);
+      return parseRenderedSkill(dir, renderedSource, resources, options);
     }
     return {
       body: '',
