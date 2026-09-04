@@ -109,8 +109,10 @@ const browserHostContext = () => ({
 
 const start = async () => {
   setStatus('Binding ' + seed.toolName + ' to the App…');
+  // The host already made the opening call; binding it by tool name keeps a
+  // large result from travelling back through the request-body bound (#562).
   const created = await api('POST', '/api/mcp/sessions/' + encodeURIComponent(seed.sessionId) + '/apps', {
-    host: browserHostContext(), input: seed.input, previewProfile: seed.previewProfile, result: seed.result, toolName: seed.toolName,
+    host: browserHostContext(), previewProfile: seed.previewProfile, toolName: seed.toolName,
   });
   const preview = created.preview;
   const bindingId = preview.bindingId;
