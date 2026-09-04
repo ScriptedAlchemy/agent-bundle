@@ -625,6 +625,26 @@ describe('lineage registry ambiguity refusals (review round 4)', () => {
     expect(await registry.resolveToolCall({ arguments: { limit: 10 }, host: 'cursor', toolName: 'dump' })).toMatchObject({ value: { conversation: 'root-a' } });
     expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'pa')?.inputDigest).toBeDefined();
   });
+
+  it('keeps a window without a recorded digest in contention, so an upgraded journal never attributes by elimination', async () => {
+    // A durable registry upgraded mid-session still holds pre-upgrade windows with no
+    // inputDigest (the field is optional for v1 journals). Such a window could own any
+    // call for its tool, so it is never filtered out: with a digested competitor in
+    // another conversation the call stays id-not-resolvable.
+    const registry = createAgentLineageRegistry();
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'cursor', idempotencyKey: key, native });
+    await observe('prompt/submit', 'a', { conversation_id: 'root-a', hook_event_name: 'beforeSubmitPrompt' });
+    await observe('prompt/submit', 'b', { conversation_id: 'root-b', hook_event_name: 'beforeSubmitPrompt' });
+    // A pre-upgrade window: the hook carried no object tool_input, so no digest was recorded.
+    await observe('tool/before', 'legacy', { conversation_id: 'root-a', hook_event_name: 'preToolUse', tool_input: 'opaque', tool_name: 'MCP:probe', tool_use_id: 'legacy' });
+    expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'legacy')?.inputDigest).toBeUndefined();
+    await observe('tool/before', 'pb', { conversation_id: 'root-b', hook_event_name: 'preToolUse', tool_input: { note: 'nested' }, tool_name: 'MCP:probe', tool_use_id: 'pb' });
+    expect(await registry.resolveToolCall({ arguments: { note: 'nested' }, host: 'cursor', toolName: 'probe' })).toEqual(unavailable('id-not-resolvable'));
+    // Once the digested competitor closes, the legacy window resolves alone, whatever the arguments.
+    await observe('tool/after', 'pb-close', { conversation_id: 'root-b', hook_event_name: 'postToolUse', tool_input: { note: 'nested' }, tool_name: 'MCP:probe', tool_output: '{}', tool_use_id: 'pb' });
+    expect(await registry.resolveToolCall({ arguments: { note: 'nested' }, host: 'cursor', toolName: 'probe' })).toMatchObject({ value: { conversation: 'root-a' } });
+  });
 });
 
 describe('lineage registry retirement and cohorts (review round 5)', () => {

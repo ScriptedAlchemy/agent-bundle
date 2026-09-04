@@ -1,3 +1,5 @@
+import { unavailable } from '@agent-bundle/runtime';
+import type { AgentLineageRegistry, LineageToolCallQuery } from '@agent-bundle/runtime/lineage';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { describe, expect, it } from '@rstest/core';
 import { z } from 'zod';
@@ -74,6 +76,59 @@ const stubs = (options: {
   };
   return { host, notices, order };
 };
+
+describe('generated server lineage correlation', () => {
+  it('hands the registry the raw tools/call arguments, not the schema-parsed input with defaults applied', async () => {
+    // Cursor's hook records the arguments as sent (`tool_input`); a schema default
+    // would make `{}` and `{ label: 'probe' }` parse alike and misattribute the
+    // omitted-argument call, so the capture must read the wire, not the callback input.
+    const queries: LineageToolCallQuery[] = [];
+    const lineage: AgentLineageRegistry = {
+      observe: async () => unavailable('id-not-resolvable'),
+      resolveToolCall: async (query) => {
+        queries.push(query);
+        return unavailable('id-not-resolvable');
+      },
+      snapshot: () => ({ nodes: {}, openCalls: [], pendingChildren: [], pendingSpawns: [], seenStarts: [] }),
+    };
+    const { host } = stubs();
+    const server = await createGeneratedRouteMcpServer({
+      artifactEpoch: 'epoch',
+      host,
+      lineage,
+      plugin: { name: 'raw-arguments', version: '0.0.0' },
+      routes: {
+        'mcp/raw/tools/probe': {
+          config: {},
+          id: 'mcp/raw/tools/probe',
+          kind: 'tool',
+          module: {
+            default: () => undefined,
+            inputSchema: z.object({ label: z.string().default('probe') }).strict(),
+            resultSchema: z.object({ ok: z.boolean() }).strict(),
+          },
+          name: 'probe',
+        },
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'cursor-vscode', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      await client.callTool({ arguments: {}, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      await client.callTool({ arguments: { label: 'probe' }, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      await client.callTool({ arguments: { label: 'other' }, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      expect(queries.map((query) => [Object.hasOwn(query, 'arguments'), query.arguments, query.host, query.toolName])).toEqual([
+        [true, {}, 'cursor', 'probe'],
+        [true, { label: 'probe' }, 'cursor', 'probe'],
+        [true, { label: 'other' }, 'cursor', 'probe'],
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
 
 describe('generated server render completion', () => {
   it('answers a completed render while the inbox observation is still pending on another connection', async () => {

@@ -39,10 +39,13 @@ export interface LineageObservation {
 
 export interface LineageToolCallQuery {
   /**
-   * The `tools/call` arguments. Without a conversation id in `_meta` (Cursor
-   * sends only `progressToken`, #424) they are the one payload fact shared
-   * with the pre-tool hook's `tool_input`, and narrow the open windows when
-   * several conversations have the same tool open at once.
+   * The raw `tools/call` arguments, exactly as the client sent them. Without a
+   * conversation id in `_meta` (Cursor sends only `progressToken`, #424) they
+   * are the one payload fact shared with the pre-tool hook's `tool_input`, and
+   * narrow the open windows when several conversations have the same tool open
+   * at once. Omit the property (rather than passing `undefined`) when the raw
+   * arguments are unknown: an absent call argument is `undefined` and digests
+   * like `{}`, an absent property disables the narrowing.
    */
   readonly arguments?: unknown;
   readonly host: LineageHost | undefined;
@@ -562,7 +565,7 @@ export const createAgentLineageRegistry = (
         }
       }
       const { host, meta, toolName } = query;
-      const argumentsDigest = inputDigest(query.arguments);
+      const argumentsDigest = Object.hasOwn(query, 'arguments') ? inputDigest(query.arguments) : undefined;
       if (host === undefined) return unavailable('id-not-resolvable');
       if (host === 'codex') {
         const turn = meta?.['x-codex-turn-metadata'];
@@ -611,7 +614,10 @@ export const createAgentLineageRegistry = (
         // `mcp__<server>__<tool>` on Codex, `mcp__plugin_<p>_<s>__<tool>` on
         // Claude. Several from one conversation share a lineage; several from
         // different conversations are told apart only by the arguments the
-        // hook recorded — identical arguments stay ambiguous, never guessed.
+        // hook recorded — identical arguments stay ambiguous, never guessed,
+        // and a window opened before digests were recorded (or from a hook
+        // whose `tool_input` was not an object) could own any call, so it is
+        // never excluded.
         const matches = state.openCalls.filter((candidate) =>
           candidate.toolName === `MCP:${toolName}`
           || candidate.toolName.endsWith(`__${toolName}`)
@@ -619,7 +625,7 @@ export const createAgentLineageRegistry = (
         const conversations = (candidates: readonly OpenToolCall[]): number => new Set(candidates.map((candidate) => candidate.conversation)).size;
         let narrowed = matches;
         if (conversations(matches) > 1 && argumentsDigest !== undefined) {
-          narrowed = matches.filter((candidate) => candidate.inputDigest === argumentsDigest);
+          narrowed = matches.filter((candidate) => candidate.inputDigest === undefined || candidate.inputDigest === argumentsDigest);
         }
         if (conversations(narrowed) > 1) return unavailable('id-not-resolvable');
         call = narrowed[narrowed.length - 1];
