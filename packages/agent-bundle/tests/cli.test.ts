@@ -1,7 +1,8 @@
-import { execFile as executeFile } from 'node:child_process';
+import { execFile as executeFile, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -15,6 +16,7 @@ const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
 const cliPath = join(packageRoot, 'dist/cli.js');
+const recorderPath = join(packageRoot, 'tests/support/record-module-loads.mjs');
 let buildPackage: Promise<void> | undefined;
 
 const buildCliPackage = async (): Promise<void> => {
@@ -209,6 +211,67 @@ it('builds a selected target through the built executable from a path containing
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
+}, 30_000 * timeScale);
+
+/**
+ * Runs the built CLI under the module-load recorder and returns the process
+ * result plus every non-builtin module URL the invocation resolved.
+ */
+const runCliRecordingModuleLoads = async (
+  args: readonly string[],
+): Promise<{ readonly code: number; readonly modules: readonly string[]; readonly stderr: string; readonly stdout: string }> => {
+  const recordRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-module-loads-'));
+  const recordPath = join(recordRoot, 'modules.txt');
+  try {
+    const child = spawn(process.execPath, ['--import', pathToFileURL(recorderPath).href, cliPath, ...args], {
+      cwd: workspaceRoot,
+      env: { ...process.env, AGENT_BUNDLE_RECORD_MODULE_LOADS: recordPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    const code = await new Promise<number>((settle, reject) => {
+      child.once('error', reject);
+      child.once('close', (exitCode) => settle(exitCode ?? 1));
+    });
+    const modules = (await readFile(recordPath, 'utf8')).split('\n').filter((line) => line.length > 0);
+    return { code, modules, stderr, stdout };
+  } finally {
+    await rm(recordRoot, { force: true, recursive: true });
+  }
+};
+
+const effectModulePattern = /\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:effect|@effect\/platform-node-shared)\//u;
+
+it('answers --version, --help, and an argv error without loading the Effect terminal runtime', async () => {
+  // The Effect module graph (`effect`, `effect/Terminal`, the
+  // platform-node-shared layers) measured ≈250 ms of module loading on
+  // rc.112 — more than the rest of the CLI's startup — so the trivial
+  // invocations must never reach it. Real commands build the runtime on
+  // their first write (checked last, so the recorder itself is proven).
+  await buildCliPackage();
+
+  const version = await runCliRecordingModuleLoads(['--version']);
+  expect(version).toMatchObject({ code: 0, stderr: '' });
+  expect(version.stdout).toMatch(/^\d+\.\d+\.\d+.*\n$/u);
+  expect(version.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const help = await runCliRecordingModuleLoads(['--help']);
+  expect(help).toMatchObject({ code: 0, stderr: '' });
+  expect(help.stdout).toContain('Usage: agent-bundle');
+  expect(help.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const argvError = await runCliRecordingModuleLoads(['mcp', 'list', '--server', 'fixture']);
+  expect(argvError).toMatchObject({ code: 2, stdout: '' });
+  expect(argvError.stderr).toContain("required option '--target <target>' not specified");
+  expect(argvError.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
+
+  const command = await runCliRecordingModuleLoads(['hooks', 'list', '--artifact', join(workspaceRoot, 'missing artifact'), '--json']);
+  expect(command).toMatchObject({ code: 1, stdout: '' });
+  expect(JSON.parse(command.stderr)).toMatchObject([{ code: 'AB6000', severity: 'error' }]);
+  expect(command.modules.some((url) => effectModulePattern.test(url))).toBe(true);
 }, 30_000 * timeScale);
 
 it('runs MCP and hook operations from a packed consumer with explicit and temporary artifacts', async () => {

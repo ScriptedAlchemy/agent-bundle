@@ -10,10 +10,14 @@ import { Effect, Layer, type PlatformError, Stdio, Stream, Terminal } from 'effe
  * shells writes to `process.stdout` / `process.stderr` for user-facing text.
  *
  * The Node layers are provided exactly once, at the CLI composition root
- * (`src/cli.ts`), right before the boundary runs the program; tests provide a
- * capture layer instead. Emitted artifacts (routed CLI bins, hook wrappers,
- * installers, MCP entries) never import this module: they stay self-contained
- * and keep their raw stream adapters. See `docs/effect-conventions.md`.
+ * (`makeCliTerminal` in `./cli-runtime.ts`, which `src/cli.ts` loads lazily on
+ * the first command write so `--version` / `--help` never load Effect); tests
+ * provide a capture layer instead. Commander's own help, version, and argv
+ * error text is the one user-facing text that does not come through here: it
+ * is written synchronously before any command runs. Emitted artifacts (routed
+ * CLI bins, hook wrappers, installers, MCP entries) never import this module:
+ * they stay self-contained and keep their raw stream adapters. See
+ * `docs/effect-conventions.md`.
  */
 
 /** The services a CLI output program needs. */

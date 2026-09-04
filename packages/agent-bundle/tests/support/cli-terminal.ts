@@ -3,11 +3,11 @@ import { Effect, Layer, Sink, Stdio, Terminal } from 'effect';
 import type { CliOutput } from '../../src/cli.ts';
 
 export interface CapturedCliTerminal {
-  /** Pass as the `runCli` output argument: a capture `Terminal` + `Stdio` layer instead of the process streams. */
+  /** Pass as the `runCli` output argument: a capture `Terminal` + `Stdio` layer and capture argv-text sinks instead of the process streams. */
   readonly output: CliOutput;
-  /** Everything written to stderr through `Stdio`. */
+  /** Everything written to stderr: Commander's argv errors and `Stdio` diagnostics, in order. */
   readonly stderr: () => string;
-  /** Everything written to stdout: `Terminal.display` text and `Stdio` machine output, in order. */
+  /** Everything written to stdout: Commander's help/version text, `Terminal.display` text, and `Stdio` machine output, in order. */
   readonly stdout: () => string;
 }
 
@@ -16,9 +16,11 @@ const chunkText = (chunk: string | Uint8Array): string =>
 
 /**
  * The test seam for the first-party CLI's terminal I/O: a `Terminal` whose
- * `display` appends to a buffer, and a `Stdio` whose stdout/stderr sinks
- * append to the same buffers, so tests never spy on `process.stdout`.
- * `readLine` replays `lines` and then quits, like a closed stdin.
+ * `display` appends to a buffer, a `Stdio` whose stdout/stderr sinks append
+ * to the same buffers, and synchronous argv-text sinks (Commander's help,
+ * version, and argv errors) over those buffers too, so tests never spy on
+ * `process.stdout`. `readLine` replays `lines` and then quits, like a closed
+ * stdin.
  */
 export const captureCliTerminal = (lines: readonly string[] = []): CapturedCliTerminal => {
   const out: string[] = [];
@@ -37,7 +39,13 @@ export const captureCliTerminal = (lines: readonly string[] = []): CapturedCliTe
     stdout: () => Sink.forEach((chunk: string | Uint8Array) => Effect.sync(() => void out.push(chunkText(chunk)))),
   });
   return Object.freeze({
-    output: { services: Layer.merge(Layer.succeed(Terminal.Terminal, terminal), stdio) },
+    output: {
+      argvText: {
+        stderr: (text: string) => void err.push(text),
+        stdout: (text: string) => void out.push(text),
+      },
+      services: Layer.merge(Layer.succeed(Terminal.Terminal, terminal), stdio),
+    },
     stderr: () => err.join(''),
     stdout: () => out.join(''),
   });

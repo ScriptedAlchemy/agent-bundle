@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
-import type { Effect, Layer } from 'effect';
+import type { Layer } from 'effect';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -9,6 +9,11 @@ import { resolve } from 'node:path';
  * inside each action. A static import would load Rsbuild, Rslib, Rslint, the MCP
  * SDK, chokidar and ajv before argv is even parsed, so `--version`, `--help` and
  * an argv error would each pay the full graph for nothing.
+ *
+ * The Effect terminal runtime (`./effect/cli-runtime.ts`) is type-only here for
+ * the same reason: `effect` + `effect/Terminal` + the platform-node-shared
+ * layers measured ≈250 ms of module loading, so `runCli` imports that module
+ * on the first command write, after Commander has parsed.
  */
 import type {
   build,
@@ -45,20 +50,36 @@ import { formatInstallResult, formatUninstallResult } from './install/format.ts'
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
-import { makeScopedEffectRuntime } from './effect/boundary.ts';
-import { type CliServices, display, nodeCliServices, writeStderr, writeStdout } from './effect/terminal.ts';
+import type { CliTerminal } from './effect/cli-runtime.ts';
+import type { CliServices } from './effect/terminal.ts';
 
 declare const __AGENT_BUNDLE_VERSION__: string;
 
+/** Synchronous text sinks for the text Commander writes itself while parsing argv. */
+export interface ArgvTextSinks {
+  readonly stderr: (text: string) => void;
+  readonly stdout: (text: string) => void;
+}
+
 /**
- * The CLI's terminal services (#465 / Effect Terminal adoption). User-facing
- * text is written through `Terminal.display`; diagnostics and machine output
- * through `Stdio`. The process-backed Node layers are the default; tests
- * provide a capture layer instead of spying on `process.stdout`.
+ * The CLI's output seams (#465 / Effect Terminal adoption). Command output —
+ * user-facing text through `Terminal.display`, diagnostics and machine output
+ * through `Stdio` — runs against `services`; the process-backed Node layers
+ * are the default and are loaded on the first write. Commander's own text —
+ * `--help`, `--version`, and argv errors — is written synchronously to
+ * `argvText` (default: the process streams) before any command runs, so those
+ * invocations never load the Effect runtime. Tests provide capture sinks for
+ * both instead of spying on `process.stdout`.
  */
 export interface CliOutput {
+  readonly argvText?: ArgvTextSinks;
   readonly services?: Layer.Layer<CliServices>;
 }
+
+const processArgvText: ArgvTextSinks = Object.freeze({
+  stderr: (text: string): void => void process.stderr.write(text),
+  stdout: (text: string): void => void process.stdout.write(text),
+});
 
 interface CliSignalSource {
   once(signal: NodeJS.Signals, listener: () => void): unknown;
@@ -619,29 +640,22 @@ const closeForegroundOnSignal = (
   for (const signal of terminationSignals) signals.once(signal, close);
 });
 
-/** Commander writes help and argv errors synchronously; the CLI queues them and replays them through the terminal services in order. */
-interface QueuedWrite {
-  readonly stream: 'stderr' | 'stdout';
-  readonly text: string;
-}
-
 export const runCli = async (
   args: string[],
   output: CliOutput = {},
   dependencies: CliDependencies = {},
 ): Promise<number> => {
   // The terminal services are provided exactly once, here at the composition
-  // root; every write below runs through the boundary against this runtime.
-  const runtime = makeScopedEffectRuntime(output.services ?? nodeCliServices);
-  const run = <A, E>(effect: Effect.Effect<A, E, CliServices>): Promise<A> => runtime.run(effect);
-  const machine = (result: unknown): Promise<void> => run(writeStdout(machineLine(result)));
-  const diagnostics = (text: string): Promise<void> => run(writeStderr(text));
-  const queued: QueuedWrite[] = [];
-  const flushQueued = async (): Promise<void> => {
-    for (const entry of queued.splice(0)) {
-      await (entry.stream === 'stdout' ? run(display(entry.text)) : diagnostics(entry.text));
-    }
-  };
+  // root, but built lazily: the runtime module loads on the first command
+  // write, so `--version`, `--help`, and argv errors (which Commander writes
+  // synchronously to the sinks below and then aborts parsing) never load it.
+  let terminal: Promise<CliTerminal> | undefined;
+  const cliTerminal = (): Promise<CliTerminal> =>
+    (terminal ??= import('./effect/cli-runtime.ts').then(({ makeCliTerminal }) => makeCliTerminal(output.services)));
+  const show = async (text: string): Promise<void> => (await cliTerminal()).display(text);
+  const machine = async (result: unknown): Promise<void> => (await cliTerminal()).writeStdout(machineLine(result));
+  const diagnostics = async (text: string): Promise<void> => (await cliTerminal()).writeStderr(text);
+  const argvText = output.argvText ?? processArgvText;
   let foreground: Promise<void> | undefined;
   let exitCode = 0;
   const program = new Command();
@@ -651,8 +665,8 @@ export const runCli = async (
     .exitOverride()
     .showHelpAfterError(false)
     .configureOutput({
-      writeErr: (chunk) => void queued.push({ stream: 'stderr', text: chunk }),
-      writeOut: (chunk) => void queued.push({ stream: 'stdout', text: chunk }),
+      writeErr: (chunk) => argvText.stderr(chunk),
+      writeOut: (chunk) => argvText.stdout(chunk),
     });
 
   const devCommand = program.command('dev').description('Serve the packaged development workbench on loopback')
@@ -672,7 +686,7 @@ export const runCli = async (
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,
     });
-    await run(display(`Development workbench at ${session.url}\n`));
+    await show(`Development workbench at ${session.url}\n`);
     foreground = closeForegroundOnSignal(session, dependencies.signals ?? process, diagnostics);
   });
 
@@ -715,7 +729,7 @@ export const runCli = async (
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
     }
-    await (options.json === true ? machine(result) : run(display(humanBuild(result))));
+    await (options.json === true ? machine(result) : show(humanBuild(result)));
   });
 
   const prepackCommand = configureSourceOptions(
@@ -728,7 +742,7 @@ export const runCli = async (
       output: options.output,
       packageOutputs: true,
     });
-    await (options.json === true ? machine(result) : run(display(humanPrepack(result))));
+    await (options.json === true ? machine(result) : show(humanPrepack(result)));
   });
 
   const installCommand = program.command('install')
@@ -756,7 +770,7 @@ export const runCli = async (
       ...(options.mode === undefined ? {} : { mode: options.mode }),
       scope: installScope(options.scope),
     });
-    await (options.json === true ? machine(result) : run(display(humanInstall(result))));
+    await (options.json === true ? machine(result) : show(humanInstall(result)));
   });
 
   const uninstallCommand = program.command('uninstall')
@@ -791,7 +805,7 @@ export const runCli = async (
       ...(options.purgeData === undefined ? {} : { purgeData: options.purgeData }),
       scope: installScope(options.scope),
     });
-    await (options.json === true ? machine(result) : run(display(humanUninstall(result))));
+    await (options.json === true ? machine(result) : show(humanUninstall(result)));
   });
 
   const doctorCommand = program.command('doctor')
@@ -805,7 +819,7 @@ export const runCli = async (
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.host.length === 0 ? {} : { hosts: options.host }),
     });
-    await (options.json === true ? machine(result) : run(display(humanDoctor(result))));
+    await (options.json === true ? machine(result) : show(humanDoctor(result)));
     if (result.diagnostics.some((entry) => entry.severity === 'error')) exitCode = 1;
   });
 
@@ -827,7 +841,7 @@ export const runCli = async (
     if (result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
       throw new DiagnosticError(result.diagnostics);
     }
-    await (options.json === true ? machine(result) : run(display(humanValidate(result))));
+    await (options.json === true ? machine(result) : show(humanValidate(result)));
   });
 
   const evalCommand = configureSourceOptions(
@@ -848,7 +862,7 @@ export const runCli = async (
       ...(options.suite === undefined || options.suite.length === 0 ? {} : { suites: options.suite }),
       ...(options.trials === undefined ? {} : { trials: options.trials }),
     });
-    await (options.json === true ? machine(result) : run(display(humanEval(result))));
+    await (options.json === true ? machine(result) : show(humanEval(result)));
     const summary = result.run.summary ?? emptyEvalSummary;
     // Inconclusive trials produced no evidence, so they cannot report success either.
     if (summary.fail > 0 || summary.inconclusive > 0) exitCode = 1;
@@ -867,7 +881,7 @@ export const runCli = async (
       baseRunId: baseline,
       candidateRunId: candidate,
     });
-    await (sourceOptions.json === true ? machine(result) : run(display(humanEvalComparison(result))));
+    await (sourceOptions.json === true ? machine(result) : show(humanEvalComparison(result)));
   });
 
   const inspectCommand = configureInspectOptions(
@@ -899,7 +913,7 @@ export const runCli = async (
       ...(options.state === true ? { focus: 'state' as const } : {}),
       ...(options.target === undefined ? {} : { target: options.target }),
     });
-    await (options.json === true ? machine(result) : run(display(humanInspect(result))));
+    await (options.json === true ? machine(result) : show(humanInspect(result)));
     if (result.state === 'invalid') exitCode = 1;
   });
 
@@ -915,7 +929,7 @@ export const runCli = async (
       server: options.server,
       target: options.target,
     });
-    await (options.json === true ? machine(result) : run(display(`Listed ${result.tools.length} tool(s) from ${options.server}\n`)));
+    await (options.json === true ? machine(result) : show(`Listed ${result.tools.length} tool(s) from ${options.server}\n`));
   });
 
   const mcpInvokeCommand = configureArtifactOptions(
@@ -939,7 +953,7 @@ export const runCli = async (
       target: options.target,
       tool: options.tool,
     });
-    await (options.json === true ? machine(result) : run(display(`Invoked ${options.tool} on ${options.server}\n`)));
+    await (options.json === true ? machine(result) : show(`Invoked ${options.tool} on ${options.server}\n`));
   });
 
   const mcpRunCommand = configureArtifactOptions(
@@ -980,7 +994,7 @@ export const runCli = async (
   hooksListCommand.action(async (options: ArtifactCommandOptions) => {
     const { listHooks } = await import('./api.ts');
     const result = await listHooks({ ...artifactOptions(options), target: options.target });
-    await (options.json === true ? machine(result) : run(display(`Listed ${result.length} hook(s)${options.target === undefined ? '' : ` from ${options.target}`}\n`)));
+    await (options.json === true ? machine(result) : show(`Listed ${result.length} hook(s)${options.target === undefined ? '' : ` from ${options.target}`}\n`));
   });
 
   const hooksSimulateCommand = configureArtifactOptions(
@@ -1001,25 +1015,28 @@ export const runCli = async (
       input: await parseJsonObject(options),
       target: options.target,
     });
-    await (options.json === true ? machine(result) : run(display(`Simulated ${options.hook}\n`)));
+    await (options.json === true ? machine(result) : show(`Simulated ${options.hook}\n`));
   });
 
   try {
     await program.parseAsync(args, { from: 'user' });
-    await flushQueued();
     return exitCode;
   } catch (error) {
-    await flushQueued();
     if (error instanceof CommanderError) {
       return error.exitCode === 0 ? 0 : 2;
     }
     await diagnostics(machineLine(diagnosticsFor(error)));
     return 1;
   } finally {
-    // A foreground session outlives this call; its close diagnostics still
-    // need the services, so the runtime follows the session instead.
-    if (foreground === undefined) await runtime.close();
-    else void foreground.then(() => runtime.close());
+    // Only a command that wrote something built the runtime. A foreground
+    // session outlives this call; its close diagnostics still need the
+    // services, so the runtime follows the session instead.
+    if (terminal !== undefined) {
+      const built = terminal;
+      const close = (): Promise<void> => built.then((active) => active.close(), () => undefined);
+      if (foreground === undefined) await close();
+      else void foreground.then(close);
+    }
   }
 };
 
