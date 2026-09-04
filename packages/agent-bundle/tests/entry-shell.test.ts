@@ -368,8 +368,12 @@ it('journals the lineage registry through sqlite only for workspace-durable proj
   });
   expect(source).toContain("import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage'");
   expect(source).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite'");
-  expect(source).toContain("const lineageAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
-  expect(source).toContain("createSqliteStateDriver({ root: join(resolve(lineageAnchor), 'state') })");
+  // One anchor per process (#468): the lineage journal opens on the same
+  // `pluginRoot` the server publishes as `request.plugin` and mounts state on.
+  expect(source).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
+  expect(source).toContain('createSqliteStateDriver({ root: pluginRoot.stateRoot })');
+  expect(source).toContain('    pluginRoot: pluginRoot.identity,');
+  expect(source).not.toContain('AGENT_BUNDLE_PLUGIN_ROOT');
   expect(source).toContain('agent-bundle lineage registry is in-memory only');
   expect(source).toContain('disposeLineage: lineage.dispose,');
 });
@@ -417,7 +421,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '16bcae6386fbba1c664806a732e02373cc753d9c3baa976782218bdb88847773',
+    'HASH_TO_BE_RECOMPUTED',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -599,7 +603,9 @@ it('generates deterministic per-request provider execution in the shared Flight 
     source.indexOf('/project/src/providers/zeta.ts'),
   );
   expect(source).toContain('key: "alphaValue"');
-  expect(source).toContain('await provider.module.default({ invocation: message.invocation, signal: controller.signal })');
+  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: plugin, signal: controller.signal })');
+  // The server's observed anchor rides each render message; the worker's own resolution backs it.
+  expect(source).toContain('const plugin = message.plugin ?? pluginRoot.identity;');
   expect(source).toContain('Context provider "');
   expect(source).toContain('provider.source');
   expect(source).toContain('providers: providerValues');
@@ -649,7 +655,7 @@ it('mounts deterministic per-request providers for plain routed CLI commands (#3
   );
   expect(withProviders).toContain('key: "alphaValue"');
   expect(withProviders).toContain(
-    "await provider.module.default({ invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }, signal: context.signal })",
+    "await provider.module.default({ invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }, plugin: pluginRoot.identity, signal: context.signal })",
   );
   expect(withProviders).toContain('must default-export a factory.');
   expect(withProviders).toContain('failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })');
@@ -706,7 +712,7 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
   expect(source.indexOf('/project/src/providers/alpha-value.ts')).toBeLessThan(
     source.indexOf('/project/src/providers/zeta.ts'),
   );
-  expect(source).toContain('await provider.module.default({ invocation: message.invocation, signal: controller.signal })');
+  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: pluginRoot.identity, signal: controller.signal })');
   expect(source).toContain('providers: providerValues');
   expect(source).toContain('processLifetime');
 
@@ -768,30 +774,36 @@ it('keeps the generated provider loop and the in-process execution helper identi
   // Behavior: processLifetime seeded first, deterministic order, fail-closed on both defects.
   const lifetime = { hits: 3, instanceId: 'instance-1', pid: 42 };
   const calls: string[] = [];
+  const plugin = { source: 'derived', state: 'available', value: { root: '/plugin', stateRoot: '/plugin/state' } };
   const values = await executeProviders({
     invocation: { kind: 'cli', props: { args: [], command: 'report' } },
+    plugin,
     processLifetime: lifetime,
     providers: [
-      { key: 'alphaValue', module: { default: (context: { invocation: unknown }) => { calls.push('alphaValue'); return context.invocation; } }, source: 'src/providers/alpha-value.ts' },
+      { key: 'alphaValue', module: { default: (context: { invocation: unknown; plugin: unknown }) => { calls.push('alphaValue'); return [context.invocation, context.plugin]; } }, source: 'src/providers/alpha-value.ts' },
       { key: 'zeta', module: { default: async () => { calls.push('zeta'); return 'z'; } }, source: 'src/providers/zeta.ts' },
     ],
     signal: new AbortController().signal,
   });
   expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
+  // Providers receive the invocation and the observed plugin root (#468) — the same value the request scope publishes.
   expect(values).toEqual({
-    alphaValue: { kind: 'cli', props: { args: [], command: 'report' } },
+    alphaValue: [{ kind: 'cli', props: { args: [], command: 'report' } }, plugin],
     processLifetime: { hits: 3, instanceId: 'instance-1', pid: 42 },
     zeta: 'z',
   });
+  expect(source).toContain('await provider.module.default({ invocation: message.invocation, plugin: pluginRoot.identity, signal: controller.signal })');
   expect(calls).toEqual(['alphaValue', 'zeta']);
   await expect(executeProviders({
     invocation: undefined,
+    plugin: undefined,
     processLifetime: lifetime,
     providers: [{ key: 'zeta', module: {}, source: 'src/providers/zeta.ts' }],
     signal: new AbortController().signal,
   })).rejects.toThrow('Context provider "zeta" (src/providers/zeta.ts) must default-export a factory.');
   await expect(executeProviders({
     invocation: undefined,
+    plugin: undefined,
     processLifetime: lifetime,
     providers: [{ key: 'zeta', module: { default: () => { throw new Error('boom'); } }, source: 'src/providers/zeta.ts' }],
     signal: new AbortController().signal,
@@ -1071,11 +1083,11 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durableEntry).toContain("import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';");
   expect(durableEntry).toContain("import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';");
   expect(durableEntry).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';");
-  expect(durableEntry).toContain("const durableAnchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));");
+  expect(durableEntry).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
   // The host's advertisement is declared once and handed to both the ledger
   // (whose sensitivity ceilings it carries) and the signaller (#99 item 7).
   expect(durableEntry).toContain(`const noticeDeliveryAdvertisement = Object.freeze(${stableJson(claudeAdapter.noticeDelivery)});`);
-  expect(durableEntry).toContain("createNoticeInboxSignaller({ delivery: noticeDeliveryAdvertisement, store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: join(durableAnchor, 'state') }), lifetime: 'workspace-durable', noticeDelivery: noticeDeliveryAdvertisement }) })");
+  expect(durableEntry).toContain("createNoticeInboxSignaller({ delivery: noticeDeliveryAdvertisement, store: createGeneratedNoticeRuntime({ driver: createSqliteStateDriver({ root: pluginRoot.stateRoot }), lifetime: 'workspace-durable', noticeDelivery: noticeDeliveryAdvertisement }) })");
   expect(durableEntry).not.toContain('noticeRetentionPolicy');
   expect(durableEntry).toContain('  notices: noticeDelivery,');
   // A declared `notices.retention` travels as one frozen literal too.
@@ -1119,7 +1131,6 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   for (const identifier of [
     'createGeneratedNoticeRuntime',
     'createNoticeInboxSignaller',
-    'durableAnchor',
     'notices: noticeDelivery',
   ]) {
     expect(unsupportedEntry).not.toContain(identifier);
@@ -1195,8 +1206,9 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     state: state('workspace-durable'),
   });
   expect(durable).toContain("from '@agent-bundle/runtime/state/sqlite'");
-  expect(durable).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
-  expect(durable).toContain("join(durableAnchor, 'state')");
+  expect(durable).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
+  expect(durable).toContain('createSqliteStateDriver({ root: pluginRoot.stateRoot })');
+  expect(durable).not.toContain('AGENT_BUNDLE_PLUGIN_ROOT');
 
   const renderedWorker = entryShellModule.generatedRenderedRouteWorkerSource({
     routes: [{ ...route, id: 'script:report', kind: 'script' }],

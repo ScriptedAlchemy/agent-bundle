@@ -66,6 +66,8 @@ export interface ExecutableProvider {
 export interface ExecuteProvidersOptions {
   /** The surface-specific provider invocation (`tool`, `event`, `cli`, `script`). */
   readonly invocation: unknown;
+  /** The observed plugin root the request scope publishes (#468); handed to every factory unchanged. */
+  readonly plugin: unknown;
   readonly processLifetime: ProviderProcessLifetime;
   /** Providers already in {@link orderedProviders} order. */
   readonly providers: readonly ExecutableProvider[];
@@ -91,8 +93,9 @@ export const executeProviders = async (
     try {
       values[provider.key] = await (factory as (context: {
         readonly invocation: unknown;
+        readonly plugin: unknown;
         readonly signal: AbortSignal;
-      }) => unknown)({ invocation: options.invocation, signal: options.signal });
+      }) => unknown)({ invocation: options.invocation, plugin: options.plugin, signal: options.signal });
     } catch (error) {
       throw new Error(providerFailedMessage(provider.key, provider.source, error), { cause: error });
     }

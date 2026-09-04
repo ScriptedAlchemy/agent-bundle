@@ -34,6 +34,8 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
   AgentTerminal,
   AgentTerminalColor,
   AgentTerminalStream,

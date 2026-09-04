@@ -35,7 +35,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 | 变量 | 由谁读取 | 含义 |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 持久状态锚点。覆盖内置的回退值。 |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录与持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
 | `AGENT_BUNDLE_HOOK_HOST` | 生成的钩子 wrapper | 显式指定声明的宿主，而不去探测。 |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的钩子 playground 会设置它。 |
@@ -64,7 +64,10 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 持久状态解析到 `$AGENT_BUNDLE_PLUGIN_ROOT/state`，回退到产物根目录，对 CLI bin 则回退到
 `./.agent-bundle/state`。只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
-不在磁盘上留下任何东西。
+不在磁盘上留下任何东西。每个生成的进程只解析该锚点一次（`@agent-bundle/runtime` 的
+`resolvePluginRoot`），并以 `(await agent()).plugin` 发布——`{ root, stateRoot }`，来自变量时
+`source: 'native'`，来自回退时为 `'derived'`——因此把自己的文件放在框架状态旁边的路由或 provider
+读取 `plugin.value.stateRoot` 即可，不必再自行推导路径。
 
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后

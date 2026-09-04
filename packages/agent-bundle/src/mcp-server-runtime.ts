@@ -39,6 +39,7 @@ import type {
   AgentDocument,
   AgentHostIdentity,
   AgentLineage,
+  AgentPluginIdentity,
   AgentProgressReporter,
   AgentRenderDispatch,
   AgentRenderDispatcher,
@@ -110,6 +111,7 @@ interface GeneratedRouteIdentity {
   readonly actor?: Observed<AgentActorIdentity>;
   readonly host?: Observed<AgentHostIdentity>;
   readonly lineage: Observed<AgentLineage>;
+  readonly plugin?: Observed<AgentPluginIdentity>;
   readonly session?: Observed<AgentSessionIdentity>;
   readonly terminal: Observed<AgentTerminal>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
@@ -194,13 +196,15 @@ const toolCallLineage = async (
   });
 };
 
-/** Identity the server derives from the transport's own request context. */
+/** Identity the server derives from the transport's own request context, plus the process's resolved plugin root. */
 const requestIdentity = (
   context: GeneratedRouteRequestContext,
   clientName: string | undefined,
   lineage: Observed<AgentLineage>,
+  plugin: Observed<AgentPluginIdentity> | undefined,
 ): GeneratedRouteIdentity => ({
   lineage,
+  ...(plugin === undefined ? {} : { plugin }),
   ...(context.http?.authInfo?.clientId === undefined
     ? {}
     : { actor: available({ id: context.http.authInfo.clientId }, 'native') }),
@@ -253,9 +257,14 @@ export const renderGeneratedRoute = async (
   route: GeneratedRouteRecord,
   input: unknown,
   context: GeneratedRouteRequestContext,
-  identity?: { readonly clientName?: string; readonly lineage?: Observed<AgentLineage> },
+  identity?: {
+    readonly clientName?: string;
+    readonly lineage?: Observed<AgentLineage>;
+    /** The server process's resolved plugin root (#468), published on every request it opens. */
+    readonly plugin?: Observed<AgentPluginIdentity>;
+  },
 ): Promise<RenderedGeneratedRoute> => runAgentRequest({
-  ...requestIdentity(context, identity?.clientName, identity?.lineage ?? unavailable<AgentLineage>('not-provided')),
+  ...requestIdentity(context, identity?.clientName, identity?.lineage ?? unavailable<AgentLineage>('not-provided'), identity?.plugin),
   invocation: { artifactEpoch, kind: 'tool', operationId: route.id, surface: route.name },
   signal: context.mcpReq.signal,
 }, async () => {
@@ -358,6 +367,8 @@ export interface RegisterGeneratedRoutesOptions {
   readonly lineage?: AgentLineageRegistry;
   /** The artifact's host, used when the negotiated client name maps to none. */
   readonly lineageHost?: LineageHost;
+  /** The process's resolved plugin root (#468); every request the server opens publishes it as `request.plugin`. */
+  readonly pluginRoot?: Observed<AgentPluginIdentity>;
   /** Raw `tools/call` arguments captured off the wire, for lineage correlation. */
   readonly rawArguments?: RawToolArgumentsCapture;
 }
@@ -387,7 +398,11 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName, lineage: await toolCallLineage(options.lineage, context, route.name, rawArguments, clientName, options.lineageHost) },
+            {
+              clientName,
+              lineage: await toolCallLineage(options.lineage, context, route.name, rawArguments, clientName, options.lineageHost),
+              ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }),
+            },
           );
           return attachMcpStructuredContent(rendered.toolResult, rendered.result);
         }, options.afterRender)) as never);
@@ -410,7 +425,7 @@ export const registerGeneratedRoutes = (
               route,
               { uri: resourceUri.href },
               context,
-              { clientName },
+              { clientName, ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }) },
             )).result;
           }, options.afterRender)) as never,
         );
@@ -428,7 +443,7 @@ export const registerGeneratedRoutes = (
             route,
             input,
             context,
-            { clientName },
+            { clientName, ...(options.pluginRoot === undefined ? {} : { plugin: options.pluginRoot }) },
           )).result;
         }, options.afterRender)) as never);
         break;
@@ -581,6 +596,7 @@ export const createFlightWorkerHost = (
             id,
             invocation,
             lineage: context.lineage,
+            plugin: context.plugin,
             requestInvocation: context.invocation,
             session: context.session,
             terminal: context.terminal,
@@ -686,6 +702,12 @@ export interface CreateGeneratedRouteMcpServerOptions {
   readonly lineage?: AgentLineageRegistry;
   readonly notices?: GeneratedNoticeDeliveryBinding;
   readonly plugin: { readonly name: string; readonly version: string };
+  /**
+   * The process's resolved plugin root / durable-state anchor (#468), the same
+   * value the entry mounted its state on; published as `request.plugin` on
+   * every tool call, resource read, prompt get, and shared-runtime event.
+   */
+  readonly pluginRoot?: Observed<AgentPluginIdentity>;
   readonly routes: Readonly<Record<string, GeneratedRouteRecord>>;
 }
 
@@ -731,7 +753,7 @@ const installNoticeInboxSubscriptions = (
     // Subscriptions are not tool calls: no pre-tool hook precedes them, so
     // there is no correlation window to resolve lineage through — a
     // subscriber therefore never matches a `conversation`/`root` recipient.
-    const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'));
+    const identity = requestIdentity(context, protocol.getClientVersion()?.name, unavailable<AgentLineage>('not-provided'), undefined);
     try {
       await notices.subscribe({
         actor: identity.actor ?? unavailable(),
@@ -853,6 +875,7 @@ const startEventRuntime = async (
   host: WarmFlightHost,
   afterRender: GeneratedRenderSettled | undefined,
   registry: AgentLineageRegistry | undefined,
+  pluginRoot: Observed<AgentPluginIdentity> | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
   return events.createEventRuntimeServer({
@@ -902,6 +925,7 @@ const startEventRuntime = async (
         surface: event,
       },
       lineage,
+      ...(pluginRoot === undefined ? {} : { plugin: pluginRoot }),
       ...(sessionId === undefined ? {} : { session: available({ sessionId }, 'native') }),
       signal,
       // A hook's stdout is its host envelope: no terminal (#511).
@@ -958,9 +982,10 @@ export const createGeneratedRouteMcpServer = async (
     : installNoticeInboxSubscriptions(server, options.notices);
   const events = options.events === undefined
     ? undefined
-    : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage);
+    : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage, options.pluginRoot);
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
     ...(afterRender === undefined ? {} : { afterRender }),
+    ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
     ...(options.lineage === undefined ? {} : { lineage: options.lineage, rawArguments: captureRawToolArguments(server) }),
     ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
       ? {}

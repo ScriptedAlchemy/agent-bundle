@@ -82,7 +82,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in every selected host artifact whose target publishes the `cli` capability (all built-in targets). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, plugin, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 | `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
@@ -156,7 +156,16 @@ directory. The npm package's routed CLI bin and rendered scripts use
 `$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
 `$PWD/.agent-bundle/state`; the artifact-hosted routed CLI bin
 (`<target>/bin/<name>.mjs`) derives the artifact root from the parent of its
-own `bin/` directory instead, like the MCP worker. Notice authorization is deliberately permissive
+own `bin/` directory instead, like the MCP worker. Each generated process
+resolves that anchor exactly once (`resolvePluginRoot` from
+`@agent-bundle/runtime`, #468): the state kernel, the notice ledger, the
+lineage journal, and every request scope the process opens read the same
+value, published as `(await agent()).plugin` — `{ root, stateRoot }` with
+`source: 'native'` from `AGENT_BUNDLE_PLUGIN_ROOT` or `'derived'` from the
+fallback — and handed to conventional providers as `plugin` beside
+`invocation` and `signal`. An anchor still carrying an unexpanded `${…}`
+token is treated as unset (reported once on stderr), never joined into a
+path. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger — every generated scope mounts the request's `lineage`
 on the notice principal, so `recipient.conversation` / `recipient.root` are
@@ -252,9 +261,10 @@ an otherwise valid migration.
 Each direct child of `src/providers/` derives its key by camel-casing the file
 stem: for example, `src/providers/project-auth.ts` mounts at
 `(await agent()).providers.projectAuth`. Every module default-exports a factory
-with the contract `(context: { invocation, signal }) => value |
-Promise<value>`, where `invocation` is the current route invocation and
-`signal` is its request abort signal.
+with the contract `(context: { invocation, plugin, signal }) => value |
+Promise<value>`, where `invocation` is the current route invocation, `plugin`
+is the observed plugin root the request will publish as
+`(await agent()).plugin` (#468), and `signal` is its request abort signal.
 
 Every generated request scope — the shared Flight worker behind generated MCP
 and event routes, the react-server worker behind rendered routed CLI commands
