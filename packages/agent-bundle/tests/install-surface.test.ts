@@ -9,7 +9,15 @@ import { expect, it } from '@rstest/core';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
-import { installReceiptFile, readInstallReceipt, treeInventory } from '../src/install/receipt.ts';
+import {
+  installReceiptFile,
+  installReceiptFormat,
+  legacyInstallReceiptFormat,
+  readInstallReceipt,
+  readInstallReceiptFile,
+  treeInventory,
+} from '../src/install/receipt.ts';
+import { diffTreeSnapshots, snapshotTree } from './support/tree-snapshot.ts';
 
 const execFile = promisify(executeFile);
 
@@ -304,13 +312,26 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
     expect(install).toContain(installReceiptFile);
     expect(install).toContain('--replace');
     expect(install).toContain('`state/`');
+    expect(install).toContain('### Uninstall');
+    expect(install).toContain('node ./install.mjs --uninstall --plan');
+    expect(install).toContain('--purge-data --confirm-purge');
   }
+  expect(claude).toContain('agent-bundle uninstall claude --from ./ --plan');
+  expect(claude).toContain('~/.claude/agent-bundle/receipts/install-fixture.install-fixture-marketplace.user.json');
+  expect(codex).toContain('agent-bundle uninstall codex --from ./ --plan');
+  expect(codex).toContain('no\nkeep-data option');
   expect(writesFor('cursor').get('INSTALL.md')).toContain('node ./install.mjs --replace');
   expect(writesFor('cursor').get('INSTALL.md')).toContain('content-hash comparison');
 
   const installer = writesFor('cursor').get('install.mjs') ?? '';
   expect(installer).toContain("argument === '--replace' || argument === '--force'");
   expect(installer).toContain(`const receiptFile = ${JSON.stringify(installReceiptFile)};`);
+  expect(installer).toContain(`const receiptFormat = ${JSON.stringify(installReceiptFormat)};`);
+  expect(installer).toContain(`const legacyReceiptFormat = ${JSON.stringify(legacyInstallReceiptFormat)};`);
+  expect(installer).toContain("if (uninstall && mode === 'local') {");
+  expect(installer).toContain("if (uninstall && mode === 'marketplace') {");
+  expect(installer).toContain('Refusing to uninstall foreign directory');
+  expect(installer).toContain('--purge-data deletes the plugin\'s durable runtime state');
   expect(installer).toContain('Refusing foreign install');
   expect(installer).toContain('Refusing content collision');
   expect(installer).toContain('Refusing version collision');
@@ -398,13 +419,18 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     expect((await readdir(destination)).sort()).toEqual([installReceiptFile, '.cursor-plugin', 'INSTALL.md', 'install.mjs', 'payload.txt', 'removed-later.txt']);
     await rm(join(bundle, 'empty'), { recursive: true });
     const firstArtifact = await treeInventory(bundle);
-    // The emitted receipt is byte-compatible with the core reader.
+    // The emitted receipt is byte-compatible with the core reader, lifecycle fields included (#101).
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: firstArtifact.hash,
       directories: ['.cursor-plugin'],
       files: firstArtifact.files,
+      format: installReceiptFormat,
       host: 'cursor',
+      hostDirectories: ['plugins', 'plugins/local'],
+      mode: 'local',
       plugin: 'install-fixture',
+      registrations: [{ kind: 'cursor-local-plugin' }],
+      scope: 'user',
       version: '1.2.3',
     });
 
@@ -590,3 +616,193 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
     await rm(root, { force: true, recursive: true });
   }
 }, 60_000);
+
+it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-owned removal, data policy, refusals', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-mjs-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const cursorRoot = join(home, '.cursor');
+  const destination = join(cursorRoot, 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  try {
+    const writes = writesFor('cursor');
+    await mkdir(join(bundle, '.cursor-plugin'), { recursive: true });
+    await mkdir(join(bundle, 'skills', 'probe'), { recursive: true });
+    await mkdir(cursorRoot, { recursive: true });
+    await writeFile(join(cursorRoot, 'operator.json'), '{}\n');
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+      writeFile(join(bundle, 'skills', 'probe', 'SKILL.md'), '# probe\n'),
+    ]);
+    const before = await snapshotTree(home);
+
+    // Flag validation happens before anything is read or written.
+    for (const [args, message] of [
+      [['--plan'], '--plan, --keep-data, --purge-data, and --confirm-purge apply to --uninstall only.'],
+      [['--uninstall', '--purge-data'], '--purge-data deletes the plugin\'s durable runtime state'],
+      [['--uninstall', '--purge-data', '--confirm-purge', '--keep-data'], '--keep-data and --purge-data are mutually exclusive.'],
+    ] as const) {
+      const refused = await run(installer, [...args], home);
+      expect(refused.code, args.join(' ')).toBe(2);
+      expect(refused.stderr, args.join(' ')).toContain(message);
+    }
+    const nothing = await run(installer, ['--uninstall'], home);
+    expect(nothing).toMatchObject({ code: 0, stderr: '' });
+    expect(nothing.stdout).toContain(`Not installed install-fixture@1.2.3 for cursor (local mode) at ${destination}`);
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    expect((await run(installer, [], home)).stdout).toContain('Installed install-fixture@1.2.3');
+    const afterInstall = await snapshotTree(home);
+    const receipt = await readInstallReceipt(destination);
+    expect(receipt?.hostDirectories).toEqual(['plugins', 'plugins/local']);
+
+    // --plan prints every exact path and changes nothing.
+    const plan = await run(installer, ['--uninstall', '--plan'], home);
+    expect(plan).toMatchObject({ code: 0, stderr: '' });
+    expect(plan.stdout).toContain(`Would uninstall install-fixture@1.2.3 for cursor (local mode) at ${destination}`);
+    expect(plan.stdout).toContain(`Receipt: consumed (${join(destination, installReceiptFile)})`);
+    for (const file of receipt?.files ?? []) expect(plan.stdout).toContain(join(destination, file));
+    expect(plan.stdout).toContain(join(cursorRoot, 'plugins', 'local'));
+    expect(plan.stdout).toContain('Data (keep): absent');
+    expect(diffTreeSnapshots(afterInstall, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // Real uninstall: the home is byte-identical to before the install; a rerun is a no-op.
+    const uninstalled = await run(installer, ['--uninstall'], home);
+    expect(uninstalled).toMatchObject({ code: 0, stderr: '' });
+    expect(uninstalled.stdout).toContain(`Uninstalled install-fixture@1.2.3 for cursor (local mode) at ${destination}`);
+    expect(uninstalled.stdout).toContain(`Removed directory 6 entries:`);
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+    expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
+
+    // Durable state and unowned files survive a default uninstall; state goes only with confirmed --purge-data.
+    await run(installer, [], home);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await writeFile(join(destination, 'notes.md'), 'operator\n');
+    // An unowned empty directory is never pruned (only owned directories are candidates) and is listed as retained.
+    await mkdir(join(destination, 'scratch'));
+    const keepPlan = await run(installer, ['--uninstall', '--keep-data', '--plan'], home);
+    expect(keepPlan).toMatchObject({ code: 0, stderr: '' });
+    expect(keepPlan.stdout).toContain(`Retained unowned under ${destination}:`);
+    expect(keepPlan.stdout).toContain('  notes.md');
+    expect(keepPlan.stdout).toContain('  scratch/');
+    const kept = await run(installer, ['--uninstall', '--keep-data'], home);
+    expect(kept).toMatchObject({ code: 0, stderr: '' });
+    expect(kept.stdout).toContain(`Data (keep): kept`);
+    expect(kept.stdout).toContain(`Retained unowned under ${destination}:`);
+    expect(kept.stdout).toContain('  notes.md');
+    expect(kept.stdout).toContain('  scratch/');
+    expect(kept.stdout).toContain(`Remnant receipt: ${join(destination, installReceiptFile)}`);
+    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, 'notes.md', 'scratch', 'state']);
+    // The remnant receipt owns nothing and remembers the host directories the install created.
+    expect(await readInstallReceipt(destination)).toMatchObject({ files: [], hostDirectories: ['plugins', 'plugins/local'], registrations: [] });
+    await rm(join(destination, 'notes.md'));
+    await rm(join(destination, 'scratch'), { recursive: true });
+    // Reinstalling around the preserved state is an install, not a foreign-directory refusal.
+    const reinstalled = await run(installer, [], home);
+    expect(reinstalled).toMatchObject({ code: 0, stderr: '' });
+    expect(reinstalled.stdout).toContain('Installed install-fixture@1.2.3');
+    expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    const purged = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    expect(purged).toMatchObject({ code: 0, stderr: '' });
+    expect(purged.stdout).toContain('Data (purge): purged');
+    expect(purged.stdout).toContain(join(destination, 'state'));
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // A remnant whose state/ was removed by hand: a keep-data rerun is still the no-op, an explicit purge consumes
+    // the remnant receipt and prunes the host directories it recorded.
+    await run(installer, [], home);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await run(installer, ['--uninstall'], home);
+    await rm(join(destination, 'state'), { recursive: true });
+    expect((await run(installer, ['--uninstall'], home)).stdout).toContain('Not installed install-fixture@1.2.3');
+    const emptyRemnant = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    expect(emptyRemnant).toMatchObject({ code: 0, stderr: '' });
+    expect(emptyRemnant.stdout).toContain('Uninstalled install-fixture@1.2.3');
+    expect(emptyRemnant.stdout).toContain('Data (purge): absent');
+    expect(emptyRemnant.stdout).not.toContain('Remnant receipt:');
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // Modified owned content: refused with the hash comparison until --force.
+    await run(installer, [], home);
+    await writeFile(join(destination, 'payload.txt'), 'modified\n');
+    const mismatch = await run(installer, ['--uninstall'], home);
+    expect(mismatch.code).toBe(1);
+    expect(mismatch.stderr).toContain('modified after installation');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('modified\n');
+    const forced = await run(installer, ['--uninstall', '--force'], home);
+    expect(forced).toMatchObject({ code: 0, stderr: '' });
+    expect(forced.stdout).toContain('Receipt: forced-mismatch');
+    expect(forced.stdout).toContain('[--force]');
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // Legacy (receipt-less) copy: AB7009-style refusal, then --force removes the inventoried files only.
+    await run(installer, [], home);
+    await rm(join(destination, installReceiptFile));
+    const legacy = await run(installer, ['--uninstall'], home);
+    expect(legacy.code).toBe(1);
+    expect(legacy.stderr).toContain('predates install receipts');
+    const forcedLegacy = await run(installer, ['--uninstall', '--force'], home);
+    expect(forcedLegacy).toMatchObject({ code: 0, stderr: '' });
+    expect(forcedLegacy.stdout).toContain('Receipt: forced-legacy');
+    // The legacy inventory owns no host directories: plugins/local stays (it was not proven ours).
+    expect(await readdir(join(cursorRoot, 'plugins', 'local'))).toEqual([]);
+    await rm(join(cursorRoot, 'plugins'), { recursive: true });
+
+    // A format/1 receipt is consumed as migrated.
+    await run(installer, [], home);
+    const written = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...legacyReceipt } = written;
+    await writeFile(join(destination, installReceiptFile), JSON.stringify({ ...legacyReceipt, format: legacyInstallReceiptFormat }));
+    const migrated = await run(installer, ['--uninstall'], home);
+    expect(migrated).toMatchObject({ code: 0, stderr: '' });
+    expect(migrated.stdout).toContain('Receipt: migrated');
+    // The migrated receipt carried no host directories, so plugins/ stays behind; that is the honest downgrade.
+    await rm(join(cursorRoot, 'plugins'), { recursive: true });
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+
+    // Foreign directory (another plugin's receipt, or no receipt and no install surface): refused even with --force.
+    await run(installer, [], home);
+    const own = JSON.parse(await readFile(join(destination, installReceiptFile), 'utf8')) as Record<string, unknown>;
+    await writeFile(join(destination, installReceiptFile), JSON.stringify({ ...own, plugin: 'someone-else' }));
+    const otherPlugin = await run(installer, ['--uninstall', '--force'], home);
+    expect(otherPlugin.code).toBe(1);
+    expect(otherPlugin.stderr).toContain('names plugin "someone-else"');
+    await rm(destination, { force: true, recursive: true });
+    await mkdir(destination);
+    await writeFile(join(destination, 'payload.txt'), 'someone else\n');
+    const foreign = await run(installer, ['--uninstall', '--force'], home);
+    expect(foreign.code).toBe(1);
+    expect(foreign.stderr).toContain('Refusing to uninstall foreign directory');
+    expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('someone else\n');
+    await rm(join(cursorRoot, 'plugins'), { recursive: true });
+
+    // Marketplace mode: staging writes a store receipt; --uninstall --mode marketplace removes the repository and receipt.
+    const staged = await run(installer, ['--mode', 'marketplace'], home);
+    expect(staged).toMatchObject({ code: 0, stderr: '' });
+    const receiptPath = join(cursorRoot, 'agent-bundle', 'receipts', 'install-fixture.marketplace.json');
+    const commit = /@ ([0-9a-f]{40})$/u.exec(staged.stdout.split('\n')[1] ?? '')?.[1];
+    expect(await readInstallReceiptFile(receiptPath)).toMatchObject({
+      files: [],
+      mode: 'marketplace',
+      registrations: [{ commit, kind: 'cursor-marketplace-staging', name: 'install-fixture-marketplace' }],
+    });
+    const marketplacePlan = await run(installer, ['--uninstall', '--mode', 'marketplace', '--plan'], home);
+    expect(marketplacePlan).toMatchObject({ code: 0, stderr: '' });
+    expect(marketplacePlan.stdout).toContain(`Would uninstall install-fixture@1.2.3 for cursor (marketplace mode) at ${join(cursorRoot, 'agent-bundle', 'marketplaces', 'install-fixture')}`);
+    expect(marketplacePlan.stdout).toContain(receiptPath);
+    expect(await readInstallReceiptFile(receiptPath)).toBeDefined();
+    const marketplaceUninstalled = await run(installer, ['--uninstall', '--mode', 'marketplace'], home);
+    expect(marketplaceUninstalled).toMatchObject({ code: 0, stderr: '' });
+    expect(marketplaceUninstalled.stdout).toContain('Registration cursor-marketplace-staging install-fixture-marketplace: removed');
+    expect(marketplaceUninstalled.stdout).toContain('Data (keep): unavailable');
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+    expect((await run(installer, ['--uninstall', '--mode', 'marketplace'], home)).stdout).toContain('Not installed install-fixture@1.2.3 for cursor (marketplace mode)');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 120_000);

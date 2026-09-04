@@ -13,6 +13,7 @@ import {
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
+  runHostUninstallProof,
   type BuiltHostInstallFixture,
   type HostInstallCommand,
 } from './support/host-install.ts';
@@ -273,5 +274,69 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
     },
   });
   expect(report.install.version, proofLabel).toBe(fixturePackageVersion);
+  expectHygienicReport(report);
+}, 180_000);
+
+claudePluginIt(
+  claudeAvailable
+    ? 'uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping'
+    : `uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping [${claudeMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'claude', {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+    expect(report, proofLabel).toMatchObject({
+      agentBundleResidue: [],
+      host: 'claude',
+      hostResidue: ['claude-orphaned-cache-copy', 'claude-plugin-registry-files', 'claude-session-bookkeeping', 'claude-settings'],
+      registrations: { 'claude-marketplace': 'removed', 'claude-plugin': 'removed' },
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+codexPluginIt(
+  codexAvailable
+    ? 'uninstalls the packed tarball through Codex with the package bin'
+    : `uninstalls the packed tarball through Codex with the package bin [${codexMissingEvidence}]`,
+  async () => {
+    const report = await runHostUninstallProof(builtFixture(), 'codex', {
+      environment: process.env,
+      installCommand: installCommand(),
+    });
+    expect(report, proofLabel).toMatchObject({
+      agentBundleResidue: [],
+      host: 'codex',
+      hostResidue: ['codex-empty-config', 'codex-empty-directories'],
+      registrations: { 'codex-marketplace': 'removed', 'codex-plugin': 'removed' },
+      status: 'passed',
+    });
+    expectHygienicReport(report);
+  },
+  300_000,
+);
+
+it('uninstalls the packed tarball from an isolated Cursor home with the package bin and leaves it byte-identical', async () => {
+  const report = await runHostUninstallProof(builtFixture(), 'cursor', {
+    environment: process.env,
+    installCommand: installCommand(),
+  });
+  expect(report, proofLabel).toEqual({
+    agentBundleResidue: [],
+    homeByteIdentical: true,
+    host: 'cursor',
+    hostResidue: [],
+    keepData: 'kept',
+    plan: 'no-op',
+    proofLevel: proofLabel,
+    purgeData: 'purged',
+    refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
+    registrations: { 'cursor-local-plugin': 'removed' },
+    rerun: 'not-installed',
+    status: 'passed',
+  });
   expectHygienicReport(report);
 }, 180_000);

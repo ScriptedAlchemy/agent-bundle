@@ -32,13 +32,15 @@ import type {
   DoctorDurableStateReport,
   DoctorHost,
   DoctorInstallComparison,
+  DoctorLifecycle,
   DoctorReport,
   runDoctor,
 } from './install/doctor.ts';
+import type { uninstallBundle, UninstallResult } from './install/uninstall.ts';
 import type { runHostMcpProxy } from './dev/host-mcp-proxy.ts';
 import { DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 import { errorMessage } from './core/errors.ts';
-import { formatInstallResult } from './install/format.ts';
+import { formatInstallResult, formatUninstallResult } from './install/format.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
@@ -69,6 +71,7 @@ export interface CliDependencies {
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
+  readonly uninstallBundle?: typeof uninstallBundle;
   /** Injectable only to verify host-validation CLI policy without an installed host. */
   readonly validate?: typeof validate;
 }
@@ -93,6 +96,18 @@ interface InstallCommandOptions {
   readonly json?: boolean;
   readonly replace?: boolean;
   readonly mode?: InstallMode;
+  readonly scope: string;
+}
+
+interface UninstallCommandOptions {
+  readonly confirmPurge?: boolean;
+  readonly force?: boolean;
+  readonly from: string;
+  readonly json?: boolean;
+  readonly keepData?: boolean;
+  readonly mode?: InstallMode;
+  readonly plan?: boolean;
+  readonly purgeData?: boolean;
   readonly scope: string;
 }
 
@@ -306,6 +321,20 @@ const writeHumanInstall = (output: Output, result: InstallResult): void => {
   output.write(formatInstallResult(result));
 };
 
+const writeHumanUninstall = (output: Output, result: UninstallResult): void => {
+  output.write(formatUninstallResult(result));
+};
+
+const describeLifecycle = (lifecycle: DoctorLifecycle): string => {
+  const observations = (['placed', 'registered', 'enabled', 'active'] as const).map((stage) => {
+    const observation = lifecycle[stage];
+    return observation.status === 'observed'
+      ? `${stage}=${observation.value ? 'yes' : 'no'}`
+      : `${stage}=unavailable`;
+  });
+  return `${lifecycle.stage} (${observations.join(', ')})`;
+};
+
 const describeInstallComparison = (comparison: DoctorInstallComparison): string => {
   const installed = (comparison.installedContentHash === undefined
     ? ''
@@ -364,6 +393,15 @@ const writeHumanDoctor = (output: Output, result: DoctorReport): void => {
           `  host validation (${validation.copy} ${validation.pluginDirectory}` +
           `${validation.scope === undefined ? '' : `, scope ${validation.scope}`}): ${validation.status}\n`,
         );
+      }
+      if (host.bundle.lifecycle !== undefined) {
+        output.write(`  lifecycle: ${describeLifecycle(host.bundle.lifecycle)}\n`);
+      }
+    }
+    if (host.receipts.length > 0) {
+      output.write(`  receipts: ${host.receipts.length} store receipt(s)\n`);
+      for (const receipt of host.receipts) {
+        output.write(`    ${receipt.plugin}@${receipt.version} (${receipt.mode}, ${receipt.scope}): ${receipt.state}\n`);
       }
     }
     const reports = [
@@ -688,6 +726,42 @@ export const runCli = async (
     });
     if (options.json === true) writeMachine(stdout, result);
     else writeHumanInstall(stdout, result);
+  });
+
+  const uninstallCommand = program.command('uninstall')
+    .description('Remove a receipt-owned host install of a built bundle, and nothing else')
+    .argument('<host>', 'Host to uninstall from: claude, codex, or cursor', installHost)
+    .option('--from <bundle-dir>', 'Target bundle directory or artifact root that identifies the plugin', process.cwd())
+    .option('--scope <scope>', 'Host install scope', installScope, 'user')
+    .option('--mode <mode>', 'Cursor delivery mode to uninstall: local (default) or marketplace', installMode)
+    .option('--keep-data', 'Keep the plugin\'s durable runtime state (state/) in place; this is the default')
+    .option('--purge-data', 'Also remove the plugin\'s durable runtime state; requires --confirm-purge')
+    .option('--confirm-purge', 'Confirm that --purge-data may delete durable state')
+    .option(
+      '--force',
+      'Proceed without an install receipt (legacy or host-only install) or when owned content no longer matches the receipt; ' +
+        'foreign directories are still refused',
+    )
+    .option('--plan', 'Print the exact paths and host registrations that would be removed without changing anything')
+    .option('--json', 'Write one machine-readable JSON document');
+  uninstallCommand.action(async (
+    host: InstallHost,
+    options: UninstallCommandOptions,
+  ) => {
+    const uninstall = dependencies.uninstallBundle ?? (await import('./install/uninstall.ts')).uninstallBundle;
+    const result = await uninstall({
+      ...(options.confirmPurge === undefined ? {} : { confirmPurge: options.confirmPurge }),
+      ...(options.force === undefined ? {} : { force: options.force }),
+      from: options.from,
+      host,
+      ...(options.keepData === undefined ? {} : { keepData: options.keepData }),
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      ...(options.plan === undefined ? {} : { plan: options.plan }),
+      ...(options.purgeData === undefined ? {} : { purgeData: options.purgeData }),
+      scope: installScope(options.scope),
+    });
+    if (options.json === true) writeMachine(stdout, result);
+    else writeHumanUninstall(stdout, result);
   });
 
   const doctorCommand = program.command('doctor')

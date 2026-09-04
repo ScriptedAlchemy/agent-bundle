@@ -98,6 +98,34 @@ a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data
 reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
 `add`. The emitted `INSTALL.md` documents the same recipe per host.
 
+## Uninstalling by receipt
+
+```sh
+npx agent-bundle uninstall cursor --from artifact/cursor --plan   # exact paths, nothing changes
+npx agent-bundle uninstall cursor --from artifact/cursor          # receipt-owned files; state/ kept
+npx agent-bundle uninstall claude --from artifact/claude          # claude plugin uninstall --keep-data + marketplace remove
+npx agent-bundle uninstall codex --from artifact/codex --purge-data --confirm-purge
+node artifact/cursor/install.mjs --uninstall [--mode marketplace]
+```
+
+Every install writes a lifecycle receipt (`agent-bundle-install-receipt/2`): version, content
+hash, delivery mode, scope, the owned files and directories, the host directories the installer
+created, the host registrations it performed, and timestamps. Cursor local copies carry it as
+`.agent-bundle-install.json`; Claude, Codex, and Cursor marketplace-mode installs keep theirs under
+`<host root>/agent-bundle/receipts/`. `uninstall` removes exactly what the receipt owns and
+reverses exactly the registrations it recorded — never anything else; unowned entries are listed
+as retained. Durable runtime state (`state/`) is kept unless you pass
+`--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
+Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; Codex deletes the
+cached tree and offers no keep-data option). A missing receipt (`AB7009`) or a content mismatch
+(`AB7007`) is refused unless `--force`; a directory that belongs to another plugin is refused
+regardless; a second run is a `not-installed` no-op. Receipts written before format 2 are read with
+their lifecycle fields synthesized and diagnosed (`AB7329`), never rejected.
+
+The host-install proofs snapshot an isolated home before install and after uninstall: byte-identical
+for Cursor local and the portable Agent Plugins package, and zero Agent Bundle residue plus an
+enumerated set of host-owned bookkeeping for Claude and Codex.
+
 ## Inspect an install without changing it
 
 ```sh
@@ -110,11 +138,13 @@ supplied bundle, checks registration proof, samples runtime endpoint health and 
 inventories durable state, and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
 `current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed`
-(`AB7325`), or `not-installed` (`AB7307`). `load-failed` means Claude Code lists the copy but refused to
-load it — its `claude plugin list --json` row carries an `errors` array, which Doctor reports verbatim in
-place of `current`, because a refused copy contributes no hooks, MCP servers, or skills to a session. The
-installer reads the same array: `agent-bundle install claude` fails with `AB7006` when the freshly
-installed (or byte-identical existing) copy carries `errors`, instead of reporting `installed`.
+(`AB7325`), or `not-installed` (`AB7307`), and its lifecycle stage — placed → registered → enabled → active — with
+every stage either observed from the host or typed `unavailable` with the reason (`AB7330`). `load-failed` means
+Claude Code lists the copy but refused to load it — its `claude plugin list --json` row carries an `errors` array,
+which Doctor reports verbatim in place of `current`, because a refused copy contributes no hooks, MCP servers, or
+skills to a session. The installer reads the same array: `agent-bundle install claude` fails with `AB7006` when the
+freshly installed (or byte-identical existing) copy carries `errors`, instead of reporting `installed`. Doctor also
+inventories the receipt store under each host root and cross-checks it against the host (`AB7328`, `AB7329`).
 
 For Claude, Doctor also reads each row's `enabled` flag and runs the Claude Code developer
 validator. A copy listed with `enabled: false` (switched off with `claude plugin disable` or the
@@ -129,6 +159,9 @@ registration proof and the rows' `errors` already hold that verdict.
 
 | Code | Severity | Meaning |
 | --- | --- | --- |
+| `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; unobservable stages (a live session's loaded plugins on every host, Cursor's server-assigned enabled state) are typed `unavailable`, never guessed. |
+| `AB7328` | warning | A store receipt records a registration the host no longer holds (orphaned), or the receipt store cannot be read; `agent-bundle uninstall` consumes an orphaned receipt. |
+| `AB7329` | info | A receipt predates lifecycle receipts and was read with synthesized fields; rerun `install` once to rewrite it as format 2. |
 | `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. |

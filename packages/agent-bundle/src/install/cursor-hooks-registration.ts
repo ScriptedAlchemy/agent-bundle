@@ -472,7 +472,7 @@ export interface CursorMarketplaceStagingFinding {
  */
 const sanitizeCacheSegment = (segment: string): string => segment.replaceAll(/[^A-Za-z0-9._-]/gu, '-');
 
-const cacheHasPlugin = async (
+export const cacheHasPlugin = async (
   home: string,
   marketplace: string,
   name: string,
@@ -503,7 +503,7 @@ const cacheHasPlugin = async (
 const isCommitSha = (value: string | undefined): value is string => value !== undefined && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(value);
 
 /** Resolves HEAD to a commit SHA; `undefined` when HEAD is missing, unreadable, malformed, or unborn. */
-const readHeadCommit = async (repoRoot: string): Promise<string | undefined> => {
+export const readHeadCommit = async (repoRoot: string): Promise<string | undefined> => {
   try {
     const head = (await readFile(join(repoRoot, '.git', 'HEAD'), 'utf8')).trim();
     if (!head.startsWith('ref: ')) return isCommitSha(head) ? head : undefined;

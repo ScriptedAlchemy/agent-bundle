@@ -547,6 +547,45 @@ comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
 "Reinstall after a same-version rebuild"). Artifact validation rejects a
 built-in target whose required install surface is missing.
 
+### Managed uninstall and lifecycle receipts (#101)
+
+Receipts are the single source of truth for an install's lifecycle. Every
+`install` writes one (format `agent-bundle-install-receipt/2`): version, content
+hash, delivery `mode` (`local`, `marketplace`, `host-cli`), `scope`, the owned
+`files` and `directories`, the `hostDirectories` the installer created under the
+host root, the host `registrations` it performed in order, and `installedAt` /
+`updatedAt`. Cursor local copies carry it in-tree; Claude, Codex, and Cursor
+marketplace-mode installs keep theirs in `<host root>/agent-bundle/receipts/`.
+`install --replace`, `uninstall`, and `doctor` all consume the same document;
+a receipt written before #101 is read with its lifecycle fields synthesized and
+diagnosed (`AB7329`), never rejected.
+
+```sh
+agent-bundle uninstall claude --from artifact/claude --plan      # exact paths and host verbs, no writer
+agent-bundle uninstall claude --from artifact/claude             # claude plugin uninstall --keep-data, marketplace remove, receipt
+agent-bundle uninstall cursor --from artifact/cursor             # receipt-owned files, directories, remnant state kept
+agent-bundle uninstall cursor --from artifact/cursor --purge-data --confirm-purge
+node artifact/cursor/install.mjs --uninstall [--plan] [--mode marketplace]
+```
+
+Uninstall removes exactly what the receipt owns and reverses exactly the
+registrations it recorded; anything else stays and is listed as retained.
+Durable runtime state (`state/`) is kept unless `--purge-data --confirm-purge`;
+the typed `data.outcome` says what the host itself decided where Agent Bundle
+cannot (`retained-by-host` for Claude's ~14-day orphaned copy,
+`removed-by-host` / `unavailable` for Codex, which has no keep-data option). A
+missing receipt or an owned-content mismatch is refused (`AB7009`, `AB7007`)
+unless `--force`; a receipt or manifest naming another plugin is refused
+regardless; `--purge-data` without `--confirm-purge` is `AB7008`; a second run is
+a `not-installed` no-op. `doctor --from` adds the lifecycle stage per host —
+placed → registered → enabled → active, each observed or typed `unavailable`
+(`AB7330`) — and cross-checks every store receipt against the host (`AB7328`).
+The host-install proofs snapshot an isolated home before install and after
+uninstall: byte-identical for Cursor and portable, zero Agent Bundle residue plus
+classified host-owned bookkeeping for Claude and Codex. Details:
+`docs/diagnostics.md`, "Managed uninstall" and "Read-only Doctor lifecycle
+receipts and activation states".
+
 ### Cursor delivery modes and hook registration (#407)
 
 `agent-bundle install cursor` and the emitted `install.mjs` accept

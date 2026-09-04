@@ -11,7 +11,8 @@ import type { TargetArtifactWrite } from '../src/adapters/types.ts';
 import { runCli } from '../src/cli.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
 import { installBundle } from '../src/install/install.ts';
-import { treeInventory } from '../src/install/receipt.ts';
+import { emptyContentHash, installReceiptFormat, installReceiptScopeKey, treeInventory } from '../src/install/receipt.ts';
+import { uninstallBundle } from '../src/install/uninstall.ts';
 import {
   doctorEndpointDirectory,
   doctorEndpointProbeConcurrency,
@@ -914,6 +915,53 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
   }
 });
 
+it('lists Claude plugins from the resolved host bundle root when --from names a multi-target artifact root', async () => {
+  const fixture = await temporaryDoctor();
+  const calls: { readonly args: readonly string[]; readonly cwd?: string }[] = [];
+  try {
+    // `<from>/claude` holds the manifest; Claude `project`/`local` rows are keyed by the cwd the host verbs ran
+    // in, and install runs them from that resolved root — so must the listing, or such scopes read as absent.
+    const artifactRoot = join(fixture.root, 'artifact');
+    await mkdir(artifactRoot, { recursive: true });
+    const bundle = join(artifactRoot, 'claude');
+    await mkdir(bundle, { recursive: true });
+    await writeFile(join(bundle, 'payload.txt'), 'payload\n');
+    await writeJson(join(bundle, '.claude-plugin/plugin.json'), {
+      author: { name: 'Doctor Fixture' },
+      description: 'Doctor fixture plugin.',
+      name: 'doctor-fixture',
+      version: '1.2.3',
+    });
+    await writeJson(join(bundle, '.claude-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'Doctor Fixture' },
+      plugins: [{ name: 'doctor-fixture', source: './' }],
+    });
+
+    await runDoctor({
+      commandRunner: async (request) => {
+        calls.push({ args: request.args, ...(request.cwd === undefined ? {} : { cwd: request.cwd }) });
+        return request.args[0] === '--version'
+          ? commandResult({ stdout: 'claude 2.1.250\n' })
+          : commandResult({ stdout: '[]' });
+      },
+      endpointDirectory: fixture.endpointDirectory,
+      from: artifactRoot,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle }),
+    ]));
+    expect(calls).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: artifactRoot }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('skips static validation when Cursor home and --from are absent', async () => {
   const fixture = await temporaryDoctor();
   try {
@@ -1771,6 +1819,344 @@ it('compares the Codex cache copy against the artifact once plugin list --json n
   }
 });
 
+it('surfaces the placed → registered → enabled → active lifecycle per host, typing the unobservable stages unavailable', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const claudeBundle = await createBundle(fixture.root, 'claude');
+    const installed = join(fixture.root, 'claude-config', 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(claudeBundle, installed, { recursive: true });
+    let row: Record<string, unknown> | undefined;
+    const runner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.257' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify(row === undefined ? [] : [row]) });
+      return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+    };
+    const doctor = () => runDoctor({
+      commandRunner: runner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: claudeBundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+
+    const absent = hostReport(await doctor(), 'claude');
+    expect(absent.bundle?.lifecycle).toMatchObject({
+      active: { status: 'unavailable' },
+      enabled: { status: 'observed', value: false },
+      placed: { status: 'observed', value: false },
+      registered: { status: 'observed', value: false },
+      stage: 'absent',
+    });
+    const absentLifecycle = absent.diagnostics.find((entry) => entry.code === 'AB7330');
+    expect(absentLifecycle).toMatchObject({ severity: 'info', target: 'claude' });
+    expect(absentLifecycle?.message).toContain('stage absent');
+    expect(absentLifecycle?.message).toContain('active=unavailable'.replace('=', ' '));
+
+    row = { enabled: false, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.2.3' };
+    const disabled = hostReport(await doctor(), 'claude');
+    expect(disabled.bundle?.lifecycle).toMatchObject({
+      enabled: { status: 'observed', value: false },
+      placed: { status: 'observed', value: true },
+      registered: { status: 'observed', value: true },
+      stage: 'registered',
+    });
+    expect(disabled.diagnostics.find((entry) => entry.code === 'AB7330')?.recovery).toContain('claude plugin enable');
+
+    row = { ...row, enabled: true };
+    const enabled = hostReport(await doctor(), 'claude');
+    expect(enabled.bundle?.lifecycle).toMatchObject({
+      active: { status: 'unavailable' },
+      enabled: { status: 'observed', value: true },
+      stage: 'enabled',
+    });
+    expect(enabled.diagnostics.find((entry) => entry.code === 'AB7330')?.message).toContain('Unavailable: active (Claude Code 2.1.257');
+
+    // Cursor: placement is registration; enabled and active have no pinned read-only surface.
+    const cursorBundle = await createBundle(fixture.root, 'cursor');
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    const cursorMissing = hostReport(await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: cursorBundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    }), 'cursor');
+    expect(cursorMissing.bundle?.lifecycle).toMatchObject({
+      enabled: { status: 'unavailable' },
+      placed: { status: 'observed', value: false },
+      stage: 'absent',
+    });
+    await installBundle({ from: cursorBundle, home: fixture.home, host: 'cursor' });
+    const cursorPlaced = hostReport(await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: cursorBundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    }), 'cursor');
+    expect(cursorPlaced.bundle?.lifecycle).toMatchObject({
+      active: { status: 'unavailable' },
+      enabled: { reason: expect.stringContaining('enable_cc_plugin_import'), status: 'unavailable' },
+      placed: { status: 'observed', value: true },
+      registered: { status: 'observed', value: true },
+      stage: 'registered',
+    });
+    expect(cursorPlaced.bundle?.receipt).toMatchObject({ mode: 'local', scope: 'user' });
+    expect(cursorPlaced.inventory.findings[0]?.receipt).toMatchObject({ mode: 'local' });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('inventories store receipts, diagnoses orphaned ones (AB7328), and reports pre-lifecycle receipts as migrated (AB7329)', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'claude');
+    const claudeConfig = join(fixture.root, 'claude-config');
+    const installed = join(claudeConfig, 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    await cp(bundle, installed, { recursive: true });
+    let rows: readonly unknown[] = [];
+    const doctorRunner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.257' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify(rows) });
+      return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+    };
+    const installRunner = {
+      run: async (_command: string, args: readonly string[]) => ({
+        code: 0,
+        stderr: '',
+        // No marketplace configured beforehand, so the install records (and owns) the marketplace registration.
+        stdout: args.join(' ') === 'plugin list --json'
+          ? JSON.stringify(rows)
+          : args.join(' ') === 'plugin marketplace list --json' ? JSON.stringify([]) : '',
+      }),
+    };
+    const doctor = () => runDoctor({
+      commandRunner: doctorRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CLAUDE_CONFIG_DIR: claudeConfig },
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+    expect(hostReport(await doctor(), 'claude').receipts).toEqual([]);
+
+    const result = await installBundle({
+      commandRunner: installRunner,
+      environment: { CLAUDE_CONFIG_DIR: claudeConfig },
+      from: bundle,
+      home: fixture.home,
+      host: 'claude',
+    });
+    rows = [{ enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.2.3' }];
+    const consistent = hostReport(await doctor(), 'claude');
+    expect(consistent.receipts).toEqual([expect.objectContaining({
+      mode: 'host-cli',
+      path: result.receipt,
+      plugin: 'doctor-fixture',
+      registrations: [
+        { kind: 'claude-marketplace', name: 'doctor-fixture-marketplace', scope: 'user' },
+        { id: 'doctor-fixture@doctor-fixture-marketplace', kind: 'claude-plugin', scope: 'user' },
+      ],
+      scope: 'user',
+      state: 'consistent',
+    })]);
+    expect(consistent.diagnostics.some((entry) => entry.code === 'AB7328')).toBe(false);
+
+    // The host forgot the plugin (uninstalled behind agent-bundle's back): the receipt is orphaned.
+    rows = [];
+    const orphaned = hostReport(await doctor(), 'claude');
+    expect(orphaned.receipts[0]?.state).toBe('orphaned');
+    const orphanDiagnostic = orphaned.diagnostics.find((entry) => entry.code === 'AB7328');
+    expect(orphanDiagnostic).toMatchObject({ severity: 'warning', target: 'claude' });
+    expect(orphanDiagnostic?.recovery).toContain('agent-bundle uninstall claude');
+
+    // An unusable listing leaves the receipt state unknown rather than orphaned.
+    const unknownRunner: DoctorCommandRunner = async (request) => request.args[0] === '--version'
+      ? commandResult({ stdout: 'claude 2.1.257' })
+      : commandResult({ stdout: 'not json' });
+    const unknown = hostReport(await runDoctor({
+      commandRunner: unknownRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CLAUDE_CONFIG_DIR: claudeConfig },
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+    expect(unknown.receipts[0]?.state).toBe('unknown');
+
+    // A receipt file that is not a receipt is reported, never thrown.
+    await writeFile(join(claudeConfig, 'agent-bundle', 'receipts', 'broken.user.json'), '{"format":"nope"}\n');
+    const broken = hostReport(await doctor(), 'claude');
+    expect(broken.diagnostics.filter((entry) => entry.code === 'AB7328').some((entry) => entry.message.includes('not a valid install receipt'))).toBe(true);
+
+    // The host executable cannot be probed at all: the store is still inventoried from disk, so the
+    // stored receipt (state unknown) and the malformed file are reported instead of hidden.
+    const absentHost: DoctorCommandRunner = async () => commandResult({ exitCode: 127, stderr: 'claude: command not found' });
+    const unprobed = hostReport(await runDoctor({
+      commandRunner: absentHost,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CLAUDE_CONFIG_DIR: claudeConfig },
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+    expect(unprobed.probe.status).not.toBe('available');
+    expect(unprobed.receipts).toEqual([expect.objectContaining({ path: result.receipt, state: 'unknown' })]);
+    expect(unprobed.diagnostics.filter((entry) => entry.code === 'AB7328').some((entry) => entry.message.includes('not a valid install receipt'))).toBe(true);
+    await rm(join(claudeConfig, 'agent-bundle', 'receipts', 'broken.user.json'));
+
+    // A Cursor local copy whose receipt predates format/2 is diagnosed as migrated, never rewritten by Doctor.
+    const cursorBundle = await createBundle(fixture.root, 'cursor');
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    await installBundle({ from: cursorBundle, home: fixture.home, host: 'cursor' });
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    const receiptPath = join(destination, '.agent-bundle-install.json');
+    const written = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const { hostDirectories: _h, mode: _m, registrations: _r, scope: _s, updatedAt: _u, ...legacy } = written;
+    await writeFile(receiptPath, JSON.stringify({ ...legacy, format: 'agent-bundle-install-receipt/1' }));
+    const migrated = hostReport(await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: cursorBundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    }), 'cursor');
+    expect(migrated.inventory.findings[0]?.receipt).toMatchObject({ format: 'agent-bundle-install-receipt/1', migratedFrom: 'agent-bundle-install-receipt/1' });
+    expect(migrated.bundle).toMatchObject({ receipt: { migratedFrom: 'agent-bundle-install-receipt/1' }, state: 'installed' });
+    const migration = migrated.diagnostics.filter((entry) => entry.code === 'AB7329');
+    expect(migration).toHaveLength(1);
+    expect(migration[0]).toMatchObject({ severity: 'info', target: 'cursor' });
+    expect(migration[0]?.recovery).toContain('agent-bundle-install-receipt/2');
+    expect(await readFile(receiptPath, 'utf8')).toContain('agent-bundle-install-receipt/1');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('cross-checks Claude project-scope receipts from their recorded project root, not the doctor cwd', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const claudeConfig = join(fixture.root, 'claude-config');
+    const projectRoot = join(fixture.root, 'elsewhere-project');
+    const goneRoot = join(fixture.root, 'gone-project');
+    await mkdir(projectRoot, { recursive: true });
+    const id = 'doctor-fixture@doctor-fixture-marketplace';
+    const installed = join(claudeConfig, 'plugins', 'cache', 'doctor-fixture-marketplace', 'doctor-fixture', '1.2.3');
+    const receipt = (root: string) => ({
+      contentHash: emptyContentHash,
+      directories: [],
+      files: [],
+      format: installReceiptFormat,
+      host: 'claude',
+      hostDirectories: [],
+      installedAt: '2026-09-03T00:00:00.000Z',
+      mode: 'host-cli',
+      plugin: 'doctor-fixture',
+      projectRoot: root,
+      registrations: [{ id, kind: 'claude-plugin', scope: 'project' }],
+      scope: 'project',
+      updatedAt: '2026-09-03T00:00:00.000Z',
+      version: '1.2.3',
+    });
+    const receipts = join(claudeConfig, 'agent-bundle', 'receipts');
+    const elsewhere = join(receipts, `doctor-fixture.doctor-fixture-marketplace.${installReceiptScopeKey('project', projectRoot)}.json`);
+    const gone = join(receipts, `doctor-fixture.doctor-fixture-marketplace.${installReceiptScopeKey('project', goneRoot)}.json`);
+    await writeJson(elsewhere, receipt(projectRoot));
+    await writeJson(gone, receipt(goneRoot));
+    const inventoryCwds: string[] = [];
+    // `plugin list --json` sees the project registration only from the project it belongs to; a root that
+    // no longer exists cannot run the host at all.
+    const doctorRunner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.257' });
+      if (isInventoryRequest(request)) {
+        inventoryCwds.push(request.cwd);
+        if (request.cwd === goneRoot) return commandResult({ exitCode: 1, stderr: `spawn claude ENOENT (cwd ${goneRoot})` });
+        return commandResult({
+          stdout: JSON.stringify(request.cwd === projectRoot
+            ? [{ enabled: true, id, installPath: installed, scope: 'project', version: '1.2.3' }]
+            : []),
+        });
+      }
+      return commandResult({ stdout: '[]' });
+    };
+    const report = hostReport(await runDoctor({
+      commandRunner: doctorRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      environment: { CLAUDE_CONFIG_DIR: claudeConfig },
+      home: fixture.home,
+      hosts: ['claude'],
+    }), 'claude');
+    expect(report.receipts).toHaveLength(2);
+    expect(report.receipts.find((entry) => entry.path === elsewhere)).toMatchObject({ scope: 'project', state: 'consistent' });
+    expect(report.receipts.find((entry) => entry.path === gone)).toMatchObject({ scope: 'project', state: 'unknown' });
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7328')).toBe(false);
+    // The doctor cwd (home) once, then one listing per recorded project root.
+    expect(inventoryCwds[0]).toBe(fixture.home);
+    expect(inventoryCwds.slice(1).sort()).toEqual([goneRoot, projectRoot].sort());
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('explains a Cursor directory holding only preserved runtime state instead of calling it corrupt or foreign', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await mkdir(join(fixture.home, '.cursor'), { recursive: true });
+    const destination = join(fixture.home, '.cursor', 'plugins', 'local', 'doctor-fixture');
+    await mkdir(join(destination, 'state'), { recursive: true });
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    const doctor = () => runDoctor({ endpointDirectory: fixture.endpointDirectory, from: bundle, home: fixture.home, hosts: ['cursor'] });
+
+    // Without any receipt (a hand-cleaned directory), the state-only shell is still not foreign.
+    const bare = hostReport(await doctor(), 'cursor');
+    expect(bare.inventory.findings).toEqual([expect.objectContaining({ path: destination, state: 'missing' })]);
+    expect(bare.bundle).toMatchObject({ comparison: { status: 'not-installed' }, state: 'missing' });
+    expect(bare.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
+    expect(bare.diagnostics.filter((entry) => entry.code === 'AB7307').every((entry) => entry.message.includes('preserved runtime state'))).toBe(true);
+
+    // With the remnant receipt `uninstall --keep-data` writes, Doctor names the plugin and the receipt too.
+    await rm(destination, { force: true, recursive: true });
+    await installBundle({ from: bundle, home: fixture.home, host: 'cursor' });
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await uninstallBundle({ from: bundle, home: fixture.home, host: 'cursor' });
+    const remnant = hostReport(await doctor(), 'cursor');
+    expect(remnant.inventory.findings).toEqual([expect.objectContaining({
+      durableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
+      name: 'doctor-fixture',
+      path: destination,
+      receipt: expect.objectContaining({ mode: 'local' }),
+      state: 'missing',
+    })]);
+    expect(remnant.bundle).toMatchObject({ lifecycle: { stage: 'absent' }, state: 'missing' });
+    expect(remnant.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
+    const remnantCodes = remnant.diagnostics.filter((entry) => entry.code === 'AB7307');
+    expect(remnantCodes.length).toBeGreaterThan(0);
+    expect(remnantCodes.every((entry) => entry.message.includes('holds only preserved runtime state'))).toBe(true);
+
+    // A remnant receipt also guarding unowned entries the uninstall retained is not called state-only: Doctor
+    // names the retained entries and points at removing them by hand, since `uninstall` never will. Both the
+    // inventory finding and the exact-bundle (`--from`) finding check the directory contents, not just the receipt.
+    await writeFile(join(destination, 'operator-notes.md'), 'mine\n');
+    const withExtras = hostReport(await doctor(), 'cursor');
+    expect(withExtras.inventory.findings).toEqual([expect.objectContaining({ path: destination, state: 'missing' })]);
+    expect(withExtras.bundle).toMatchObject({ comparison: { status: 'not-installed' }, state: 'missing' });
+    const extras = withExtras.diagnostics.filter((entry) => entry.code === 'AB7307');
+    expect(extras.length).toBe(remnantCodes.length);
+    for (const entry of extras) {
+      expect(entry.message).toContain('retained the unowned entry "operator-notes.md" beside preserved runtime state');
+      expect(entry.message).not.toContain('holds only preserved runtime state');
+      expect(entry.recovery).toContain('never removes unowned entries');
+    }
+
+    // Without any state left, a remnant receipt over unowned entries is still not "state-only".
+    await rm(join(destination, 'state'), { force: true, recursive: true });
+    const noState = hostReport(await doctor(), 'cursor');
+    for (const entry of noState.diagnostics.filter((item) => item.code === 'AB7307')) {
+      expect(entry.message).toContain('retained the unowned entry "operator-notes.md"');
+      expect(entry.message).not.toContain('beside preserved runtime state');
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 const serverSockets = new WeakMap<Server, Set<Socket>>();
 
 const listen = async (path: string, response?: unknown): Promise<Server> => {
@@ -2111,6 +2497,7 @@ it('prints human Doctor output and exits zero for warnings', async () => {
     host: 'cursor',
     inventory: Object.freeze({ findings: Object.freeze([]), status: 'known' }),
     probe: Object.freeze({ evidence: 'directory', status: 'available' }),
+    receipts: Object.freeze([]),
   }]);
   const code = await runCli(
     ['doctor'],
@@ -2689,7 +3076,23 @@ it('tracks staged Cursor marketplaces from staged to imported', async () => {
     await writeFile(join(repo, 'plugins', 'doctor-fixture', 'payload.txt'), 'changed\n');
     const drifted = await doctor();
     expect(hostReport(drifted, 'cursor').bundle?.state).toBe('drifted');
-    expect(drifted.diagnostics.filter((entry) => entry.code === 'AB7308')[0]?.message).toContain('Staged Cursor marketplace copy');
+    const driftedDiagnostic = drifted.diagnostics.filter((entry) => entry.code === 'AB7308')[0];
+    expect(driftedDiagnostic?.message).toContain('Staged Cursor marketplace copy');
+    // Cursor already imported this staging: drift of the staged bytes does not un-import the copy Cursor holds,
+    // so the lifecycle stays registered, the message says the imported plugin is the older content, and the
+    // recovery is the managed uninstall + reinstall + re-import, not a bare directory removal.
+    expect(driftedDiagnostic?.message).toContain('Cursor has imported the staged copy');
+    expect(driftedDiagnostic?.recovery).toContain('agent-bundle uninstall cursor --mode marketplace');
+    expect(hostReport(drifted, 'cursor').bundle?.lifecycle?.registered).toMatchObject({ status: 'observed', value: true });
+
+    // Without an imported copy the same drift is only a stale staging: not registered, remove and restage.
+    await rm(cached, { recursive: true });
+    const driftedUnimported = await doctor();
+    expect(hostReport(driftedUnimported, 'cursor').bundle?.state).toBe('drifted');
+    expect(hostReport(driftedUnimported, 'cursor').bundle?.lifecycle?.registered).toMatchObject({ status: 'observed', value: false });
+    expect(driftedUnimported.diagnostics.filter((entry) => entry.code === 'AB7308')[0]?.recovery).toContain('Remove the staged marketplace directory');
+    await writeJson(join(cached, '.cursor-plugin', 'plugin.json'), { name: 'doctor-fixture', version: '1.2.3' });
+    await writeFile(join(cached, '.cache-complete'), '');
 
     // A parseable manifest that no longer lists the staged plugin is corrupt even when the cache matches.
     await writeJson(join(repo, '.cursor-plugin/marketplace.json'), {

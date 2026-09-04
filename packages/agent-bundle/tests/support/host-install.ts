@@ -43,6 +43,7 @@ import {
   normalClaudeSettingsAndPluginsUnchanged,
   packedNativeEnvironment,
 } from './packed-native-smoke.ts';
+import { diffTreeSnapshots, snapshotTree, treesIdentical } from './tree-snapshot.ts';
 import { replaceWatchedSource } from './watched-files.ts';
 
 const execFile = promisify(executeFile);
@@ -431,25 +432,30 @@ const runNodeCli = (
   { ...options, timeout: 180_000 },
 );
 
-const runInstallCommand = (
+/** Runs `install` or `uninstall` through the source-built CLI (`--from <bundle>`) or the packed package bin. */
+const runLifecycleCommand = (
   fixture: BuiltHostInstallFixture,
+  verb: 'install' | 'uninstall',
   host: 'claude' | 'codex' | 'cursor',
   bundle: string,
   options: HostInstallProofOptions,
+  extraArguments: readonly string[] = [],
 ): Promise<CommandResult> => {
   if (options.installCommand === undefined) {
     return runNodeCli(fixture, [
-      'install',
+      verb,
       host,
       '--from',
       bundle,
+      ...extraArguments,
       '--json',
     ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
   }
   return run(options.installCommand.executable, [
     ...(options.installCommand.prefixArguments ?? []),
-    'install',
+    verb,
     host,
+    ...extraArguments,
     '--json',
   ], {
     cwd: options.installCommand.cwd ?? bundle,
@@ -457,6 +463,13 @@ const runInstallCommand = (
     timeout: 180_000,
   });
 };
+
+const runInstallCommand = (
+  fixture: BuiltHostInstallFixture,
+  host: 'claude' | 'codex' | 'cursor',
+  bundle: string,
+  options: HostInstallProofOptions,
+): Promise<CommandResult> => runLifecycleCommand(fixture, 'install', host, bundle, options);
 
 const parseJson = <T>(text: string, context: string): T => {
   try {
@@ -2319,4 +2332,401 @@ export const runClaudeTokenSessionProof = async (
     }),
     status: 'passed',
   });
+};
+
+interface UninstallResultDocument {
+  readonly data?: { readonly outcome?: unknown; readonly policy?: unknown };
+  readonly receipt?: { readonly status?: unknown };
+  readonly registrations?: readonly { readonly action?: unknown; readonly kind?: unknown }[];
+  readonly remnantReceipt?: unknown;
+  readonly state?: unknown;
+}
+
+interface DiagnosticDocument {
+  readonly code?: unknown;
+}
+
+/**
+ * Host-owned residue an uninstall cannot and must not remove, classified per
+ * host from what the real CLIs leave behind (observed 2026-09-03 against
+ * Claude Code 2.1.257 and codex-cli 0.147.0 in isolated homes). Anything
+ * outside these classes fails the proof: it would mean Agent Bundle left
+ * something of its own behind, or the host changed its bookkeeping.
+ */
+export type HostResidueClass =
+  | 'claude-orphaned-cache-copy'
+  | 'claude-plugin-registry-files'
+  | 'claude-session-bookkeeping'
+  | 'claude-settings'
+  | 'codex-empty-config'
+  | 'codex-empty-directories';
+
+export interface HostUninstallProofReport {
+  /** Entries under the Agent Bundle namespace (`agent-bundle/`) or receipts left behind: always empty. */
+  readonly agentBundleResidue: readonly string[];
+  readonly homeByteIdentical: boolean;
+  readonly host: InstallHost;
+  /** Classified host-owned residue after uninstall, relative to the host root; empty when byte-identical. */
+  readonly hostResidue: readonly HostResidueClass[];
+  readonly keepData: 'kept' | 'retained-by-host' | 'unavailable';
+  readonly plan: 'no-op';
+  readonly proofLevel: string;
+  readonly purgeData: 'purged' | 'removed-by-host';
+  readonly refusals: {
+    readonly foreignOrMismatch: 'AB7007';
+    readonly missingReceipt: 'AB7009';
+    readonly unconfirmedPurge: 'AB7008';
+  };
+  readonly registrations: Readonly<Record<string, 'already-absent' | 'removed'>>;
+  readonly rerun: 'not-installed';
+  readonly status: 'passed';
+}
+
+const parseDiagnostics = (stderr: string, context: string): readonly DiagnosticDocument[] => {
+  const document = parseJson<unknown>(stderr, context);
+  return Array.isArray(document) ? document as readonly DiagnosticDocument[] : fail(`${context} did not return a diagnostics array.`);
+};
+
+const expectRefusal = async (
+  attempt: Promise<CommandResult>,
+  code: string,
+  context: string,
+): Promise<void> => {
+  const result = await attempt;
+  assertProof(result.exitCode !== 0, `${context} was not refused.`);
+  const diagnostics = parseDiagnostics(result.stderr, context);
+  assertProof(diagnostics.some((entry) => entry.code === code), `${context} was refused without ${code}: ${JSON.stringify(diagnostics)}`);
+};
+
+const classifyClaudeResidue = (path: string, plugin: string, marketplace: string): HostResidueClass | undefined => {
+  if (path === '.claude.json' || path === '.claude.json.lock' || path === 'backups' || path.startsWith('backups/')) {
+    return 'claude-session-bookkeeping';
+  }
+  if (path === 'settings.json') return 'claude-settings';
+  if (
+    path === 'plugins' || path === 'plugins/installed_plugins.json' || path === 'plugins/known_marketplaces.json' ||
+    path === 'plugins/marketplaces' || path === 'plugins/cache' || path === `plugins/cache/${marketplace}` ||
+    path === `plugins/cache/${marketplace}/${plugin}`
+  ) {
+    return 'claude-plugin-registry-files';
+  }
+  if (path.startsWith(`plugins/cache/${marketplace}/${plugin}/`)) return 'claude-orphaned-cache-copy';
+  return undefined;
+};
+
+const classifyCodexResidue = (path: string, marketplace: string): HostResidueClass | undefined => {
+  if (path === 'config.toml') return 'codex-empty-config';
+  if (
+    path === '.tmp' || path === '.tmp/marketplaces' || path === 'plugins' || path === 'plugins/cache' ||
+    path === `plugins/cache/${marketplace}`
+  ) {
+    return 'codex-empty-directories';
+  }
+  return undefined;
+};
+
+const agentBundleResidueOf = (added: readonly string[]): readonly string[] =>
+  added.filter((path) => path === 'agent-bundle' || path.startsWith('agent-bundle/') || path.endsWith('/.agent-bundle-install.json'));
+
+/**
+ * Proves the receipt-owned uninstall against a real host in an isolated home:
+ * install → `--plan` (no-op) → uninstall → the host's own inventory no longer
+ * names the plugin or its marketplace → rerun is `not-installed`; then the
+ * `--keep-data` / `--purge-data` policy, the missing-receipt and mismatch
+ * refusals, and finally a snapshot diff of the host root against the state
+ * before the first install. Cursor is byte-identical; Claude and Codex leave
+ * only classified host-owned bookkeeping.
+ */
+export const runHostUninstallProof = async (
+  fixture: BuiltHostInstallFixture,
+  host: 'claude' | 'codex' | 'cursor',
+  options: HostInstallProofOptions,
+): Promise<HostUninstallProofReport> => {
+  const root = await mkdtemp(join(tmpdir(), `agent-bundle-host-uninstall-${host}-`));
+  const home = join(root, 'home');
+  const config = join(root, 'config');
+  await Promise.all([mkdir(home, { recursive: true }), mkdir(config, { recursive: true })]);
+  if (host === 'cursor') await mkdir(join(home, '.cursor'), { recursive: true });
+  const environment = isolatedEnvironment(options.environment, {
+    ...(host === 'claude' ? { CLAUDE_CONFIG_DIR: config } : {}),
+    ...(host === 'codex' ? { CODEX_HOME: config } : {}),
+    HOME: home,
+  });
+  const hostRoot = host === 'cursor' ? home : config;
+  const bundle = fixture.bundles[host];
+  const lifecycle = (verb: 'install' | 'uninstall', extra: readonly string[] = []): Promise<CommandResult> =>
+    runLifecycleCommand(fixture, verb, host, bundle, { ...options, environment }, extra);
+  const uninstall = async (extra: readonly string[] = []): Promise<UninstallResultDocument> => {
+    const result = await lifecycle('uninstall', extra);
+    assertProof(result.exitCode === 0, `${host} uninstall ${extra.join(' ')} failed: ${commandDetail(result)}`);
+    return parseJson<UninstallResultDocument>(result.stdout, `${host} uninstall`);
+  };
+  const install = async (): Promise<void> => {
+    const result = await lifecycle('install');
+    assertProof(result.exitCode === 0, `${host} install failed: ${commandDetail(result)}`);
+  };
+  const installedRoot = host === 'cursor'
+    ? join(home, '.cursor', 'plugins', 'local', plugin)
+    : join(config, 'plugins', 'cache', marketplace, plugin, version);
+  const receiptPath = host === 'cursor'
+    ? join(installedRoot, '.agent-bundle-install.json')
+    : join(config, 'agent-bundle', 'receipts', `${plugin}.${marketplace}.user.json`);
+  const stateDirectory = join(installedRoot, 'state');
+  try {
+    const untouched = await snapshotTree(hostRoot);
+    const homeBefore = await snapshotTree(home);
+
+    // Nothing installed yet: an honest no-op. Claude's and Codex's own read-only `plugin list --json` verbs
+    // create their session bookkeeping on first contact, so the baseline for the byte-level comparison is
+    // taken after this probe; Cursor needs no host verb and stays exactly as it was.
+    assertProof((await uninstall()).state === 'not-installed', `${host} uninstall on a fresh home was not a not-installed no-op.`);
+    const before = await snapshotTree(hostRoot);
+    if (host === 'cursor') {
+      assertProof(treesIdentical(untouched, before), 'Cursor uninstall on a fresh home changed the host root.');
+    } else {
+      for (const path of diffTreeSnapshots(untouched, before).added) {
+        const classified = host === 'claude' ? classifyClaudeResidue(path, plugin, marketplace) : classifyCodexResidue(path, marketplace);
+        assertProof(classified !== undefined, `${host} read-only inventory probe created an unclassified entry: ${path}`);
+      }
+    }
+
+    await install();
+    await access(receiptPath).catch(() => fail(`${host} install wrote no receipt at ${receiptPath}.`));
+    const afterInstall = await snapshotTree(hostRoot);
+
+    // --plan names the exact paths and registrations and writes nothing.
+    const plan = await uninstall(['--plan']);
+    assertProof(plan.state === 'planned', `${host} uninstall --plan did not report planned.`);
+    assertProof(plan.receipt?.status === 'consumed', `${host} uninstall --plan did not find the receipt: ${JSON.stringify(plan.receipt)}`);
+    assertProof(treesIdentical(afterInstall, await snapshotTree(hostRoot)), `${host} uninstall --plan changed the host root.`);
+
+    // --purge-data without confirmation is refused before anything changes.
+    await expectRefusal(lifecycle('uninstall', ['--purge-data']), 'AB7008', `${host} uninstall --purge-data without --confirm-purge`);
+    assertProof(treesIdentical(afterInstall, await snapshotTree(hostRoot)), `${host} refused purge still changed the host root.`);
+
+    const uninstalled = await uninstall();
+    assertProof(uninstalled.state === 'uninstalled', `${host} uninstall did not report uninstalled: ${JSON.stringify(uninstalled)}`);
+    const registrations: Record<string, 'already-absent' | 'removed'> = {};
+    for (const registration of uninstalled.registrations ?? []) {
+      assertProof(
+        (registration.action === 'removed' || registration.action === 'already-absent') && typeof registration.kind === 'string',
+        `${host} uninstall reported an unexpected registration action: ${JSON.stringify(registration)}`,
+      );
+      registrations[registration.kind] = registration.action;
+    }
+    await access(receiptPath).then(
+      () => fail(`${host} uninstall left the receipt at ${receiptPath}.`),
+      () => undefined,
+    );
+    if (host === 'claude') {
+      const listed = await run('claude', ['plugin', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(listed.exitCode === 0, `Claude plugin list failed after uninstall: ${commandDetail(listed)}`);
+      const rows = parseJson<readonly ClaudePluginRow[]>(listed.stdout, 'Claude plugin list');
+      assertProof(!rows.some((row) => row.id === `${plugin}@${marketplace}`), 'Claude still lists the plugin after uninstall.');
+      const marketplaces = await run('claude', ['plugin', 'marketplace', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(!marketplaces.stdout.includes(marketplace), 'Claude still lists the marketplace after uninstall.');
+    } else if (host === 'codex') {
+      const listed = await run('codex', ['plugin', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(listed.exitCode === 0, `Codex plugin list failed after uninstall: ${commandDetail(listed)}`);
+      assertProof(!listed.stdout.includes(`${plugin}@${marketplace}`), 'Codex still lists the plugin after uninstall.');
+      const marketplaces = await run('codex', ['plugin', 'marketplace', 'list', '--json'], { cwd: bundle, environment });
+      assertProof(!marketplaces.stdout.includes(marketplace), 'Codex still lists the marketplace after uninstall.');
+    } else {
+      await access(installedRoot).then(
+        () => fail('Cursor uninstall left the local plugin directory behind.'),
+        () => undefined,
+      );
+    }
+    assertProof((await uninstall()).state === 'not-installed', `${host} uninstall rerun was not a not-installed no-op.`);
+
+    // The host root after uninstall against the host root before install. Nothing that existed before may be
+    // removed; every added or rewritten entry must be classified host-owned bookkeeping (Claude rewrites its
+    // registries and settings in place), and none of it may be Agent Bundle's.
+    const afterUninstall = await snapshotTree(hostRoot);
+    const difference = diffTreeSnapshots(before, afterUninstall);
+    assertProof(difference.removed.length === 0, `${host} uninstall removed pre-existing entries: ${JSON.stringify(difference)}`);
+    const agentBundleResidue = agentBundleResidueOf([...difference.added, ...difference.changed]);
+    assertProof(agentBundleResidue.length === 0, `${host} uninstall left Agent Bundle-owned entries behind: ${agentBundleResidue.join(', ')}`);
+    const residueClasses = new Set<HostResidueClass>();
+    for (const path of [...difference.added, ...difference.changed]) {
+      const classified = host === 'claude'
+        ? classifyClaudeResidue(path, plugin, marketplace)
+        : host === 'codex'
+          ? classifyCodexResidue(path, marketplace)
+          : undefined;
+      assertProof(classified !== undefined, `${host} uninstall left an unclassified entry behind: ${path}`);
+      residueClasses.add(classified);
+    }
+    if (host === 'claude') {
+      await access(join(installedRoot, '.orphaned_at')).catch(() =>
+        fail('Claude did not mark its retained cache copy as orphaned (.orphaned_at); the residue is not the documented grace-period copy.'));
+      const registry = await readJson(join(config, 'plugins', 'installed_plugins.json'), 'Claude installed_plugins.json');
+      assertProof(!JSON.stringify(registry).includes(plugin), 'Claude installed_plugins.json still names the plugin.');
+      const settings = await readJson(join(config, 'settings.json'), 'Claude settings.json');
+      assertProof(!JSON.stringify(settings).includes(`${plugin}@${marketplace}`), 'Claude settings.json still enables the plugin.');
+    }
+    if (host === 'codex') {
+      const configToml = await readText(join(config, 'config.toml'), 'Codex config.toml');
+      assertProof(!configToml.includes(plugin) && !configToml.includes(marketplace), 'Codex config.toml still names the plugin or marketplace.');
+    }
+    // HOME itself (distinct from the host config root for Claude and Codex) is untouched in every case.
+    assertProof(treesIdentical(homeBefore, await snapshotTree(home)) || host === 'cursor', `${host} uninstall changed HOME outside the host root.`);
+    const homeByteIdentical = treesIdentical(before, afterUninstall);
+    assertProof(host !== 'cursor' || homeByteIdentical, `Cursor uninstall did not leave the home byte-identical: ${JSON.stringify(difference)}`);
+
+    // Data policy: --keep-data preserves durable state (or says honestly why it cannot), a confirmed purge removes it.
+    await install();
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
+    const kept = await uninstall(['--keep-data']);
+    const keepOutcome = kept.data?.outcome;
+    assertProof(
+      keepOutcome === 'kept' || keepOutcome === 'retained-by-host' || keepOutcome === 'unavailable',
+      `${host} --keep-data reported an unexpected outcome: ${JSON.stringify(kept.data)}`,
+    );
+    if (keepOutcome !== 'unavailable') {
+      await access(join(stateDirectory, 'plugin.sqlite')).catch(() => fail(`${host} --keep-data did not preserve state/plugin.sqlite.`));
+    }
+    if (host === 'cursor') {
+      assertProof(kept.remnantReceipt === receiptPath, 'Cursor --keep-data wrote no remnant receipt beside the preserved state.');
+    }
+    await install();
+    if (host !== 'cursor') {
+      // Codex deletes the cache on remove and Claude's reinstall rewrites the cached copy from the bundle, so
+      // the host itself discarded the marker; recreate it so the purge run has state to report on.
+      await mkdir(stateDirectory, { recursive: true });
+      await writeFile(join(stateDirectory, 'plugin.sqlite'), 'durable\n');
+    }
+    const purged = await uninstall(['--purge-data', '--confirm-purge']);
+    const purgeOutcome = purged.data?.outcome;
+    assertProof(purgeOutcome === 'purged' || purgeOutcome === 'removed-by-host', `${host} --purge-data reported an unexpected outcome: ${JSON.stringify(purged.data)}`);
+    await access(stateDirectory).then(
+      () => fail(`${host} --purge-data --confirm-purge left state/ behind.`),
+      () => undefined,
+    );
+    if (host === 'cursor') {
+      assertProof(treesIdentical(before, await snapshotTree(hostRoot)), 'Cursor keep→reinstall→purge cycle did not restore the home byte-identically.');
+    }
+
+    // Refusals: a missing receipt (AB7009) and a mismatch between the installed copy and the receipt (AB7007).
+    await install();
+    await rm(receiptPath);
+    await expectRefusal(lifecycle('uninstall'), 'AB7009', `${host} uninstall without a receipt`);
+    // A receipt-less Cursor copy is the pre-receipt legacy layout (`forced-legacy`); a host-CLI install with no
+    // store receipt is `forced-missing`. Both need --force and both remove only what the receipt (or, for the
+    // legacy layout, the inventory) proves is this plugin's.
+    const forced = await uninstall(['--force']);
+    assertProof(
+      forced.state === 'uninstalled' && (forced.receipt?.status === 'forced-missing' || forced.receipt?.status === 'forced-legacy'),
+      `${host} uninstall --force did not proceed: ${JSON.stringify(forced)}`,
+    );
+    await install();
+    await writeFile(join(installedRoot, 'INSTALL.md'), '# tampered\n');
+    await expectRefusal(lifecycle('uninstall'), 'AB7007', `${host} uninstall of a modified copy`);
+    const forcedMismatch = await uninstall(['--force']);
+    assertProof(forcedMismatch.state === 'uninstalled' && forcedMismatch.receipt?.status === 'forced-mismatch', `${host} uninstall --force after a mismatch did not proceed: ${JSON.stringify(forcedMismatch)}`);
+
+    return Object.freeze({
+      agentBundleResidue: Object.freeze(agentBundleResidue),
+      homeByteIdentical,
+      host,
+      hostResidue: Object.freeze([...residueClasses].sort()),
+      keepData: keepOutcome,
+      plan: 'no-op',
+      proofLevel,
+      purgeData: purgeOutcome,
+      refusals: Object.freeze({ foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' }),
+      registrations: Object.freeze(registrations),
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+};
+
+export interface PortableUninstallProofReport {
+  readonly homeByteIdentical: true;
+  readonly host: 'cursor';
+  readonly installer: 'emitted install.mjs --uninstall';
+  readonly keepData: 'kept';
+  readonly plan: 'no-op';
+  readonly proofLevel: string;
+  readonly purgeData: 'purged';
+  readonly refusals: { readonly foreign: 'refused'; readonly missingReceipt: 'refused'; readonly unconfirmedPurge: 'refused' };
+  readonly rerun: 'not-installed';
+  readonly status: 'passed';
+}
+
+/** The emitted standalone installer's `--uninstall` against an isolated Cursor home for the Agent Plugins pack. */
+export const runPortableUninstallProof = async (
+  fixture: BuiltPortableHostInstallFixture,
+  options: { readonly environment: Readonly<NodeJS.ProcessEnv> },
+): Promise<PortableUninstallProofReport> => {
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-host-uninstall-portable-'));
+  try {
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const environment = isolatedEnvironment(options.environment, { HOME: home });
+    const installer = join(fixture.portableBundle, 'install.mjs');
+    const destination = join(home, '.cursor', 'plugins', 'local', portablePlugin);
+    const receiptPath = join(destination, '.agent-bundle-install.json');
+    const runInstaller = (args: readonly string[]): Promise<CommandResult> =>
+      run(process.execPath, [installer, ...args], { cwd: fixture.portableBundle, environment });
+    const expectOk = async (args: readonly string[], prefix: string): Promise<string> => {
+      const result = await runInstaller(args);
+      assertProof(result.exitCode === 0, `Portable installer ${args.join(' ')} failed: ${commandDetail(result)}`);
+      assertProof(result.stdout.startsWith(prefix), `Portable installer ${args.join(' ')} did not report "${prefix}": ${JSON.stringify(result.stdout)}`);
+      return result.stdout;
+    };
+    const before = await snapshotTree(home);
+    await expectOk(['--uninstall'], `Not installed ${portablePlugin}@${version}`);
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    const afterInstall = await snapshotTree(home);
+    const plan = await expectOk(['--uninstall', '--plan'], `Would uninstall ${portablePlugin}@${version}`);
+    assertProof(plan.includes(receiptPath), 'Portable --plan did not name the receipt path.');
+    assertProof(treesIdentical(afterInstall, await snapshotTree(home)), 'Portable --plan changed the home.');
+    const unconfirmed = await runInstaller(['--uninstall', '--purge-data']);
+    assertProof(unconfirmed.exitCode === 2 && unconfirmed.stderr.includes('--confirm-purge'), 'Portable --purge-data without confirmation was not refused.');
+    await expectOk(['--uninstall'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(treesIdentical(before, await snapshotTree(home)), `Portable uninstall did not leave the home byte-identical: ${JSON.stringify(diffTreeSnapshots(before, await snapshotTree(home)))}`);
+    await expectOk(['--uninstall'], `Not installed ${portablePlugin}@${version}`);
+
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    const kept = await expectOk(['--uninstall', '--keep-data'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(kept.includes('Data (keep): kept'), 'Portable --keep-data did not report kept state.');
+    await access(join(destination, 'state', 'plugin.sqlite')).catch(() => fail('Portable --keep-data did not preserve state/.'));
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    const purged = await expectOk(['--uninstall', '--purge-data', '--confirm-purge'], `Uninstalled ${portablePlugin}@${version}`);
+    assertProof(purged.includes('Data (purge): purged'), 'Portable confirmed purge did not report purged state.');
+    assertProof(treesIdentical(before, await snapshotTree(home)), 'Portable keep→reinstall→purge did not restore the home byte-identically.');
+
+    await expectOk([], `Installed ${portablePlugin}@${version}`);
+    await rm(receiptPath);
+    const missing = await runInstaller(['--uninstall']);
+    assertProof(missing.exitCode === 1 && missing.stderr.includes('predates install receipts'), 'Portable uninstall without a receipt was not refused.');
+    await expectOk(['--uninstall', '--force'], `Uninstalled ${portablePlugin}@${version}`);
+    await rm(join(home, '.cursor', 'plugins'), { force: true, recursive: true });
+    await mkdir(destination, { recursive: true });
+    await writeFile(join(destination, 'payload.txt'), 'someone else\n');
+    const foreign = await runInstaller(['--uninstall', '--force']);
+    assertProof(foreign.exitCode === 1 && foreign.stderr.includes('Refusing to uninstall foreign directory'), 'Portable uninstall of a foreign directory was not refused.');
+    await access(join(destination, 'payload.txt')).catch(() => fail('Portable refused uninstall still removed the foreign file.'));
+
+    return Object.freeze({
+      homeByteIdentical: true,
+      host: 'cursor',
+      installer: 'emitted install.mjs --uninstall',
+      keepData: 'kept',
+      plan: 'no-op',
+      proofLevel: portableProofLevel,
+      purgeData: 'purged',
+      refusals: Object.freeze({ foreign: 'refused', missingReceipt: 'refused', unconfirmedPurge: 'refused' }),
+      rerun: 'not-installed',
+      status: 'passed',
+    });
+  } finally {
+    await rm(home, { force: true, recursive: true });
+  }
 };

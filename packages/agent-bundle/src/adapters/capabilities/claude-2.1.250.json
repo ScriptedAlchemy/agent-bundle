@@ -12,6 +12,40 @@
     "source": "https://code.claude.com/docs/en/discover-plugins",
     "state": "supported"
   },
+  "lifecycle": {
+    "uninstall": {
+      "commands": [
+        "claude plugin uninstall <plugin>@<marketplace> --scope <scope> --keep-data",
+        "claude plugin marketplace remove <marketplace>"
+      ],
+      "evidence": [
+        "2026-09-03: local Claude Code 2.1.257 `claude plugin uninstall --help` documents --keep-data (preserve ~/.claude/plugins/data/{id}/), --scope user|project|local, and --prune/-y; `claude plugin marketplace remove --help` documents removal from every scope by default. `agent-bundle uninstall claude` runs exactly those two verbs, in that order, from the registrations its install receipt recorded (#101).",
+        "2026-09-03: in an isolated CLAUDE_CONFIG_DIR, `claude plugin uninstall <id> --scope user --keep-data` marked the cached copy orphaned (`.orphaned_at`) instead of deleting it and left `plugins/installed_plugins.json` as `{\"plugins\":{}}`, `plugins/known_marketplaces.json` as `{}`, and `settings.json` with empty `enabledPlugins`/`extraKnownMarketplaces`; `claude plugin marketplace remove` then removed the marketplace declaration. Removing a marketplace or plugin that is not registered exits 1 (`not found`), so the uninstaller consults `claude plugin list --json` and `claude plugin marketplace list --json` first and reports already-absent registrations instead of failing."
+      ],
+      "state": "supported"
+    },
+    "keepData": {
+      "evidence": [
+        "2026-09-03: Claude Code 2.1.257 retains the orphaned cache copy, its `state/` included, for the documented ~14-day grace period, and --keep-data preserves ~/.claude/plugins/data/{id}/; the uninstaller reports this as data outcome `retained-by-host` and, under --purge-data --confirm-purge, removes `state/` under the cached copy and the plugins/data entry itself (`purged`)."
+      ],
+      "state": "supported"
+    },
+    "activationState": {
+      "evidence": [
+        "2026-09-03: `claude plugin list --json` rows carry `enabled` (observed true after `claude plugin install`), `scope`, `installPath`, and `version`; Doctor reads placed (installPath exists), registered (row present), and enabled (row flag) from them. No read-only verb reports which plugins a live session has loaded, so `active` is typed unavailable."
+      ],
+      "observable": [
+        "placed",
+        "registered",
+        "enabled"
+      ],
+      "reason": "Live activation has no pinned read-only surface on Claude Code 2.1.257.",
+      "state": "degraded",
+      "unavailable": [
+        "active"
+      ]
+    }
+  },
   "deferredNativeEvents": {
     "ConfigChange-policy_settings": {
       "reason": "retrieved 2026-09-02 from https://code.claude.com/docs/en/hooks: ConfigChange block decisions cannot stop policy_settings changes; recorded so the config/change family's deny channel is not overstated.",
