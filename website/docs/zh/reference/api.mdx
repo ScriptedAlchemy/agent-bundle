@@ -13,7 +13,7 @@ description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如
 | 入口点 | 内容 |
 | --- | --- |
 | `agent-bundle` | 编写与编排表面：`defineSkill`、`canonicalAgentEvents`、`startDevServer`、`runEvals`、`compareEvals`、eval harness 工厂，以及产物清单辅助函数。 |
-| `agent-bundle/api` | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App）、`listHooks` 与 `simulateHook`。 |
+| `agent-bundle/api` | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；产物内部的路由式 CLI 命令无法导入它，见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)）、`listHooks` 与 `simulateHook`。 |
 | `agent-bundle/config` | `defineConfig` 与配置类型。 |
 | `agent-bundle/test` | 路由测试 harness、匹配器与契约矩阵。 |
 | `agent-bundle/test/browser` | 面向浏览器渲染视图的 MCP App bridge harness。 |

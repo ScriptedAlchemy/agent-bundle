@@ -1414,7 +1414,21 @@ and the bridge exposes only the selected server. This is a local preview
 host, not a deployment target.
 
 `serveApp` in `agent-bundle/api` is the programmatic form (`{ url, close,
-closed }`) for a plugin's own routed CLI (`hauler dashboard`). It belongs to
-the plugin's dev-time / CLI process — import it lazily from the route that
-needs it — never to the MCP server shell, so emitted artifacts stay free of
-the host runtime.
+closed }`). It is a host-process API: it belongs to processes the framework
+does not compile — the first-party CLI, the Workbench, tests, a plugin's own
+`package.json` scripts or a hand-written `.mjs` run from the checkout — and
+never to the MCP server shell. A routed CLI command inside the artifact
+cannot import it today: routed CLI bins are self-contained (#387), so the
+bundler inlines `agent-bundle/dist/api.js` into the bin and fails on the
+framework's runtime-relative module references (`Module not found: Can't
+resolve '../events'`), while an external bare import (`AB6005 uses
+unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
+non-literal dynamic import`) fails artifact validation. The pattern that
+builds is a plain routed command that spawns `agent-bundle serve-app` as a
+child process — resolving the framework CLI from `node_modules/agent-bundle`
+by path, relaying the child's `MCP App <app> at <url>` line to stderr so the
+routed CLI keeps stdout for its result, and turning the route `signal` into
+the child's `SIGTERM` — which makes it a checkout-only command (an installed
+host pack has neither `node_modules` nor the artifact). A framework helper
+for that plumbing is tracked in #558; the worked example is in the MCP Apps
+guide, "Serving an App standalone".
