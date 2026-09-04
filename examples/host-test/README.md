@@ -3,7 +3,7 @@
 A probing plugin. Install it into a Claude Code, Codex, or Cursor home, drive
 one agent session, and read back exactly what that host sent to every plugin
 hook and MCP call — the raw envelope, the framework request context each
-handler saw, and (once the framework resolves it) the conversation lineage.
+handler saw, and the conversation lineage the runtime resolved for it.
 It is the acceptance vehicle for `request.lineage` and the evidence source for
 `docs/audits/*-host-lineage-matrix.md`.
 
@@ -25,7 +25,7 @@ bounded summary into the durable state kernel (`src/state.ts`,
 | --- | --- |
 | `event.native` | The complete host payload, byte for byte, with secret-looking values replaced by `[redacted]`. |
 | `event.canonical` | The framework's canonical identity (`event`, `idempotencyKey`, `observedAt`, `provenance`). |
-| `request` | `(await agent())` as the route saw it: `invocation`, `host`, `session`, `actor`, `workspace`, `capabilities`, provider keys, whether state and notices were mounted, and `lineage` when the runtime supplies it. |
+| `request` | `(await agent())` as the route saw it: `invocation`, `host`, `session`, `actor`, `workspace`, `capabilities`, `lineage`, provider keys, and whether state and notices were mounted. `lineage` is always present: `available` with the resolved tree position, or `unavailable` with the runtime's per-host reason. |
 | `ids` | Every identity-shaped native field (`conversation_id`, `generation_id`, `session_id`, `subagent_id`, `tool_call_id`, `agent_id`, `turn_id`, `user_email`, …) lifted out for filtering. |
 | `process` | `pid`, `ppid`, `cwd`, `execPath`, entry file, uptime — of the process that ran the route. |
 | `runtime` | `shared-runtime` when the hook reached the warm MCP-hosted runtime, `standalone-hook` when it fell back to the hook process, `mcp-server`, or `cli`. |

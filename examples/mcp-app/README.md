@@ -84,7 +84,7 @@ pnpm exec agent-bundle mcp run --server status --target portable
 ```
 
 The command resolves the generated entry from the portable target's MCP
-manifest, building a temporary artifact first; pass `--artifact dist` to
+manifest, building a temporary artifact first; pass `--artifact artifact` to
 reuse the `pnpm build` output instead. Closing stdin exits 0 and Ctrl-C
 exits 130, and per-server state persists under
 `.agent-bundle/mcp-run/portable/status`.
