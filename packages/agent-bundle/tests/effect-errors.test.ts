@@ -32,7 +32,7 @@ class YieldableCoded extends YieldableCodedError<'AB0001'> {
 
 describe('yieldable framework error bases (src/effect/errors.ts)', () => {
   it('fails an Effect.gen program by yield* with the same instance Effect.fail would carry', async () => {
-    const error = new McpSessionError('MCP_SESSION_CLOSED', 'Session "s1" is closed.');
+    const error = new McpSessionError('session-closed', 'Session "s1" is closed.');
     const program = Effect.gen(function* () {
       return yield* error;
     });

@@ -26,7 +26,7 @@ onto those classes at the boundary — it does not replace them.
 - Typed fail, framework-process class (dev seam / eval service, extends
   `YieldableFrameworkError` or `YieldableCodedError` from
   `packages/agent-bundle/src/effect/errors.ts`):
-  `return yield* new McpSessionError('MCP_SESSION_CLOSED', message)`.
+  `return yield* new McpSessionError('session-closed', message)`.
   `Effect.fail(new McpSessionError(...))` is equally valid; do not churn
   call sites for style.
 - Defect (bug): `Effect.die(defect)` — not for expected fail-closed states.
