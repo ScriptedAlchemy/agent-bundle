@@ -22,6 +22,13 @@ export interface ArtifactOutputCandidate {
 }
 
 export interface BundledOutputCandidate {
+  /**
+   * Module roots excluded from this asset's authored-source evidence, on top
+   * of the roots every asset of the run excludes. Surfaces sharing one
+   * bundler run keep their own exclusions this way (a hook wrapper inlines
+   * the event runtime; a script never does).
+   */
+  readonly ignoredSourcePaths?: readonly string[];
   /** Asset path reported by the bundler, relative to its output root. */
   readonly path: string;
   /** Absolute authored inputs known by the compiler before bundling. */
@@ -180,7 +187,33 @@ export const collectBundledOutputEvidence = (options: {
   if (options.stats === undefined) {
     throw new Error('Bundler build result did not include public stats for output provenance.');
   }
-  const json = asRecord(options.stats.toJson({ assets: true, children: true, modules: true, nestedModules: true }));
+  // The evidence reads each compilation's asset names and chunk ids, its
+  // module list with every module's `chunks`, `nameForCondition`,
+  // `identifier`, `name`, `moduleType`, and concatenated `modules`, and the
+  // `filtered*` counters. Everything else Rspack renders into JSON by
+  // default — per-module reasons, export usage, optimization bailouts,
+  // depth, module traces, errors — is paid for by walking every module of
+  // every environment and is switched off; the module list itself (orphans,
+  // runtime modules, cached modules) stays complete.
+  const json = asRecord(options.stats.toJson({
+    assets: true,
+    children: true,
+    chunkOrigins: false,
+    depth: false,
+    errorDetails: false,
+    errors: false,
+    moduleAssets: false,
+    moduleTrace: false,
+    modules: true,
+    nestedModules: true,
+    optimizationBailout: false,
+    providedExports: false,
+    reasons: false,
+    relatedAssets: false,
+    source: false,
+    usedExports: false,
+    warnings: false,
+  }));
   if (json === undefined) throw new Error('Bundler stats were not an object.');
   throwOnFilteredStats(json);
   const compilations = flattenCompilations(json);
@@ -206,7 +239,9 @@ export const collectBundledOutputEvidence = (options: {
         compilation: match.compilation,
         allowUnassociatedHtml: expected.allowUnassociatedHtml === true,
         explicitInputs: expected.sourceInputs,
-        ignoredSourcePaths,
+        ignoredSourcePaths: expected.ignoredSourcePaths === undefined
+          ? ignoredSourcePaths
+          : [...ignoredSourcePaths, ...expected.ignoredSourcePaths],
         projectRoot: options.projectRoot,
       }),
     });

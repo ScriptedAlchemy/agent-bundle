@@ -97,7 +97,7 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   // The generated executable envelope wraps the `main` export.
   expect(script.generatedEntry).toContain('process.argv.slice(2)');
   expect(script.config).toMatchObject({
-    id: 'agent-bundle-tool',
+    id: 'agent-bundle-scripts-tool',
     // Routes are authored as TSX, so every Rslib entry carries the React
     // plugin: without it JSX lowers to a `React` factory that no generated
     // executable has in scope.

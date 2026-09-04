@@ -4,8 +4,7 @@ import { cliBinCapability } from '../adapters/capability-state.ts';
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { AgentBundleToolsConfig, NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
-import type { AgentBundleMeta } from '../meta.ts';
+import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
 import {
@@ -14,7 +13,7 @@ import {
   generatedCliBinEntrySource,
   generatedRenderedRouteWorkerSource,
 } from './entry-shell.ts';
-import { buildWithRslib, type RslibEntry } from './rslib.ts';
+import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 
 /**
  * The artifact-hosted routed CLI (#387). A generated-mode `src/cli/**`
@@ -159,48 +158,44 @@ export const cliBinRslibEntries = (
   return entries;
 });
 
-export const compileCliBins = async (
+/**
+ * Plans the routed CLI bin of one hosting target (#387) as a surface of the
+ * target's shared Rslib run: the executable plus, for rendered commands, its
+ * react-server Flight worker.
+ */
+export const planCliBinsSurface = (
   model: NormalizedPlugin,
-  options: {
-    readonly cwd: string;
-    readonly meta: AgentBundleMeta;
-    readonly outDir: string;
-    readonly target: string;
-    readonly tools?: AgentBundleToolsConfig;
-  },
-): Promise<readonly CompiledCliBin[]> => {
+  options: { readonly outDir: string; readonly target: string },
+): RslibSurfacePlan<readonly CompiledCliBin[]> => {
   const planned = planCompiledCliBins(model, options);
-  if (planned.length === 0) return Object.freeze([]);
-  const evidence = await buildWithRslib({
-    cwd: options.cwd,
-    entries: cliBinRslibEntries(planned, model),
+  return {
+    entries: planned.length === 0 ? [] : cliBinRslibEntries(planned, model),
+    finish: async (evidence) => {
+      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+      const bundledInputs = (path: string, label: string): readonly string[] => {
+        const inputs = evidenceByPath.get(path);
+        if (inputs === undefined) throw new Error(`Missing bundled routed CLI ${label} evidence for ${JSON.stringify(path)}.`);
+        return inputs;
+      };
+      return Object.freeze(planned.map((entry): CompiledCliBin => Object.freeze({
+        id: entry.id,
+        name: entry.name,
+        output: entry.output,
+        outputKind: entry.outputKind,
+        source: entry.source,
+        sourceInputs: bundledInputs(cliBinArtifactPath(entry.name), 'executable'),
+        target: entry.target,
+        ...(entry.workerOutput === undefined
+          ? {}
+          : {
+            workerOutput: entry.workerOutput,
+            workerSourceInputs: bundledInputs(cliBinWorkerArtifactPath(entry.name), 'worker'),
+          }),
+      })));
+    },
     ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath())],
     logLevel: 'error',
-    meta: options.meta,
-    outputRoot: options.outDir,
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-  });
-  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
-  const bundledInputs = (path: string, label: string): readonly string[] => {
-    const inputs = evidenceByPath.get(path);
-    if (inputs === undefined) throw new Error(`Missing bundled routed CLI ${label} evidence for ${JSON.stringify(path)}.`);
-    return inputs;
   };
-  return Object.freeze(planned.map((entry): CompiledCliBin => Object.freeze({
-    id: entry.id,
-    name: entry.name,
-    output: entry.output,
-    outputKind: entry.outputKind,
-    source: entry.source,
-    sourceInputs: bundledInputs(cliBinArtifactPath(entry.name), 'executable'),
-    target: entry.target,
-    ...(entry.workerOutput === undefined
-      ? {}
-      : {
-        workerOutput: entry.workerOutput,
-        workerSourceInputs: bundledInputs(cliBinWorkerArtifactPath(entry.name), 'worker'),
-      }),
-  })));
 };
 
 /**

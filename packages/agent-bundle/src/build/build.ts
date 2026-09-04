@@ -11,25 +11,27 @@ import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '
 import { assertInside, isInsideOrEqual } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
-  compileEntries,
-  compileHooks,
-  compileMcpEntries,
   planCompiledEntries,
   planCompiledHooks,
   planCompiledMcpEntries,
+  planHooksSurface,
+  planMcpEntriesSurface,
+  planScriptsSurface,
   type CompiledEntry,
   type CompiledHookEntry,
   type CompiledMcpEntry,
 } from './entries.ts';
 import {
   cliBinCollisionDiagnostics,
-  compileCliBins,
+  planCliBinsSurface,
   planCompiledCliBins,
   targetHostsCliBin,
   type CompiledCliBin,
 } from './cli-bins.ts';
 import { projectMeta } from './meta.ts';
 import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
+import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
+import { planTargetStages } from './target-stages.ts';
 import {
   assertUniqueArtifactDestinations,
   artifactHookIndexName,
@@ -388,73 +390,84 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     // One identity feeds every compiled surface, exactly the identity the
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
+    const plugin = { name: options.model.metadata.name, version: options.model.metadata.version };
     for (const target of stagedTargets) {
-      // MCP Apps compile first: their Rsbuild pass asserts the target root
-      // holds nothing but its own HTML, so every other surface follows it.
-      const targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
-        cwd: options.projectRoot,
-        meta,
-        outDir: target.root,
-        target: target.name,
-        ...tools,
-      });
-      compiledMcpApps.push(...targetMcpApps);
-      await emitPlanEntries({ entries: target.entries, root: target.root });
-      if (target.cliBin) {
-        compiledCliBins.push(...(await compileCliBins(options.model, {
-          cwd: options.projectRoot,
-          meta,
-          outDir: target.root,
-          target: target.name,
-          ...tools,
-        })));
+      let targetMcpApps: readonly CompiledMcpApp[] = Object.freeze([]);
+      for (const stage of planTargetStages(target)) {
+        switch (stage.kind) {
+          case 'mcp-apps':
+            // The optional browser stage, always first: the MCP entries
+            // embed its HTML, and its Rsbuild pass asserts the target root
+            // holds nothing but that HTML.
+            targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
+              cwd: options.projectRoot,
+              meta,
+              outDir: target.root,
+              target: target.name,
+              ...tools,
+            });
+            compiledMcpApps.push(...targetMcpApps);
+            break;
+          case 'node-surfaces': {
+            await emitPlanEntries({ entries: target.entries, root: target.root });
+            const noticeDelivery = options.registry.noticeDelivery(target.name);
+            // Every agent-host surface of the target lowers through one Rslib
+            // instance; each surface keeps its own evidence and result.
+            const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
+              { cwd: options.projectRoot, meta, outputRoot: target.root, ...tools },
+              [
+                target.cliBin
+                  ? planCliBinsSurface(options.model, { outDir: target.root, target: target.name })
+                  : settledRslibSurface<readonly CompiledCliBin[]>(Object.freeze([])),
+                await planScriptsSurface(
+                  options.model.scripts.filter((script) => script.targets.includes(target.name)),
+                  {
+                    cwd: options.projectRoot,
+                    layouts: options.model.layouts ?? [],
+                    outDir: target.root,
+                    ...noticePolicy,
+                    providers: options.model.providers ?? [],
+                    ...(options.model.state === undefined ? {} : { state: options.model.state }),
+                  },
+                ),
+                planHooksSurface(target.hookEntries, {
+                  artifactEpoch: options.projectContext.revision,
+                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                  ...noticePolicy,
+                  outDir: target.root,
+                  plugin,
+                  providers: options.model.providers ?? [],
+                  ...(options.model.state === undefined ? {} : { state: options.model.state }),
+                }),
+                await planMcpEntriesSurface(options.model.mcpServers, {
+                  apps: targetMcpApps,
+                  artifactEpoch: options.projectContext.revision,
+                  eventHooks: target.hookEntries
+                    .filter((entry) => entry.hook.eventRoute !== undefined)
+                    .map((entry) => entry.hook),
+                  layouts: options.model.layouts ?? [],
+                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                  ...noticePolicy,
+                  outDir: target.root,
+                  plugin,
+                  providers: options.model.providers ?? [],
+                  ...(options.model.state === undefined ? {} : { state: options.model.state }),
+                  target: target.name,
+                }),
+              ],
+            );
+            compiledCliBins.push(...cliBins);
+            compiledEntries.push(...scripts);
+            compiledHooks.push(...hooks);
+            compiledMcpEntries.push(...mcpEntries);
+            break;
+          }
+          default: {
+            const exhaustive: never = stage;
+            throw new Error(`Unknown target compile stage ${JSON.stringify(exhaustive)}.`);
+          }
+        }
       }
-      compiledEntries.push(
-        ...(await compileEntries(
-          options.model.scripts.filter((script) => script.targets.includes(target.name)),
-          {
-            cwd: options.projectRoot,
-            layouts: options.model.layouts ?? [],
-            meta,
-            outDir: target.root,
-            ...noticePolicy,
-            providers: options.model.providers ?? [],
-            ...(options.model.state === undefined ? {} : { state: options.model.state }),
-            ...tools,
-          },
-        )),
-      );
-      const noticeDelivery = options.registry.noticeDelivery(target.name);
-      compiledHooks.push(...(await compileHooks(target.hookEntries, {
-        artifactEpoch: options.projectContext.revision,
-        cwd: options.projectRoot,
-        meta,
-        ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-        ...noticePolicy,
-        outDir: target.root,
-        plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
-        providers: options.model.providers ?? [],
-        ...(options.model.state === undefined ? {} : { state: options.model.state }),
-        ...tools,
-      })));
-      compiledMcpEntries.push(...(await compileMcpEntries(options.model.mcpServers, {
-        apps: targetMcpApps,
-        artifactEpoch: options.projectContext.revision,
-        cwd: options.projectRoot,
-        eventHooks: target.hookEntries
-          .filter((entry) => entry.hook.eventRoute !== undefined)
-          .map((entry) => entry.hook),
-        layouts: options.model.layouts ?? [],
-        meta,
-        ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-        ...noticePolicy,
-        outDir: target.root,
-        plugin: { name: options.model.metadata.name, version: options.model.metadata.version },
-        providers: options.model.providers ?? [],
-        ...(options.model.state === undefined ? {} : { state: options.model.state }),
-        target: target.name,
-        ...tools,
-      })));
     }
     const publishedCompiledEntries = deepFreeze(compiledEntries.map((entry) =>
       ({

@@ -485,6 +485,32 @@ Hook tool selectors a host cannot map still fail at plan time
 
 ## Distribution
 
+### How a target compiles
+
+`agent-bundle build` plans every target before it compiles anything, then
+lowers each target's outputs in at most two stages into one staged root that
+is published atomically once the artifact validates
+(`src/build/target-stages.ts`):
+
+1. **MCP Apps** — the browser environment, compiled through the workspace
+   `@rsbuild/core`. This stage exists only for a target whose project
+   declares App routes and always runs first: the MCP entries embed its
+   emitted HTML.
+2. **Agent-host surfaces** — the routed CLI bin, bundled scripts, hook
+   wrappers, MCP stdio entries, and each surface's react-server Flight worker.
+   All of them lower together through **one Rslib instance per target**: one
+   Rsbuild environment per output, compiled by one Rspack multi-compiler.
+   A host surface reaches its Flight worker by file name at run time, never
+   through a build-time manifest, so nothing orders the two within the stage;
+   each surface keeps its own authored-source evidence for the manifest.
+
+Every synthesized bundler config — both stages plus the `dist/` package build
+— composes the same way: the framework profile, then the consumer's
+`tools.rsbuild` fragment, then the `tools.rspack` hatch, then the framework
+invariant layer that no hatch value can override
+(`src/build/compose-layers.ts`; see the `tools` section of the configuration
+reference). `agent-bundle inspect --bundler` prints the result.
+
 `agent-bundle build` makes each target directory independently distributable.
 Every target includes `INSTALL.md` generated with its real plugin and
 marketplace names. Claude and Codex bundles include local marketplace manifests
