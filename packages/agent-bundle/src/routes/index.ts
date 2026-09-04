@@ -80,6 +80,8 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,

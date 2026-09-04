@@ -33,7 +33,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'plugin-root', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -49,6 +49,7 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/layout-probe',
         'tool:harness/lifecycle',
         'tool:harness/mutation-probe',
+        'tool:harness/plugin-root',
         'tool:harness/publish-notice',
         'tool:harness/strict-report',
         'tool:harness/ticket',
@@ -284,6 +285,33 @@ describe('the in-memory MCP projection level', () => {
         content: [{ text: expect.stringContaining('elapsed time exceeds 1ms'), type: 'text' }],
         isError: true,
       });
+    });
+  });
+
+  it('publishes the plugin root the server process resolved on every tool call, and forwards a context override (#468)', async () => {
+    const anchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
+    const previous = process.env[anchor];
+    process.env[anchor] = '/installs/harness';
+    try {
+      // The server resolves the anchor once when it opens, exactly as the
+      // generated entry does at startup; every request then observes it.
+      await using session = await openInMemoryMcpServer();
+      const result = await session.client.callTool({ arguments: {}, name: 'plugin-root' });
+      expect(result).toMatchObject({
+        structuredContent: {
+          plugin: { source: 'native', state: 'available', value: { root: '/installs/harness', stateRoot: '/installs/harness/state' } },
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env[anchor];
+      else process.env[anchor] = previous;
+    }
+
+    const injected = await invokeMcpTool('plugin-root', {
+      context: { plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } } as never },
+    });
+    expect(injected.structuredContent).toEqual({
+      plugin: { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } },
     });
   });
 

@@ -651,12 +651,13 @@ const eventRouteHookWrapperSource = (
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
-      ? ["import { agent, available, createAgentRenderDispatcher, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      ? [
+          "import { fileURLToPath } from 'node:url';",
+          "import { agent, available, createAgentRenderDispatcher, resolvePluginRoot, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+        ]
       : []),
     ...(retiresLineage
       ? [
-          "import { join } from 'node:path';",
-          "import { fileURLToPath } from 'node:url';",
           "import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';",
           "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
         ]
@@ -679,6 +680,9 @@ const eventRouteHookWrapperSource = (
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
       ? [
+          // The wrapper lives in `hooks/`, so its artifact root is the parent
+          // directory — the same anchor the generated MCP entry resolves (#468).
+          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });",
           'const renderStandalone = async (invocation, signal) => {',
           '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -714,6 +718,7 @@ const eventRouteHookWrapperSource = (
           '          id,',
           '          invocation: dispatch.invocation,',
           '          lineage: context.lineage,',
+          '          plugin: context.plugin,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
           '          terminal: context.terminal,',
@@ -733,8 +738,7 @@ const eventRouteHookWrapperSource = (
             ? [
                 'const retireLineage = async (native, idempotencyKey, observedAt) => {',
                 "  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') return;",
-                "  const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
-                "  const driver = createSqliteStateDriver({ root: join(anchor, 'state') });",
+                '  const driver = createSqliteStateDriver({ root: pluginRoot.stateRoot });',
                 '  try {',
                 '    const store = await driver.open(agentLineageStateDefinition());',
                 '    try {',
@@ -762,6 +766,7 @@ const eventRouteHookWrapperSource = (
           '    host: available({ name: target }, "native"),',
           '    invocation: { artifactEpoch, hostContractRevision: capabilityRevision, kind: "event", operationId: `event:${canonicalEvent}`, surface: canonicalEvent },',
           '    lineage,',
+          '    plugin: pluginRoot.identity,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
           // A hook's stdout is its host envelope: no terminal, never probed (#511).

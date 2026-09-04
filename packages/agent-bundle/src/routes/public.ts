@@ -97,9 +97,30 @@ type AgentProviderInvocation =
     readonly props: { readonly input?: JsonValue; readonly view: string };
   };
 
+/**
+ * The plugin install root and durable-state anchor a generated scope resolved
+ * (#468), as `(await agent()).plugin` observes it: `root` is the expanded
+ * `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's fallback
+ * (`'derived'`), and `stateRoot` is `<root>/state`, where the SQLite kernel,
+ * the notice ledger, and the lineage journal live. Declared here so
+ * config-only consumers need no runtime import; structurally identical to the
+ * runtime's `AgentPluginIdentity`.
+ */
+export interface AgentProviderPluginRoot {
+  readonly root: string;
+  readonly stateRoot: string;
+}
+
+/** The observed plugin root a provider receives; the same shape as every `agent()` identity axis. */
+export type AgentProviderObservedPluginRoot =
+  | { readonly source: 'native' | 'receipt' | 'derived'; readonly state: 'available'; readonly value: AgentProviderPluginRoot }
+  | { readonly reason: string; readonly state: 'unavailable' };
+
 /** Request-scoped inputs supplied to a conventional context provider factory. */
 export interface AgentProviderContext {
   readonly invocation: AgentProviderInvocation;
+  /** The resolved plugin root, exactly what the route will read as `(await agent()).plugin`. */
+  readonly plugin: AgentProviderObservedPluginRoot;
   readonly signal: AbortSignal;
 }
 

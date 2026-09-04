@@ -169,6 +169,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'layout-probe',
         'lifecycle',
         'mutation-probe',
+        'plugin-root',
         'publish-notice',
         'strict-report',
         'ticket',

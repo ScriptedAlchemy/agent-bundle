@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import { Agent, agent, useAgent } from '@agent-bundle/runtime';
 import { describe, expect, it } from '@rstest/core';
 import { createElement } from 'react';
@@ -317,6 +319,55 @@ describe('renderRoute through the real renderer', () => {
         { completed: 2, message: 'waiting', total: 3 },
         { completed: 3, message: 'waiting', total: 3 },
       ]);
+    });
+  });
+
+  describe('the plugin root axis (#468)', () => {
+    const anchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
+    const withAnchor = async <T>(value: string | undefined, body: () => Promise<T>): Promise<T> => {
+      const previous = process.env[anchor];
+      if (value === undefined) delete process.env[anchor];
+      else process.env[anchor] = value;
+      try {
+        return await body();
+      } finally {
+        if (previous === undefined) delete process.env[anchor];
+        else process.env[anchor] = previous;
+      }
+    };
+
+    it('observes the expanded AGENT_BUNDLE_PLUGIN_ROOT as the native anchor, with state one level below', async () => {
+      const rendered = await withAnchor('/installs/harness', () => renderRoute('tool:harness/plugin-root'));
+
+      expectDocument(rendered).toHaveStatus('success').toContainText('plugin root: /installs/harness');
+      expect(rendered.result).toEqual({
+        plugin: { source: 'native', state: 'available', value: { root: '/installs/harness', stateRoot: '/installs/harness/state' } },
+      });
+    });
+
+    it("derives the project root's .agent-bundle when the anchor is unset, the npm bin's fallback", async () => {
+      const root = join(testManifest().projectRoot, '.agent-bundle');
+      const rendered = await withAnchor(undefined, () => renderRoute('tool:harness/plugin-root'));
+
+      expect(rendered.result).toEqual({
+        plugin: { source: 'derived', state: 'available', value: { root, stateRoot: join(root, 'state') } },
+      });
+    });
+
+    it('treats an unexpanded host token as unset instead of joining it into a path', async () => {
+      const root = join(testManifest().projectRoot, '.agent-bundle');
+      const rendered = await withAnchor('${CLAUDE_PLUGIN_ROOT}', () => renderRoute('tool:harness/plugin-root'));
+
+      expect(rendered.result).toEqual({
+        plugin: { source: 'derived', state: 'available', value: { root, stateRoot: join(root, 'state') } },
+      });
+    });
+
+    it('lets the context seam inject the axis like every other identity axis', async () => {
+      const plugin = { source: 'receipt', state: 'available', value: { root: '/fixture', stateRoot: '/fixture/state' } } as never;
+      const rendered = await renderRoute('tool:harness/plugin-root', { context: { plugin } });
+
+      expect(rendered.result).toEqual({ plugin });
     });
   });
 
