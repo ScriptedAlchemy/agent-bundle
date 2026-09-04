@@ -1,26 +1,114 @@
-version: 2.1.250
+version: 2.1.260
 
 $ claude plugin --help
 Usage: claude plugin|plugins [options] [command]
 
 Manage Claude Code plugins
 
-Commands:
-  details [options] <name>             Show a plugin's component inventory and projected token cost
-  install|i [options] <plugin>         Install a plugin from available marketplaces
-  marketplace                          Manage Claude Code marketplaces
-  validate [options] <path>            Validate a plugin or marketplace manifest
+Options:
+  -h, --help                           Display help for command
 
+Commands:
+  details [options] <name>             Show a plugin's component inventory and
+                                       projected token cost
+  disable [options] [plugin]           Disable an enabled plugin
+  enable [options] <plugin>            Enable a disabled plugin
+  eval [options] [target]              Run eval cases (<eval dir>/**/case.yaml
+                                       or prompt.md + graders/*.md; the eval dir
+                                       is evals/ unless --eval-dir or the
+                                       manifest says otherwise) against a plugin
+                                       and report scored results. Target is a
+                                       path, a plugin name, or a
+                                       `plugin@marketplace` id — installed and
+                                       skills-dir plugins both resolve (and add
+                                       a no-plugin baseline arm)
+  help [command]                       display help for command
+  init|new [options] <name>            Scaffold a new plugin at
+                                       ~/.claude/skills/<name>/ (auto-loads next
+                                       session as <name>@skills-dir)
+  install|i [options] <plugin>         Install a plugin from available
+                                       marketplaces (use plugin@marketplace for
+                                       specific marketplace)
+  list [options]                       List installed plugins
+  marketplace                          Manage Claude Code marketplaces
+  prune|autoremove [options]           Remove auto-installed dependencies that
+                                       are no longer needed
+  tag [options] [path]                 Create a {name}--v{version} git tag for a
+                                       plugin release, validating that
+                                       plugin.json and any enclosing marketplace
+                                       entry agree
+  uninstall|remove [options] <plugin>  Uninstall an installed plugin
+  update [options] <plugin>            Update a plugin to the latest version
+                                       (restart required to apply)
+  validate [options] <path>            Validate a plugin or marketplace
+                                       manifest, or the skills, agents, and
+                                       commands in a directory
+$ claude plugin validate --help
+Usage: claude plugin validate [options] <path>
+
+Validate a plugin or marketplace manifest, or the skills, agents, and commands
+in a directory
+
+Options:
+  -h, --help  Display help for command
+  --json      Output the validation report as JSON (same exit codes)
+  --strict    Treat warnings as errors (exit 1). Use in CI to fail on
+              unrecognized fields, missing metadata, and other issues that the
+              runtime tolerates.
+$ claude plugin list --help
+Usage: claude plugin list [options]
+
+List installed plugins
+
+Options:
+  --available  Include available plugins from marketplaces (requires --json)
+  -h, --help   Display help for command
+  --json       Output as JSON
+$ claude plugin marketplace --help
+Usage: claude plugin marketplace [options] [command]
+
+Manage Claude Code marketplaces
+
+Options:
+  -h, --help                  Display help for command
+
+Commands:
+  add [options] <source>      Add a marketplace from a URL, path, or GitHub repo
+  help [command]              display help for command
+  list [options]              List all configured marketplaces
+  remove|rm [options] <name>  Remove a configured marketplace
+  update [options] [name]     Update marketplace(s) from their source - updates
+                              all if no name specified
 $ claude mcp add --help
 Usage: claude mcp add [options] <name> <commandOrUrl> [args...]
 
 Add an MCP server to Claude Code.
 
 Examples:
+  # Add HTTP server:
   claude mcp add --transport http sentry https://mcp.sentry.dev/mcp
+
+  # Add HTTP server with headers:
+  claude mcp add --transport http corridor https://app.corridor.dev/api/mcp
+--header "Authorization: Bearer ..."
+
+  # Add stdio server with environment variables:
   claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server
 
+  # Add stdio server with subprocess flags:
+  claude mcp add my-server -- my-command --some-flag arg1
+
 Options:
-  -e, --env <env...>           Set environment variables
-  -H, --header <header...>     Set WebSocket headers
-  -t, --transport <transport>  Transport type (stdio, sse, http). Defaults to stdio if not specified.
+  --callback-port <port>       Fixed port for OAuth callback (for servers
+                               requiring pre-registered redirect URIs)
+  --client-id <clientId>       OAuth client ID for HTTP/SSE servers
+  --client-secret              Prompt for OAuth client secret (or set
+                               MCP_CLIENT_SECRET env var)
+  -e, --env <env...>           Set environment variables (e.g. -e KEY=value)
+  -H, --header <header...>     Set headers for HTTP/SSE servers (e.g. -H
+                               "X-Api-Key: abc123" -H "X-Custom: value")
+  -h, --help                   Display help for command
+  -s, --scope <scope>          Configuration scope (local, user, or project)
+                               (default: "local")
+  -t, --transport <transport>  Transport type (stdio, sse, http). Defaults to
+                               stdio if not specified.

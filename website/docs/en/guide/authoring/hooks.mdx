@@ -204,8 +204,12 @@ throw before anything reaches the host: `session/end`, `compact/after`, `tool/fa
 `hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'` on Claude and Codex but
 `{ permission: 'allow' | 'deny', … }` on Cursor, which documents `ask` as unenforced and
 therefore rejects it; a denied `stop` becomes `{ decision: 'block', reason }` or Cursor's
-`followup_message`. `allow` and `ask` are `tool/before` decisions (`allow` also answers
-`permission/request` on the user's behalf); every other family rejects them. Which families each
+`followup_message`. `allow` and `ask` are `tool/before` and `model-switch/before` decisions
+(`allow` also answers `permission/request` on the user's behalf); every other family rejects them.
+A decided `model-switch/before` becomes `hookSpecificOutput.permissionDecision: 'allow' | 'ask' |
+'deny'` on Claude Code's `PreModelSwitch` (2.1.251 or later; `ask` is a refusal outside an
+interactive `/model`), and `model-switch/after` observes the completed switch with
+`Agent.Context` reaching Claude as `additionalContext` on the next request. Which families each
 host supports is the generated [Event and hook matrix](../../reference/events.md).
 
 `updatedInput` on `tool/before` rewrites the pending call and is independent of the decision. On
@@ -215,9 +219,9 @@ the rewrite or with `ask` to show the rewritten input to the user. Cursor docume
 `updated_input` only alongside a `permission`, so a rewrite is delivered as `permission: 'allow'`
 there.
 
-Event routes reach the twenty canonical families (`session/end`, `prompt/submit`,
-`compact/before`, `permission/request`, …); config-declared `hooks` cover only the seven
-listed above.
+Event routes reach the twenty-two canonical families (`session/end`, `prompt/submit`,
+`compact/before`, `permission/request`, `model-switch/before`, …); config-declared `hooks` cover
+only the seven listed above.
 
 A route or handler that **throws** produces no document and therefore no decision: the generated
 wrapper writes to stderr, nothing to stdout, and exits `1`, which every supported host documents as

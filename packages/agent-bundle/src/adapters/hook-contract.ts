@@ -307,6 +307,22 @@ export const createNativeEventStarter = (
         team_name: 'lifecycle-replay-team',
         teammate_name: 'lifecycle-replay-teammate',
       });
+    case 'model-switch/before':
+    case 'model-switch/after':
+      // hooks reference "PreModelSwitch input" / "PostModelSwitch input": the
+      // documented example for `/model opus` from a Sonnet session.
+      return deepFreeze({
+        ...base,
+        cache_ttl: '5m',
+        context_tokens: 0,
+        estimated_cache_write_usd: 0,
+        from_model: 'claude-sonnet-5',
+        pricing: 'catalog',
+        prompt_cache_warm: false,
+        requested_model: 'opus',
+        source: 'command',
+        to_model: 'claude-opus-5',
+      });
     case 'workspace/open':
       return deepFreeze(target === 'cursor'
         ? {
