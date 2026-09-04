@@ -147,3 +147,16 @@ export const runWithPlatform = <A, E>(
   Effect.provide(effect, platformLayer).pipe(Effect.mapError(unwrapPlatformError)),
   options,
 );
+
+/**
+ * The Promise edge a service runs its platform programs through: either
+ * `runWithPlatform` (one layer per call — the default for library callers)
+ * or a long-lived runtime's edge (`src/dev/platform-runtime.ts`, the dev
+ * server). Same failure contract either way: `PlatformError` unwrapped to
+ * its Node cause. A type only: this module is bundled into the emitted
+ * installer, and the runtime-backed edge must not ride along.
+ */
+export type PlatformRun = <A, E>(
+  effect: Effect.Effect<A, E, PlatformServices>,
+  options?: RunPromiseOptions,
+) => Promise<A>;

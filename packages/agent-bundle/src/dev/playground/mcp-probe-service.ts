@@ -8,9 +8,11 @@ import {
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { performance } from 'node:perf_hooks';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+
+import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type {
@@ -24,6 +26,9 @@ import type {
 } from '../../contracts/mcp-probe.ts';
 import { redactCredentialText } from '../../core/credentials.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { resolveBundleRoot } from '../../install/doctor.ts';
 import {
   readTargetMcpServer,
@@ -126,6 +131,8 @@ export interface McpProbeServiceOptions {
   readonly prepared: () => Readonly<{ readonly bundleSource: string }> | undefined;
   readonly projectRoot: string;
   readonly registry?: TargetRegistry;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly timeoutMs?: number;
   /** Testing seam for every probe delay; production keeps Node timers. */
   readonly timers?: McpProbeTimers;
@@ -313,12 +320,22 @@ const positiveTimeout = (value: number): number => {
 };
 
 /**
+ * Teardown-owned removal. Stays on `node:fs`: `FileSystem.remove` has no
+ * `maxRetries` / `retryDelay`, and a transport that is still releasing its
+ * process needs them.
+ */
+const removePluginData = (pluginData: string): Promise<void> =>
+  rm(pluginData, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 });
+
+/** Plain removal for the paths where nothing was launched, so nothing can hold the directory. */
+const removeUnusedPluginData = (run: PlatformRun, pluginData: string): Promise<void> =>
+  run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(pluginData, { force: true, recursive: true })));
+
+/**
  * Invoke a close callback so that both a synchronous throw and a rejection
  * become one settled promise; teardown chains must never depend on a close
  * being well behaved.
  */
-const removePluginData = (pluginData: string): Promise<void> =>
-  rm(pluginData, { force: true, maxRetries: 3, recursive: true, retryDelay: 50 });
 
 const settledClose = (close: () => Promise<void>): Promise<void> => {
   try {
@@ -342,6 +359,7 @@ export class McpProbeService {
   readonly #projectRoot: string;
   readonly #registry: TargetRegistry;
   readonly #removePluginData: (pluginData: string) => Promise<void>;
+  readonly #runPlatform: PlatformRun;
   readonly #timeoutMs: number;
   readonly #timers: McpProbeTimers;
 
@@ -352,8 +370,14 @@ export class McpProbeService {
         { name: 'agent-bundle', version: '0.1.0' },
         { capabilities: {} },
       ));
+    this.#runPlatform = platformRunOf(options.platformRuntime);
+    // Ownership of the directory passes to the transport teardown, so this is
+    // a plain `makeTempDirectory`, not a `withTempDirectory` bracket.
     this.#createPluginData = options.createPluginData ??
-      (() => mkdtemp(resolve(tmpdir(), 'agent-bundle-mcp-probe-')));
+      (() => this.#runPlatform(Effect.flatMap(
+        FileSystem.FileSystem,
+        (fs) => fs.makeTempDirectory({ directory: tmpdir(), prefix: 'agent-bundle-mcp-probe-' }),
+      )));
     this.#createStdioTransport = options.createStdioTransport ??
       ((stdioOptions) => new StdioClientTransport(stdioOptions));
     this.#createStreamableHttpTransport = options.createStreamableHttpTransport ??
@@ -444,7 +468,7 @@ export class McpProbeService {
       );
     } catch (error) {
       // No transport was opened, so nothing can still hold the directory.
-      await rm(pluginData, { force: true, recursive: true });
+      await removeUnusedPluginData(this.#runPlatform, pluginData);
       throw error;
     }
     // From here on the transport teardown owns plugin-data removal (#execute):
@@ -541,7 +565,7 @@ export class McpProbeService {
     serverName: string,
   ) {
     const document = parseJsonWithoutDuplicateKeys(
-      await readFile(resolve(bundleRoot, runtime.manifestPath), 'utf8'),
+      await this.#runPlatform(readFileString(resolve(bundleRoot, runtime.manifestPath))),
     );
     const result = readTargetMcpServer(runtime, document, serverName);
     if (result.status === 'missing') {
@@ -572,7 +596,7 @@ export class McpProbeService {
       transport = this.#transport(options.launch);
     } catch (error) {
       // Nothing was launched, so the directory cannot be in use.
-      await rm(options.pluginData, { force: true, recursive: true });
+      await removeUnusedPluginData(this.#runPlatform, options.pluginData);
       throw error;
     }
     // One close promise per probe: a timeout starts the transport's TERM/KILL
