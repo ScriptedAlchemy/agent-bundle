@@ -4,10 +4,12 @@
 import { pluginReact } from '@rsbuild/plugin-react';
 import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
 import { readFile, realpath } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
+import { exists, isInsideOrEqual } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -318,6 +320,45 @@ const readManifest = async (packageRoot: string): Promise<Record<string, unknown
 const isBeneathNodeModules = (path: string): boolean => path.split(sep).includes('node_modules');
 
 /**
+ * The manifest of dependency `name` as Node resolves it from `packageRoot`,
+ * which honours hoisting: npm, Yarn, and pnpm with a hoist pattern place a
+ * workspace dependency in an ancestor `node_modules`, where Rspack finds it
+ * too. A package whose `exports` map hides `package.json` makes that lookup
+ * throw, so the same ancestor walk is then performed by hand.
+ */
+const dependencyManifestPath = async (packageRoot: string, name: string): Promise<string | undefined> => {
+  try {
+    return createRequire(join(packageRoot, 'package.json')).resolve(`${name}/package.json`);
+  } catch (error) {
+    if (isErrno(error, 'MODULE_NOT_FOUND')) return undefined;
+    if (!isErrno(error, 'ERR_PACKAGE_PATH_NOT_EXPORTED')) throw error;
+  }
+  let directory = packageRoot;
+  while (true) {
+    const candidate = join(directory, 'node_modules', ...name.split('/'), 'package.json');
+    if (await exists(candidate)) return candidate;
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+};
+
+/**
+ * The project root as Rspack records it, so a dependency link back onto the
+ * project compares equal. A directory that does not exist has no manifest and
+ * therefore no dependency roots; it is kept as given rather than failing here.
+ */
+const canonicalProjectRoot = async (cwd: string): Promise<string> => {
+  const root = resolve(cwd);
+  try {
+    return await realpath(root);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return root;
+    throw error;
+  }
+};
+
+/**
  * Real roots of the project's declared dependencies, followed transitively
  * through each linked dependency's own runtime dependencies. Provenance already
  * discards modules beneath a `node_modules` directory, but pnpm links workspace
@@ -326,9 +367,12 @@ const isBeneathNodeModules = (path: string): boolean => path.split(sep).includes
  * `packages/rsc-runtime` must be excluded by root, and so must the workspace
  * packages *it* depends on (`rsc-markdown-stream`), which the project never
  * declares itself. Registry packages resolve beneath `node_modules`, so their
- * trees are never walked.
+ * trees are never walked. The project itself is never a root: a dependency
+ * cycle back onto it (A → B → A) must not turn every authored module into an
+ * ignored one.
  */
 const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
+  const projectRoot = await canonicalProjectRoot(cwd);
   const roots = new Set<string>();
   const visited = new Set<string>();
   const visit = async (packageRoot: string, fields: readonly string[]): Promise<void> => {
@@ -337,18 +381,15 @@ const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> 
     const manifest = await readManifest(packageRoot);
     if (manifest === undefined) return;
     await Promise.all(declaredDependencyNames(manifest, fields).map(async (name) => {
-      let root: string;
-      try {
-        root = await realpath(resolve(packageRoot, 'node_modules', ...name.split('/')));
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) return;
-        throw error;
-      }
+      const manifestPath = await dependencyManifestPath(packageRoot, name);
+      if (manifestPath === undefined) return;
+      const root = await realpath(dirname(manifestPath));
+      if (isInsideOrEqual(projectRoot, root)) return;
       roots.add(root);
       if (!isBeneathNodeModules(root)) await visit(root, runtimeDependencyFields);
     }));
   };
-  await visit(resolve(cwd), projectDependencyFields);
+  await visit(projectRoot, projectDependencyFields);
   return Object.freeze([...roots].sort((left, right) => left.localeCompare(right)));
 };
 

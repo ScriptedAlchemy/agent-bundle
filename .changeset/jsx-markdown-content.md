@@ -12,5 +12,8 @@ hand-concatenated strings. The renderer behind them, `rsc-markdown-stream`, is
 now a package of this repository and is published from it (it was previously
 only installable from its git URL), so `@agent-bundle/runtime` depends on it
 by version. `agent-bundle build` now follows symlinked (workspace) dependencies
-transitively when attributing bundle provenance, so a project whose linked
-dependency links another package no longer fails with `AB5000`. (#344)
+transitively when attributing bundle provenance, resolving each one the way
+Node does, so a project whose linked dependency links another package —
+including one hoisted to an ancestor `node_modules` — no longer fails with
+`AB5000`, and a dependency that links back onto the project never hides the
+project's own sources from provenance. (#344)
