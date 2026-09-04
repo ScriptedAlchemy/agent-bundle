@@ -265,6 +265,11 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       // Namespace-qualified factory, computed argument.
       await writeFile(consumer, 'import * as Module from "node:module";\nconst load = Module.createRequire(import.meta.url);\nexport const any = (name) => load(name);\n');
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      // Factory chained off a CommonJS load, literal argument.
+      await writeFile(consumer, 'const load = require("node:module").createRequire(__filename);\nmodule.exports = load("driver-package");\n');
+      const [chained] = withCode(await diagnostics(pack), 'AB7014');
+      expect(chained?.message).toContain('"never-loaded"');
+      expect(chained?.message).not.toContain('"driver-package"');
     } finally {
       await rm(consumer, { force: true });
     }
@@ -291,9 +296,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm parses these two only to fail, so optional or not, the consumer's install dies.
+      // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
+      'url-optional': 'http:%zz',
     };
   },
   async () => {
@@ -301,7 +307,7 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the

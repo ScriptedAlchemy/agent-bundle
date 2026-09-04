@@ -73,6 +73,7 @@ it.each([
   ['npm:', false],
   ['file:', false],
   ['github:', false],
+  ['http:%zz', false],
 ])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
   expect(isRegistrySpecifier(specifier)).toBe(registry);
 });
@@ -98,6 +99,9 @@ it.each([
   ['npm:', false],
   ['npm:name@', true],
   ['file:', false],
+  ['http:%zz', false],
+  ['https://', false],
+  ['github:', false],
 ])('isNpmParseable(%j) is %s', (specifier, parseable) => {
   expect(isNpmParseable(specifier)).toBe(parseable);
 });

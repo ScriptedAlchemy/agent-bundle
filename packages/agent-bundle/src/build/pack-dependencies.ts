@@ -125,14 +125,19 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
 
 /**
  * The specifier schemes npm can parse at all, each needing something after
- * the colon (`file:` alone names nothing). Anything else with a scheme —
+ * the colon (`file:` alone names nothing) and the URL forms a valid URL. Anything else with a scheme —
  * `workspace:`, `catalog:`, `link:`, `portal:`, or a typo — fails every
  * consumer with `EUNSUPPORTEDPROTOCOL` before npm fetches anything, even for
  * a peer it would never install. `npm:` is parsed as an alias and must name a
  * package (`npm:` alone is "aliases must have a name").
  */
-const npmScheme = /^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file):\S/iu;
+const hostedShorthand = /^(?:github|gitlab|bitbucket|gist):\S/iu;
+const urlScheme = /^(?:git(?:\+[a-z]+)?|https?|file):\S/iu;
 const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
+
+/** A known scheme npm parses: a hosted shorthand with a remainder, or a URL form that is a valid URL (`http:%zz` is not). */
+const parseableScheme = (specifier: string): boolean =>
+  hostedShorthand.test(specifier) || (urlScheme.test(specifier) && URL.canParse(specifier));
 const windowsDrivePath = /^[a-z]:[\\/]/iu;
 
 /**
@@ -186,7 +191,7 @@ export const isNpmParseable = (specifier: string): boolean => {
     return target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target));
   }
   if (/^npm:/iu.test(trimmed)) return false;
-  if (anyScheme.test(trimmed)) return npmScheme.test(trimmed) || windowsDrivePath.test(trimmed);
+  if (anyScheme.test(trimmed)) return parseableScheme(trimmed) || windowsDrivePath.test(trimmed);
   return nonRegistrySpecifier.test(trimmed) || isRegistrySelector(trimmed);
 };
 
@@ -252,12 +257,13 @@ const factoryNames = (source: string): readonly string[] => [
 ];
 
 /**
- * `const load = <factory>(…)`, the factory bare or namespace-qualified
- * (`Module.createRequire(…)` after `import * as Module from "node:module"`):
+ * `const load = <factory>(…)`, the factory bare, namespace-qualified
+ * (`Module.createRequire(…)` after `import * as Module from "node:module"`),
+ * or chained off a CommonJS load (`require("node:module").createRequire(…)`):
  * the binding is a loader, called like `require` from then on.
  */
 const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
+  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:(?:[A-Za-z_$][\w$]*|\brequire\s*[(][^)]*[)])\s*\.\s*)?(?:${factories.join('|')})\s*[(]`,
   'gu',
 );
 
