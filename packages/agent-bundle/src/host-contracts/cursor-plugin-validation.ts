@@ -408,8 +408,12 @@ interface ReadDocumentsResult {
   readonly documents: readonly ParsedDocument[];
 }
 
-/** The pinned-schema document lane; `validateCursorPluginFiles` runs it through `runWithPlatform`. */
-export const readCursorPluginDocuments = Effect.fnUntraced(function* (
+/**
+ * The pinned-schema document lane; `validateCursorPluginFiles` runs it through
+ * `runWithPlatform`. Not exported: an Effect-typed export would put `effect`
+ * on the public declaration graph (`public-api.test.ts`).
+ */
+const readCursorPluginDocuments = Effect.fnUntraced(function* (
   pluginDirectory: string,
   target: string,
 ): Effect.fn.Return<ReadDocumentsResult, never, FileSystem.FileSystem> {

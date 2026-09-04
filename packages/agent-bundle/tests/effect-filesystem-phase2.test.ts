@@ -13,7 +13,7 @@ import { createTemporaryCodexTrialHome, removeTemporaryCodexTrialHome } from '..
 import { materializeEvalFixture, planEvalFixture } from '../src/eval/fixtures.ts';
 import { copyOpaqueCodexAuthStateProgram } from '../src/host-contracts/native-codex-contract.ts';
 import { validatePortablePluginFiles } from '../src/host-contracts/portable-plugin-validation.ts';
-import { forwardingSignals } from '../src/services/mcp-run.ts';
+import { forwardingSignals } from '../src/services/mcp-run-signals.ts';
 
 /**
  * Phase-2 FileSystem adoption: the ordinary reads, copies, and temp

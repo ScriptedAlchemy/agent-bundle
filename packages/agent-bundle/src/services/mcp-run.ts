@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
-import { Effect, FileSystem, type Scope } from 'effect';
+import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
@@ -15,6 +15,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
+import { forwardingSignals } from './mcp-run-signals.ts';
 import {
   readTargetMcpServer,
   type ModernMcpStdioServer,
@@ -208,26 +209,6 @@ const loadLaunchFileEnv = async (
  * `.env` file layer, then the operator's real `process.env` — an exported
  * variable always beats every file- or manifest-declared value.
  */
-/**
- * SIGINT/SIGTERM forwarding to the child for as long as the wait runs. A
- * scoped resource: the listeners come off when the scope closes, however
- * the wait ends — the `try`/`finally` this replaces.
- */
-export const forwardingSignals = (child: ChildProcess): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const onSigint = (): void => { child.kill('SIGINT'); };
-      const onSigterm = (): void => { child.kill('SIGTERM'); };
-      process.on('SIGINT', onSigint);
-      process.on('SIGTERM', onSigterm);
-      return { onSigint, onSigterm };
-    }),
-    (listeners) => Effect.sync(() => {
-      process.off('SIGINT', listeners.onSigint);
-      process.off('SIGTERM', listeners.onSigterm);
-    }),
-  ).pipe(Effect.asVoid);
-
 /** The child's exit code, or 128 + signal number for the two forwarded signals. */
 const childExitCode = (child: ChildProcess): Promise<number> => new Promise<number>((resolveExit, rejectExit) => {
   child.once('error', rejectExit);

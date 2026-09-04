@@ -369,9 +369,11 @@ const skillDiagnostics = Effect.fnUntraced(function* (
 
 /**
  * The document, server, and skill lanes as one `FileSystem` program;
- * `validatePortablePluginFiles` runs it beside the raw symlink lane.
+ * `validatePortablePluginFiles` runs it beside the raw symlink lane. Not
+ * exported: an Effect-typed export would put `effect` on the public
+ * declaration graph (`public-api.test.ts`).
  */
-export const portablePluginByteDiagnostics = Effect.fnUntraced(function* (
+const portablePluginByteDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   target: string,
   overrides: Readonly<Partial<Record<DocumentPath, string>>>,

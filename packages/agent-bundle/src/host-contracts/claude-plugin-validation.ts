@@ -206,9 +206,11 @@ const readJsonDocument = (
 /**
  * The local document lane as a `FileSystem` program. The wildcard listing
  * (`matchingDocumentPaths`) stays on `node:fs` because it keys on `Dirent`
- * symlink types, which the pinned `FileSystem` cannot report.
+ * symlink types, which the pinned `FileSystem` cannot report. Not exported:
+ * an Effect-typed export would put `effect` on the public declaration graph
+ * (`public-api.test.ts`).
  */
-export const validateClaudePluginFilesProgram = Effect.fnUntraced(function* (
+const validateClaudePluginFilesProgram = Effect.fnUntraced(function* (
   options: ValidateClaudePluginFilesOptions,
 ): Effect.fn.Return<readonly Diagnostic[], never, FileSystem.FileSystem> {
   const pluginDirectory = resolve(options.pluginDirectory);
