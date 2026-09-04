@@ -3,6 +3,7 @@ import type {
   AgentActorIdentity,
   AgentHostIdentity,
   AgentInvocation,
+  AgentLineage,
   AgentSessionIdentity,
   AgentWorkspaceIdentity,
   Observed,
@@ -33,10 +34,21 @@ export type AgentNoticeState = (typeof AGENT_NOTICE_STATES)[number];
 
 export type AgentNoticePriority = 'low' | 'normal' | 'high';
 
-/** A recipient is the conjunction of the observed identity axes it specifies. */
+/**
+ * A recipient is the conjunction of the observed identity axes it specifies:
+ * every axis present must match the admitting request, and an axis the
+ * request cannot observe never matches. `conversation` and `root` are read
+ * from the request's `lineage` (#host-lineage), so they address one agent
+ * thread — or every thread under one root — where `session` cannot: on
+ * Claude and Codex every subagent's hooks carry the root `session_id`.
+ */
 export interface AgentRecipient {
   readonly actor?: AgentActorIdentity;
+  /** Matches when `request.lineage.conversation` is exactly this id: one agent thread. */
+  readonly conversation?: string;
   readonly host?: AgentHostIdentity;
+  /** Matches when `request.lineage.root` is this id: the root conversation and every subagent under it. */
+  readonly root?: string;
   readonly session?: AgentSessionIdentity;
   readonly workspace?: AgentWorkspaceIdentity;
 }
@@ -44,6 +56,30 @@ export interface AgentRecipient {
 export interface AgentNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /**
+   * The request's place in the conversation tree. Optional so a principal
+   * built before the axis existed (a four-axis `openRequest()` or
+   * `subscribe()` caller) keeps working: absent is unavailable, and
+   * unavailable lineage matches no `conversation`/`root` recipient.
+   */
+  readonly lineage?: Observed<AgentLineage>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** The lineage facts recipient matching reads: the request's own conversation and its root. */
+export type AgentNoticeLineageScope = Pick<AgentLineage, 'conversation' | 'root'>;
+
+/**
+ * The principal as the ledger journals it on an admission: the identity axes
+ * plus only the lineage scope, so a journaled admission never depends on the
+ * rest of the lineage shape. `lineage` is absent on admissions journaled
+ * before the axis existed and is treated as unavailable.
+ */
+export interface AgentNoticeRecordedPrincipal {
+  readonly actor: Observed<AgentActorIdentity>;
+  readonly host: Observed<AgentHostIdentity>;
+  readonly lineage?: Observed<AgentNoticeLineageScope>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }

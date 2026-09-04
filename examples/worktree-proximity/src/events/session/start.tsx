@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withNotices, withTopology } from '../../coordination.js';
-import { deliveryContexts, nativeString, requestLineage } from '../../event-support.js';
+import { ROOT_ACTOR_PREFIX, deliveryContexts, nativeString, requestLineage } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -40,7 +40,7 @@ export default async function SessionStart({
     );
   }
 
-  const actorId = `session:${root.id}`;
+  const actorId = `${ROOT_ACTOR_PREFIX}${root.id}`;
   const topologyResult = await withTopology(async (topology) => {
     await topology.dispatch('actorObserved', {
       id: actorId,

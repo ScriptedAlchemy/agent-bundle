@@ -244,10 +244,22 @@ workspace-durable SQLite driver and passes the resulting ledger as
 subpath and ship no state or notice implementation.
 
 Inside an authorized request, `(await agent()).notices` is a request-bound
-handle with `publish()`, `read()`, `inbox()`, and `acknowledge()`. Recipients
-use only observed host/session/actor/workspace axes. Publish authorization
-runs before persistence, and delivery authorization runs again when a
-matching event is admitted. `read()` exposes notices selected for that event
+handle with `publish()`, `read()`, `inbox()`, and `acknowledge()`. A
+recipient is the conjunction of the observed axes it names — `actor`, `host`,
+`session`, `workspace`, plus the two lineage axes read from the admitting
+request's `lineage`: `conversation` (exactly one agent thread,
+`request.lineage.conversation`) and `root` (the root conversation and every
+subagent under it, `request.lineage.root`). Every named axis must match, and
+an axis the request cannot observe — including lineage the runtime could not
+resolve, or a principal built without the optional `lineage` at all —
+matches nothing, so a `conversation`-addressed notice is never
+admitted on a sibling's event even though Claude and Codex give every
+subagent the root `session_id`. Admissions journal the principal's lineage as
+just `{ conversation, root }`; both recipient fields and that scope are
+additive optional schema fields (no definition version bump), and an
+admission journaled before them matches exactly what it matched then. Publish
+authorization runs before persistence, and delivery authorization runs again
+when a matching event is admitted. `read()` exposes notices selected for that event
 while the ledger records a receipt containing the invocation id and state
 `attempted`. `acknowledge()` is recipient-matched and authorization-gated and
 produces the terminal `acknowledged` state — the strongest evidenced outcome.

@@ -158,7 +158,10 @@ directory. The npm package's routed CLI bin and rendered scripts use
 (`<target>/bin/<name>.mjs`) derives the artifact root from the parent of its
 own `bin/` directory instead, like the MCP worker. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
-enforced by the ledger, while application authorization policy is deferred.
+enforced by the ledger — every generated scope mounts the request's `lineage`
+on the notice principal, so `recipient.conversation` / `recipient.root` are
+matched against `request.lineage` on every surface — while application
+authorization policy is deferred.
 
 Each cross-request notice route is selected from the target host's pinned
 `noticeDelivery` table, exposed as `TargetAdapter.noticeDelivery` /

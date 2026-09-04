@@ -149,6 +149,9 @@ const bindActors = async (): Promise<void> => {
   );
 };
 
+// Claude and Codex carry the subagent's `agent_id` on every one of its hook
+// payloads and the shared runtime resolves it as that agent's lineage
+// conversation, so a child's tool events arrive with `request.lineage` set.
 const recordIntent = (
   actorId: 'agent-a' | 'agent-b',
   root: string,
@@ -159,6 +162,7 @@ const recordIntent = (
   'event:tool/before',
   'tool/before',
   {
+    agent_id: actorId,
     cwd: root,
     hook_event_name: 'PreToolUse',
     session_id: 'root-session',
@@ -168,6 +172,30 @@ const recordIntent = (
   id,
   root,
   actorId,
+  childLineage(actorId),
+);
+
+const completeIntent = (
+  root: string,
+  path: string,
+  id: string,
+  actorId?: string,
+  lineage?: Observed<AgentLineage>,
+) => renderEvent(
+  'event:tool/after',
+  'tool/after',
+  {
+    ...(actorId === undefined ? {} : { agent_id: actorId }),
+    cwd: root,
+    hook_event_name: 'PostToolUse',
+    session_id: 'root-session',
+    tool_input: { file_path: path },
+    tool_name: 'Edit',
+  },
+  id,
+  root,
+  actorId,
+  lineage,
 );
 
 beforeEach(async () => {
@@ -219,9 +247,11 @@ describe('worktree proximity journeys', () => {
     expect(rendered.document.value).toEqual({ outcome: 'continue' });
 
     const notices = await mounted.notices();
+    // The notice names the other agent's lineage conversation, not its
+    // worktree: only that agent thread admits it (#458).
     expect(notices.notices).toEqual([
       expect.objectContaining({
-        recipient: { workspace: { root: worktrees.a } },
+        recipient: { conversation: 'agent-a' },
         state: 'pending',
       }),
     ]);
@@ -232,20 +262,7 @@ describe('worktree proximity journeys', () => {
     await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
     await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
 
-    const delivered = await renderEvent(
-      'event:tool/after',
-      'tool/after',
-      {
-        cwd: worktrees.a,
-        hook_event_name: 'PostToolUse',
-        session_id: 'root-session',
-        tool_input: { file_path: 'src/shared.ts' },
-        tool_name: 'Edit',
-      },
-      'intent:a:after',
-      worktrees.a,
-      'agent-a',
-    );
+    const delivered = await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
 
     expectDocument(delivered)
       .toHaveStatus('success')
@@ -257,6 +274,69 @@ describe('worktree proximity journeys', () => {
       attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
       state: 'attempted',
     });
+  });
+
+  it('delivers a conversation-addressed notice to one agent even when a sibling shares its worktree (#458)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
+
+    // agent-c works in agent-a's worktree: same host, session, and workspace
+    // as agent-a, so a workspace-addressed notice could not tell them apart.
+    const sibling = await completeIntent(worktrees.a, 'src/other.ts', 'intent:c:after', 'agent-c', childLineage('agent-c'));
+    expectDocument(sibling).toHaveStatus('success').toHaveNodeKinds(['result']);
+    // An event in that worktree whose lineage the runtime could not resolve
+    // is not the addressed agent either, even though the worktree binding
+    // attributes its intent to agent-a.
+    const unresolved = await completeIntent(worktrees.a, 'src/other.ts', 'intent:unresolved:after');
+    expectDocument(unresolved).toHaveStatus('success').toHaveNodeKinds(['result']);
+
+    expect((await mounted.notices()).notices).toEqual([expect.objectContaining({ attempts: [], state: 'pending' })]);
+    expect((await mounted.read()).state.actors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'agent-a', worktreeRoot: worktrees.a }),
+      expect.objectContaining({ id: 'agent-c', worktreeRoot: worktrees.a }),
+    ]));
+
+    const delivered = await completeIntent(worktrees.a, 'src/shared.ts', 'intent:a:after', 'agent-a', childLineage('agent-a'));
+    expectDocument(delivered)
+      .toHaveStatus('success')
+      .toContainContext('Directed proximity notice')
+      .toContainContext('src/shared.ts');
+    expect((await mounted.notices()).notices[0]).toMatchObject({
+      attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
+      state: 'attempted',
+    });
+  });
+
+  it('addresses a derived actor through its worktree because it has no conversation', async () => {
+    await bindActors();
+    // No agent_id and no lineage in a worktree no actor is bound to: the
+    // application falls back to the derived `worktree:<root>` actor.
+    await renderEvent(
+      'event:tool/before',
+      'tool/before',
+      {
+        cwd: '/repo/.worktrees/c',
+        hook_event_name: 'PreToolUse',
+        session_id: 'root-session',
+        tool_input: { file_path: 'src/shared.ts' },
+        tool_name: 'Edit',
+      },
+      'intent:derived',
+      '/repo/.worktrees/c',
+    );
+    const rendered = await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    expectDocument(rendered).toHaveStatus('success').toContainContext('Proximity warning');
+
+    expect((await mounted.notices()).notices).toEqual([
+      expect.objectContaining({
+        recipient: { workspace: { root: '/repo/.worktrees/c' } },
+        state: 'pending',
+      }),
+    ]);
+
+    const delivered = await completeIntent('/repo/.worktrees/c', 'src/shared.ts', 'intent:derived:after');
+    expectDocument(delivered).toContainContext('Directed proximity notice');
   });
 
   it('deduplicates a repeated native intent envelope (journey 7)', async () => {
