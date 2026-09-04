@@ -44,17 +44,22 @@ export const discoveryProbeStateAtom = Atom.family(
 const discoveryClientErrorCode = 'AB8234';
 
 /**
- * The atom's fail channel is always the client's typed error: a
- * `DiscoveryClientError` from the loader passes through unchanged, any other
- * rejection is wrapped with its message (or the generic text) so the page
- * renders the same code and message it did for a bare `Error`.
+ * The atom's fail channel is always the client's typed error. A
+ * `DiscoveryClientError` passes through unchanged; any other coded `Error`
+ * (for example the foreground authority's `ForegroundRouteClientError` when
+ * authentication was invalidated) keeps its own `code`, `message`, and numeric
+ * `status`; an uncoded rejection gets the decoder code and its message — the
+ * same code/message pair `errorDetails` on the page derived from a bare
+ * `Error`.
  */
 const toDiscoveryClientError = (error: unknown): DiscoveryClientError => {
   if (error instanceof DiscoveryClientError) return error;
-  return new DiscoveryClientError(
-    discoveryClientErrorCode,
-    error instanceof Error ? error.message : 'Host discovery request could not be completed.',
-  );
+  if (!(error instanceof Error)) {
+    return new DiscoveryClientError(discoveryClientErrorCode, 'Host discovery request could not be completed.');
+  }
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : discoveryClientErrorCode;
+  const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+  return new DiscoveryClientError(code, error.message, status);
 };
 
 export const discoveryReportAtom = Atom.family((refreshKey: number) => Atom.make(

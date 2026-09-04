@@ -4,8 +4,10 @@ import { AsyncResult, AtomRegistry, type Atom } from 'effect/unstable/reactivity
 
 import { DiscoveryClientError, type HostDiscoveryReport } from '../src/discovery/discovery-client.ts';
 import { discoveryLoaderAtom, discoveryReportAtom } from '../src/discovery/discovery-atoms.ts';
+import { ForegroundRouteClientError } from '../src/mcp/mcp-route-client.ts';
 import { AgentDocumentClientError } from '../src/runtime/agent-document-client.ts';
 import { agentDocumentEventsAtom, agentDocumentLoaderAtom } from '../src/runtime/agent-document-atoms.ts';
+import { RuntimeClientError } from '../src/runtime-client.ts';
 
 const settled = <A, E>(
   registry: AtomRegistry.AtomRegistry,
@@ -68,6 +70,27 @@ describe('Workbench atom error channels', () => {
         name: 'AgentDocumentClientError',
       });
 
+      // The production loader (`RuntimeClient.readRunDocument`) rethrows the
+      // route diagnostic as a RuntimeClientError; its code must survive.
+      registry.set(agentDocumentLoaderAtom, async () => {
+        throw new RuntimeClientError({ code: 'AB8208', message: 'Stored Flight could not be decoded.', phase: 'flight-decode' });
+      });
+      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-3-runtime')))).toMatchObject({
+        code: 'AB8208',
+        message: 'Stored Flight could not be decoded.',
+        name: 'AgentDocumentClientError',
+        status: undefined,
+      });
+      registry.set(agentDocumentLoaderAtom, async () => {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+      });
+      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-3-foreground')))).toMatchObject({
+        code: 'AB8019',
+        message: 'Foreground authentication was invalidated.',
+        name: 'AgentDocumentClientError',
+        status: 401,
+      });
+
       registry.set(agentDocumentLoaderAtom, async () => { throw 'opaque'; });
       expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-4')))).toMatchObject({
         code: 'AB8206',
@@ -103,6 +126,18 @@ describe('Workbench atom error channels', () => {
         code: 'AB8234',
         message: 'Failed to fetch',
         name: 'DiscoveryClientError',
+      });
+
+      // A foreground authentication failure surfaces before any discovery
+      // response; its own diagnostic code must not be relabelled as AB8234.
+      registry.set(discoveryLoaderAtom, async () => {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
+      });
+      expect(failureOf(await settled(registry, discoveryReportAtom(20)))).toMatchObject({
+        code: 'AB8019',
+        message: 'Foreground authentication was invalidated.',
+        name: 'DiscoveryClientError',
+        status: 401,
       });
 
       registry.set(discoveryLoaderAtom, async () => { throw 'opaque'; });

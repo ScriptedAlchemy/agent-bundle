@@ -15,17 +15,22 @@ type AgentDocumentLoader = (runId: string, signal?: AbortSignal) => Promise<read
 const runtimeClientErrorCode = 'AB8206';
 
 /**
- * The atom's fail channel is always the client's typed error: a
- * `AgentDocumentClientError` from the loader passes through unchanged, any
- * other rejection is wrapped with its message so the panel renders the same
- * text it did when the channel carried bare strings.
+ * The atom's fail channel is always the client's typed error. An
+ * `AgentDocumentClientError` passes through unchanged; any other coded
+ * `Error` (the production loader rethrows `RuntimeClientError`, and the
+ * foreground authority raises `ForegroundRouteClientError`) keeps its own
+ * `code`, `message`, and numeric `status`; an uncoded rejection gets the
+ * runtime client code and its message, so the panel renders the same text it
+ * did when the channel carried bare strings.
  */
 const toAgentDocumentClientError = (error: unknown): AgentDocumentClientError => {
   if (error instanceof AgentDocumentClientError) return error;
-  return new AgentDocumentClientError(
-    runtimeClientErrorCode,
-    error instanceof Error ? error.message : 'Agent Document request could not be completed.',
-  );
+  if (!(error instanceof Error)) {
+    return new AgentDocumentClientError(runtimeClientErrorCode, 'Agent Document request could not be completed.');
+  }
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : runtimeClientErrorCode;
+  const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+  return new AgentDocumentClientError(code, error.message, status);
 };
 
 export const agentDocumentLoaderAtom = Atom.make<AgentDocumentLoader | undefined>(undefined);
