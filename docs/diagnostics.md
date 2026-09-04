@@ -913,7 +913,11 @@ remnant receipt alone does not make a directory "state-only": when `uninstall`
 also retained unowned entries beside (or instead of) `state/`, both the
 inventory finding and the `--from` bundle finding read the directory and the
 `AB7307` message names those retained entries and points at removing them by
-hand, since `uninstall` never will.
+hand, since `uninstall` never will. Preserved state is only what `uninstall`
+would still keep — a `state/` that holds something, and this home's real,
+non-empty `PLUGIN_DATA` directory — so a remnant whose data has since been
+removed or emptied is reported as exhausted, with the default `uninstall` that
+consumes it as the recovery.
 
 ## Managed uninstall (`AB7007`–`AB7009`)
 
@@ -1014,9 +1018,12 @@ root, the remnant receipt written there stays in place (`receipt.status:
 no-op for as long as that preserved data — or an unowned entry the uninstall
 retained — is still there; `--purge-data --confirm-purge` removes the
 preserved state and prunes the root. Once the preserved data has been removed
-or emptied by hand, the remnant guards nothing, and the next run — with or
-without `--purge-data` — consumes it: the receipt, the empty plugin root, and
-the host and `plugin-data` directories it recorded.
+or emptied by hand (an empty `state/` or `PLUGIN_DATA` directory holds no
+data, so it is pruned like an installer-created directory rather than kept),
+the remnant guards nothing, and the next run — with or without `--purge-data`
+— consumes it: the receipt, the empty plugin root, and the host and
+`plugin-data` directories it recorded. Doctor reports such a remnant as
+exhausted (`AB7307`) instead of claiming preserved state that is gone.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |

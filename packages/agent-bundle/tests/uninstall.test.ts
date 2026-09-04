@@ -288,6 +288,23 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(consumed.remnantReceipt).toBeUndefined();
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
 
+    // A state/ directory emptied by hand (the directory itself left behind) is not durable state either: the remnant
+    // is exhausted, the empty state/ is pruned with the root, and the home is byte-identical again.
+    await installBundle(options);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    expect((await uninstallBundle(options)).remnantReceipt).toBe(join(destination, installReceiptFile));
+    await rm(join(destination, 'state', 'plugin.sqlite'));
+    const emptiedState = await uninstallBundle(options);
+    expect(emptiedState).toMatchObject({
+      data: { detail: expect.stringContaining('state/ under the installed plugin root is empty and is pruned'), outcome: 'absent' },
+      receipt: { status: 'consumed' },
+      state: 'uninstalled',
+    });
+    expect(emptiedState.removed.directories).toEqual([join(destination, 'state'), destination, join(cursorRoot, 'plugins', 'local'), join(cursorRoot, 'plugins')]);
+    expect(emptiedState.remnantReceipt).toBeUndefined();
+    expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
+
     // A receipt recording a PLUGIN_DATA expansion (written by the emitted install.mjs for an Agent Plugins pack):
     // the directory is receipt-owned durable state outside the plugin root. Written → kept behind a remnant that
     // carries the expansion (the root survives to own it), purged only when confirmed; empty → pruned with its

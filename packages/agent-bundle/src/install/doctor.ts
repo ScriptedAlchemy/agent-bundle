@@ -554,28 +554,44 @@ const preservedPluginData = async (pluginRoot: string, receipt: InstallReceipt |
 /**
  * AB7307 for a Cursor directory that holds no plugin but was left by `uninstall --keep-data`.
  * A remnant receipt (owning no files) may also guard unowned entries the uninstall retained, so
- * the message reports those extras instead of calling the directory state-only; `stateOnly`
- * short-circuits the readdir when the caller already proved the directory holds only `state/`.
+ * the message reports those extras instead of calling the directory state-only.
  */
-const remnantDiagnostic = async (subject: string, path: string, stateOnly: boolean, receipt: InstallReceipt | undefined): Promise<Diagnostic> => {
-  const entries = stateOnly ? [] : (await readdir(path)).filter((name) => name !== installReceiptFile);
-  const extras = entries.filter((name) => !isPreservedRuntimeRoot(name)).sort((left, right) => left.localeCompare(right));
+const remnantDiagnostic = async (subject: string, path: string, receipt: InstallReceipt | undefined): Promise<Diagnostic> => {
+  const allEntries = (await readdir(path)).filter((name) => name !== installReceiptFile);
+  const extras = allEntries.filter((name) => !isPreservedRuntimeRoot(name)).sort((left, right) => left.localeCompare(right));
+  // Preserved state is what `uninstall` would still keep: a state/ that holds something (an emptied one is pruned on
+  // the next run, like the remnant itself) and this home's real, non-empty PLUGIN_DATA directory. Nothing is
+  // assumed: a remnant whose preserved data has since gone is reported as exactly that.
+  const stateRoots = allEntries.filter(isPreservedRuntimeRoot);
+  let stateHeld = false;
+  for (const name of stateRoots) {
+    try {
+      if ((await readdir(join(path, name))).length > 0) stateHeld = true;
+    } catch {
+      stateHeld = true;
+    }
+  }
   const pluginData = await preservedPluginData(path, receipt);
   const preserved = [
-    ...(stateOnly || entries.some(isPreservedRuntimeRoot) ? ['state/'] : []),
+    ...(stateHeld ? ['state/'] : []),
     ...(pluginData === undefined ? [] : [`the PLUGIN_DATA directory ${pluginData}`]),
   ];
-  const preservedText = preserved.length === 0 ? 'state/' : preserved.join(' and ');
+  const preservedText = preserved.join(' and ');
   return diagnostic(
     'AB7307',
     extras.length === 0
-      ? `${subject} holds only preserved runtime state (${preservedText}) from an earlier \`uninstall --keep-data\`; ` +
-        'no plugin is installed there.'
+      ? preserved.length === 0
+        ? `${subject} holds only the remnant receipt of an earlier \`uninstall --keep-data\` whose preserved runtime state has since ` +
+          'been removed; no plugin is installed there.'
+        : `${subject} holds only preserved runtime state (${preservedText}) from an earlier \`uninstall --keep-data\`; ` +
+          'no plugin is installed there.'
       : `${subject} holds no plugin: an earlier \`uninstall\` retained the unowned ` +
         `${extras.length === 1 ? 'entry' : 'entries'} ${extras.map((name) => JSON.stringify(name)).join(', ')}` +
         `${preserved.length === 0 ? '' : ` beside preserved runtime state (${preservedText})`}.`,
     extras.length === 0
-      ? 'Reinstall the plugin to use the preserved state, or run `agent-bundle uninstall cursor --purge-data --confirm-purge` to remove it.'
+      ? preserved.length === 0
+        ? 'Run `agent-bundle uninstall cursor` (or the bundle\'s `install.mjs --uninstall`) to consume the remnant, or reinstall the plugin.'
+        : 'Reinstall the plugin to use the preserved state, or run `agent-bundle uninstall cursor --purge-data --confirm-purge` to remove it.'
       : 'Reinstall the plugin, or move the retained entries out and remove the directory by hand; `uninstall` never removes unowned entries.',
     'info',
     'cursor',
@@ -944,7 +960,7 @@ const cursorInventory = async (
       if (remnant) {
         const durableState = await inspectDurableState(path, 'cursor');
         if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
-        diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, stateOnly, remnantReceipt));
+        diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, remnantReceipt));
         findings.push({
           ...(durableState === undefined ? {} : { durableState }),
           entry,
@@ -1841,7 +1857,6 @@ const cursorBundle = async (
         diagnostics: freezeDiagnostics([await remnantDiagnostic(
           `Cursor destination ${destination} (${identity.name}@${identity.version})`,
           destination,
-          stateOnly,
           comparison.receipt,
         )]),
         finding: Object.freeze({

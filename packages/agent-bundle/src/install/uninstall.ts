@@ -436,6 +436,8 @@ const realPluginDataDirectory = async (cursorRoot: string, pluginData: string): 
 interface CursorLocalData {
   /** Installer-created `PLUGIN_DATA` directory that nothing wrote to: pruned like a created host directory, never "data". */
   readonly emptyPluginData?: string;
+  /** A `state/` directory holding nothing: not durable state, so it is pruned rather than kept alive as a remnant. */
+  readonly emptyState?: string;
   /** Whether any durable state (state/ or a written PLUGIN_DATA) exists. */
   readonly present: boolean;
   /** A written `PLUGIN_DATA` directory kept by `--keep-data`: it lives outside the plugin root, so the root must survive to carry it. */
@@ -453,9 +455,14 @@ const cursorLocalData = async (
   const stateDirectory = join(destination, 'state');
   const paths: string[] = [];
   const kinds: string[] = [];
+  let emptyState: string | undefined;
   if (await realDirectory(stateDirectory, 'cursor') !== undefined) {
-    paths.push(stateDirectory);
-    kinds.push('state/ (state kernel, notices journal)');
+    if ((await readdir(stateDirectory)).length === 0) {
+      emptyState = stateDirectory;
+    } else {
+      paths.push(stateDirectory);
+      kinds.push('state/ (state kernel, notices journal)');
+    }
   }
   // The receipt's cursorExpansion records the PLUGIN_DATA directory the installer created for this copy; only the
   // directory at this home's own plugin-data location is receipt-owned — a recorded path elsewhere is left alone.
@@ -481,9 +488,12 @@ const cursorLocalData = async (
   if (paths.length === 0) {
     return {
       ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
+      ...(emptyState === undefined ? {} : { emptyState }),
       present: false,
       report: Object.freeze({
-        detail: `No durable runtime state exists (no state/ under the installed plugin root${
+        detail: `No durable runtime state exists (${
+          emptyState === undefined ? 'no state/ under the installed plugin root' : 'state/ under the installed plugin root is empty and is pruned'
+        }${
           emptyPluginData === undefined ? '' : `; the installer-created PLUGIN_DATA directory ${emptyPluginData} is empty and is pruned`
         }).${foreignNote}`,
         outcome: 'absent',
@@ -495,6 +505,7 @@ const cursorLocalData = async (
   const retainedPluginData = policy === 'purge' ? undefined : paths.find((path) => path === expected);
   return {
     ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
+    ...(emptyState === undefined ? {} : { emptyState }),
     present: true,
     report: Object.freeze({
       detail: policy === 'purge'
@@ -573,6 +584,7 @@ const uninstallCursorLocal = async (
     // The installer created PLUGIN_DATA and its agent-bundle parents; once empty they go too — never while
     // receipts, marketplaces, or another plugin's data keep them alive.
     ...(data.emptyPluginData === undefined ? [] : [data.emptyPluginData]),
+    ...(data.emptyState === undefined ? [] : [data.emptyState]),
     ...(pluginDataRecorded ? [join(cursorRoot, 'agent-bundle', 'plugin-data'), join(cursorRoot, 'agent-bundle')] : []),
   ];
   const ownedDirectories = new Set(ownership.directories);

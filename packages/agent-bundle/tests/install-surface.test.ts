@@ -800,6 +800,18 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     expect(emptyRemnant.stdout).toContain('Data (keep): absent');
     expect(emptyRemnant.stdout).not.toContain('Remnant receipt:');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
+    // A state/ emptied by hand (directory left behind) is not durable state either: pruned with the exhausted remnant.
+    await run(installer, [], home);
+    await mkdir(join(destination, 'state'));
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await run(installer, ['--uninstall'], home);
+    await rm(join(destination, 'state', 'plugin.sqlite'));
+    const emptiedState = await run(installer, ['--uninstall'], home);
+    expect(emptiedState).toMatchObject({ code: 0, stderr: '' });
+    expect(emptiedState.stdout).toContain('Uninstalled install-fixture@1.2.3');
+    expect(emptiedState.stdout).toContain('state/ under the installed plugin root is empty and is pruned');
+    expect(emptiedState.stdout).not.toContain('Remnant receipt:');
+    expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
 
     // Modified owned content: refused with the hash comparison until --force.
     await run(installer, [], home);

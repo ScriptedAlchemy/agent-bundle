@@ -2213,10 +2213,25 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     const withData = await remnantMessages();
     expect(withData.length).toBeGreaterThan(0);
     expect(withData.every((message) => message.includes(`holds only preserved runtime state (the PLUGIN_DATA directory ${pluginData})`))).toBe(true);
+    // Emptied, removed, or foreign, the directory is not claimed — and with no state/ either, Doctor does not invent
+    // one: the remnant is reported as exhausted, with the default `uninstall` that consumes it as the recovery.
     await rm(join(pluginData, 'cache.sqlite'));
-    expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA'))).toBe(true);
+    const exhausted = hostReport(await doctor(), 'cursor').diagnostics.filter((entry) => entry.code === 'AB7307');
+    expect(exhausted.length).toBeGreaterThan(0);
+    for (const entry of exhausted) {
+      expect(entry.message).toContain('holds only the remnant receipt of an earlier `uninstall --keep-data` whose preserved runtime state has since been removed');
+      expect(entry.message).not.toContain('state/');
+      expect(entry.message).not.toContain('PLUGIN_DATA');
+      expect(entry.recovery).toContain('to consume the remnant');
+    }
     await rm(pluginData, { recursive: true });
-    expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA'))).toBe(true);
+    expect((await remnantMessages()).every((message) => !message.includes('PLUGIN_DATA') && !message.includes('state/'))).toBe(true);
+    // An emptied state/ directory left behind is not preserved state either.
+    await mkdir(join(destination, 'state'));
+    expect((await remnantMessages()).every((message) => message.includes('whose preserved runtime state has since been removed'))).toBe(true);
+    await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    expect((await remnantMessages()).every((message) => message.includes('holds only preserved runtime state (state/)'))).toBe(true);
+    await rm(join(destination, 'state'), { recursive: true });
     const elsewhere = join(fixture.root, 'other-home', '.cursor', 'agent-bundle', 'plugin-data', 'doctor-fixture');
     await mkdir(elsewhere, { recursive: true });
     await writeFile(join(elsewhere, 'cache.sqlite'), 'foreign\n');
