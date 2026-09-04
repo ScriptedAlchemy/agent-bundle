@@ -23,6 +23,12 @@ export const LineageNodeSchema = z.object({
   id,
   isParallelWorker: z.boolean().optional(),
   parent: id.optional(),
+  /**
+   * How `parent`/`depth` were placed when not by the host's own start/stop
+   * payloads: `transcript` means they were read from the host-written rollout
+   * the payload named (Codex `transcript_path`), so they are exact, not inferred.
+   */
+  placement: z.enum(['transcript']).optional(),
   root: id,
   startedAt: timestamp,
   stoppedAt: timestamp.optional(),
@@ -40,6 +46,8 @@ export const LineageNodeSchema = z.object({
 
 /** A pre-tool hook whose post-tool hook has not fired: the correlation window for MCP calls and spawns. */
 export const OpenToolCallSchema = z.object({
+  /** Codex `spawn_agent` answers `{"task_name": "/root/<task>/…"}`: the child's `agent_path`, matched against its rollout at start. */
+  agentPath: id.optional(),
   conversation: id,
   /** The carrier's turn-shaped id when the window opened (Cursor `generation_id`, Codex `turn_id`, Claude `prompt_id`). */
   generation: id.optional(),
@@ -133,6 +141,18 @@ export const lineageEventSchemas = {
    */
   childUnbound: z.object({ conversation: id, subagentId: id }).strict(),
   nodeStarted: LineageNodeSchema,
+  /**
+   * Later host evidence named a different parent (or an exact depth) for a
+   * node placed by inference; descendants shift with it. Codex: the rollout
+   * head of the child, or the parent rollout `SubagentStop` names in `transcript_path`.
+   */
+  nodeReparented: z.object({
+    depth: z.number().int().nonnegative().optional(),
+    id,
+    parent: id,
+    placement: z.enum(['transcript']).optional(),
+    toolCallId: id.optional(),
+  }).strict(),
   nodeStopped: z.object({ id, stoppedAt: timestamp }).strict(),
   /** A finished session releases its correlation windows and pending spawns. */
   sessionRetired: z.object({ root: id }).strict(),
@@ -151,7 +171,8 @@ export const lineageEventSchemas = {
   spawnFailed: z.object({ toolCallId: id }).strict(),
   /** A subagent started but no single spawn call could be claimed for it; the edge waits for a host confirmation. */
   startUnplaced: UnplacedStartSchema,
-  toolCallClosed: z.object({ conversation: id, toolCallId: id }).strict(),
+  /** `agentPath` annotates a still-pending spawn with the child path the host's tool response carried. */
+  toolCallClosed: z.object({ agentPath: id.optional(), conversation: id, toolCallId: id }).strict(),
   toolCallOpened: OpenToolCallSchema.extend({ spawn: z.boolean().optional() }).strict(),
 } as const;
 
@@ -220,6 +241,8 @@ export const reduceLineage = (
     case 'nodeStarted': {
       const node = event.payload as LineageNode;
       const nodes = pruneStopped({ ...state.nodes, [node.id]: node });
+      // A start placed by other evidence (a Codex rollout read later) is no longer waiting on its edge.
+      const unplaced = state.unplacedStarts?.filter((start) => start.id !== node.id);
       return {
         ...state,
         nodes,
@@ -227,6 +250,7 @@ export const reduceLineage = (
           ? [...state.pendingChildren.filter((pending) => pending !== node.id), node.id]
           : state.pendingChildren,
         seenStarts: node.depth === 0 ? state.seenStarts : remember(state.seenStarts, [node.id]),
+        ...(unplaced === undefined || unplaced.length === state.unplacedStarts?.length ? {} : { unplacedStarts: unplaced }),
       };
     }
     case 'nodeStopped': {
@@ -300,8 +324,47 @@ export const reduceLineage = (
       };
     }
     case 'toolCallClosed': {
-      const { toolCallId } = event.payload as { conversation: string; toolCallId: string };
-      return { ...state, openCalls: state.openCalls.filter((open) => open.toolCallId !== toolCallId) };
+      const { agentPath, toolCallId } = event.payload as { agentPath?: string; conversation: string; toolCallId: string };
+      return {
+        ...state,
+        openCalls: state.openCalls.filter((open) => open.toolCallId !== toolCallId),
+        pendingSpawns: agentPath === undefined
+          ? state.pendingSpawns
+          : state.pendingSpawns.map((open) => (open.toolCallId === toolCallId ? { ...open, agentPath } : open)),
+      };
+    }
+    case 'nodeReparented': {
+      const { depth, id: nodeId, parent, placement, toolCallId } = event.payload as {
+        depth?: number; id: string; parent: string; placement?: 'transcript'; toolCallId?: string;
+      };
+      const node = state.nodes[nodeId];
+      if (node === undefined) return state;
+      const nextDepth = depth ?? node.depth;
+      const shift = nextDepth - node.depth;
+      const nodes: Record<string, LineageNode> = {
+        ...state.nodes,
+        [nodeId]: {
+          ...node,
+          depth: nextDepth,
+          parent,
+          ...(placement === undefined ? {} : { placement }),
+          ...(toolCallId === undefined ? {} : { toolCallId }),
+        },
+      };
+      if (shift !== 0) {
+        // Every descendant sits `shift` levels away from where it was filed.
+        const queue = [nodeId];
+        while (queue.length > 0) {
+          const current = queue.shift()!;
+          for (const child of Object.values(nodes)) {
+            if (child.parent === current && child.id !== nodeId) {
+              nodes[child.id] = { ...child, depth: child.depth + shift };
+              queue.push(child.id);
+            }
+          }
+        }
+      }
+      return { ...state, nodes };
     }
     case 'spawnClaimed': {
       const { siblingsUncertain, toolCallId } = event.payload as { siblingsUncertain?: boolean; toolCallId: string };

@@ -10,9 +10,19 @@ export {
   lineageCarrier,
   lineageHostFromClient,
   resolveNativeLineage,
+  resolveStandaloneLineage,
   type LineageCarrier,
   type LineageHost,
 } from '../lineage-native.js';
+export {
+  CODEX_ROLLOUT_HEAD_BYTES,
+  codexThreadFromRolloutPath,
+  parseCodexRolloutMeta,
+  readCodexRolloutHead,
+  readCodexSpawnLineage,
+  type CodexRolloutMeta,
+  type CodexRolloutReader,
+} from './codex-rollout.js';
 export {
   AGENT_LINEAGE_STATE_ID,
   agentLineageStateDefinition,

@@ -451,12 +451,17 @@
       ]
     },
     "parent": {
-      "state": "degraded",
-      "reason": "2026-09-03: SubagentStart names no parent (host gap tracked in #423; parent_thread_id exists only in tools/call _meta.x-codex-turn-metadata, and SubagentStop hints at it through the parent rollout in transcript_path). Hooks resolve the parent through the registry by claiming the newest unclaimed collaborationspawn_agent call under the same root (resolution: registry; refused when two parents have unclaimed spawns), while MCP calls resolve it natively."
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: SubagentStart names no parent thread (#423), but names the new thread's rollout in transcript_path — as does every hook fired inside the thread; SubagentStop moves it to agent_transcript_path — and that rollout's session_meta head records source.subagent.thread_spawn.parent_thread_id, present on every thread-spawn rollout observed for cli 0.130.0 through 0.152.0 (fixtures/host-lineage/codex-0.147.0-rollouts). The registry reads it at SubagentStart, on the first hook of a thread seen mid-flight, and at SubagentStop (resolution: transcript, provenance derived); standalone hooks read it the same way. tools/call _meta.x-codex-turn-metadata carries parent_thread_id natively.",
+        "2026-09-03: with the rollout unreadable the registry falls back to claiming the newest unclaimed collaborationspawn_agent call under the same root (resolution: registry; refused when two parents have unclaimed spawns) and corrects that parent at SubagentStop: from the child's own rollout in agent_transcript_path (exact parent and depth) when readable, else from the parent rollout named in transcript_path (rollout-<timestamp>-<thread id>.jsonl). The spawn call's PostToolUse tool_response.task_name (/root/<task>/…) equals the child rollout's agent_path, so the spawning tool call is matched by path rather than by order."
+      ]
     },
     "depth": {
-      "state": "degraded",
-      "reason": "2026-09-03: no depth counter is delivered (#423); the registry derives it from the parent chain for hooks and from parent_thread_id for MCP calls (a grandchild whose parent thread the registry never saw stays id-not-resolvable rather than guessed)."
+      "state": "supported",
+      "evidence": [
+        "2026-09-03: no depth counter is delivered on hook payloads or in tools/call _meta (#423); the thread's rollout session_meta head records source.subagent.thread_spawn.depth (1 for a child of the root), read by the registry and by standalone hooks as for parent (resolution: transcript). MCP calls take the depth of the registered thread, or parent depth + 1 for a direct child of the root; a grandchild whose thread no hook has placed stays id-not-resolvable rather than guessed."
+      ]
     },
     "mcp-correlation": {
       "state": "supported",

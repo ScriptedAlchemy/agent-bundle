@@ -360,6 +360,9 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   expect(degradedSource).toContain('error.code === "runtime-unavailable"');
   expect(degradedSource).toContain('Array.isArray(native.workspace_roots)');
   expect(degradedSource).toContain('native.workspace_roots[0]');
+  // Standalone lineage reads the Codex rollout the payload names (#423), so it is awaited.
+  expect(degradedSource).toContain("resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime'");
+  expect(degradedSource).toContain('await resolveStandaloneLineage(target, native)');
   expect(degradedSource).not.toContain('import * as routeModule');
   expect(degradedSource).not.toContain('renderStandaloneEventRoute');
 });

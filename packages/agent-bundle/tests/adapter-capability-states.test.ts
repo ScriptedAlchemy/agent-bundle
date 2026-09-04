@@ -1348,8 +1348,11 @@ it('advertises conversation lineage per host with dated 2026-09-03 evidence', as
       expect(Object.values(lineage).every((entry) => entry.state === 'unavailable')).toBe(true);
     } else {
       // Every hook-bearing host names its subagents; none names a parent on the child's own events.
+      // Codex names the child's rollout instead, whose head records the parent and depth (#423).
       expect(lineage['subagent-events']!.state).toBe('supported');
-      expect(lineage['parent']!.state).toBe('degraded');
+      expect(lineage['parent']!.state).toBe(host === 'codex' ? 'supported' : 'degraded');
+      expect(lineage['depth']!.state).toBe(host === 'codex' ? 'supported' : 'degraded');
+      if (host === 'codex') expect(lineage['parent']!.evidence?.join(' ')).toMatch(/thread_spawn\.parent_thread_id/u);
     }
     // Only Codex resolves MCP calls without a hook window; Cursor cannot correlate natively at all.
     expect(lineage['mcp-correlation']!.state).toBe(host === 'cursor' ? 'degraded' : host === 'portable' ? 'unavailable' : 'supported');

@@ -11,6 +11,13 @@ import { lineageCarrier, type LineageHost } from '../lineage-native.js';
 import { AgentStateError, type AgentStateStore } from '../state/contract.js';
 import { canonicalJson } from '../state/index.js';
 import {
+  codexThreadFromRolloutPath,
+  readCodexRolloutHead,
+  readCodexSpawnLineage,
+  type CodexRolloutMeta,
+  type CodexRolloutReader,
+} from './codex-rollout.js';
+import {
   initialLineageState,
   reduceLineage,
   type LineageEvents,
@@ -70,6 +77,11 @@ export interface AgentLineageRegistry {
 }
 
 export interface CreateAgentLineageRegistryOptions {
+  /**
+   * Reads the head of a Codex rollout the payload named (`transcript_path`);
+   * defaults to a bounded filesystem read. Tests inject captured heads.
+   */
+  readonly readTranscript?: CodexRolloutReader;
   /** Durable journal; omitted registries live only in memory. */
   readonly store?: AgentStateStore<LineageState, LineageEvents>;
 }
@@ -89,6 +101,35 @@ const inputDigest = (input: unknown): string | undefined => {
   const value = input === undefined ? {} : input;
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex').slice(0, 16);
+};
+
+/**
+ * The rollout that belongs to the thread a Codex payload speaks for: its own
+ * `transcript_path` on every hook fired inside it, except `SubagentStop`,
+ * where `transcript_path` is the parent's rollout and the child's moves to
+ * `agent_transcript_path` (fixture rows 37 and 39, codex-0.147.0.ndjson).
+ */
+const codexOwnRollout = (event: LineageEventFamily, native: Readonly<Record<string, unknown>>): string | undefined =>
+  event === 'agent/stop' ? nativeString(native, 'agent_transcript_path') : nativeString(native, 'transcript_path');
+
+/**
+ * Codex answers a successful `spawn_agent` with `{"task_name": "/root/<task>/…"}`
+ * — the child's `agent_path`, the same string the child's rollout head
+ * records — as a JSON string (shell/collaboration tools) or an object.
+ */
+const codexSpawnAgentPath = (native: Readonly<Record<string, unknown>>): string | undefined => {
+  const response = native['tool_response'];
+  let parsed: unknown = response;
+  if (typeof response === 'string') {
+    try {
+      parsed = JSON.parse(response);
+    } catch {
+      return undefined;
+    }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const taskName = (parsed as Readonly<Record<string, unknown>>)['task_name'];
+  return typeof taskName === 'string' && taskName.startsWith('/') ? taskName : undefined;
 };
 
 /**
@@ -245,7 +286,7 @@ const rootNode = (
 export const createAgentLineageRegistry = (
   options: CreateAgentLineageRegistryOptions = {},
 ): AgentLineageRegistry => {
-  const { store } = options;
+  const { readTranscript = readCodexRolloutHead, store } = options;
   let state: LineageState = initialLineageState;
   let hydration: Promise<void> | undefined;
   const applied = new Set<string>();
@@ -355,10 +396,27 @@ export const createAgentLineageRegistry = (
     | { readonly kind: 'claimed'; readonly call: OpenToolCall; readonly toolCallIdCertain: boolean }
     | { readonly kind: 'none' };
 
-  const claimSpawn = async (host: LineageHost, root: string, keys: JournalKeys): Promise<SpawnClaim> => {
+  /** What the child's own rollout said about it, when the host wrote one (Codex). */
+  interface SpawnTarget {
+    readonly agentPath?: string;
+    readonly parent: string;
+  }
+
+  const claimSpawn = async (host: LineageHost, root: string, keys: JournalKeys, target?: SpawnTarget): Promise<SpawnClaim> => {
     const spawn = SPAWN_TOOLS[host];
-    const candidates = state.pendingSpawns.filter((call) =>
+    const underRoot = state.pendingSpawns.filter((call) =>
       spawn(call.toolName) && (nodeFor(call.conversation)?.root ?? call.conversation) === root);
+    // A known parent narrows the field to that parent's spawns. A known agent
+    // path names the exact call, since the spawn's tool response carried the
+    // same path; a call recorded with a *different* path belongs to another
+    // child and is never consumed, while a call whose response was missed
+    // (no path recorded) stays eligible.
+    const fromParent = target === undefined ? underRoot : underRoot.filter((call) => call.conversation === target.parent);
+    const compatible = target?.agentPath === undefined
+      ? fromParent
+      : fromParent.filter((call) => call.agentPath === undefined || call.agentPath === target.agentPath);
+    const exact = target?.agentPath === undefined ? [] : compatible.filter((call) => call.agentPath === target.agentPath);
+    const candidates = exact.length > 0 ? exact : compatible;
     if (candidates.length === 0) return { kind: 'none' };
     // Several unclaimed spawns from different parents under one root: the
     // start payload carries nothing to pick between them, so no guess.
@@ -369,6 +427,69 @@ export const createAgentLineageRegistry = (
     const cohort = candidates.length > 1;
     await dispatch('spawnClaimed', { ...(cohort ? { siblingsUncertain: true } : {}), toolCallId: call.toolCallId }, keys);
     return { call, kind: 'claimed', toolCallIdCertain: !cohort && call.uncertain !== true };
+  };
+
+  /**
+   * Places a Codex thread from the spawn lineage its own rollout head records
+   * (parent thread, depth, agent path): exact host evidence, so the node is
+   * marked `transcript` and no ordering guess is involved. The spawn call is
+   * still claimed — by parent and agent path — so `toolCallId` is certain
+   * whenever the parent's `spawn_agent` response was observed.
+   */
+  const placeCodexFromRollout = async (
+    agentId: string,
+    spawn: CodexRolloutMeta & { readonly depth: number; readonly parent: string },
+    native: Readonly<Record<string, unknown>>,
+    observedAt: string,
+    keys: JournalKeys,
+  ): Promise<LineageNode | undefined> => {
+    const root = spawn.root ?? lineageCarrier('codex', native).root;
+    if (root === undefined) return undefined;
+    const rootNodeValue = await ensureRoot('codex', root, undefined, observedAt, keys, true, undefined);
+    if (rootNodeValue === undefined) return undefined;
+    const claim = await claimSpawn('codex', rootNodeValue.root, keys, { ...(spawn.agentPath === undefined ? {} : { agentPath: spawn.agentPath }), parent: spawn.parent });
+    // A start held unplaced (its rollout was unreadable at the time) is
+    // materialized as it started, and as already stopped when its stop came
+    // first; placing it drops it from the unplaced set (`nodeStarted`).
+    const waiting = (state.unplacedStarts ?? []).find((start) => start.id === agentId);
+    const generation = waiting?.generation ?? nativeString(native, 'turn_id');
+    const type = waiting?.type ?? nativeString(native, 'agent_type');
+    await dispatch('nodeStarted', {
+      depth: spawn.depth,
+      ...(generation === undefined ? {} : { generation }),
+      id: agentId,
+      parent: spawn.parent,
+      placement: 'transcript',
+      root: rootNodeValue.root,
+      startedAt: waiting?.startedAt ?? observedAt,
+      ...(claim.kind === 'claimed' && claim.toolCallIdCertain ? { toolCallId: claim.call.toolCallId } : {}),
+      ...(type === undefined ? {} : { type }),
+    }, keys);
+    if (waiting?.stoppedAt !== undefined) await dispatch('nodeStopped', { id: agentId, stoppedAt: waiting.stoppedAt }, keys);
+    return state.nodes[agentId];
+  };
+
+  /**
+   * A Codex thread the tree has not placed, seen on any hook that names its
+   * rollout: placed from that rollout when it is readable and describes a
+   * spawned thread. Replayed starts stay recognized through `seenStarts`,
+   * except a start still held unplaced, which this hook may now place.
+   */
+  const placeUnknownCodexThread = async (
+    event: LineageEventFamily,
+    native: Readonly<Record<string, unknown>>,
+    observedAt: string,
+    keys: JournalKeys,
+  ): Promise<LineageNode | undefined> => {
+    const agentId = nativeString(native, 'agent_id');
+    if (agentId === undefined) return undefined;
+    const known = state.nodes[agentId];
+    if (known !== undefined) return known;
+    const unplaced = (state.unplacedStarts ?? []).some((start) => start.id === agentId);
+    if (state.seenStarts.includes(agentId) && !unplaced) return undefined;
+    const spawn = await readCodexSpawnLineage(codexOwnRollout(event, native), agentId, readTranscript);
+    if (spawn === undefined) return undefined;
+    return placeCodexFromRollout(agentId, spawn, native, observedAt, keys);
   };
 
   /**
@@ -442,7 +563,7 @@ export const createAgentLineageRegistry = (
     if (node === undefined) return unavailable('id-not-resolvable');
     const resolution: AgentLineageResolution = node.depth === 0 && (host !== 'cursor' || state.pendingChildren.length === 0)
       ? 'native'
-      : registryResolution(node, fallback);
+      : node.placement === 'transcript' ? 'transcript' : registryResolution(node, fallback);
     return available(lineageOf(node, carrier.generation, resolution), resolution === 'native' ? 'native' : 'derived');
   };
 
@@ -492,6 +613,16 @@ export const createAgentLineageRegistry = (
       }, keys);
       return;
     }
+    // Codex names the new thread's rollout in `transcript_path`; its head
+    // states the parent and depth the payload omits, so no spawn ordering is
+    // needed when it is readable (#423).
+    if (host === 'codex') {
+      const spawn = await readCodexSpawnLineage(nativeString(native, 'transcript_path'), agentId, readTranscript);
+      if (spawn !== undefined) {
+        await placeCodexFromRollout(agentId, spawn, native, observedAt, keys);
+        return;
+      }
+    }
     const rootNodeValue = await ensureRoot(host, root, undefined, observedAt, keys, true, undefined);
     if (rootNodeValue === undefined) return;
     const claim = await claimSpawn(host, rootNodeValue.root, keys);
@@ -534,6 +665,30 @@ export const createAgentLineageRegistry = (
         })()
       : nativeString(native, 'agent_id');
     if (stopped === undefined) return;
+    if (host === 'codex') {
+      // A stop for a thread the registry never placed (cold registry, missed
+      // start, or a start left unplaced while its rollout was unreadable)
+      // still names the thread's rollout in `agent_transcript_path`.
+      if (state.nodes[stopped] === undefined) await placeUnknownCodexThread('agent/stop', native, observedAt, keys);
+      // A node placed by spawn ordering is checked against the host's own
+      // record before it retires: the child's rollout (`agent_transcript_path`)
+      // states parent and depth exactly; failing that, `transcript_path` is
+      // the parent's rollout and its basename carries the parent thread id
+      // (the depth then follows the parent when the registry knows it).
+      const node = state.nodes[stopped];
+      if (node !== undefined && node.placement !== 'transcript') {
+        const own = await readCodexSpawnLineage(nativeString(native, 'agent_transcript_path'), stopped, readTranscript);
+        if (own !== undefined) {
+          await dispatch('nodeReparented', { depth: own.depth, id: stopped, parent: own.parent, placement: 'transcript' }, keys);
+        } else {
+          const parent = codexThreadFromRolloutPath(nativeString(native, 'transcript_path'));
+          if (parent !== undefined && parent !== node.id && node.parent !== parent) {
+            const parentDepth = parent === node.root ? 0 : nodeFor(parent)?.depth;
+            await dispatch('nodeReparented', { ...(parentDepth === undefined ? {} : { depth: parentDepth + 1 }), id: stopped, parent }, keys);
+          }
+        }
+      }
+    }
     // A stop for a start still waiting on its edge is kept with that start, so
     // a late confirmation materializes an already-finished node.
     const unplaced = (state.unplacedStarts ?? []).some((start) => start.id === stopped);
@@ -605,6 +760,10 @@ export const createAgentLineageRegistry = (
         : carrier.conversation === carrier.root;
       if (rootLike || host === 'cursor') {
         await ensureRoot(host, carrier.conversation, carrier.generation, observedAt, keys, rootLike, host === 'cursor' ? cursorWorkspace(native) : undefined);
+      } else if (host === 'codex' && event !== 'agent/start' && event !== 'agent/stop') {
+        // A Codex subagent first seen mid-flight (registry restarted, start
+        // missed) names its rollout on every hook; place it from there.
+        await placeUnknownCodexThread(event, native, observedAt, keys);
       }
     }
     const toolCallId = nativeString(native, 'tool_use_id') ?? nativeString(native, 'tool_call_id');
@@ -627,7 +786,10 @@ export const createAgentLineageRegistry = (
           toolName,
         }, keys);
       } else if (event === 'tool/after' || event === 'tool/failure') {
-        await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
+        // A successful Codex spawn answers with the child's agent path; kept
+        // on the pending spawn so the child's rollout can name its exact call.
+        const agentPath = host === 'codex' && event === 'tool/after' && SPAWN_TOOLS[host](toolName) ? codexSpawnAgentPath(native) : undefined;
+        await dispatch('toolCallClosed', { ...(agentPath === undefined ? {} : { agentPath }), conversation: carrier.conversation, toolCallId }, keys);
         // A spawn that failed produced no child; Codex closes a successful
         // spawn before SubagentStart, so only failure discards the claim.
         if (event === 'tool/failure' && SPAWNS_NEW_AGENT[host](toolName, native)) {

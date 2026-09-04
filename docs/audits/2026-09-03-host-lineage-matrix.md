@@ -314,7 +314,7 @@ gives shell commands the agent runs `CURSOR_CONVERSATION_ID`/`CURSOR_REQUEST_ID`
 | Host | Answer | How |
 | --- | --- | --- |
 | Claude | Yes, with the parent inferred | `SubagentStart` names the child (`agent_id`). The parent is not in the payload; it is the agent whose `Agent`/`Task` `PreToolUse` is open when `SubagentStart` fires (root when none is open) — re-verified live at depth 1 and 2 in all three runs, including two spawns issued in one message (the host serialises them: each `SubagentStart` fires before the next `Agent` `PreToolUse` opens). The host then confirms the link on the parent's `Agent` `PostToolUse` (`tool_response.agentId` = the child, `status` `async_launched` or `completed`). `Stop`/`SubagentStop` list the children still running **in the background** in `background_tasks[]` (empty when every child ran in the foreground). |
-| Codex | Yes | `SubagentStart` names the child thread; the parent is inferred from the open `collaborationspawn_agent` call and confirmed at `SubagentStop` by the parent rollout in `transcript_path`. MCP calls carry `parent_thread_id` directly. |
+| Codex | Yes | `SubagentStart` names the child thread and its rollout (`transcript_path`); the rollout's `session_meta` head records `source.subagent.thread_spawn.{parent_thread_id, depth, agent_path}` (§10), so the parent is read, not inferred. The `collaborationspawn_agent` call is matched to the child by `agent_path` (= the call's `PostToolUse` `tool_response.task_name`, rows 16/27). With the rollout unreadable, the parent is inferred from the newest unclaimed spawn call and corrected at `SubagentStop` — from the child's own rollout (`agent_transcript_path`) when readable by then, else from the parent rollout in `transcript_path`. MCP calls carry `parent_thread_id` directly. |
 | Cursor | Yes for the spawn, weakly for the child's traffic | `subagentStart` carries `parent_conversation_id`, `subagent_id`/`tool_call_id`, `is_parallel_worker`. The child's own `conversation_id` is not in that payload, so the first event with an unseen conversation id after a `subagentStart` is bound to it (unambiguous when children start sequentially; ambiguous for parallel workers). |
 
 **Can a plugin running under a subagent know its parent/root?**
@@ -322,7 +322,7 @@ gives shell commands the agent runs `CURSOR_CONVERSATION_ID`/`CURSOR_REQUEST_ID`
 | Host | Root | Parent |
 | --- | --- | --- |
 | Claude | Yes — `session_id` on every event is the root session (re-verified live: all 42 + 46 + 127 hook payloads across the three runs carry the root id — through resumed turns and a compaction too — and `CLAUDE_CODE_SESSION_ID` in every plugin process is the root id) | Only through the runtime's registry (placed at `SubagentStart`, confirmed by the parent's `Agent` PostToolUse); nothing in the child's payload |
-| Codex | Yes — `session_id` is the root thread on every event, and `_meta.x-codex-turn-metadata.session_id` on MCP calls | Yes on MCP calls (`parent_thread_id`); on hooks only through the registry (or the parent rollout at `SubagentStop`) |
+| Codex | Yes — `session_id` is the root thread on every event, and `_meta.x-codex-turn-metadata.session_id` on MCP calls | Yes on MCP calls (`parent_thread_id`); on hooks from the thread's own rollout head, which every hook inside the thread names in `transcript_path` (§10) — even in a standalone hook process with no registry |
 | Cursor | Only through the registry — a child's payload carries neither root nor parent | Only through the registry (ordering-bound) |
 
 **Operator identity is out of scope.** The maintainer decided on 2026-09-03
@@ -342,12 +342,18 @@ root, and the parent-of-subagent chain — is the only identity-adjacent surface
 - Hook→MCP correlation: Codex from `_meta`, Claude from
   `claudecode/toolUseId`, Cursor from the open `MCP:<tool>` pre-tool hook.
 - Claude `PostToolUse` string `tool_response` (MCP tools) accepted.
+- Codex hook-side parent and depth read from the thread's own rollout head
+  (§10; `resolution: 'transcript'`), with the spawn call matched by
+  `agent_path`; `SubagentStop` corrects an inferred parent from the parent
+  rollout it names; standalone Codex hooks resolve the same way
+  (`resolveStandaloneLineage`). Landed after #444 for #423.
 
 ## 7. Gaps and host-blocked items
 
 | Gap | Host | Evidence | Status |
 | --- | --- | --- | --- |
-| No parent id on `SubagentStart`; child events carry no parent | Claude, Codex | §1, §2 | Inferred from the newest unclaimed spawn call under the same root; refused when two parents have unclaimed spawns; filed as #422 / #423 |
+| No parent id on `SubagentStart`; child events carry no parent | Claude | §1, §2 | Inferred from the newest unclaimed spawn call under the same root; refused when two parents have unclaimed spawns; filed as #422 |
+| No parent id on `SubagentStart`; child events carry no parent | Codex | §1, §2, §10 | Ours: read from the thread's own rollout head (`thread_spawn.parent_thread_id`, `depth`), which every hook names in `transcript_path`; spawn call matched by `agent_path`; inferred parent corrected at `SubagentStop`. Remaining host-side: the payload itself carries no `parent_thread_id`, so a hook on a machine that cannot read `CODEX_HOME/sessions` (or a rollout not yet flushed) falls back to inference (#423) |
 | Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Bound by elimination in the registry (single pending start per workspace); refused while ambiguous for parallel workers; filed as #424 |
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
 | `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 gap 4); lineage never depends on it to establish a root |
@@ -437,3 +443,44 @@ Consequences for lineage:
   `subagentStart`/`subagentStop` delivery is unobserved here; the §1 CLI
   capture remains the evidence for the subagent families.
 
+
+## 10. Codex rollout heads: the parent the hook payloads omit (added 2026-09-03)
+
+Every Codex hook payload names a rollout file. Inside a subagent thread it is
+the thread's own (`transcript_path` on `SubagentStart` and on every tool hook,
+fixture rows 17, 19–27, 28, 30–36; `agent_transcript_path` on `SubagentStop`,
+rows 37 and 39, where `transcript_path` is the **parent's** rollout). The
+rollout basename is `rollout-<YYYY-MM-DDTHH-MM-SS>-<thread id>.jsonl`, and its
+first line is a `session_meta` item. For a spawned thread that line carries the
+edge the hook payload does not:
+
+```json
+{"type":"session_meta","payload":{"id":"<thread>","session_id":"<root>","parent_thread_id":"<parent>","forked_from_id":"<parent>",
+ "source":{"subagent":{"thread_spawn":{"parent_thread_id":"<parent>","depth":2,"agent_path":"/root/host_probe/nested_probe","agent_nickname":"…","agent_role":null}}},
+ "thread_source":"subagent","agent_path":"/root/host_probe/nested_probe","cli_version":"0.147.0", …}}
+```
+
+Checked on the capturing machine's own `~/.codex/sessions` (8,567 rollouts,
+cli 0.130.0 → 0.152.0): all 8,049 `thread_spawn` rollouts carry
+`source.subagent.thread_spawn.parent_thread_id` and `depth`; `agent_path`
+is present from 0.141.0 on (absent on 839 older rollouts, `null` inside
+`thread_spawn` on ≤0.136.0); the top-level `parent_thread_id` copy appears
+later than the nested one. Roots carry a string `source` (`exec`, `cli`,
+`vscode`) and `thread_source: "user"`; host-internal helpers carry
+`{"subagent":{"other":"guardian"}}` with no spawn lineage. First-line size:
+13–43 KiB (`base_instructions` is inlined). The `agent_path` equals the
+`spawn_agent` `PostToolUse` `tool_response.task_name` (`/root/host_probe`,
+`/root/host_probe/nested_probe`, rows 16 and 27), which is how the spawning
+call is matched to the child without relying on order.
+
+`fixtures/host-lineage/codex-0.147.0-rollouts/` holds one head per thread of
+the capture in this shape (ids, paths, agent paths, and commit from the
+capture; long strings redacted — see its README). The registry reads the head
+the payload names, verifies `payload.id` equals the payload's `agent_id`, and
+places the thread with `resolution: 'transcript'`; the MCP `_meta` lineage
+(§3) and the hook-side lineage therefore agree by construction. What stays
+host-side: the payload itself still carries no `parent_thread_id`, so a hook
+that cannot read `CODEX_HOME/sessions` (or a rollout not yet flushed) falls
+back to spawn-ordering inference and is corrected at `SubagentStop` (from the
+child's own rollout when readable by then, else from the parent rollout's
+basename).

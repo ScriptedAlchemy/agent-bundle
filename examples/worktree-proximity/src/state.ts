@@ -5,11 +5,12 @@ const nonEmpty = z.string().trim().min(1);
 /**
  * Where an identity claim came from: `native` is read straight from the host
  * envelope (or a `request.lineage` the runtime resolved natively), `registry`,
- * `inferred` and `confirmed` are the runtime lineage registry's own
- * resolutions (`confirmed` once the host has named every edge to the root),
- * and `derived` is this application's fallback (`worktree:<root>`).
+ * `inferred`, `confirmed` and `transcript` are the runtime lineage registry's
+ * own resolutions (`confirmed` once the host has named every edge to the root;
+ * `transcript` read from the host's own rollout file), and `derived` is this
+ * application's fallback (`worktree:<root>`).
  */
-const provenance = z.enum(['native', 'registry', 'inferred', 'confirmed', 'derived']);
+const provenance = z.enum(['native', 'registry', 'inferred', 'confirmed', 'transcript', 'derived']);
 
 export type IdentityProvenance = z.output<typeof provenance>;
 
