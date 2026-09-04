@@ -88,7 +88,8 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
-boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——它是框架在所有宿主上的流式进度表面：
+boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——它是框架在 MCP、渲染式 CLI 与 Workbench 上的
+流式进度表面：
 
 ```tsx
 // src/mcp/curator/tools/search.tsx
@@ -114,6 +115,11 @@ export default async function Search({ input, signal }: ToolRouteProps<typeof in
 `completed` 已被先前报告到达的回退，不会被重发；而推进了 `completed` 的后续回退会被发送。当嵌套的每一级
 boundary 都应到达客户端时，请给它们递增的 `completed` 值。进度节点永远不会成为 `content` 块；留在最终
 文档中的进度节点只是内容。
+
+同一条路由以渲染式 CLI 命令形式暴露（`routes.mcpCommands`）或作为渲染式 `src/cli/**` 命令编写时，交互式
+终端同样会显示这个回退：就地更新的进度行会像来自显式报告一样从流式传输的 `Agent.Progress` 节点绘制，
+仅在回退变化时重绘，并且永远不会打印到管道 Markdown、`--json` 或 `--ndjson` 输出中（在那里该节点只是一个
+文档事件）。Workbench 把该节点渲染为文档内容。钩子没有进度通道。
 
 route-unit 与 `mcp-in-memory` 两个测试层级无需宿主即可证明这一点：
 `projectTargetCapabilities(await renderRouteEvents('tool:curator/search', { input }), fixture)`
