@@ -3,10 +3,11 @@ import { isBuiltin } from 'node:module';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { sha256Hex } from '../core/digest.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
-import { readModuleImports, rememberedModuleImports, type ModuleImport } from './module-imports.ts';
+import { readModuleImports, rememberedModuleImports, type ModuleSyntaxCheck } from './module-imports.ts';
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
 const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
@@ -97,11 +98,12 @@ const resolveJavaScriptImport = async (options: {
 export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
   /**
-   * Modules the framework compiled (manifest kind `bundle`): the ESM lexer is
-   * their only syntax pass (`ModuleSyntaxCheck` `lexed`); every other module
-   * is parsed in full (`parsed`).
+   * Modules the framework compiled (manifest kind `bundle`), checked at
+   * `bundleSyntaxCheck`; every other module is parsed in full (`parsed`).
    */
   readonly bundledPaths?: ReadonlySet<string>;
+  /** How a bundled module's syntax is checked; `lexed` unless a caller knows the bundler output may have been rewritten. */
+  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
@@ -123,25 +125,24 @@ export const validateJavaScriptModules = async (options: {
       return;
     }
     visiting.add(path);
-    const check = options.bundledPaths?.has(path) === true ? 'lexed' : 'parsed';
-    // The inspection that listed this file already digested its bytes; the
-    // same bytes scanned earlier in this process need no second read or lex.
-    const sha256 = files.get(path)?.sha256;
-    let imports: readonly ModuleImport[] | undefined = sha256 === undefined
-      ? undefined
-      : rememberedModuleImports(check, sha256);
+    const check = options.bundledPaths?.has(path) === true ? options.bundleSyntaxCheck ?? 'lexed' : 'parsed';
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(resolve(artifactRoot, path));
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
+    }
+    // Keyed by the digest of the bytes just read — not the inspection's — so
+    // a module rewritten between the two is never answered from the cache,
+    // while the same bytes scanned earlier in this process are not lexed twice.
+    const sha256 = sha256Hex(bytes);
+    let imports = rememberedModuleImports(check, sha256);
     if (imports === undefined) {
-      let source: string;
       try {
-        source = await readFile(resolve(artifactRoot, path), 'utf8');
-      } catch {
-        diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
-        visiting.delete(path);
-        visited.add(path);
-        return;
-      }
-      try {
-        imports = await readModuleImports(source, { check, ...(sha256 === undefined ? {} : { sha256 }) });
+        imports = await readModuleImports(bytes.toString('utf8'), { check, sha256 });
       } catch {
         diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
         visiting.delete(path);

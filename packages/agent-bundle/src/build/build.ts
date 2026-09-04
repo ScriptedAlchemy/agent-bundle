@@ -508,8 +508,15 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       files: await listArtifactFiles(stageRoot),
       outputProvenance,
     });
+    // The bundler's own output is trusted to the ESM lexer; once a consumer
+    // hatch can rewrite emitted assets (a banner, a processAssets pass), the
+    // final bytes are no longer the bundler's proof and are parsed in full.
+    const bundleSyntaxCheck = options.tools?.rspack === undefined && options.tools?.rsbuild === undefined
+      ? 'lexed'
+      : 'parsed';
     const preManifestDiagnostics = await validateArtifactFiles({
       artifactRoot: stageRoot,
+      bundleSyntaxCheck,
       manifestFiles: files,
       prebuiltPaths: new Set(outputProvenance
         .filter((output) => output.kind === 'prebuilt')
@@ -528,7 +535,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         targets: stagedTargets,
       }),
     });
-    const diagnostics = await validateArtifact({ artifactRoot: stageRoot, registry: options.registry });
+    const diagnostics = await validateArtifact({ artifactRoot: stageRoot, bundleSyntaxCheck, registry: options.registry });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(diagnostics);
     }

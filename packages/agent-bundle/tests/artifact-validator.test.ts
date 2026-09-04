@@ -1839,6 +1839,16 @@ it('parses copied and generated modules in full and trusts compiler bundles to t
       ['custom/scripts/generated.mjs', 'Generated JavaScript import from "custom/scripts/generated.mjs" has invalid syntax.'],
       ['custom/scripts/unterminated.mjs', 'Generated JavaScript import from "custom/scripts/unterminated.mjs" has invalid syntax.'],
     ]);
+    // A build whose consumer hatch may have rewritten the emitted assets asks
+    // for the full parse of bundles too; nothing else changes.
+    const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
+    expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
+      'custom/scripts/bundled.mjs',
+      'custom/scripts/copied.mjs',
+      'custom/scripts/dangling.mjs',
+      'custom/scripts/generated.mjs',
+      'custom/scripts/unterminated.mjs',
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

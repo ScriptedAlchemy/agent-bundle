@@ -30,6 +30,7 @@ import {
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
+import type { ModuleSyntaxCheck } from './module-imports.ts';
 import type {
   ValidateArtifactOptions,
   ValidatedArtifactMcpServerEvidence,
@@ -614,6 +615,7 @@ const validateArtifactStructure = (options: {
 
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
+  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: readonly ManifestFile[];
   readonly prebuiltPaths?: ReadonlySet<string>;
@@ -653,6 +655,7 @@ const validateGeneratedFiles = async (options: {
 
   diagnostics.push(...await validateJavaScriptModules({
     artifactRoot: options.artifactRoot,
+    ...(options.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: options.bundleSyntaxCheck }),
     files: options.files,
     ...(options.manifestFiles === undefined
       ? {}
@@ -681,6 +684,7 @@ export const validateArtifactFiles = async (
     ...filesystemDiagnostics(inspection.filesystem),
     ...await validateGeneratedFiles({
       artifactRoot: context.artifactRoot,
+      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       ...(context.manifestFiles === undefined ? {} : { manifestFiles: context.manifestFiles }),
       ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
@@ -820,6 +824,7 @@ export const validateArtifactWithSnapshot = async (
     }),
     validateGeneratedFiles({
       artifactRoot,
+      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       manifestFiles: manifest.files,
     }),
