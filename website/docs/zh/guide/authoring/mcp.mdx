@@ -114,13 +114,50 @@ export default function Layout({ children, route }: AgentLayoutProps) {
 `kind`、`name`，MCP 类型还有 `serverId`），`signal` 是请求中止信号，`await agent()` 在布局中的用法与在
 路由中完全一致。
 
-路由的元素在布局链渲染**之前**解析，因此抛错的路由仍然让整次渲染失败（CLI 退出码 `1`、MCP 传输失败），
-而不是被降级为布局外壳之下的 boundary 错误；代价是布局无法在 `children` 周围流式输出 `Suspense` 回退。
+路由的元素在布局链渲染**之前**解析，因此抛错的路由仍然让整次渲染失败（CLI 退出码 `1`；在 MCP 上是 SDK
+默认的 `isError` 结果或一个 JSON-RPC 错误，且没有布局 `_meta`——见
+[路由抛错时会发生什么](#路由抛错时会发生什么)），而不是被降级为布局外壳之下的 boundary 错误；代价是
+布局无法在 `children` 周围流式输出 `Suspense` 回退。
 默认导出不是函数、或导出了仅属于路由的 `config`/`inputSchema`/`resultSchema` 的布局是 `AB4830`；同一作用域
 下 `.ts` 与 `.tsx` 并存是 `AB4831`；其服务器没有声明任何工具、资源或提示路由的服务器布局是 `AB4832`，而固定为
 `custom`、`command` 或 `remote` 的服务器会完全跳过其布局。route-unit 与 projection 两个测试层级组合同一条
 布局链，因此 `renderRoute('tool:...')` 与 `invokeMcpTool(...)` 证明的是组合后的文档；直接传给 `renderRoute()`
 的模块不会组合任何布局。
+
+## 路由抛错时会发生什么
+
+`Agent.Error` 是受支持的错误路径。错误是文档内部的数据，因此布局外壳、`_meta`、`structuredContent` 与
+`[code] message` 文本都得以保留，线上结果携带 `isError: true`：
+
+```tsx
+export default async function Lookup({ input }: ToolRouteProps<typeof inputSchema>) {
+  const hit = await catalog.find(input.id);
+  if (hit === undefined) {
+    return (
+      <Agent.Result value={{ found: false }}>
+        <Agent.Error code="E_NOT_FOUND">{`No entry is named ${input.id}.`}</Agent.Error>
+      </Agent.Result>
+    );
+  }
+  // …
+}
+```
+
+改为**抛出**异常的路由完全不会被 agent-bundle 投影——没有文档可投影——各个表面自己的默认行为生效。布局外壳
+永远不会包裹它。按表面分列：
+
+| 表面 | 路由的默认导出抛错 | 嵌套的 `Suspense` boundary 被拒绝 |
+| --- | --- | --- |
+| MCP `tools/call` | MCP SDK 的默认工具错误：`{ content: [{ type: 'text', text: <message> }], isError: true }`——没有 `_meta`、没有 `structuredContent`、没有 `[code]` 前缀。会话仍然可用。 | 一个已表示的错误：reconciler 把被拒绝的 boundary 折叠进文档，成为 code 为 `boundary` 的错误节点，因此结果与 `<Agent.Error code="boundary">` 所产生的一致——保留布局 `_meta`，`structuredContent` 来自路由的值，`isError: true`，并在已渲染的内容旁多一个 `[boundary] <message>` 文本块。 |
+| MCP `prompts/get`、`resources/read` | 一个携带该消息的 JSON-RPC 错误响应；客户端调用被拒绝。这些表面没有 `isError` 通道。 | 生成的服务器从同一份已表示文档中返回路由经 `resultSchema` 解析后的值。 |
+| 渲染式 CLI 命令 / 渲染式脚本 | 消息写到 stderr，退出码 `1`；stdout 无输出。 | 文档照常打印并带有 `**[boundary]** message`；退出码 `1`，与任何非 `success` 文档相同。 |
+| 普通 CLI 命令 / 普通脚本 | 路由式命令：消息写到 stderr，退出码 `1`（用法与输入错误退出码为 `2`）。普通脚本：走 Node 的顶层失败路径——堆栈写到 stderr，退出码 `1`。 | 不适用 |
+| 事件路由（钩子） | 生成的包装器把消息写到 stderr，stdout 无输出，退出码 `1`。所有受支持的宿主都把退出码 `1` 记作**非阻塞**错误，因此待执行的动作会像 pass-through 一样继续进行——抛错的 `tool/before` **不会**拒绝。要阻止，请返回 `outcome: 'deny'`。 | 钩子投影只读取 `Agent.Context` 与结果值；错误节点不贡献任何内容。 |
+| `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')`，指明路由与原因；没有文档，也没有事件。 | 正常返回：`document.status === 'represented-error'`，一个 code 为 `boundary` 的 `error` 节点，事件序列为 `shell → error → complete`。 |
+
+投影器有意不把根级抛错包装成 `Agent.Error` 的形状：布局外壳是文档的属性，而根级抛错没有文档。希望在失败时
+带有 code、外壳或结构化内容的路由应渲染 `Agent.Error`；希望嵌套失败不影响文档其余部分的路由应把它放到
+`Suspense` 之后。
 
 ## 手写 stdio 入口
 

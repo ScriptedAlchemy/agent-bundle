@@ -30,6 +30,7 @@ describe('the CLI dispatch level', () => {
         'harness catalog',
         'harness context',
         'harness echo',
+        'harness fault',
         'harness journal',
         'harness layout-probe',
         'harness lifecycle',

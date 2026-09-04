@@ -87,6 +87,7 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
   'tool:harness/catalog': { input: { genre: 'mystery' }, resultCompat: 'additive' },
   'tool:harness/context': { resultCompat: 'closed' },
   'tool:harness/echo': { input: { message: 'contract matrix' }, resultCompat: 'additive' },
+  'tool:harness/fault': { input: { mode: 'ok' }, resultCompat: 'additive' },
   'tool:harness/journal': { resultCompat: 'closed' },
   'tool:harness/layout-probe': { input: { label: 'contract matrix' }, resultCompat: 'additive' },
   'tool:harness/lifecycle': lifecycleFixture(),

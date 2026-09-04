@@ -1523,6 +1523,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       { ...base.hooks[0]!, id: 'hook:session-start:valid:00000001', name: 'valid-00000001', source: join(sourceRoot, 'valid.ts'), targets: ['codex'] },
       { ...base.hooks[0]!, id: 'hook:session-start:export:00000002', name: 'export-00000002', source: join(sourceRoot, 'no-default.ts'), targets: ['codex'] },
       { ...base.hooks[0]!, id: 'hook:session-start:result:00000003', name: 'result-00000003', source: join(sourceRoot, 'bad-result.ts'), targets: ['codex'] },
+      { ...base.hooks[0]!, id: 'hook:session-start:throws:00000004', name: 'throws-00000004', source: join(sourceRoot, 'throws.ts'), targets: ['codex'] },
     ],
     targets: [base.targets[0]!],
   };
@@ -1535,6 +1536,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       writeFile(join(sourceRoot, 'valid.ts'), 'export default () => undefined;\n'),
       writeFile(join(sourceRoot, 'no-default.ts'), 'export const value = true;\n'),
       writeFile(join(sourceRoot, 'bad-result.ts'), "export default () => 'not a result';\n"),
+      writeFile(join(sourceRoot, 'throws.ts'), "export default () => { throw new Error('handler exploded'); };\n"),
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
@@ -1553,6 +1555,16 @@ it('rejects malformed native hook input, exports, and handler results concisely'
     }))).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: handler must return void or a result object\n',
+      stdout: '',
+    });
+    // #492: a handler that throws is the same wire outcome as a malformed one —
+    // the message on stderr, nothing on stdout, exit 1 (a non-blocking error on
+    // every supported host, so the pending action proceeds).
+    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'throws-00000004.mjs'), JSON.stringify({
+      cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
+    }))).resolves.toEqual({
+      code: 1,
+      stderr: 'handler exploded\n',
       stdout: '',
     });
   } finally {
