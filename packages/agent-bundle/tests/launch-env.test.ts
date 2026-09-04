@@ -130,6 +130,48 @@ describe('the operator .env layer of an installed pack (#469)', () => {
     expect(JSON.stringify(result)).not.toContain('s3cr3t');
   });
 
+  it('lets the file beat a manifest default the host passed through, but never a value that differs from it', async () => {
+    const root = await createRoot();
+    await writeFile(join(root, '.env'), 'MANIFEST_ONLY=from-file\nHOST_EXPORTED=from-file\nHOST_ONLY=from-file\nABSENT_EVERYWHERE=from-file\n');
+    const manifestEnv = {
+      HOST_EXPORTED: 'manifest-default',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+      // A path token is expanded by the host before launch, so the running
+      // value never equals the embedded default and stays reserved.
+      TOKENIZED: 'agent-bundle:path:plugin-root/data',
+    };
+    // What a host hands the child: the manifest block merged with its own exports.
+    const env: NodeJS.ProcessEnv = {
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+      TOKENIZED: '/installs/curator/data',
+    };
+
+    expect(applyOperatorEnv({ env, manifestEnv, pluginRoot: root }).applied).toEqual(['ABSENT_EVERYWHERE', 'MANIFEST_ONLY']);
+    expect(env).toEqual({
+      ABSENT_EVERYWHERE: 'from-file',
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'from-file',
+      TOKENIZED: '/installs/curator/data',
+    });
+
+    // Without the defaults every present variable is reserved (the self-connecting entry's position).
+    const blind: NodeJS.ProcessEnv = { MANIFEST_ONLY: 'manifest-default' };
+    expect(applyOperatorEnv({ env: blind, pluginRoot: root }).applied).toEqual(['ABSENT_EVERYWHERE', 'HOST_EXPORTED', 'HOST_ONLY']);
+    expect(blind.MANIFEST_ONLY).toBe('manifest-default');
+
+    // The default is matched under Windows' case-insensitive names too.
+    const windows: NodeJS.ProcessEnv = { Manifest_Only: 'manifest-default' };
+    expect(applyOperatorEnv({ env: windows, manifestEnv, platform: 'win32', pluginRoot: root }).applied)
+      .toEqual(['ABSENT_EVERYWHERE', 'HOST_EXPORTED', 'HOST_ONLY', 'MANIFEST_ONLY']);
+    expect(windows.MANIFEST_ONLY).toBe('from-file');
+  });
+
   it('is a no-op with absent files and reports them as absent', async () => {
     const root = await createRoot();
     const env: NodeJS.ProcessEnv = { KEEP: '1' };

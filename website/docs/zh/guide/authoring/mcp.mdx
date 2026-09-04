@@ -475,10 +475,12 @@ export default () => createRscMcpServer(application, 'curator');
 外壳，也没有操作者 `.env` 层，因为没有外壳能在模块自身的顶层代码运行之前应用它。源码校验
 会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
 
-同一套生命周期对手写入口也是公开 API，生成外壳在导入服务器模块之前应用的操作者 `.env` 层同样如此
-（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）。这两个导入都会被内联进产出的
-入口，入口保持自包含；`agent-bundle/launch-env` 会被别名到每一个 stdio 入口，因此无论入口有没有外壳都能
-解析。需要这一层的自行连接入口应在第一行自行应用它，并像生成外壳一样锚定（产物根目录是 `mcp/` 的上一级）：
+同一套生命周期对手写入口也是公开 API，生成外壳先于服务器模块导入的操作者 `.env` 层同样如此——因此即使
+在模块顶层读取 `process.env` 也能看到合成后的环境（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）。
+这两个导入都会被内联进产出的入口，入口保持自包含；`agent-bundle/launch-env` 会被别名到每一个 stdio
+入口，因此无论入口有没有外壳都能解析。需要这一层的自行连接入口应在第一行自行应用它，并像生成外壳一样
+锚定（产物根目录是 `mcp/` 的上一级）；还可以把自己声明的 `env` 块作为 `manifestEnv` 传入，让宿主透传的
+清单默认值像在生成外壳中那样让位于文件：
 
 ```ts
 import { fileURLToPath } from 'node:url';
@@ -486,12 +488,14 @@ import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
 
 applyOperatorEnv({
+  manifestEnv: { LIBRARY_URL: 'https://library.example' },
   pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
 });
 ```
 
 `operatorEnvPluginRoot` 会优先采用宿主设置的 `AGENT_BUNDLE_PLUGIN_ROOT`，否则回退到你传入的目录，
-因此该入口读取的文件与同一个包的钩子包装器和 CLI 完全一致。
+因此该入口读取的文件与同一个包的钩子包装器和 CLI 完全一致。不传 `manifestEnv` 时，宿主设置的每个变量
+都会被保留，清单默认值也在其中。
 
 ## 在配置中声明服务器
 

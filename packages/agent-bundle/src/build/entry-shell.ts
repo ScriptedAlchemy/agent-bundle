@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
-import { operatorEnvImports, operatorEnvStatement } from './launch-env-shell.ts';
+import { operatorEnvLayerImport, operatorEnvLayerImports, operatorEnvLayerStatement } from './launch-env-shell.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
@@ -69,22 +69,57 @@ export const terminalCapabilityRuntimePath = (): string => runtimeModulePath('te
 export type GeneratedExecutableSurface = 'cli' | 'script';
 
 /**
- * The generated stdio MCP entry body for a factory-exporting server module:
- * the lifecycle installs the console guard before the consumer module
- * evaluates, so `loadEntry` stays a deferred dynamic import — which is also
- * what lets the operator `.env` layer land before any server code reads
- * `process.env`.
+ * The generated prelude of a stdio MCP entry: the stdout guard, then the
+ * operator `.env` layer (#469), as one virtual module the shell imports
+ * first. stdout is the protocol wire on a stdio server, so the guard must be
+ * in place before the server module's own top level runs — and under
+ * bundling that top level precedes the shell body whichever way the module
+ * is imported, so only an earlier import can install it. The guard is the
+ * one `agent-bundle/mcp-entry` exports; the lifecycle adopts it rather than
+ * installing a second. Hook wrappers and the CLI bin import the env-only
+ * layer instead: they legitimately write stdout.
+ */
+export const stdioPreludeSpecifier = 'agent-bundle/stdio-prelude';
+
+/** The import every generated stdio MCP entry places first. */
+export const stdioPreludeImport = `import ${JSON.stringify(stdioPreludeSpecifier)};`;
+
+/** The prelude source: guard first, so nothing after it can reach stdout; then the layer with the server's manifest `env` defaults. */
+export const stdioPreludeModuleSource = (manifestEnv?: Readonly<Record<string, string>>): string => [
+  ...operatorEnvLayerImports,
+  `import { redirectConsoleToStderr } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
+  '',
+  'redirectConsoleToStderr();',
+  operatorEnvLayerStatement(manifestEnv),
+  '',
+].join('\n');
+
+/** The prelude as the virtual module an Rslib entry serves beside its shell. */
+export const stdioPreludeVirtualModule = (
+  manifestEnv?: Readonly<Record<string, string>>,
+): { readonly name: string; readonly source: string } => ({
+  name: stdioPreludeSpecifier,
+  source: stdioPreludeModuleSource(manifestEnv),
+});
+
+/**
+ * The generated stdio MCP entry body for a factory-exporting server module.
+ * The prelude is the first import and the server module a static import
+ * after it: the bundler inlines every module of the single-chunk bundle
+ * ahead of the entry body and places a dynamic import's target ahead of the
+ * static ones, so only static import order puts the guard and the layer
+ * before the server module's own top level (see launchEnvLayerSpecifier).
  */
 export const generatedStdioMcpEntrySource = (options: {
   readonly entrySource: string;
   readonly serverName: string;
 }): string => [
-  ...operatorEnvImports({ importsFileUrlToPath: false }),
+  stdioPreludeImport,
   `import { runGeneratedStdioMcpEntry } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
+  `import * as serverModule from ${JSON.stringify(options.entrySource)};`,
   '',
-  operatorEnvStatement,
   'await runGeneratedStdioMcpEntry({',
-  `  loadEntry: () => import(${JSON.stringify(options.entrySource)}),`,
+  '  loadEntry: async () => serverModule,',
   `  serverName: ${JSON.stringify(options.serverName)},`,
   '});',
   '',
@@ -344,6 +379,12 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   const plainIndent = options.state === undefined ? '  ' : '    ';
   const stateFallback = options.stateFallback ?? 'cwd';
   return [
+    // The artifact-hosted executable is part of an installed pack, so it
+    // applies the pack's operator `.env` layer (#469) — first, before the
+    // route, provider, and state modules it imports evaluate, so a
+    // module-level `process.env` read sees the composed environment. The
+    // npm package bin runs from the operator's own shell and reads none.
+    ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
     `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
@@ -351,18 +392,9 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...pluginRootImports(stateFallback),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
-    // The artifact-hosted executable is part of an installed pack, so it
-    // reads the pack's operator `.env` layer (#469); the npm package bin
-    // runs from the operator's own shell and reads none. The artifact
-    // plugin-root imports (#468) already bind `fileURLToPath`.
-    ...(stateFallback === 'artifact' ? operatorEnvImports({ importsFileUrlToPath: true }) : []),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    // Before the state owner opens and before any command runs; route modules
-    // are static imports, so a module-level `process.env` read still sees the
-    // host environment only (documented).
-    ...(stateFallback === 'artifact' ? [operatorEnvStatement] : []),
     pluginRootDeclaration(stateFallback),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
