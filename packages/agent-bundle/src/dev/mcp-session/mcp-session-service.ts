@@ -44,6 +44,7 @@ import {
 } from './mcp-session-apps.ts';
 
 import {
+  McpSessionError,
   McpSessionServiceCloseError,
   McpSessionStaleEpochError,
   type McpClient,
@@ -55,7 +56,8 @@ import {
   type StdioTransport,
 } from './mcp-session-types.ts';
 
-export { McpSessionServiceCloseError, McpSessionStaleEpochError };
+export { McpSessionError, McpSessionServiceCloseError, McpSessionStaleEpochError };
+export type { McpSessionErrorCode } from './mcp-session-types.ts';
 export { mcpAppClientCapabilities };
 export { McpSession } from './mcp-session.ts';
 export type {
@@ -251,7 +253,7 @@ export class McpSessionService {
   }
 
   async open(options: OpenMcpSessionOptions): Promise<McpSession> {
-    if (this.#closed) throw new Error('MCP session service is closed.');
+    if (this.#closed) throw McpSessionError.serviceClosed();
     const timeoutMs = requestOptions(options).timeout;
     const opening = openingSession();
     this.#openingSessions.add(opening);
@@ -303,7 +305,7 @@ export class McpSessionService {
         const target = options.target;
         const runtime = yield* liftTry(() => this.#runtime(target));
         if (options.serverName.trim().length === 0) {
-          return yield* Effect.fail(new Error('MCP server name must be nonempty.'));
+          return yield* Effect.fail(McpSessionError.invalidServerName());
         }
         const epochReference = yield* Effect.acquireRelease(
           liftPromise(() => this.#epochStore.acquireEpochReference(options.epochId)),
@@ -345,7 +347,7 @@ export class McpSessionService {
         }));
         constructed = session;
         yield* liftPromise(() => session.initialize({ signal: options.signal }));
-        if (this.#closed) return yield* Effect.fail(new Error('MCP session service is closed.'));
+        if (this.#closed) return yield* Effect.fail(McpSessionError.serviceClosed());
         this.#sessions.set(sessionId, {
           appLeaseCount: 0,
           closeWatchers: new Set(),
