@@ -1,5 +1,8 @@
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
+
+import { Effect, FileSystem, Option } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 
 import capabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import {
@@ -23,6 +26,7 @@ import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
+import { isPlatformErrno, readFileString, runWithPlatform } from '../effect/platform.ts';
 
 /**
  * Agent Plugins 1.0.0 bytes-at-rest validation for the `portable` target.
@@ -128,17 +132,19 @@ const displayPath = (root: string, path: string): string => relative(root, path)
 const schemaVersion = (identifier: unknown): string | undefined =>
   typeof identifier === 'string' ? schemaVersionPattern.exec(identifier)?.[1] : undefined;
 
-const fileKind = async (path: string): Promise<'directory' | 'file' | 'missing' | 'other'> => {
-  try {
-    const metadata = await stat(path);
-    if (metadata.isDirectory()) return 'directory';
-    if (metadata.isFile()) return 'file';
-    return 'other';
-  } catch (error) {
-    if (isErrno(error, 'ENOENT') || isErrno(error, 'ENOTDIR') || isErrno(error, 'ELOOP')) return 'missing';
-    throw error;
-  }
-};
+type FileKind = 'directory' | 'file' | 'missing' | 'other';
+
+/** `stat` follows symlinks, as the §6.2 "resolves to a regular file" wording requires. */
+const fileKind = Effect.fnUntraced(function* (path: string): Effect.fn.Return<FileKind, PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.stat(path).pipe(
+    Effect.map((metadata): FileKind =>
+      metadata.type === 'Directory' ? 'directory' : metadata.type === 'File' ? 'file' : 'other'),
+    Effect.catch((error) => isPlatformErrno(error, 'ENOENT', 'ENOTDIR', 'ELOOP')
+      ? Effect.succeed<FileKind>('missing')
+      : Effect.fail(error)),
+  );
+});
 
 /**
  * §4.1 plugin-relative path: begins with `./` and stays inside the plugin root
@@ -151,19 +157,21 @@ const pluginRelativeTarget = (pluginDirectory: string, value: string): string | 
   return contained === undefined ? undefined : join(pluginDirectory, contained);
 };
 
-const readDocuments = async (
+interface ReadDocumentsResult {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly documents: readonly ParsedDocument[];
+}
+
+const readDocuments = Effect.fnUntraced(function* (
   pluginDirectory: string,
   target: string,
   overrides: Readonly<Partial<Record<DocumentPath, string>>>,
-): Promise<Readonly<{
-  readonly diagnostics: readonly Diagnostic[];
-  readonly documents: readonly ParsedDocument[];
-}>> => {
+): Effect.fn.Return<ReadDocumentsResult, PlatformError, FileSystem.FileSystem> {
   const diagnostics: Diagnostic[] = [];
   const documents: ParsedDocument[] = [];
   for (const contract of pinnedDocumentContracts) {
     const file = join(pluginDirectory, contract.path);
-    const kind = await fileKind(file);
+    const kind = yield* fileKind(file);
     const override = overrides[contract.path];
     if (kind === 'missing') {
       if (contract.required) {
@@ -189,9 +197,8 @@ const readDocuments = async (
     if (override !== undefined) {
       source = override;
     } else {
-      try {
-        source = await readFile(file, 'utf8');
-      } catch {
+      const read = yield* readFileString(file).pipe(Effect.option);
+      if (Option.isNone(read)) {
         diagnostics.push(diagnostic(
           'AB6035',
           `${contract.path} could not be read for pinned-schema validation.`,
@@ -200,6 +207,7 @@ const readDocuments = async (
         ));
         continue;
       }
+      source = read.value;
     }
     let value: unknown;
     try {
@@ -222,7 +230,7 @@ const readDocuments = async (
     diagnostics: freezeDiagnostics(diagnostics),
     documents: Object.freeze(documents),
   });
-};
+});
 
 const versionAgreementDiagnostics = (
   documents: readonly ParsedDocument[],
@@ -269,12 +277,12 @@ const headerDiagnostics = (
   target: string,
 ): readonly Diagnostic[] => ruleDiagnostics(serverName, portableHeaderIssues(headers), target);
 
-const stdioDiagnostics = async (
+const stdioDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   serverName: string,
   server: Readonly<Record<string, unknown>>,
   target: string,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
   const command = server['command'];
   const diagnostics: Diagnostic[] = [
     ...ruleDiagnostics(serverName, portableCommandIssues(command), target),
@@ -282,7 +290,7 @@ const stdioDiagnostics = async (
   // Only the byte lane can prove a plugin-relative command is a bundled regular file.
   if (typeof command === 'string' && command.startsWith('./') && diagnostics.length === 0) {
     const resolved = pluginRelativeTarget(pluginDirectory, command);
-    if (resolved !== undefined && (await fileKind(resolved)) !== 'file') {
+    if (resolved !== undefined && (yield* fileKind(resolved)) !== 'file') {
       diagnostics.push(diagnostic(
         'AB6036',
         `mcp.json/mcpServers/${serverName}/command ${JSON.stringify(command)} does not resolve to a bundled regular file (Agent Plugins 1.0.0 §7.2.1).`,
@@ -296,13 +304,13 @@ const stdioDiagnostics = async (
     ...ruleDiagnostics(serverName, portableEnvKeyIssues(server['env']), target),
   );
   return freezeDiagnostics(diagnostics);
-};
+});
 
-const serverDiagnostics = async (
+const serverDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   documents: readonly ParsedDocument[],
   target: string,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
   const mcp = documents.find((document) => document.path === 'mcp.json');
   if (mcp === undefined || !isRecord(mcp.value) || !isRecord(mcp.value['mcpServers'])) return Object.freeze([]);
   const diagnostics: Diagnostic[] = [];
@@ -310,7 +318,7 @@ const serverDiagnostics = async (
     if (!isRecord(server)) continue;
     switch (server['type']) {
       case 'stdio':
-        diagnostics.push(...await stdioDiagnostics(pluginDirectory, serverName, server, target));
+        diagnostics.push(...yield* stdioDiagnostics(pluginDirectory, serverName, server, target));
         break;
       case 'sse':
       case 'streamable-http':
@@ -323,14 +331,15 @@ const serverDiagnostics = async (
     }
   }
   return freezeDiagnostics(diagnostics);
-};
+});
 
-const skillDiagnostics = async (
+const skillDiagnostics = Effect.fnUntraced(function* (
   pluginDirectory: string,
   target: string,
-): Promise<readonly Diagnostic[]> => {
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
   const skillsRoot = join(pluginDirectory, 'skills');
-  const kind = await fileKind(skillsRoot);
+  const kind = yield* fileKind(skillsRoot);
   if (kind === 'missing') return Object.freeze([]);
   if (kind !== 'directory') {
     return freezeDiagnostics([diagnostic(
@@ -341,23 +350,49 @@ const skillDiagnostics = async (
     )]);
   }
   const diagnostics: Diagnostic[] = [];
-  const entries = (await readdir(skillsRoot, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const skillDirectory = join(skillsRoot, entry.name);
-    if ((await fileKind(skillDirectory)) !== 'directory') continue;
+  const entries = (yield* fs.readDirectory(skillsRoot))
+    .sort((left, right) => left.localeCompare(right));
+  for (const name of entries) {
+    const skillDirectory = join(skillsRoot, name);
+    if ((yield* fileKind(skillDirectory)) !== 'directory') continue;
     const skillFile = join(skillDirectory, 'SKILL.md');
-    if ((await fileKind(skillFile)) === 'file') continue;
+    if ((yield* fileKind(skillFile)) === 'file') continue;
     diagnostics.push(diagnostic(
       'AB6036',
-      `skills/${entry.name} has no regular SKILL.md file, so clients skip it (Agent Plugins 1.0.0 §7.1).`,
+      `skills/${name} has no regular SKILL.md file, so clients skip it (Agent Plugins 1.0.0 §7.1).`,
       'error',
       target,
     ));
   }
   return freezeDiagnostics(diagnostics);
-};
+});
 
+/**
+ * The document, server, and skill lanes as one `FileSystem` program;
+ * `validatePortablePluginFiles` runs it beside the raw symlink lane.
+ */
+export const portablePluginByteDiagnostics = Effect.fnUntraced(function* (
+  pluginDirectory: string,
+  target: string,
+  overrides: Readonly<Partial<Record<DocumentPath, string>>>,
+): Effect.fn.Return<readonly Diagnostic[], PlatformError, FileSystem.FileSystem> {
+  const [documents, skills] = yield* Effect.all([
+    readDocuments(pluginDirectory, target, overrides),
+    skillDiagnostics(pluginDirectory, target),
+  ], { concurrency: 'unbounded' });
+  return freezeDiagnostics([
+    ...documents.diagnostics,
+    ...versionAgreementDiagnostics(documents.documents, target),
+    ...yield* serverDiagnostics(pluginDirectory, documents.documents, target),
+    ...skills,
+  ]);
+});
+
+/**
+ * Stays on `node:fs`: §4.1 containment is about link identity (`Dirent`
+ * symlink types, `lstat` of the root), which the pinned `FileSystem` cannot
+ * express — `stat` follows links and `readDirectory` returns names only.
+ */
 const symlinkDiagnostics = async (
   pluginDirectory: string,
   target: string,
@@ -425,18 +460,11 @@ export const validatePortablePluginFiles = async (
   options: ValidatePortablePluginFilesOptions,
 ): Promise<readonly Diagnostic[]> => {
   const pluginDirectory = resolve(options.pluginDirectory);
-  const [documents, skills, symlinks] = await Promise.all([
-    readDocuments(pluginDirectory, options.target, options.documents ?? {}),
-    skillDiagnostics(pluginDirectory, options.target),
+  const [bytes, symlinks] = await Promise.all([
+    runWithPlatform(portablePluginByteDiagnostics(pluginDirectory, options.target, options.documents ?? {})),
     symlinkDiagnostics(pluginDirectory, options.target),
   ]);
-  return freezeDiagnostics([
-    ...documents.diagnostics,
-    ...versionAgreementDiagnostics(documents.documents, options.target),
-    ...await serverDiagnostics(pluginDirectory, documents.documents, options.target),
-    ...skills,
-    ...symlinks,
-  ]);
+  return freezeDiagnostics([...bytes, ...symlinks]);
 };
 
 export const validatePortablePlugin = async (

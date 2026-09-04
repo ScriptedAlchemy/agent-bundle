@@ -302,6 +302,20 @@ the first-party CLI's user-facing text — see
   `dev/mcp-session/mcp-session-service.ts`): a scoped temp is removed when
   the scope closes, which is too early there.
 - File handles whose use is bounded by one program: scoped `open`.
+- Text reads: `readFileString(path)` / `readFileBytes(path)` from
+  `src/effect/platform.ts`, not `fs.readFileString`. The service method
+  decodes through `TextDecoder`, which drops a leading UTF-8 BOM; Node's
+  `readFile(path, 'utf8')` keeps it as U+FEFF, and the migrated sites parse
+  JSON and digest what they read, so the bytes must decode as before.
+  `isPlatformErrno(error, ...codes)` is the `isErrno` check for a failure
+  that may still be wrapped in a `PlatformError`, for programs that branch
+  on `ENOENT` / `ENOTDIR` / `ELOOP` the way their `try`/`catch` did.
+- Mixed modules: when one function pairs a link-identity check (`lstat`,
+  `realpath`, `Dirent.isDirectory()`, `O_NOFOLLOW`, `dev`/`ino`) with
+  ordinary reads, the ordinary reads move to the service and the identity
+  check stays on `node:fs` with a one-line comment at the site. Do not
+  replace `lstat` with `stat` to finish the migration: `stat` follows the
+  link, and every one of those checks exists to refuse it.
 - Layer wiring: one composition root per process. The scaffolder provides
   `NodeServices.layer` immediately before its boundary's `runPromise`
   (`src/scaffold-cli.ts`, loaded by `runCli` only once a scaffold is
@@ -339,6 +353,16 @@ the first-party CLI's user-facing text — see
   installer body itself is Effect-native.
 - `events/ipc.ts` inode locks (`open` with `wx` + `stat` identity + Linux
   start time).
+- `eval/workspace-diff.ts`: hashes through an `O_NOFOLLOW` descriptor and
+  compares its `dev`/`ino`/`nlink` with the discovering `lstat`; `opendir`
+  for `Dirent` kinds. `build/validate-artifact.ts` `snapshotManifest`
+  (`lstat` / read / `lstat` `dev`/`ino` identity), the `lstat` rows in
+  `validate-artifact-modules.ts`, `pack-inventory.ts`, `eval/artifact.ts`,
+  `eval/fixtures.ts`, `eval/graders.ts`, and the `Dirent`-typed listings in
+  `eval/codex-plugins.ts` and `host-contracts/*` `symlinkDiagnostics`
+  (a symlinked directory is not a directory to them). `declaration-diagnostics.ts`'s
+  synchronous `existsSync` probe beside `createRequire`'s synchronous
+  resolution.
 - Synchronous SQLite setup (`rsc-runtime/src/state/sqlite.ts`).
 - `dev/watcher.ts`: chokidar stays. `FileSystem.watch` is a thin `fs.watch`
   with create/update/remove only — no `ignored` callbacks, readiness, or the
@@ -374,22 +398,36 @@ split. `undici` is not pulled into the bundle.
 `packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
 layer: `platformLayer` (the `NodeServices` union composed from
 `@effect/platform-node-shared`), `withTempDirectory`, `ensuringRemoved`,
-`unwrapPlatformError`, and `runWithPlatform`, which provides the layer and
+`unwrapPlatformError`, `isPlatformErrno`, `readFileString` /
+`readFileBytes`, and `runWithPlatform`, which provides the layer and
 unwraps `PlatformError` before handing off to `boundary.ts`'s `runPromise`.
-It is the only module that imports `effect/PlatformError`: `boundary.ts` is
-bundled into every emitted hook wrapper, and the error class would drag
-`Data.TaggedError` into each one (measured: +12 kB per hook). Phase-1
-callers are the throwaway artifact in `api.ts` (`listMcp` / `invokeMcp` /
-`runMcp` / `listHooks` / `simulateHook` without `artifact`) and the Codex
-validator's schema-generation directory, both through `withTempDirectory`,
-and `routes/typegen.ts`'s `writeRouteTypesProgram` (the atomic
-`routes.d.ts` publish, through `ensuringRemoved`; `writeRouteTypes` keeps
-its Promise signature via `runWithPlatform`). The sibling `routes/graph.ts`
-reads stay raw: `compileRouteGraph` is the compiler/cold-start discovery
-path, and lifting only its two async reads would add an Effect runtime per
-compile for nothing. Emitted artifacts, hook wrappers, and compiler hot
-paths never import this module; the dev server picks it up in phase 2
-through `makeScopedEffectRuntime(platformLayer)`.
+It is the only module that imports `effect/PlatformError` at run time
+(`import type` is erased and fine): `boundary.ts` is bundled into every
+emitted hook wrapper, and the error class would drag `Data.TaggedError`
+into each one (measured: +12 kB per hook). Phase-1 callers are the
+throwaway artifact in `api.ts` (`listMcp` / `invokeMcp` / `runMcp` /
+`listHooks` / `simulateHook` without `artifact`) and the Codex validator's
+schema-generation directory, both through `withTempDirectory`, and
+`routes/typegen.ts`'s `writeRouteTypesProgram` (the atomic `routes.d.ts`
+publish, through `ensuringRemoved`; `writeRouteTypes` keeps its Promise
+signature via `runWithPlatform`). Phase 2 (ordinary-I/O modules, behind
+command dispatch, 2026-09-03) moved the ordinary reads, copies, and temp
+directories of `host-contracts/{claude,cursor,portable}-plugin-validation.ts`
+and `native-codex-contract.ts`, `services/{hook-service,mcp-service,mcp-run}.ts`
+(the MCP client's plugin-data directory is a `withTempDirectory` bracket;
+`mcp-run`'s SIGINT/SIGTERM forwarding is a scoped `acquireRelease`), the
+`eval/*` harness readers, `fixtures.ts` materialization and the Codex trial
+home, and the post-build readers `build/validate-artifact*.ts`,
+`pack-inventory.ts` — each through `runWithPlatform` at its existing
+Promise signature, with the link-identity checks kept raw per the
+carve-outs above. The sibling `routes/graph.ts` reads stay raw:
+`compileRouteGraph` is the compiler/cold-start discovery path, and lifting
+only its two async reads would add an Effect runtime per compile for
+nothing. Emitted artifacts, hook wrappers, compiler hot paths, and the
+modules `cli.ts` loads eagerly never import this module (`cli.test.ts`
+fails if `--version` / `--help` resolve an `effect` module); the dev server
+picks it up in phase 2's second PR through
+`makeScopedEffectRuntime(platformLayer)`.
 
 ### Terminal and Stdio: user-facing CLI text
 
@@ -554,7 +592,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
-| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 

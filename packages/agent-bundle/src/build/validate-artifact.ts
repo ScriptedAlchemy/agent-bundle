@@ -9,6 +9,7 @@ import type {
 } from '../adapters/types.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { dataArrayValues, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { validatePortablePluginFiles } from '../host-contracts/portable-plugin-validation.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
@@ -155,6 +156,7 @@ const sameManifestSnapshot = (left: ManifestSnapshot, right: ManifestSnapshot): 
   left.inode === right.inode &&
   left.bytes.equals(right.bytes);
 
+/** Stays on `lstat`: the read is bracketed by a `dev`/`ino` identity check the pinned `FileSystem` cannot make. */
 const snapshotManifest = async (path: string): Promise<ManifestSnapshot> => {
   const initialMetadata = await lstat(path);
   if (!initialMetadata.isFile()) throw new Error('Artifact manifest is not a regular file.');
@@ -179,7 +181,7 @@ const inspectArtifact = async (context: ValidateArtifactOptions): Promise<Artifa
   ) {
     try {
       allowedEpochStagingMarker = isEpochStagingMarker(
-        await readFile(resolve(context.artifactRoot, epochStagingMarkerName), 'utf8'),
+        await runWithPlatform(readFileString(resolve(context.artifactRoot, epochStagingMarkerName))),
       );
     } catch {
       allowedEpochStagingMarker = false;
@@ -401,7 +403,7 @@ const validateTargetContracts = async (options: {
       for (const generatedPath of generatedPaths) {
         let parsed: unknown;
         try {
-          parsed = JSON.parse(await readFile(resolve(options.artifactRoot, generatedPath), 'utf8')) as unknown;
+          parsed = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, generatedPath)))) as unknown;
         } catch {
           continue;
         }
@@ -632,7 +634,7 @@ const validateGeneratedFiles = async (options: {
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
-      const document = JSON.parse(await readFile(resolve(options.artifactRoot, file.path), 'utf8')) as unknown;
+      const document = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, file.path)))) as unknown;
       validJson.add(file.path);
       if (!file.path.includes('/')) {
         for (const mcpPath of localMcpPaths(document)) {

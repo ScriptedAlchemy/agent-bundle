@@ -1,9 +1,13 @@
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { Effect, FileSystem } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
+
+import { runWithPlatform } from '../effect/platform.ts';
 import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { isCredentialKey, isProviderEndpointKey } from '../core/credentials.ts';
 import { parseRedactedEventEnvelopes, type RedactedEventEnvelope } from './host-contract.ts';
@@ -194,12 +198,20 @@ export const classifyCodexNativeSmokeFailure = (
   return Object.freeze({ code: `native-codex.${input.stage}.failed`, kind: 'harness-failure' });
 };
 
-export const copyOpaqueCodexAuthState = async (source: string, destination: string): Promise<void> => {
-  const sourceStat = await stat(source);
-  await mkdir(dirname(destination), { recursive: true });
-  await copyFile(source, destination);
-  await chmod(destination, sourceStat.mode & 0o777);
-};
+/** Copies `auth.json` bytes and permission bits into a temporary home; nothing inspects the contents. */
+export const copyOpaqueCodexAuthStateProgram = Effect.fnUntraced(function* (
+  source: string,
+  destination: string,
+): Effect.fn.Return<void, PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  const sourceStat = yield* fs.stat(source);
+  yield* fs.makeDirectory(dirname(destination), { recursive: true });
+  yield* fs.copyFile(source, destination);
+  yield* fs.chmod(destination, sourceStat.mode & 0o777);
+});
+
+export const copyOpaqueCodexAuthState = (source: string, destination: string): Promise<void> =>
+  runWithPlatform(copyOpaqueCodexAuthStateProgram(source, destination));
 
 const snapshotCodexState = (codexHome: string): Promise<CodexStateSnapshot> =>
   snapshotDigestSites<CodexStateSite>(Object.freeze({
@@ -332,10 +344,18 @@ interface CodexSmokeEvidence {
   events: readonly RedactedEventEnvelope[];
 }
 
+/**
+ * The smoke root is not a `withTempDirectory` bracket: its removal is
+ * injectable (`cleanupTemporaryRoot`), and a removal failure is reported in
+ * the result (`cleanup.status`), not thrown — `removeCodexSmokeRoot` owns it.
+ */
 const createCodexSmokeRoot = async (temporaryDirectoryParent: string): Promise<string> => {
   try {
-    await mkdir(temporaryDirectoryParent, { recursive: true });
-    return await mkdtemp(join(temporaryDirectoryParent, 'agent-bundle-codex-smoke-'));
+    return await runWithPlatform(Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(temporaryDirectoryParent, { recursive: true });
+      return yield* fs.makeTempDirectory({ directory: temporaryDirectoryParent, prefix: 'agent-bundle-codex-smoke-' });
+    }));
   } catch (error) {
     throw failedStep('temp-home', error);
   }
@@ -353,18 +373,19 @@ const stageCodexSmokeInputs = async (
   staging: CodexSmokeStaging,
 ): Promise<void> => {
   try {
-    await mkdir(staging.home, { recursive: true });
+    await runWithPlatform(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(staging.home, { recursive: true })));
   } catch (error) {
     throw failedStep('temp-home', error);
   }
   try {
+    // `lstat` stays raw: a candidate that is a dangling symlink must fail as `candidate`, not inside the copy.
     await lstat(options.candidateDirectory);
-    await cp(options.candidateDirectory, staging.candidate, { recursive: true });
+    await runWithPlatform(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.copy(options.candidateDirectory, staging.candidate, { overwrite: true })));
   } catch (error) {
     throw failedStep('candidate', error);
   }
   try {
-    await cp(options.fixtureDirectory, staging.fixture, { recursive: true });
+    await runWithPlatform(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.copy(options.fixtureDirectory, staging.fixture, { overwrite: true })));
     await (options.initializeFixture ?? initializeCodexSmokeFixture)(staging.fixture);
   } catch (error) {
     throw failedStep('fixture', error);
@@ -435,9 +456,9 @@ const removeCodexSmokeRoot = async (
   result: CodexNativeSmokeResult,
 ): Promise<CodexNativeSmokeResult> => {
   try {
-    await (options.cleanupTemporaryRoot ?? (async (temporaryRoot: string) => {
-      await rm(temporaryRoot, { force: true, recursive: true });
-    }))(root);
+    await (options.cleanupTemporaryRoot ?? ((temporaryRoot: string) => runWithPlatform(
+      Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(temporaryRoot, { force: true, recursive: true })),
+    )))(root);
     return result;
   } catch {
     if (result.status === 'passed') {

@@ -1,8 +1,9 @@
 import { loadEnv } from '@rsbuild/core';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
+
+import { Effect, FileSystem, type Scope } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
@@ -10,6 +11,9 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { runPromise } from '../effect/boundary.ts';
+import { liftPromise } from '../effect/lift.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import {
   readTargetMcpServer,
@@ -85,7 +89,7 @@ export const resolveMcpStdioLaunch = async (
   const manifestPath = joinArtifact(targetRoot, runtime.manifestPath);
   let document: unknown;
   try {
-    document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
+    document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(manifestPath)));
   } catch {
     throw new Error(`MCP manifest for target ${JSON.stringify(options.target)} is not valid JSON.`);
   }
@@ -179,7 +183,7 @@ const loadLaunchFileEnv = async (
       const path = resolve(file);
       let contents: string;
       try {
-        contents = await readFile(path, 'utf8');
+        contents = await runWithPlatform(readFileString(path));
       } catch {
         throw new Error(`Cannot read env file ${JSON.stringify(path)}.`);
       }
@@ -204,9 +208,44 @@ const loadLaunchFileEnv = async (
  * `.env` file layer, then the operator's real `process.env` — an exported
  * variable always beats every file- or manifest-declared value.
  */
+/**
+ * SIGINT/SIGTERM forwarding to the child for as long as the wait runs. A
+ * scoped resource: the listeners come off when the scope closes, however
+ * the wait ends — the `try`/`finally` this replaces.
+ */
+export const forwardingSignals = (child: ChildProcess): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const onSigint = (): void => { child.kill('SIGINT'); };
+      const onSigterm = (): void => { child.kill('SIGTERM'); };
+      process.on('SIGINT', onSigint);
+      process.on('SIGTERM', onSigterm);
+      return { onSigint, onSigterm };
+    }),
+    (listeners) => Effect.sync(() => {
+      process.off('SIGINT', listeners.onSigint);
+      process.off('SIGTERM', listeners.onSigterm);
+    }),
+  ).pipe(Effect.asVoid);
+
+/** The child's exit code, or 128 + signal number for the two forwarded signals. */
+const childExitCode = (child: ChildProcess): Promise<number> => new Promise<number>((resolveExit, rejectExit) => {
+  child.once('error', rejectExit);
+  child.once('exit', (code, signal) => {
+    if (code !== null) {
+      resolveExit(code);
+      return;
+    }
+    resolveExit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1);
+  });
+});
+
 export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
   const launch = await resolveMcpStdioLaunch(options);
-  await mkdir(resolve(options.pluginDataRoot), { recursive: true });
+  await runWithPlatform(Effect.flatMap(
+    FileSystem.FileSystem,
+    (fs) => fs.makeDirectory(resolve(options.pluginDataRoot), { recursive: true }),
+  ));
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
@@ -218,26 +257,8 @@ export const runMcpForeground = async (options: RunMcpForegroundOptions): Promis
     stdio: 'inherit',
   });
 
-  const forward = (signal: NodeJS.Signals): void => {
-    child.kill(signal);
-  };
-  const onSigint = (): void => forward('SIGINT');
-  const onSigterm = (): void => forward('SIGTERM');
-  process.on('SIGINT', onSigint);
-  process.on('SIGTERM', onSigterm);
-  try {
-    return await new Promise<number>((resolveExit, rejectExit) => {
-      child.once('error', rejectExit);
-      child.once('exit', (code, signal) => {
-        if (code !== null) {
-          resolveExit(code);
-          return;
-        }
-        resolveExit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1);
-      });
-    });
-  } finally {
-    process.off('SIGINT', onSigint);
-    process.off('SIGTERM', onSigterm);
-  }
+  return runPromise(Effect.scoped(Effect.gen(function* () {
+    yield* forwardingSignals(child);
+    return yield* liftPromise(() => childExitCode(child));
+  })));
 };

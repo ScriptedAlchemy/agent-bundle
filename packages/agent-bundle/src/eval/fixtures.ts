@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
-import { chmod, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { Effect, FileSystem } from 'effect';
+import type { PlatformError } from 'effect/PlatformError';
 import fastGlob from 'fast-glob';
 
 import { digest, sha256File, sha256Hex } from '../core/digest.ts';
@@ -11,6 +13,7 @@ import type { EvalFixture } from './types.ts';
 import { isInside } from '../core/paths.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { runWithPlatform } from '../effect/platform.ts';
 
 
 const runCommand = promisify(execFile);
@@ -160,23 +163,31 @@ export const materializeEvalFixture = async (
   } catch (error) {
     if (!isErrno(error, 'ENOENT')) throw error;
   }
-  await mkdir(destination, { recursive: true });
-
-  for (const entry of options.plan.entries) {
-    const source = join(options.plan.sourcePath, entry.path);
-    const target = join(destination, entry.path);
-    const contents = await readFile(source);
-    if (sha256Hex(contents) !== entry.sha256) {
-      throw fixtureError(
-        'EVAL_FIXTURE_SOURCE_INVALID',
-        `Eval fixture entry ${JSON.stringify(entry.path)} changed after its digest was recorded.`,
-      );
-    }
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, contents);
-    await chmod(target, entry.executable ? 0o755 : 0o644);
-  }
+  await runWithPlatform(copyPlannedEntries(options.plan, destination));
   if (options.plan.git) await initializeGitBaseline(destination);
 
   return Object.freeze({ digest: options.plan.digest, path: destination });
 };
+
+/** The ordinary copy: every planned regular file, re-digested, written with its planned mode. */
+const copyPlannedEntries = Effect.fnUntraced(function* (
+  plan: EvalFixturePlan,
+  destination: string,
+): Effect.fn.Return<void, EvalFixtureError | PlatformError, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(destination, { recursive: true });
+  for (const entry of plan.entries) {
+    const source = join(plan.sourcePath, entry.path);
+    const target = join(destination, entry.path);
+    const contents = yield* fs.readFile(source);
+    if (sha256Hex(contents) !== entry.sha256) {
+      return yield* Effect.fail(fixtureError(
+        'EVAL_FIXTURE_SOURCE_INVALID',
+        `Eval fixture entry ${JSON.stringify(entry.path)} changed after its digest was recorded.`,
+      ));
+    }
+    yield* fs.makeDirectory(dirname(target), { recursive: true });
+    yield* fs.writeFile(target, contents);
+    yield* fs.chmod(target, entry.executable ? 0o755 : 0o644);
+  }
+});

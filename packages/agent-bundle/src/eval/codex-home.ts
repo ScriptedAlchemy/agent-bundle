@@ -1,12 +1,14 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { Effect, FileSystem } from 'effect';
 
 import { meetsMinimumVersion, parseSemanticVersion } from '../core/semver.ts';
 import { copyOpaqueCodexAuthState, withoutProviderApiKeys } from '../host-contracts/native-codex-contract.ts';
 import { digestFileTree } from '../host-contracts/native-host-spine.ts';
 import { withoutEvalCredentialEnvironment } from './credentials.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
+import { runWithPlatform } from '../effect/platform.ts';
 
 /** Mirrors the W1 Codex contract minimum; older CLIs are rejected instead of adapted to. */
 export const minimumCodexEvalVersion = '0.147.0';
@@ -53,22 +55,29 @@ export const codexChildEnvironment = (
   CODEX_HOME: temporaryHome,
 });
 
-export const createTemporaryCodexTrialHome = async (parent: string): Promise<TemporaryCodexTrialHome> => {
-  await mkdir(parent, { recursive: true });
-  const root = await mkdtemp(join(parent, 'agent-bundle-codex-trial-'));
-  const home = join(root, 'home');
-  await mkdir(home, { recursive: true });
-  return Object.freeze({
-    candidate: join(root, 'candidate'),
-    home,
-    root,
-    workspace: join(root, 'workspace'),
-  });
-};
+/**
+ * Ownership of the trial root transfers to the caller (the Codex harness
+ * removes it through `removeTemporaryCodexTrialHome` after recording the
+ * trial), so this is a plain `makeTempDirectory`, not a `withTempDirectory`
+ * bracket.
+ */
+export const createTemporaryCodexTrialHome = (parent: string): Promise<TemporaryCodexTrialHome> =>
+  runWithPlatform(Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(parent, { recursive: true });
+    const root = yield* fs.makeTempDirectory({ directory: parent, prefix: 'agent-bundle-codex-trial-' });
+    const home = join(root, 'home');
+    yield* fs.makeDirectory(home, { recursive: true });
+    return Object.freeze({
+      candidate: join(root, 'candidate'),
+      home,
+      root,
+      workspace: join(root, 'workspace'),
+    });
+  }));
 
-export const removeTemporaryCodexTrialHome = async (root: string): Promise<void> => {
-  await rm(root, { force: true, recursive: true });
-};
+export const removeTemporaryCodexTrialHome = (root: string): Promise<void> =>
+  runWithPlatform(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(root, { force: true, recursive: true })));
 
 /**
  * Copies `auth.json` byte for byte with its original mode. The file is never read as data,

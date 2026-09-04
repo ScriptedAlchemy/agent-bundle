@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
 import {
   validateClaudeSkillFrontmatter,
@@ -112,7 +112,7 @@ export const validateEmittedSkills = async (options: {
   for (const skill of skills) {
     let markdown: string;
     try {
-      markdown = await readFile(resolve(options.artifactRoot, skill.path), 'utf8');
+      markdown = await runWithPlatform(readFileString(resolve(options.artifactRoot, skill.path)));
     } catch {
       diagnostics.push(diagnostic(
         'AB6015',
