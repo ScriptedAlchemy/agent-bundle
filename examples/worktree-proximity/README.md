@@ -57,9 +57,10 @@ The application has four planes:
   Git directory, and linked-worktree identity without throwing for expected
   degradation. `agent-topology` assembles the coordinator's snapshot once per
   request from the request view every provider receives: the agent tree
-  `context.lineage` resolved (own chain plus the live tree) and a read of the
-  mounted intent state through `context.state.read()`; each half carries its
-  own availability, and the provider can only read.
+  `context.lineage` resolved (own chain plus the live tree), a read of the
+  mounted intent state through `context.state.read()`, and the counts of the
+  notices this caller published through `context.notices.published()`; each
+  part carries its own availability, and the provider can only read.
 - **Events** — canonical shared-runtime routes bind actors to worktrees,
   record or clear intent, detect conflicts, render current-actor context,
   release stopped actors, and publish or admit notices.
@@ -79,13 +80,14 @@ store from Git identity data; `gitWorktree.commonDir` remains identity
 evidence only.
 
 `providers.agentTopology` is that snapshot: a provider factory receives the
-request's `host`, `session`, `workspace`, and `lineage` — with the live tree
-([#457](https://github.com/scriptedalchemy/agent-bundle/issues/457)) — plus
-read-only `state` (`read()`) and `notices` (`inbox()`) handles
-([#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)), so the
-coordinator `status` tool reads `providers.agentTopology` and performs no
-second read of its own. Event routes still use the mounted
-`(await agent()).state` handle, because they dispatch.
+request's `host`, `session`, `workspace`, `plugin`, and `lineage` — with the
+live tree ([#457](https://github.com/scriptedalchemy/agent-bundle/issues/457))
+— plus read-only `state` (`read()`) and `notices` (`inbox()`, `published()`)
+handles ([#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)),
+so the coordinator `status` tool reads `providers.agentTopology` and performs
+no read of its own. Event routes still use the mounted `(await agent()).state`
+and `.notices` handles through `withIntent`/`withNotices`, because they
+dispatch and publish.
 
 `worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
 provider value. `useWorktree()` is the hook-shaped variant for Server
@@ -169,8 +171,8 @@ message to one peer, not to the tree.
 current invocation, and `inbox()` only what is pending for the current
 recipient. The coordinator status reports, beside the agent tree, bindings,
 and intents, what became of the notices *the calling agent* published — `pending`,
-`attempted`, `acknowledged`, and the other ledger states, counted from
-`(await agent()).notices.published()`
+`attempted`, `acknowledged`, and the other ledger states, counted by the
+`agent-topology` provider from the request's own `notices.published()`
 ([#460](https://github.com/scriptedalchemy/agent-bundle/issues/460)). That
 view is scoped by the publisher identity the ledger recorded at publish, the
 agent's lineage conversation, so a status call correlated to agent B's

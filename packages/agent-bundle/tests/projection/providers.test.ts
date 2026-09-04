@@ -24,16 +24,18 @@ const keys = ['libraryTooling', 'processLifetime', 'requestView'];
 
 /**
  * What the `request-view` fixture provider reports on a surface that mounts
- * no host conversation (#459): the identity axes as the route reads them, the
+ * no host conversation (#459): the identity axes as the route reads them (the
+ * plugin root is the harness's `.agent-bundle/state` anchor, #468), the
  * runtime error `useAgent()` raises inside a provider, and — where the harness
- * mounts state — the `read`-only state handle and the `inbox`-only notice
- * handle, nothing more.
+ * mounts state — the `read`-only state handle and the `inbox`/`published`-only
+ * notice handle, nothing more.
  */
 const requestView = (surface: { readonly host?: string; readonly mounted: boolean; readonly workspace?: string }) => ({
   handle: 'outside-invocation',
   host: surface.host ?? 'unsupported-surface',
   lineage: 'not-provided',
-  notices: surface.mounted ? { keys: ['inbox'] } : null,
+  notices: surface.mounted ? { keys: ['inbox', 'published'], published: [] } : null,
+  plugin: expect.stringMatching(/[\\/]\.agent-bundle[\\/]state$/u),
   session: 'not-provided',
   state: surface.mounted ? { keys: ['lifetime', 'read'], lifetime: 'workspace-durable', revision: 0 } : null,
   workspace: surface.workspace ?? process.cwd(),
@@ -146,8 +148,10 @@ describe('conventional providers through the harness', () => {
       host: 'agent-bundle-in-memory-projection',
       // The same registry answer the route reads from `request.lineage`, live tree included (#457).
       lineage: { conversation: 'root', depth: 0, siblings: ['child'] },
-      // `inbox()` is the real request-scoped read: no pending notices are addressed to this principal.
-      notices: { inbox: [], keys: ['inbox'] },
+      // `inbox()` and `published()` are the real request-scoped reads: nothing
+      // is addressed to this principal and it published nothing.
+      notices: { inbox: [], keys: ['inbox', 'published'], published: [] },
+      plugin: expect.stringMatching(/[\\/]\.agent-bundle[\\/]state$/u),
       session: 'not-provided',
       state: { keys: ['lifetime', 'read'], lifetime: 'process', revision: 0 },
       workspace: process.cwd(),
@@ -191,7 +195,8 @@ describe('conventional providers through the harness', () => {
       handle: 'outside-invocation',
       host: 'route-unit-host',
       lineage: { conversation: 'child', depth: 1, siblings: ['root'] },
-      notices: { keys: ['inbox'] },
+      notices: { keys: ['inbox', 'published'], published: [] },
+      plugin: expect.stringMatching(/[\\/]\.agent-bundle[\\/]state$/u),
       session: 'root',
       state: { keys: ['lifetime', 'read'], lifetime: 'workspace-durable', revision: 0 },
       workspace: '/tmp/route-unit',

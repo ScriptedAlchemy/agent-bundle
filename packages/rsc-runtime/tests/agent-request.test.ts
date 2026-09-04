@@ -345,6 +345,7 @@ describe('agent request store', () => {
             acknowledge: async () => { throw new Error('unreachable'); },
             inbox: async () => { events.push('inbox'); return []; },
             publish: async () => { throw new Error('unreachable'); },
+            published: async () => { events.push('published'); return [{ id: 'n-1', state: 'attempted' }]; },
             read: async () => [],
           },
         };
@@ -357,6 +358,7 @@ describe('agent request store', () => {
       host: available({ name: 'claude' }, 'native'),
       lineage: available({ conversation: 'root', depth: 0, resolution: 'native', root: 'root', tree: { children: [], roots: [], siblings: [] } }, 'native'),
       noticeLedger: ledger as never,
+      plugin: available({ root: '/plugin', stateRoot: '/plugin/state' }, 'native'),
       providers: async (request) => {
         events.push('providers');
         view = request as unknown as Record<string, unknown>;
@@ -368,7 +370,16 @@ describe('agent request store', () => {
         }
         const snapshot = await request.state!.read({ revision: 3 });
         const pending = await request.notices!.inbox();
-        return { topology: { pending: pending.length, revision: snapshot.revision, siblings: request.lineage.state === 'available' ? request.lineage.value.tree?.siblings.length : undefined } };
+        const published = await request.notices!.published();
+        return {
+          topology: {
+            pending: pending.length,
+            published: published.map((notice) => notice.state),
+            revision: snapshot.revision,
+            siblings: request.lineage.state === 'available' ? request.lineage.value.tree?.siblings.length : undefined,
+            stateRoot: request.plugin.state === 'available' ? request.plugin.value.stateRoot : request.plugin.reason,
+          },
+        };
       },
       state: stateHandle as never,
     }, async () => {
@@ -376,16 +387,19 @@ describe('agent request store', () => {
       return (await agent()).providers;
     });
 
-    // Order: lease open → providers → operation → lease close; the resolver saw the real inbox.
-    expect(events).toEqual(['open:evt-1', 'providers', 'inbox', 'operation', 'close']);
-    expect(result).toEqual({ topology: { pending: 0, revision: 3, siblings: 0 } });
+    // Order: lease open → providers → operation → lease close; the resolver saw the real inbox and published view.
+    expect(events).toEqual(['open:evt-1', 'providers', 'inbox', 'published', 'operation', 'close']);
+    expect(result).toEqual({ topology: { pending: 0, published: ['attempted'], revision: 3, siblings: 0, stateRoot: '/plugin/state' } });
     expect(Object.isFrozen(result)).toBe(true);
     // The view is frozen, carries exactly the read-only members, and the handles are narrowed by construction.
     expect(Object.isFrozen(view)).toBe(true);
-    expect(Object.keys(view!).sort()).toEqual(['host', 'lineage', 'notices', 'session', 'signal', 'state', 'workspace']);
+    expect(Object.keys(view!).sort()).toEqual(['host', 'lineage', 'notices', 'plugin', 'session', 'signal', 'state', 'workspace']);
     expect(Object.keys(view!['state'] as object).sort()).toEqual(['lifetime', 'read']);
-    expect(Object.keys(view!['notices'] as object)).toEqual(['inbox']);
+    expect(Object.keys(view!['notices'] as object).sort()).toEqual(['inbox', 'published']);
+    expect(Object.isFrozen(view!['state'])).toBe(true);
+    expect(Object.isFrozen(view!['notices'])).toBe(true);
     expect(view!['host']).toEqual(available({ name: 'claude' }, 'native'));
+    expect(view!['plugin']).toEqual(available({ root: '/plugin', stateRoot: '/plugin/state' }, 'native'));
     expect(view!['session']).toEqual(unavailable());
     // Providers never observe a request handle, so no write path is reachable through `agent()`.
     expect(inside).toBe('outside-invocation');

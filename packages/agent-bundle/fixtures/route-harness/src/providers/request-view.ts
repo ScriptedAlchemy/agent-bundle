@@ -3,11 +3,12 @@ import type { AgentProviderContext } from 'agent-bundle';
 
 /**
  * A conventional provider that reports what the request view hands it (#459):
- * the identity axes and lineage as the route will read them, the read-only
- * `state`/`notices` handles (their keys prove the narrowing; `state.read()` is
- * a pure read), and the runtime error `useAgent()` raises because providers
- * run outside the request's async context. `notices.inbox()` records an
- * exposure receipt on the ledger, so it runs only when a tool input asks.
+ * the identity axes (plugin root included) and lineage as the route will read
+ * them, the read-only `state`/`notices` handles (their keys prove the
+ * narrowing; `state.read()` and `notices.published()` are pure reads), and the
+ * runtime error `useAgent()` raises because providers run outside the
+ * request's async context. `notices.inbox()` records an exposure receipt on
+ * the ledger, so it runs only when a tool input asks.
  */
 export default async function requestView(context: AgentProviderContext) {
   let handle: string;
@@ -35,8 +36,10 @@ export default async function requestView(context: AgentProviderContext) {
       ? null
       : {
           keys: Object.keys(context.notices).sort(),
+          published: (await context.notices.published()).map((notice) => notice.id),
           ...(inbox ? { inbox: (await context.notices.inbox()).map((notice) => notice.id) } : {}),
         },
+    plugin: context.plugin.state === 'available' ? context.plugin.value.stateRoot : context.plugin.reason,
     session: context.session.state === 'available' ? context.session.value.sessionId : context.session.reason,
     state: context.state === undefined
       ? null
