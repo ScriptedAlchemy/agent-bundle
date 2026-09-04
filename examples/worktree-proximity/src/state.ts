@@ -14,20 +14,22 @@ const provenance = z.enum(['native', 'registry', 'inferred', 'confirmed', 'trans
 
 export type IdentityProvenance = z.output<typeof provenance>;
 
-export const ActorSchema = z
+/**
+ * Which worktree an actor works in. This is the one fact about an actor the
+ * runtime's lineage registry cannot know — the agent tree itself (parent,
+ * root, depth, who is alive) is `(await agent()).lineage`, so nothing about
+ * it is recorded here.
+ */
+export const BindingSchema = z
   .object({
-    id: nonEmpty,
-    kind: z.enum(['root', 'child']),
-    parentSessionId: nonEmpty.optional(),
+    actorId: nonEmpty,
     provenance: z
       .object({
-        id: provenance,
-        parentSessionId: provenance.optional(),
-        worktreeRoot: provenance.optional(),
+        actorId: provenance,
+        worktreeRoot: provenance,
       })
       .strict(),
-    status: z.enum(['active', 'stopped']),
-    worktreeRoot: nonEmpty.optional(),
+    worktreeRoot: nonEmpty,
   })
   .strict();
 
@@ -57,90 +59,54 @@ export const EdgeRefusalSchema = z
   })
   .strict();
 
-export const TopologyStateSchema = z
+export const IntentStateSchema = z
   .object({
     activities: z.array(ActivitySchema),
-    actors: z.array(ActorSchema),
+    bindings: z.array(BindingSchema),
     refusals: z.array(EdgeRefusalSchema),
   })
   .strict();
 
-export type Actor = z.output<typeof ActorSchema>;
+export type Binding = z.output<typeof BindingSchema>;
 export type Activity = z.output<typeof ActivitySchema>;
-export type TopologyState = z.output<typeof TopologyStateSchema>;
+export type IntentState = z.output<typeof IntentStateSchema>;
 
-const actorObservedSchema = ActorSchema.omit({ worktreeRoot: true }).strict();
-const actorBoundSchema = z
-  .object({
-    actorId: nonEmpty,
-    provenance,
-    worktreeRoot: nonEmpty,
-  })
-  .strict();
-const actorStoppedSchema = z
+const actorReleasedSchema = z
   .object({
     actorId: nonEmpty,
     observedAt: nonEmpty,
   })
   .strict();
 
-export const topologyEventSchemas = {
-  actorBound: actorBoundSchema,
-  actorObserved: actorObservedSchema,
-  actorStopped: actorStoppedSchema,
+export const intentEventSchemas = {
+  /** An actor was seen working in a worktree; a later binding for the same actor replaces the earlier one. */
+  actorBound: BindingSchema,
+  /** The actor stopped: its binding and any intent it still held are gone. */
+  actorReleased: actorReleasedSchema,
   edgeRefused: EdgeRefusalSchema,
   intentRecorded: ActivitySchema,
 } as const;
 
-export type TopologyEvents = typeof topologyEventSchemas;
+export type IntentEvents = typeof intentEventSchemas;
 
-const replaceActor = (
-  actors: readonly Actor[],
-  actorId: string,
-  update: (actor: Actor) => Actor,
-): Actor[] => actors.map((actor) => actor.id === actorId ? update(actor) : actor);
-
-export const topologyStateDefinition = defineState({
-  events: topologyEventSchemas,
-  id: 'worktree-proximity/topology',
+export const intentStateDefinition = defineState({
+  events: intentEventSchemas,
+  id: 'worktree-proximity/intent',
   initial: {
     activities: [],
-    actors: [],
+    bindings: [],
     refusals: [],
   },
   lifetime: 'workspace-durable',
-  reduce: (state, event): TopologyState => {
+  reduce: (state, event): IntentState => {
     switch (event.name) {
-      case 'actorObserved': {
-        const previous = state.actors.find((actor) => actor.id === event.payload.id);
-        const actor = previous === undefined
-          ? event.payload
-          : {
-              ...event.payload,
-              ...(previous.worktreeRoot === undefined ? {} : { worktreeRoot: previous.worktreeRoot }),
-              provenance: {
-                ...event.payload.provenance,
-                ...(previous.provenance.worktreeRoot === undefined
-                  ? {}
-                  : { worktreeRoot: previous.provenance.worktreeRoot }),
-              },
-            };
-        return {
-          ...state,
-          actors: [...state.actors.filter((candidate) => candidate.id !== actor.id), actor],
-        };
-      }
       case 'actorBound':
         return {
           ...state,
-          actors: replaceActor(state.actors, event.payload.actorId, (actor) => ({
-            ...actor,
-            provenance: {
-              ...actor.provenance,
-              worktreeRoot: event.payload.provenance,
-            },
-            worktreeRoot: event.payload.worktreeRoot,
-          })),
+          bindings: [
+            ...state.bindings.filter((binding) => binding.actorId !== event.payload.actorId),
+            event.payload,
+          ],
         };
       case 'intentRecorded':
         return {
@@ -150,14 +116,11 @@ export const topologyStateDefinition = defineState({
             event.payload,
           ],
         };
-      case 'actorStopped':
+      case 'actorReleased':
         return {
           ...state,
           activities: state.activities.filter((activity) => activity.actorId !== event.payload.actorId),
-          actors: replaceActor(state.actors, event.payload.actorId, (actor) => ({
-            ...actor,
-            status: 'stopped',
-          })),
+          bindings: state.bindings.filter((binding) => binding.actorId !== event.payload.actorId),
         };
       case 'edgeRefused':
         return {
@@ -166,16 +129,16 @@ export const topologyStateDefinition = defineState({
         };
       default: {
         const unreachable: never = event;
-        throw new Error(`Unhandled topology event ${String(unreachable)}`);
+        throw new Error(`Unhandled intent event ${String(unreachable)}`);
       }
     }
   },
-  schema: TopologyStateSchema,
+  schema: IntentStateSchema,
   version: 1,
 });
 
 export default defineState({
-  ...topologyStateDefinition,
-  id: 'worktree-proximity/topology',
+  ...intentStateDefinition,
+  id: 'worktree-proximity/intent',
   lifetime: 'workspace-durable',
 });

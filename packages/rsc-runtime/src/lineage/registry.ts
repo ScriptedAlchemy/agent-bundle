@@ -4,7 +4,10 @@ import {
   available,
   unavailable,
   type AgentLineage,
+  type AgentLineagePeer,
   type AgentLineageResolution,
+  type AgentLineageSubagent,
+  type AgentLineageTree,
   type Observed,
 } from '../agent-request.js';
 import { lineageCarrier, type LineageHost } from '../lineage-native.js';
@@ -222,14 +225,8 @@ const cursorWorkspace = (native: Readonly<Record<string, unknown>>): string | un
 const sameWorkspace = (left: string | undefined, right: string | undefined): boolean =>
   left === undefined || right === undefined || left === right;
 
-const lineageOf = (node: LineageNode, generation: string | undefined, resolution: AgentLineageResolution): AgentLineage => Object.freeze({
-  conversation: node.id,
-  depth: node.depth,
-  ...(generation === undefined ? {} : { generation }),
-  ...(node.parent === undefined ? {} : { parent: node.parent }),
-  resolution,
-  root: node.root,
-  ...(node.depth === 0
+const subagentOf = (node: LineageNode): { readonly subagent: AgentLineageSubagent } | Record<never, never> =>
+  node.depth === 0
     ? {}
     : {
         subagent: Object.freeze({
@@ -238,8 +235,36 @@ const lineageOf = (node: LineageNode, generation: string | undefined, resolution
           ...(node.toolCallId === undefined ? {} : { toolCallId: node.toolCallId }),
           ...(node.type === undefined ? {} : { type: node.type }),
         }),
-      }),
+      };
+
+const lineageOf = (
+  node: LineageNode,
+  generation: string | undefined,
+  resolution: AgentLineageResolution,
+  tree: AgentLineageTree | undefined,
+): AgentLineage => Object.freeze({
+  conversation: node.id,
+  depth: node.depth,
+  ...(generation === undefined ? {} : { generation }),
+  ...(node.parent === undefined ? {} : { parent: node.parent }),
+  resolution,
+  root: node.root,
+  ...subagentOf(node),
+  ...(tree === undefined ? {} : { tree }),
 });
+
+const peerOf = (node: LineageNode, resolution: AgentLineageResolution): AgentLineagePeer => Object.freeze({
+  conversation: node.id,
+  depth: node.depth,
+  ...(node.parent === undefined ? {} : { parent: node.parent }),
+  resolution,
+  startedAt: node.startedAt,
+  ...subagentOf(node),
+});
+
+/** Oldest first, then by id, so two nodes started in the same tick order the same way on every read. */
+const byStart = (left: LineageNode, right: LineageNode): number =>
+  left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id);
 
 /**
  * Deterministic journal keys for one observation: the caller's key, the event
@@ -552,6 +577,44 @@ export const createAgentLineageRegistry = (
     await dispatch('nodeStarted', rootNode(conversation, node.generation, node.startedAt, node.workspace), keys);
   };
 
+  /**
+   * How much of a node's `parent`/`root`/`depth` the host vouched for: a root
+   * names itself (`native`, except a Cursor root while a child is still
+   * pending, when the binding it may yet receive keeps it at `fallback`); a
+   * Codex thread placed from its own rollout is `transcript`; otherwise the
+   * registry's own match, upgraded to `confirmed` once the host named every
+   * edge up to the root.
+   */
+  const nodeResolution = (node: LineageNode, host: LineageHost, fallback: AgentLineageResolution): AgentLineageResolution =>
+    node.depth === 0 && (host !== 'cursor' || state.pendingChildren.length === 0)
+      ? 'native'
+      : node.placement === 'transcript' ? 'transcript' : registryResolution(node, fallback);
+
+  /** The registry's default trust for a node it placed itself on this host. */
+  const placementFallback = (host: LineageHost): AgentLineageResolution => (host === 'cursor' ? 'inferred' : 'registry');
+
+  /**
+   * The live tree as `node` may see it (#457): every other live node under
+   * its root, its own live children, and the other live roots — on Cursor
+   * only those seen in the same workspace, the same rule that scopes child
+   * binding. Read from the registry's nodes alone; nothing is fabricated for
+   * a node the registry never saw start, and stopped nodes are not listed.
+   */
+  const treeFor = (node: LineageNode, host: LineageHost): AgentLineageTree => {
+    const fallback = placementFallback(host);
+    const live = Object.values(state.nodes).filter((candidate) => candidate.stoppedAt === undefined && candidate.id !== node.id).sort(byStart);
+    const peer = (candidate: LineageNode): AgentLineagePeer => peerOf(candidate, nodeResolution(candidate, host, fallback));
+    const ownRoot = nodeFor(node.root);
+    return Object.freeze({
+      children: Object.freeze(live.filter((candidate) => candidate.parent === node.id).map(peer)),
+      roots: Object.freeze(live
+        .filter((candidate) => candidate.depth === 0 && candidate.id !== node.root
+          && (host !== 'cursor' || sameWorkspace(candidate.workspace, ownRoot?.workspace ?? node.workspace)))
+        .map(peer)),
+      siblings: Object.freeze(live.filter((candidate) => candidate.root === node.root).map(peer)),
+    });
+  };
+
   const resolve = (
     host: LineageHost,
     native: Readonly<Record<string, unknown>>,
@@ -561,10 +624,8 @@ export const createAgentLineageRegistry = (
     if (carrier.conversation === undefined) return unavailable('id-not-resolvable');
     const node = nodeFor(carrier.conversation);
     if (node === undefined) return unavailable('id-not-resolvable');
-    const resolution: AgentLineageResolution = node.depth === 0 && (host !== 'cursor' || state.pendingChildren.length === 0)
-      ? 'native'
-      : node.placement === 'transcript' ? 'transcript' : registryResolution(node, fallback);
-    return available(lineageOf(node, carrier.generation, resolution), resolution === 'native' ? 'native' : 'derived');
+    const resolution = nodeResolution(node, host, fallback);
+    return available(lineageOf(node, carrier.generation, resolution, treeFor(node, host)), resolution === 'native' ? 'native' : 'derived');
   };
 
   const observeStart = async (observation: LineageObservation, observedAt: string, keys: JournalKeys): Promise<void> => {
@@ -866,6 +927,9 @@ export const createAgentLineageRegistry = (
                 ? (conversation === root ? 0 : undefined)
                 : parentDepth === undefined ? undefined : parentDepth + 1);
             if (depth === undefined) return unavailable('id-not-resolvable');
+            // The tree is the registry's, so it exists only for a thread the
+            // registry saw start; `_meta` alone proves the caller's own chain.
+            const tree = known === undefined ? undefined : treeFor(known, 'codex');
             const value: AgentLineage = {
               conversation,
               depth,
@@ -876,6 +940,7 @@ export const createAgentLineageRegistry = (
               ...(parent === undefined
                 ? {}
                 : { subagent: { id: conversation, ...(subagentKind === undefined ? {} : { type: subagentKind }) } }),
+              ...(tree === undefined ? {} : { tree }),
             };
             return available(value, 'native');
           }
@@ -913,7 +978,7 @@ export const createAgentLineageRegistry = (
       const node = nodeFor(call.conversation);
       if (node === undefined) return unavailable('id-not-resolvable');
       const resolution: AgentLineageResolution = claudeToolUseId !== undefined ? registryResolution(node, 'registry') : 'inferred';
-      return available(lineageOf(node, call.generation, resolution), 'derived');
+      return available(lineageOf(node, call.generation, resolution, treeFor(node, host)), 'derived');
     },
 
     snapshot() {

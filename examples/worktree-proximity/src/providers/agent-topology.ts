@@ -4,19 +4,19 @@ export interface AgentTopologyProviderValue {
 }
 
 /**
- * The issue sketch places a topology snapshot at
- * `providers.agentTopology.snapshot`. A conventional provider factory still
- * receives only `{ invocation, signal }` — no request identity, no
- * `lineage`, and no mounted `state`/`notices` handles (agent-bundle#459) —
- * so it cannot derive that view. Routes read the topology from
- * `(await agent()).state` and their own place in the conversation tree from
- * `(await agent()).lineage` instead; this provider reports the gap honestly
- * rather than opening a second store.
+ * The issue sketch places the agent tree at `providers.agentTopology`. The
+ * tree itself is now on the request — `(await agent()).lineage.value.tree`
+ * lists the live siblings, children, and other roots the runtime's registry
+ * holds (agent-bundle#457) — but a conventional provider factory still
+ * receives only `{ invocation, signal }`, not the request's `lineage`
+ * (agent-bundle#459), so this provider cannot derive that view. Routes read
+ * `request.lineage` directly (`agentTree()` in `event-support.ts`); this
+ * provider reports the gap honestly rather than inventing a tree.
  */
 export default function agentTopologyProvider(): AgentTopologyProviderValue {
   return {
     reason:
-      'Topology snapshots are available only from the mounted request state handle; providers receive no request identity, lineage, or state handle (agent-bundle#459).',
+      'The agent tree is on request.lineage.tree; providers receive no request lineage (agent-bundle#459), so read it from (await agent()).lineage in a route.',
     state: 'unavailable',
   };
 }

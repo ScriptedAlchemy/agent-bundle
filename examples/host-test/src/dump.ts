@@ -50,12 +50,20 @@ const asCaptures = (records: readonly Record<string, JsonValue>[]): CaptureRecor
   .filter((record) => typeof record['kind'] === 'string' && typeof record['recordedAt'] === 'string')
   .map((record) => record as unknown as CaptureRecord);
 
+/**
+ * A record belongs to a conversation when the host named it in an id field,
+ * as the session, or anywhere on the request's *own* lineage chain. The
+ * `tree` the lineage carries lists other live conversations (#457) and is
+ * deliberately not searched: a sibling's records are not this conversation's.
+ */
 const matchesConversation = (record: CaptureRecord, conversation: string): boolean => {
   if (Object.values(record.ids).some((value) => value === conversation)) return true;
   const session = (record.request as { session?: { value?: { sessionId?: string } } }).session;
   if (session?.value?.sessionId === conversation) return true;
-  const lineage = JSON.stringify((record.request as { lineage?: unknown }).lineage ?? null);
-  return lineage.includes(JSON.stringify(conversation));
+  const lineage = (record.request as { lineage?: Observed<AgentLineage> | { readonly state?: undefined } }).lineage;
+  if (lineage?.state !== 'available') return false;
+  const { conversation: own, parent, root, subagent } = lineage.value;
+  return own === conversation || parent === conversation || root === conversation || subagent?.id === conversation;
 };
 
 /** The compact shape a human or an agent scans first; `full` returns the whole line. */

@@ -3,7 +3,7 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
+import { withIntent, withNotices } from '../../coordination.js';
 import { actorForWorktree, deliveryContexts } from '../../event-support.js';
 
 export const config = {
@@ -22,9 +22,9 @@ export default async function AfterTool({
       </Agent.Result>
     );
   }
-  const topologyResult = await withTopology(async (topology) => {
-    const resolved = await actorForWorktree(topology, currentWorktree, canonical);
-    await topology.dispatch('intentRecorded', {
+  const intentResult = await withIntent(async (intent) => {
+    const resolved = await actorForWorktree(intent, currentWorktree, canonical);
+    await intent.dispatch('intentRecorded', {
       actorId: resolved.actor.id,
       dependencies: [],
       idempotencyKey: canonical.idempotencyKey,
@@ -40,10 +40,10 @@ export default async function AfterTool({
     });
     return resolved.actor;
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result value={{ outcome: 'continue' }}>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }
