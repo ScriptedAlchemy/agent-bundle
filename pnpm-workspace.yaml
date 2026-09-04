@@ -3,12 +3,16 @@ packages:
   - packages/workbench/src/inspector
   - examples/*
   - website
-# The published agent-bundle manifest must never carry a `workspace:` range
-# (npm refuses to install such a tarball, and the release audit forbids it),
-# so its optional @agent-bundle/runtime peer is satisfied from the workspace
-# here instead of through a devDependency in the shipped package.json.
+# A published manifest must never carry a `workspace:` range (npm refuses to
+# install such a tarball, and the release audit forbids it), so inter-package
+# dependencies are written as plain ranges and satisfied from the workspace
+# here: agent-bundle's optional @agent-bundle/runtime peer instead of a
+# devDependency in the shipped package.json, and @agent-bundle/runtime's
+# rsc-markdown-stream dependency instead of a registry fetch of the version
+# this checkout is about to publish.
 overrides:
   '@agent-bundle/runtime': workspace:*
+  rsc-markdown-stream: workspace:*
 peerDependencyRules:
   allowedVersions:
     'effect-rstest>@rstest/core': 0.11.10

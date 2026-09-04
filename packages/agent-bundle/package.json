@@ -94,6 +94,7 @@
     }
   },
   "dependencies": {
+    "@effect/platform-node-shared": "4.0.0-rc.112",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
@@ -101,7 +102,6 @@
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "0.23.2",
     "@rslint/core": "0.8.2",
-    "@effect/platform-node-shared": "4.0.0-rc.112",
     "@rstackjs/load-config": "0.1.2",
     "acorn": "8.18.0",
     "ajv": "8.20.0",
@@ -113,12 +113,14 @@
     "fast-glob": "3.3.3",
     "ignore": "7.0.7",
     "jiti": "2.7.0",
+    "npm-package-arg": "13.0.2",
     "open": "11.0.2",
     "ws": "8.21.3",
     "yaml": "2.9.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/server": "2.0.0",
+    "@types/npm-package-arg": "6.1.4",
     "@types/react": "19.2.18",
     "@types/ws": "8.18.1",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",

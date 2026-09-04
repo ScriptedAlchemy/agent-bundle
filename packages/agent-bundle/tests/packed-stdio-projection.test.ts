@@ -45,9 +45,10 @@ interface McpJson {
  * the cost and explicitly does not claim any of this.
  */
 it('serves compiled routes and durable state across packed process restarts', async () => {
-  const [agentBundle, runtime] = await Promise.all([
+  const [agentBundle, runtime, markdownStream] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('runtime'),
+    sharedPackedTarball('markdown-stream'),
   ]);
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-stdio-'));
   const project = join(consumer, 'project');
@@ -79,6 +80,7 @@ it('serves compiled routes and durable state across packed process restarts', as
     await execFile('npm', ['install', ...cachedNpmInstallArguments,
       agentBundle.tarball,
       runtime.tarball,
+      markdownStream.tarball,
       'react@19.2.8',
       'react-dom@19.2.8',
       'zod@4.4.3',

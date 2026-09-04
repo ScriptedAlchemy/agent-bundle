@@ -1,4 +1,4 @@
-import { Agent } from '@agent-bundle/runtime';
+import { Agent, MarkdownContent } from '@agent-bundle/runtime';
 import React from 'react';
 
 export interface Field {
@@ -10,10 +10,18 @@ export interface DataListProps {
   readonly fields: readonly Field[];
 }
 
+const singleLine = (value: Field['value']): string => String(value).replaceAll(/\s*\n\s*/gu, ' ');
+
 export const DataList = ({ fields }: DataListProps) => (
-  <Agent.Markdown>
-    {fields.map(({ label, value }) => `- **${label}:** ${String(value).replaceAll(/\s*\n\s*/gu, ' ')}`).join('\n')}
-  </Agent.Markdown>
+  <MarkdownContent>
+    <ul>
+      {fields.map(({ label, value }) => (
+        <li key={label}>
+          <strong>{label}:</strong> {singleLine(value)}
+        </li>
+      ))}
+    </ul>
+  </MarkdownContent>
 );
 
 export interface FileListProps {
@@ -21,7 +29,11 @@ export interface FileListProps {
 }
 
 export const FileList = ({ files }: FileListProps) => (
-  <Agent.Markdown>{files.map((file) => `- ${file}`).join('\n')}</Agent.Markdown>
+  <MarkdownContent>
+    <ul>
+      {files.map((file) => <li key={file}>{file}</li>)}
+    </ul>
+  </MarkdownContent>
 );
 
 export interface CalloutProps {
