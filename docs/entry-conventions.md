@@ -979,7 +979,10 @@ name).
 Self-connecting entries — modules that construct and connect a transport at
 top level without a default export — keep today's behavior byte for byte: no
 lifecycle shell and no operator `.env` layer (#469); an entry that wants the
-layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself.
+layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself. That
+module is aliased into every stdio entry, shell or not, so the import is
+inlined from this package rather than resolved through the plugin's own
+`node_modules`, and a `tools` hatch can never externalize it.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one

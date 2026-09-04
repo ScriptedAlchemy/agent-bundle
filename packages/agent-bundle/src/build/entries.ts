@@ -427,21 +427,26 @@ export const planMcpEntriesSurface = async (
       : undefined;
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
-  // The stdio lifecycle shell applies the operator `.env` layer (#469); the
-  // plain-Node module is inlined beside it.
-  const launchEnvRuntime = runtimeShell === undefined ? undefined : launchEnvRuntimePath();
+  // The operator `.env` layer (#469) is public API for every stdio entry: the
+  // lifecycle shell applies it before the deferred server import, and a
+  // self-connecting entry — which has no shell — imports
+  // `agent-bundle/launch-env` and calls `applyOperatorEnv` itself. The alias
+  // is unconditional so that import resolves to this package's plain-Node
+  // module and can never be externalized; the bundler inlines it only where
+  // an import reaches it, so an entry that never imports it is unchanged.
+  const launchEnvRuntime = launchEnvRuntimePath();
   const eventIpcRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('project');
   const serverRuntime = generatedRouteSources.some((routeSource) => routeSource !== undefined)
     ? mcpServerRuntimePath()
     : undefined;
   const mainEntries = compiled.map(({ id, name, source, sourceInputs }, index) => ({
-    ...(entryShells[index] === undefined || runtimeShell === undefined
-      ? {}
-      : {
-        aliases: {
+    aliases: {
+      [launchEnvRuntimeSpecifier]: launchEnvRuntime,
+      ...(entryShells[index] === undefined || runtimeShell === undefined
+        ? {}
+        : {
           [mcpEntryRuntimeSpecifier]: runtimeShell,
-          ...(launchEnvRuntime === undefined ? {} : { [launchEnvRuntimeSpecifier]: launchEnvRuntime }),
           ...(id !== eventHostId || eventIpcRuntime === undefined || eventProjectRuntime === undefined
             ? {}
             : {
@@ -451,9 +456,9 @@ export const planMcpEntriesSurface = async (
           ...(generatedRouteSources[index] === undefined || serverRuntime === undefined
             ? {}
             : { [mcpServerRuntimeSpecifier]: serverRuntime }),
-        },
-        virtualSource: entryShells[index],
-      }),
+        }),
+    },
+    ...(entryShells[index] === undefined ? {} : { virtualSource: entryShells[index] }),
     name,
     outputRelativePath: `mcp/${name}.mjs`,
     ...(generatedRouteSources[index] === undefined ? {} : { rscManifest: true as const }),
@@ -487,18 +492,14 @@ export const planMcpEntriesSurface = async (
   });
   return {
     entries: [...mainEntries, ...workerEntries],
-    ...([runtimeShell, eventIpcRuntime, serverRuntime].filter((path): path is string => path !== undefined).length === 0
-      ? {}
-      : {
-        ignoredSourcePaths: [
-          ...(runtimeShell === undefined ? [] : [runtimeShell]),
-          // The package root, not the file: from the built package the
-          // module shares chunks with its siblings under `dist/`.
-          ...(launchEnvRuntime === undefined ? [] : [runtimeIgnoredRoot(launchEnvRuntime)]),
-          ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
-          ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
-        ],
-      }),
+    ignoredSourcePaths: [
+      ...(runtimeShell === undefined ? [] : [runtimeShell]),
+      // The package root, not the file: from the built package the
+      // module shares chunks with its siblings under `dist/`.
+      runtimeIgnoredRoot(launchEnvRuntime),
+      ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
+      ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
+    ],
     finish: async (evidence) => {
       const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
       return Object.freeze(compiled.map((entry) => Object.freeze({

@@ -225,13 +225,19 @@ const mcpEntryEntries = async (
       });
     entries.push(rslibInspectionEntry({
       entry: {
-        ...(wrapped
-          ? {
-            aliases: {
-              [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
+        aliases: {
+          // Every stdio entry can import the operator `.env` layer (#469); the
+          // lifecycle shell of a wrapped entry applies it itself.
+          [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
+          ...(wrapped
+            ? {
               [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath(),
               ...(routeSource === undefined ? {} : { [mcpServerRuntimeSpecifier]: mcpServerRuntimePath() }),
-            },
+            }
+            : {}),
+        },
+        ...(wrapped
+          ? {
             virtualSource: generatedStdioMcpEntrySource({
               entrySource: routeSource === undefined ? entry.source : 'agent-bundle/generated-route-server',
               serverName,

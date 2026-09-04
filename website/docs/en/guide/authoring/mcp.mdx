@@ -450,13 +450,24 @@ never an error.
 
 The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
 generated shell applies before it imports the server module (see
-[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)) —
-a self-connecting entry that needs the layer calls `applyOperatorEnv` itself, first thing:
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)).
+Both imports are inlined into the emitted entry, which stays self-contained;
+`agent-bundle/launch-env` is aliased into every stdio entry, so it resolves whether or not the
+entry has a shell. A self-connecting entry that needs the layer applies it first thing, anchored
+the way the generated shell is (the artifact root is the parent of `mcp/`):
 
 ```ts
-import { applyOperatorEnv } from 'agent-bundle/launch-env';
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` prefers an `AGENT_BUNDLE_PLUGIN_ROOT` the host set over the directory you
+pass, so the entry reads the same files as the pack's hook wrappers and CLI.
 
 ## Declaring servers in config
 
