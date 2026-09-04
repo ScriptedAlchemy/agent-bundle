@@ -301,25 +301,30 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
+      // npm skips this one after the failed fetch too — and then postinstall fails on the missing command.
+      'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'setup-tool --init' };
   },
   async () => {
     const pack = { ...result.pack, files: [...result.pack.files, { path: 'node_modules/embedded/package.json' }] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
-    // release; a specifier it cannot parse fails the manifest read and stays fatal.
+    // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
+    // install script then runs.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
     expect(reported[1]?.message).not.toContain('"scp"');
+    expect(reported[2]?.message).not.toContain('"setup-tool"');
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
@@ -404,11 +409,12 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
-      // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks.
-      postinstall: 'named-in-script --init && npm --silent run setup',
+      // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks, behind
+      // options with values (`--prefix .`, `-w .`) and without (`--silent`).
+      postinstall: 'named-in-script --init && npm --silent --prefix . run setup',
       setup: 'echo setup',
       presetup: 'tsc --version',
-      postsetup: 'pnpm run finish',
+      postsetup: 'pnpm run -w . finish',
       finish: 'node-pre-gyp install && real --check',
       prepare: 'prepare-only --generate',
     };
@@ -444,12 +450,20 @@ it('accepts a dependency reached through a package imports map or run by a consu
 it('prepack succeeds and surfaces the warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
   (document) => {
     document.optionalDependencies = { 'optional-native': 'github:owner/optional-native' };
-    // The build rewrites dist, so the usage evidence lives in an install script rather than a packed module.
-    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'optional-native --setup || true' };
+    // The build rewrites dist, so the packed module that loads the optional package lives in its own packed
+    // directory; an install script naming it instead would make the failed fetch fatal.
+    document.files = [...(document.files as readonly string[]), 'extras'];
   },
   async () => {
-    const packed = await prepack({ root: projectRoot });
-    expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
+    const extras = join(projectRoot, 'extras');
+    await mkdir(extras, { recursive: true });
+    await writeFile(join(extras, 'optional.mjs'), 'export const native = await import("optional-native").catch(() => undefined);\n');
+    try {
+      const packed = await prepack({ root: projectRoot });
+      expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
+    } finally {
+      await rm(extras, { force: true, recursive: true });
+    }
   },
 ));
 
@@ -483,11 +497,15 @@ it('accepts a dependency that packed JavaScript imports, requires, or only resol
       // Named only through escaped literals, which Node decodes before resolving.
       'hex-pkg': '^1.0.0',
       'unicode-pkg': '^1.0.0',
+      // Run as an executable, never loaded: by the `tsc` bin its installed manifest declares.
+      typescript: '^5.0.0',
     };
   },
   async () => {
     const consumer = join(projectRoot, 'dist', 'consumer.mjs');
     await writeFile(consumer, [
+      'import { execSync, spawnSync } from "node:child_process";',
+      'const ran = [spawnSync("tsc", ["--version"]), execSync("tsc --noEmit")];',
       'import leftPad from "left-pad/lib/index.js";',
       'const { createRequire } = await import("node:module");',
       'const require = createRequire(import.meta.url);',
@@ -497,7 +515,7 @@ it('accepts a dependency that packed JavaScript imports, requires, or only resol
       String.raw`const hex = require("\x68ex-pkg");`,
       String.raw`const unicode = require('unicode-pkg\u002fsubpath');`,
       '// import { Function } from "effect" -- a comment never counts.',
-      'export { leftPad, required, asset, tool, hex, unicode };',
+      'export { leftPad, required, asset, tool, hex, unicode, ran };',
       '',
     ].join('\n'));
     try {

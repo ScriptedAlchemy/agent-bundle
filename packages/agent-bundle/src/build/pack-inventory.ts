@@ -188,9 +188,12 @@ const dependencyDiagnostics = async (options: {
   // cannot parse — which it reads even for a peer it never installs.
   const unresolvable = declared.filter((dependency) => !embedded(dependency)
     && (dependency.installed ? kinds.get(dependency) !== 'registry' : kinds.get(dependency) === 'unparseable'));
-  // An optional dependency npm parses but cannot fetch: the install continues without it.
+  // An optional dependency npm parses but cannot fetch: the install continues without it — unless a consumer
+  // install script then runs it, and fails on the missing command.
   const survivable = (dependency: DeclaredDependency): boolean =>
-    dependency.field === 'optionalDependencies' && kinds.get(dependency) === 'fetched';
+    dependency.field === 'optionalDependencies'
+    && kinds.get(dependency) === 'fetched'
+    && !imported.installScripts.has(dependency.name);
   // A computed import() may load any declared package; nothing can then be called unused.
   const unused = imported.complete
     ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))
@@ -200,7 +203,7 @@ const dependencyDiagnostics = async (options: {
     // npm 7+ still installs it for every consumer, so it is worth a look, not a refusal.
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages no packed JavaScript or declaration file references: ${quoteAll(own.map((dependency) => dependency.name))}. `
+      `package.json ${field} names packages no packed JavaScript or declaration file references, runs, or install script needs: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + (field === 'peerDependencies'
           ? 'If they only constrain the host version, that is a compatibility contract; npm 7+ still installs them for every consumer.'
           : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
@@ -209,8 +212,9 @@ const dependencyDiagnostics = async (options: {
         : 'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
       field === 'peerDependencies' ? 'warning' : 'error',
     )),
-    // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed;
-    // an unsupported protocol or invalid selector fails the manifest read itself, whichever field declares it.
+    // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed
+    // (an unsupported protocol or invalid selector fails the manifest read itself, whichever field declares it) and
+    // only when no install script then runs the skipped package's command.
     ...perField(unresolvable.filter((dependency) => !survivable(dependency)), (field, own) => diagnostic(
       'AB7015',
       `${unresolvableMessage(field, own)}consumers cannot install the package.`,
