@@ -30,7 +30,7 @@ const renderTargets = (targets: readonly TargetName[]): string =>
 
 /** Derived from the shared default list so a change there cannot silently break the drift check. */
 const defaultTargetsLiteral = `targets: [${renderTargets(defaultTargets)}]`;
-const installerTargetNames: readonly TargetName[] = ['claude', 'codex', 'cursor', 'plugin'];
+const installerTargetNames: readonly TargetName[] = ['claude', 'codex', 'cursor'];
 
 export interface ScaffoldRequest {
   readonly frameworkSpec: string;
@@ -108,7 +108,7 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
 /** The hosts the generated installer bin accepts, in the package build's order. */
 const installableHosts = (targets: readonly TargetName[]): readonly TargetName[] =>
   (['claude', 'codex', 'cursor'] as const)
-    .filter((host) => targets.some((target) => target === host || target === 'plugin'));
+    .filter((host) => targets.includes(host));
 
 /**
  * Template READMEs are written against the default targets, so their install

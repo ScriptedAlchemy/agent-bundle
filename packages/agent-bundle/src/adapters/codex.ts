@@ -134,7 +134,7 @@ declare module '../core/types.ts' {
 
 const codexName = 'codex';
 
-/** Codex's conventional artifact document paths, shared with the unified bundle adapter. */
+/** Codex's conventional artifact document paths. */
 export const codexArtifactPaths = Object.freeze({
   apps: '.app.json',
   hooksManifest: 'hooks/hooks.json',
@@ -150,7 +150,7 @@ const validateMarketplace = validator.compile(marketplaceSchema);
 
 /**
  * The pinned schema admits every documented plugin-root-relative component
- * path. Standalone and unified plans still emit their canonical paths.
+ * path; the plan emits its canonical paths.
  */
 const pluginValidatorFor = (_mcpRelativePath: string): ValidateFunction => validatePlugin;
 
@@ -1255,7 +1255,7 @@ export const planCodexArtifacts = (
   const plan = options.sharedCopyEntries === false
     ? basePlan
     : Object.freeze({ ...basePlan, entries: withPluginLogoEntry(basePlan.entries, model) });
-  return withInstallSurface(plan, model, targetName === 'plugin' ? 'plugin' : 'codex');
+  return withInstallSurface(plan, model, 'codex');
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({

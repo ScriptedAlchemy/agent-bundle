@@ -388,7 +388,7 @@ declare module '../core/types.ts' {
 
 const claudeName = 'claude';
 
-/** Claude Code's conventional artifact document paths, shared with the unified bundle adapter. */
+/** Claude Code's conventional artifact document paths. */
 export const claudeArtifactPaths = Object.freeze({
   hooksManifest: 'hooks/hooks.json',
   lsp: '.lsp.json',
@@ -409,7 +409,7 @@ const validateMonitors = validator.compile(monitorsSchema);
 const validateSettings = validator.compile(settingsSchema);
 const validateTheme = validator.compile(themeSchema);
 
-/** The pinned Claude hooks validator, shared with the unified bundle adapter. */
+/** The pinned Claude hooks validator, shared with artifact validation. */
 export const claudeHooksValidator = validateHooks;
 const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 const hookContract = Object.freeze({
@@ -1994,9 +1994,9 @@ const noLspPlan: ClaudeLspPlan = deepFreeze({
  * only the first server registered for a file extension, so pointing the
  * manifest at the conventional file risks a self-collision for no gain.
  *
- * The Claude host config is the source of truth for both the `claude`
- * target and the Claude half of the unified `plugin` bundle, because no
- * other pinned host contract has an LSP surface to select.
+ * The Claude host config is the source of truth for the `claude`
+ * projection, because no other pinned host contract has an LSP surface to
+ * select.
  */
 export const planClaudeLsp = (model: NormalizedPlugin): ClaudeLspPlan => {
   const extension = model.extensions[claudeName];
@@ -3244,7 +3244,7 @@ export const planClaudeArtifacts = (
       ...workflows.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
-  }), model, targetName === 'plugin' ? 'plugin' : 'claude');
+  }), model, 'claude');
 };
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({

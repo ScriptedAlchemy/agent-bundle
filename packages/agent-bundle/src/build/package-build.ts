@@ -194,7 +194,7 @@ export const planPackageEntries = async (
     });
   }
   const installHosts = Object.freeze((['claude', 'codex', 'cursor'] as const)
-    .filter((host) => model.targets.some((target) => target.name === host || target.name === 'plugin')));
+    .filter((host) => model.targets.some((target) => target.name === host)));
   if (
     installHosts.length > 0 &&
     options.artifactRoot !== undefined &&

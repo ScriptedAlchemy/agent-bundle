@@ -68,8 +68,7 @@ import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
-import type { SkillIr } from '../skills/ir.ts';
-import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
+import { decideSkillTreeLayout, lowerSkillIrForHosts } from '../skills/lower.ts';
 import { parseSkillIr } from '../skills/parse-ir.ts';
 import type { SkillHost } from '../skills/tokens.ts';
 import { normalizeNoticeRetention } from './notice-retention.ts';
@@ -78,27 +77,8 @@ import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './scri
 const isSkillHost = (name: string): name is SkillHost =>
   name === 'claude' || name === 'codex' || name === 'cursor' || name === 'portable';
 
-const loweringHosts = (targetNames: readonly string[]): SkillHost[] => {
-  const hosts = new Set<SkillHost>();
-  for (const name of targetNames) {
-    if (name === 'plugin') {
-      hosts.add('claude');
-      hosts.add('codex');
-    } else if (isSkillHost(name)) {
-      hosts.add(name);
-    }
-  }
-  return [...hosts];
-};
-
-const pluginSharedDocument = (skillIr: SkillIr) => {
-  const claude = lowerSkillIr(skillIr, 'claude');
-  const codex = lowerSkillIr(skillIr, 'codex');
-  if (claude.passThrough && codex.passThrough && claude.skillMarkdown === codex.skillMarkdown) {
-    return claude;
-  }
-  return lowerSkillIr(skillIr, 'portable');
-};
+const loweringHosts = (targetNames: readonly string[]): SkillHost[] =>
+  [...new Set(targetNames.filter(isSkillHost))];
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -1232,10 +1212,7 @@ export const normalizeProject = async (
         : basename(skill.dir);
     const description = frontmatter.description;
     const skillIr = parseSkillIr(skill);
-    const hostDocuments = {
-      ...lowerSkillIrForHosts(skillIr, skillHosts),
-      ...(targetNames.includes('plugin') ? { plugin: pluginSharedDocument(skillIr) } : {}),
-    };
+    const hostDocuments = lowerSkillIrForHosts(skillIr, skillHosts);
 
     return {
       body: skill.body,

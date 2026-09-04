@@ -113,7 +113,7 @@ loopback origin 上。它是本地预览宿主，不是部署目标。面向脚�
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `--host-validation` / `--no-host-validation` | 开启 | 产物写出后，对每个已构建的 `claude` 与 `plugin` target 运行已安装的 Claude Code 开发者校验器与加载检查——与 `validate --artifact` 运行的是同一对检查（`AB6019`–`AB6022`、`AB7311`、`AB7325`）。`PATH` 上没有 `claude` 时，构建只启动一次进程并报告一条信息性的 `AB6019` 跳过。 |
+| `--host-validation` / `--no-host-validation` | 开启 | 产物写出后，对已构建的 `claude` 投影运行已安装的 Claude Code 开发者校验器与加载检查——与 `validate --artifact` 运行的是同一对检查（`AB6019`–`AB6022`、`AB7311`、`AB7325`）。`PATH` 上没有 `claude` 时，构建只启动一次进程并报告一条信息性的 `AB6019` 跳过。 |
 | `--strict` | 关闭 | 把宿主工具的 warning 提升为 error。 |
 
 JSON 文档在 `hostValidation` 下携带这些报告，每个被校验的 target 一份；加载检查运行过时，每份报告带有
@@ -200,7 +200,7 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `--artifact <path>` | —— | 精确校验这份已构建产物，而不是项目源码。 |
-| `--host-validation` / `--no-host-validation` | 开启 | 为兼容的已构建 target 运行已安装的宿主开发者工具。对 `claude` 与 `plugin` target，这是两次 `claude plugin validate --strict` 运行，随后是 `claude --plugin-dir <dir> plugin list --json` 加载检查（该行带有 `errors` 时为 `AB7325`，没有该行时为 `AB7311`）。 |
+| `--host-validation` / `--no-host-validation` | 开启 | 为兼容的已构建 target 运行已安装的宿主开发者工具。选择了 `claude` 时，这是两次 `claude plugin validate --strict` 运行，随后是 `claude --plugin-dir <dir> plugin list --json` 加载检查（该行带有 `errors` 时为 `AB7325`，没有该行时为 `AB7311`）。 |
 | `--strict` | 关闭 | 把宿主工具的 warning 提升为 error。 |
 
 ## eval

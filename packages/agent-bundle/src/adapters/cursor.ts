@@ -97,8 +97,8 @@ declare module '../core/types.ts' {
 }
 
 /**
- * Cursor's local-plugin document paths, shared with the unified bundle
- * adapter. A known-loading physical install uses `.cursor-plugin/plugin.json`
+ * Cursor's local-plugin document paths. A known-loading physical install
+ * uses `.cursor-plugin/plugin.json`
  * with root `mcp.json` and `hooks/hooks.json`; the manifest keeps explicit
  * pointers so every declared component resolves from one plugin root.
  */
@@ -123,7 +123,7 @@ const validateMarketplace = validator.compile(marketplaceSchema);
 const validateSchemaUri = validator.compile({ type: 'string', format: 'uri' });
 const validateSchemaEmail = validator.compile({ type: 'string', format: 'email' });
 
-/** The pinned Cursor document validators, shared with the unified bundle adapter. */
+/** The pinned Cursor document validators, shared with artifact validation. */
 export const cursorPluginValidator = validatePlugin;
 export const cursorMcpValidator = validateMcp;
 export const cursorHooksValidator = validateHooks;
@@ -180,7 +180,7 @@ export interface CursorHookContractOptions {
 }
 
 /**
- * Cursor hook lowering, shared with the unified bundle adapter: flat
+ * Cursor hook lowering: flat
  * `{ command, matcher?, timeout? }` entries under a `version: 1` envelope,
  * `${CURSOR_PLUGIN_ROOT}` command interpolation, and the dedicated Cursor
  * wrapper codec (Cursor's stdin/stdout envelope is not the shared

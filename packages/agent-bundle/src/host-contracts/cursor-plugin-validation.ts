@@ -49,10 +49,7 @@ const inlineHooksPath = `${manifestPath}#/hooks`;
  * `.cursor-plugin/plugin.json` `hooks` field the way the loader does: a string
  * is a plugin-root-relative path that replaces folder discovery (so the default
  * `hooks/hooks.json` is not also scanned), an object is an inline hooks
- * document, and an absent field falls back to `hooks/hooks.json`. The unified
- * `plugin` target relies on the replacement: its Cursor manifest points at
- * `hooks/hooks-cursor.json` while `hooks/hooks.json` carries the Claude/Codex
- * document (#438).
+ * document, and an absent field falls back to `hooks/hooks.json` (#438).
  */
 export type CursorHooksSource =
   | Readonly<{ readonly kind: 'default'; readonly path: typeof cursorDefaultHooksPath }>

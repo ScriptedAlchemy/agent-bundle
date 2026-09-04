@@ -20,7 +20,6 @@ import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
-import { pluginAdapter } from './plugin.ts';
 import {
   routedCliBinLayout,
   type TargetAdapter,
@@ -782,5 +781,4 @@ export const createDefaultRegistry = (): TargetRegistry =>
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
     .register(claudeAdapter)
-    .register(cursorAdapter)
-    .register(pluginAdapter);
+    .register(cursorAdapter);

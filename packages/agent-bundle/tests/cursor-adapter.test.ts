@@ -9,7 +9,6 @@ import {
   cursorPluginValidator,
   isValidCursorPluginName,
 } from '../src/adapters/cursor.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
 import { readTargetMcpServers } from '../src/services/mcp-runtime.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
@@ -78,7 +77,7 @@ const writeContents = (model: NormalizedPlugin): Record<string, string> => Objec
 
 it('registers cursor as a first-class target with pinned schema validation', () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'plugin']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(registry.supports('cursor', 'mcp')).toBe(true);
   expect(registry.supports('cursor', 'rules')).toBe(true);
@@ -116,22 +115,12 @@ it('holds the 64-character plugin-name bound in both Cursor-producing planners',
   const named = (name: string): NormalizedPlugin => ({
     ...model,
     metadata: { ...model.metadata, name },
-    targets: [
-      ...model.targets,
-      { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: configPath } },
-    ],
   });
 
   expect(cursorAdapter.plan(named(overLong)).diagnostics.filter((entry) => entry.code === 'cursor.name')).toEqual([
     { code: 'cursor.name', message: cursorPluginNameError(overLong), severity: 'error', target: 'cursor' },
   ]);
-  expect(pluginAdapter.plan(named(overLong)).diagnostics.filter((entry) => entry.code === 'plugin.cursor.name')).toEqual([
-    { code: 'plugin.cursor.name', message: cursorPluginNameError(overLong), severity: 'error', target: 'plugin' },
-  ]);
-
-  for (const plan of [cursorAdapter.plan(named(boundary)), pluginAdapter.plan(named(boundary))]) {
-    expect(plan.diagnostics.filter((entry) => entry.code.endsWith('cursor.name'))).toEqual([]);
-  }
+  expect(cursorAdapter.plan(named(boundary)).diagnostics.filter((entry) => entry.code.endsWith('cursor.name'))).toEqual([]);
 });
 
 it('validates Cursor documents against the vendored real-host schemas', () => {
@@ -176,13 +165,10 @@ const withCursorConfig = (value: unknown): NormalizedPlugin => ({
       value,
     },
   },
-  targets: [
-    ...plugin().targets,
-    { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: configPath } },
-  ],
+  targets: plugin().targets,
 });
 
-it('registers the cursor config extension and emits schema-admitted manifest metadata on both Cursor manifests', () => {
+it('registers the cursor config extension and emits schema-admitted manifest metadata on the Cursor manifest', () => {
   const registry = createDefaultRegistry();
   expect(registry.configExtensions().map((extension) => extension.key)).toContain('cursor');
 
@@ -215,18 +201,6 @@ it('registers the cursor config extension and emits schema-admitted manifest met
   expect(cursorPluginValidator(manifest)).toBe(true);
   const manifestEntry = plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json');
   expect(manifestEntry?.sourceInputs).toContain(configPath);
-
-  const bundle = pluginAdapter.plan(model);
-  expect(bundle.diagnostics).toEqual([]);
-  const bundleManifest = JSON.parse(
-    (bundle.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
-  ) as Record<string, unknown>;
-  expect(bundleManifest).toMatchObject({ author: { name: 'Example DevTools' }, minClientVersions: { cursor: '3.13.0' }, publisher: 'Example' });
-  const claudeManifest = JSON.parse(
-    (bundle.entries.find((entry) => entry.relativePath === '.claude-plugin/plugin.json') as { readonly content: string }).content,
-  ) as Record<string, unknown>;
-  expect(claudeManifest).not.toHaveProperty('publisher');
-  expect(claudeManifest).not.toHaveProperty('minClientVersions');
 });
 
 it('rejects cursor manifest metadata the pinned schema does not admit and emits no partial metadata', () => {
@@ -253,8 +227,6 @@ it('rejects cursor manifest metadata the pinned schema does not admit and emits 
   for (const field of ['author', 'homepage', 'keywords', 'license', 'minClientVersions', 'repository']) {
     expect(manifest).not.toHaveProperty(field);
   }
-  expect(pluginAdapter.plan(model).diagnostics.map((diagnostic) => diagnostic.code)).toContain('plugin.cursor.manifest.author.invalid');
-
   expect(cursorAdapter.plan(withCursorConfig({ minClientVersions: {} })).diagnostics.map((diagnostic) => diagnostic.code))
     .toEqual(['cursor.manifest.minClientVersions.invalid']);
   expect(cursorAdapter.plan(withCursorConfig({})).diagnostics).toEqual([]);

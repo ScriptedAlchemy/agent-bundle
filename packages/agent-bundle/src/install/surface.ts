@@ -14,7 +14,7 @@ import {
   preservedRuntimeEntries,
 } from './receipt.ts';
 
-export type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
+export type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 const marketplaceName = (model: NormalizedPlugin): string => `${model.metadata.name}-marketplace`;
 
@@ -291,8 +291,6 @@ const installMarkdown = (model: NormalizedPlugin, target: BuiltInTarget): string
         return cursorInstructions(model);
       case 'portable':
         return portableInstructions();
-      case 'plugin':
-        return [...claudeInstructions(model), ...codexInstructions(model), ...cursorInstructions(model)];
       default: {
         const exhaustive: never = target;
         throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
@@ -1385,12 +1383,12 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
 };
 
 const needsCursorInstaller = (target: BuiltInTarget): boolean =>
-  target === 'cursor' || target === 'plugin' || target === 'portable';
+  target === 'cursor' || target === 'portable';
 
 export const installSurfaceRequirements = (
   target: string,
 ): readonly string[] => {
-  if (target === 'cursor' || target === 'plugin' || target === 'portable') {
+  if (target === 'cursor' || target === 'portable') {
     return Object.freeze(['INSTALL.md', 'install.mjs']);
   }
   if (target === 'claude' || target === 'codex') {

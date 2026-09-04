@@ -130,8 +130,7 @@ const hostMcpPath = (host: InstallHost): string =>
 /**
  * The hook document the installed host loads. Claude and Codex read the
  * pinned `hooks/hooks.json`; Cursor reads whatever the installed
- * `.cursor-plugin/plugin.json` `hooks` field names (the unified `plugin`
- * target points it at `hooks/hooks-cursor.json`, #438), falling back to
+ * `.cursor-plugin/plugin.json` `hooks` field names (#438), falling back to
  * `hooks/hooks.json` folder discovery when the field is absent.
  */
 const hostHookPath = (host: InstallHost, installedManifest: Readonly<Record<string, unknown>>): string => {

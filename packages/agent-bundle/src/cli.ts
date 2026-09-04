@@ -846,7 +846,7 @@ export const runCli = async (
     program.command('build').description('Build a validated Agent Bundle artifact'),
   )
     .option('--output <path>', 'Artifact output path relative to --root (overrides config output.distPath; default artifact, since dist is the npm package build output)')
-    .option('--host-validation', 'Run the installed Claude developer validator over built claude and plugin targets', true)
+    .option('--host-validation', 'Run the installed Claude developer validator over the built claude projection', true)
     .option('--no-host-validation', 'Skip the installed Claude developer validator')
     .option('--strict', 'Promote host-tool warnings to errors');
   buildCommand.action(async (options: BuildCommandOptions) => {

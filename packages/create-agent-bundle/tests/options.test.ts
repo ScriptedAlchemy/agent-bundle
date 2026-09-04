@@ -152,13 +152,13 @@ describe('resolveOptions', () => {
 
   it('respects explicit flags over prompts and detection', async () => {
     const resolved = await resolveOptions(
-      parseFlags(['dir', '-t', 'cli-tool', '--targets', 'plugin', '--package-manager', 'bun', '--no-install']),
+      parseFlags(['dir', '-t', 'cli-tool', '--targets', 'cursor', '--package-manager', 'bun', '--no-install']),
       { interactive: true, prompter: unusedPrompter, userAgent: 'pnpm/11.23.0' },
     );
     expect(resolved).toMatchObject({
       install: false,
       packageManager: 'bun',
-      targets: ['plugin'],
+      targets: ['cursor'],
       template: 'cli-tool',
     });
   });

@@ -189,7 +189,7 @@ it('enumerates lsp components with unambiguous ids for any server name (#100)', 
       },
     },
     plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
-    targets: ['claude', 'cursor', 'plugin'],
+    targets: ['claude', 'cursor'],
   }), { skills: [] }, createDefaultRegistry());
 
   // Separator and escape characters are escaped so the (key, name) tuple is
@@ -203,7 +203,7 @@ it('enumerates lsp components with unambiguous ids for any server name (#100)', 
   expect(model.lspServers).toHaveLength(4);
   // Only adapters that lower the `claude` extension are targeted.
   for (const server of model.lspServers ?? []) {
-    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude', 'plugin'] });
+    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude'] });
   }
   expect(Object.isFrozen(model.lspServers)).toBe(true);
 });
@@ -294,12 +294,6 @@ it('enumerates claude.bin relative to the config file into immutable executable 
     expect(Object.isFrozen(model.hostBins?.[0])).toBe(true);
     expect(Object.isFrozen(model.hostBins?.[0]?.files)).toBe(true);
     expect(Object.isFrozen(model.hostBins?.[0]?.files[0])).toBe(true);
-
-    const pluginModel = await normalizeProject({
-      ...loaded,
-      config: { ...loaded.config, targets: ['plugin'] },
-    }, { skills: [] }, createDefaultRegistry());
-    expect(pluginModel.hostBins?.[0]?.target).toBe('plugin');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -364,13 +358,6 @@ it('enumerates Claude workflows and output styles relative to the config file in
     expect(Object.isFrozen(model.hostWorkflows?.[0]?.files[0])).toBe(true);
     expect(Object.isFrozen(model.hostOutputStyles)).toBe(true);
     expect(Object.isFrozen(model.hostOutputStyles?.[0]?.files[0])).toBe(true);
-
-    const pluginModel = await normalizeProject({
-      ...loaded,
-      config: { ...loaded.config, targets: ['plugin'] },
-    }, { skills: [] }, createDefaultRegistry());
-    expect(pluginModel.hostWorkflows?.[0]?.target).toBe('plugin');
-    expect(pluginModel.hostOutputStyles?.[0]?.target).toBe('plugin');
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -986,6 +973,23 @@ it('reports unknown targets, duplicate IDs, and portable output collisions', asy
     { generatedPath: 'portable/skills/duplicate/SKILL.md' },
     { generatedPath: 'future-host/skills/duplicate/SKILL.md' },
   ]);
+});
+
+it('rejects the retired plugin target as unknown (#555 acceptance 3)', async () => {
+  // The composite root is the only output shape; `plugin` is not a target
+  // that selects anything inside it, so it fails like any other unknown name.
+  const model = await normalizeProject(loadedProject({
+    plugin: { name: 'review-tools', version: '1.0.0' },
+    targets: ['plugin'],
+  }), { skills: [] }, registry);
+
+  expect(model.targets.map((target) => target.name)).toEqual(['plugin']);
+  expect(validateModel(model, registry)).toMatchObject([{
+    code: 'AB4100',
+    message: 'Unknown target "plugin".',
+    severity: 'error',
+    target: 'plugin',
+  }]);
 });
 
 it('normalizes discovered assets with stable IDs, provenance, and all selected targets', async () => {

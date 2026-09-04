@@ -55,7 +55,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/mcp.test.ts',
   'packages/agent-bundle/tests/package-build.test.ts',
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
-  'packages/agent-bundle/tests/plugin-bundle.test.ts',
   'packages/agent-bundle/tests/prepack.test.ts',
   'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',

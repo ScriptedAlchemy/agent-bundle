@@ -655,13 +655,6 @@ const eventRouteHookWrapperSource = (
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
   const targetSource = concreteTarget !== undefined
     ? [`const target = ${JSON.stringify(concreteTarget)};`]
-    : entry.target === 'plugin'
-    ? [
-        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
-        'const target = declaredHost === "claude" || declaredHost === "codex"',
-        '  ? declaredHost',
-        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
-      ]
     : ['const target = artifactTarget;'];
   return [
     // Only a wrapper that can render in-process needs the operator `.env`

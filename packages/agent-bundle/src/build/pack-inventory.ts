@@ -112,12 +112,6 @@ const hostManifestPaths = (target: string): readonly string[] => {
       return Object.freeze(['.codex-plugin/plugin.json']);
     case 'cursor':
       return Object.freeze(['.cursor-plugin/plugin.json']);
-    case 'plugin':
-      return Object.freeze([
-        '.claude-plugin/plugin.json',
-        '.codex-plugin/plugin.json',
-        '.cursor-plugin/plugin.json',
-      ]);
     case 'portable':
       return Object.freeze(['plugin.json']);
     default:

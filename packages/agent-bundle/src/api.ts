@@ -549,8 +549,8 @@ export interface BuildOptions extends ProjectOptions {
   /**
    * After the artifact is written, run the installed Claude developer
    * validator (`claude plugin validate --strict` against the emitted
-   * `plugin.json` and `marketplace.json`) for every built `claude` and
-   * `plugin` target, exactly as `validate --artifact` does. The CLI `build`
+   * `plugin.json` and `marketplace.json`) for every built `claude` target,
+   * exactly as `validate --artifact` does. The CLI `build`
    * command requests this by default; programmatic artifact operations
    * (temporary artifacts, dev, evals) never do. Without `claude` on `PATH`
    * the run costs one failed spawn and reports a single `AB6019` info.
@@ -574,7 +574,7 @@ export interface BuildProjectResult {
   readonly build: BuildResult;
   /** Project diagnostics followed by the host-validation findings (`AB6019`–`AB6022`) when `hostValidation` ran. */
   readonly diagnostics: readonly Diagnostic[];
-  /** One report per built `claude`/`plugin` target; present only when `hostValidation` was requested. */
+  /** One report per built `claude` target; present only when `hostValidation` was requested. */
   readonly hostValidation?: readonly ClaudePluginValidationReport[];
   readonly model: NormalizedPlugin;
   readonly packageBuild?: PackageBuildResult;
@@ -719,13 +719,12 @@ const temporaryArtifact = async <Result>(
   ));
 };
 
-type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
+type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 const hostValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>([
   'claude',
   'codex',
   'cursor',
-  'plugin',
   'portable',
 ]);
 
@@ -744,7 +743,6 @@ const hostValidationReport = (
     case 'portable':
       return validatePortablePlugin({ pluginDirectory, target });
     case 'claude':
-    case 'plugin':
       return validateClaudePlugin({ pluginDirectory, strict, target });
     default: {
       const exhaustive: never = target;
@@ -1237,12 +1235,12 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   });
 };
 
-const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude', 'plugin']);
+const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude']);
 
 /**
  * `build --host-validation`: the Claude developer validator (`plugin validate`
  * over both manifests, then the `--plugin-dir … plugin list --json` load check)
- * over every built `claude`/`plugin` target (#476). Targets run one after
+ * every built `claude` target (#476). Targets run one after
  * another: once the CLI proves absent (`AB6019`), the remaining targets are
  * marked `unavailable` without another spawn, so a build without `claude` on
  * `PATH` costs one failed spawn and reports the skip once.

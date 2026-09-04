@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 export const templateNames = ['minimal', 'mcp-server', 'cli-tool'] as const;
 export type TemplateName = (typeof templateNames)[number];
 
-export const targetNames = ['portable', 'claude', 'codex', 'cursor', 'plugin'] as const;
+export const targetNames = ['portable', 'claude', 'codex', 'cursor'] as const;
 export type TargetName = (typeof targetNames)[number];
 
 /** The target set every in-repo example ships with. */

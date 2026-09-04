@@ -49,7 +49,7 @@ const writesFor = (target: string): ReadonlyMap<string, string> => {
     .map((entry) => [entry.relativePath, entry.content]));
 };
 
-it.each(['claude', 'codex', 'cursor', 'portable', 'plugin'])(
+it.each(['claude', 'codex', 'cursor', 'portable'])(
   'emits a concrete INSTALL.md for the %s target',
   (target) => {
     const install = writesFor(target).get('INSTALL.md');
@@ -117,7 +117,7 @@ it('emits the exact host uninstall commands the framework CLI itself runs, with 
 });
 
 it('emits a standalone safe-copy installer only for Cursor-compatible fallback profiles', () => {
-  for (const target of ['cursor', 'portable', 'plugin']) {
+  for (const target of ['cursor', 'portable']) {
     const writes = writesFor(target);
     expect(writes.get('INSTALL.md')).toContain('node ./install.mjs');
     expect(writes.get('install.mjs')).toContain("join(cursorRoot, 'plugins', 'local')");
@@ -391,14 +391,6 @@ it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy o
   }
 }, 60_000);
 
-it('documents every real host path from the composite profile', () => {
-  const install = writesFor('plugin').get('INSTALL.md');
-
-  expect(install).toContain('claude plugin install install-fixture@install-fixture-marketplace --scope user');
-  expect(install).toContain('codex plugin add install-fixture@install-fixture-marketplace');
-  expect(install).toContain('node ./install.mjs');
-});
-
 it('documents the same-version reinstall recipe per host, including Claude\'s version-gated update', () => {
   const claude = writesFor('claude').get('INSTALL.md') ?? '';
   expect(claude).toContain('Reinstall after a same-version rebuild');
@@ -412,7 +404,7 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(codex).toContain('codex plugin remove install-fixture@install-fixture-marketplace');
   expect(codex).toContain('--replace');
 
-  for (const target of ['cursor', 'portable', 'plugin']) {
+  for (const target of ['cursor', 'portable']) {
     const install = writesFor(target).get('INSTALL.md') ?? '';
     expect(install).toContain(installReceiptFile);
     expect(install).toContain('--replace');

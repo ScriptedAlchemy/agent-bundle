@@ -19,7 +19,6 @@ target 表格——各 target 输出哪种布局，以及 portable 标准为何�
 | `codex` | 本地市场清单。 | `codex plugin marketplace add` + `codex plugin add`。 |
 | `cursor` | `marketplace: true` 时生成本地市场清单（`.cursor-plugin/marketplace.json`）。 | `install.mjs`。 |
 | `portable` | —— | `install.mjs`。 |
-| `plugin` | Claude、Codex 与 Cursor 三份清单，外加一份生成的 `AGENTS.md`。 | `install.mjs` 与各宿主 CLI。 |
 
 当某个 target 缺少必需的安装表面文件时，产物校验会报错，因此捆绑包不可能在缺少其 `INSTALL.md` 所承诺的
 安装器的情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。

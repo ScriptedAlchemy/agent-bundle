@@ -1101,9 +1101,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   const eventTarget = options.target ?? 'unknown';
-  const allowedEventTargets = eventTarget === 'plugin'
-    ? ['claude', 'codex', 'cursor']
-    : [eventTarget];
+  const allowedEventTargets = [eventTarget];
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already

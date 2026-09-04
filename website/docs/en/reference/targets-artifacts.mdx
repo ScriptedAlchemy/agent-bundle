@@ -21,7 +21,6 @@ real plugin and marketplace names, and the install surface that target requires.
 | `codex` | Local marketplace manifest. | `codex plugin marketplace add` + `codex plugin add`. |
 | `cursor` | Local marketplace manifest (`.cursor-plugin/marketplace.json`) when `marketplace: true`. | `install.mjs`. |
 | `portable` | — | `install.mjs`. |
-| `plugin` | Claude, Codex, and Cursor manifests, plus a generated `AGENTS.md`. | `install.mjs` and the host CLIs. |
 
 Artifact validation errors when a target is missing a required install-surface file, so a bundle
 cannot ship without the installer its `INSTALL.md` promises. The npm pack inventory checks the

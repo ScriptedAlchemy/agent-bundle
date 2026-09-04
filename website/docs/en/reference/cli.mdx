@@ -118,7 +118,7 @@ Both build package outputs when the project declares `bin` or `lib`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host-validation` / `--no-host-validation` | on | After the artifact is written, run the installed Claude Code developer validator and load check over every built `claude` and `plugin` target — the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
+| `--host-validation` / `--no-host-validation` | on | After the artifact is written, run the installed Claude Code developer validator and load check over the built `claude` projection — the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
 The JSON document carries the reports under `hostValidation`, one per validated target, each
@@ -217,7 +217,7 @@ from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not co
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--artifact <path>` | — | Validate exactly this built artifact instead of project source. |
-| `--host-validation` / `--no-host-validation` | on | Run installed host developer tools for compatible built targets. For `claude` and `plugin` targets this is the two `claude plugin validate --strict` runs followed by the `claude --plugin-dir <dir> plugin list --json` load check (`AB7325` when the row carries `errors`, `AB7311` when there is no row). |
+| `--host-validation` / `--no-host-validation` | on | Run installed host developer tools for compatible built targets. When `claude` is selected this is the two `claude plugin validate --strict` runs followed by the `claude --plugin-dir <dir> plugin list --json` load check (`AB7325` when the row carries `errors`, `AB7311` when there is no row). |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
 ## eval

@@ -213,6 +213,27 @@ it('builds a selected target through the built executable from a path containing
   }
 }, 30_000 * timeScale);
 
+it('rejects --target plugin as an unknown target (#555 acceptance 3)', async () => {
+  // `plugin` is not a public target: the composite root is the only output
+  // shape, and `claude|codex|cursor|portable` select the projections inside it.
+  const project = await createCliProject();
+  try {
+    const result = await runSourceCliWithOutput([
+      'build', '--root', project.root, '--output', project.output, '--target', 'plugin', '--json',
+    ]);
+
+    expect(result).toMatchObject({ code: 1, stdout: '' });
+    expect(JSON.parse(result.stderr)).toEqual([expect.objectContaining({
+      code: 'AB4100',
+      message: 'Unknown target "plugin".',
+      severity: 'error',
+      target: 'plugin',
+    })]);
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+});
+
 /**
  * Runs the built CLI under the module-load recorder and returns the process
  * result plus every non-builtin module URL the invocation resolved.
