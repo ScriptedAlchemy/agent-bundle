@@ -4,7 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import { dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
-import { Context, Duration, Effect, Layer } from 'effect';
+import { Context, Duration, Effect, Exit, Layer } from 'effect';
 import { z } from 'zod';
 
 import { isAbortError, makeScopedEffectRuntime, runPromise, type ScopedEffectRuntime } from '../effect/boundary.ts';
@@ -308,6 +308,10 @@ export interface EventRuntimeServerTestHooks {
     identity: Readonly<{ readonly device: number; readonly inode: number }>,
   ) => Promise<void>;
   readonly beforeEndpointClaimRemoval?: () => Promise<void>;
+  /** Runs after the claim handle closed and before its lock file is removed; a rejection stands in for a failing release. */
+  readonly beforeEndpointClaimRelease?: () => Promise<void>;
+  /** Runs at the start of the owned-endpoint removal on close; a rejection stands in for a failing removal. */
+  readonly beforeEndpointRemoval?: () => Promise<void>;
 }
 
 interface EndpointClaim {
@@ -409,6 +413,16 @@ const removeFileIfIdentityMatches = async (
   return true;
 };
 
+/**
+ * The endpoint claim is an inode lock and stays raw `node:fs` on purpose:
+ * exclusive create (`open` with `wx`), the owner record written through the
+ * same handle, and the handle's `dev`/`ino` as the identity every later
+ * removal must match. Effect's `FileSystem` cannot express that identity
+ * (`stat` follows links and returns no handle-bound inode), so this helper and
+ * `readEndpointClaimSnapshot` / `removeFileIfIdentityMatches` are lifted as
+ * one imperative unit (`docs/effect-conventions.md` § Effect platform
+ * services); only the orchestration around them is Effect.
+ */
 const tryClaimEndpoint = (
   endpoint: string,
 ): Effect.Effect<EndpointClaim | undefined, EventRuntimeTransportError> =>
@@ -529,7 +543,7 @@ const releaseEndpointRecoveryGate = (server: Server): Effect.Effect<void> =>
     }
     server.close(() => resume(Effect.void));
     return undefined;
-  }).pipe(Effect.ignore);
+  });
 
 const reclaimOrphanedEndpointClaim = Effect.fnUntraced(function*(
   endpoint: string,
@@ -602,11 +616,23 @@ const reclaimOrphanedEndpointClaim = Effect.fnUntraced(function*(
   return removed;
 });
 
-const releaseEndpointClaim = (claim: EndpointClaim): Effect.Effect<void> =>
+/**
+ * Releases the claim lock: close the exclusive handle, then remove the lock
+ * file only while it is still the inode this process created. A failure is a
+ * typed transport error, not a swallowed one — `openServer` decides how it
+ * combines with the open outcome (last failure wins).
+ */
+const releaseEndpointClaim = (
+  claim: EndpointClaim,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.Effect<void, EventRuntimeTransportError> =>
   liftPromise(async () => {
     await claim.handle.close();
+    await testHooks?.beforeEndpointClaimRelease?.();
     await removeFileIfIdentityMatches(claim.path, claim.identity);
-  }).pipe(Effect.ignore);
+  }).pipe(
+    Effect.mapError((error) => transportError('runtime-failed', 'Unable to release the event runtime endpoint claim.', error)),
+  );
 
 const claimEndpoint = Effect.fnUntraced(function*(
   endpoint: string,
@@ -724,34 +750,57 @@ const openServer = Effect.fnUntraced(function*(
     ));
   }
 
-  return yield* Effect.acquireUseRelease(
-    claimEndpoint(endpoint, testHooks),
-    () => Effect.gen(function*() {
-      const claimedEndpointState = yield* probeEndpoint(endpoint);
-      if (claimedEndpointState === 'live') {
-        return yield* Effect.fail(transportError(
+  const listenUnderClaim = Effect.gen(function*() {
+    const claimedEndpointState = yield* probeEndpoint(endpoint);
+    if (claimedEndpointState === 'live') {
+      return yield* Effect.fail(transportError(
+        'runtime-failed',
+        'Event runtime endpoint already has a live server.',
+      ));
+    }
+    if (claimedEndpointState === 'stale') {
+      yield* liftPromise(() => rm(endpoint)).pipe(
+        Effect.mapError((error) => transportError(
           'runtime-failed',
-          'Event runtime endpoint already has a live server.',
-        ));
-      }
-      if (claimedEndpointState === 'stale') {
-        yield* liftPromise(() => rm(endpoint)).pipe(
-          Effect.mapError((error) => transportError(
-            'runtime-failed',
-            'Unable to remove the stale event runtime endpoint.',
-            error,
-          )),
-        );
-      }
-      return yield* listenServer(options, endpoint);
-    }),
-    releaseEndpointClaim,
-  );
+          'Unable to remove the stale event runtime endpoint.',
+          error,
+        )),
+      );
+    }
+    return yield* listenServer(options, endpoint);
+  });
+  // The claim is held only across the probe and listen. Its release must
+  // *propagate* a failure, so this is an explicit exit sequence rather than a
+  // scope finalizer: capture the listen `Exit`, release the claim, and let the
+  // release failure win — after shutting down a server that did come up, so a
+  // failed claim release never leaks a listening socket. The mask keeps the
+  // acquire→release pairing intact under interruption, as `acquireUseRelease`
+  // would.
+  return yield* Effect.uninterruptibleMask((restore) => Effect.gen(function*() {
+    const claim = yield* claimEndpoint(endpoint, testHooks);
+    const listened = yield* Effect.exit(restore(listenUnderClaim));
+    const released = yield* Effect.exit(releaseEndpointClaim(claim, testHooks));
+    if (Exit.isFailure(released)) {
+      if (Exit.isSuccess(listened)) yield* shutdownServer(listened.value);
+      return yield* Effect.failCause(released.cause);
+    }
+    return yield* listened;
+  }));
 });
 
-const removeOwnedEndpoint = (service: EventSocketServiceShape): Effect.Effect<void> =>
+/**
+ * Removes the socket path only while it is still the inode this server bound
+ * (identity-matched `stat` + `rm`, kept raw like the claim lock). A removal
+ * failure is a typed transport error so `close()` can surface it instead of
+ * leaving a stale endpoint behind silently; a missing path is already gone.
+ */
+const removeOwnedEndpoint = (
+  service: EventSocketServiceShape,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.Effect<void, EventRuntimeTransportError> =>
   liftPromise(async () => {
     if (service.endpointIdentity === undefined) return;
+    await testHooks?.beforeEndpointRemoval?.();
     let current;
     try {
       current = await stat(service.endpoint);
@@ -765,9 +814,12 @@ const removeOwnedEndpoint = (service: EventSocketServiceShape): Effect.Effect<vo
     ) {
       await rm(service.endpoint, { force: true });
     }
-  }).pipe(Effect.ignore);
+  }).pipe(
+    Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the event runtime endpoint.', error)),
+  );
 
-const closeServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
+/** Destroys every accepted socket and stops listening. Idempotent and infallible: the scope finalizer. */
+const shutdownServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {
     for (const socket of service.sockets) socket.destroy();
     if (!service.server.listening) {
@@ -776,19 +828,28 @@ const closeServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
     }
     service.server.close(() => resume(Effect.void));
     return undefined;
-  }).pipe(
-    Effect.ensuring(
-      process.platform === 'win32'
-        ? Effect.void
-        : removeOwnedEndpoint(service),
-    ),
+  });
+
+/**
+ * The explicit teardown `EventRuntimeServer.close()` runs: shut the server
+ * down, then remove the owned endpoint. The removal is fallible on purpose —
+ * the scope finalizer only ever repeats the (idempotent) shutdown, so the one
+ * teardown step that can fail reports to the caller rather than to a
+ * finalizer that would have to swallow it.
+ */
+const closeServer = (
+  service: EventSocketServiceShape,
+  testHooks?: EventRuntimeServerTestHooks,
+): Effect.Effect<void, EventRuntimeTransportError> =>
+  shutdownServer(service).pipe(
+    Effect.andThen(process.platform === 'win32' ? Effect.void : removeOwnedEndpoint(service, testHooks)),
   );
 
 const eventSocketLayer = (
   options: CreateEventRuntimeServerOptions,
   testHooks?: EventRuntimeServerTestHooks,
 ): Layer.Layer<EventSocketService, EventRuntimeTransportError> =>
-  Layer.effect(EventSocketService, Effect.acquireRelease(openServer(options, testHooks), closeServer));
+  Layer.effect(EventSocketService, Effect.acquireRelease(openServer(options, testHooks), shutdownServer));
 
 const createEventRuntimeServerWithHooks = async (
   options: CreateEventRuntimeServerOptions,
@@ -796,8 +857,12 @@ const createEventRuntimeServerWithHooks = async (
 ): Promise<EventRuntimeServer> => {
   const runtime: ScopedEffectRuntime<EventSocketService> = makeScopedEffectRuntime(eventSocketLayer(options, testHooks));
   const service = await runtime.run(EventSocketService);
+  let closing: Promise<void> | undefined;
   return Object.freeze({
-    close: () => runtime.close(),
+    close: () => {
+      closing ??= runtime.run(closeServer(service, testHooks)).finally(() => runtime.close());
+      return closing;
+    },
     endpoint: service.endpoint,
   });
 };

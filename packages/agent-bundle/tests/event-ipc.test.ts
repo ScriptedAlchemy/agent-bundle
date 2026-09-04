@@ -278,6 +278,66 @@ it.live('rejects a second live server without disturbing the endpoint owner', ()
   }));
 }));
 
+it.live('reports a failed endpoint removal from close() after the server has stopped listening', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-close-failure-${crypto.randomUUID()}`;
+  const removalFailure = new Error('endpoint removal failed');
+  let removals = 0;
+  const server = yield* Effect.promise(() => createEventRuntimeServerForTest({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => undefined,
+  }, {
+    beforeEndpointRemoval: async () => {
+      removals += 1;
+      throw removalFailure;
+    },
+  }));
+
+  const closeFailure = yield* Effect.tryPromise({ try: () => server.close(), catch: (error) => error }).pipe(Effect.flip);
+  expect(closeFailure).toMatchObject({
+    cause: removalFailure,
+    code: 'runtime-failed',
+    message: 'Unable to remove the event runtime endpoint.',
+    name: EventRuntimeTransportError.name,
+  });
+  // The server stopped listening before the removal ran, and a repeated close
+  // returns the same settled teardown instead of retrying it.
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({ endpoint: server.endpoint, timeoutMs: 500 })))
+    .toEqual({ status: 'unavailable' });
+  expect(yield* Effect.tryPromise({ try: () => server.close(), catch: (error) => error }).pipe(Effect.flip)).toBe(closeFailure);
+  expect(removals).toBe(1);
+  yield* Effect.promise(() => rm(server.endpoint, { force: true }));
+}));
+
+it.live('reports a failed claim release from open() and shuts down the server it had started', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-claim-release-failure-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const releaseFailure = new Error('claim release failed');
+  const openFailure = yield* Effect.tryPromise({
+    try: () => createEventRuntimeServerForTest({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => undefined,
+    }, {
+      beforeEndpointClaimRelease: async () => { throw releaseFailure; },
+    }),
+    catch: (error) => error,
+  }).pipe(Effect.flip);
+  expect(openFailure).toMatchObject({
+    cause: releaseFailure,
+    code: 'runtime-failed',
+    message: 'Unable to release the event runtime endpoint claim.',
+    name: EventRuntimeTransportError.name,
+  });
+  // The listening server that had come up under the claim is shut down again.
+  expect(yield* Effect.promise(() => requestEventRuntimeStatus({ endpoint, timeoutMs: 500 })))
+    .toEqual({ status: 'unavailable' });
+  yield* Effect.promise(() => rm(`${endpoint}.lock`, { force: true }));
+  yield* Effect.promise(() => rm(endpoint, { force: true }));
+}));
+
 it.live('replaces a stale event runtime socket file', () => Effect.gen(function*() {
   if (process.platform === 'win32') return;
   const endpointId = `event-ipc-stale-${crypto.randomUUID()}`;
