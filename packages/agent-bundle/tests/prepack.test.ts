@@ -270,6 +270,11 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       const [chained] = withCode(await diagnostics(pack), 'AB7014');
       expect(chained?.message).toContain('"never-loaded"');
       expect(chained?.message).not.toContain('"driver-package"');
+      // Loader called inline with a literal.
+      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const driver = createRequire(import.meta.url)("driver-package");\n');
+      const [inline] = withCode(await diagnostics(pack), 'AB7014');
+      expect(inline?.message).toContain('"never-loaded"');
+      expect(inline?.message).not.toContain('"driver-package"');
     } finally {
       await rm(consumer, { force: true });
     }
@@ -392,7 +397,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks.
-      postinstall: 'named-in-script --init && npm run -s setup',
+      postinstall: 'named-in-script --init && npm --silent run setup',
       setup: 'echo setup',
       presetup: 'tsc --version',
       postsetup: 'pnpm run finish',

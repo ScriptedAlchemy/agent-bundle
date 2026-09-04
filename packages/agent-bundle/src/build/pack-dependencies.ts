@@ -103,7 +103,7 @@ export const packageNameOf = (specifier: string): string | undefined =>
  * itself, but only to a registry target: the part after the aliased name is
  * classified like any other specifier (an absent target is `latest`).
  */
-const registryAlias = /^npm:(?:@[^/@]+\/)?[^/@]+(?:@(?<target>.*))?$/u;
+const registryAlias = /^npm:(?<name>(?:@[^/@]+\/)?[^/@]+)(?:@(?<target>.*))?$/u;
 
 /**
  * Protocols only a workspace manager understands. pnpm, Yarn, and Bun
@@ -124,18 +124,23 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
   /^(?:pnpm|yarn|bun)\//u.test(packerUserAgent ?? '');
 
 /**
- * The specifier schemes npm can parse at all, each needing something after
- * the colon (`file:` alone names nothing) and the URL forms a valid URL. Anything else with a scheme —
+ * The specifier schemes npm can parse at all, the URL forms as valid URLs. Anything else with a scheme —
  * `workspace:`, `catalog:`, `link:`, `portal:`, or a typo — fails every
  * consumer with `EUNSUPPORTEDPROTOCOL` before npm fetches anything, even for
  * a peer it would never install. `npm:` is parsed as an alias and must name a
  * package (`npm:` alone is "aliases must have a name").
  */
-const hostedShorthand = /^(?:github|gitlab|bitbucket|gist):\S/iu;
-const urlScheme = /^(?:git(?:\+[a-z]+)?|https?|file):\S/iu;
+const hostedShorthand = /^(?:github|gitlab|bitbucket|gist):/iu;
+/** npm's git transports: `git:` and `git+ssh|https|http|file:`; any other `git+x` is unsupported. */
+const urlScheme = /^(?:git(?:\+(?:ssh|https?|file))?|https?|file):/iu;
 const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
 
-/** A known scheme npm parses: a hosted shorthand with a remainder, or a URL form that is a valid URL (`http:%zz` is not). */
+/**
+ * A known scheme npm parses: a hosted shorthand, or a URL form that is a
+ * valid URL (`http:%zz` is not). An empty remainder (`file:`, `github:`)
+ * still parses — as a local directory or empty hosted source — and merely
+ * fails to fetch, so an optional entry declaring it survives the install.
+ */
 const parseableScheme = (specifier: string): boolean =>
   hostedShorthand.test(specifier) || (urlScheme.test(specifier) && URL.canParse(specifier));
 const windowsDrivePath = /^[a-z]:[\\/]/iu;
@@ -204,7 +209,8 @@ export const isNpmParseable = (specifier: string): boolean => {
   const alias = registryAlias.exec(trimmed);
   if (alias !== null) {
     const target = alias.groups?.target;
-    return target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target));
+    return isValidPackageName(alias.groups?.name ?? '')
+      && (target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target)));
   }
   if (/^npm:/iu.test(trimmed)) return false;
   if (anyScheme.test(trimmed)) return parseableScheme(trimmed) || windowsDrivePath.test(trimmed);
@@ -222,7 +228,8 @@ export const isRegistrySpecifier = (specifier: string): boolean => {
   const alias = registryAlias.exec(trimmed);
   if (alias !== null) {
     const target = alias.groups?.target;
-    return target === undefined || target === '' || (!target.startsWith('npm:') && isRegistrySpecifier(target));
+    return isValidPackageName(alias.groups?.name ?? '')
+      && (target === undefined || target === '' || (!target.startsWith('npm:') && isRegistrySpecifier(target)));
   }
   return isNpmParseable(trimmed) && !nonRegistrySpecifier.test(trimmed);
 };
@@ -240,8 +247,10 @@ const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
  * as imported, never as unused, so the pattern errs toward keeping a
  * declaration.
  */
-const literalLoad = (loaders: readonly string[]): RegExp =>
-  new RegExp(String.raw`(?:\b(?:${loaders.join('|')})|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
+const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
+  String.raw`(?:\b(?:${loaders.join('|')})|\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)])\s*[(]\s*${quotedLiteral}\s*[)]`,
+  'gu',
+);
 
 /**
  * A CommonJS load or resolution whose argument is not a string literal —
@@ -296,13 +305,15 @@ const loaderNames = (source: string): readonly string[] => [
 
 /**
  * Every module specifier a declaration file resolves: `from "…"`,
- * `import("…")`, `import x = require("…")`, and `/// <reference types="…" />`.
+ * `import("…")`, `import x = require("…")`, `declare module "…"` (an
+ * augmentation of that package's types, in an external-module declaration),
+ * and `/// <reference types="…" />`.
  * A consumer needs the package that provides these types even though the
  * bundled JavaScript has no runtime import. Declarations are not ES modules
  * the lexer accepts, so this is a text scan with the same keep-only bias.
  */
 const declarationSpecifier = new RegExp(
-  String.raw`\b(?:from|import|require)\s*\(?\s*${quotedLiteral}|<reference\s+types\s*=\s*(["'])([^"'\n]+)\3`,
+  String.raw`\b(?:from|import|require|declare\s+module)\s*\(?\s*${quotedLiteral}|<reference\s+types\s*=\s*(["'])([^"'\n]+)\3`,
   'gu',
 );
 
@@ -344,12 +355,13 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
     imports = [];
   }
   const loaders = loaderNames(source);
+  const factories = factoryNames(source);
   return {
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad(loaders, factoryNames(source)).test(source),
+      && !computedLoad(loaders, factories).test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-      ...Array.from(source.matchAll(literalLoad(loaders)), (match) => match[2] ?? ''),
+      ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => match[2] ?? ''),
     ],
   };
 };
@@ -400,8 +412,8 @@ const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>
 
 const installScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
 
-/** `npm run build`, `pnpm run -s build`, `yarn run build`, `bun run build`: a script delegating to another. */
-const delegatedRun = /\b(?:npm|pnpm|yarn|bun)\s+run(?:-script)?\s+(?:-{1,2}[\w-]+\s+)*([\w:.-]+)/gu;
+/** `npm run build`, `npm --silent run build`, `pnpm run -s build`, `yarn run build`, `bun run build`: a script delegating to another. */
+const delegatedRun = /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+\s+)*run(?:-script)?\s+(?:-{1,2}[\w-]+\s+)*([\w:.-]+)/gu;
 
 /**
  * The text a consumer's install lifecycle executes: the lifecycle scripts,

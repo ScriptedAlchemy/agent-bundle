@@ -73,11 +73,13 @@ it.each([
   ['vendor/foo/bar', false],
   ['not a valid spec', false],
   ['npm:name@not a valid spec', false],
-  // A known scheme with nothing after it names no package.
+  // An alias must name a valid package; a known scheme with nothing after it is a source npm cannot fetch.
   ['npm:', false],
+  ['npm:bad name@1', false],
   ['file:', false],
   ['github:', false],
   ['http:%zz', false],
+  ['git+foo://host/repo', false],
   // A bare tarball filename is a file source npm reads from disk.
   ['foo.tgz', false],
   ['vendor/foo.tar.gz', false],
@@ -106,10 +108,16 @@ it.each([
   ['not a valid spec', false],
   ['npm:', false],
   ['npm:name@', true],
-  ['file:', false],
+  ['npm:bad name@1', false],
+  // Empty fetch sources parse (a local directory, an empty hosted source) and merely fail to fetch.
+  ['file:', true],
+  ['github:', true],
+  ['git:', true],
   ['http:%zz', false],
   ['https://', false],
-  ['github:', false],
+  // npm's git transports only.
+  ['git+ssh://git@github.com/o/r.git', true],
+  ['git+foo://host/repo', false],
   ['foo.tgz', true],
   ['vendor/foo/bar', true],
   ['1.2.3+..', false],
@@ -180,6 +188,8 @@ it.each([
   ["declare const y: typeof import ( 'spaced' );", ['spaced']],
   // A type directive resolves through the package itself or its DefinitelyTyped package.
   ['/// <reference types="node" />', ['node', '@types/node']],
+  ['declare module "driver-package" { interface Options { verbose?: boolean } }', ['driver-package']],
+  ["declare module 'augmented' {}", ['augmented']],
   ["/// <reference types = '@scope/name' />", ['@scope/name', '@types/scope__name']],
   ['import a from "one"; export { b } from "two"; import c = require("three");', ['one', 'two', 'three']],
   ['declare const n: string;', []],
