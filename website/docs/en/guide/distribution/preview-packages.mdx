@@ -18,8 +18,9 @@ from, how far you can trust them, and what pinning actually guarantees.
 
 `.github/workflows/package-preview.yml` runs `pnpm preview:publish` after a full build, on every
 pull request and on every push to `main`. It publishes `packages/agent-bundle`,
-`packages/rsc-runtime`, and `packages/create-agent-bundle` with `--previewVersion --peerDeps
---no-compact --no-template`.
+`packages/rsc-runtime`, `packages/rsc-markdown-stream` (the Markdown renderer
+`@agent-bundle/runtime` depends on), and `packages/create-agent-bundle` with
+`--previewVersion --peerDeps --no-compact --no-template`.
 
 Runs for `main` pushes use a **per-commit** concurrency group, so overlapping pushes cannot
 cancel one another and every `main` commit has an installable snapshot. PR runs do cancel

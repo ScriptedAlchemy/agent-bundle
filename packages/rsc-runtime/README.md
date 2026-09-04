@@ -61,9 +61,8 @@ The package exports `Hook`, `Mcp`, `Agent`, both lowerers, the request-store
 APIs, the Agent Document contracts, `createAgentRenderDispatcher`,
 `projectMcpRenderStream`, `createWarmFlightHost`, `decodeAgentFlightStream`,
 and the `@agent-bundle/runtime/flight/server` render entry. Rich Markdown
-authoring rides [rsc-markdown-stream](https://github.com/ScriptedAlchemy/rsc-markdown-stream),
-bundled into the package build (it is not published to npm, so the package
-installs with no git dependency): `renderToMarkdown` /
+authoring rides `rsc-markdown-stream`, the Markdown renderer published from
+this repository's `packages/rsc-markdown-stream`: `renderToMarkdown` /
 `renderToMarkdownStream` are re-exported, and the async
 `MarkdownContent` component renders JSX children — headings, lists, GFM
 tables, task lists, nested async components — to one escaped Markdown string

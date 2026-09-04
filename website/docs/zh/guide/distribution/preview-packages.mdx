@@ -15,7 +15,8 @@ description: '代替 npm 的 pkg.pr.new 预览通道：预览包如何发布、�
 
 `.github/workflows/package-preview.yml` 在一次完整构建之后运行 `pnpm preview:publish`，覆盖每个
 pull request 与每次推送到 `main`。它以 `--previewVersion --peerDeps --no-compact --no-template`
-发布 `packages/agent-bundle`、`packages/rsc-runtime` 与 `packages/create-agent-bundle`。
+发布 `packages/agent-bundle`、`packages/rsc-runtime`、`packages/rsc-markdown-stream`（`@agent-bundle/runtime`
+所依赖的 Markdown 渲染器）与 `packages/create-agent-bundle`。
 
 针对 `main` 推送的运行使用**逐提交**的并发分组，因此相互重叠的推送不会取消彼此，每个 `main` 提交都有
 一份可安装的快照。PR 的运行则会取消同一个 PR 中被取代的构建，因为只有 PR 的最新一次预览才有意义。

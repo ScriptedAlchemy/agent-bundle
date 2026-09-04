@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@agent-bundle/runtime': workspace:*
+  rsc-markdown-stream: workspace:*
 
 importers:
 
@@ -362,6 +363,21 @@ importers:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
 
+  packages/rsc-markdown-stream:
+    devDependencies:
+      '@rslib/core':
+        specifier: 0.23.2
+        version: 0.23.2(typescript@7.0.2)
+      '@rstest/core':
+        specifier: 0.11.10
+        version: 0.11.10
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+
   packages/rsc-runtime:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -379,6 +395,9 @@ importers:
       react-server-dom-rspack:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      rsc-markdown-stream:
+        specifier: workspace:*
+        version: link:../rsc-markdown-stream
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -413,9 +432,6 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
-      rsc-markdown-stream:
-        specifier: github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47
-        version: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8)
 
   packages/workbench:
     dependencies:
@@ -2998,13 +3014,6 @@ packages:
     peerDependencies:
       '@rsbuild/core': ^2.0.0
       react-server-dom-rspack: '*'
-
-  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47:
-    resolution: {gitHosted: true, integrity: sha512-lcNhSQSZZtAqZyArvaeBB/VraOr2kyresHsPj8DimmwtN7A08rUgJ5y6Hz4PE8m8WSZRrJpWpaWnZZynSysRDA==, tarball: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47}
-    version: 0.1.0
-    engines: {node: '>=18'}
-    peerDependencies:
-      react: ^19.0.0
 
   run-applescript@7.1.0:
     resolution: {integrity: sha512-DPe5pVFaAsinSaV6QjQ6gdiedWDcRCbUuiQfQa2wmWV7+xC9bGulGI8+TdRmoFkAPaBXk8CrAbnlY2ISniJ47Q==}
@@ -6207,10 +6216,6 @@ snapshots:
     dependencies:
       '@rsbuild/core': 2.2.1
       react-server-dom-rspack: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-
-  rsc-markdown-stream@https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8):
-    dependencies:
-      react: 19.2.8
 
   run-applescript@7.1.0: {}
 
