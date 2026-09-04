@@ -1,11 +1,12 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 
+import { projectMeta } from '../build/meta.ts';
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { CodedError, isErrno } from '../core/errors.ts';
-import type { NormalizedSkill, SourceProvenance } from '../core/types.ts';
+import type { NormalizedPlugin, NormalizedSkill, SourceProvenance } from '../core/types.ts';
 import { EpochStore } from './epoch-store.ts';
 import { ProjectService } from './project-service.ts';
 import { isInsideOrEqual } from '../core/paths.ts';
@@ -243,21 +244,24 @@ export class SkillDocumentService {
 
   async sourceTree(): Promise<SkillDocumentTree> {
     const prepared = await this.#projectService.prepare('inspect');
+    const model = prepared.model;
     return Object.freeze({
       diagnostics: freezeDiagnostics(prepared.diagnostics),
-      skills: Object.freeze(await Promise.all((prepared.model?.skills ?? []).map((skill) => this.#sourceDocument(skill)))),
+      skills: Object.freeze(model === undefined
+        ? []
+        : await Promise.all(model.skills.map((skill) => this.#sourceDocument(skill, model)))),
     });
   }
 
   async source(skillId: string): Promise<ServedSkillDocument> {
-    const skill = await this.#sourceSkill(skillId);
-    return this.#sourceDocument(skill);
+    const { model, skill } = await this.#sourceSkill(skillId);
+    return this.#sourceDocument(skill, model);
   }
 
   async sourceResource(skillId: string, segments: readonly string[]): Promise<ServedSkillResource> {
     let skill: NormalizedSkill;
     try {
-      skill = await this.#sourceSkill(skillId);
+      ({ skill } = await this.#sourceSkill(skillId));
     } catch (error) {
       if (error instanceof SkillDocumentError && error.code === 'SKILL_DOCUMENT_UNAVAILABLE') {
         throw new SkillDocumentError('SKILL_RESOURCE_UNAVAILABLE', 'Skill resource is not available from this document base.');
@@ -298,17 +302,22 @@ export class SkillDocumentService {
     });
   }
 
-  async #sourceSkill(skillId: string): Promise<NormalizedSkill> {
+  async #sourceSkill(skillId: string): Promise<{ readonly model: NormalizedPlugin; readonly skill: NormalizedSkill }> {
     const prepared = await this.#projectService.prepare('inspect');
-    const skill = prepared.model?.skills.find((candidate) => candidate.id === skillId);
-    if (skill === undefined) {
+    const model = prepared.model;
+    const skill = model?.skills.find((candidate) => candidate.id === skillId);
+    if (model === undefined || skill === undefined) {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Source Skill is not available from the current normalized project.');
     }
-    return skill;
+    return { model, skill };
   }
 
-  async #sourceDocument(skill: NormalizedSkill): Promise<ServedSkillDocument> {
-    const document = await parseSkill(skill.dir, this.#root);
+  /**
+   * Re-parses the source document. A rendered skill evaluates again here and
+   * observes the same `agent-bundle/meta` identity discovery served it.
+   */
+  async #sourceDocument(skill: NormalizedSkill, model: NormalizedPlugin): Promise<ServedSkillDocument> {
+    const document = await parseSkill(skill.dir, this.#root, undefined, { meta: projectMeta(model.metadata) });
     if (document.diagnostics.some((entry) => entry.code === 'AB3000')) {
       throw new SkillDocumentError('SKILL_DOCUMENT_UNAVAILABLE', 'Source Skill Markdown is not available.');
     }

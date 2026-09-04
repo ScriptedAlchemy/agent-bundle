@@ -126,6 +126,13 @@ export default () => (
 `Skill.ProjectRoot`、`Skill.SessionIdentity` 与 `Skill.SkillRoot`。`Skill.Resource` 渲染的是
 Markdown 链接（`[path](path)`），不是 token。宿主语法在降级阶段应用，绝不在组件里应用。
 
+渲染源可以导入项目代码，因此文档由插件所发布的同一批源码计算得出；它也可以导入
+`agent-bundle/meta`：加载器提供的 `{ name, packageName, packageVersion, version }` 与编译器烙印到
+每个构建面上的完全相同，所以 Skill 能打印出它所描述的版本。它的 JSX 针对加载器自己的元素工厂编译，
+而不是项目的 `react/jsx-runtime`——渲染器只遍历普通元素对象，不需要任何 React 内部实现——因此求值
+不依赖进程如何解析 `react`（包括 route-unit 池的 `react-server` 条件），`inspectWorkbenchSurface`
+可以从任意池检查带有渲染 Skill 的项目。
+
 同目录下手写的 `SKILL.md` 总是胜出——手写文件胜过生成文件——被遮蔽的组件会报告信息级的 `AB4735`
 提示。渲染模块加载失败报告 `AB3003`；未默认导出组件函数、或未导出 `frontmatter` 记录，则报告
 `AB3004`。
