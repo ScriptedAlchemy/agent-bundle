@@ -89,8 +89,10 @@ export const ensuringRemoved = <A, E, R>(
 /**
  * `const dir = await mkdtemp(...); try { return await use(dir) } finally
  * { await rm(dir, { recursive: true, force: true }) }` — the
- * `ensuringRemoved` contract with the directory created inside the mask, so
- * an interrupt cannot land between its creation and its cleanup. Not
+ * `ensuringRemoved` bracket with the directory created inside the mask, so
+ * an interrupt cannot land between its creation and its cleanup. The
+ * operation is restored to the caller's interruptibility before it enters
+ * the bracket (the bracket's own mask is a no-op inside this one). Not
  * `fs.makeTempDirectoryScoped`: in rc.112 its finalizer removes without
  * `force` and `orDie`s, so a missing directory would reject an already
  * successful call and a real cleanup error would lose its Node cause.
@@ -102,9 +104,7 @@ export const withTempDirectory = <A, E, R>(
   Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const directory = yield* fs.makeTempDirectory(options);
-    const exit = yield* Effect.exit(restore(use(directory)));
-    yield* fs.remove(directory, { force: true, recursive: true });
-    return yield* exit;
+    return yield* ensuringRemoved(directory, restore(use(directory)));
   }));
 
 /**

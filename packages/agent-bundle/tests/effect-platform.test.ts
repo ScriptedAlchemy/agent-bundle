@@ -2,7 +2,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Cause, Effect, Exit, FileSystem, Path, PlatformError } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Option, Path, PlatformError } from 'effect';
 import { describe, expect, it } from '@rstest/core';
 
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -129,6 +129,33 @@ describe('effect platform layer (agent-bundle)', () => {
       expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
       expect(directory).toBeDefined();
       await expect(access(directory!)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(parent, { force: true, recursive: true });
+    }
+  });
+
+  it('lets an external interrupt reach the operation, then removes the temp directory', async () => {
+    // `withTempDirectory` delegates to `ensuringRemoved` from inside its own
+    // mask; the operation must still run at the caller's interruptibility,
+    // or a fiber parked in it could never be interrupted.
+    const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-platform-'));
+    try {
+      const outcome = await runWithPlatform(Effect.gen(function* () {
+        const created = yield* Deferred.make<string>();
+        const fiber = yield* Effect.forkChild(withTempDirectory(
+          { directory: parent, prefix: '.staging-' },
+          (directory) => Deferred.succeed(created, directory).pipe(Effect.andThen(Effect.never)),
+        ));
+        const directory = yield* Deferred.await(created);
+        const exit = yield* Fiber.interrupt(fiber).pipe(
+          Effect.andThen(Fiber.await(fiber)),
+          Effect.timeoutOption('2 seconds'),
+        );
+        return { directory, exit };
+      }));
+      expect(Option.isSome(outcome.exit)).toBe(true);
+      expect(Option.isSome(outcome.exit) && Exit.isFailure(outcome.exit.value) && Cause.hasInterrupts(outcome.exit.value.cause)).toBe(true);
+      await expect(access(outcome.directory)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(parent, { force: true, recursive: true });
     }
