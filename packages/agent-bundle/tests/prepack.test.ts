@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
@@ -243,8 +243,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     const reported = withCode(await diagnostics(), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*fails to fetch/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
+    // npm survives an optional dependency it cannot fetch, so that entry warns rather than blocks the release.
+    expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'warning']);
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
@@ -274,14 +276,33 @@ it('withholds AB7014 when packed JavaScript has a computed import() that could l
   },
 ));
 
-it('withholds AB7014 for a computed CommonJS require() just as for a computed import()', () => withPackageDocument(
+it.each([
+  ['require()', 'module.exports = (name) => require(name);'],
+  ['require.resolve()', 'module.exports = (name) => require.resolve(name);'],
+  ['import.meta.resolve()', 'export const where = (name) => import.meta.resolve(name);'],
+  ['a direct createRequire()()', 'import { createRequire } from "node:module";\nexport const load = (name) => createRequire(import.meta.url)(name);'],
+])('withholds AB7014 for a computed CommonJS %s just as for a computed import()', (_form, source) => withPackageDocument(
   (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
   async () => {
-    const consumer = join(projectRoot, 'dist', 'computed.cjs');
-    await writeFile(consumer, 'module.exports = (name) => require(name);\n');
+    const consumer = join(projectRoot, 'dist', source.startsWith('module.exports') ? 'computed.cjs' : 'computed.mjs');
+    await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/computed.cjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
+it('still reports AB7014 when the only non-literal resolve() calls are path or Promise resolution', () => withPackageDocument(
+  (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'resolvers.mjs');
+    await writeFile(consumer, 'import { resolve } from "node:path";\nexport const f = (a, b) => [resolve(a, b), Promise.resolve(a)];\n');
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/resolvers.mjs' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')[0]?.message).toContain('"never-loaded"');
     } finally {
       await rm(consumer, { force: true });
     }

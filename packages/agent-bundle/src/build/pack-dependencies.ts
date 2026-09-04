@@ -159,12 +159,14 @@ const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
 const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quotedLiteral}\s*[)]`, 'gu');
 
 /**
- * A `require(expression)` whose argument is not a string literal: CommonJS
- * selecting a package at runtime, which no literal can prove. Bundler
- * runtimes (`__webpack_require__(…)`) have no word boundary before
- * `require` and never match.
+ * A CommonJS load or resolution whose argument is not a string literal —
+ * `require(x)`, `require.resolve(x)`, `import.meta.resolve(x)`, or a direct
+ * `createRequire(…)(x)` — selecting a package at runtime, which no literal can
+ * prove. Bundler runtimes (`__webpack_require__(…)`) have no word boundary
+ * before `require` and never match; `path.resolve(x)` and `Promise.resolve(x)`
+ * are not resolution and never match.
  */
-const computedRequire = /\brequire\s*[(]\s*[^"'\s)]/u;
+const computedLoad = /(?:\brequire(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*[^"'\s)]/u;
 
 /**
  * Every module specifier a declaration file resolves: `from "…"`,
@@ -217,7 +219,7 @@ const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
   }
   return {
     complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedRequire.test(source),
+      && !computedLoad.test(source),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
       ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),

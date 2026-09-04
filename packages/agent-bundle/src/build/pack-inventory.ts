@@ -2,7 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
-import type { Diagnostic } from '../core/diagnostics.ts';
+import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -128,12 +128,8 @@ const binEntries = (value: unknown): readonly [string, string][] => {
     .sort(([left], [right]) => left.localeCompare(right)));
 };
 
-const diagnostic = (code: string, message: string, recovery: string): Diagnostic => Object.freeze({
-  code,
-  message,
-  recovery,
-  severity: 'error',
-});
+const diagnostic = (code: string, message: string, recovery: string, severity: DiagnosticSeverity = 'error'): Diagnostic =>
+  Object.freeze({ code, message, recovery, severity });
 
 const quoteAll = (values: readonly string[]): string => values.map((value) => JSON.stringify(value)).join(', ');
 
@@ -177,14 +173,18 @@ const dependencyDiagnostics = async (options: {
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
       'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
     )),
+    // npm skips an optional dependency it cannot fetch, so the install survives; the entry is still dead weight every consumer fails to fetch.
     ...perField(unresolvable, (field, own) => diagnostic(
       'AB7015',
       `package.json ${field} names packages a consumer's npm cannot resolve through a registry: ${own.map((dependency) =>
         `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `
-        + (field === 'optionalDependencies' ? 'every consumer install fails to fetch them.' : 'consumers cannot install the package.'),
+        + (field === 'optionalDependencies'
+          ? 'every consumer install tries and fails to fetch them, then continues without them.'
+          : 'consumers cannot install the package.'),
       'Depend on a published registry version, or bundle the package and declare it under devDependencies. '
         + 'npm 12 refuses git and remote fetches by default (allow-git, allow-remote) and never accepts workspace: or catalog:, '
         + 'which only pnpm, Yarn, or Bun rewrite while packing.',
+      field === 'optionalDependencies' ? 'warning' : 'error',
     )),
   ];
 };
