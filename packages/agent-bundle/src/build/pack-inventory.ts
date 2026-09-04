@@ -11,13 +11,12 @@ import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
 import {
+  classifyDependency,
   declaredDependencies,
   importedPackageNames,
-  isNpmParseable,
-  isValidPackageName,
-  isRegistrySpecifier,
   isWorkspaceProtocol,
   type DeclaredDependency,
+  type DependencyKind,
   type InstalledDependencyField,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
@@ -149,10 +148,6 @@ const perField = (
  * fail outright when the specifier is one a consumer's npm cannot resolve
  * (git, remote tarball, path, or an unrewritten workspace protocol).
  */
-/** An optional dependency npm parses but cannot fetch: the install continues without it. */
-const survivable = (dependency: DeclaredDependency): boolean =>
-  dependency.field === 'optionalDependencies' && isValidPackageName(dependency.name) && isNpmParseable(dependency.specifier);
-
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
   `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
     `${JSON.stringify(dependency.name)} -> ${JSON.stringify(dependency.specifier)}`).join(', ')}; `;
@@ -180,12 +175,20 @@ const dependencyDiagnostics = async (options: {
   const packed = new Set(options.packedPaths);
   const embedded = (dependency: DeclaredDependency): boolean =>
     dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`);
-  // A consumer's install fails on a workspace protocol the packer leaves in place, on a fetch npm refuses
-  // (installed entries only), or on a scheme npm cannot parse — which it reads even for a peer it never installs.
-  const unresolvable = declared.filter((dependency) => !embedded(dependency) && (!isValidPackageName(dependency.name)
-    || (isWorkspaceProtocol(dependency.specifier)
-      ? !options.packerRewritesWorkspaceProtocols
-      : dependency.installed ? !isRegistrySpecifier(dependency.specifier) : !isNpmParseable(dependency.specifier))));
+  // A workspace protocol the packer rewrites reaches the consumer as a registry version; every other entry
+  // is read as npm itself reads it.
+  const kindOf = (dependency: DeclaredDependency): DependencyKind =>
+    isWorkspaceProtocol(dependency.specifier) && options.packerRewritesWorkspaceProtocols
+      ? 'registry'
+      : classifyDependency(dependency.name, dependency.specifier);
+  const kinds = new Map(declared.map((dependency) => [dependency, kindOf(dependency)]));
+  // A consumer's install fails on a fetch npm refuses (installed entries only), or on a name or specifier npm
+  // cannot parse — which it reads even for a peer it never installs.
+  const unresolvable = declared.filter((dependency) => !embedded(dependency)
+    && (dependency.installed ? kinds.get(dependency) !== 'registry' : kinds.get(dependency) === 'unparseable'));
+  // An optional dependency npm parses but cannot fetch: the install continues without it.
+  const survivable = (dependency: DeclaredDependency): boolean =>
+    dependency.field === 'optionalDependencies' && kinds.get(dependency) === 'fetched';
   // A computed import() may load any declared package; nothing can then be called unused.
   const unused = imported.complete
     ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))

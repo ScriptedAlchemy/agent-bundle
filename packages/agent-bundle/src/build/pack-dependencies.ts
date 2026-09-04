@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import { resolve } from 'node:path';
 
+import npa from 'npm-package-arg';
+
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -99,14 +101,6 @@ export const packageNameOf = (specifier: string): string | undefined =>
   nonPackageSpecifier.test(specifier) || isBuiltin(specifier) ? undefined : packageNamePrefix.exec(specifier)?.[0];
 
 /**
- * An `npm:` alias (prefix case-insensitive, as npm reads it), `npm:name` or
- * `npm:name@<target>`. npm resolves the alias itself, but only to a registry
- * target: the part after the aliased name is classified like any other
- * specifier (an absent target is `latest`).
- */
-const registryAlias = /^npm:(?<name>(?:@[^/@]+\/)?[^/@]+)(?:@(?<target>.*))?$/iu;
-
-/**
  * Protocols only a workspace manager understands. pnpm, Yarn, and Bun
  * rewrite them to registry versions while packing; npm publishes them
  * verbatim and every consumer then fails with `EUNSUPPORTEDPROTOCOL`.
@@ -125,115 +119,36 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
   /^(?:pnpm|yarn|bun)\//u.test(packerUserAgent ?? '');
 
 /**
- * The specifier schemes npm can parse at all, the URL forms as valid URLs. Anything else with a scheme —
- * `workspace:`, `catalog:`, `link:`, `portal:`, or a typo — fails every
- * consumer with `EUNSUPPORTEDPROTOCOL` before npm fetches anything, even for
- * a peer it would never install. `npm:` is parsed as an alias and must name a
- * package (`npm:` alone is "aliases must have a name").
+ * How a consumer's npm reads one dependency entry, name and specifier
+ * together:
+ *
+ * - `registry`: a version, range, dist-tag, or `npm:` alias of one — resolved
+ *   through the registry, the only kind a published package can rely on.
+ * - `fetched`: parseable, but a git, remote-tarball, or path source. npm 12
+ *   refuses the first two by default (`allow-git=none`, `allow-remote=none`)
+ *   and a path never exists on the consumer's disk; an optional entry
+ *   survives the failed fetch, any other kind fails the install.
+ * - `unparseable`: npm rejects the manifest before fetching anything —
+ *   `EINVALIDPACKAGENAME`, `EUNSUPPORTEDPROTOCOL` (`workspace:`, `catalog:`,
+ *   `link:`, a typo), `EINVALIDTAGNAME`, an alias of a non-registry target,
+ *   or an invalid URL — whichever field declares it, even a peer it would
+ *   never install.
+ *
+ * The verdict is npm's own: `npm-package-arg` is the parser npm, Arborist,
+ * and pacote share, so the gate agrees with the consumer's install by
+ * construction rather than by imitating its grammar. Whether the packer
+ * rewrites a workspace protocol first is the caller's policy
+ * (`isWorkspaceProtocol`).
  */
-const hostedShorthand = /^(?:github|gitlab|bitbucket|gist):/iu;
-/** npm's git transports: `git:` and `git+ssh|https|http|file|ftp|rsync:`; any other `git+x` is unsupported. */
-const urlScheme = /^(?:git(?:\+(?:ssh|https?|file|ftp|rsync))?|https?|file):/iu;
-const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
+export type DependencyKind = 'registry' | 'fetched' | 'unparseable';
 
-/**
- * A known scheme npm parses: a hosted shorthand, or a URL form that is a
- * valid URL (`http:%zz` is not). An empty remainder (`file:`, `github:`)
- * still parses — as a local directory or empty hosted source — and merely
- * fails to fetch, so an optional entry declaring it survives the install.
- */
-const parseableScheme = (specifier: string): boolean =>
-  hostedShorthand.test(specifier) || (urlScheme.test(specifier) && URL.canParse(specifier));
-const windowsDrivePath = /^[a-z]:[\\/]/iu;
-
-/**
- * Everything npm fetches as `git` or `remote`, or reads from disk: the forms
- * npm 12 refuses by default (`allow-git=none`, `allow-remote=none`) so a
- * consumer's `npm install` of the published package fails before any code
- * runs. Semver ranges and dist-tags never match: they contain no `:` and no
- * `/`, and a tilde range (`~1.2.3`) is followed by a digit, never a slash.
- */
-const nonRegistrySpecifier = new RegExp([
-  String.raw`^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file):`,
-  String.raw`^[^\s@]+@[^\s:]+:`, // scp-style git@host:path
-  windowsDrivePath.source,
-  String.raw`^(?:\.|/|~[\\/])`, // relative, absolute, or home path
-  String.raw`\.(?:tgz|tar\.gz|tar)$`, // a bare tarball filename, which npm reads from disk
-  String.raw`^[^\s]*/`, // owner/repo[#ref] GitHub shorthand, or any other slash-bearing spec: a bare directory
-].join('|'), 'iu');
-
-/** Names npm refuses outright, whatever their characters. */
-const reservedPackageNames = new Set(['node_modules', 'favicon.ico']);
-
-/**
- * A package name npm accepts in a dependency key: optionally scoped, URL-safe,
- * no leading `.` or `_`, at most 214 characters. npm validates the key as well
- * as the specifier, and rejects the manifest with `EINVALIDPACKAGENAME`.
- */
-export const isValidPackageName = (name: string): boolean =>
-  name.length <= 214
-  && !reservedPackageNames.has(name.toLowerCase())
-  && /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/iu.test(name);
-
-/**
- * The semver range grammar npm accepts: `||`-separated sets of
- * whitespace-separated comparators (`>=`, `<=`, `>`, `<`, `=`, `~`, `~>`,
- * `^`) or a hyphen range, over partial versions with `x`/`X`/`*` wildcards,
- * an optional `v`, and prerelease/build tails of dot-separated, non-empty
- * identifiers (`1.2.3+..` is not a version). An empty range is `*`.
- */
-const semverRange = (() => {
-  const part = String.raw`(?:\d+|x|X|\*)`;
-  const identifiers = String.raw`[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*`;
-  const partial = String.raw`v?${part}(?:\.${part}(?:\.${part})?)?(?:-${identifiers})?(?:\+${identifiers})?`;
-  const comparator = String.raw`(?:>=|<=|>|<|=|~>|~|\^)?\s*${partial}`;
-  const set = String.raw`(?:${partial}\s+-\s+${partial}|${comparator}(?:\s+${comparator})*)?`;
-  return new RegExp(String.raw`^\s*${set}(?:\s*\|\|\s*${set})*\s*$`, 'u');
-})();
-
-/**
- * A scheme-less registry selector npm accepts: a semver range, or a dist-tag,
- * which npm validates as URL-safe (`encodeURIComponent` leaves it unchanged;
- * `"not a valid spec"` fails with `EINVALIDTAGNAME`).
- */
-const isRegistrySelector = (selector: string): boolean =>
-  semverRange.test(selector) || encodeURIComponent(selector) === selector;
-
-/**
- * Whether npm parses this specifier at all: a known scheme, a Windows drive
- * path, a git/path/GitHub-shorthand form, an `npm:` alias with a parseable
- * target, or a valid registry selector. Anything else fails every consumer's
- * install before any fetch, whichever field declares it.
- */
-export const isNpmParseable = (specifier: string): boolean => {
-  const trimmed = specifier.trim();
-  const alias = registryAlias.exec(trimmed);
-  if (alias !== null) {
-    const target = alias.groups?.target;
-    // "aliases only work for registry deps": a non-registry target is a parse error, not a fetch that may fail.
-    return isValidPackageName(alias.groups?.name ?? '')
-      && (target === undefined || target === '' || (!/^npm:/iu.test(target) && isRegistrySpecifier(target)));
+export const classifyDependency = (name: string, specifier: string): DependencyKind => {
+  try {
+    // `where` only anchors path specifiers into a string; nothing touches the disk.
+    return npa.resolve(name, specifier.trim(), '/').registry === true ? 'registry' : 'fetched';
+  } catch {
+    return 'unparseable';
   }
-  if (/^npm:/iu.test(trimmed)) return false;
-  if (anyScheme.test(trimmed)) return parseableScheme(trimmed) || windowsDrivePath.test(trimmed);
-  return nonRegistrySpecifier.test(trimmed) || isRegistrySelector(trimmed);
-};
-
-/**
- * Whether a consumer's npm resolves this dependency specifier, as written,
- * through a package registry: parseable, and neither a fetch npm refuses nor
- * a path. A workspace protocol is not one; whether the packer rewrites it
- * first is the caller's policy (`isWorkspaceProtocol`).
- */
-export const isRegistrySpecifier = (specifier: string): boolean => {
-  const trimmed = specifier.trim();
-  const alias = registryAlias.exec(trimmed);
-  if (alias !== null) {
-    const target = alias.groups?.target;
-    return isValidPackageName(alias.groups?.name ?? '')
-      && (target === undefined || target === '' || (!/^npm:/iu.test(target) && isRegistrySpecifier(target)));
-  }
-  return isNpmParseable(trimmed) && !nonRegistrySpecifier.test(trimmed);
 };
 
 /** A single- or double-quoted string literal; the group after the opening quote is its body. */
@@ -245,12 +160,13 @@ const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
  * literal argument. The ESM lexer reports `import` forms only; CommonJS
  * payloads a consumer prebuilt reach the package through `require`, and a
  * package located only to find an asset or executable is still a runtime
- * dependency. A match inside a comment or string can only mark a dependency
- * as imported, never as unused, so the pattern errs toward keeping a
- * declaration.
+ * dependency. Only these resolvers count: `path.resolve("foo")` or
+ * `Promise.resolve("foo")` never make an unused `foo` look reachable. A match
+ * inside a comment or string can only mark a dependency as imported, never as
+ * unused, so the pattern otherwise errs toward keeping a declaration.
  */
 const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:\b(?:${loaders.join('|')})|\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)])\s*[(]\s*${quotedLiteral}\s*[)]`,
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)](?:\.resolve)?)\s*[(]\s*${quotedLiteral}\s*[)]`,
   'gu',
 );
 
@@ -264,7 +180,7 @@ const literalLoad = (loaders: readonly string[], factories: readonly string[]): 
  * `Promise.resolve(x)` are not resolution and never match.
  */
 const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)])\s*[(]\s*`
+  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|\b(?:${factories.join('|')})\s*[(][^)]*[)](?:\.resolve)?)\s*[(]\s*`
     + String.raw`(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
   'u',
 );
@@ -444,10 +360,11 @@ const installScriptText = (scripts: Readonly<Record<string, unknown>>): string =
  * (and `prepare` when installing from git), so a script that names a
  * dependency, or one of its `bin` commands, needs it installed even though no
  * packed JavaScript imports it. Bin names come from the dependency's own
- * manifest under `node_modules`; when that manifest is unreadable (Plug'n'Play,
- * a platform-specific optional dependency not installed here) the unscoped
- * package name stands in, npm's default bin name — `node-pre-gyp` for
- * `@mapbox/node-pre-gyp`.
+ * manifest under `node_modules`. A string-form `bin` is one command named
+ * after the installed manifest's unscoped `name` — `real` for an alias
+ * `"wrapper": "npm:@scope/real@1"`, not `wrapper`. When the manifest is
+ * unreadable (Plug'n'Play, a platform-specific optional dependency not
+ * installed here) the dependency's unscoped name stands in.
  */
 const installScriptDependencies = async (
   packageDocument: Readonly<Record<string, unknown>>,
@@ -456,13 +373,15 @@ const installScriptDependencies = async (
 ): Promise<readonly string[]> => {
   const text = installScriptText(isRecord(packageDocument.scripts) ? packageDocument.scripts : {});
   if (text === '') return [];
+  const unscoped = (name: string): string => name.replace(/^@[^/]+\//u, '');
   const binCommands = async (name: string): Promise<readonly string[]> => {
-    const unscoped = name.replace(/^@[^/]+\//u, '');
     const manifest = await readFile(resolve(projectRoot, 'node_modules', name, 'package.json'), 'utf8').catch(() => undefined);
-    if (manifest === undefined) return [unscoped];
+    if (manifest === undefined) return [unscoped(name)];
     const parsed: unknown = JSON.parse(manifest);
     const bin = isRecord(parsed) ? parsed.bin : undefined;
-    return typeof bin === 'string' ? [unscoped] : isRecord(bin) ? Object.keys(bin) : [];
+    if (isRecord(bin)) return Object.keys(bin);
+    if (typeof bin !== 'string') return [];
+    return [unscoped(isRecord(parsed) && typeof parsed.name === 'string' ? parsed.name : name)];
   };
   const mentioned = async (name: string): Promise<boolean> =>
     text.includes(name) || (await binCommands(name)).some((command) =>

@@ -370,11 +370,15 @@ it.each([
   },
 ));
 
-it('still reports AB7014 when the only non-literal resolve() calls are path or Promise resolution', () => withPackageDocument(
+it('still reports AB7014 when the only resolve() calls are path or Promise resolution, literal or not', () => withPackageDocument(
   (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
   async () => {
     const consumer = join(projectRoot, 'dist', 'resolvers.mjs');
-    await writeFile(consumer, 'import { resolve } from "node:path";\nexport const f = (a, b) => [resolve(a, b), Promise.resolve(a)];\n');
+    await writeFile(consumer, [
+      'import path, { resolve } from "node:path";',
+      'export const f = (a, b) => [resolve(a, b), Promise.resolve(a), path.resolve("never-loaded"), Promise.resolve("never-loaded")];',
+      '',
+    ].join('\n'));
     try {
       const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/resolvers.mjs' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')[0]?.message).toContain('"never-loaded"');
@@ -392,6 +396,8 @@ it('accepts a dependency reached through a package imports map or run by a consu
       typescript: '^5.0.0',
       // Not installed here, so its bin names are unknowable; the unscoped name stands in for npm's default bin.
       '@mapbox/node-pre-gyp': '^1.0.0',
+      // A string-form `bin` is one command named after the installed manifest, not the alias.
+      'prepack-test-wrapper': 'npm:@scope/real@^1.0.0',
     };
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
@@ -401,22 +407,29 @@ it('accepts a dependency reached through a package imports map or run by a consu
       setup: 'echo setup',
       presetup: 'tsc --version',
       postsetup: 'pnpm run finish',
-      finish: 'node-pre-gyp install',
+      finish: 'node-pre-gyp install && real --check',
     };
   },
   async () => {
     const consumer = join(projectRoot, 'dist', 'mapped.mjs');
     await writeFile(consumer, 'export { default } from "#driver";\n');
+    // The fixture's node_modules is the workspace's; the manifest is removed again below.
+    const wrapper = join(workspaceNodeModules, 'prepack-test-wrapper');
+    await mkdir(wrapper, { recursive: true });
+    await writeFile(join(wrapper, 'package.json'), JSON.stringify({ name: '@scope/real', version: '1.0.0', bin: 'cli.js' }));
     try {
       const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/mapped.mjs' }] };
-      // `#driver` reaches driver-package; the script names named-in-script directly and typescript through its `tsc` bin.
+      // `#driver` reaches driver-package; the script names named-in-script directly, typescript through its `tsc` bin,
+      // and the alias through `real`, the bin npm derives from the installed manifest's name.
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
       // Without the `#` import the map alone proves nothing.
       const [reported] = withCode(await diagnostics(), 'AB7014');
       expect(reported?.message).toContain('"driver-package"');
       expect(reported?.message).not.toContain('"typescript"');
       expect(reported?.message).not.toContain('"@mapbox/node-pre-gyp"');
+      expect(reported?.message).not.toContain('"prepack-test-wrapper"');
     } finally {
+      await rm(wrapper, { force: true, recursive: true });
       await rm(consumer, { force: true });
     }
   },

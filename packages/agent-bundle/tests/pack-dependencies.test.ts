@@ -1,10 +1,8 @@
 import { expect, it } from '@rstest/core';
 
 import {
+  classifyDependency,
   declaredDependencies,
-  isNpmParseable,
-  isRegistrySpecifier,
-  isValidPackageName,
   isWorkspaceProtocol,
   declarationSpecifiers,
   packageNameOf,
@@ -12,143 +10,111 @@ import {
 } from '../src/build/pack-dependencies.ts';
 
 it.each([
-  // Registry: semver ranges, dist-tags, and protocols the workspace manager rewrites at publish time.
-  ['^1.2.3', true],
-  ['~1.2.3', true],
-  ['~1.2', true],
-  ['1.2.3', true],
-  ['latest', true],
-  ['>=1 <2 || 3.x', true],
-  ['npm:effect@^4.0.0', true],
-  ['npm:@scope/name@latest', true],
-  ['npm:effect', true],
-  // An alias only ever points at a registry package; its target is classified too.
-  ['npm:bar@file:../bar', false],
-  ['npm:bar@workspace:*', false],
-  ['npm:bar@github:owner/repo', false],
-  ['npm:bar@npm:baz@^1', false],
-  // Workspace protocols, as written, are not registry specifiers; whether the packer rewrites them is the caller's policy.
-  ['workspace:*', false],
-  ['catalog:', false],
-  // Git.
-  ['git+ssh://git@github.com/owner/repo.git', false],
-  ['git+https://github.com/owner/repo.git', false],
-  ['git://github.com/owner/repo.git', false],
-  ['git@github.com:owner/repo.git', false],
-  ['github:owner/repo#131f4b6', false],
-  ['gitlab:owner/repo', false],
-  ['bitbucket:owner/repo', false],
-  ['gist:deadbeef', false],
-  ['owner/repo', false],
-  ['owner/repo#semver:^1', false],
-  // Remote tarballs.
-  ['https://pkg.pr.new/owner/repo/@scope/name@42539ff', false],
-  ['http://example.test/name.tgz', false],
-  // Paths.
-  ['file:../local', false],
-  ['link:../local', false],
-  ['portal:../local', false],
-  ['./vendor/dep', false],
-  ['../vendor/dep', false],
-  ['/opt/vendor/dep', false],
-  ['~/vendor/dep', false],
-  ['C:\\vendor\\dep', false],
-  ['c:/vendor/dep', false],
-  // Schemes npm cannot parse at all (EUNSUPPORTEDPROTOCOL), including a typo.
-  ['foo:bar', false],
-  ['jsr:@scope/name', false],
-  ['npm:name@foo:bar', false],
-  // Scheme-less selectors: every range form npm accepts, and URL-safe dist-tags; anything else is EINVALIDTAGNAME.
-  ['', true],
-  ['*', true],
-  ['1.x', true],
-  ['>=1.2.3 <2.0.0', true],
-  ['1.2.3 - 2.3.4', true],
-  ['^1.0.0 || ^2.0.0', true],
-  ['v1.2.3', true],
-  ['1.2.3-beta.1+build.5', true],
-  ['next', true],
-  ['1.2.3+..', false], // not a version, and `+` is not URL-safe, so not a tag either
-  // Any other slash-bearing spec is a bare directory npm reads from disk.
-  ['vendor/foo/bar', false],
-  ['not a valid spec', false],
-  ['npm:name@not a valid spec', false],
-  // An alias must name a valid package; a known scheme with nothing after it is a source npm cannot fetch.
-  ['npm:', false],
-  ['npm:bad name@1', false],
-  ['NPM:effect@^4', true],
-  ['file:', false],
-  ['github:', false],
-  ['http:%zz', false],
-  ['git+foo://host/repo', false],
-  // A bare tarball filename is a file source npm reads from disk.
-  ['foo.tgz', false],
-  ['vendor/foo.tar.gz', false],
-  ['foo.tar', false],
-])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
-  expect(isRegistrySpecifier(specifier)).toBe(registry);
+  // Registry: versions, ranges (npm's loose grammar included), and dist-tags.
+  ['^1.2.3', 'registry'],
+  ['~1.2.3', 'registry'],
+  ['1.2.3', 'registry'],
+  ['v1.2.3', 'registry'],
+  ['1.2.3-beta.1+build.5', 'registry'],
+  ['latest', 'registry'],
+  ['next', 'registry'],
+  ['', 'registry'],
+  ['*', 'registry'],
+  ['1.x', 'registry'],
+  ['>=1 <2 || 3.x', 'registry'],
+  ['>=1, <2', 'registry'],
+  ['v=1', 'registry'],
+  ['1.2.3 - 2.3.4', 'registry'],
+  // An `npm:` alias, its prefix case-insensitive, an absent target being `latest`.
+  ['npm:effect@^4.0.0', 'registry'],
+  ['npm:@scope/name@latest', 'registry'],
+  ['npm:effect', 'registry'],
+  ['npm:name@', 'registry'],
+  ['NPM:effect@^4', 'registry'],
+  // "aliases only work for registry deps": a non-registry target fails the manifest read, as does an unnamed
+  // or invalidly named alias.
+  ['npm:bar@file:../bar', 'unparseable'],
+  ['npm:bar@workspace:*', 'unparseable'],
+  ['npm:bar@github:owner/repo', 'unparseable'],
+  ['npm:bar@npm:baz@^1', 'unparseable'],
+  ['npm:name@foo:bar', 'unparseable'],
+  ['npm:name@not a valid spec', 'unparseable'],
+  ['npm:bad name@1', 'unparseable'],
+  ['npm:', 'unparseable'],
+  // Workspace protocols, as written, are unparseable to npm; whether the packer rewrites them is the caller's policy.
+  ['workspace:*', 'unparseable'],
+  ['catalog:', 'unparseable'],
+  // Git, over every transport npm knows; any other `git+x` is unsupported.
+  ['git+ssh://git@github.com/owner/repo.git', 'fetched'],
+  ['git+https://github.com/owner/repo.git', 'fetched'],
+  ['git+ftp://host/repo', 'fetched'],
+  ['git+rsync://host/repo', 'fetched'],
+  ['git://github.com/owner/repo.git', 'fetched'],
+  ['git:', 'fetched'],
+  ['git+foo://host/repo', 'unparseable'],
+  // scp-style: only a host npm recognises parses; `git@host:path` is read as an invalid dist-tag.
+  ['git@github.com:owner/repo.git', 'fetched'],
+  ['git@host:path', 'unparseable'],
+  // Hosted shorthands; an empty one parses, a malformed one does not.
+  ['github:owner/repo#131f4b6', 'fetched'],
+  ['gitlab:owner/repo', 'fetched'],
+  ['bitbucket:owner/repo', 'fetched'],
+  ['gist:deadbeef', 'fetched'],
+  ['github:', 'fetched'],
+  ['github:%zz', 'unparseable'],
+  ['owner/repo', 'fetched'],
+  ['owner/repo#semver:^1', 'fetched'],
+  // Remote tarballs, when the URL is one.
+  ['https://pkg.pr.new/owner/repo/@scope/name@42539ff', 'fetched'],
+  ['http://example.test/name.tgz', 'fetched'],
+  ['http:%zz', 'unparseable'],
+  ['https://', 'unparseable'],
+  // Paths: `file:`, relative, absolute, home, Windows drive, bare tarball, bare directory.
+  ['file:../local', 'fetched'],
+  ['file:', 'fetched'],
+  ['./vendor/dep', 'fetched'],
+  ['../vendor/dep', 'fetched'],
+  ['/opt/vendor/dep', 'fetched'],
+  ['~/vendor/dep', 'fetched'],
+  ['C:\\vendor\\dep', 'fetched'],
+  ['c:/vendor/dep', 'fetched'],
+  ['foo.tgz', 'fetched'],
+  ['foo.tar', 'fetched'],
+  ['vendor/foo/bar', 'fetched'],
+  // Schemes npm does not support, including other managers' link protocols and a typo.
+  ['link:../local', 'unparseable'],
+  ['portal:../local', 'unparseable'],
+  ['foo:bar', 'unparseable'],
+  ['jsr:@scope/name', 'unparseable'],
+  // Neither a range nor a URL-safe dist-tag (EINVALIDTAGNAME).
+  ['not a valid spec', 'unparseable'],
+  ['1.2.3+..', 'unparseable'],
+])('classifyDependency("name", %j) is %s', (specifier, kind) => {
+  expect(classifyDependency('name', specifier)).toBe(kind);
 });
 
 it.each([
-  ['^1.2.3', true],
-  ['latest', true],
-  ['npm:name@^1', true],
-  ['github:owner/repo', true],
-  ['git+ssh://git@github.com/owner/repo.git', true],
-  ['https://example.test/name.tgz', true],
-  ['file:../local', true],
-  ['C:\\vendor\\dep', true],
-  ['workspace:*', false],
-  ['catalog:', false],
-  ['link:../local', false],
-  ['portal:../local', false],
-  ['foo:bar', false],
-  ['git@github.com:owner/repo.git', true],
-  ['owner/repo', true],
-  ['../local', true],
-  ['not a valid spec', false],
-  ['npm:', false],
-  ['npm:name@', true],
-  ['NPM:name@^1', true],
-  ['npm:bad name@1', false],
-  // Aliases only work for registry deps: a non-registry target is a parse error.
-  ['npm:bar@file:../bar', false],
-  ['npm:bar@github:owner/repo', false],
-  // Empty fetch sources parse (a local directory, an empty hosted source) and merely fail to fetch.
-  ['file:', true],
-  ['github:', true],
-  ['git:', true],
-  ['http:%zz', false],
-  ['https://', false],
-  // npm's git transports only.
-  ['git+ssh://git@github.com/o/r.git', true],
-  ['git+ftp://host/repo', true],
-  ['git+rsync://host/repo', true],
-  ['git+foo://host/repo', false],
-  ['foo.tgz', true],
-  ['vendor/foo/bar', true],
-  ['1.2.3+..', false],
-])('isNpmParseable(%j) is %s', (specifier, parseable) => {
-  expect(isNpmParseable(specifier)).toBe(parseable);
+  // npm validates the dependency key too (EINVALIDPACKAGENAME): scoped or not, URL-safe, no leading `.` or `_`
+  // on an unscoped name, and never a reserved name.
+  ['name', 'registry'],
+  ['@scope/name', 'registry'],
+  ['some.pkg_name-1~', 'registry'],
+  ['UPPER', 'registry'],
+  ['@_scope/name', 'registry'],
+  ['@.scope/name', 'registry'],
+  ['@scope/_name', 'registry'],
+  ['bad name', 'unparseable'],
+  ['.hidden', 'unparseable'],
+  ['_private', 'unparseable'],
+  ['@scope', 'unparseable'],
+  ['@scope/', 'unparseable'],
+  ['name/extra', 'unparseable'],
+  ['node_modules', 'unparseable'],
+  ['Favicon.ico', 'unparseable'],
+])('classifyDependency(%j, "^1") is %s', (name, kind) => {
+  expect(classifyDependency(name, '^1')).toBe(kind);
 });
 
-it.each([
-  ['name', true],
-  ['@scope/name', true],
-  ['some.pkg_name-1~', true],
-  ['UPPER', true], // legacy names npm still installs
-  ['bad name', false],
-  ['.hidden', false],
-  ['_private', false],
-  ['@scope', false],
-  ['@scope/', false],
-  ['name/extra', false],
-  ['a'.repeat(215), false],
-  ['node_modules', false],
-  ['Favicon.ico', false],
-])('isValidPackageName(%j) is %s', (name, valid) => {
-  expect(isValidPackageName(name)).toBe(valid);
-});
 
 it('tells workspace protocols apart and knows which packers rewrite them', () => {
   expect(isWorkspaceProtocol('workspace:*')).toBe(true);
