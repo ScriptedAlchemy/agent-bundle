@@ -99,7 +99,9 @@ The host binds to `127.0.0.1` only, serves one document and the authenticated `/
 routes (a per-launch token plus same-origin checks; `AB8003` / `AB8004` on refusal), and exposes
 only the selected server through the bridge. The App document itself runs on a second loopback
 origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
-programmatic form is `serveApp` in `agent-bundle/api`; see
+programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`; a plugin's own routed
+CLI command spawns this command instead, because the self-contained bin cannot import
+`agent-bundle/api` — see
 [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone).
 
 ## build and prepack
