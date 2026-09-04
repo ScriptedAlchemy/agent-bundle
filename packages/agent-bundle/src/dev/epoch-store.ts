@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
+import type { Dirent } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
@@ -431,9 +432,9 @@ export class EpochStore {
   /** Returns detached safe epoch identities, ordered newest first. */
   async listEpochs(): Promise<readonly ArtifactEpoch[]> {
     return runPromise(this.#transitions.withPermit(
-      liftPromise(async () => Object.freeze((await this.#readAllEpochMetadata())
+      this.#readAllEpochMetadata().pipe(Effect.map((entries) => Object.freeze(entries
         .map((metadata) => freezeArtifactEpoch(metadata.epoch))
-        .sort(compareNewestFirst))),
+        .sort(compareNewestFirst)))),
     ));
   }
 
@@ -469,20 +470,23 @@ export class EpochStore {
 
   /** Removes leftover staging directories from crashed or interrupted publishes. */
   async recoverStaging(): Promise<void> {
-    await runPromise(this.#transitions.withPermit(liftPromise(async () => {
-      let entries;
-      try {
-        entries = await readdir(this.#epochsPath, { withFileTypes: true });
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) return;
-        throw error;
-      }
-      await Promise.all(
-        entries
-          .filter((entry) => entry.isDirectory() && entry.name.startsWith(stagingPrefix))
-          .map((entry) => rm(join(this.#epochsPath, entry.name), { force: true, recursive: true })),
+    await runPromise(this.#transitions.withPermit(Effect.gen({ self: this }, function* (this: EpochStore) {
+      const entries = yield* this.#readDirectoryEntries(this.#epochsPath);
+      yield* Effect.forEach(
+        entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(stagingPrefix)),
+        (entry) => liftPromise(() => rm(join(this.#epochsPath, entry.name), { force: true, recursive: true })),
+        { concurrency: 'unbounded', discard: true },
       );
     })));
+  }
+
+  /** Directory entries, or none when the directory does not exist yet. */
+  #readDirectoryEntries(path: string): Effect.Effect<readonly Dirent[], unknown> {
+    return liftPromise(() => readdir(path, { withFileTypes: true })).pipe(
+      Effect.catch((error) => isErrno(error, 'ENOENT')
+        ? Effect.succeed([] as readonly Dirent[])
+        : Effect.fail(error)),
+    );
   }
 
   async #readActiveEpoch(): Promise<ArtifactEpoch | undefined> {
@@ -537,7 +541,7 @@ export class EpochStore {
   #cleanupUnderLease(): Effect.Effect<void, unknown> {
     return Effect.gen({ self: this }, function* (this: EpochStore) {
       const active = yield* liftPromise(() => this.#readActiveEpoch());
-      const metadata = yield* liftPromise(() => this.#readAllEpochMetadata());
+      const metadata = yield* this.#readAllEpochMetadata();
       const protectedIds = new Set<string>(active === undefined ? [] : [active.id]);
       for (const entry of metadata) {
         if ((epochReferenceCounts.get(join(this.#epochsPath, entry.epoch.id)) ?? 0) > 0) {
@@ -993,23 +997,23 @@ export class EpochStore {
     return metadata;
   }
 
-  async #readAllEpochMetadata(): Promise<readonly EpochMetadata[]> {
-    let entries;
-    try {
-      entries = await readdir(this.#epochMetadataPath, { withFileTypes: true });
-    } catch (error) {
-      if (isErrno(error, 'ENOENT')) return Object.freeze([]);
-      throw error;
-    }
-    return Object.freeze(await Promise.all(entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-      .map(async (entry) => {
-        const epochId = entry.name.slice(0, -'.json'.length);
-        if (!isSafePathSegment(epochId)) {
-          throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata file name is not path-safe.');
-        }
-        return this.#readEpochMetadata(epochId);
-      })));
+  /** Every persisted epoch's metadata, read concurrently; the first failure wins. */
+  #readAllEpochMetadata(): Effect.Effect<readonly EpochMetadata[], unknown> {
+    return Effect.gen({ self: this }, function* (this: EpochStore) {
+      const entries = yield* this.#readDirectoryEntries(this.#epochMetadataPath);
+      const metadata = yield* Effect.forEach(
+        entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json')),
+        (entry) => Effect.suspend(() => {
+          const epochId = entry.name.slice(0, -'.json'.length);
+          if (!isSafePathSegment(epochId)) {
+            return Effect.fail(new EpochStoreError('EPOCH_METADATA_INVALID', 'Epoch metadata file name is not path-safe.'));
+          }
+          return liftPromise(() => this.#readEpochMetadata(epochId));
+        }),
+        { concurrency: 'unbounded' },
+      );
+      return Object.freeze(metadata);
+    });
   }
 
 }

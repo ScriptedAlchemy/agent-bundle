@@ -885,6 +885,39 @@ it('removes abandoned staging directories without touching the active epoch', as
   }
 });
 
+it('recovers every abandoned staging directory at once and tolerates a store that never published', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent bundle staging recovery batch '));
+
+  try {
+    const fresh = new EpochStore({ projectRoot: join(root, 'never-published') });
+    await expect(fresh.recoverStaging()).resolves.toBeUndefined();
+    await expect(fresh.listEpochs()).resolves.toEqual([]);
+
+    const store = new EpochStore({ projectRoot: root });
+    const stagings = await Promise.all([1, 2, 3].map((index) => store.createStagingEpoch({
+      epoch: epochFor(root, `epoch-${index}`, undefined, { claude: `claude-digest-${index}` }),
+      targets: ['claude'],
+    })));
+    for (const staging of stagings) {
+      await mkdir(join(staging.root, 'claude'), { recursive: true });
+      await writeFile(join(staging.root, 'claude', 'plugin.json'), 'abandoned\n');
+    }
+    await mkdir(join(root, '.agent-bundle', 'epochs', 'not-staging'), { recursive: true });
+
+    await store.recoverStaging();
+
+    for (const staging of stagings) {
+      await expect(readFile(join(staging.root, 'claude', 'plugin.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    }
+    await expect(readdir(join(root, '.agent-bundle', 'epochs'))).resolves.toEqual(['not-staging']);
+    await Promise.all(stagings.map((staging) => staging.close()));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('requires selected targets to exactly match the epoch target digests', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle epoch target identity '));
 

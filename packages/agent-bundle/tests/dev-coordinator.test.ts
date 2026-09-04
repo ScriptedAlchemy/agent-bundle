@@ -978,6 +978,104 @@ it('uses one initial development preparation before preparing later development 
   }
 });
 
+it('re-raises a startup failure after releasing the watcher and lock it acquired', async () => {
+  const root = await createProject();
+  const readyFailure = new Error('watcher never became ready');
+  let watcherCloses = 0;
+  let lockCloses = 0;
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => { lockCloses += 1; } }),
+      createWatcher: () => ({
+        close: async () => { watcherCloses += 1; },
+        ready: async () => { throw readyFailure; },
+      }),
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await expect(coordinator.start()).rejects.toBe(readyFailure);
+    expect([watcherCloses, lockCloses]).toEqual([1, 1]);
+    // A repeated start returns the same settled startup instead of retrying.
+    await expect(coordinator.start()).rejects.toBe(readyFailure);
+    await expect(coordinator.rebuild(invalidation(['src/changed.ts']))).resolves.toMatchObject({
+      diagnostics: [{ code: 'AB7200', message: 'DevCoordinator must finish starting before rebuilding.' }],
+      outcome: 'failed',
+    });
+    await coordinator.close();
+    expect([watcherCloses, lockCloses]).toEqual([1, 1]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('fails a synchronous watcher construction error closed and releases the lock', async () => {
+  const root = await createProject();
+  const constructionFailure = new Error('watcher construction failed');
+  let lockCloses = 0;
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => { lockCloses += 1; } }),
+      createWatcher: () => { throw constructionFailure; },
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    await expect(coordinator.start()).rejects.toBe(constructionFailure);
+    expect(lockCloses).toBe(1);
+    await coordinator.close();
+    expect(lockCloses).toBe(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('turns a rejected prepared-project hook into a failed prepare attempt', async () => {
+  const root = await createProject();
+  const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const events: string[] = [];
+  hub.subscribe((event) => {
+    if (event.type !== 'replay.gap') events.push(event.type);
+  });
+  let builds = 0;
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: { build: async (prepared) => {
+        builds += 1;
+        return succeeded(epochFor(root, 'epoch-hook', prepared.source.revision ?? 'missing'));
+      } },
+      createWatcher: () => ({ close: async () => undefined }),
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: new EpochStore({ projectRoot: root }),
+      eventHub: hub,
+      onPreparedProject: async () => { throw new Error('hook rejection'); },
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const session = await coordinator.start();
+    expect(builds).toBe(0);
+    expect(session.status()).toMatchObject({
+      build: {
+        lastAttempt: {
+          diagnostics: [{ code: 'AB7201', message: 'Prepare failed during development rebuild: hook rejection' }],
+          outcome: 'failed',
+        },
+        state: 'failed',
+      },
+    });
+    expect(events).toEqual(expect.arrayContaining(['build.started', 'build.failed', 'artifact.status']));
+    await session.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('turns prepare, lint, and artifact rejections into failed attempts and events', async () => {
   const phases = ['prepare', 'lint', 'artifact'] as const;
   for (const phase of phases) {
