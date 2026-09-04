@@ -350,16 +350,19 @@ export const compileCliCommands = async (
     const config = routeCliConfig(route);
     diagnostics.push(...config.diagnostics);
 
-    const exports = scanRouteModuleExports(moduleText, relativePath);
+    const exports = scanRouteModuleExports(moduleText, relativePath, { source: route.source });
+    // A default re-exported from a module the scan cannot read is judged at
+    // run time, like the MCP route contract.
+    const asyncDefault = exports.asyncDefault || exports.defaultReExport?.resolution === 'unresolved';
     const argv = extractCliArgv(moduleText, relativePath, route.source);
     const missing = [
       ...(argv.found ? [] : ['inputSchema']),
       ...(exports.named.has('resultSchema') ? [] : ['resultSchema']),
     ];
-    if (missing.length > 0 || !exports.asyncDefault) {
+    if (missing.length > 0 || !asyncDefault) {
       const details = [
         ...(missing.length === 0 ? [] : [`missing named ${missing.join(' and ')}`]),
-        ...(exports.asyncDefault ? [] : ['default export is not an async function']),
+        ...(asyncDefault ? [] : ['default export is not an async function']),
       ];
       diagnostics.push(contractError(
         `CLI route ${relativePath} does not satisfy the routed command contract: ${details.join('; ')}.`,

@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 
 // Aliased: the workspace toolchain is typescript@7 (native compiler, no
@@ -10,6 +9,7 @@ import ts from 'typescript-5';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { hasExportModifier, positionOf, unwrapExpression } from './input-schema.ts';
+import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
 import { emptyRouteConfig } from './types.ts';
 
 /** The package subpath route modules import compile-time authoring helpers from. */
@@ -239,46 +239,6 @@ const scriptKindOf = (relativePath: string): ts.ScriptKind => {
 
 const parseModule = (path: string, text: string): ts.SourceFile =>
   ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, scriptKindOf(path));
-
-const readModuleFromDisk = (path: string): string | undefined => {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    // Missing, unreadable, or a directory: the specifier names no module.
-    return undefined;
-  }
-};
-
-const moduleExtensions: Readonly<Record<string, readonly string[]>> = {
-  '.cjs': ['.cts', '.cjs'],
-  '.cts': ['.cts'],
-  '.js': ['.ts', '.tsx', '.js'],
-  '.jsx': ['.tsx', '.jsx'],
-  '.mjs': ['.mts', '.mjs'],
-  '.mts': ['.mts'],
-  '.ts': ['.ts'],
-  '.tsx': ['.tsx'],
-};
-
-/**
- * The on-disk candidates one relative specifier may name, in TypeScript
- * resolution order: an explicit `.ts`/`.tsx` extension is exact, a `.js`-style
- * extension maps onto its TypeScript source, and an extensionless specifier
- * probes `.ts`, `.tsx`, and an index module.
- */
-const moduleCandidates = (fromDirectory: string, specifier: string): readonly string[] => {
-  const base = resolve(fromDirectory, specifier);
-  const extension = extname(specifier).toLowerCase();
-  const mapped = moduleExtensions[extension];
-  if (mapped !== undefined) {
-    const stem = base.slice(0, -extension.length);
-    return mapped.map((candidate) => `${stem}${candidate}`);
-  }
-  return [`${base}.ts`, `${base}.tsx`, resolve(base, 'index.ts'), resolve(base, 'index.tsx')];
-};
-
-const isRelativeSpecifier = (specifier: string): boolean =>
-  specifier.startsWith('./') || specifier.startsWith('../');
 
 const insideProject = (projectRoot: string | undefined, path: string): boolean => {
   if (projectRoot === undefined) return true;

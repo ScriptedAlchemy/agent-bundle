@@ -311,8 +311,8 @@ it('gates a bin-claimed rendered script with AB4737 only when it exports no main
       '};',
       '',
     ].join('\n'),
-    // A default re-exported from a private sibling cannot be judged
-    // statically; it is accepted (the worker still verifies it at run time).
+    // A default re-exported from a private sibling is judged in that sibling
+    // (#446): an async component there satisfies the rendered surface here.
     'src/scripts/_component.tsx': 'export default async () => undefined;\n',
     'src/scripts/render-reexport.tsx': [
       'export const main = async (argv: readonly string[]): Promise<number> => argv.length;',
@@ -1502,6 +1502,173 @@ it('validates the single async route-module authoring contract statically', asyn
     'AB4810',
     'AB4811',
   ]);
+});
+
+it('follows a re-exported default to the module that declares it when one tool is placed on two servers (#446)', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    // The primary placement: a full route module.
+    'src/mcp/public/tools/search.tsx': [
+      "export const config = { description: 'Search.' };",
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      'export default async function Search() { return undefined; }',
+      '',
+    ].join('\n'),
+    // The second placement carries its own config and re-exports the rest.
+    'src/mcp/library/tools/search.tsx': [
+      "export const config = { description: 'Search from the widget server.' };",
+      "export { default, inputSchema, resultSchema } from '../../public/tools/search.tsx';",
+      '',
+    ].join('\n'),
+    // A named component aliased to default, through a shared page module.
+    'src/pages/download.tsx': 'export async function DownloadPage() { return undefined; }\n',
+    'src/mcp/library/tools/download.tsx': [
+      "export const config = { description: 'Download.' };",
+      "export { DownloadPage as default } from '../../../pages/download.tsx';",
+      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
+      '',
+    ].join('\n'),
+    // A chain: the shared module itself re-exports its default, and a
+    // `.js` specifier names the emitted extension of a `.tsx` source.
+    'src/pages/_delete-impl.tsx': 'export default async () => undefined;\n',
+    'src/pages/delete.tsx': "export { default } from './_delete-impl.js';\n",
+    'src/mcp/library/tools/delete.tsx': [
+      "export const config = { description: 'Delete.' };",
+      "export { default } from '../../../pages/delete.tsx';",
+      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
+      '',
+    ].join('\n'),
+    // A default from a package the scan cannot read is verified at run time.
+    'src/mcp/library/tools/external.tsx': [
+      "export const config = { description: 'External.' };",
+      'export const inputSchema = {};',
+      'export const resultSchema = {};',
+      "export { default } from '@shared/routes/external';",
+      '',
+    ].join('\n'),
+    // The re-exported default is judged where it is declared: a sync
+    // function component there is still AB4810 here, naming the target.
+    'src/pages/sync.tsx': 'export default function SyncPage() { return undefined; }\n',
+    'src/mcp/library/tools/sync.tsx': [
+      "export const config = { description: 'Sync.' };",
+      "export { default } from '../../../pages/sync.tsx';",
+      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
+      '',
+    ].join('\n'),
+    // A type-only default re-export emits no binding and never satisfies the contract.
+    'src/mcp/library/tools/typed.tsx': [
+      "export const config = { description: 'Typed.' };",
+      "export { type default } from '../../public/tools/search.tsx';",
+      "export { inputSchema, resultSchema } from '../../public/tools/search.tsx';",
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics.map(({ code, message, sourcePath }) => ({
+    code,
+    message,
+    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
+  }))).toEqual([
+    {
+      code: 'AB4810',
+      message: 'Route module src/mcp/library/tools/sync.tsx does not satisfy the public route contract: default export re-exported from "../../../pages/sync.tsx" (default) is not an async function component.',
+      source: 'src/mcp/library/tools/sync.tsx',
+    },
+    {
+      code: 'AB4810',
+      message: 'Route module src/mcp/library/tools/typed.tsx does not satisfy the public route contract: default export is not an async function component.',
+      source: 'src/mcp/library/tools/typed.tsx',
+    },
+  ]);
+  expect(graph.servers.map((server) => [server.name, server.routes.map((route) => route.id)])).toEqual([
+    ['library', [
+      'tool:library/delete',
+      'tool:library/download',
+      'tool:library/external',
+      'tool:library/search',
+      'tool:library/sync',
+      'tool:library/typed',
+    ]],
+    ['public', ['tool:public/search']],
+  ]);
+});
+
+it('reports the scanned export surface of a re-exporting module', () => {
+  const modules = new Map<string, string>([
+    ['/project/src/shared/page.tsx', [
+      'export const helper = () => 1;',
+      'export async function Page() { return undefined; }',
+      'export { Page as Alias };',
+      'export default Page;',
+      '',
+    ].join('\n')],
+    ['/project/src/shared/cycle-a.tsx', "export { default } from './cycle-b.tsx';\n"],
+    ['/project/src/shared/cycle-b.tsx', "export { default } from './cycle-a.tsx';\n"],
+    // An emitted `.js` beside its `.tsx` source: TypeScript resolution order
+    // names the source first, so the async component is judged, not the
+    // stale sync emit.
+    ['/project/src/shared/dual.js', 'export default function Dual() { return undefined; }\n'],
+    ['/project/src/shared/dual.tsx', 'export default async function Dual() { return undefined; }\n'],
+    ['/project/src/shared/dir/index.tsx', 'export default async () => undefined;\n'],
+    ['/project/src/shared/legacy.cts', 'export default async function Legacy() { return undefined; }\n'],
+  ]);
+  const readModule = (path: string): string | undefined => modules.get(path);
+  const scan = (text: string, source: string): routesModule.RouteModuleExports =>
+    routesModule.scanRouteModuleExports(text, source.slice('/project/'.length), { readModule, source });
+
+  // The same TypeScript candidate order the config extractor uses.
+  expect(scan("export { default } from '../shared/dual.js';\n", '/project/src/mcp/dual.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/dir';\n", '/project/src/mcp/dir.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/legacy.cjs';\n", '/project/src/mcp/legacy.tsx').asyncDefault).toBe(true);
+  expect(scan("export { default } from '../shared/dual.ts';\n", '/project/src/mcp/exact.tsx').defaultReExport?.resolution).toBe('unresolved');
+
+  const followed = routesModule.scanRouteModuleExports(
+    "export { default, helper, Alias as Component } from '../shared/page.tsx';\n",
+    'src/mcp/a/tools/x.tsx',
+    { readModule, source: '/project/src/mcp/x.tsx' },
+  );
+  expect(followed.asyncDefault).toBe(true);
+  expect(followed.defaultFunction).toBe(true);
+  expect(followed.defaultReExport).toEqual({ name: 'default', resolution: 'followed', specifier: '../shared/page.tsx' });
+  expect([...followed.named].sort()).toEqual(['Component', 'helper']);
+  expect([...followed.namedFunctions].sort()).toEqual(['Component', 'helper']);
+  expect([...followed.namedAsyncFunctions]).toEqual(['Component']);
+
+  const aliased = routesModule.scanRouteModuleExports(
+    "export { Page as default } from '../shared/page.tsx';\n",
+    'src/mcp/a/tools/y.tsx',
+    { readModule, source: '/project/src/mcp/y.tsx' },
+  );
+  expect(aliased.asyncDefault).toBe(true);
+  expect(aliased.defaultReExport?.name).toBe('Page');
+
+  // Without a source there is nothing to resolve against.
+  const sourceless = routesModule.scanRouteModuleExports(
+    "export { default } from '../shared/page.tsx';\n",
+    'src/mcp/a/tools/z.tsx',
+    { readModule },
+  );
+  expect(sourceless.asyncDefault).toBe(false);
+  expect(sourceless.defaultReExport?.resolution).toBe('unresolved');
+
+  const cyclic = routesModule.scanRouteModuleExports(
+    modules.get('/project/src/shared/cycle-a.tsx')!,
+    'src/shared/cycle-a.tsx',
+    { readModule, source: '/project/src/shared/cycle-a.tsx' },
+  );
+  expect(cyclic.asyncDefault).toBe(false);
+  expect(cyclic.defaultReExport).toEqual({ name: 'default', resolution: 'unresolved', specifier: './cycle-b.tsx' });
+
+  // A relative target no candidate file satisfies cannot be judged either.
+  const missing = routesModule.scanRouteModuleExports(
+    "export { default } from './missing.tsx';\n",
+    'src/mcp/a/tools/m.tsx',
+    { readModule, source: '/project/src/mcp/m.tsx' },
+  );
+  expect(missing.defaultReExport?.resolution).toBe('unresolved');
 });
 
 it('validates provider default factories with AB4940', async () => {
