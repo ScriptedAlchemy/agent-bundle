@@ -1,4 +1,11 @@
-import { Client, type JSONRPCMessage, type Transport, type TransportSendOptions } from '@modelcontextprotocol/client';
+import {
+  Client,
+  specTypeSchemas,
+  type JSONRPCMessage,
+  type StandardSchemaV1,
+  type Transport,
+  type TransportSendOptions,
+} from '@modelcontextprotocol/client';
 
 import { isMcpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
@@ -98,9 +105,15 @@ export interface McpSessionControllerTransport extends Transport {
 export interface McpSessionControllerClient {
   close(): Promise<void>;
   connect(transport: Transport): Promise<void>;
+  /**
+   * Sends one request. `resultSchema` is required by the SDK for methods
+   * outside its typed spec surface — the `2025-11-25` task methods — and is
+   * the SDK's own schema for that result; spec methods pass none.
+   */
   request(
     request: Readonly<{ readonly method: string; readonly params?: Readonly<Record<string, unknown>> }> ,
     options?: Readonly<{ readonly signal?: AbortSignal }>,
+    resultSchema?: StandardSchemaV1,
   ): Promise<unknown>;
 }
 
@@ -400,7 +413,7 @@ const traceEntry = (value: unknown): McpSessionTraceEntry | McpSessionTraceRepla
   }
   if (
     value.kind === 'operation' && typeof value.operation === 'string' && typeof value.phase === 'string' &&
-    ['callTool', 'cancel', 'close', 'getPrompt', 'initialize', 'listPrompts', 'listResources', 'listResourceTemplates', 'listTools', 'readResource', 'restart'].includes(value.operation) &&
+    ['callTool', 'callToolTask', 'cancel', 'cancelTask', 'close', 'getPrompt', 'getTask', 'getTaskResult', 'initialize', 'listPrompts', 'listResources', 'listResourceTemplates', 'listTasks', 'listTools', 'readResource', 'restart'].includes(value.operation) &&
     ['started', 'succeeded', 'failed'].includes(value.phase)
   ) return {
     kind: 'operation',
@@ -439,10 +452,17 @@ const activeRequest = (): ActiveRequest => {
   return { abort: new AbortController(), settle, settled };
 };
 
+interface ControllerWireRequest {
+  readonly method: string;
+  readonly params?: Readonly<Record<string, unknown>>;
+  /** The SDK result schema a task method needs; spec methods carry none. */
+  readonly resultSchema?: StandardSchemaV1;
+}
+
 const requestFor = (
   operation: McpSessionControllerOperation,
   params: Readonly<Record<string, unknown>>,
-): Readonly<{ readonly method: string; readonly params?: Readonly<Record<string, unknown>> }> => {
+): ControllerWireRequest => {
   if (operation === 'initialize') return { method: 'initialize' };
   if (operation === 'listTools') return { method: 'tools/list' };
   if (operation === 'listResources') return { method: 'resources/list' };
@@ -451,6 +471,16 @@ const requestFor = (
   if (operation === 'getPrompt') return { method: 'prompts/get', params };
   if (operation === 'readResource') return { method: 'resources/read', params };
   if (operation === 'callTool') return { method: 'tools/call', params };
+  // The 2025-11-25 Tasks utility (#369): a task-augmented call carries
+  // `params.task`; the task operations are outside the SDK's typed method
+  // surface, so each names the SDK schema its result is validated against.
+  if (operation === 'callToolTask') {
+    return { method: 'tools/call', params: { ...params, task: isRecord(params.task) ? params.task : {} }, resultSchema: specTypeSchemas.CreateTaskResult };
+  }
+  if (operation === 'getTask') return { method: 'tasks/get', params, resultSchema: specTypeSchemas.GetTaskResult };
+  if (operation === 'getTaskResult') return { method: 'tasks/result', params, resultSchema: specTypeSchemas.CallToolResult };
+  if (operation === 'cancelTask') return { method: 'tasks/cancel', params, resultSchema: specTypeSchemas.CancelTaskResult };
+  if (operation === 'listTasks') return { method: 'tasks/list', params, resultSchema: specTypeSchemas.ListTasksResult };
   throw new McpSessionControllerError(`MCP operation ${JSON.stringify(operation)} is not supported by the session controller.`);
 };
 
@@ -541,8 +571,16 @@ const invocationError = (reason: unknown): unknown => reason instanceof Error
   ? { message: reason.message, name: reason.name }
   : reason;
 
-const defaultClient = (): McpSessionControllerClient =>
-  new Client({ name: 'agent-bundle-workbench', version: '0.0.0' }) as unknown as McpSessionControllerClient;
+const defaultClient = (): McpSessionControllerClient => {
+  const client = new Client({ name: 'agent-bundle-workbench', version: '0.0.0' });
+  return {
+    close: () => client.close(),
+    connect: (transport) => client.connect(transport),
+    request: (request, options, resultSchema) => (resultSchema === undefined
+      ? client.request(request as never, options)
+      : client.request(request, resultSchema, options)),
+  };
+};
 
 const defaultAppClient = (): Client => new Client({ name: 'agent-bundle-workbench', version: '0.0.0' });
 
@@ -1404,7 +1442,7 @@ export class McpSessionController {
       throw new McpSessionControllerError('MCP invocation requires a non-empty id and an object request.');
     }
     if (this.#requests.has(input.id)) throw new McpSessionControllerError(`MCP invocation ${JSON.stringify(input.id)} is already active.`);
-    let operation: Readonly<{ readonly method: string; readonly params?: Readonly<Record<string, unknown>> }>;
+    let operation: ControllerWireRequest;
     try {
       operation = requestFor(input.operation, input.request);
     } catch (reason) {
@@ -1427,7 +1465,8 @@ export class McpSessionController {
       type: 'request.start',
     });
     try {
-      const result = await client.request(operation, { signal: active.abort.signal });
+      const { resultSchema, ...wire } = operation;
+      const result = await client.request(wire, { signal: active.abort.signal }, resultSchema);
       if (!this.#closing) this.#publish({ completedAt: Date.now(), id: input.id, result, type: 'request.settled' });
       return result;
     } catch (reason) {

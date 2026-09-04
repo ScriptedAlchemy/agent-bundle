@@ -22,6 +22,7 @@ import {
   type HookResult,
 } from '../src/adapters/hook-handler.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { launchEnvRuntimeSpecifier, operatorEnvStatement } from '../src/build/launch-env-shell.ts';
 import { canonicalHookEvents } from '../src/core/types.ts';
 import type { CanonicalAgentEvent } from '../src/routes/public.ts';
 
@@ -72,10 +73,13 @@ const wrapperInternalsSource = (host: Host, entry: TargetHookWrapper): string =>
     : nativeHookWrapperSource(entry, host === 'claude' ? 'Claude' : 'Codex');
   const mainIndex = source.indexOf('if (import.meta.main) {');
   expect(mainIndex).toBeGreaterThan(0);
+  // The handler module and the operator `.env` layer (#469) are the wrapper's
+  // bundled runtime; the codec internals under test need neither.
   const body = source
     .slice(0, mainIndex)
     .split('\n')
     .filter((line) => !line.startsWith('import * as handlerModule from '))
+    .filter((line) => !line.includes(JSON.stringify(launchEnvRuntimeSpecifier)) && line !== operatorEnvStatement)
     .join('\n');
   const decoder = host === 'cursor' ? 'decodeCursorNative' : 'decodeNative';
   return `${body}\nexport { ${decoder} as decodeNative, validateNativeInput, validateResult };\n`;

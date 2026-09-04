@@ -98,6 +98,51 @@ a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data
 reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
 `add`. The emitted `INSTALL.md` documents the same recipe per host.
 
+## Operator configuration: the installed pack's `.env`
+
+A plugin configured through environment variables — session cookies, API tokens, a host name — is
+configured at the install, not in the artifact: manifest `env` is compiled, content-addressed, and
+re-emitted on every build, which is the wrong place for a secret. Instead, put a `.env` file at the
+plugin root of the installed copy (the directory that holds `.claude-plugin/`, `.cursor-plugin/`,
+or the Codex plugin manifest, beside `mcp/`, `hooks/`, and `bin/`), optionally with a `.env.local`
+beside it:
+
+```sh
+# ~/.cursor/plugins/local/movie-library/.env
+IPT_SESSION=…
+RTORRENT_SSH_HOST=nas.local
+```
+
+Every shell the pack emits reads that file when it starts — the stdio MCP server entries (factory
+exports; a [self-connecting entry](../authoring/mcp.mdx#handwritten-stdio-entries) has no shell and
+reads none unless it calls `applyOperatorEnv` itself), the hook wrappers that run plugin code, and
+the artifact CLI `bin/<name>.mjs` — under one rule:
+
+| Precedence | Layer | Contents |
+| --- | --- | --- |
+| 3 (highest) | Host environment | What the host exported and what its manifest `env` declared (including `AGENT_BUNDLE_PLUGIN_ROOT`). An exported variable always wins. |
+| 2 | `.env.local` | Fills gaps only; beats `.env` for the same key. |
+| 1 (lowest) | `.env` | Fills gaps only. |
+
+The location is the plugin root the pack resolved — `AGENT_BUNDLE_PLUGIN_ROOT` when the host set
+it, otherwise the directory above the shell's own (`mcp/`, `hooks/`, `bin/`). `AGENT_BUNDLE_ENV_FILE`
+names one or more files (platform path delimiter) to read instead, and `AGENT_BUNDLE_ENV_FILE=none`
+disables the layer. The grammar is dotenv's: `KEY=value`, `export KEY=value`, `#` comments, single-,
+double-, or backtick-quoted values (double quotes expand `\n`), multi-line quoted values, and no
+`${VAR}` interpolation. A missing file is the normal case and costs nothing; an unreadable one is
+skipped so the pack still starts. Values are never logged. The file is not owned by the install
+receipt, so `install --replace` and a same-version rebuild leave it in place, and `uninstall` never
+removes unowned entries: the file survives an uninstall too (Doctor then reports the directory as a
+remnant, `AB7307`), so delete it by hand when the credentials should go. Route and provider code sees the composed
+environment when it runs; a hook handler or CLI route module that reads `process.env` at import
+time still sees the host environment only, because those modules are static imports of their
+wrapper — MCP server modules load after the layer and see it everywhere. `agent-bundle mcp run`
+composes the same three layers itself and hands `--env-file` / `--no-env` down as
+`AGENT_BUNDLE_ENV_FILE`, so a rehearsal and an installed pack read the same files.
+
+`agent-bundle doctor` reports whether an installed copy carries `.env` or `.env.local` and how many
+variables each declares (`AB7331`, informational) — never a name or a value.
+
 ## Uninstalling by receipt
 
 ```sh
@@ -135,7 +180,7 @@ npx agent-bundle doctor --from artifact --json
 
 Doctor is read-only. It probes hosts, inventories installed bundles, compares them against a
 supplied bundle, checks registration proof, samples runtime endpoint health and identity,
-inventories durable state, and re-runs the pinned process-free document and loader validators over
+inventories durable state and the operator `.env` layer (`AB7331`), and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
 `current`, `stale` (`AB7308`), `version-mismatch` (`AB7309`), `foreign` (`AB7321`), `load-failed`
 (`AB7325`), or `not-installed` (`AB7307`), and its lifecycle stage — placed → registered → enabled → active — with

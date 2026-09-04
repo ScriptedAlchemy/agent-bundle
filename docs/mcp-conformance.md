@@ -44,7 +44,87 @@ route harness does not provide. The official runner rejects both unexpected
 failures and stale baseline entries, so newly fixed scenarios must be removed
 from the baseline.
 
-## Task-augmented requests: deferred 2026-09-02
+## Task-augmented requests: served 2026-09-04
+
+Issue [#369](https://github.com/ScriptedAlchemy/agent-bundle/issues/369) (the #96
+acceptance remainder) is implemented for generated route servers: a tool route
+that declares `config.execution.taskSupport` (`optional` or `required`,
+validated as `AB4836` and advertised in `tools/list`) may be called as a task
+under the MCP `2025-11-25` Tasks utility. The `2026-09-02` deferral recorded
+below was lifted after re-auditing the installed SDK.
+
+What the audit found on `@modelcontextprotocol/server@2.0.0` /
+`@modelcontextprotocol/client@2.0.0` (unchanged since the deferral):
+
+- The task methods are outside the SDK's typed spec-method surface, but the
+  SDK's documented custom-method form — `setRequestHandler(method, { params },
+  handler)` on the server and `request(request, resultSchema)` on the client —
+  routes them, and the SDK exports their result schemas publicly as
+  `specTypeSchemas.CreateTaskResult`, `GetTaskResult`, `CancelTaskResult`,
+  `ListTasksResult` (the deferral note's "not exported publicly" was wrong; they
+  are keyed without the `Schema` suffix). On a `2025-11-25` session the SDK's
+  own method registry admits `tasks/*`; on `2026-07-28` it answers `-32601`
+  before any handler and its codec strips `execution.taskSupport` and
+  `capabilities.tasks`, so a modern-revision client keeps the ordinary contract.
+- The SDK's `tools/call` result validation admits `CallToolResult` only and
+  refuses a `task` body. The lifecycle therefore lives in a `Server` subclass
+  (`packages/agent-bundle/src/mcp-tasks.ts`) whose `_wrapHandler` — the SDK's
+  documented protected seam for role-specific request handling — answers a
+  task-augmented request with a `CreateTaskResult` and runs the SDK-validated
+  handler behind the task. Nothing reaches past the SDK's public or protected
+  surface.
+- The `2026-07-28` revision moves tasks to the `io.modelcontextprotocol/tasks`
+  extension (SEP-2663) with a different shape (`resultType: "task"`,
+  `tasks/update`, no `tasks/result`/`tasks/list`). This SDK release does not
+  implement that extension; the generated server serves the core `2025-11-25`
+  shape only and is gated on the negotiated protocol version. Serving the
+  extension is a follow-up that inherits the same route contract.
+
+Behaviour (proven at the `mcp-in-memory` level by
+`packages/agent-bundle/tests/projection/mcp-in-memory.test.ts`, at the unit
+level by `packages/agent-bundle/tests/mcp-tasks.test.ts`, and over real stdio
+framing by `packages/agent-bundle/tests/packed-stdio-projection.test.ts`):
+
+- A server with at least one opted-in tool declares
+  `capabilities.tasks: { list, cancel, requests: { tools: { call } } }`; a
+  server with none declares nothing and processes a task-augmented request as
+  an ordinary one (the fallback the utility requires of a receiver without the
+  capability).
+- `tools/call` with `params.task` on an opted-in tool answers a
+  `CreateTaskResult` (status `working`, honoured `ttl` ≤ 24 h, `pollInterval`
+  ≥ 100 ms, `_meta["io.modelcontextprotocol/model-immediate-response"]`);
+  on a `forbidden` tool it is `-32601`; an ordinary call to a `required` tool
+  is `-32601`.
+- `tasks/get` reports `working` with the latest render progress
+  (`statusMessage`, `_meta["agent-bundle/progress"]`), `completed`, `failed`
+  (a result with `isError: true`, as the spec requires), or `cancelled`.
+- `tasks/result` blocks until the task settles and returns exactly what the
+  ordinary call would have returned, stamped with
+  `_meta["io.modelcontextprotocol/related-task"]`; a JSON-RPC error is
+  returned as that error.
+- `tasks/cancel` transitions to `cancelled` before answering and aborts the
+  render through its `AbortSignal`; cancelling a settled task is `-32602`, as
+  is any unknown `taskId`. `tasks/list` pages the session's tasks by cursor.
+- Progress notifications flow only under the client's own `progressToken`,
+  stamped with the related-task key; the task observes progress either way.
+  Records are session-scoped, retained for `ttl` after settling, bounded at
+  256 per server, and cancelled when the session closes.
+- The operation-based `createRscMcpServer` (`@agent-bundle/runtime/plugin`) is
+  unchanged: no `tasks` capability, ordinary processing.
+
+The conformance lane (`server --suite active`, specification `2025-11-25`)
+does not yet exercise the Tasks utility; when the official runner adds task
+scenarios, the reused route harness's `wait` and `catalog` tools already
+declare `execution.taskSupport: "optional"`.
+
+### Deferral record (2026-09-02, lifted)
+
+The section below is the dated deferral as recorded by #394, kept for the
+audit trail. Its sentinel test (`packages/rsc-runtime/tests/mcp-tasks-deferral.test.ts`)
+and the `@ts-expect-error` sentinel in `mcp-in-memory.test.ts` were removed
+with the implementation; the SDK pin itself is unchanged.
+
+#### Original text
 
 Issue [#369](https://github.com/ScriptedAlchemy/agent-bundle/issues/369) tracks
 the #96 acceptance remainder: a task-augmented `tools/call` that returns a

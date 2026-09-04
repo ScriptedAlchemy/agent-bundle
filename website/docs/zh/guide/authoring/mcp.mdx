@@ -158,6 +158,35 @@ interface AgentTerminal {
 [包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
 一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
 
+### 请求上下文 provider
+
+约定式的 `src/providers/<name>.ts` 模块默认导出一个工厂函数，其返回值在每个生成表面上挂载到
+`(await agent()).providers.<camelCaseName>`。除了表面特定的 `invocation` 和请求 `signal` 之外，工厂
+还会收到路由将要读到的请求本身——`host`、`session`、`workspace`、`plugin` 与 `lineage`（含 `tree`），
+即同样的 `Observed` 值、同样的来源——以及已挂载句柄的只读视图：项目声明了 `src/state.ts` 时的
+`state`（仅 `read`），作用域挂载了通知账本时的 `notices`（仅 `inbox` 与 `published`）。因此 provider
+可以派生共享状态的一个视图——拓扑、对等节点列表、本代理发布的通知的去向——但不能派发状态事件或发布通知；
+这些仍然只属于路由。
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+provider 每个请求作为该请求自己的解析器运行一次：在 `runAgentRequest` 冻结身份轴、打开通知租约之后，
+在路由之前，按确定的键顺序，并且在请求的异步上下文之外（工厂里调用 `agent()` 会抛出
+`outside-invocation`）。抛出异常的工厂会使请求失败关闭；预期中的降级应返回一个诚实的 unavailable
+形状的值。`agent-bundle/test` 测试装置把同样的视图交给它的 provider，因此注入了 `context.lineage`
+或挂载了状态的路由单元测试会在 `providers.<key>` 中看到它们；显式的 `context.providers` 映射会被原样挂载。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
@@ -229,6 +258,74 @@ Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，�
 计时器（stdio 服务器为 30 分钟）正是由这些通知重置；Codex 以 `tool_timeout_sec` 约束一次调用，除非操作者
 在 `config.toml` 中提高，否则为 60 秒。`agent-bundle inspect --routes` 会随每条路由编译后的 `config`
 一并显示该预算。
+
+## 长时运行的工具：任务
+
+渲染预算约束的是一次渲染最多能跑多久；它并不改变普通 `tools/call` 会一直阻塞客户端直到渲染结束这一点。
+MCP `2025-11-25` 的 Tasks 工具是与之互补的机制：请求任务增强执行的客户端会立刻拿到一个任务句柄，稍后再
+取结果，于是它自身的请求期限不再影响渲染。工具路由通过 `config.execution.taskSupport` 选择加入，这正是
+`tools/list` 宣告的工具 `execution` 块：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Convert the selected audiobook.',
+  execution: { taskSupport: 'optional' },
+} satisfies ToolConfig;
+```
+
+`taskSupport` 取 `'forbidden'`（省略该键时的线上默认值：每次调用都是普通请求）、`'optional'`（客户端
+可以请求任务；不请求的客户端得到普通结果）或 `'required'`（普通调用会被以 JSON-RPC `-32601` 拒绝）；
+其他任何值、`execution` 下的未知键，或把该键放在资源或提示路由上，都会报 `AB4836`。路由模块本身无需
+改动：它与普通调用完全一样地渲染，`signal`、`progress.report()` 与流式 `Agent.Progress` 回退的含义也
+一如从前。
+
+只要至少有一个工具选择加入，生成的服务器就会声明
+`capabilities.tasks: { list, cancel, requests: { tools: { call } } }`，并在 `2025-11-25` 会话上提供整个
+生命周期：
+
+| 请求 | 应答 |
+| --- | --- |
+| 对已加入的工具发出带 `params.task`（`{ ttl?, pollInterval? }`）的 `tools/call` | 立即返回 `CreateTaskResult`：`task.taskId`、`status: "working"`、`createdAt`、`lastUpdatedAt`、实际采用的 `ttl`（客户端请求的值，上限 24 小时；省略时为五分钟）与 `pollInterval`（至少 100 毫秒；省略时为 1 秒），以及 `_meta["io.modelcontextprotocol/model-immediate-response"]`——宿主可在任务运行期间交给模型的一句话。渲染在任务之下开始。 |
+| `tasks/get` | 任务本身：`working` 时 `statusMessage` 为最新的进度消息，`_meta["agent-bundle/progress"]` 携带 `{ progress, total?, message? }`——与馈送 `notifications/progress` 的同一份 `Agent.Progress` 投影；`completed`；`failed` 时以工具错误文本作为 `statusMessage`（按规范要求，`isError: true` 的结果即失败任务）；或 `cancelled`。已结束的任务上仍可读到最后一次进度。 |
+| `tasks/result` | 阻塞到任务结束，然后返回与普通调用完全相同的内容：同样的 `content`、`structuredContent` 与布局 `_meta`，另加 `_meta["io.modelcontextprotocol/related-task"]`；以 JSON-RPC 错误结束的渲染返回该错误。 |
+| `tasks/cancel` | 在应答前把任务转为 `cancelled`，并通过与取消请求相同的 `AbortSignal` 中止渲染；被中断的渲染以 SDK 的工具错误结束，随后 `tasks/result` 返回的就是它。取消已结束的任务报 `-32602`。 |
+| `tasks/list` | 会话仍保留的所有任务，按创建先后排列，以不透明的 `cursor` 分页。 |
+
+未知 `taskId` 报 `-32602`；对未声明支持（或声明为 forbidden）的工具发出任务增强调用报 `-32601`。任务的
+进度通知仍只在请求携带 `_meta.progressToken` 时发送，并加盖 related-task 键；无论是否携带令牌，任务都会
+记录进度。从不发送 `params.task` 的客户端看不到任何变化；没有任何工具加入的服务器不会宣告 `tasks` 能力，
+并把任务增强请求当作普通请求处理——这正是该工具对不具备能力的接收方的要求。任务记录归创建它的会话（被
+拉起的 stdio 进程，一个客户端）所有，在任务结束后保留 `ttl` 时长，每台服务器最多 256 条，会话关闭时仍在
+运行的任务全部被取消。
+
+渲染预算作用于任务的渲染，而不是客户端的请求：无论预算多大，任务的 `tools/call` 都会立即返回，其背后的
+渲染仍受路由 `config.render`（或 60 秒默认值）约束。只在渲染本身确实需要更久时才提高预算，不要为了熬过
+宿主的请求期限而提高——那正是任务的用途。`2026-07-28` 协议修订把任务从核心移入
+`io.modelcontextprotocol/tasks` 扩展，形态也不同（`resultType: "task"`、`tasks/update`、没有
+`tasks/result`）；生成服务器所用的 SDK 版本不提供该扩展，因此该修订上的客户端保持普通契约，也不会被宣告
+任务能力。固定版本的宿主是否会发出任务增强调用，按宿主记录在[宿主能力矩阵](../../reference/hosts.md)中；
+撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench MCP 页面证明：宣告了任务支持的
+工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result` 并取消任务。
+
+`mcp-in-memory` 层用真实的 SDK 客户端证明整套契约：
+
+```ts
+import { specTypeSchemas } from '@modelcontextprotocol/client';
+import { openInMemoryMcpServer } from 'agent-bundle/test';
+
+await using session = await openInMemoryMcpServer();
+const created = await session.client.request({
+  method: 'tools/call',
+  params: { arguments: { holdMs: 2000 }, name: 'wait', task: { ttl: 60_000 } },
+}, specTypeSchemas.CreateTaskResult);
+const result = await session.client.request({
+  method: 'tasks/result',
+  params: { taskId: created.task.taskId },
+}, specTypeSchemas.CallToolResult);
+```
 
 ## 共享布局
 
@@ -326,14 +423,27 @@ export default () => createRscMcpServer(application, 'curator');
 这层保护之所以重要，是因为 stdout 承载着 JSON-RPC 帧：任何被导入模块中一次走神的 `console.log` 都会
 破坏协议流。
 
-自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变。源码校验
+自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变：没有生命周期
+外壳，也没有操作者 `.env` 层，因为没有外壳能在模块自身的顶层代码运行之前应用它。源码校验
 会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
 
-同一套生命周期对手写入口也是公开 API：
+同一套生命周期对手写入口也是公开 API，生成外壳在导入服务器模块之前应用的操作者 `.env` 层同样如此
+（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）。这两个导入都会被内联进产出的
+入口，入口保持自包含；`agent-bundle/launch-env` 会被别名到每一个 stdio 入口，因此无论入口有没有外壳都能
+解析。需要这一层的自行连接入口应在第一行自行应用它，并像生成外壳一样锚定（产物根目录是 `mcp/` 的上一级）：
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` 会优先采用宿主设置的 `AGENT_BUNDLE_PLUGIN_ROOT`，否则回退到你传入的目录，
+因此该入口读取的文件与同一个包的钩子包装器和 CLI 完全一致。
 
 ## 在配置中声明服务器
 

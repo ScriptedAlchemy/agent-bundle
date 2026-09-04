@@ -25,6 +25,7 @@ import {
 
 import { agentBundleNodeModules, agentBundlePackageRoot, workbenchNodeModules } from './helpers/workspace-paths.ts';
 import { loadedProject } from './support/loaded-project.ts';
+import { runNodeScript } from './support/run-node-script.ts';
 
 const registry: NormalizationTargetRegistry = {
   configExtensions: () => [],
@@ -676,6 +677,65 @@ it('bundles each local MCP entry once and maps every target manifest to that art
     expect(await readFile(join(outputRoot, 'portable', 'mcp', outputName), 'utf8')).toBe(
       previousBundle,
     );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
+it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply the operator .env layer itself (#469)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-self-connecting-env-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    // No default export: the entry gets no lifecycle shell, so it applies the
+    // layer first thing, anchored exactly as a shell would (the documented recipe).
+    await writeFile(join(root, 'src', 'probe.ts'), [
+      "import { fileURLToPath } from 'node:url';",
+      "import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';",
+      '',
+      "const layer = applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });",
+      "process.stdout.write(`${JSON.stringify({ applied: layer.applied, file: process.env.PROBE_FILE ?? null, host: process.env.PROBE_HOST ?? null })}\\n`);",
+      '',
+    ].join('\n'));
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: { servers: { probe: { entry: './src/probe.ts' } } },
+        plugin: { name: 'mcp-self-connecting-env', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'artifact');
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
+    const [entry] = result.compiledMcpEntries;
+    // The inlined loader is framework runtime, never authored-source evidence.
+    expect(entry).toMatchObject({
+      id: 'mcp:probe',
+      sourceInputs: [join(root, 'agent-bundle.config.ts'), join(root, 'src', 'probe.ts')],
+      target: 'portable',
+    });
+
+    const bundle = await readFile(entry!.output, 'utf8');
+    // Self-contained (the alias resolved to the framework's own module) and
+    // still shell-free: the entry's own top-level code is what runs first.
+    expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
+    expect(bundle).not.toContain('runGeneratedStdioMcpEntry');
+    expect(bundle).toContain('AGENT_BUNDLE_ENV_FILE');
+
+    // `<plugin root>/.env` is one directory above `mcp/`; it fills the gap and
+    // an exported variable still wins.
+    const pluginRoot = join(outputRoot, 'portable');
+    const probe = async (env: Readonly<Record<string, string>>): Promise<unknown> => {
+      const run = await runNodeScript({ args: [entry!.output], env });
+      expect(run).toMatchObject({ code: 0, stderr: '' });
+      return JSON.parse(run.stdout);
+    };
+    expect(await probe({ PROBE_HOST: 'from-host' })).toEqual({ applied: [], file: null, host: 'from-host' });
+    await writeFile(join(pluginRoot, '.env'), 'PROBE_FILE=from-file\nPROBE_HOST=from-file\n');
+    expect(await probe({ PROBE_HOST: 'from-host' })).toEqual({ applied: ['PROBE_FILE'], file: 'from-file', host: 'from-host' });
+    expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none', PROBE_HOST: 'from-host' })).toEqual({ applied: [], file: null, host: 'from-host' });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -5,6 +5,8 @@ const maxHoldMs = 5000;
 
 export const config = {
   description: 'Waits until aborted or holdMs elapses, for cancellation contract proof.',
+  // A long wait a task-aware client may run behind a task (#369) and poll.
+  execution: { taskSupport: 'optional' },
   // The long-poll shape of #454: a route whose legitimate wait outlives the
   // runtime's default render session declares its own budget.
   render: { maxElapsedMs: 120_000 },

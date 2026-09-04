@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
+import { operatorEnvImports, operatorEnvStatement } from './launch-env-shell.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
@@ -52,6 +53,9 @@ export const mcpEntryRuntimePath = (): string => runtimeModulePath('mcp-entry');
 
 export const mcpServerRuntimePath = (): string => runtimeModulePath('mcp-server-runtime');
 
+/** The on-disk `agent-bundle/launch-env` module (#469), aliased into every artifact shell that applies the operator `.env` layer. */
+export const launchEnvRuntimePath = (): string => runtimeModulePath('launch-env');
+
 /**
  * The terminal-capability probe (#511) aliased into `main`-envelope
  * executables: plain Node, dependency-free, so a plain script or bin learns
@@ -67,14 +71,18 @@ export type GeneratedExecutableSurface = 'cli' | 'script';
 /**
  * The generated stdio MCP entry body for a factory-exporting server module:
  * the lifecycle installs the console guard before the consumer module
- * evaluates, so `loadEntry` stays a deferred dynamic import.
+ * evaluates, so `loadEntry` stays a deferred dynamic import — which is also
+ * what lets the operator `.env` layer land before any server code reads
+ * `process.env`.
  */
 export const generatedStdioMcpEntrySource = (options: {
   readonly entrySource: string;
   readonly serverName: string;
 }): string => [
+  ...operatorEnvImports({ importsFileUrlToPath: false }),
   `import { runGeneratedStdioMcpEntry } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
   '',
+  operatorEnvStatement,
   'await runGeneratedStdioMcpEntry({',
   `  loadEntry: () => import(${JSON.stringify(options.entrySource)}),`,
   `  serverName: ${JSON.stringify(options.serverName)},`,
@@ -343,9 +351,18 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...pluginRootImports(stateFallback),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
+    // The artifact-hosted executable is part of an installed pack, so it
+    // reads the pack's operator `.env` layer (#469); the npm package bin
+    // runs from the operator's own shell and reads none. The artifact
+    // plugin-root imports (#468) already bind `fileURLToPath`.
+    ...(stateFallback === 'artifact' ? operatorEnvImports({ importsFileUrlToPath: true }) : []),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
+    // Before the state owner opens and before any command runs; route modules
+    // are static imports, so a module-level `process.env` read still sees the
+    // host environment only (documented).
+    ...(stateFallback === 'artifact' ? [operatorEnvStatement] : []),
     pluginRootDeclaration(stateFallback),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
@@ -368,8 +385,8 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '};',
     '',
     // Plain commands mount the same conventional providers as every other
-    // generated request scope (#313): once per request, in deterministic key
-    // order, fail-closed, before the typed Agent request context opens.
+    // generated request scope (#313, #459): once per request, in deterministic
+    // key order, fail-closed, as the typed Agent request's own resolver.
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
@@ -379,12 +396,6 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...(options.state === undefined
       ? []
       : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
-    ...providerExecutionSource(providers, {
-      indent: plainIndent,
-      invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
-      plugin: 'pluginRoot.identity',
-      signal: 'context.signal',
-    }),
     `${plainIndent}const result = await runAgentRequest({`,
     '    capabilities: {',
     '      command: unavailable(),',
@@ -397,7 +408,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "    lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '    plugin: pluginRoot.identity,',
-    `    providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, {
+      indent: '    ',
+      invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+    }),
     '    signal: context.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     "    terminal: available(context.terminal, 'native'),",
@@ -590,7 +604,6 @@ export const generatedRenderedRouteWorkerSource = (
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
     ...(options.state === undefined ? [] : ['    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'pluginRoot.identity', signal: 'controller.signal' }),
     '    await runAgentRequest({',
     '      capabilities: {',
     '        command: unavailable(),',
@@ -604,7 +617,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
-    `      providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     // The executable probed its terminal once and forwards the value; a worker
@@ -857,44 +870,44 @@ const processHitSource = (indent: string): readonly string[] => [
 const processLifetimeValueSource = 'processHit';
 
 /**
- * Per-request provider execution shared by every generated request scope
- * (shared Flight worker, rendered CLI/script worker, plain routed CLI): once
- * per request, sequentially in deterministic key order, fail-closed on a
- * missing factory or a thrown/rejected factory, with the framework-owned
- * `processLifetime` value seeded first. The emitted loop mirrors
- * `executeProviders` in `../routes/provider-execution.ts`, which the
- * in-process test harness runs; `entry-shell.test.ts` pins the two together.
+ * The `providers` field of every generated `runAgentRequest` init (shared
+ * Flight worker, rendered CLI/script worker, plain routed CLI): only the
+ * framework-owned process identity for a project without providers, otherwise
+ * the request's provider resolver (#459) — run by the runtime once per
+ * request, after the identity axes are frozen and the notice lease is open,
+ * before the route; sequentially in deterministic key order; fail-closed on a
+ * missing factory or a thrown/rejected factory; `processLifetime` seeded
+ * first. Each factory receives the runtime's read-only request view (`host`,
+ * `session`, `workspace`, `plugin`, `lineage`, `signal`, the `read`-only
+ * `state` handle, and the `inbox`/`published`-only `notices` handle) spread
+ * beside the surface-specific `invocation`.
+ * The emitted loop mirrors `executeProviders` in
+ * `../routes/provider-execution.ts`, which the in-process test harness runs;
+ * `entry-shell.test.ts` pins the two together.
  */
-const providerExecutionSource = (
+const providersFieldSource = (
   providers: readonly CompiledProvider[],
-  expressions: {
-    readonly indent: string;
-    readonly invocation: string;
-    /** The observed plugin root the request scope publishes (#468); providers receive the same value. */
-    readonly plugin: string;
-    readonly signal: string;
-  },
+  expressions: { readonly indent: string; readonly invocation: string },
 ): readonly string[] => {
-  if (providers.length === 0) return [];
-  const { indent, invocation, plugin, signal } = expressions;
+  const { indent, invocation } = expressions;
+  if (providers.length === 0) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
   return [
-    `${indent}const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
-    `${indent}for (const provider of providers) {`,
-    `${indent}  if (typeof provider.module.default !== 'function') {`,
-    `${indent}    throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
+    `${indent}providers: async (request) => {`,
+    `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
+    `${indent}  for (const provider of providers) {`,
+    `${indent}    if (typeof provider.module.default !== 'function') {`,
+    `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
+    `${indent}    }`,
+    `${indent}    try {`,
+    `${indent}      providerValues[provider.key] = await provider.module.default({ ...request, invocation: ${invocation} });`,
+    `${indent}    } catch (error) {`,
+    `${indent}      throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
+    `${indent}    }`,
     `${indent}  }`,
-    `${indent}  try {`,
-    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, plugin: ${plugin}, signal: ${signal} });`,
-    `${indent}  } catch (error) {`,
-    `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
-    `${indent}  }`,
-    `${indent}}`,
+    `${indent}  return providerValues;`,
+    `${indent}},`,
   ];
 };
-
-/** The `providers` request-scope value: the executed map, or only the framework-owned process identity. */
-const providerValuesExpression = (providers: readonly CompiledProvider[]): string =>
-  providers.length === 0 ? `{ processLifetime: ${processLifetimeValueSource} }` : 'providerValues';
 
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
@@ -952,7 +965,6 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
     '    const plugin = message.plugin ?? pluginRoot.identity;',
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'plugin', signal: 'controller.signal' }),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
@@ -961,7 +973,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin,',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
-    `      providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),

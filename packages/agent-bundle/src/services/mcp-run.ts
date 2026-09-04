@@ -1,6 +1,6 @@
 import { loadEnv } from '@rsbuild/core';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { resolve } from 'node:path';
+import { delimiter, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
 import { Effect, FileSystem } from 'effect';
@@ -14,6 +14,7 @@ import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
+import { OPERATOR_ENV_FILE_NONE, OPERATOR_ENV_FILE_VARIABLE } from '../launch-env.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { forwardingSignals } from './mcp-run-signals.ts';
 import {
@@ -203,11 +204,32 @@ const loadLaunchFileEnv = async (
 };
 
 /**
+ * What the spawned entry's own operator `.env` layer (#469) should do. The
+ * generated shell reads `<plugin root>/.env` and `.env.local` at launch, and
+ * under `mcp run` the plugin root is the workspace root, so by default it
+ * re-reads the same files this process already composed — a no-op, because
+ * the layer fills only missing variables. `--env-file` and `--no-env` name a
+ * different set, so they are handed down as `AGENT_BUNDLE_ENV_FILE` and the
+ * shell follows the operator's choice instead of the convention. An operator
+ * who exported `AGENT_BUNDLE_ENV_FILE` keeps it: `process.env` wins anyway.
+ */
+const operatorEnvFileForChild = (
+  options: McpLaunchEnvironmentOptions,
+): Readonly<Record<string, string>> => {
+  if (options.loadEnvFiles === false) return { [OPERATOR_ENV_FILE_VARIABLE]: OPERATOR_ENV_FILE_NONE };
+  if (options.envFiles !== undefined && options.envFiles.length > 0) {
+    return { [OPERATOR_ENV_FILE_VARIABLE]: options.envFiles.map((file) => resolve(file)).join(delimiter) };
+  }
+  return {};
+};
+
+/**
  * The complete launch of one stdio server out of a built artifact: the
  * resolved command plus the layered environment `mcp run` and `serve-app`
  * share. Precedence, lowest to highest: manifest env (declared entries plus
  * the injected plugin-root anchor, path tokens expanded), the `.env` file
- * layer, then the operator's real `process.env` — an exported variable
+ * layer, the `AGENT_BUNDLE_ENV_FILE` hand-down for the child's own operator
+ * layer (#469), then the operator's real `process.env` — an exported variable
  * always beats every file- or manifest-declared value. The plugin-data root
  * is created so the server's durable-state anchor exists before it starts.
  */
@@ -227,7 +249,7 @@ export const resolveMcpLaunchEnvironment = async (
     args: launch.args,
     command: launch.command,
     cwd: launch.cwd,
-    env: Object.freeze({ ...launch.env, ...fileEnv, ...inheritedEnv }),
+    env: Object.freeze({ ...launch.env, ...fileEnv, ...operatorEnvFileForChild(options), ...inheritedEnv }),
   });
 };
 

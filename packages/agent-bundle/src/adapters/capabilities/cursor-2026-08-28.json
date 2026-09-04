@@ -406,7 +406,15 @@
       ]
     },
     "stdio": true,
-    "streamableHttp": true
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "Cursor does not task-augment a tools/call: its documented MCP protocol and extension support lists Tools, Prompts, Resources, Roots, Elicitation, and Apps, not Tasks, and recorded calls carry no `params.task`.",
+      "evidence": [
+        "retrieved 2026-09-04 from https://cursor.com/docs/context/mcp, \"Protocol and extension support\": Tools, Prompts, Resources, Roots, Elicitation, Apps (extension) are the supported rows; Tasks is absent.",
+        "2026-09-03 (#424): tools/call `_meta` carries only progressToken from the cursor-vscode client; no `params.task`."
+      ]
+    }
   },
   "noticeDelivery": {
     "current-response": {

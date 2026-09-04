@@ -82,7 +82,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in every selected host artifact whose target publishes the `cli` capability (all built-in targets). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, plugin, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }` — the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 | `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
@@ -261,22 +261,58 @@ an otherwise valid migration.
 Each direct child of `src/providers/` derives its key by camel-casing the file
 stem: for example, `src/providers/project-auth.ts` mounts at
 `(await agent()).providers.projectAuth`. Every module default-exports a factory
-with the contract `(context: { invocation, plugin, signal }) => value |
-Promise<value>`, where `invocation` is the current route invocation, `plugin`
-is the observed plugin root the request will publish as
-`(await agent()).plugin` (#468), and `signal` is its request abort signal.
+with the contract `(context: AgentProviderContext) => value | Promise<value>`:
+
+```ts
+interface AgentProviderContext {
+  invocation: AgentProviderInvocation;  // the surface-specific route invocation
+  signal: AbortSignal;                  // the request abort signal
+  host: Observed<{ name }>;             // exactly what the route reads on `await agent()`
+  session: Observed<{ sessionId }>;
+  workspace: Observed<{ root }>;
+  plugin: Observed<{ root; stateRoot }>; // the resolved plugin root (#468)
+  lineage: Observed<AgentLineage>;      // own chain plus the live `tree` (#457)
+  state?: { lifetime; read(options?) }; // the mounted state handle, `read` only
+  notices?: { inbox(); published() };   // the request's notice handle, reads only
+}
+```
+
+`host`, `session`, `workspace`, `plugin`, and `lineage` are the same observed
+values the route will read, provenance and unavailable reasons included.
+`state` is present for projects that declare `src/state.ts` and `notices` for
+projects whose scope mounts the notice ledger; both are the real request
+handles narrowed by construction to their read paths (#459) — `inbox()` is
+what is pending for this request's principal, `published()` what became of
+the notices it published (#460) — so a provider can expose a derived view of
+shared state — a topology, a summary, a peers list — but never dispatch a
+state event or publish, acknowledge, or withdraw a notice: those stay
+route-only. Providers also run outside the request's async context, so
+`agent()` and `useAgent()` inside a factory throw `outside-invocation` rather
+than handing it the full handle. The types ship from `agent-bundle`
+(`AgentProviderContext`, `AgentProviderStateHandle`,
+`AgentProviderNoticesHandle`, `AgentProviderLineage`, …) without a runtime
+import; at run time the handles are the runtime's own.
 
 Every generated request scope — the shared Flight worker behind generated MCP
 and event routes, the react-server worker behind rendered routed CLI commands
 and rendered scripts, and the routed-CLI executable itself for plain `.ts`
-commands — executes providers once per request, sequentially in deterministic
-key order, before entering `runAgentRequest`. The returned values join the
-request's provider map. A thrown or rejected factory fails the request closed;
+commands — executes providers once per request as the request's own provider
+resolver: `runAgentRequest` freezes the identity axes, opens the notice lease
+(so `notices.inbox()` is real), then runs the factories sequentially in
+deterministic key order, and only then runs the route. That ordering — state
+and notices mounted before providers, rather than a lazy handle that resolves
+later — is what keeps the generated loop and the harness's `executeProviders`
+one simple function: a provider awaits real handles, and a factory that reads
+`inbox()` eagerly cannot deadlock on a lease that has not opened yet. The
+returned values join the request's provider map. A thrown or rejected factory
+fails the request closed, exactly as a route that throws after admission does;
 expected degradation should return an honest unavailable-shaped value instead
 of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `script`), so a provider can branch on the entry surface deliberately.
 `processLifetime` is reserved for the framework-owned process identity and hit
-counter, so provider filenames must not derive that key.
+counter, so provider filenames must not derive that key. A custom host calling
+`runAgentRequest` directly may pass `providers` as the resolved record or as
+the same resolver function `(request: AgentProviderRequest) => values`.
 
 The `agent-bundle/test` harness mounts the same providers, in the same order
 and with the same fail-closed semantics, for every manifest-backed helper
@@ -977,14 +1013,27 @@ race against wedged transports, and heartbeat/activity logging on stderr
 name).
 
 Self-connecting entries — modules that construct and connect a transport at
-top level without a default export — keep today's behavior byte for byte.
+top level without a default export — keep today's behavior byte for byte: no
+lifecycle shell and no operator `.env` layer (#469); an entry that wants the
+layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself. That
+module is aliased into every stdio entry, shell or not, so the import is
+inlined from this package rather than resolved through the plugin's own
+`node_modules`, and a `tools` hatch can never externalize it.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
-final `CallToolResult`. The shell advertises no `tasks` capability and
-processes a task-augmented request as an ordinary one; task-augmented calls
-are deferred until the MCP SDK ships a task runtime (see
-[MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)).
+final `CallToolResult`. The operation-based `createRscMcpServer` shell above
+advertises no `tasks` capability and processes a task-augmented request as an
+ordinary one, as the `2025-11-25` Tasks utility requires of a receiver without
+the capability. Generated route servers (`src/mcp/<server>/tools/*.tsx`) serve
+the utility for tool routes that declare `config.execution.taskSupport`: a
+`tools/call` carrying `params.task` answers with a `CreateTaskResult`, the
+Flight render continues behind the task, `tasks/get` reports status and the
+last render progress, `tasks/result` blocks for the same `CallToolResult` the
+ordinary call returns, `tasks/cancel` interrupts the render through its
+`AbortSignal`, and `tasks/list` lists the session's tasks (see
+[Long-running tools: tasks](https://scriptedalchemy.github.io/agent-bundle/guide/authoring/mcp#long-running-tools-tasks)
+and [MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-served-2026-09-04)).
 
 The same lifecycle is public API for hand-rolled entries:
 
@@ -1302,6 +1351,23 @@ canonical precedence order (highest wins):
 | 3 (highest) | Operator `process.env` | The real environment `mcp run` was started with. An exported variable always wins. |
 | 2 | `.env` file layer | The conventional project-root set, or the explicit `--env-file` list in order. Fills gaps only; never beats an exported variable. |
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
+
+Installed packs get the same layer without `mcp run` (#469): every artifact
+shell that runs plugin code — the stdio MCP entry of a factory-exporting
+server (before its deferred server import; a self-connecting entry has no
+shell), the hook wrappers that execute handlers or render standalone, and the
+artifact CLI `bin/<name>.mjs` — applies `agent-bundle/launch-env`
+(`src/launch-env.ts`, plain Node, inlined into the bundle) at startup. It
+reads `<plugin root>/.env` then `.env.local`, where the plugin root is the
+expanded `AGENT_BUNDLE_PLUGIN_ROOT` or the shell's parent directory, or the
+files `AGENT_BUNDLE_ENV_FILE` names (platform-delimited list; `none` disables
+the layer); it fills only variables the host did not set, never logs a value,
+treats a missing file as the normal case and an unreadable one as skipped.
+The dotenv grammar has no `${VAR}` interpolation. Under `mcp run` the plugin
+root is the project root, so the shell's pass is a no-op; `--env-file` and
+`--no-env` are handed down as `AGENT_BUNDLE_ENV_FILE` so the shell follows the
+operator's choice. The npm package bin reads no pack file. Doctor reports the
+presence and variable count of each file (`AB7331`).
 
 ### Durable-state anchors
 

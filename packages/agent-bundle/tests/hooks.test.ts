@@ -1051,6 +1051,66 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
   }
 });
 
+it('applies the operator .env layer of the installed pack before a hook handler runs, filling only what the host did not set (#469)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-operator-env-'));
+  const sourceRoot = join(root, 'src', 'hooks');
+  const outputRoot = join(root, 'dist');
+  const model = hookModel(root);
+
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await Promise.all([
+      writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
+      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(sourceRoot, 'session-start.ts'), [
+        "export default () => ({ outcome: 'continue' as const, additionalContext: `${process.env.OPERATOR_TOKEN ?? 'unset'}:${process.env.HOST_WINS ?? 'unset'}` });",
+        '',
+      ].join('\n')),
+      writeFile(join(sourceRoot, 'check-command.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+      writeFile(join(sourceRoot, 'record.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+      writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
+    ]);
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+
+    const event = {
+      cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
+    };
+    const context = (result: { readonly stdout: string }): string =>
+      (JSON.parse(result.stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+    for (const target of ['codex', 'claude']) {
+      const pluginRoot = join(outputRoot, target);
+      const wrapper = join(pluginRoot, 'hooks', 'session-start-session-start-7ab7e8a5.mjs');
+      // No file: the wrapper is a no-op and the handler sees the host environment only.
+      const withoutFile = await runNativeHook(wrapper, event);
+      expect(withoutFile).toMatchObject({ code: 0, stderr: '' });
+      expect(context(withoutFile)).toBe('unset:unset');
+
+      // `<plugin root>/.env` fills the gap; an exported variable still wins.
+      await writeFile(join(pluginRoot, '.env'), 'OPERATOR_TOKEN=from-file\nHOST_WINS=from-file\n');
+      const withFile = await runNodeScript({ args: [wrapper], env: { HOST_WINS: 'host' }, input: JSON.stringify(event) });
+      expect(withFile).toMatchObject({ code: 0, stderr: '' });
+      expect(context(withFile)).toBe('from-file:host');
+
+      // The anchor the host injects decides the location: pointed elsewhere, the artifact's file is not read.
+      const elsewhere = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-operator-env-anchor-'));
+      try {
+        await writeFile(join(elsewhere, '.env'), 'OPERATOR_TOKEN=from-anchor\n');
+        const anchored = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_PLUGIN_ROOT: elsewhere }, input: JSON.stringify(event) });
+        expect(context(anchored)).toBe('from-anchor:unset');
+        // An explicit AGENT_BUNDLE_ENV_FILE replaces the convention; `none` disables the layer.
+        const explicit = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: join(elsewhere, '.env') }, input: JSON.stringify(event) });
+        expect(context(explicit)).toBe('from-anchor:unset');
+        const disabled = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: 'none' }, input: JSON.stringify(event) });
+        expect(context(disabled)).toBe('unset:unset');
+      } finally {
+        await rm(elsewhere, { force: true, recursive: true });
+      }
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('runs the embedded Codex and Claude native codecs through their published wrappers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-native-codecs-'));
   const sourceRoot = join(root, 'src', 'hooks');

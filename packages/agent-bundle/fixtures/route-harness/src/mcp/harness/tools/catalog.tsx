@@ -4,6 +4,8 @@ import { z } from 'zod';
 
 export const config = {
   description: 'Streams the harness catalog behind one Suspense boundary.',
+  // Its streamed Agent.Progress fallback is what a task reports through tasks/get (#369).
+  execution: { taskSupport: 'optional' },
   title: 'Catalog',
 };
 

@@ -175,6 +175,39 @@ as the second argument of `main` (see [Package entries](./package-entries.mdx#th
 In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
 and `context.terminal` injects any other one through the same seam as every identity axis.
 
+### Request context providers
+
+A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
+mounted at `(await agent()).providers.<camelCaseName>` on every generated surface. Beyond the
+surface-specific `invocation` and the request `signal`, the factory receives the request as the
+route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
+same `Observed` values with the same provenance — plus read-only views of the mounted handles:
+`state` (`read` only) when the project declares `src/state.ts`, `notices` (`inbox` and
+`published` only) when the scope mounts the notice ledger. A provider can therefore derive a view
+of shared state — a topology, a peers list, what became of the notices this agent published — but
+cannot dispatch a state event or publish a notice; those stay in routes.
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+Providers run once per request as the request's own resolver: after `runAgentRequest` has
+frozen the identity axes and opened the notice lease, before the route, in deterministic key
+order, outside the request's async context (`agent()` inside a factory throws
+`outside-invocation`). A factory that throws fails the request closed; expected degradation
+should return an honest unavailable-shaped value instead. The `agent-bundle/test` harness hands
+its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
+sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
@@ -256,6 +289,84 @@ Code's default per-call wall clock is about 28 hours (`MCP_TOOL_TIMEOUT`, or a p
 notifications; Codex bounds a call at `tool_timeout_sec`, 60 seconds unless the operator raises
 it in `config.toml`. `agent-bundle inspect --routes` shows the budget with the rest of each
 route's compiled `config`.
+
+## Long-running tools: tasks
+
+The render budget bounds how long a render may run; it does not change that an ordinary
+`tools/call` blocks the client until the render ends. The MCP `2025-11-25` Tasks utility is the
+complementary mechanism: a client that asks for task-augmented execution gets a task handle at
+once and collects the result later, so its own request deadline stops mattering for the render. A
+tool route opts in with `config.execution.taskSupport`, the tool's `execution` block as
+`tools/list` advertises it:
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Convert the selected audiobook.',
+  execution: { taskSupport: 'optional' },
+} satisfies ToolConfig;
+```
+
+`taskSupport` is `'forbidden'` (the wire default when the key is absent: every call is an
+ordinary request), `'optional'` (a client may ask for a task; one that does not gets the ordinary
+result), or `'required'` (an ordinary call is refused with JSON-RPC `-32601`); anything else, an
+unknown key under `execution`, or the key on a resource or prompt route is `AB4836`. The route
+module itself does not change: it renders exactly as for an ordinary call, and `signal`,
+`progress.report()`, and streamed `Agent.Progress` fallbacks mean what they always did.
+
+When at least one tool opted in, the generated server declares
+`capabilities.tasks: { list, cancel, requests: { tools: { call } } }` and serves the lifecycle on
+a `2025-11-25` session:
+
+| Request | Answer |
+| --- | --- |
+| `tools/call` with `params.task` (`{ ttl?, pollInterval? }`) on an opted-in tool | `CreateTaskResult` at once: `task.taskId`, `status: "working"`, `createdAt`, `lastUpdatedAt`, the honoured `ttl` (the client's request, capped at 24 hours; five minutes when omitted) and `pollInterval` (at least 100 ms; 1 s when omitted), plus `_meta["io.modelcontextprotocol/model-immediate-response"]`, a sentence a host may hand its model while the task runs. The render starts under the task. |
+| `tasks/get` | The task: `working` with `statusMessage` set to the latest progress message and `_meta["agent-bundle/progress"]` carrying `{ progress, total?, message? }` — the same `Agent.Progress` projection that feeds `notifications/progress`; `completed`; `failed` with the tool error's text as `statusMessage` (a result with `isError: true` is a failed task, as the spec requires); or `cancelled`. The last progress stays readable on a settled task. |
+| `tasks/result` | Blocks until the task settles, then returns exactly what the ordinary call would have: the same `content`, `structuredContent`, and layout `_meta`, plus `_meta["io.modelcontextprotocol/related-task"]`; a render that ended in a JSON-RPC error returns that error. |
+| `tasks/cancel` | Transitions the task to `cancelled` before answering and aborts the render through the same `AbortSignal` a cancelled request uses; the interrupted render settles as the SDK's tool error, which `tasks/result` then returns. Cancelling a settled task is `-32602`. |
+| `tasks/list` | Every task the session still retains, oldest first, paged by an opaque `cursor`. |
+
+An unknown `taskId` is `-32602`; a task-augmented call to a tool that declared no support (or
+none) is `-32601`. Progress notifications for a task still flow only when the request carried
+`_meta.progressToken`, now stamped with the related-task key; the task observes progress either
+way. A client that never sends `params.task` sees no change at all, and a server none of whose
+tools opted in advertises no `tasks` capability and processes a task-augmented request as an
+ordinary one, as the utility requires of a receiver without the capability. Task records belong
+to the session that created them (the spawned stdio process, one client), stay for `ttl` after
+the task settles, at most 256 per server, and every task still working is cancelled when the
+session closes.
+
+The render budget applies to the task's render, not to the client's request: a task's
+`tools/call` returns immediately whatever the budget, and the render behind it is still bounded
+by the route's `config.render` (or the 60-second default). Raise the budget only when the render
+itself needs longer, not to outlast a host's request deadline — that is what the task is for. The
+`2026-07-28` protocol revision moves tasks out of the core into the `io.modelcontextprotocol/tasks`
+extension with a different shape (`resultType: "task"`, `tasks/update`, no `tasks/result`); the
+generated server's SDK release does not serve that extension, so a client on that revision keeps
+the ordinary contract and no task capability is advertised to it. Whether a pinned host issues
+task-augmented calls at all is recorded per host in the [host capability
+matrix](../../reference/hosts.md); at the time of writing none does, so the lifecycle is proven with
+the SDK client and the Workbench MCP page, where a tool that advertises task support offers
+**Run as task** and the Tasks panel polls `tasks/get`, fetches `tasks/result`, and cancels.
+
+The `mcp-in-memory` level proves the whole contract with the real SDK client:
+
+```ts
+import { specTypeSchemas } from '@modelcontextprotocol/client';
+import { openInMemoryMcpServer } from 'agent-bundle/test';
+
+await using session = await openInMemoryMcpServer();
+const created = await session.client.request({
+  method: 'tools/call',
+  params: { arguments: { holdMs: 2000 }, name: 'wait', task: { ttl: 60_000 } },
+}, specTypeSchemas.CreateTaskResult);
+const result = await session.client.request({
+  method: 'tasks/result',
+  params: { taskId: created.task.taskId },
+}, specTypeSchemas.CallToolResult);
+```
 
 ## Shared layouts
 
@@ -365,14 +476,31 @@ That guard matters because stdout carries JSON-RPC framing: one stray `console.l
 imported module would corrupt the protocol stream.
 
 Self-connecting entries — modules that construct and connect a transport at top level without a
-default export — keep their existing behavior byte for byte. Source validation reports the
-informational `AB4730` nudge suggesting the factory upgrade; it is never an error.
+default export — keep their existing behavior byte for byte: no lifecycle shell, and no operator
+`.env` layer, since there is no shell to apply it before the module's own top-level code runs.
+Source validation reports the informational `AB4730` nudge suggesting the factory upgrade; it is
+never an error.
 
-The same lifecycle is public API for hand-rolled entries:
+The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
+generated shell applies before it imports the server module (see
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)).
+Both imports are inlined into the emitted entry, which stays self-contained;
+`agent-bundle/launch-env` is aliased into every stdio entry, so it resolves whether or not the
+entry has a shell. A self-connecting entry that needs the layer applies it first thing, anchored
+the way the generated shell is (the artifact root is the parent of `mcp/`):
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` prefers an `AGENT_BUNDLE_PLUGIN_ROOT` the host set over the directory you
+pass, so the entry reads the same files as the pack's hook wrappers and CLI.
 
 ## Declaring servers in config
 

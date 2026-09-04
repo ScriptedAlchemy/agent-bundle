@@ -409,9 +409,15 @@ describe('mcp run', () => {
     const custom = await captureLaunch({ ...base, envFiles: [join(root, 'custom.env')] });
     expect(custom.env.CUSTOM_ONLY).toBe('custom');
     expect(custom.env.FROM_DOTENV).toBeUndefined();
+    // The spawned shell applies its own operator `.env` layer at launch
+    // (#469); the operator's explicit choice rides down as AGENT_BUNDLE_ENV_FILE
+    // so the shell follows it instead of re-reading the conventional pair.
+    expect(custom.env.AGENT_BUNDLE_ENV_FILE).toBe(join(root, 'custom.env'));
+    expect(bare.env.AGENT_BUNDLE_ENV_FILE).toBeUndefined();
     const disabled = await captureLaunch({ ...base, loadEnvFiles: false });
     expect(disabled.env.FROM_DOTENV).toBeUndefined();
     expect(disabled.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(root);
+    expect(disabled.env.AGENT_BUNDLE_ENV_FILE).toBe('none');
 
     // pluginRoot restores the byte-faithful artifact-rooted rehearsal.
     const rehearsal = await captureLaunch({ ...base, pluginRoot: join(artifact, 'portable') });

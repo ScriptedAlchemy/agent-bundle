@@ -328,6 +328,119 @@ describe('agent request store', () => {
     }
   });
 
+  it('resolves a providers function over a read-only request view, after the notice lease opens and outside any request context (#459)', async () => {
+    const events: string[] = [];
+    const stateHandle = {
+      changes: async () => { throw new Error('unreachable'); },
+      dispatch: async () => { events.push('dispatch'); throw new Error('unreachable'); },
+      lifetime: 'workspace-durable' as const,
+      read: async (options?: { readonly revision?: number }) => ({ revision: options?.revision ?? 7, state: { notes: [] } }),
+    };
+    const ledger = {
+      openRequest: async (request: { readonly invocation: { readonly id: string } }) => {
+        events.push(`open:${request.invocation.id}`);
+        return {
+          close: () => { events.push('close'); },
+          handle: {
+            acknowledge: async () => { throw new Error('unreachable'); },
+            inbox: async () => { events.push('inbox'); return []; },
+            publish: async () => { throw new Error('unreachable'); },
+            published: async () => { events.push('published'); return [{ id: 'n-1', state: 'attempted' }]; },
+            read: async () => [],
+          },
+        };
+      },
+    };
+    let view: Record<string, unknown> | undefined;
+    let inside: unknown;
+    const result = await runAgentRequest({
+      ...init('event', 'evt-1'),
+      host: available({ name: 'claude' }, 'native'),
+      lineage: available({ conversation: 'root', depth: 0, resolution: 'native', root: 'root', tree: { children: [], roots: [], siblings: [] } }, 'native'),
+      noticeLedger: ledger as never,
+      plugin: available({ root: '/plugin', stateRoot: '/plugin/state' }, 'native'),
+      providers: async (request) => {
+        events.push('providers');
+        view = request as unknown as Record<string, unknown>;
+        try {
+          useAgent();
+          inside = 'reachable';
+        } catch (error) {
+          inside = error instanceof AgentRequestError ? error.code : error;
+        }
+        const snapshot = await request.state!.read({ revision: 3 });
+        const pending = await request.notices!.inbox();
+        const published = await request.notices!.published();
+        return {
+          topology: {
+            pending: pending.length,
+            published: published.map((notice) => notice.state),
+            revision: snapshot.revision,
+            siblings: request.lineage.state === 'available' ? request.lineage.value.tree?.siblings.length : undefined,
+            stateRoot: request.plugin.state === 'available' ? request.plugin.value.stateRoot : request.plugin.reason,
+          },
+        };
+      },
+      state: stateHandle as never,
+    }, async () => {
+      events.push('operation');
+      return (await agent()).providers;
+    });
+
+    // Order: lease open → providers → operation → lease close; the resolver saw the real inbox and published view.
+    expect(events).toEqual(['open:evt-1', 'providers', 'inbox', 'published', 'operation', 'close']);
+    expect(result).toEqual({ topology: { pending: 0, published: ['attempted'], revision: 3, siblings: 0, stateRoot: '/plugin/state' } });
+    expect(Object.isFrozen(result)).toBe(true);
+    // The view is frozen, carries exactly the read-only members, and the handles are narrowed by construction.
+    expect(Object.isFrozen(view)).toBe(true);
+    expect(Object.keys(view!).sort()).toEqual(['host', 'lineage', 'notices', 'plugin', 'session', 'signal', 'state', 'workspace']);
+    expect(Object.keys(view!['state'] as object).sort()).toEqual(['lifetime', 'read']);
+    expect(Object.keys(view!['notices'] as object).sort()).toEqual(['inbox', 'published']);
+    expect(Object.isFrozen(view!['state'])).toBe(true);
+    expect(Object.isFrozen(view!['notices'])).toBe(true);
+    expect(view!['host']).toEqual(available({ name: 'claude' }, 'native'));
+    expect(view!['plugin']).toEqual(available({ root: '/plugin', stateRoot: '/plugin/state' }, 'native'));
+    expect(view!['session']).toEqual(unavailable());
+    // Providers never observe a request handle, so no write path is reachable through `agent()`.
+    expect(inside).toBe('outside-invocation');
+  });
+
+  it('keeps a providers function outside an enclosing request context, and fails the request closed when it rejects', async () => {
+    let inside: unknown;
+    await runAgentRequest(init('tool', 'outer'), async () => {
+      const outer = await agent();
+      expect(outer.invocation.id).toBe('outer');
+      await runAgentRequest({
+        ...init('tool', 'inner'),
+        providers: () => {
+          try {
+            inside = useAgent().invocation.id;
+          } catch (error) {
+            inside = error instanceof AgentRequestError ? error.code : error;
+          }
+          return {};
+        },
+      }, async () => undefined);
+      // The outer context is intact once the inner request settles.
+      expect((await agent()).invocation.id).toBe('outer');
+    });
+    expect(inside).toBe('outside-invocation');
+
+    let closed = false;
+    let ran = false;
+    await expect(runAgentRequest({
+      ...init('tool'),
+      noticeLedger: {
+        openRequest: async () => ({ close: () => { closed = true; }, handle: {} }),
+      } as never,
+      providers: async () => { throw new Error('ffprobe is not installed'); },
+    }, async () => { ran = true; })).rejects.toThrow('ffprobe is not installed');
+    expect(ran).toBe(false);
+    expect(closed).toBe(true);
+    // A plain record is still mounted as before.
+    expect(await runAgentRequest({ ...init('tool'), providers: { library: 'x' } }, async () => (await agent()).providers)).toEqual({ library: 'x' });
+  });
+
   it('re-exports the request store from the plugin entry', () => {
     expect(pluginUseAgent).toBe(useAgent);
     expect(pluginAgent).toBe(agent);
