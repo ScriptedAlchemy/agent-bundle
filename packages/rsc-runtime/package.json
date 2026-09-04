@@ -85,7 +85,6 @@
     "effect": "4.0.0-rc.112",
     "flare-redact": "1.6.1",
     "react-server-dom-rspack": "0.1.0",
-    "rsc-markdown-stream": "github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -98,6 +97,7 @@
     "micromark": "4.0.2",
     "micromark-extension-gfm": "3.0.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "rsc-markdown-stream": "github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47"
   }
 }

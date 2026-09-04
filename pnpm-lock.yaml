@@ -379,9 +379,6 @@ importers:
       react-server-dom-rspack:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      rsc-markdown-stream:
-        specifier: github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47
-        version: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8)
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -416,6 +413,9 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
+      rsc-markdown-stream:
+        specifier: github:ScriptedAlchemy/rsc-markdown-stream#eba2ea0b930493b80b9f4f9bb2c582041b0a3f47
+        version: https://codeload.github.com/ScriptedAlchemy/rsc-markdown-stream/tar.gz/eba2ea0b930493b80b9f4f9bb2c582041b0a3f47(react@19.2.8)
 
   packages/workbench:
     dependencies:

@@ -1,12 +1,11 @@
 ---
-"@agent-bundle/runtime": minor
+"@agent-bundle/runtime": patch
 ---
 
-Add the async `MarkdownContent` component and re-export `renderToMarkdown` /
-`renderToMarkdownStream` from `rsc-markdown-stream`, so routes author rich
-Markdown blocks — GFM tables, task lists, nested async components, escaped
-text — as JSX lowered into `Agent.Markdown` instead of hand-concatenated
-strings. The rendered Markdown is verified against a GFM parser: sibling
-lists stay separate, hard breaks never leave a literal backslash, entity-like
-text (`&amp;`) and trailing `#` in headings render literally, and
-`style`/`script` bodies never leak into output.
+Add the async `MarkdownContent` component and the `renderToMarkdown` /
+`renderToMarkdownStream` exports to `@agent-bundle/runtime`, so routes author
+rich Markdown blocks — headings, lists, GFM tables, task lists, nested async
+components, escaped text — as JSX lowered into `Agent.Markdown` instead of
+hand-concatenated strings. The renderer (`rsc-markdown-stream`) is bundled
+into the package build, so installing `@agent-bundle/runtime` adds no git
+dependency. (#344)
