@@ -1,11 +1,12 @@
 /**
  * The Rsbuild plugins agent-bundle registers itself in the configs it
  * synthesizes, keyed by plugin `name`. Rsbuild's plugin manager appends every
- * plugin it is handed and never dedupes by name, and both composition paths
- * (`mergeRslibConfig` for artifact scripts, MCP entries, hooks, and the
- * package build; `mergeRsbuildConfig` for MCP App views) concatenate `plugins`
- * arrays, so a consumer who adds one of these through `tools.rsbuild.plugins`
- * registers it twice. `validateTools` reports that as AB4724 instead.
+ * plugin it is handed and never dedupes by name, and both engines the layers
+ * from `composeToolsLayers` are handed to (`mergeRslibConfig` for artifact
+ * scripts, MCP entries, hooks, and the package build; `mergeRsbuildConfig` for
+ * MCP App views) concatenate `plugins` arrays, so a consumer who adds one of
+ * these through `tools.rsbuild.plugins` registers it twice. `validateTools`
+ * reports that as AB4724 instead.
  *
  * The names are literals rather than instances so the validator does not
  * load a bundler plugin to read a string; `framework-plugins.test.ts` pins

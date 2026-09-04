@@ -4,6 +4,7 @@
     "jsx": "react-jsx"
   },
   "include": [
+    ".agent-bundle/routes.d.ts",
     "agent-bundle.config.ts",
     "evals/**/*.ts",
     "src/**/*.ts",
