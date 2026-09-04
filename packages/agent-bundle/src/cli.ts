@@ -390,7 +390,7 @@ const humanDoctor = (result: DoctorReport): string => {
         out.push(`  installed copy: ${describeInstallComparison(host.bundle.comparison)}\n`);
       }
       for (const validation of host.bundle.hostValidation ?? []) {
-        output.write(
+        out.push(
           `  host validation (${validation.copy} ${validation.pluginDirectory}` +
           `${validation.scope === undefined ? '' : `, scope ${validation.scope}`}): ${validation.status}\n`,
         );
