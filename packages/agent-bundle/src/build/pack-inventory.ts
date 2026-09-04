@@ -163,12 +163,14 @@ const dependencyDiagnostics = async (options: {
   const unresolvable = declared.filter((dependency) => !dependency.bundled && (isWorkspaceProtocol(dependency.specifier)
     ? !options.packerRewritesWorkspaceProtocols
     : !isRegistrySpecifier(dependency.specifier)));
+  // A computed import() may load any declared package; nothing can then be called unused.
+  const unused = imported.complete ? declared.filter((dependency) => !imported.names.has(dependency.name)) : [];
   return [
-    ...perField(declared.filter((dependency) => !imported.has(dependency.name)), (field, own) => diagnostic(
+    ...perField(unused, (field, own) => diagnostic(
       'AB7014',
       `package.json ${field} names packages no packed JavaScript or declaration file references: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
-      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime.',
+      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import(expression) in packed code withholds this check.',
     )),
     ...perField(unresolvable, (field, own) => diagnostic(
       'AB7015',

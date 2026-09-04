@@ -258,13 +258,31 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
   },
 ));
 
-it('accepts a dependency that only packed declaration files reference', () => withPackageDocument(
-  (document) => { document.dependencies = { zod: '^4.5.4' }; },
+it('withholds AB7014 when packed JavaScript has a computed import() that could load any declared package', () => withPackageDocument(
+  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
+  async () => {
+    const consumer = join(projectRoot, 'dist', 'computed.mjs');
+    await writeFile(consumer, 'export const load = (name) => import(name);\n');
+    try {
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/computed.mjs' }] };
+      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      // Without that file the same declaration is reported.
+      expect(withCode(await diagnostics(), 'AB7014')).toHaveLength(1);
+    } finally {
+      await rm(consumer, { force: true });
+    }
+  },
+));
+
+it('accepts a dependency that only packed declaration files reference, including @types for a type directive', () => withPackageDocument(
+  (document) => { document.dependencies = { zod: '^4.5.4', '@types/node': '^22.0.0' }; },
   async () => {
     const declaration = join(projectRoot, 'dist', 'consumer.d.ts');
     await writeFile(declaration, [
+      '/// <reference types="node" />',
       "import type { ZodType } from 'zod';",
       'export declare const schema: ZodType;',
+      'export declare const buffer: Buffer;',
       '',
     ].join('\n'));
     try {

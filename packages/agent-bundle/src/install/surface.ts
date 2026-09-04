@@ -47,8 +47,15 @@ const optionalCliReinstall = (host: 'claude' | 'codex'): string[] => [
  * the inventory the framework's own uninstaller performs before it removes one.
  */
 const marketplaceRemoval = (host: 'claude' | 'codex', model: NormalizedPlugin): string[] => [
-  `The marketplace \`${marketplaceName(model)}\` stays registered. Remove it only when \`${host} plugin list\` shows no other`,
-  `plugin from it${host === 'claude' ? ' in any scope or project (`plugin marketplace remove` applies to all of them)' : ''}:`,
+  `The marketplace \`${marketplaceName(model)}\` stays registered. Remove it only when nothing else installs from it:`,
+  ...(host === 'claude'
+    ? [
+      '`plugin marketplace remove` applies to every scope and every project, and `claude plugin list` shows only',
+      'the current project, so also check `~/.claude/plugins/installed_plugins.json` (under `$CLAUDE_CONFIG_DIR`',
+      'when set), where Claude records every scope of every install. The optional `agent-bundle uninstall claude`',
+      'below performs that inventory before it removes anything.',
+    ]
+    : ['`codex plugin list` shows every other plugin from it.']),
   '',
   '```sh',
   `${host} plugin marketplace remove ${marketplaceName(model)}`,

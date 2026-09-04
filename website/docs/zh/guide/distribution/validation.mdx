@@ -159,7 +159,8 @@ npx agent-bundle prepack --root . --output artifact --json
 `prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、清单
 哈希、包 bin 目标、发布版本一致性以及 `package.json` 中的安装期依赖字段把关。构建会把每个依赖内联进
 `dist/bin` 与各宿主包，因此已发布的插件不应安装任何东西：请把框架、`@agent-bundle/runtime`、`react`、
-`zod` 以及其余技术栈都声明在 `devDependencies` 下。`--output` 是相对 `--root` 的产物路径，会覆盖配置中的
+`zod` 以及其余技术栈都声明在 `devDependencies` 下。例外是打包后的模块仍然导入的包——通过 `tools` 逃生舱保持
+外部化的包——它应声明在 `dependencies` 下，`AB7014` 会允许它。`--output` 是相对 `--root` 的产物路径，会覆盖配置中的
 `output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
 而且任何 npm 生命周期都绝不会执行宿主安装。
 
@@ -173,8 +174,9 @@ npx agent-bundle prepack --root . --output artifact --json
 | `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项不经由注册表解析：git 或 GitHub 简写来源、`http(s):` tarball，或 `file:`/`link:`/相对路径。npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），因此消费者无法安装该包。`workspace:`/`catalog:` 同样会被报告，除非是 pnpm、Yarn 或 Bun 在执行打包并会重写它们；`bundleDependencies` 中的项（peer 除外）不会被报告，`npm:` 别名按其目标判断。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
 
 依赖证据直接读取自打包后的字节：npm 将发布的每个 `.js`/`.mjs`/`.cjs` 文件都会被词法分析出 `import`
-说明符，并扫描字面量 `require("…")` 与 `.resolve("…")` 调用；每个打包后的 `.d.ts` 会被扫描其类型所引用的模块。说明符归约
-为包名，忽略 Node 内建模块。注释中的提及只会保留某个依赖，绝不会报告它；`devDependencies` 永不检查，
+说明符，并扫描字面量 `require("…")` 与 `.resolve("…")` 调用；每个打包后的 `.d.ts` 会被扫描其类型所引用的模块（`/// <reference types>` 指令同时计入该包及其
+`@types/*` 对应包）。说明符归约为包名，忽略 Node 内建模块。打包代码中的计算型 `import(表达式)` 可能加载任何
+已声明的包，因此会整体撤回 `AB7014`。注释中的提及只会保留某个依赖，绝不会报告它；`devDependencies` 永不检查，
 `npm:` 别名在其目标是注册表说明符时才视为注册表说明符。
 
 发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带

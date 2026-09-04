@@ -170,16 +170,35 @@ const declarationSpecifier = new RegExp(
   'gu',
 );
 
+/**
+ * The package a `/// <reference types="name" />` directive resolves through:
+ * `name` itself when it ships declarations, or its DefinitelyTyped package
+ * (`@types/name`; `@types/scope__name` for a scoped name). Both are reported,
+ * since the declaration cannot say which one the consumer needs.
+ */
+const typeDirectivePackages = (name: string): readonly string[] => [
+  name,
+  name.startsWith('@') ? `@types/${name.slice(1).replace('/', '__')}` : `@types/${name}`,
+];
+
 /** The literal module specifiers a declaration file resolves, in order of appearance. */
 export const declarationSpecifiers = (source: string): readonly string[] =>
-  Array.from(source.matchAll(declarationSpecifier), (match) => match[2] ?? match[4] ?? '');
+  Array.from(source.matchAll(declarationSpecifier)).flatMap((match) =>
+    (match[4] === undefined ? [match[2] ?? ''] : typeDirectivePackages(match[4])));
+
+/** What one packed file proves about the packages it resolves. */
+interface FileEvidence {
+  readonly specifiers: readonly string[];
+  /** `false` when a computed `import(expression)` means the file may load a package no literal names. */
+  readonly complete: boolean;
+}
 
 /**
  * The module specifiers packed JavaScript resolves: the lexer's static and
  * dynamic literal imports — never a mention inside a comment or string,
  * which bundled library docblocks are full of — plus literal `require` calls.
  */
-const javaScriptSpecifiers = async (bytes: Buffer): Promise<readonly string[]> => {
+const javaScriptEvidence = async (bytes: Buffer): Promise<FileEvidence> => {
   const source = bytes.toString('utf8');
   let imports: readonly ModuleImport[];
   try {
@@ -188,44 +207,60 @@ const javaScriptSpecifiers = async (bytes: Buffer): Promise<readonly string[]> =
     // Syntax is another gate's concern; skipping can only keep a declaration.
     imports = [];
   }
-  return [
-    ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-    ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),
-  ];
+  return {
+    complete: imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined),
+    specifiers: [
+      ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
+      ...Array.from(source.matchAll(requireCall), (match) => match[2] ?? ''),
+    ],
+  };
 };
 
 const javaScriptSuffix = /\.[cm]?js$/u;
 const declarationSuffix = /\.d\.[cm]?ts$/u;
 
-const packageNamesIn = async (path: string): Promise<readonly string[]> => {
+const fileEvidence = async (path: string): Promise<FileEvidence> => {
   let bytes: Buffer;
   try {
     bytes = await readFile(path);
   } catch (error) {
     // npm listed the file; only its absence is a benign inconsistency.
-    if (isErrno(error, 'ENOENT')) return [];
+    if (isErrno(error, 'ENOENT')) return { complete: true, specifiers: [] };
     throw error;
   }
-  const specifiers = declarationSuffix.test(path)
-    ? declarationSpecifiers(bytes.toString('utf8'))
-    : await javaScriptSpecifiers(bytes);
-  return specifiers.flatMap((specifier) => {
-    const name = packageNameOf(specifier);
-    return name === undefined ? [] : [name];
-  });
+  return declarationSuffix.test(path)
+    ? { complete: true, specifiers: declarationSpecifiers(bytes.toString('utf8')) }
+    : javaScriptEvidence(bytes);
 };
 
+export interface ImportedPackages {
+  /** Every package name the packed files name literally. */
+  readonly names: ReadonlySet<string>;
+  /**
+   * Whether `names` is the whole story. A computed `import(expression)` in
+   * packed JavaScript may load any declared package, so no declaration can
+   * then be called unused.
+   */
+  readonly complete: boolean;
+}
+
 /**
- * Every package name the packed JavaScript imports or requires, or the
- * packed declarations reference, read from the bytes npm would publish.
+ * Every package name the packed JavaScript imports, requires, or resolves, or
+ * the packed declarations reference, read from the bytes npm would publish.
  */
 export const importedPackageNames = async (options: {
   readonly paths: readonly string[];
   readonly projectRoot: string;
-}): Promise<ReadonlySet<string>> => {
+}): Promise<ImportedPackages> => {
   const projectRoot = resolve(options.projectRoot);
-  const names = await Promise.all(options.paths
+  const evidence = await Promise.all(options.paths
     .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
-    .map((path) => packageNamesIn(resolve(projectRoot, path))));
-  return new Set(names.flat());
+    .map((path) => fileEvidence(resolve(projectRoot, path))));
+  return {
+    complete: evidence.every((file) => file.complete),
+    names: new Set(evidence.flatMap((file) => file.specifiers).flatMap((specifier) => {
+      const name = packageNameOf(specifier);
+      return name === undefined ? [] : [name];
+    })),
+  };
 };

@@ -180,7 +180,8 @@ exact package and artifact inventory, manifest hashes, package bin targets, rele
 agreement, and the installed-dependency fields of `package.json`. The build inlines every
 dependency into `dist/bin` and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
-`devDependencies`. `--output` is an artifact path relative to `--root` that overrides the configured
+`devDependencies`. The exception is a package a packed module still imports — one kept external
+through the `tools` escape hatch — which belongs under `dependencies`, and `AB7014` permits it there. `--output` is an artifact path relative to `--root` that overrides the configured
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
 
@@ -195,8 +196,10 @@ prevents recursion, and no npm lifecycle ever performs a host install.
 
 The dependency evidence is read from the packed bytes: every `.js`/`.mjs`/`.cjs` file npm would
 publish is lexed for `import` specifiers and scanned for literal `require("…")` and `.resolve("…")` calls, and every
-packed `.d.ts` is scanned for the modules its types reference; specifiers are reduced to package
-names, with Node built-ins ignored. A mention inside a comment can only keep a dependency, never
+packed `.d.ts` is scanned for the modules its types reference (a `/// <reference types>` directive
+counts for the package and its `@types/*` twin); specifiers are reduced to package names, with
+Node built-ins ignored. A computed `import(expression)` in packed code could load any declared
+package, so it withholds `AB7014` altogether. A mention inside a comment can only keep a dependency, never
 report one; `devDependencies` are never inspected, and an `npm:` alias counts as a registry specifier when its target does.
 
 A release build also refuses a project with **no** release version at all (`AB4013`), so a

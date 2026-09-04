@@ -193,10 +193,12 @@ literal `require("…")` and `.resolve("…")` calls (`require.resolve`, `create
 `import.meta.resolve`: a package located only to find an asset is still a runtime dependency), and
 every `.d.ts`/`.d.mts`/`.d.cts` file is scanned for `from "…"`,
 `import("…")`, `import x = require("…")`, and `/// <reference types="…" />` (a consumer needs the
-package that provides those types even without a runtime import); bare specifiers are reduced to
+package that provides those types even without a runtime import; a type directive counts for the
+named package and its `@types/*` twin, `@types/scope__name` for a scoped name); bare specifiers are reduced to
 their package name (`@scope/name` or `name`), and Node built-ins are ignored. A mention inside a
 comment or string can only keep a dependency, never report one, and `devDependencies` are never
-inspected.
+inspected. A computed `import(expression)` in packed JavaScript could load any declared package,
+so its presence withholds `AB7014` entirely; the recovery text says so.
 
 ## Declaration generation (`AB4716`)
 

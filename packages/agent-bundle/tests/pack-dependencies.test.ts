@@ -99,8 +99,9 @@ it.each([
   ['type T = import("types-only").T;', ['types-only']],
   ['import x = require("legacy");', ['legacy']],
   ["declare const y: typeof import ( 'spaced' );", ['spaced']],
-  ['/// <reference types="node" />', ['node']],
-  ["/// <reference types = 'react' />", ['react']],
+  // A type directive resolves through the package itself or its DefinitelyTyped package.
+  ['/// <reference types="node" />', ['node', '@types/node']],
+  ["/// <reference types = '@scope/name' />", ['@scope/name', '@types/scope__name']],
   ['import a from "one"; export { b } from "two"; import c = require("three");', ['one', 'two', 'three']],
   ['declare const n: string;', []],
 ])('declarationSpecifiers(%j) is %j', (source, specifiers) => {
