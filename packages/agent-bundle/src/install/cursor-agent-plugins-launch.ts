@@ -1,5 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { portablePlaceholderPattern } from '../adapters/portable-mcp-rules.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -190,6 +190,63 @@ const driftIssues = async (
   return Object.freeze(issues);
 };
 
+/**
+ * The expansion the emitted `install.mjs` performs, reproduced byte for byte
+ * so Doctor can recompute what the Cursor copy of a recorded document must
+ * hold. `undefined` when the document has no stdio server to expand. Any
+ * change here must be mirrored in `surface.ts` (`expandAgentPluginsMcp`); the
+ * Doctor test that installs through the real emitted installer pins the two.
+ */
+export const expandAgentPluginsMcpForCursor = (
+  text: string,
+  pluginRoot: string,
+  pluginData: string,
+): string | undefined => {
+  let document: unknown;
+  try {
+    document = JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(document) || !isRecord(document['mcpServers'])) return undefined;
+  const expandPlaceholders = (value: string): string =>
+    value.replaceAll('${PLUGIN_ROOT}', pluginRoot).replaceAll('${PLUGIN_DATA}', pluginData);
+  const expandPath = (value: string): string => (value.startsWith('./') ? join(pluginRoot, value.slice(2)) : expandPlaceholders(value));
+  let expanded = false;
+  const servers: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(document['mcpServers'])) {
+    if (!isRecord(server) || server['type'] !== 'stdio' || typeof server['command'] !== 'string') {
+      servers[name] = server;
+      continue;
+    }
+    expanded = true;
+    const env: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(isRecord(server['env']) ? server['env'] : {})) {
+      env[key] = typeof value === 'string' ? expandPlaceholders(value) : value;
+    }
+    env['PLUGIN_ROOT'] = pluginRoot;
+    env['PLUGIN_DATA'] = pluginData;
+    const args = server['args'];
+    servers[name] = {
+      ...server,
+      command: expandPath(server['command']),
+      ...(Array.isArray(args) ? { args: args.map((argument) => (typeof argument === 'string' ? expandPlaceholders(argument) : argument)) } : {}),
+      cwd: typeof server['cwd'] === 'string' ? expandPath(server['cwd']) : pluginRoot,
+      env,
+    };
+  }
+  if (!expanded) return undefined;
+  return `${JSON.stringify({ ...document, mcpServers: servers }, null, 2)}\n`;
+};
+
+const readText = async (path: string): Promise<string | undefined> => {
+  if ((await fileKind(path)) !== 'file') return undefined;
+  return readFile(path, 'utf8');
+};
+
+const empty = (documents?: Readonly<{ readonly 'mcp.json': string }>): CursorAgentPluginsLaunchInspection =>
+  Object.freeze({ diagnostics: Object.freeze([]), ...(documents === undefined ? {} : { documents }) });
+
 export const inspectCursorAgentPluginsLaunch = async (
   pluginRoot: string,
   options: InspectCursorAgentPluginsLaunchOptions = {},
@@ -202,31 +259,24 @@ export const inspectCursorAgentPluginsLaunch = async (
     // An unreadable or non-regular receipt is the install-comparison lane's finding; here it is simply absent.
     expansion = undefined;
   }
-  const original = expansion?.documents['mcp.json'];
-  const documents = original === undefined ? undefined : Object.freeze({ 'mcp.json': original });
   const mcpPath = resolve(pluginRoot, 'mcp.json');
-  // The Agent Plugins byte lane owns a missing, non-regular, or unparsable document.
-  if ((await fileKind(mcpPath)) !== 'file') {
-    return Object.freeze({ diagnostics: Object.freeze([]), ...(documents === undefined ? {} : { documents }) });
-  }
-  let document: unknown;
-  try {
-    document = JSON.parse(await readFile(mcpPath, 'utf8')) as unknown;
-  } catch {
-    return Object.freeze({ diagnostics: Object.freeze([]), ...(documents === undefined ? {} : { documents }) });
-  }
-  const servers = stdioServers(document);
-  if (servers.length === 0) {
-    return Object.freeze({ diagnostics: Object.freeze([]), ...(documents === undefined ? {} : { documents }) });
-  }
-  const names = Object.freeze(servers.map((server) => server.name));
+  const installedText = await readText(mcpPath);
   if (expansion === undefined) {
+    // The Agent Plugins byte lane owns a missing, non-regular, or unparsable document.
+    if (installedText === undefined) return empty();
+    let document: unknown;
+    try {
+      document = JSON.parse(installedText) as unknown;
+    } catch {
+      return empty();
+    }
+    const servers = stdioServers(document);
     // Without a recorded expansion, only servers that still rely on client-side resolution are a finding;
     // a copy expanded by other means (absolute paths, cwd, §9.1 variables in place) launches as it is.
     const unexpanded = servers
       .map((server) => ({ forms: unexpandedForms(server), name: server.name }))
       .filter((server) => server.forms.length > 0);
-    if (unexpanded.length === 0) return Object.freeze({ diagnostics: Object.freeze([]) });
+    if (unexpanded.length === 0) return empty();
     const detail = unexpanded.map((server) => `${server.name}: ${server.forms.join('; ')}`).join(' | ');
     const unexpandedNames = unexpanded.map((server) => JSON.stringify(server.name)).join(', ');
     return Object.freeze({
@@ -237,31 +287,47 @@ export const inspectCursorAgentPluginsLaunch = async (
         REINSTALL_RECOVERY,
         'warning',
       )]),
-      launch: Object.freeze({ servers: names, state: 'unexpanded' }),
+      launch: Object.freeze({ servers: Object.freeze(servers.map((server) => server.name)), state: 'unexpanded' }),
     });
   }
-  const issues = await driftIssues(pluginRoot, expansion, servers, caseInsensitive);
-  const launchBase = Object.freeze({ pluginData: expansion.pluginData, pluginRoot: expansion.pluginRoot, servers: names });
-  if (issues.length > 0) {
-    return Object.freeze({
+
+  // A recorded expansion is proven, never trusted: the installed bytes must be exactly the expansion
+  // of the recorded document, and only then is that document the one the Agent Plugins byte lane validates.
+  const original = expansion.documents['mcp.json'];
+  const expected = original === undefined ? undefined : expandAgentPluginsMcpForCursor(original, expansion.pluginRoot, expansion.pluginData);
+  const drift = (issues: readonly string[], servers: readonly string[], documents?: Readonly<{ readonly 'mcp.json': string }>): CursorAgentPluginsLaunchInspection =>
+    Object.freeze({
       diagnostics: freezeDiagnostics([finding(
         `Cursor plugin entry ${JSON.stringify(pluginRoot)} recorded an Agent Plugins placeholder expansion that no longer describes the installed copy: ${issues.join('; ')}.`,
         `${REINSTALL_RECOVERY} A copy moved or edited after install must be reinstalled at its current location.`,
         'error',
       )]),
       ...(documents === undefined ? {} : { documents }),
-      launch: Object.freeze({ ...launchBase, state: 'drifted' }),
+      launch: Object.freeze({ pluginData: expansion.pluginData, pluginRoot: expansion.pluginRoot, servers, state: 'drifted' }),
     });
+  if (original === undefined || expected === undefined) {
+    return drift(['the receipt records an expansion but no pre-expansion mcp.json with a stdio server to expand'], Object.freeze([]));
   }
+  if (installedText === undefined) {
+    return drift(['mcp.json is missing or not a regular file although the receipt recorded its expansion'], Object.freeze([]));
+  }
+  const documents = Object.freeze({ 'mcp.json': original });
+  const servers = stdioServers(JSON.parse(expected) as unknown);
+  const names = Object.freeze(servers.map((server) => server.name));
+  if (installedText !== expected) {
+    return drift(['the installed mcp.json is not the expansion of the recorded document (edited or replaced after install)'], names);
+  }
+  const issues = await driftIssues(pluginRoot, expansion, servers, caseInsensitive);
+  if (issues.length > 0) return drift(issues, names, documents);
   return Object.freeze({
     diagnostics: freezeDiagnostics([finding(
       `Cursor plugin entry ${JSON.stringify(pluginRoot)} is an Agent Plugins package whose stdio server${servers.length === 1 ? '' : 's'} ` +
         `${names.map((name) => JSON.stringify(name)).join(', ')} were expanded for Cursor at install (provenance: derived; Cursor 3.18.25 expands no Agent Plugins placeholder itself): ` +
-        `PLUGIN_ROOT=${JSON.stringify(expansion.pluginRoot)}, PLUGIN_DATA=${JSON.stringify(expansion.pluginData)}; every expanded path resolves and the pre-expansion mcp.json is validated against the Agent Plugins 1.0.0 contract.`,
+        `PLUGIN_ROOT=${JSON.stringify(expansion.pluginRoot)}, PLUGIN_DATA=${JSON.stringify(expansion.pluginData)}; the installed mcp.json is byte-identical to the expansion of the recorded document, every expanded path resolves, and the recorded document is validated against the Agent Plugins 1.0.0 contract.`,
       'No action needed; reinstall with the emitted `install.mjs` after moving the copy.',
       'info',
     )]),
-    ...(documents === undefined ? {} : { documents }),
-    launch: Object.freeze({ ...launchBase, state: 'expanded' }),
+    documents,
+    launch: Object.freeze({ pluginData: expansion.pluginData, pluginRoot: expansion.pluginRoot, servers: names, state: 'expanded' }),
   });
 };

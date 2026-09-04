@@ -432,6 +432,40 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     expect(ab7325(moved)[0]?.message).toContain(`the receipt expanded PLUGIN_ROOT to ${JSON.stringify(destination)} but the package is installed at ${JSON.stringify(join(installRoot, 'moved'))}`);
     // The moved copy's on-disk mcp.json is still validated against the recorded bundle document, not its expanded bytes.
     expect(ab7320Errors(moved)).toEqual([]);
+    await rm(join(installRoot, 'moved'), { recursive: true });
+
+    // 5. An edit to the installed copy that keeps every path valid (a bare command renamed) is still drift:
+    //    the installed bytes must equal the expansion of the recorded document, and the byte lane then
+    //    validates the installed bytes themselves (which are not Agent Plugins-conformant), so the entry is corrupt.
+    await cp(bundle, join(fixture.root, 'bundle-again'), { recursive: true });
+    await new Promise<void>((resolveInstall, reject) => {
+      const child = spawn(process.execPath, [join(fixture.root, 'bundle-again', 'install.mjs')], { cwd: join(fixture.root, 'bundle-again'), env: { ...process.env, HOME: fixture.home }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+      child.on('error', reject);
+      child.on('exit', (code) => code === 0 ? resolveInstall() : reject(new Error(`install.mjs exited ${String(code)}: ${output}`)));
+    });
+    const installedMcp = await readFile(join(destination, 'mcp.json'), 'utf8');
+    await writeFile(join(destination, 'mcp.json'), installedMcp.replace('"command": "node"', '"command": "bun"'));
+    const edited = await doctor();
+    expect(ab7325(edited)).toEqual([expect.objectContaining({
+      message: expect.stringContaining('the installed mcp.json is not the expansion of the recorded document (edited or replaced after install)'),
+      severity: 'error',
+    })]);
+    expect(ab7320Errors(edited).length).toBeGreaterThan(0);
+    expect(hostReport(edited, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: expect.objectContaining({ state: 'drifted' }), name: 'expanded', state: 'corrupt' }),
+    ]);
+
+    // 6. The expanded document removed altogether while the receipt still records it.
+    await rm(join(destination, 'mcp.json'));
+    const removed = await doctor();
+    expect(ab7325(removed).map((entry) => entry.severity)).toEqual(['error']);
+    expect(ab7325(removed)[0]?.message).toContain('mcp.json is missing or not a regular file although the receipt recorded its expansion');
+    expect(hostReport(removed, 'cursor').inventory.findings).toEqual([
+      expect.objectContaining({ launch: { pluginData, pluginRoot: destination, servers: [], state: 'drifted' }, state: 'corrupt' }),
+    ]);
   } finally {
     await fixture.cleanup();
   }
