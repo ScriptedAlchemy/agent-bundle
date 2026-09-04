@@ -345,6 +345,63 @@ export default defineConfig({
 声明在*预构建*服务器上的 App 仍属于开发期表面：Workbench 会实时编译它，而构建假定 payload 已经在
 提供该资源。
 
+### 独立提供 App
+
+在 MCP 宿主之外，App 通常经由 Workbench 的 MCP 页面访问。当插件想要一条“打开仪表盘”的命令——从终端
+出发，在一个普通浏览器标签页里实时查看它自己的服务器——`agent-bundle serve-app` 会独立托管一个已构建的
+App：
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
+同样的 plugin-data 根目录），通过 Workbench MCP 页面所用的同一套宿主栈——沙箱代理、同意授权、
+`McpAppBridge`——把 App 绑定到它上面，先调用一次 App 的工具让它带着数据打开，然后打印 loopback URL。
+宿主只绑定 `127.0.0.1`，只提供一个页面加上由每次启动生成的令牌保护的 `/api/mcp/...` 路由，并且只通过
+桥接暴露那一个服务器；App 文档运行在框架沙箱内的第二个 loopback origin 上。它是本地预览宿主，不是部署
+目标。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
+
+同一套宿主以 `agent-bundle/api` 中的 `serveApp` 提供编程形式，因此插件自己的路由式 CLI 可以提供这条
+命令。它返回 `{ url, close, closed }`：`close()` 拆除宿主与服务器，`closed` 在服务器连接因任何原因
+结束时落定。
+
+```ts
+// src/cli/dashboard.ts —— `hauler dashboard`：针对正在运行的守护进程打开 App。
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  await served.closed;
+  return { url: served.url };
+}
+```
+
+`serveApp` 运行在插件的开发期或 CLI 进程里，绝不在 MCP 服务器外壳之内：像上面那样，在需要它的路由中
+惰性导入，这样输出的产物就不携带宿主运行时；同时要保证 `agent-bundle` 在该 CLI 运行之处可被解析。
+`autoApprove` 会在 App 请求时代操作者批准列出的同意能力（`call-tool` 让轮询型仪表盘无需弹窗即可刷新）；
+其余能力与 Workbench 一样，在宿主页面里等待 Allow/Deny 决定。
+
 ## 服务器模式
 
 当目录约定不该生效时，`routes.servers.<server>` 可以让某个服务器退出路由生成——手写服务器用

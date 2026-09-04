@@ -1,8 +1,9 @@
 import { execFile as executeFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { Effect } from 'effect';
+import { Effect, type Scope } from 'effect';
 
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
@@ -32,6 +33,10 @@ import {
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
+import { parseServeAppSelector, serveMcpApp, type ServedMcpApp, type ServeMcpAppOptions } from './serve-app/serve-mcp-app.ts';
+export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/serve-mcp-app.ts';
+export type { OpenBrowser } from './dev/mcp-apps/mcp-app-preview-host.ts';
+export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
 import { deepFreeze } from './core/freeze.ts';
 
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
@@ -524,6 +529,19 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: Parameters<typeof runMcpForeground>[0]['spawnProcess'];
   readonly target: string;
+}
+
+export interface ServeAppOptions extends ArtifactOperationOptions, Pick<ServeMcpAppOptions, 'autoApprove' | 'input' | 'open' | 'openBrowser' | 'port' | 'profile' | 'timeoutMs' | 'tool'> {
+  /** The MCP App to serve: `<server>/<app>` (for example `status/status`), or `<server>/ui://...` for an exact resource URI. */
+  readonly app: string;
+  /** Explicit `.env` files replacing the conventional project-root set; see {@link RunMcpOptions.envFiles}. */
+  readonly envFiles?: readonly string[];
+  /** Set false to launch the server without any `.env` layer. */
+  readonly loadEnvFiles?: boolean;
+  /** Root the env-declared plugin-root anchors expand to; see {@link RunMcpOptions.pluginRoot}. */
+  readonly pluginRoot?: string;
+  /** The artifact target whose generated server to bind; defaults to `portable`. */
+  readonly target?: string;
 }
 
 export interface ListHooksOptions extends ArtifactOperationOptions {
@@ -1340,6 +1358,68 @@ export const runMcp = async (options: RunMcpOptions): Promise<number> => {
     target: options.target,
     workspaceRoot,
   }));
+};
+
+/**
+ * A throwaway artifact whose lifetime is the served App's: built into a
+ * staging directory beside the project when the App is served, removed when
+ * `close()` finalizes the scope. Ownership transfers to the served App, so
+ * this is a scoped `acquireRelease` rather than `withTempDirectory`.
+ */
+const scopedThrowawayArtifact = (
+  options: ArtifactOperationOptions,
+): Effect.Effect<string, unknown, Scope.Scope> => Effect.acquireRelease(
+  liftPromise(() => mkdtemp(join(resolve(options.root), '.agent-bundle-artifact-'))),
+  (artifact) => Effect.promise(() => rm(artifact, { force: true, recursive: true }).catch(() => undefined)),
+).pipe(Effect.tap((artifact) => liftPromise(() => build({
+  configPath: options.configPath,
+  logger: options.logger,
+  mode: options.mode,
+  output: artifact,
+  registry: options.registry,
+  root: options.root,
+  targets: options.targets,
+}))));
+
+/**
+ * Serves one built MCP App standalone in a browser, bound to the plugin's
+ * own packed MCP server. The server launches exactly as {@link runMcp}
+ * launches it (same artifact resolution, same `.env` layering, same
+ * plugin-data root under `.agent-bundle/mcp-run/<target>/<server>`), the App
+ * is hosted through the Workbench's MCP App host stack (sandbox proxy,
+ * consent authority, bridge), and the result's `url` renders it. Call
+ * `close()` to tear down the host and the server; `closed` settles when the
+ * server connection ends for any reason.
+ *
+ * This runs in a dev-time or CLI process — a plugin's own routed CLI can
+ * call it from a `hauler dashboard`-style route — never inside the MCP
+ * server shell.
+ */
+export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
+  const registry = registryFor(options);
+  const workspaceRoot = resolve(options.root);
+  const target = options.target ?? 'portable';
+  const { server } = parseServeAppSelector(options.app);
+  return serveMcpApp({
+    app: options.app,
+    artifact: options.artifact === undefined ? scopedThrowawayArtifact({ ...options, registry }) : resolve(options.artifact),
+    ...(options.autoApprove === undefined ? {} : { autoApprove: options.autoApprove }),
+    ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
+    ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
+    ...(options.input === undefined ? {} : { input: options.input }),
+    ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
+    ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.open === undefined ? {} : { open: options.open }),
+    ...(options.openBrowser === undefined ? {} : { openBrowser: options.openBrowser }),
+    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', target, mcpServerStateDirectory(server)),
+    ...(options.port === undefined ? {} : { port: options.port }),
+    ...(options.profile === undefined ? {} : { profile: options.profile }),
+    registry,
+    target,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.tool === undefined ? {} : { tool: options.tool }),
+    workspaceRoot,
+  });
 };
 
 export const listHooks = async (options: ListHooksOptions) => {

@@ -1179,3 +1179,38 @@ content-hashed bundle inside the target root). `--plugin-root <path>`
 overrides the env-anchor root, e.g. point it at `artifact/<target>` for a
 byte-faithful rehearsal of a copied-artifact launch; under a host install the
 anchor still means the durable install root, exactly as before.
+
+## `agent-bundle serve-app`
+
+```sh
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--target <target>]
+  [--tool <name>] [--input <json> | --input-file <path>] [--port <port>]
+  [--profile <profile>] [--allow <capability>]... [--open]
+  [--env-file <path>]... [--no-env] [--plugin-root <path>]
+```
+
+Serves one built MCP App standalone in a browser, outside any MCP host and
+without the Workbench. The command launches the App's packed MCP server
+through exactly the `mcp run` launcher above (same manifest resolution, same
+three-layer environment, same durable-state anchors), binds the App to that
+one session through the Workbench's own MCP App host stack
+(`McpAppBindingService` → `McpAppPreviewService` → `McpAppRoutes`, the
+loopback sandbox proxy, the consent authority, `McpAppBridge`), calls the
+App's tool once so it opens populated, and prints the loopback URL. It runs
+in the foreground until SIGINT/SIGTERM, or until the server exits on its own,
+which is reported as one `AB5000` diagnostic with exit code 1. Without
+`--artifact`, a throwaway artifact is built into a staging directory beside
+the project root and removed when the host closes.
+
+The host document is served on `127.0.0.1` only, at `/`, with the
+authenticated `/api/mcp/...` routes behind a per-launch token plus
+same-origin and loopback `Host` checks (`AB8003` / `AB8004` on refusal); the
+App document runs on a second loopback origin inside the framework sandbox,
+and the bridge exposes only the selected server. This is a local preview
+host, not a deployment target.
+
+`serveApp` in `agent-bundle/api` is the programmatic form (`{ url, close,
+closed }`) for a plugin's own routed CLI (`hauler dashboard`). It belongs to
+the plugin's dev-time / CLI process — import it lazily from the route that
+needs it — never to the MCP server shell, so emitted artifacts stay free of
+the host runtime.

@@ -93,6 +93,15 @@ as well, and is the form to use when the component also needs the URI at run
 time. The full grammar and the `config.template` resolution rule are in
 [Diagnostics](diagnostics.md).
 
+A built App is previewed in the Workbench MCP page, or served standalone in a
+plain browser tab with `agent-bundle serve-app <server>/<app>` — the same
+host stack (sandbox proxy, consent authority, bridge) bound to the plugin's
+own packed server, launched as `mcp run` launches it. `serveApp` in
+`agent-bundle/api` is the programmatic form for a plugin's own "open the
+dashboard" CLI route; it runs in the plugin's dev-time / CLI process, never
+in the MCP shell, and is a local preview host, not a deployment target. See
+[Entry conventions](entry-conventions.md#agent-bundle-serve-app).
+
 The compiler statically reads `config`, imports schemas and implementations
 only into generated entries, installs `runAgentRequest`, and derives the real
 MCP server from the route graph. Each call renders through a warm internal
