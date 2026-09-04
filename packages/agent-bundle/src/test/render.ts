@@ -647,6 +647,25 @@ const noMountedState: AutoMountedState = Object.freeze({
 type StateMount = (renderer: Renderer, signal: AbortSignal) => Promise<AutoMountedState>;
 
 /**
+ * Marks the `state` handle a {@link mountTestState} mount hands out. A render
+ * that receives one rebinds the shared owner to its own request signal — the
+ * same `requestBindings({ signal })` a generated request scope performs — so
+ * aborting that render stops its in-flight state operations without
+ * disturbing the owner the other renders share.
+ */
+const MOUNTED_TEST_STATE: unique symbol = Symbol.for('agent-bundle/test-mounted-state');
+
+type RebindMountedState = (signal: AbortSignal) => Promise<AutoMountedState>;
+
+type RebindableStateHandle<
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+> = AgentState.AgentStateHandle<TState, TEvents> & { readonly [MOUNTED_TEST_STATE]?: RebindMountedState };
+
+const mountedStateRebind = (context: RenderRouteContext): RebindMountedState | undefined =>
+  (context.state as RebindableStateHandle | undefined)?.[MOUNTED_TEST_STATE];
+
+/**
  * Resolves how a manifest render mounts its state, without mounting it: the
  * loader lookup is harness wiring and fails here, while loading the state
  * module and opening its driver — user code and a filesystem root — wait for
@@ -657,6 +676,8 @@ const manifestStateMount = (
   provenance: RenderedRouteProvenance,
   context: RenderRouteContext,
 ): StateMount => {
+  const rebind = mountedStateRebind(context);
+  if (rebind !== undefined) return (_renderer, signal) => rebind(signal);
   const descriptor = manifest?.state;
   if (
     manifest === undefined
@@ -854,9 +875,13 @@ const manifestStateDefinition = async (
  * removes; every other lifetime uses the memory driver. `renderRoute` and
  * `renderRouteEvents` honour a caller-supplied `state` and `noticeLedger`, so
  * spreading `context()` into each render's `context` is the whole wiring; a
- * render that omits them still mounts its own isolated owner. The owner is
- * held as one request's bindings, so a `request`-lifetime definition behaves
- * as one long request. Always `close()` it (or use {@link withTestState}).
+ * render that omits them still mounts its own isolated owner. Each render
+ * that receives the handles binds the shared owner to its own request
+ * signal, exactly as a generated request scope does, so a render's `signal`
+ * still cancels its state operations; `read()`, `notices()`, and the handles
+ * themselves are bound to `options.signal`. The owner is held as one request's
+ * bindings, so a `request`-lifetime definition behaves as one long request.
+ * Always `close()` it (or use {@link withTestState}).
  */
 export const mountTestState = async <
   TState = unknown,
@@ -877,11 +902,30 @@ export const mountTestState = async <
     await opened.dispose();
     throw error;
   }
+  let closed = false;
+  // A render that receives these handles rebinds the shared owner to its own
+  // request signal (see MOUNTED_TEST_STATE). A `request`-lifetime owner opens
+  // fresh stores per binding, so it is not rebound: the mount's one binding
+  // is the request every render shares.
+  const rebind: RebindMountedState = async (signal) => {
+    if (closed || definition.lifetime === 'request') return noMountedState;
+    const request = await opened.owner.requestBindings({ signal });
+    return Object.freeze({
+      context: { noticeLedger: request.noticeLedger, state: request.state },
+      close: request.close,
+    });
+  };
+  const state: RebindableStateHandle<TState, TEvents> = Object.freeze({
+    lifetime: bindings.state.lifetime,
+    changes: bindings.state.changes,
+    dispatch: bindings.state.dispatch,
+    read: bindings.state.read,
+    [MOUNTED_TEST_STATE]: rebind,
+  });
   const context: MountedTestStateContext<TState, TEvents> = Object.freeze({
     noticeLedger: bindings.noticeLedger,
-    state: bindings.state,
+    state,
   });
-  let closed = false;
   return Object.freeze({
     ...context,
     async close() {

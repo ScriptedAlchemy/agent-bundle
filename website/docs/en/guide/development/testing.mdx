@@ -170,7 +170,9 @@ try {
 ```
 
 `read()` and `notices()` are the owner's own snapshots, not a per-render copy; `state` and
-`noticeLedger` are exposed too, for a direct `dispatch`. `withTestState(async (state) => { ... })`
+`noticeLedger` are exposed too, for a direct `dispatch`. Each render binds the shared owner to its
+own request signal, exactly as a generated request scope does, so a render's `signal` still
+cancels that render's state operations. `withTestState(async (state) => { ... })`
 is the same mount scoped to one callback, closed when it settles. The snapshot type comes from the
 type arguments — the state registration carries no state type — or, checked, from
 `options.definition`, which mounts that definition instead of the manifest's (an `external`

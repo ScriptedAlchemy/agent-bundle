@@ -56,6 +56,44 @@ describe('mountTestState', () => {
     }
   });
 
+  it('binds each render to its own signal without disturbing the shared owner', async () => {
+    const mounted = await mountTestState<JournalState>();
+    try {
+      await renderRoute('tool:harness/journal', { context: mounted.context(), input: { note: 'kept' } });
+
+      // A cancelled render neither commits nor closes the owner the other renders share.
+      const cancelled = new AbortController();
+      cancelled.abort();
+      await expect(renderRoute('tool:harness/journal', {
+        context: mounted.context(),
+        input: { note: 'never' },
+        signal: cancelled.signal,
+      })).rejects.toThrow();
+      expect((await mounted.read()).state.entries).toEqual([{ note: 'kept' }]);
+
+      // The handle a render receives is the owner rebound to that render's
+      // signal — the request scope's own binding — not the mount-wide one.
+      const rebind = (mounted.state as unknown as Record<symbol, (signal: AbortSignal) => Promise<{
+        readonly context: { readonly state: { read(): Promise<unknown> } };
+        close(): Promise<void>;
+      }>>)[Symbol.for('agent-bundle/test-mounted-state')]!;
+      const aborted = new AbortController();
+      aborted.abort(new Error('render cancelled'));
+      const bound = await rebind(aborted.signal);
+      try {
+        await expect(bound.context.state.read()).rejects.toThrow();
+        await expect(mounted.read()).resolves.toMatchObject({ state: { entries: [{ note: 'kept' }] } });
+      } finally {
+        await bound.close();
+      }
+
+      const after = await renderRoute('tool:harness/journal', { context: mounted.context(), input: { note: 'after' } });
+      expectDocument(after).toHaveValue({ entries: [{ note: 'kept' }, { note: 'after' }], revision: 2 });
+    } finally {
+      await mounted.close();
+    }
+  });
+
   it('closes idempotently, after which the handles are closed too', async () => {
     const mounted = await mountTestState();
     const rendered = await renderRoute('tool:harness/journal', { context: mounted.context(), input: { note: 'x' } });

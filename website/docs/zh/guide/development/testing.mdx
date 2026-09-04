@@ -147,7 +147,8 @@ try {
 ```
 
 `read()` 与 `notices()` 是所有者自身的快照，而不是每次渲染的副本；`state` 与 `noticeLedger` 也会暴露出来，
-以便直接 `dispatch`。`withTestState(async (state) => { ... })` 是同一次挂载限定在一个回调内的形式，回调
+以便直接 `dispatch`。每次渲染都会把共享的所有者绑定到它自己的请求信号上——与生成的请求作用域完全一致——
+因此某次渲染的 `signal` 仍然会取消该次渲染的 state 操作。`withTestState(async (state) => { ... })` 是同一次挂载限定在一个回调内的形式，回调
 结束时关闭。快照类型来自类型参数——state 注册不携带 state 类型——或者（经过检查地）来自
 `options.definition`，它会挂载该定义而不是 manifest 的定义（`external` 定义需要 `options.driver`，
 因为它没有指名任何测试工具能打开的存储）。省略了已挂载句柄的渲染仍会获得自己隔离的所有者，因此两种写法
