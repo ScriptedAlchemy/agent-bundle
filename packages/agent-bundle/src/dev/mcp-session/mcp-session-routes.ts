@@ -44,7 +44,18 @@ export interface McpSessionRouteSession {
   readonly id: string;
   readonly timeoutMs: number;
   callTool(options: { readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly requestId?: string }): Promise<unknown>;
+  /** A task-augmented `tools/call` (#369): answered by a `CreateTaskResult` handle. */
+  callToolTask(options: {
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly name: string;
+    readonly requestId?: string;
+    readonly task: Readonly<{ readonly pollInterval?: number; readonly ttl?: number }>;
+  }): Promise<unknown>;
   cancel(requestId: string): boolean;
+  cancelTask(options: { readonly taskId: string }): Promise<unknown>;
+  getTask(options: { readonly taskId: string }): Promise<unknown>;
+  getTaskResult(options: { readonly taskId: string }): Promise<unknown>;
+  listTasks(options: { readonly cursor?: string }): Promise<unknown>;
   getPrompt(options: { readonly arguments?: Record<string, string>; readonly name: string }): Promise<unknown>;
   inspectorConfig(): McpSessionInspectorConfig;
   listPrompts(): Promise<readonly unknown[]>;
@@ -129,7 +140,27 @@ type Operation =
   | Readonly<{ readonly operation: 'tools/list' | 'resources/list' | 'resources/templates/list' | 'prompts/list' }>
   | Readonly<{ readonly arguments?: Record<string, string>; readonly name: string; readonly operation: 'prompts/get' }>
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
-  | Readonly<{ readonly arguments: Readonly<Record<string, unknown>>; readonly name: string; readonly operation: 'tools/call'; readonly requestId?: string }>;
+  | Readonly<{
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly name: string;
+    readonly operation: 'tools/call';
+    readonly requestId?: string;
+    /** Present on a task-augmented call: the `params.task` the server receives. */
+    readonly task?: Readonly<{ readonly pollInterval?: number; readonly ttl?: number }>;
+  }>
+  | Readonly<{ readonly operation: 'tasks/get' | 'tasks/result' | 'tasks/cancel'; readonly taskId: string }>
+  | Readonly<{ readonly cursor?: string; readonly operation: 'tasks/list' }>;
+
+const taskCreation = (value: unknown): Readonly<{ readonly pollInterval?: number; readonly ttl?: number }> => {
+  if (!isRecord(value) || !hasOnly(value, ['pollInterval', 'ttl'])) return invalidShape();
+  const { pollInterval, ttl } = value;
+  if (ttl !== undefined && (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0)) return invalidShape();
+  if (pollInterval !== undefined && (typeof pollInterval !== 'number' || !Number.isFinite(pollInterval) || pollInterval <= 0)) return invalidShape();
+  return Object.freeze({
+    ...(pollInterval === undefined ? {} : { pollInterval }),
+    ...(ttl === undefined ? {} : { ttl }),
+  });
+};
 
 const operationRequest = (value: JsonObject): Operation => {
   const operation = value.operation;
@@ -160,7 +191,7 @@ const operationRequest = (value: JsonObject): Operation => {
     return Object.freeze({ operation, uri });
   }
   if (operation === 'tools/call') {
-    if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId'])) return invalidShape();
+    if (!hasOnly(value, ['arguments', 'name', 'operation', 'requestId', 'task'])) return invalidShape();
     const argumentsValue = value.arguments;
     const name = value.name;
     const requestId = value.requestId;
@@ -171,7 +202,20 @@ const operationRequest = (value: JsonObject): Operation => {
       name,
       operation,
       ...(requestId === undefined ? {} : { requestId }),
+      ...(value.task === undefined ? {} : { task: taskCreation(value.task) }),
     });
+  }
+  if (operation === 'tasks/get' || operation === 'tasks/result' || operation === 'tasks/cancel') {
+    if (!hasOnly(value, ['operation', 'taskId'])) return invalidShape();
+    const taskId = value.taskId;
+    if (!nonemptyString(taskId)) return invalidShape();
+    return Object.freeze({ operation, taskId });
+  }
+  if (operation === 'tasks/list') {
+    if (!hasOnly(value, ['cursor', 'operation'])) return invalidShape();
+    const cursor = value.cursor;
+    if (cursor !== undefined && !nonemptyString(cursor)) return invalidShape();
+    return Object.freeze({ ...(cursor === undefined ? {} : { cursor }), operation });
   }
   return invalidShape();
 };
@@ -354,12 +398,17 @@ export class McpSessionRoutes {
     }
     if (operation.operation === 'resources/read') return session.readResource({ uri: operation.uri });
     if (operation.operation === 'tools/call') {
-      return session.callTool({
+      const call = {
         arguments: operation.arguments,
         name: operation.name,
         ...(operation.requestId === undefined ? {} : { requestId: operation.requestId }),
-      });
+      };
+      return operation.task === undefined ? session.callTool(call) : session.callToolTask({ ...call, task: operation.task });
     }
+    if (operation.operation === 'tasks/get') return session.getTask({ taskId: operation.taskId });
+    if (operation.operation === 'tasks/result') return session.getTaskResult({ taskId: operation.taskId });
+    if (operation.operation === 'tasks/cancel') return session.cancelTask({ taskId: operation.taskId });
+    if (operation.operation === 'tasks/list') return session.listTasks(operation.cursor === undefined ? {} : { cursor: operation.cursor });
     return invalidShape();
   }
 

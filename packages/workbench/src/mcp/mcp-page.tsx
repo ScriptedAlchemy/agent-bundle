@@ -202,9 +202,130 @@ type CatalogItem = Readonly<{
   readonly description?: string;
   readonly name: string;
   readonly schema?: unknown;
+  /** The tool's advertised `execution.taskSupport` (MCP 2025-11-25 Tasks); absent means ordinary calls only. */
+  readonly taskSupport?: McpTaskSupport;
   readonly uri?: string;
   readonly uriTemplate?: string;
 }>;
+
+type McpTaskSupport = 'forbidden' | 'optional' | 'required';
+
+const taskSupportOf = (record: Readonly<Record<string, unknown>>): McpTaskSupport | undefined => {
+  const execution = isRecord(record.execution) ? record.execution : undefined;
+  const value = execution?.taskSupport;
+  return value === 'forbidden' || value === 'optional' || value === 'required' ? value : undefined;
+};
+
+/** The retention the Workbench asks of a task it creates: ten minutes after the render settles. */
+export const MCP_PAGE_TASK_TTL_MS = 10 * 60 * 1000;
+
+/** One task this session created or listed, folded from the invocation history. */
+export interface McpPageTask {
+  readonly createdBy?: string;
+  /** The JSON-RPC error `tasks/get` or `tasks/result` last answered with, when the task is gone or failed. */
+  readonly error?: unknown;
+  readonly progress?: Readonly<{ readonly message?: string; readonly progress: number; readonly total?: number }>;
+  /** The final `CallToolResult` once `tasks/result` returned it. */
+  readonly result?: unknown;
+  readonly task: Readonly<Record<string, unknown>> & { readonly status: string; readonly taskId: string };
+  readonly toolName?: string;
+}
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(['cancelled', 'completed', 'failed']);
+
+export const isTerminalMcpTask = (task: McpPageTask): boolean => TERMINAL_TASK_STATUSES.has(task.task.status);
+
+const taskRecord = (value: unknown): McpPageTask['task'] | undefined => {
+  if (!isRecord(value) || typeof value.taskId !== 'string' || typeof value.status !== 'string') return undefined;
+  return value as McpPageTask['task'];
+};
+
+const taskProgress = (task: Readonly<Record<string, unknown>>): McpPageTask['progress'] => {
+  const meta = isRecord(task._meta) ? task._meta : undefined;
+  const progress = meta === undefined ? undefined : meta['agent-bundle/progress'];
+  if (!isRecord(progress) || typeof progress.progress !== 'number') return undefined;
+  return Object.freeze({
+    progress: progress.progress,
+    ...(typeof progress.message === 'string' ? { message: progress.message } : {}),
+    ...(typeof progress.total === 'number' ? { total: progress.total } : {}),
+  });
+};
+
+/**
+ * Folds the invocation history into the tasks this session knows about
+ * (#369): a `callToolTask` creates one, every later `getTask`, `cancelTask`,
+ * `listTasks`, and `getTaskResult` answer refreshes it. Derived, never
+ * stored, so the panel can never disagree with the protocol trace.
+ */
+export const mcpPageTasksFor = (history: readonly McpBrowserSessionInvocation[]): readonly McpPageTask[] => {
+  const tasks = new Map<string, McpPageTask>();
+  const refresh = (task: McpPageTask['task'], extra: Partial<McpPageTask> = {}): void => {
+    const current = tasks.get(task.taskId);
+    const { _meta: _dropped, ...bare } = task;
+    tasks.set(task.taskId, Object.freeze({
+      ...current,
+      ...extra,
+      progress: taskProgress(task) ?? current?.progress,
+      task: bare as McpPageTask['task'],
+    }));
+  };
+  // Timeline order: later answers replace earlier ones.
+  for (const invocation of history) {
+    const request = isRecord(invocation.request) ? invocation.request : {};
+    switch (invocation.operation) {
+      case 'callToolTask': {
+        const created = isRecord(invocation.result) ? taskRecord(invocation.result.task) : undefined;
+        if (created !== undefined) refresh(created, { createdBy: invocation.id, toolName: text(request.name) });
+        break;
+      }
+      case 'getTask':
+      case 'cancelTask': {
+        const task = taskRecord(invocation.result);
+        if (task !== undefined) refresh(task);
+        else if (invocation.error !== undefined && typeof request.taskId === 'string') {
+          const current = tasks.get(request.taskId);
+          if (current !== undefined) tasks.set(request.taskId, Object.freeze({ ...current, error: invocation.error }));
+        }
+        break;
+      }
+      case 'listTasks': {
+        const listed = isRecord(invocation.result) && Array.isArray(invocation.result.tasks) ? invocation.result.tasks : [];
+        for (const entry of listed) {
+          const task = taskRecord(entry);
+          if (task !== undefined) refresh(task);
+        }
+        break;
+      }
+      case 'getTaskResult': {
+        if (typeof request.taskId !== 'string') break;
+        const current = tasks.get(request.taskId);
+        if (current === undefined) break;
+        tasks.set(request.taskId, Object.freeze({
+          ...current,
+          ...(invocation.error === undefined ? { result: invocation.result } : { error: invocation.error }),
+        }));
+        break;
+      }
+      case 'callTool':
+      case 'cancel':
+      case 'close':
+      case 'getPrompt':
+      case 'initialize':
+      case 'listPrompts':
+      case 'listResources':
+      case 'listResourceTemplates':
+      case 'listTools':
+      case 'readResource':
+      case 'restart':
+        break;
+      default: {
+        const unreachable: never = invocation.operation;
+        throw new TypeError(`Unhandled MCP operation ${String(unreachable)}.`);
+      }
+    }
+  }
+  return Object.freeze([...tasks.values()]);
+};
 
 const runtimeBindingFields = Object.freeze([
   'definitionDigest',
@@ -603,10 +724,12 @@ export const mcpAppPreviewSourceFor = (
 const catalogItems = (catalog: readonly unknown[], fallback: string): readonly CatalogItem[] =>
   catalog.map((entry, index) => {
     const record = isRecord(entry) ? entry : {};
+    const taskSupport = taskSupportOf(record);
     return {
       description: text(record.description),
       name: text(record.name) ?? `${fallback} ${index + 1}`,
       schema: record.inputSchema ?? record.argumentsSchema,
+      ...(taskSupport === undefined ? {} : { taskSupport }),
       uri: text(record.uri),
       uriTemplate: text(record.uriTemplate),
     };
@@ -1110,6 +1233,8 @@ export const McpPage = (props: McpPageProps) => {
   const [activeTimeoutMs, setActiveTimeoutMs] = useState(controller.session?.timeoutMs);
   const [toolName, setToolName] = useState(initialToolPrefill?.toolName ?? '');
   const [toolArguments, setToolArguments] = useState<ImmutableJsonRecord>(initialToolPrefill?.arguments ?? {});
+  const [runAsTask, setRunAsTask] = useState(false);
+  const taskPolls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [promptName, setPromptName] = useState('');
   const [promptArguments, setPromptArguments] = useState<ImmutableJsonRecord>({});
   const [actionError, setActionError] = useState<string>();
@@ -1249,6 +1374,39 @@ export const McpPage = (props: McpPageProps) => {
     const requestId = nextRequestId();
     run(`invoke:${operation}`, () => controller.invoke({ id: requestId, operation, request }));
   };
+  const tasks = mcpPageTasksFor(controller.history);
+  const sessionReady = model.phase === 'ready';
+  // Every answered invocation re-evaluates the schedule: a poll that found the
+  // task still working has no other trace in the task itself.
+  const taskPollKey = `${String(controller.history.length)}|${tasks.map((entry) => `${entry.task.taskId}:${entry.task.status}:${entry.error === undefined ? '' : 'error'}`).join('|')}`;
+  // Each working task is polled through tasks/get at the interval the server
+  // suggested, as a task-aware host would, until it settles or answers an
+  // error; every poll is an ordinary invocation, so it shows in the history
+  // and the trace like any other protocol call.
+  useEffect(() => {
+    const polls = taskPolls.current;
+    for (const [taskId, timer] of polls) {
+      const entry = tasks.find((candidate) => candidate.task.taskId === taskId);
+      if (!sessionReady || entry === undefined || isTerminalMcpTask(entry) || entry.error !== undefined) {
+        clearTimeout(timer);
+        polls.delete(taskId);
+      }
+    }
+    if (!sessionReady) return;
+    for (const entry of tasks) {
+      if (isTerminalMcpTask(entry) || entry.error !== undefined || polls.has(entry.task.taskId)) continue;
+      const interval = typeof entry.task.pollInterval === 'number' && entry.task.pollInterval > 0 ? entry.task.pollInterval : 1000;
+      polls.set(entry.task.taskId, setTimeout(() => {
+        polls.delete(entry.task.taskId);
+        invoke('getTask', { taskId: entry.task.taskId });
+      }, interval));
+    }
+    // The poll key summarises every task field the schedule depends on.
+  }, [sessionReady, taskPollKey]);
+  useEffect(() => () => {
+    for (const timer of taskPolls.current.values()) clearTimeout(timer);
+    taskPolls.current.clear();
+  }, []);
 
   const tools = catalogItems(model.catalogs.tools, 'Tool');
   const prompts = catalogItems(model.catalogs.prompts, 'Prompt');
@@ -1463,16 +1621,33 @@ export const McpPage = (props: McpPageProps) => {
             }} type="button">{item.name}</button>
             {item.description === undefined ? undefined : <p>{item.description}</p>}
           </li>)}</ol>}
-          {selectedTool === undefined ? undefined : <McpJsonInput
-            disabled={model.phase !== 'ready' || isPending('invoke:callTool')}
-            id="mcp-tool-arguments"
-            label="Tool arguments"
-            onChange={setToolArguments}
-            onSubmit={(argumentsValue) => invoke('callTool', { arguments: argumentsValue, name: selectedTool.name })}
-            schema={selectedTool.schema}
-            submitLabel={`Call ${selectedTool.name}`}
-            value={toolArguments}
-          />}
+          {selectedTool === undefined ? undefined : <>
+            {selectedTool.taskSupport === 'optional' || selectedTool.taskSupport === 'required' ? <label className="mcp-page-task-toggle">
+              <input
+                checked={selectedTool.taskSupport === 'required' || runAsTask}
+                disabled={selectedTool.taskSupport === 'required' || model.phase !== 'ready'}
+                onChange={(event) => setRunAsTask(event.currentTarget.checked)}
+                type="checkbox"
+              />
+              Run as task {selectedTool.taskSupport === 'required'
+                ? '(this tool requires task-augmented calls)'
+                : '(tools/call answers with a task; the result arrives through tasks/result)'}
+            </label> : undefined}
+            <McpJsonInput
+              disabled={model.phase !== 'ready' || isPending('invoke:callTool') || isPending('invoke:callToolTask')}
+              id="mcp-tool-arguments"
+              label="Tool arguments"
+              onChange={setToolArguments}
+              onSubmit={(argumentsValue) => (selectedTool.taskSupport === 'required' || (runAsTask && selectedTool.taskSupport === 'optional')
+                ? invoke('callToolTask', { arguments: argumentsValue, name: selectedTool.name, task: { ttl: MCP_PAGE_TASK_TTL_MS } })
+                : invoke('callTool', { arguments: argumentsValue, name: selectedTool.name }))}
+              schema={selectedTool.schema}
+              submitLabel={selectedTool.taskSupport === 'required' || (runAsTask && selectedTool.taskSupport === 'optional')
+                ? `Run ${selectedTool.name} as task`
+                : `Call ${selectedTool.name}`}
+              value={toolArguments}
+            />
+          </>}
         </section>
         <section className="mcp-page-catalog" aria-label="Prompts">
           <h3>Prompts</h3>
@@ -1507,7 +1682,37 @@ export const McpPage = (props: McpPageProps) => {
         <button disabled={model.phase !== 'ready' || isPending('invoke:listResources')} onClick={() => invoke('listResources', {})} type="button">List resources</button>
         <button disabled={model.phase !== 'ready' || isPending('invoke:listResourceTemplates')} onClick={() => invoke('listResourceTemplates', {})} type="button">List resource templates</button>
         <button disabled={model.phase !== 'ready' || isPending('invoke:listPrompts')} onClick={() => invoke('listPrompts', {})} type="button">List prompts</button>
+        {model.connection?.serverCapabilities !== undefined && isRecord(model.connection.serverCapabilities) && isRecord(model.connection.serverCapabilities.tasks)
+          ? <button disabled={model.phase !== 'ready' || isPending('invoke:listTasks')} onClick={() => invoke('listTasks', {})} type="button">List tasks</button>
+          : undefined}
       </div>
+      {tasks.length === 0 ? undefined : <section aria-label="MCP tasks" className="mcp-page-tasks">
+        <h3>Tasks</h3>
+        <p>Task-augmented calls this session created or listed. Working tasks are polled through <code>tasks/get</code> at the server’s suggested interval.</p>
+        <ol>{tasks.map((entry) => {
+          const terminal = isTerminalMcpTask(entry);
+          const progress = entry.progress;
+          return <li data-task-id={entry.task.taskId} data-task-status={entry.task.status} key={entry.task.taskId}>
+            <div>
+              <strong>{entry.toolName ?? 'task'}</strong>
+              <span className={`mcp-page-task-status mcp-page-task-status-${entry.task.status}`}>{entry.task.status}</span>
+              <code>{entry.task.taskId}</code>
+            </div>
+            {typeof entry.task.statusMessage === 'string' ? <p>{entry.task.statusMessage}</p> : undefined}
+            {progress === undefined ? undefined : <p className="mcp-page-task-progress">
+              Progress {progress.total === undefined ? String(progress.progress) : `${String(progress.progress)} / ${String(progress.total)}`}{progress.message === undefined ? '' : ` · ${progress.message}`}
+            </p>}
+            <p className="mcp-page-task-times">created {String(entry.task.createdAt)} · updated {String(entry.task.lastUpdatedAt)} · ttl {String(entry.task.ttl)} ms{typeof entry.task.pollInterval === 'number' ? ` · poll every ${String(entry.task.pollInterval)} ms` : ''}</p>
+            {entry.error === undefined ? undefined : <p className="mcp-page-task-error" role="status">{display(entry.error)}</p>}
+            <div className="mcp-page-actions">
+              <button disabled={model.phase !== 'ready' || isPending('invoke:getTask')} onClick={() => invoke('getTask', { taskId: entry.task.taskId })} type="button">Poll {entry.task.taskId.slice(0, 8)}</button>
+              <button disabled={model.phase !== 'ready' || isPending('invoke:getTaskResult')} onClick={() => invoke('getTaskResult', { taskId: entry.task.taskId })} type="button">Fetch result {entry.task.taskId.slice(0, 8)}</button>
+              <button disabled={model.phase !== 'ready' || terminal || isPending('invoke:cancelTask')} onClick={() => invoke('cancelTask', { taskId: entry.task.taskId })} type="button">Cancel {entry.task.taskId.slice(0, 8)}</button>
+            </div>
+            {entry.result === undefined ? undefined : <pre><code>{display(entry.result)}</code></pre>}
+          </li>;
+        })}</ol>
+      </section>}
       {appPreviewClient === undefined ? undefined : <section aria-label="MCP App preview controls" className="mcp-page-app-controls">
         <div>
           <h3>App preview</h3>

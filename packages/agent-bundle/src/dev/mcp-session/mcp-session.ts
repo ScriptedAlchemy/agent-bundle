@@ -1,11 +1,17 @@
-import type {
-  CallToolResult,
-  GetPromptResult,
-  Prompt,
-  Resource,
-  ResourceTemplateType,
-  Tool,
-  Transport,
+import {
+  specTypeSchemas,
+  type CallToolResult,
+  type CancelTaskResult,
+  type CreateTaskResult,
+  type GetPromptResult,
+  type GetTaskResult,
+  type ListTasksResult,
+  type Prompt,
+  type Resource,
+  type ResourceTemplateType,
+  type StandardSchemaV1,
+  type Tool,
+  type Transport,
 } from '@modelcontextprotocol/client';
 import { Effect, type Scope, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
@@ -47,6 +53,9 @@ import {
   type McpSessionReplay,
   type McpSessionRequestOptions,
   type McpSessionResourceOptions,
+  type McpSessionTaskCallOptions,
+  type McpSessionTaskListOptions,
+  type McpSessionTaskOptions,
   type McpSessionToolCallOptions,
   type RemoteTransportOptions,
   type StdioOptions,
@@ -316,7 +325,71 @@ export class McpSession {
     if (options.signal?.aborted) {
       throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
     }
-    return this.#operation('callTool', () => runPromise(this.#callToolEffect(options)));
+    return this.#operation('callTool', () => runPromise(this.#callToolEffect(options, (client, params, wire) => client.callTool(params, wire))));
+  }
+
+  /**
+   * A task-augmented `tools/call` (#369): the same request slot and
+   * cancellation as `callTool`, but the request carries `params.task` and the
+   * server answers with the `CreateTaskResult` handle. The call is outside the
+   * SDK's typed `callTool`, so it goes through `request()` with the SDK's own
+   * result schema.
+   */
+  async callToolTask(options: McpSessionTaskCallOptions): Promise<CreateTaskResult> {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new Error('MCP session tool call was aborted.');
+    }
+    return this.#operation('callToolTask', () => runPromise(this.#callToolEffect(options, (client, params, wire) => {
+      if (client.request === undefined) throw new TypeError('MCP session client cannot issue a task-augmented tools/call: it has no request() method.');
+      return client.request({ method: 'tools/call', params: { ...params, task: { ...options.task } } }, specTypeSchemas.CreateTaskResult, wire);
+    })));
+  }
+
+  /** `tasks/get`: the status, progress, and retention of one task this session created. */
+  async getTask(options: McpSessionTaskOptions): Promise<GetTaskResult> {
+    return this.#operation('getTask', () => this.#taskRequest(
+      { method: 'tasks/get', params: { taskId: options.taskId } },
+      specTypeSchemas.GetTaskResult,
+      options,
+    ));
+  }
+
+  /** `tasks/result`: the final `CallToolResult`, blocking until the task settles (bounded by the request timeout). */
+  async getTaskResult(options: McpSessionTaskOptions): Promise<CallToolResult> {
+    return this.#operation('getTaskResult', () => this.#taskRequest(
+      { method: 'tasks/result', params: { taskId: options.taskId } },
+      specTypeSchemas.CallToolResult,
+      options,
+    ));
+  }
+
+  /** `tasks/cancel`: interrupts the task's render; the server answers with the cancelled task. */
+  async cancelTask(options: McpSessionTaskOptions): Promise<CancelTaskResult> {
+    return this.#operation('cancelTask', () => this.#taskRequest(
+      { method: 'tasks/cancel', params: { taskId: options.taskId } },
+      specTypeSchemas.CancelTaskResult,
+      options,
+    ));
+  }
+
+  /** `tasks/list`: every task the server still retains for this session. */
+  async listTasks(options: McpSessionTaskListOptions = {}): Promise<ListTasksResult> {
+    return this.#operation('listTasks', () => this.#taskRequest(
+      { method: 'tasks/list', params: options.cursor === undefined ? {} : { cursor: options.cursor } },
+      specTypeSchemas.ListTasksResult,
+      options,
+    ));
+  }
+
+  /** The SDK request path task methods take: outside the typed surface, validated by the SDK result schema. */
+  async #taskRequest<T extends StandardSchemaV1>(
+    request: { readonly method: string; readonly params?: Record<string, unknown> },
+    resultSchema: T,
+    options: McpSessionRequestOptions,
+  ): Promise<StandardSchemaV1.InferOutput<T>> {
+    const client = this.#clientFor();
+    if (client.request === undefined) throw new TypeError(`MCP session client cannot issue ${request.method}: it has no request() method.`);
+    return client.request(request, resultSchema, requestOptions(options, this.#timeoutMs));
   }
 
   /**
@@ -332,7 +405,14 @@ export class McpSession {
    * `acquireRelease(new AbortController, abort)` shape, but it exposes only
    * the signal and aborts without a reason; this contract needs both.
    */
-  #callToolEffect(options: McpSessionToolCallOptions): Effect.Effect<CallToolResult, unknown> {
+  #callToolEffect<Result>(
+    options: McpSessionToolCallOptions,
+    send: (
+      client: McpClient,
+      params: { readonly _meta?: McpSessionToolCallOptions['_meta']; readonly arguments: Record<string, unknown>; readonly name: string },
+      wire: RequestOptions,
+    ) => Promise<Result>,
+  ): Effect.Effect<Result, unknown> {
     return this.#assertEpochCurrentEffect().pipe(Effect.andThen(Effect.suspend(() => {
       if (options.signal?.aborted) {
         return Effect.fail(options.signal.reason ?? new Error('MCP session tool call was aborted.'));
@@ -344,7 +424,7 @@ export class McpSession {
       const call = Effect.gen({ self: this }, function* (this: McpSession) {
         const controller = yield* this.#admitRequest(requestId);
         const client = yield* liftTry(() => this.#clientFor());
-        const result = yield* liftPromise(() => client.callTool({
+        const result = yield* liftPromise(() => send(client, {
           ...(options._meta === undefined ? {} : { _meta: options._meta }),
           arguments: options.arguments,
           name: options.name,
