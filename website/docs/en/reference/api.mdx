@@ -14,7 +14,7 @@ Every public entry point is documented from its declarations:
 | Entry point | Contents |
 | --- | --- |
 | `agent-bundle` | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
-| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, and the `AgentComponentKind` / `componentKindCapability` component-kind helpers. |
+| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser), `listHooks`, and `simulateHook`. |
 | `agent-bundle/config` | `defineConfig` and the configuration types. |
 | `agent-bundle/test` | The route-testing harness, matchers, and contract matrices. |
 | `agent-bundle/test/browser` | The MCP App bridge harness for browser-rendered views. |

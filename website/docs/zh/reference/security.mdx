@@ -34,6 +34,11 @@ API key 与形似凭据的环境取值，并在所选宿主的日常配置、设
 Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是**惰性的**。Skill 文档是用于
 展示的内容，而不是用于执行的标记。
 
+`agent-bundle serve-app` 对单个 MCP App 遵循同一模型：只绑定 loopback、只在一个进程生命期内、只绑定一个
+服务器。它的 `/api/mcp/...` 路由要求一个只有被提供的文档持有的每次启动令牌，外加同源与 loopback `Host`
+检查；App 文档运行在框架沙箱内的第二个 loopback origin 上，并且每一个 App 动作仍与 Workbench 一样经过同一
+个同意授权（`--allow` 代操作者预先批准指定能力）。它是本地预览宿主，不是部署目标。
+
 ## Agent API
 
 Agent API 默认关闭。启用时，它是挂载在同一个 loopback 前台服务器 `/mcp` 路径上、经过认证的 Streamable

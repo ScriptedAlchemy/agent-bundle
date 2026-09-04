@@ -227,7 +227,7 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 
 ### Semantic event-route support
 
-| Event family | Cursor | Claude Code 2.1.250 | Codex 0.147.0 |
+| Event family | Cursor | Claude Code 2.1.260 | Codex 0.147.0 |
 | --- | --- | --- | --- |
 | `session/start` | Supported | `SessionStart` | `SessionStart` |
 | `session/end` | `sessionEnd` (observe-only; desktop only) | `SessionEnd` (observe-only) | `SessionEnd` (observe-only) |
@@ -246,6 +246,8 @@ Host/Origin allowlists mitigate DNS rebinding and cross-origin requests, but the
 | `task/create` | Unavailable | `TaskCreated` (deny) | Unavailable |
 | `task/complete` | Unavailable | `TaskCompleted` (observe-only; blocking is exit-code-only) | Unavailable |
 | `agent/idle` | Unavailable | `TeammateIdle` (deny via continue:false) | Unavailable |
+| `model-switch/before` | Unavailable | `PreModelSwitch` (allow/ask/deny; 2.1.251+) | Unavailable |
+| `model-switch/after` | Unavailable | `PostModelSwitch` (observe-only + context; 2.1.251+) | Unavailable |
 | `agent/start` | `subagentStart` (deny via `permission: "deny"`; no context channel) | `SubagentStart` (context) | `SubagentStart` (context) |
 | `agent/stop` | `subagentStop` (deny via `followup_message`; no context channel) | `SubagentStop` (deny + context) | `SubagentStop` (deny) |
 | `workspace/open` | Supported (observe-only; native `pluginPaths` return not modeled) | Unavailable | Unavailable |

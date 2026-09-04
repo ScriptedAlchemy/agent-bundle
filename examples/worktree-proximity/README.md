@@ -22,8 +22,10 @@ This example is intentionally not part of the newcomer path.
    worktrees, ignoring an intent whose agent `request.lineage.tree` no longer
    lists as alive.
 5. A conflict renders an `Agent.Context` warning with an `outcome: continue`
-   result and publishes a recipient-scoped notice.
-6. The other actor's next event admits the pending notice, changes its
+   result and publishes a notice addressed to the other actor's lineage
+   conversation (`recipient.conversation`).
+6. That actor's next event — and only that actor's, even when a sibling works
+   in the same worktree — admits the pending notice, changes its
    evidence-backed state to `attempted`, and renders its content as context.
 7. `tool/after` records an empty current intent; `agent/stop` and `stop`
    release the actor's binding and whatever intent it still held (the
@@ -99,11 +101,13 @@ to the root; `transcript` is read from the host's own rollout file), and
 - `session/start` binds the root conversation — `(await agent()).lineage.root`
   when the runtime resolved a lineage and the native `session_id` otherwise —
   to its worktree, under the same id `request.lineage.tree` lists it by.
-- `agent/start` binds the child named by `request.lineage` (`subagent.id`,
+- `agent/start` binds the child named by `request.lineage` (`conversation`,
   with `resolution` as the binding's provenance) when the runtime placed the
   start below the root — which needs the spawning `Agent`/`Task`
   `tool/before` to have passed through the same shared runtime — and the
-  native `agent_id` otherwise. The edge itself (parent, depth, root) is not
+  native `agent_id` otherwise. Either way the child's actor id is its lineage
+  conversation (Claude and Codex spell it `agent_id`), which is what a
+  directed notice targets. The edge itself (parent, depth, root) is not
   recorded: the registry holds it.
 - Claude and Codex put the subagent's `agent_id` on every one of its hook
   payloads; Cursor gives the child a fresh `conversation_id` that only the
@@ -144,18 +148,32 @@ mounted handle, they return an unavailable result and the route renders that
 reason as `Agent.Context`; there is no fallback write path.
 
 Notice admission runs once per event invocation in the render scope.
-Generated event principals in v1 mount host, session, and workspace identity,
-but not actor identity. Proximity notices therefore target the recipient
-worktree through `recipient.workspace.root`, while their content and dedupe
-keys continue to name the target actor. Lineage-addressed delivery
-(`recipient.conversation` / `recipient.root` matched against
-`request.lineage`) is tracked in
-[agent-bundle#458](https://github.com/scriptedalchemy/agent-bundle/issues/458).
+Generated event principals mount host, session, workspace, and lineage
+identity, but not actor identity (#391/#444). A proximity notice is therefore
+addressed to the other actor's lineage conversation —
+`recipient: { conversation }`, matched against the admitting request's
+`request.lineage.conversation` — so only that agent thread admits it, even
+when a sibling shares its worktree and every subagent shares the root
+`session_id`. An event whose lineage the runtime could not resolve (no shared
+runtime, an unplaced `agent_id`) is never the addressed agent; the notice
+stays pending for the next event that is. Only the application's derived
+`worktree:<root>` fallback actor, which names no conversation, is still
+addressed through `recipient.workspace.root`. `recipient.root` (every
+conversation under one root) is available but unused here: proximity is a
+message to one peer, not to the tree.
 `(await agent()).notices.read()` exposes only deliveries attempted for the
-current invocation; publisher-scoped visibility is
-[#460](https://github.com/scriptedalchemy/agent-bundle/issues/460). The
-coordinator status therefore reports the agent tree, bindings, and intents
-only and does not claim a whole-ledger pending count.
+current invocation, and `inbox()` only what is pending for the current
+recipient. The coordinator status reports, beside the agent tree, bindings,
+and intents, what became of the notices *the calling agent* published — `pending`,
+`attempted`, `acknowledged`, and the other ledger states, counted from
+`(await agent()).notices.published()`
+([#460](https://github.com/scriptedalchemy/agent-bundle/issues/460)). That
+view is scoped by the publisher identity the ledger recorded at publish, the
+agent's lineage conversation, so a status call correlated to agent B's
+conversation (Claude names the pre-tool hook's `tool_use_id` in the MCP call's
+`_meta`) counts agent B's notices whatever the MCP client name, session id, or
+server cwd; a call whose lineage the runtime cannot resolve counts zero. It is
+never a whole-ledger count and never another agent's.
 
 ## Evidence boundary
 
@@ -165,7 +183,10 @@ and exercises the documented journeys against one shared durable runtime
 owner. The root integration-pool suite
 `packages/agent-bundle/tests/worktree-proximity-journeys.test.ts` builds the
 real artifact, invokes generated hooks as separate processes against linked
-Git worktrees, and proves warning, workspace-directed delivery, replay
+Git worktrees, and proves warning, conversation-directed delivery (the
+spawning `Agent` `PreToolUse` opens the registry's spawn window and the
+child's hook payloads carry its `agent_id`, as Claude's do; an event the
+runtime cannot place under that child is not delivered to), replay
 idempotency, exact-revision restart durability, and the registry-fed agent
 tree — spawned children visible to the root's `status` call, still visible
 after a server restart, gone after `agent/stop` — through the generated MCP

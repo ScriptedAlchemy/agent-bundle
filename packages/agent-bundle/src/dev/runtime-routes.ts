@@ -14,8 +14,9 @@ import {
 } from './http.ts';
 
 import {
-  DevRuntimeGenerationConflictError,
   DevRuntimeUnavailableError,
+  isDevRuntimeGenerationConflictError,
+  isDevRuntimeUnavailableError,
   type DevRuntimeSession,
 } from './runtime-provider.ts';
 import type {
@@ -275,10 +276,12 @@ export class RuntimeRoutes {
       await this.#dispatch(parsed, request, response);
     } catch (error) {
       if (isRequestDiagnostic(error)) throw error;
-      if (error instanceof DevRuntimeGenerationConflictError) {
+      // Recognised by name and code, not constructor identity: a provider
+      // throws these from its own `agent-bundle/api` installation (#485).
+      if (isDevRuntimeGenerationConflictError(error)) {
         throw requestError(diagnostic(error.code, error.message, 409));
       }
-      if (error instanceof DevRuntimeUnavailableError) {
+      if (isDevRuntimeUnavailableError(error)) {
         throw requestError(diagnostic(error.code, error.message, 404));
       }
       throw requestError(diagnostic('AB8205', 'Runtime request could not be completed.', 500));

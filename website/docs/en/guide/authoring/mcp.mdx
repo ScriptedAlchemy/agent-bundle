@@ -136,6 +136,45 @@ registry did not place the request (a standalone hook, or a Codex `_meta` naming
 never saw start): the axis then still says who you are, not who else is here. Route-unit tests
 inject it through the same `context.lineage` seam as the rest of the axis.
 
+### The terminal capability
+
+The handle's last axis is `terminal`, an `Observed<AgentTerminal>`: what the process's output
+streams are, so a route that paints its own stderr or sizes its own table never probes
+`process.stdout.isTTY` or reads `FORCE_COLOR` itself. The framework shell computes it once per
+invocation with the same rules that select the CLI output mode, so plugin output and framework
+output agree. It is information only — never a writer — and it changes nothing about what
+`Agent.*` components render.
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 and fd 2 name one open file (`2>&1`, one shared terminal)
+}
+```
+
+Color follows the informal standards in their usual precedence: `FORCE_COLOR` decides outright
+when set (`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor), `CLICOLOR_FORCE`
+forces color on even for a pipe, `NO_COLOR` (any non-empty value) and `CLICOLOR=0` force it off,
+`TERM=dumb` renders none, and otherwise a terminal renders at the depth `COLORTERM`/`TERM`
+advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported size.
+
+| Where the route runs | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| Routed CLI executable — plain, rendered, or projected MCP command | `cli` | Probed from the executable's own process. Machine output owns stdout, so `stdout` says where the document lands and `stderr` is the channel a route may write to. |
+| Rendered script (`src/scripts/<name>.tsx`) | `script` | Probed, as above. |
+| Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
+| Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
+| Workbench lifecycle replay | `workbench` | `none` on both. |
+| `defineRscApplication` adapters | `mcp` / `cli` | `createRscMcpServer` mounts `none` on both; `runRscCli` owns no probe and mounts the `terminal` its caller passes in the options, else `unavailable` (`not-provided`). |
+| A custom host that mounts none | — | `unavailable` (`not-provided`). |
+
+A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
+as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
+In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
+and `context.terminal` injects any other one through the same seam as every identity axis.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
@@ -399,6 +438,76 @@ silently at run time.
 
 An App declared on a *prebuilt* server stays a development surface: the Workbench compiles it
 live, and the build assumes the payload already serves the resource.
+
+### Serving an App standalone
+
+Outside an MCP host, an App is normally reached through the Workbench MCP page. When a plugin
+wants an "open the dashboard" command instead — a live view of its own server, in a plain browser
+tab, from a terminal — `agent-bundle serve-app` hosts one built App standalone:
+
+```sh
+npx agent-bundle build
+npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+```
+
+The command launches the plugin's packed MCP server exactly as `mcp run` does (same artifact
+resolution, same `.env` layering, same plugin-data root), binds the App to it through the same
+host stack the Workbench MCP page uses — sandbox proxy, consent authority, `McpAppBridge` — calls
+the App's tool once so it opens populated, and prints the loopback URL. The host binds `127.0.0.1`
+only, serves one page plus the authenticated `/api/mcp/...` routes behind a per-launch token, and
+exposes only that server through the bridge; the App document runs on a second loopback origin in
+the framework's sandbox. It is a local preview host, not a deployment target. Every option is in
+the [CLI reference](../../reference/cli.mdx#serve-app).
+
+The same host is available programmatically as `serveApp` in `agent-bundle/api`, so a plugin's
+own routed CLI can offer the command. It returns `{ url, close, closed }`: `close()` tears down the
+host and the server, `closed` settles when the server connection ends for any reason.
+
+```ts
+// src/cli/dashboard.ts — `hauler dashboard`: open the App against the running daemon.
+import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { z } from 'zod';
+
+export const config = {
+  description: 'Open the cargo-hauler dashboard in a browser.',
+} satisfies CliRouteConfig;
+
+export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+
+export const resultSchema = z.object({ url: z.string() }).strict();
+
+export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+  const { serveApp } = await import('agent-bundle/api');
+  const served = await serveApp({
+    app: 'hauler/dashboard',
+    artifact: new URL('../../artifact', import.meta.url).pathname,
+    autoApprove: ['call-tool'],
+    open: input.open,
+    root: process.cwd(),
+    target: 'cursor',
+    tool: 'hauler_status',
+  });
+  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
+  try {
+    // Settles on Ctrl-C (through the signal) or when the daemon exits on its own.
+    await served.closed;
+  } finally {
+    // `closed` tracks only the server connection; close() also releases the
+    // host, the sandbox proxy, and any throwaway artifact.
+    await served.close();
+  }
+  return { url: served.url };
+}
+```
+
+`serveApp` runs in the plugin's dev-time or CLI process, never inside the MCP server shell: import
+it lazily from the route that needs it, as above, so the emitted artifact stays free of the host
+runtime, and expect `agent-bundle` to be resolvable where that CLI runs. Always `close()` when
+you are done — `closed` settling means the server connection ended, not that the host was torn
+down. `autoApprove` grants the
+listed consent capabilities on the operator's behalf as the App requests them (`call-tool` lets a
+polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision in the
+host page, as in the Workbench.
 
 ## Server modes
 

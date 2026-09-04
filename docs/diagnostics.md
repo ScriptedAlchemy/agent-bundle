@@ -65,10 +65,11 @@ first, which covers `plugin.json`, `hooks/hooks.json`, and the `skills/`,
 `agents/`, and `commands/` directories, and then
 `claude plugin validate <dir>/.claude-plugin/marketplace.json --strict`, dropping
 the marketplace run's `plugins[N] plugin.json →` copies of manifest findings the
-plugin run already reported. On Claude Code 2.1.259 or later both runs add
-`--json` and each finding is attributed to its file (`generatedPath`); older
-releases fall back to the text report, attributed by its `Validating <type>:
-<file>` headers.
+plugin run already reported. Both runs ask for `--json` first (Claude Code
+2.1.259 or later; the pinned 2.1.260 prints it) and each finding is attributed
+to its file (`generatedPath`); when the CLI rejects the flag (`unknown option
+'--json'`) or the probed version predates 2.1.259, the runs fall back to the
+text report, attributed by its `Validating <type>: <file>` headers.
 
 `claude plugin validate --strict` is not a load verdict: Claude Code 2.1.250
 through 2.1.260 accept manifests and component files (for example an invalid

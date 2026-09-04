@@ -326,7 +326,7 @@ it('pins host help, capabilities, and every schema snapshot to the supported CLI
   // Schema snapshot hashes are pinned by adapter-metadata.test.ts's rehash
   // test; this test pins the observed CLI versions and the redacted help text.
   const hosts = {
-    claude: { version: '2.1.250' },
+    claude: { version: '2.1.260' },
     codex: { version: '0.147.0' },
   } as const;
 

@@ -56,8 +56,9 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
 - 宿主的 **error** 会变成 Agent Bundle 的 error（`AB6021`）。
 - 宿主的 **warning** 保持为 warning（`AB6020`），除非设置了 `agent-bundle validate --strict`。
 - 每条发现都会点名 Claude Code 检查的文件，例如
-  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`。在 Claude Code 2.1.259
-  及更高版本上，Agent Bundle 读取 CLI 的 `--json` 报告；更早的版本则解析文本报告。marketplace 那次
+  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`。Agent Bundle 会先请求 CLI 的
+  `--json` 报告（Claude Code 2.1.259 及更高版本；固定的 2.1.260 会输出它），只有当 CLI 拒绝该标志或探测到的
+  版本早于 2.1.259 时才解析文本报告。marketplace 那次
   运行中对插件运行已报告过的清单发现的 `plugins[0] plugin.json →` 副本会被丢弃。
 - 二进制文件缺失会被报告为一次显式的信息性**跳过**（`AB6019`），绝不会伪造成功；探测或运行无法完成
   时为 `AB6022`。`PATH` 上没有 `claude` 时，`build` 只会启动一次进程并只报告一次跳过，无论它构建了多少个

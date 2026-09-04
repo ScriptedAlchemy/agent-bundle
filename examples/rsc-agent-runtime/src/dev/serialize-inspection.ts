@@ -1,11 +1,11 @@
 import { isValidElement, type ReactNode } from 'react';
 
+import type { JsonObject, JsonValue } from 'agent-bundle';
 import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeTraceSpan,
   DevRuntimeTreeNode,
-} from '../../../../packages/agent-bundle/src/dev/runtime-protocol.ts';
-import type { JsonObject, JsonValue } from 'agent-bundle';
+} from 'agent-bundle/api';
 
 const inspectionStartedAt = '1970-01-01T00:00:00.000Z';
 const flightPreviewBytes = 32 * 1024;

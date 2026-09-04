@@ -3,6 +3,7 @@ import type {
   AgentActorIdentity,
   AgentHostIdentity,
   AgentInvocation,
+  AgentLineage,
   AgentSessionIdentity,
   AgentWorkspaceIdentity,
   Observed,
@@ -33,10 +34,21 @@ export type AgentNoticeState = (typeof AGENT_NOTICE_STATES)[number];
 
 export type AgentNoticePriority = 'low' | 'normal' | 'high';
 
-/** A recipient is the conjunction of the observed identity axes it specifies. */
+/**
+ * A recipient is the conjunction of the observed identity axes it specifies:
+ * every axis present must match the admitting request, and an axis the
+ * request cannot observe never matches. `conversation` and `root` are read
+ * from the request's `lineage` (#host-lineage), so they address one agent
+ * thread — or every thread under one root — where `session` cannot: on
+ * Claude and Codex every subagent's hooks carry the root `session_id`.
+ */
 export interface AgentRecipient {
   readonly actor?: AgentActorIdentity;
+  /** Matches when `request.lineage.conversation` is exactly this id: one agent thread. */
+  readonly conversation?: string;
   readonly host?: AgentHostIdentity;
+  /** Matches when `request.lineage.root` is this id: the root conversation and every subagent under it. */
+  readonly root?: string;
   readonly session?: AgentSessionIdentity;
   readonly workspace?: AgentWorkspaceIdentity;
 }
@@ -44,6 +56,47 @@ export interface AgentRecipient {
 export interface AgentNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
+  /**
+   * The request's place in the conversation tree. Optional so a principal
+   * built before the axis existed (a four-axis `openRequest()` or
+   * `subscribe()` caller) keeps working: absent is unavailable, and
+   * unavailable lineage matches no `conversation`/`root` recipient.
+   */
+  readonly lineage?: Observed<AgentLineage>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** The lineage facts recipient matching reads: the request's own conversation and its root. */
+export type AgentNoticeLineageScope = Pick<AgentLineage, 'conversation' | 'root'>;
+
+/**
+ * The publishing request's identity as `publish()` recorded it: every axis the
+ * request could observe, in the same terms a recipient is spelled. It scopes
+ * `notices.published()` — the publisher's own view of what became of its
+ * notices (#460) — and nothing else: it is never matched for delivery, and it
+ * is absent on notices published before it existed or by a request that
+ * observed no identity at all, which therefore no `published()` view returns.
+ */
+export interface AgentNoticePublisher {
+  readonly actor?: AgentActorIdentity;
+  /** `request.lineage.conversation`: the agent thread that published, whichever transport observed it. */
+  readonly conversation?: string;
+  readonly host?: AgentHostIdentity;
+  readonly session?: AgentSessionIdentity;
+  readonly workspace?: AgentWorkspaceIdentity;
+}
+
+/**
+ * The principal as the ledger journals it on an admission: the identity axes
+ * plus only the lineage scope, so a journaled admission never depends on the
+ * rest of the lineage shape. `lineage` is absent on admissions journaled
+ * before the axis existed and is treated as unavailable.
+ */
+export interface AgentNoticeRecordedPrincipal {
+  readonly actor: Observed<AgentActorIdentity>;
+  readonly host: Observed<AgentHostIdentity>;
+  readonly lineage?: Observed<AgentNoticeLineageScope>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
@@ -138,6 +191,8 @@ export interface AgentNotice {
   /** Admissions before this instant leave the notice pending (V1: evaluated only on admitted events, never by an implied timer). */
   readonly nextAttemptAt?: string;
   readonly priority: AgentNoticePriority;
+  /** Who published it, for {@link AgentNoticesHandle.published}; absent on pre-#460 notices and identity-less publishes. */
+  readonly publisher?: AgentNoticePublisher;
   readonly recipient: AgentRecipient;
   /** Maximum next-event attempt receipts before admission stops re-attempting; absent means 1. */
   readonly retryBudget?: number;
@@ -235,7 +290,8 @@ export type AgentNoticeAuthorizationDecision =
 
 export interface AgentNoticeAuthorizationRequest {
   readonly noticeId?: string;
-  readonly phase: 'acknowledge' | 'deliver' | 'publish' | 'read';
+  /** `published` is the publisher-scoped read (`notices.published()`), judged once per notice like `read`. */
+  readonly phase: 'acknowledge' | 'deliver' | 'publish' | 'published' | 'read';
   readonly principal: AgentNoticePrincipal;
   readonly recipient: AgentRecipient;
 }
@@ -264,6 +320,17 @@ export interface AgentNoticesHandle {
   /** Pending notices as the `mcp-inbox` route discloses them (`content` redacted per sensitivity; withheld ones omitted). */
   inbox(): Promise<readonly AgentNotice[]>;
   publish(input: AgentNoticePublishInput, options: AgentNoticePublishOptions): Promise<AgentNoticePublishResult>;
+  /**
+   * The notices this principal published, in every state, with their
+   * receipts — the publisher's answer to "was my notice attempted or
+   * acknowledged?" (#460). Scoped by the publisher identity `publish()`
+   * recorded: the same lineage conversation when both sides have one,
+   * otherwise every recorded identity axis. Never another publisher's
+   * notices and never a recipient view; `content` is disclosed under the
+   * default `internal` ceiling (secret-passed; `secret` content is the
+   * placeholder), because this is not a delivery route. Records nothing.
+   */
+  published(): Promise<readonly AgentNotice[]>;
   read(): Promise<readonly AgentNoticeDelivery[]>;
 }
 

@@ -1,15 +1,16 @@
-import { Agent, type JsonValue } from '@agent-bundle/runtime';
+import { Agent, type AgentNoticeState, type JsonValue } from '@agent-bundle/runtime';
+import { AGENT_NOTICE_STATES } from '@agent-bundle/runtime/notices';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
 import { z } from 'zod';
 
-import { withIntent } from '../../../coordination.js';
+import { withIntent, withNotices } from '../../../coordination.js';
 import { agentTree } from '../../../event-support.js';
 import { ActivitySchema, BindingSchema } from '../../../state.js';
 
 export const config = {
   annotations: { readOnlyHint: true },
-  description: 'Show the live agent tree the runtime resolved for this call, the worktree bindings, active intents, and refusals.',
+  description: 'Show the live agent tree the runtime resolved for this call, the worktree bindings, active intents, refusals, and the state of the proximity notices this agent published.',
 } satisfies ToolConfig;
 
 export const inputSchema = z
@@ -62,12 +63,35 @@ export const agentsSchema = z.discriminatedUnion('state', [
     .strict(),
 ]);
 
+const noticeCount = z.number().int().nonnegative();
+
+/**
+ * What became of the notices the calling agent published, counted by ledger
+ * state. Scoped by the publisher identity the ledger recorded at publish —
+ * the caller's lineage conversation — so it is this agent's own notices, never
+ * the whole ledger and never another agent's ([#460](https://github.com/scriptedalchemy/agent-bundle/issues/460)).
+ */
+export const PublishedNoticesSchema = z
+  .object({
+    acknowledged: noticeCount,
+    attempted: noticeCount,
+    expired: noticeCount,
+    pending: noticeCount,
+    reason: z.string().optional(),
+    state: z.enum(['available', 'unavailable']),
+    total: noticeCount,
+    unavailable: noticeCount,
+    withdrawn: noticeCount,
+  })
+  .strict();
+
 export const resultSchema = z
   .object({
     activeActivities: z.number().int().nonnegative(),
     activities: z.array(ActivitySchema),
     agents: agentsSchema,
     bindings: z.array(BindingSchema),
+    notices: PublishedNoticesSchema,
     reason: z.string().optional(),
     refusals: z.number().int().nonnegative(),
     revision: z.number().int().nonnegative(),
@@ -76,12 +100,27 @@ export const resultSchema = z
   .strict();
 
 type StatusResult = z.output<typeof resultSchema>;
+type PublishedNotices = z.output<typeof PublishedNoticesSchema>;
+
+const emptyCounts = (): Record<AgentNoticeState, number> =>
+  Object.fromEntries(AGENT_NOTICE_STATES.map((state) => [state, 0])) as Record<AgentNoticeState, number>;
+
+const publishedNotices = async (): Promise<PublishedNotices> => {
+  const result = await withNotices(async (notices) => notices.published());
+  if (result.state === 'unavailable') {
+    return { ...emptyCounts(), reason: result.reason, state: 'unavailable', total: 0 };
+  }
+  const counts = emptyCounts();
+  for (const notice of result.value) counts[notice.state] += 1;
+  return { ...counts, state: 'available', total: result.value.length };
+};
 
 export default async function Status({
   input,
 }: ToolRouteProps<typeof inputSchema>) {
   const agents = await agentTree();
   const intentResult = await withIntent(async (store) => store.read());
+  const notices = await publishedNotices();
   let result: StatusResult;
   if (intentResult.state === 'unavailable') {
     result = {
@@ -89,6 +128,7 @@ export default async function Status({
       activities: [],
       agents,
       bindings: [],
+      notices,
       reason: intentResult.reason,
       refusals: 0,
       revision: 0,
@@ -108,6 +148,7 @@ export default async function Status({
       activities,
       agents,
       bindings,
+      notices,
       refusals: intent.refusals.length,
       revision,
       state: 'available',
@@ -121,6 +162,9 @@ export default async function Status({
         `- Children: ${String(result.agents.children.length)}; other live roots: ${String(result.agents.roots.length)}`,
       ]
     : [`- Agent tree unavailable: ${result.agents.reason}`];
+  const noticeLine = notices.state === 'available'
+    ? `- Published notices: ${String(notices.total)} (pending ${String(notices.pending)}, attempted ${String(notices.attempted)}, acknowledged ${String(notices.acknowledged)})`
+    : `- Published notices unavailable: ${notices.reason ?? 'unknown reason'}`;
   const markdown = result.state === 'available'
     ? [
         '# Worktree proximity status',
@@ -129,12 +173,14 @@ export default async function Status({
         `- Worktree bindings: ${String(result.bindings.length)}`,
         `- Active activities: ${String(result.activeActivities)}`,
         `- Refused edges: ${String(result.refusals)}`,
+        noticeLine,
       ].join('\n')
     : [
         '# Worktree proximity status',
         '',
         ...agentLines,
         `- Intent state unavailable: ${result.reason ?? 'unknown reason'}`,
+        noticeLine,
       ].join('\n');
   return (
     <Agent.Result value={result as unknown as JsonValue}>

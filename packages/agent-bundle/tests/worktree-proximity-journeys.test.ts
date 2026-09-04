@@ -52,6 +52,12 @@ interface StatusResult {
   readonly activities: readonly { readonly actorId: string; readonly paths: readonly string[] }[];
   readonly agents: AgentsStatus;
   readonly bindings: readonly BindingStatus[];
+  readonly notices: {
+    readonly pending: number;
+    readonly reason?: string;
+    readonly state: 'available' | 'unavailable';
+    readonly total: number;
+  };
   readonly reason?: string;
   readonly refusals: number;
   readonly revision: number;
@@ -183,6 +189,7 @@ const callStatus = async (client: Client): Promise<StatusResult> => {
     'activities',
     'agents',
     'bindings',
+    'notices',
     'refusals',
     'revision',
     'state',
@@ -311,12 +318,24 @@ it('proves worktree proximity journeys across real processes and linked worktree
   expect(liveSession.pid).toBeGreaterThan(0);
   await expect(stat(fixture.endpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
   // A client the registry cannot place (no pre-tool hook window names this
-  // call) gets no agent tree: the server never guesses who is asking.
+  // call, and it carries no `_meta` correlation) gets no agent tree — the
+  // server never guesses who is asking — and is nobody's publisher: the
+  // published-notice count is honestly zero for it, never the ledger's total.
   await expect(callStatus(liveSession.client)).resolves.toEqual({
     activeActivities: 0,
     activities: [],
     agents: { reason: 'lineage unavailable (id-not-resolvable)', state: 'unavailable' },
     bindings: [],
+    notices: {
+      acknowledged: 0,
+      attempted: 0,
+      expired: 0,
+      pending: 0,
+      state: 'available',
+      total: 0,
+      unavailable: 0,
+      withdrawn: 0,
+    },
     refusals: 0,
     revision: 0,
     state: 'available',
@@ -331,9 +350,13 @@ it('proves worktree proximity journeys across real processes and linked worktree
     source: 'startup',
     transcript_path: transcriptPath,
   }, hookEnvironment);
-  // Each child is spawned the way Claude does it: the root's `Agent` PreToolUse
-  // opens the spawn window the registry places the SubagentStart under, and
-  // the PostToolUse names the child, confirming the edge (#422).
+  // Each child is spawned the way Claude does it
+  // (fixtures/host-lineage/claude-2.1.259-orchestration.ndjson): the root's
+  // `Agent` PreToolUse opens the spawn window the shared runtime's lineage
+  // registry places the SubagentStart under, the PostToolUse names the child,
+  // confirming the edge (#422), and every one of the child's later hook
+  // payloads carries its `agent_id`, which the registry resolves as the child's
+  // lineage conversation — the axis the proximity notice is addressed to.
   const spawn = async (agentId: string, worktree: string, toolUseId: string): Promise<void> => {
     const call = {
       cwd: fixture.repoRoot,
@@ -379,6 +402,7 @@ it('proves worktree proximity journeys across real processes and linked worktree
   expect(rootView.agents.state === 'available' ? rootView.agents.siblings.map((peer) => peer.conversation) : []).toEqual(['agent-a', 'agent-b']);
 
   const intentA = {
+    agent_id: 'agent-a',
     cwd: fixture.worktreeA,
     hook_event_name: 'PreToolUse',
     session_id: sessionId,
@@ -388,6 +412,7 @@ it('proves worktree proximity journeys across real processes and linked worktree
     transcript_path: transcriptPath,
   } as const;
   const intentB = {
+    agent_id: 'agent-b',
     cwd: fixture.worktreeB,
     hook_event_name: 'PreToolUse',
     session_id: sessionId,
@@ -414,7 +439,22 @@ it('proves worktree proximity journeys across real processes and linked worktree
   );
   expect(hookText(secondIntent)).toContain(warning);
 
+  // Only agent-a's own conversation admits the notice: an event in worktree A
+  // that the runtime cannot place under agent-a (no `agent_id`) is not it.
+  const notAgentA = await runHook(fixture.hooks.afterTool, fixture.worktreeA, {
+    cwd: fixture.worktreeA,
+    hook_event_name: 'PostToolUse',
+    session_id: sessionId,
+    tool_input: { file_path: 'src/other.ts' },
+    tool_name: 'Edit',
+    tool_response: { ok: true },
+    tool_use_id: 'not-agent-a-after',
+    transcript_path: transcriptPath,
+  }, hookEnvironment);
+  expect(hookText(notAgentA)).not.toContain('Directed proximity notice');
+
   const delivered = await runHook(fixture.hooks.afterTool, fixture.worktreeA, {
+    agent_id: 'agent-a',
     cwd: fixture.worktreeA,
     hook_event_name: 'PostToolUse',
     session_id: sessionId,
@@ -461,6 +501,9 @@ it('proves worktree proximity journeys across real processes and linked worktree
       provenance: { actorId: 'native', worktreeRoot: 'native' },
       worktreeRoot: fixture.repoRoot,
     },
+    // Placed under the root by the runtime's lineage registry (the spawning
+    // `Agent` call opened the window), so the child's identity and its
+    // parent carry the registry's provenance rather than the raw envelope's.
     {
       actorId: 'agent-a',
       provenance: { actorId: 'registry', worktreeRoot: 'native' },

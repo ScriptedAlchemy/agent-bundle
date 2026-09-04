@@ -127,6 +127,8 @@ const hookEventForRoute: Readonly<Record<CanonicalAgentEvent, NormalizedHookEven
   'task/create': 'taskCreate',
   'task/complete': 'taskComplete',
   'agent/idle': 'agentIdle',
+  'model-switch/before': 'modelSwitchBefore',
+  'model-switch/after': 'modelSwitchAfter',
   'workspace/open': 'workspaceOpen',
 });
 

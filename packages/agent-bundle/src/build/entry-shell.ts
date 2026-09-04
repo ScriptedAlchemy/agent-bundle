@@ -53,6 +53,18 @@ export const mcpEntryRuntimePath = (): string => runtimeModulePath('mcp-entry');
 export const mcpServerRuntimePath = (): string => runtimeModulePath('mcp-server-runtime');
 
 /**
+ * The terminal-capability probe (#511) aliased into `main`-envelope
+ * executables: plain Node, dependency-free, so a plain script or bin learns
+ * its TTY-ness, color, and size without loading the routed-CLI shell.
+ */
+export const terminalCapabilityRuntimeSpecifier = 'agent-bundle/terminal-capability';
+
+export const terminalCapabilityRuntimePath = (): string => runtimeModulePath('terminal-capability');
+
+/** The surface a `main`-envelope executable reports as its `terminal.hostSurface`. */
+export type GeneratedExecutableSurface = 'cli' | 'script';
+
+/**
  * The generated stdio MCP entry body for a factory-exporting server module:
  * the lifecycle installs the console guard before the consumer module
  * evaluates, so `loadEntry` stays a deferred dynamic import.
@@ -73,21 +85,24 @@ export const generatedStdioMcpEntrySource = (options: {
 /**
  * The generated process envelope for a `main`- or default-exporting
  * executable entry (npm bin outputs and artifact Scripts): await the entry
- * point with argv, adopt a numeric return as the exit code, and let an
- * escaped rejection surface through Node's top-level failure path (stack to
- * stderr, exit code 1).
+ * point with argv and the process's terminal capability (#511), adopt a
+ * numeric return as the exit code, and let an escaped rejection surface
+ * through Node's top-level failure path (stack to stderr, exit code 1).
  */
 export const generatedExecutableEntrySource = (options: {
   readonly entrySource: string;
   readonly exportName: 'default' | 'main';
+  /** `cli` for a package bin, `script` for an artifact script; defaults to `script`. */
+  readonly hostSurface?: GeneratedExecutableSurface;
 }): string => [
+  `import { detectProcessTerminal } from ${JSON.stringify(terminalCapabilityRuntimeSpecifier)};`,
   `import * as entry from ${JSON.stringify(options.entrySource)};`,
   '',
   `const main = entry[${JSON.stringify(options.exportName)}];`,
   "if (typeof main !== 'function') {",
   `  throw new TypeError('Executable entry must export a ${options.exportName} function: ' + ${JSON.stringify(options.entrySource)});`,
   '}',
-  'const code = await main(process.argv.slice(2));',
+  `const code = await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal(${JSON.stringify(options.hostSurface ?? 'script')}) }));`,
   "if (typeof code === 'number') process.exitCode = code;",
   '',
 ].join('\n');
@@ -230,7 +245,7 @@ const generatedStateOwner = (
  * worker stdout guarded onto stderr (machine output owns stdout).
  */
 const renderedSessionSource = (workerFile: string): readonly string[] => [
-  'const openRenderedSession = ({ invocation, props, request, routeId, signal, validate }) => {',
+  'const openRenderedSession = ({ invocation, props, request, routeId, signal, terminal, validate }) => {',
   `  const worker = new Worker(new URL(${JSON.stringify(`./${workerFile}`)}, import.meta.url), { stderr: true, stdout: true });`,
   "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
   "  worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -266,8 +281,10 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
   "      dispatch.signal.addEventListener('abort', entry.abort, { once: true });",
   '      if (dispatch.signal.aborted) { entry.abort(); return stream; }',
   // The invocation rides to the worker so conventional providers observe the
-  // real surface (`cli`, `script`, `tool`) instead of an undefined invocation.
-  "      worker.postMessage({ id, invocation, props, request, routeId, type: 'render' });",
+  // real surface (`cli`, `script`, `tool`) instead of an undefined invocation;
+  // the terminal capability rides with it because a worker thread's own
+  // streams are pipes to this process, never the terminal (#511).
+  "      worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' });",
   '      return stream;',
   '    },',
   '  });',
@@ -361,6 +378,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     `    providers: ${providerValuesExpression(providers)},`,
     '    signal: context.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    "    terminal: available(context.terminal, 'native'),",
     "    workspace: available({ root: cwd }, 'derived'),",
     `  }, async () => route.module.default({ input: parsed, signal: context.signal }));`,
     `${options.state === undefined ? '  ' : '    '}return route.module.resultSchema.parse(result);`,
@@ -383,6 +401,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         `      request: { artifactEpoch: ${JSON.stringify(generatedRouteArtifactEpoch(options.plugin))}, kind: 'tool', operationId: command.routeId, surface: command.mcp.tool },`,
         '      routeId: command.routeId,',
         '      signal: context.signal,',
+        '      terminal: context.terminal,',
         '      validate: (value) => route.module.resultSchema.parse(value),',
         '    });',
         '  }',
@@ -392,6 +411,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         "    request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
         '    routeId: command.routeId,',
         '    signal: context.signal,',
+        '    terminal: context.terminal,',
         '    validate: (value) => route.module.resultSchema.parse(value),',
         '  });',
         '};',
@@ -560,6 +580,9 @@ export const generatedRenderedRouteWorkerSource = (
     `      providers: ${providerValuesExpression(providers)},`,
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    // The executable probed its terminal once and forwards the value; a worker
+    // thread cannot probe it (its streams are pipes to the parent).
+    "      terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),",
     "      workspace: available({ root: cwd }, 'derived'),",
     '    }, async () => {',
     '      const flight = renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
@@ -622,6 +645,7 @@ export const generatedRenderedScriptEntrySource = (
   `    request: { kind: 'script', operationId: ${JSON.stringify(options.routeId)}, surface: ${JSON.stringify(options.name)} },`,
   `    routeId: ${JSON.stringify(options.routeId)},`,
   '    signal: context.signal,',
+  '    terminal: context.terminal,',
   '    validate: (value) => value,',
   '  }),',
   `  name: ${JSON.stringify(options.name)},`,
@@ -904,6 +928,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
+    // MCP and hook surfaces have no terminal; the host scope says so and the
+    // worker forwards it rather than probing its own pipes (#511).
+    "      terminal: message.terminal ?? unavailable('not-provided'),",
     '      ...(message.workspace === undefined ? {} : { workspace: message.workspace }),',
     '    }, async () => {',
     "      const props = message.invocation.kind === 'event'",

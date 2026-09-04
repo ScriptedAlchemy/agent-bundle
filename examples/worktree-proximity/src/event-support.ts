@@ -4,12 +4,16 @@ import {
   type AgentLineage,
   type AgentLineageTree,
   type AgentNoticeDelivery,
+  type AgentRecipient,
   type Observed,
 } from '@agent-bundle/runtime';
 
 import type { AvailableWorktree } from './api.js';
 import type { IntentAccess } from './coordination.js';
-import type { IdentityProvenance, IntentState } from './state.js';
+import type { Binding, IdentityProvenance, IntentState } from './state.js';
+
+/** The application's own fallback identity for a worktree no envelope names an agent for. */
+export const DERIVED_ACTOR_PREFIX = 'worktree:';
 
 export interface EventIdentity {
   readonly idempotencyKey: string;
@@ -87,17 +91,36 @@ export const agentTree = async (): Promise<AgentTreeView> => agentTreeOf(await r
  * The subagent a request speaks for, when the runtime's `request.lineage`
  * places it below the root. The runtime resolves the same shape on every
  * host, so the route never has to know that Claude and Codex spell the child
- * `agent_id` while Cursor gives it a fresh `conversation_id`. A root request
- * (depth 0) is deliberately not a child; the root actor is observed at
- * `session/start`.
+ * `agent_id` while Cursor gives it a fresh `conversation_id`: the actor id is
+ * the lineage `conversation`, which is also the id a directed notice targets
+ * through `recipient.conversation`. A root request (depth 0) is deliberately
+ * not a child; the root actor is observed at `session/start`.
  */
 export const childFromLineage = (lineage: Observed<AgentLineage>): CarriedChild | undefined => {
   if (lineage.state !== 'available' || lineage.value.depth === 0) return undefined;
   return {
-    id: lineage.value.subagent?.id ?? lineage.value.conversation,
+    id: lineage.value.conversation,
     parentSessionId: lineage.value.parent ?? lineage.value.root,
     source: lineage.value.resolution,
   };
+};
+
+/**
+ * Where a proximity notice for the actor `binding` names is addressed. A
+ * binding whose actor id is a lineage conversation — the root bound at
+ * `session/start`, or a child named by `request.lineage` or by the host's own
+ * `agent_id` (Claude and Codex put it on every one of the subagent's hook
+ * payloads, and the runtime resolves it as that agent's `conversation`) — is
+ * addressed through `recipient.conversation`, so only that agent thread admits
+ * the notice even when a sibling shares its worktree. The application's
+ * derived `worktree:<root>` fallback names no conversation, so the notice
+ * stays addressed to the worktree through `recipient.workspace.root`.
+ */
+export const noticeRecipientFor = (binding: Binding | undefined, worktreeRoot: string): AgentRecipient => {
+  if (binding === undefined || binding.provenance.actorId === 'derived') {
+    return { workspace: { root: worktreeRoot } };
+  }
+  return { conversation: binding.actorId };
 };
 
 /**
@@ -204,7 +227,7 @@ export const actorForWorktree = async (
   }
 
   const actor: ResolvedActor = {
-    id: `worktree:${worktree.root}`,
+    id: `${DERIVED_ACTOR_PREFIX}${worktree.root}`,
     source: 'derived',
   };
   const boundResult = await intent.dispatch('actorBound', {
