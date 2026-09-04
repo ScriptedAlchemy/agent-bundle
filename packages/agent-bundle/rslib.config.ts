@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import { defineConfig, type Rspack, type rspack as RspackInstance } from '@rslib/core';
+import { defineConfig, type RsbuildPlugin } from '@rslib/core';
 import { pluginPublint } from 'rsbuild-plugin-publint';
 import packageManifest from './package.json' with { type: 'json' };
 
@@ -14,23 +14,22 @@ const esmNodeGlobalsShim = [
 /**
  * Prepends the `__filename`/`__dirname` shim to every emitted ESM chunk that
  * still references those CommonJS globals (the bundled TypeScript parser's
- * eager `getNodeSystem()`); every other chunk is left untouched.
+ * eager `getNodeSystem()`); every other chunk is left untouched. Registered
+ * through Rsbuild's `processAssets` hook (the `additions` stage), the way
+ * Rsbuild's own `rsbuild:inline-chunk` and `rsbuild:appIcon` plugins hang
+ * asset rewrites, so no Rspack plugin class or compiler tap is needed.
  */
-const esmNodeGlobalsPlugin = (rspack: typeof RspackInstance): Rspack.RspackPluginInstance => ({
-  apply(compiler: Rspack.Compiler) {
-    compiler.hooks.thisCompilation.tap('agent-bundle:esm-node-globals', (compilation: Rspack.Compilation) => {
-      compilation.hooks.processAssets.tap({
-        name: 'agent-bundle:esm-node-globals',
-        stage: rspack.Compilation.PROCESS_ASSETS_STAGE_ADDITIONS,
-      }, (assets: Rspack.Assets) => {
-        for (const [name, asset] of Object.entries(assets)) {
-          if (!name.endsWith('.js') || !/\b__(?:filename|dirname)\b/u.test(asset.source().toString())) continue;
-          compilation.updateAsset(name, new rspack.sources.ConcatSource(esmNodeGlobalsShim, asset));
-        }
-      });
+const esmNodeGlobalsPlugin: RsbuildPlugin = {
+  name: 'agent-bundle:esm-node-globals',
+  setup(api) {
+    api.processAssets({ stage: 'additions' }, ({ assets, compilation, sources }) => {
+      for (const [name, asset] of Object.entries(assets)) {
+        if (!name.endsWith('.js') || !/\b__(?:filename|dirname)\b/u.test(asset.source().toString())) continue;
+        compilation.updateAsset(name, new sources.ConcatSource(esmNodeGlobalsShim, asset));
+      }
     });
   },
-});
+};
 
 /**
  * Rslib enables Rspack's persistent build cache by default and keys its
@@ -65,24 +64,27 @@ export default defineConfig({
   ...(buildCacheDirectory === undefined || buildCacheDirectory.length === 0
     ? {}
     : { performance: { buildCache: { cacheDirectory: buildCacheDirectory } } }),
-  // Suggestions stay informational; errors and warnings block publishing.
-  plugins: [pluginPublint({ throwOn: 'warning' })],
+  plugins: [
+    // Suggestions stay informational; errors and warnings block publishing.
+    pluginPublint({ throwOn: 'warning' }),
+    // The bundled TypeScript 5 parser's eager `getNodeSystem()` reads the
+    // CommonJS `__filename`/`__dirname` globals, which the ESM output does
+    // not define and which Rspack's `node-module` rewrite (disabled below)
+    // leaves untouched inside that module. The chunk that carries them gets
+    // a module-scoped shim derived from its own `import.meta.url`
+    // (`process.getBuiltinModule` is Node >= 22.3).
+    esmNodeGlobalsPlugin,
+  ],
   root: import.meta.dirname,
   tools: {
     // The TypeScript 5 parser is bundled (a devDependency, #381) so consumers
     // never receive its `tsc` bin beside their own TypeScript.
-    rspack: (config, { rspack }) => {
+    rspack: (config) => {
       // Its `sys.tryEnableSourceMapsForHost` requires `source-map-support`
       // inside a try/catch for the tsc CLI only; the static route-config
       // extractor never reaches it.
       config.ignoreWarnings = [...(config.ignoreWarnings ?? []), /Can't resolve 'source-map-support'/u];
-      // Its eager `getNodeSystem()` reads the CommonJS `__filename`/`__dirname`
-      // globals, which the ESM output does not define and which Rspack's
-      // `node-module` rewrite leaves untouched inside that module. The chunk
-      // that carries them gets a module-scoped shim derived from its own
-      // `import.meta.url` (`process.getBuiltinModule` is Node >= 22.3).
       config.node = { ...(typeof config.node === 'object' ? config.node : {}), __dirname: false, __filename: false };
-      config.plugins = [...(config.plugins ?? []), esmNodeGlobalsPlugin(rspack)];
     },
   },
   source: {
