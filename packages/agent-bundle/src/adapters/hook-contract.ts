@@ -494,10 +494,13 @@ export const encodeNativeHookPlaygroundOutput = (
   }
   const beforeTool = canonicalEvent === 'beforeTool';
   const denied = result.outcome === 'deny';
+  // A continuing beforeTool handler makes no decision: the host keeps its own
+  // permission flow (and evaluates any rewrite through it). Only deny is
+  // projected as a decision (#461).
   const output = defined({
     additionalContext: result.additionalContext,
     hookEventName: nativeEvent,
-    permissionDecision: beforeTool ? (denied ? 'deny' : 'allow') : undefined,
+    permissionDecision: beforeTool && denied ? 'deny' : undefined,
     permissionDecisionReason: beforeTool && denied ? result.reason : undefined,
     updatedInput: beforeTool && !denied ? result.updatedInput : undefined,
   });
@@ -1245,7 +1248,7 @@ export const nativeHookWrapperSource = (
     '  const output = defined({',
     '    additionalContext: result.additionalContext,',
     '    hookEventName: nativeEvent,',
-    '    permissionDecision: canonicalEvent === "beforeTool" ? (result.outcome === "deny" ? "deny" : "allow") : undefined,',
+    '    permissionDecision: canonicalEvent === "beforeTool" && result.outcome === "deny" ? "deny" : undefined,',
     '    permissionDecisionReason: canonicalEvent === "beforeTool" && result.outcome === "deny" ? result.reason : undefined,',
     '    updatedInput: canonicalEvent === "beforeTool" && result.outcome !== "deny" ? result.updatedInput : undefined,',
     '  });',

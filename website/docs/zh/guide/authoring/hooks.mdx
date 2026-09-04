@@ -111,7 +111,10 @@ export default (event: SessionStartEvent) => ({
 逐事件的限制是被强制执行的，而不是「写在文档里、希望有人遵守」：
 
 - `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。
-- `beforeTool` 不能停止，也不能在拒绝的同时替换输入。
+- `beforeTool` 不能停止，也不能在拒绝的同时替换输入。继续（`continue`）的 `beforeTool` 处理器
+  **不做**任何权限决定：宿主的决定字段不会被写入，因此其正常的权限提示仍然适用；`updatedInput`
+  改写会由该流程针对改写后的输入进行评估。只有 `deny` 会被投影为决定。若要显式批准一次调用，请使用
+  [事件路由](#事件路由)并返回 `outcome: 'allow'`。
 - `stop` 只接受 `continue`，或带原因的 `deny`。
 - `agentStop` 不能停止父流程或替换输入；在 Codex 上也不能追加上下文。
 
@@ -177,11 +180,20 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
 信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的轴保持不可用。
 
 路由通过它渲染出的文档作答。`Agent.Context` 文本成为宿主的附加上下文通道，`Agent.Result` 的 `value` 可以
-携带 `{ outcome: 'continue' | 'deny', reason?, updatedInput? }`。投影按事件、按宿主进行，非法组合在任何
-内容到达宿主之前就会抛错：`session/end`、`compact/after`、`tool/failure` 与 `workspace/open` 在所有宿主上
-都只可观察；被拒绝的 `tool/before` 在 Claude 与 Codex 上成为 `hookSpecificOutput.permissionDecision`，
-在 Cursor 上则是 `{ permission: 'deny', … }`；被拒绝的 `stop` 成为 `{ decision: 'block', reason }` 或
-Cursor 的 `followup_message`。每个宿主支持哪些事件族，见生成的[事件与钩子矩阵](../../reference/events.md)。
+携带 `{ outcome: 'continue' | 'allow' | 'ask' | 'deny', reason?, updatedInput? }`。`continue`——或完全不给
+`value`——是「放行」的回答：路由没有意见，因此**不会写入任何决定**，宿主的正常权限流程照常适用。只有显式的
+`allow`、`ask` 或 `deny` 才会被投影为决定。投影按事件、按宿主进行，非法组合在任何内容到达宿主之前就会抛错：
+`session/end`、`compact/after`、`tool/failure` 与 `workspace/open` 在所有宿主上都只可观察；做出决定的
+`tool/before` 在 Claude 与 Codex 上成为 `hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'`，
+在 Cursor 上则是 `{ permission: 'allow' | 'deny', … }`——Cursor 文档称 `ask` 不会被强制执行，因此会拒绝它；
+被拒绝的 `stop` 成为 `{ decision: 'block', reason }` 或 Cursor 的 `followup_message`。`allow` 与 `ask` 是
+`tool/before` 的决定（`allow` 也可以代表用户回答 `permission/request`）；其他任何事件族都会拒绝它们。每个
+宿主支持哪些事件族，见生成的[事件与钩子矩阵](../../reference/events.md)。
+
+`tool/before` 上的 `updatedInput` 改写待执行的调用，并且与决定相互独立。在 Claude 与 Codex 上，随 `continue`
+返回的改写不携带 `permissionDecision`，宿主会针对改写后的输入评估其权限规则；与 `allow` 搭配可自动批准该改写，
+与 `ask` 搭配则把改写后的输入展示给用户确认。Cursor 只在与 `permission` 同时出现时记载 `updated_input`，因此
+改写在那里以 `permission: 'allow'` 交付。
 
 事件路由可以触达全部二十个规范事件族（`session/end`、`prompt/submit`、`compact/before`、
 `permission/request`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
@@ -211,9 +223,9 @@ hooks 文件（`manifest.hooks` 只用于额外文档）。每个包装层都拿
    react-server worker 渲染路由组件。
 4. **运行时 → 包装层。** 一条 JSON 回复：`{ status: 'ok', output }`，或 `{ status: 'error', code }`，
    其中 `code` 为 `epoch-mismatch`、`invalid-message` 或 `runtime-failed`。
-5. **包装层 → 宿主（stdout）。** 宿主原生的响应。对 `tool/before`，即便路由没有渲染任何决定，包装层也
-   总会给出显式的允许/拒绝决定（除非路由拒绝，否则为允许），以宿主自己的字段名表达；沉默只保留给只可
-   观察的事件族。
+5. **包装层 → 宿主（stdout）。** 宿主原生的响应，或者什么都不输出。没有渲染任何决定与上下文的路由不写
+   任何输出并以 0 退出，宿主会像没有这个钩子一样继续；对 `tool/before` 而言，这意味着它自己的权限提示。
+   只有当路由返回 `allow`、`ask` 或 `deny` 时，才会写入决定字段。
 
 失败默认是关闭的。唯一的回退是同时编译了独立形态的路由上的 `fallback: 'standalone'`，而且它**只**在
 `runtime-unavailable`（没有活的 socket）时触发。`runtime-timeout`、`epoch-mismatch`、`invalid-message`

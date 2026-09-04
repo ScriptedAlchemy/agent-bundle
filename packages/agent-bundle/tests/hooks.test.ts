@@ -1025,7 +1025,14 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       writeFile(join(sourceRoot, 'session-start.ts'), "export default (event: { sessionId?: string }) => ({ outcome: 'continue' as const, additionalContext: event.sessionId });\n"),
-      writeFile(join(sourceRoot, 'check-command.ts'), "export default (event: { toolName?: string }) => ({ outcome: event.toolName === 'Bash' ? 'deny' as const : 'continue' as const, reason: 'blocked command' });\n"),
+      writeFile(join(sourceRoot, 'check-command.ts'), [
+        'export default (event: { toolName?: string; toolInput?: Record<string, unknown> }) => {',
+        "  if (event.toolName === 'Bash') return { outcome: 'deny' as const, reason: 'blocked command' };",
+        "  if (event.toolName === 'Edit') return { outcome: 'continue' as const, updatedInput: { ...event.toolInput, file_path: '/workspace/safe.ts' } };",
+        "  return { outcome: 'continue' as const };",
+        '};',
+        '',
+      ].join('\n')),
       writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: unknown }) => ({ outcome: 'continue' as const, additionalContext: String(event.toolResponse) });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
@@ -1046,6 +1053,19 @@ it('runs the embedded Codex and Claude native codecs through their published wra
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked command"}}',
+      });
+      // A continuing beforeTool handler writes no decision, so the host's own
+      // permission prompt still applies (#461): nothing on stdout without a
+      // rewrite, and a rewrite alone without permissionDecision.
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { command: 'ls' }, tool_name: 'Write', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
+      })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+        cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { file_path: '/etc/passwd' }, tool_name: 'Edit', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
+      })).resolves.toEqual({
+        code: 0,
+        stderr: '',
+        stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"file_path":"/workspace/safe.ts"}}}',
       });
       await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         cwd: '/workspace', hook_event_name: 'PostToolUse', session_id: 'session-1', tool_input: {}, tool_response: { value: 'observed' }, tool_name: 'Write', tool_use_id: 'use-2', transcript_path: '/workspace/transcript.json',
