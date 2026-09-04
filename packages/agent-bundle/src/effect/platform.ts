@@ -60,23 +60,40 @@ export const unwrapPlatformError = <E>(error: E): Exclude<E, PlatformError> | Er
     : (error as Exclude<E, PlatformError>);
 
 /**
- * `const dir = await mkdtemp(...); try { return await use(dir) } finally
- * { await rm(dir, { recursive: true, force: true }) }` as an Effect, with
- * the same contract the two `try`/`finally` sites had before they moved
- * onto Effect:
+ * `try { return await use } finally { await rm(path, { recursive: true,
+ * force: true }) }` as an Effect, with the contract the `try`/`finally`
+ * sites had before they moved onto Effect:
  *
  * - `force: true` — an operation that removed (or renamed away) its own
- *   staging directory does not fail the call;
+ *   staging path does not fail the call;
  * - the cleanup failure is a typed `PlatformError` on the error channel
  *   (unwrapped to its Node cause by `runWithPlatform`), and when both the
  *   operation and the cleanup fail the cleanup error wins, as a throwing
  *   `finally` did;
  * - cleanup runs on interruption as well, uninterruptibly.
  *
- * Not `fs.makeTempDirectoryScoped`: in rc.112 its finalizer removes without
+ * Not a scope finalizer: those cannot fail typed, so an `EACCES` from the
+ * cleanup would surface as the `PlatformError` wrapper after `orDie`.
+ */
+export const ensuringRemoved = <A, E, R>(
+  path: string,
+  use: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | PlatformError, R | FileSystem.FileSystem> =>
+  Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const exit = yield* Effect.exit(restore(use));
+    yield* fs.remove(path, { force: true, recursive: true });
+    return yield* exit;
+  }));
+
+/**
+ * `const dir = await mkdtemp(...); try { return await use(dir) } finally
+ * { await rm(dir, { recursive: true, force: true }) }` — the
+ * `ensuringRemoved` contract with the directory created inside the mask, so
+ * an interrupt cannot land between its creation and its cleanup. Not
+ * `fs.makeTempDirectoryScoped`: in rc.112 its finalizer removes without
  * `force` and `orDie`s, so a missing directory would reject an already
- * successful call, and an `EACCES` would surface as the `PlatformError`
- * wrapper (scope finalizers cannot fail typed).
+ * successful call and a real cleanup error would lose its Node cause.
  */
 export const withTempDirectory = <A, E, R>(
   options: { readonly directory?: string; readonly prefix?: string } | undefined,
