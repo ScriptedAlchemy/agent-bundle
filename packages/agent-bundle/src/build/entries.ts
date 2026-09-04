@@ -12,14 +12,12 @@ import {
   type TargetHookEntry,
 } from '../adapters/hook-contract.ts';
 import type {
-  AgentBundleToolsConfig,
   NormalizedHook,
   NormalizedMcpServer,
   NormalizedNoticeRetentionPolicy,
   NormalizedScript,
   NormalizedStateDefinition,
 } from '../core/types.ts';
-import type { AgentBundleMeta } from '../meta.ts';
 import { mcpEntryAliasPattern } from '../config/normalize.ts';
 import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
@@ -43,7 +41,7 @@ import {
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
-import { buildWithRslib } from './rslib.ts';
+import type { RslibSurfacePlan } from './rslib.ts';
 
 const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
   for (const candidate of [
@@ -156,26 +154,29 @@ export const planCompiledEntries = (
   }).map((entry) => Object.freeze(entry)));
 };
 
-export const compileEntries = async (
+/**
+ * Plans the artifact scripts of one target as a surface of the target's
+ * shared Rslib run: bundled scripts (with the react-server Flight worker
+ * beside each rendered one) compile there; copied scripts are emitted when
+ * the surface finishes.
+ */
+export const planScriptsSurface = async (
   entries: readonly NormalizedScript[],
   options: {
     readonly cwd: string;
     readonly layouts?: readonly CompiledLayout[];
-    readonly meta: AgentBundleMeta;
     readonly outDir: string;
     readonly providers?: readonly CompiledProvider[];
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
-    readonly tools?: AgentBundleToolsConfig;
   },
-): Promise<readonly CompiledEntry[]> => {
+): Promise<RslibSurfacePlan<readonly CompiledEntry[]>> => {
   const compiled = planCompiledEntries(entries, options);
   const bundled = compiled.filter((entry) => entry.mode === 'bundle');
   const cliRuntimeShell = bundled.some((entry) => entry.rendered !== undefined)
     ? cliEntryRuntimePath()
     : undefined;
-  const evidence = await buildWithRslib({
-    cwd: options.cwd,
+  return {
     entries: await Promise.all(bundled.flatMap((entry) => {
       const { name, rendered, source, sourceInputs } = entry;
       if (rendered !== undefined) {
@@ -243,33 +244,32 @@ export const compileEntries = async (
       })()];
     })),
     ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
-    meta: options.meta,
-    outputRoot: options.outDir,
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-  });
-  await emitPlanEntries({
-    entries: await Promise.all(compiled
-      .filter((entry) => entry.mode === 'copy')
-      .map(async (entry) => ({
-        bytes: (await stat(entry.source)).size,
-        kind: 'copy' as const,
-        relativePath: relative(options.outDir, entry.output).replaceAll('\\', '/'),
-        source: entry.source,
-        sourceInputs: entry.sourceInputs,
-      }))),
-    root: options.outDir,
-  });
+    finish: async (evidence) => {
+      await emitPlanEntries({
+        entries: await Promise.all(compiled
+          .filter((entry) => entry.mode === 'copy')
+          .map(async (entry) => ({
+            bytes: (await stat(entry.source)).size,
+            kind: 'copy' as const,
+            relativePath: relative(options.outDir, entry.output).replaceAll('\\', '/'),
+            source: entry.source,
+            sourceInputs: entry.sourceInputs,
+          }))),
+        root: options.outDir,
+      });
 
-  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
-  return Object.freeze(compiled.map((entry) => Object.freeze({
-    ...entry,
-    sourceInputs: entry.mode === 'bundle'
-      ? evidenceByPath.get(`scripts/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled script evidence for ${JSON.stringify(entry.name)}.`); })()
-      : entry.sourceInputs,
-    ...(entry.rendered === undefined ? {} : {
-      workerSourceInputs: evidenceByPath.get(`scripts/${entry.rendered.workerFile}`) ?? (() => { throw new Error(`Missing bundled script worker evidence for ${JSON.stringify(entry.name)}.`); })(),
-    }),
-  })));
+      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+      return Object.freeze(compiled.map((entry) => Object.freeze({
+        ...entry,
+        sourceInputs: entry.mode === 'bundle'
+          ? evidenceByPath.get(`scripts/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled script evidence for ${JSON.stringify(entry.name)}.`); })()
+          : entry.sourceInputs,
+        ...(entry.rendered === undefined ? {} : {
+          workerSourceInputs: evidenceByPath.get(`scripts/${entry.rendered.workerFile}`) ?? (() => { throw new Error(`Missing bundled script worker evidence for ${JSON.stringify(entry.name)}.`); })(),
+        }),
+      })));
+    },
+  };
 };
 
 const localMcpOutputName = (server: NormalizedMcpServer): string => {
@@ -318,15 +318,19 @@ export const planCompiledMcpEntries = (
     }));
 };
 
-export const compileMcpEntries = async (
+/**
+ * Plans the local MCP servers of one target as a surface of the target's
+ * shared Rslib run: each stdio entry plus the react-server Flight worker of
+ * each route-generated server. The compiled MCP App HTML is read here, so
+ * the target's browser stage must have finished before this plan is made.
+ */
+export const planMcpEntriesSurface = async (
   servers: readonly NormalizedMcpServer[],
   options: {
     readonly apps?: readonly CompiledMcpApp[];
     readonly artifactEpoch: string;
-    readonly cwd: string;
     readonly eventHooks: readonly NormalizedHook[];
     readonly layouts?: readonly CompiledLayout[];
-    readonly meta: AgentBundleMeta;
     /** The target adapter's notice delivery advertisement; absent wires no cross-request route. */
     readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
@@ -335,9 +339,8 @@ export const compileMcpEntries = async (
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly target: string;
-    readonly tools?: AgentBundleToolsConfig;
   },
-): Promise<readonly CompiledMcpEntry[]> => {
+): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
   const eventHostId = compiled.find((entry) =>
     servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
@@ -465,8 +468,7 @@ export const compileMcpEntries = async (
       virtualSource: workerSource,
     }];
   });
-  const evidence = await buildWithRslib({
-    cwd: options.cwd,
+  return {
     entries: [...mainEntries, ...workerEntries],
     ...([runtimeShell, eventIpcRuntime, serverRuntime].filter((path): path is string => path !== undefined).length === 0
       ? {}
@@ -477,19 +479,18 @@ export const compileMcpEntries = async (
           ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
         ],
       }),
+    finish: async (evidence) => {
+      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+      return Object.freeze(compiled.map((entry) => Object.freeze({
+        ...entry,
+        sourceInputs: evidenceByPath.get(`mcp/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled MCP evidence for ${JSON.stringify(entry.name)}.`); })(),
+        ...(entry.workerOutput === undefined ? {} : {
+          workerSourceInputs: evidenceByPath.get(`mcp/${entry.name}-flight.mjs`) ?? (() => { throw new Error(`Missing bundled MCP Flight worker evidence for ${JSON.stringify(entry.name)}.`); })(),
+        }),
+      })));
+    },
     logLevel: 'error',
-    meta: options.meta,
-    outputRoot: options.outDir,
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-  });
-  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
-  return Object.freeze(compiled.map((entry) => Object.freeze({
-    ...entry,
-    sourceInputs: evidenceByPath.get(`mcp/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled MCP evidence for ${JSON.stringify(entry.name)}.`); })(),
-    ...(entry.workerOutput === undefined ? {} : {
-      workerSourceInputs: evidenceByPath.get(`mcp/${entry.name}-flight.mjs`) ?? (() => { throw new Error(`Missing bundled MCP Flight worker evidence for ${JSON.stringify(entry.name)}.`); })(),
-    }),
-  })));
+  };
 };
 
 export const planCompiledHooks = (
@@ -522,21 +523,23 @@ export const planCompiledHooks = (
   })));
 };
 
-export const compileHooks = async (
+/**
+ * Plans the hook wrappers of one target as a surface of the target's shared
+ * Rslib run, plus the one standalone react-server Flight worker the
+ * event-routed hooks share.
+ */
+export const planHooksSurface = (
   entries: readonly TargetHookEntry[],
   options: {
     readonly artifactEpoch: string;
-    readonly cwd: string;
-    readonly meta: AgentBundleMeta;
     readonly noticeDelivery?: NoticeDeliveryAdvertisement;
     readonly outDir: string;
     readonly plugin: { readonly name: string; readonly version: string };
     readonly providers?: readonly CompiledProvider[];
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
-    readonly tools?: AgentBundleToolsConfig;
   },
-): Promise<readonly CompiledHookEntry[]> => {
+): RslibSurfacePlan<readonly CompiledHookEntry[]> => {
   const compiled = planCompiledHooks(entries, options);
   const routeEntries = entries.filter((entry) => entry.hook.eventRoute !== undefined);
   const standaloneEventRoutes = [...new Map(routeEntries
@@ -572,8 +575,7 @@ export const compileHooks = async (
         ...(options.state === undefined ? {} : { state: options.state }),
       }),
     };
-  const evidence = await buildWithRslib({
-    cwd: options.cwd,
+  return {
     entries: [
       ...compiled.map((entry, index) => ({
       // One hook can compile into several host wrappers (for example a shared
@@ -606,16 +608,15 @@ export const compileHooks = async (
       : {
         ignoredSourcePaths: [runtimeIgnoredRoot(eventIpcRuntime)],
       }),
-    meta: options.meta,
-    outputRoot: options.outDir,
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-  });
-  const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
-  return Object.freeze(compiled.map((entry, index) => Object.freeze({
-    ...entry,
-    sourceInputs: evidenceByPath.get(entries[index]!.relativePath) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),
-    ...(entry.workerOutput === undefined ? {} : {
-      workerSourceInputs: evidenceByPath.get('hooks/hooks-flight.mjs') ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
-    }),
-  })));
+    finish: async (evidence) => {
+      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+      return Object.freeze(compiled.map((entry, index) => Object.freeze({
+        ...entry,
+        sourceInputs: evidenceByPath.get(entries[index]!.relativePath) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),
+        ...(entry.workerOutput === undefined ? {} : {
+          workerSourceInputs: evidenceByPath.get('hooks/hooks-flight.mjs') ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
+        }),
+      })));
+    },
+  };
 };

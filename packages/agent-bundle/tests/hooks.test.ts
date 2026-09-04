@@ -13,9 +13,9 @@ import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
-import { compileHooks } from '../src/build/entries.ts';
+import { planHooksSurface } from '../src/build/entries.ts';
 import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
-import { buildWithRslib } from '../src/build/rslib.ts';
+import { buildWithRslib, compileRslibSurfaces } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
@@ -1141,13 +1141,14 @@ it('runs the Cursor workspace/open lifecycle starter through a generated wrapper
 
     expect(plan.diagnostics).toEqual([]);
     expect(generated).toBeDefined();
-    await compileHooks(plan.hookEntries ?? [], {
-      artifactEpoch: 'cursor-workspace-open-test',
-      cwd: buildRoot,
-      meta: projectMeta(model.metadata),
-      outDir: outputRoot,
-      plugin: { name: model.metadata.name, version: model.metadata.version },
-    });
+    await compileRslibSurfaces(
+      { cwd: buildRoot, meta: projectMeta(model.metadata), outputRoot },
+      [planHooksSurface(plan.hookEntries ?? [], {
+        artifactEpoch: 'cursor-workspace-open-test',
+        outDir: outputRoot,
+        plugin: { name: model.metadata.name, version: model.metadata.version },
+      })],
+    );
     expect(starter).toEqual({
       cursor_version: 'lifecycle-replay',
       hook_event_name: 'workspaceOpen',

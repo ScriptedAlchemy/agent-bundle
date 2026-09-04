@@ -24,6 +24,24 @@ The build already validates the project before it writes anything, so a separate
 against source is a fast pre-flight rather than a required stage. Validating the **artifact** is
 the interesting one, because it needs no project sources at all.
 
+### How a target compiles
+
+The build plans every target first, then lowers each target's outputs in at most two stages
+into one staged root, published atomically once the artifact validates:
+
+1. **MCP Apps** — the browser environment, compiled through `@rsbuild/core`. Present only for a
+   target whose project declares App routes, and always first: the MCP entries embed its HTML.
+2. **Agent-host surfaces** — the routed CLI bin, bundled scripts, hook wrappers, MCP stdio
+   entries, and each surface's react-server Flight worker, lowered together through **one Rslib
+   instance per target** (one Rsbuild environment per output, one Rspack multi-compiler). A
+   surface reaches its worker by file name at run time, so nothing orders the two within the
+   stage, and each surface keeps its own source evidence for the manifest.
+
+Both stages and the `dist/` package build compose their bundler config the same way — profile,
+`tools.rsbuild`, `tools.rspack`, then the framework invariants — as described under
+[`tools`](../../reference/configuration.mdx#tools). `agent-bundle inspect --bundler` prints the
+result.
+
 ## What ships inside a target directory
 
 Every built target contains a generated `INSTALL.md` written with the bundle's **real** plugin

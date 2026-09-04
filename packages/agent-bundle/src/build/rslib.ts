@@ -360,10 +360,10 @@ const assertExecutableConfig = (
     if (environment === undefined) {
       throw new Error('Rslib did not resolve one environment for every generated executable.');
     }
-    // Scripts, MCP entries, hooks, and MCP Apps build sequentially into one
-    // shared staged root, so an environment that cleans its dist path would
-    // delete sibling outputs already emitted there; the composed invariant
-    // pins it off after the hatch merge.
+    // Every surface of a target builds into one shared staged root (MCP Apps
+    // first, then the node surfaces together), so an environment that cleans
+    // its dist path would delete sibling outputs already emitted there; the
+    // composed invariant pins it off after the hatch merge.
     if (environment.output?.cleanDistPath !== false) {
       throw new Error('Rslib resolved a generated executable environment that would clean its own output root.');
     }
@@ -585,30 +585,95 @@ export const composeEntryLibConfig = (
   return lib;
 };
 
-export const buildWithRslib = async (options: {
-  readonly cwd: string;
+/**
+ * One compiled surface's share of a target's Rslib run: the entries it
+ * synthesizes and the module roots its authored-source evidence excludes.
+ * Every surface of one target (routed CLI bin, scripts, hook wrappers, MCP
+ * entries, and each one's react-server Flight worker) rides one Rslib
+ * instance — one Rsbuild environment per entry, compiled by one Rspack
+ * multi-compiler in parallel — instead of one sequential instance per
+ * surface. Surfaces keep their own evidence exclusions and results.
+ */
+export interface RslibSurface {
   readonly entries: readonly RslibEntry[];
-  /** Extra module roots excluded from authored-source evidence (e.g. the aliased runtime shell). */
+  /** Extra module roots excluded from this surface's authored-source evidence (e.g. an aliased runtime shell). */
   readonly ignoredSourcePaths?: readonly string[];
-  /** 'error' lets declaration-generation failures reach the consumer's terminal. */
+  /** 'error' lets bundler and declaration-generation failures reach the consumer's terminal. */
   readonly logLevel?: 'error' | 'silent';
+}
+
+/**
+ * A surface planned for a shared Rslib run: its entries plus the step that
+ * turns the run's evidence for those entries back into compiled records.
+ * Planning is separated from finishing so the orchestrator can gather every
+ * surface of a target first and lower them together in one instance.
+ */
+export interface RslibSurfacePlan<Result> extends RslibSurface {
+  readonly finish: (evidence: readonly BundledOutputEvidence[]) => Promise<Result>;
+}
+
+/** A surface with nothing to compile whose result is already settled (e.g. a target that hosts no CLI bin). */
+export const settledRslibSurface = <Result>(result: Result): RslibSurfacePlan<Result> => ({
+  entries: Object.freeze([]),
+  finish: async () => result,
+});
+
+export interface RslibRunOptions {
+  readonly cwd: string;
   /** The project identity served to plugin source as `agent-bundle/meta`. */
   readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;
-}, dependencies: RslibDependencies = {}): Promise<readonly BundledOutputEvidence[]> => {
-  if (options.entries.length === 0) {
-    return Object.freeze([]);
+}
+
+/**
+ * Lib ids key Rslib environments and `mergeRslibConfig` folds same-id libs
+ * into one, so two surfaces of one run may not synthesize the same entry
+ * name. Surfaces prefix their names (`bin-`, `hooks-`, MCP output stems),
+ * and the planner rejects duplicate destinations before any run, so this
+ * is an internal invariant rather than a consumer-facing diagnostic.
+ */
+const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
+  const seen = new Map<string, string>();
+  for (const entry of entries) {
+    const id = entryLibId(entry);
+    const previous = seen.get(id);
+    if (previous !== undefined) {
+      throw new Error(
+        `Rslib surfaces of one target synthesize the same lib id ${JSON.stringify(id)} for `
+        + `${JSON.stringify(previous)} and ${JSON.stringify(entry.outputRelativePath)}.`,
+      );
+    }
+    seen.set(id, entry.outputRelativePath);
   }
+};
+
+/**
+ * Lowers every surface's entries through one Rslib instance and returns the
+ * bundled evidence per surface, in surface order. A surface without entries
+ * contributes nothing and receives no evidence; with no entries at all no
+ * instance is created.
+ */
+export const buildRslibSurfaces = async (
+  options: RslibRunOptions,
+  surfaces: readonly RslibSurface[],
+  dependencies: RslibDependencies = {},
+): Promise<readonly (readonly BundledOutputEvidence[])[]> => {
+  const entries = surfaces.flatMap((surface) => surface.entries);
+  if (entries.length === 0) {
+    return Object.freeze(surfaces.map(() => Object.freeze([])));
+  }
+  assertDistinctLibIds(entries);
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const reservedExternalViolations: string[] = [];
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
-      logLevel: options.logLevel ?? 'silent',
-      lib: options.entries.map((entry) => composeEntryLibConfig(entry, {
+      // The run reports at the most verbose level any surface asks for.
+      logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
+      lib: entries.map((entry) => composeEntryLibConfig(entry, {
         meta: options.meta,
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
@@ -618,7 +683,7 @@ export const buildWithRslib = async (options: {
   });
 
   const inspection = await rslib.inspectConfig();
-  assertExecutableConfig(options.entries, inspection.origin, options.outputRoot, options.meta);
+  assertExecutableConfig(entries, inspection.origin, options.outputRoot, options.meta);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {
@@ -631,23 +696,57 @@ export const buildWithRslib = async (options: {
     }
     if (reservedExternalViolations.length > 0) throw reservedExternalError(reservedExternalViolations[0]!);
     const evidence = collectBundledOutputEvidence({
-      expectedAssets: options.entries.map((entry) => ({
+      expectedAssets: surfaces.flatMap((surface) => surface.entries.map((entry) => ({
+        ...(surface.ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths: surface.ignoredSourcePaths }),
         path: entry.outputRelativePath,
         sourceInputs: entry.sourceInputs,
-      })),
+      }))),
       ignoredSourcePaths: [
         // Generated wrapper/registry modules are virtual, but they still
         // surface in stats as modules under this reserved namespace.
         resolve(options.outputRoot, generatedModulesDirname),
-        ...(options.ignoredSourcePaths ?? []),
         ...dependencyRoots,
       ],
       projectRoot: options.cwd,
       stats: result.stats,
     });
-    await assertNoResidualReservedImports(options.entries, options.outputRoot);
-    return evidence;
+    await assertNoResidualReservedImports(entries, options.outputRoot);
+    // Evidence covers exactly every entry (a missing asset already threw),
+    // sorted by path; each surface takes back its own entries' records.
+    return Object.freeze(surfaces.map((surface) => {
+      const paths = new Set(surface.entries.map((entry) => entry.outputRelativePath));
+      return Object.freeze(evidence.filter((record) => paths.has(record.path)));
+    }));
   } finally {
     await result?.close();
   }
+};
+
+/** Lowers every planned surface in one Rslib run and finishes each with its own evidence, in order. */
+export const compileRslibSurfaces = async <const Plans extends readonly RslibSurfacePlan<unknown>[]>(
+  options: RslibRunOptions,
+  plans: Plans,
+): Promise<{ readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never }> => {
+  const evidence = await buildRslibSurfaces(options, plans);
+  const results: unknown[] = [];
+  // Sequential on purpose: a finish step may emit sibling files into the
+  // shared staged root, and the former per-surface order is preserved.
+  for (const [index, plan] of plans.entries()) {
+    results.push(await plan.finish(evidence[index]!));
+  }
+  return results as { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never };
+};
+
+/** The single-surface run: the package build and direct callers. */
+export const buildWithRslib = async (
+  options: RslibRunOptions & RslibSurface,
+  dependencies: RslibDependencies = {},
+): Promise<readonly BundledOutputEvidence[]> => {
+  const { entries, ignoredSourcePaths, logLevel, ...run } = options;
+  const [evidence] = await buildRslibSurfaces(run, [{
+    entries,
+    ...(ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths }),
+    ...(logLevel === undefined ? {} : { logLevel }),
+  }], dependencies);
+  return evidence!;
 };
